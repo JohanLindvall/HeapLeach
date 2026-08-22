@@ -25,7 +25,7 @@ import (
 // making the list longer:
 //
 //   - It rots. Sites move platforms, new ones appear, and a list compiled
-//     into a binary cannot follow. DOWN_KVS_HOSTS extends it at runtime.
+//     into a binary cannot follow. HEAPLEACH_KVS_HOSTS extends it at runtime.
 //   - It will never be complete. There are far more KVS installs than anyone
 //     will enumerate — so the direct-link fallback sniffs for the page shape
 //     on any URL laid out like a KVS video page, which covers the tail

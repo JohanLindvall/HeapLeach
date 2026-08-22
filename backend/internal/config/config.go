@@ -39,7 +39,8 @@ type Config struct {
 	GofileSecret string
 	// KVSHosts extends the built-in list of Kernel Video Sharing installs.
 	// The platform is sold to hundreds of sites and a compiled-in list can
-	// only ever trail them, so DOWN_KVS_HOSTS adds hosts without a rebuild.
+	// only ever trail them, so HEAPLEACH_KVS_HOSTS adds hosts without a
+	// rebuild.
 	KVSHosts   []string
 	MaxRetries int
 	Streams    int
@@ -61,7 +62,7 @@ type Config struct {
 	Password string
 }
 
-// FromEnv reads DOWN_*-prefixed environment variables over the defaults.
+// FromEnv reads HEAPLEACH_*-prefixed environment variables over the defaults.
 //
 // It performs no validation and touches no filesystem, so a caller can layer
 // command-line flags on top before anything is created: resolving the
@@ -181,7 +182,7 @@ func expandHome(path string) (string, error) {
 // failed transfers. This bites most often with a bind-mounted volume whose
 // owner does not match the user the container runs as.
 func checkWritable(dir string) error {
-	probe, err := os.CreateTemp(dir, ".down-write-probe-*")
+	probe, err := os.CreateTemp(dir, ".heapleach-write-probe-*")
 	if err != nil {
 		return fmt.Errorf("download dir %s is not writable by uid %d: %w\n"+
 			"hint: when bind-mounting a host directory, run the container as its owner, "+

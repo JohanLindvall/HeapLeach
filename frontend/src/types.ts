@@ -19,12 +19,25 @@ export interface ItemView {
   /** Bytes per second, smoothed server-side. Zero unless running. */
   speed: number;
   error?: string;
+  /**
+   * What the transfer is waiting for right now — a busy host being given
+   * time, say. Transient, and cleared when the item finishes, so unlike an
+   * error it describes the present rather than the outcome.
+   */
+  note?: string;
   path?: string;
   url?: string;
   /** Connections currently fetching this file; absent or 1 when unsplit. */
   streams?: number;
   /** True when the file was already in the destination, so nothing moved. */
   skipped?: boolean;
+  /**
+   * Parts joined so far, and how many there are. A file arriving as a
+   * playlist has no known byte total until the last part lands, so these are
+   * the only honest progress it has.
+   */
+  segmentsDone?: number;
+  segmentsTotal?: number;
   /** Seconds since the transfer started. */
   elapsed: number;
 }

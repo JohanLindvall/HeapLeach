@@ -111,24 +111,10 @@ func (x *XHamster) Match(u *url.URL) bool {
 // because the links are signed and expire.
 func (x *XHamster) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	page := u.String()
-	title, best, err := x.best(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: []File{{
-		Name:    title + ".mp4",
-		URL:     best.URL,
-		Size:    -1,
-		Headers: httpx.Referer(xhamsterRoot + "/"),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			name, fresh, err := x.best(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh.URL, Name: name + ".mp4", Size: -1,
-				Headers: httpx.Referer(xhamsterRoot + "/")}, nil
-		},
-	}}}, nil
+	return refetchedVideo(ctx, ".mp4", httpx.Referer(xhamsterRoot+"/"), func(ctx context.Context) (string, string, error) {
+		title, best, err := x.best(ctx, page)
+		return title, best.URL, err
+	})
 }
 
 func (x *XHamster) best(ctx context.Context, page string) (string, mediaCandidate, error) {
@@ -161,24 +147,10 @@ func (t *TNAFlix) Match(u *url.URL) bool { return util.HostMatches(u.Host, "tnaf
 // because the links carry an expiry.
 func (t *TNAFlix) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	page := u.String()
-	title, best, err := t.best(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: []File{{
-		Name:    title + ".mp4",
-		URL:     best.URL,
-		Size:    -1,
-		Headers: httpx.Referer(tnaflixRoot + "/"),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			name, fresh, err := t.best(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh.URL, Name: name + ".mp4", Size: -1,
-				Headers: httpx.Referer(tnaflixRoot + "/")}, nil
-		},
-	}}}, nil
+	return refetchedVideo(ctx, ".mp4", httpx.Referer(tnaflixRoot+"/"), func(ctx context.Context) (string, string, error) {
+		title, best, err := t.best(ctx, page)
+		return title, best.URL, err
+	})
 }
 
 func (t *TNAFlix) best(ctx context.Context, page string) (string, mediaCandidate, error) {
@@ -216,24 +188,10 @@ func (p *PornOne) Match(u *url.URL) bool { return util.HostMatches(u.Host, "porn
 // because the links carry an expiry.
 func (p *PornOne) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	page := u.String()
-	title, best, err := p.best(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: []File{{
-		Name:    title + ".mp4",
-		URL:     best.URL,
-		Size:    -1,
-		Headers: httpx.Referer(pornoneRoot + "/"),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			name, fresh, err := p.best(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh.URL, Name: name + ".mp4", Size: -1,
-				Headers: httpx.Referer(pornoneRoot + "/")}, nil
-		},
-	}}}, nil
+	return refetchedVideo(ctx, ".mp4", httpx.Referer(pornoneRoot+"/"), func(ctx context.Context) (string, string, error) {
+		title, best, err := p.best(ctx, page)
+		return title, best.URL, err
+	})
 }
 
 func (p *PornOne) best(ctx context.Context, page string) (string, mediaCandidate, error) {

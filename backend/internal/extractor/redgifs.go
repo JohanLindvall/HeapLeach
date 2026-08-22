@@ -3,6 +3,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -120,7 +121,7 @@ func (r *RedGifs) call(ctx context.Context, path string, out any) error {
 	if err == nil {
 		return nil
 	}
-	if !strings.Contains(err.Error(), "401") {
+	if !httpx.HasStatus(err, http.StatusUnauthorized) {
 		return err
 	}
 	if token, err = r.ensureToken(ctx, true); err != nil {

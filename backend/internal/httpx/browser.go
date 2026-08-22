@@ -115,6 +115,7 @@ var challengeStatuses = map[int]bool{
 var challengeMarkers = []string{
 	"just a moment", "attention required", "challenge-platform",
 	"cf-browser-verification", "challenge.css", "_cf_chl", "captcha",
+	"ddos-guard",
 }
 
 // looksChallenged reports whether a response is a bot check rather than the

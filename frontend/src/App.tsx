@@ -67,8 +67,8 @@ export default function App() {
   useEffect(() => {
     document.title =
       snapshot && snapshot.active > 0
-        ? `↓ ${snapshot.active} downloading — down`
-        : 'down — bulk downloader';
+        ? `↓ ${snapshot.active} downloading — HeapLeach`
+        : 'HeapLeach — bulk downloader';
   }, [snapshot]);
 
   if (!snapshot) {

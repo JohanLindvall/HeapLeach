@@ -27,8 +27,10 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 	if !strings.EqualFold(filepath.Ext(path), ".ts") {
 		return path
 	}
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
+	// tools.Find rather than the bare PATH lookup, so the static build
+	// `make dependencies` places next to the binary is honoured here too.
+	ffmpeg, ok := tools.Find("ffmpeg")
+	if !ok {
 		m.log.Debug("ffmpeg not installed; keeping the transport stream", "path", filepath.Base(path))
 		return path
 	}

@@ -44,7 +44,7 @@ func (y *YouTube) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
 		return nil, fmt.Errorf("youtube: yt-dlp is not installed — run `make dependencies` "+
-			"to fetch it into the folder holding downd, or put it on PATH (%s)", u.Redacted())
+			"to fetch it into the folder holding heapleach, or put it on PATH (%s)", u.Redacted())
 	}
 
 	entries, title, err := y.probe(ctx, ytdlp, u.String())

@@ -11,9 +11,15 @@ interface ItemRowProps {
 
 /** One file: name, live progress, and the action that fits its state. */
 export function ItemRow({ item, onCancel, onRetry }: ItemRowProps) {
-  const percent = percentOf(item.downloaded, item.size);
   const running = item.status === 'running';
   const active = running || item.status === 'queued';
+
+  // A playlist has no byte total until its last part lands, so parts joined
+  // is the only progress it can honestly show.
+  const segments = segmentProgress(item);
+  const percent = segments
+    ? percentOf(segments.done, segments.total)
+    : percentOf(item.downloaded, item.size);
 
   return (
     <li className={`item item--${item.status}`}>
@@ -37,6 +43,11 @@ export function ItemRow({ item, onCancel, onRetry }: ItemRowProps) {
           {formatBytes(item.downloaded)}
           {item.size > 0 && ` / ${formatBytes(item.size)}`}
         </span>
+        {segments && (
+          <span className="item__segments" title="Parts joined so far">
+            {segments.done}/{segments.total} parts
+          </span>
+        )}
         {running && <span className="item__speed">{formatSpeed(item.speed)}</span>}
         {running && (item.streams ?? 0) > 1 && (
           <span className="item__streams" title={`Split across ${item.streams} connections`}>
@@ -49,6 +60,9 @@ export function ItemRow({ item, onCancel, onRetry }: ItemRowProps) {
         {percent !== null && <span className="item__pct">{percent.toFixed(0)}%</span>}
       </div>
 
+      {/* A note explains a deliberate wait, so it belongs where a stalled
+          download would otherwise look like nothing happening. */}
+      {item.note && <p className="item__note">{item.note}</p>}
       {item.error && <p className="item__error">{item.error}</p>}
 
       <div className="item__actions">
@@ -68,6 +82,13 @@ export function ItemRow({ item, onCancel, onRetry }: ItemRowProps) {
       </div>
     </li>
   );
+}
+
+/** Part counts, when this file arrives as a playlist rather than one body. */
+function segmentProgress(item: ItemView): { done: number; total: number } | null {
+  const total = item.segmentsTotal ?? 0;
+  if (total <= 0) return null;
+  return { done: item.segmentsDone ?? 0, total };
 }
 
 function statusLabel(item: ItemView): string {

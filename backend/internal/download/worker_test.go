@@ -17,7 +17,7 @@ func TestWatchForStallAbortsSilentTransfer(t *testing.T) {
 	defer abort()
 
 	var stalled atomic.Bool
-	go watchForStall(ctx, item, abort, &stalled, 90*time.Millisecond, nil)
+	go watchForStall(ctx, item.downloaded.Load, abort, &stalled, 90*time.Millisecond, nil)
 
 	select {
 	case <-ctx.Done():
@@ -35,7 +35,7 @@ func TestWatchForStallLeavesProgressingTransferAlone(t *testing.T) {
 	defer abort()
 
 	var stalled atomic.Bool
-	go watchForStall(ctx, item, abort, &stalled, 120*time.Millisecond, nil)
+	go watchForStall(ctx, item.downloaded.Load, abort, &stalled, 120*time.Millisecond, nil)
 
 	// Trickle bytes more slowly than the poll interval but faster than the
 	// timeout: a slow transfer must not be mistaken for a stalled one.
@@ -64,7 +64,7 @@ func TestWatchForStallExitsWithContext(t *testing.T) {
 	var stalled atomic.Bool
 	stopped := make(chan struct{})
 	go func() {
-		watchForStall(ctx, item, abort, &stalled, time.Minute, nil)
+		watchForStall(ctx, item.downloaded.Load, abort, &stalled, time.Minute, nil)
 		close(stopped)
 	}()
 

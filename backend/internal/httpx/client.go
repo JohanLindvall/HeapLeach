@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -140,6 +141,17 @@ func (e *StatusError) Error() string {
 		return fmt.Sprintf("%s: %s (%s)", e.URL, e.Status, util.Truncate(e.Body, 200))
 	}
 	return fmt.Sprintf("%s: %s", e.URL, e.Status)
+}
+
+// HasStatus reports whether err is, or wraps, a StatusError carrying one of
+// the given codes — the typed alternative to grepping an error's text for a
+// number.
+func HasStatus(err error, codes ...int) bool {
+	var se *StatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return slices.Contains(codes, se.Code)
 }
 
 // Do executes req, retrying transient failures with exponential backoff.

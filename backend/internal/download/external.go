@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -41,7 +40,7 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	ytdlp, ok := tools.Find("yt-dlp")
 	if !ok {
 		return fmt.Errorf("yt-dlp is not installed — run `make dependencies` to fetch it " +
-			"into the folder holding downd, or put it on PATH")
+			"into the folder holding heapleach, or put it on PATH")
 	}
 
 	cmd := exec.CommandContext(ctx, script, source, dir)
@@ -70,16 +69,8 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	it.streams.Store(1)
 	defer it.streams.Store(0)
 
-	var (
-		produced string
-		wg       sync.WaitGroup
-	)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		produced = m.readExternalProgress(it, stdout)
-	}()
-	wg.Wait()
+	// Drained before Wait, which closes the pipe out from under a reader.
+	produced := m.readExternalProgress(it, stdout)
 
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {

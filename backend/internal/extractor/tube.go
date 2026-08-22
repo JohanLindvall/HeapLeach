@@ -1,10 +1,13 @@
 package extractor
 
 import (
+	"context"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // Shared helpers for tube sites.
@@ -20,6 +23,32 @@ type mediaCandidate struct {
 	URL     string
 	Quality int
 	IsHLS   bool
+}
+
+// refetchedVideo builds the one-file result these hosts share: the link that
+// is good right now, and a resolver that reads the page again when the item
+// actually starts, because the links are signed per visit and expire within
+// minutes. fetch returns the page's current title and direct link; headers
+// accompany every media request.
+func refetchedVideo(ctx context.Context, ext string, headers httpx.Header,
+	fetch func(context.Context) (title, link string, err error)) (*Result, error) {
+	title, link, err := fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: title, Files: []File{{
+		Name:    title + ext,
+		URL:     link,
+		Size:    -1,
+		Headers: headers,
+		Resolve: func(ctx context.Context) (*Target, error) {
+			fresh, freshLink, err := fetch(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &Target{URL: freshLink, Name: fresh + ext, Size: -1, Headers: headers}, nil
+		},
+	}}}, nil
 }
 
 // qualityPattern finds a vertical resolution in a URL or label: "720p",

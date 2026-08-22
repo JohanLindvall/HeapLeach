@@ -244,17 +244,3 @@ func (tr *throttledReader) Read(p []byte) (int, error) {
 func (m *Manager) throttled(ctx context.Context, r io.Reader) io.Reader {
 	return &throttledReader{r: r, t: m.throttle, ctx: ctx}
 }
-
-// chargeThrottle pays for bytes that arrived in one piece, blocking until
-// the bucket has covered them. A cancelled context simply stops the wait:
-// the bytes are already in hand, and the caller's own context check will
-// deal with the cancellation.
-func (m *Manager) chargeThrottle(ctx context.Context, n int) {
-	for n > 0 {
-		took, err := m.throttle.take(ctx, n)
-		if err != nil {
-			return
-		}
-		n -= took
-	}
-}

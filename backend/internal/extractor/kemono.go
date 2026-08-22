@@ -114,7 +114,7 @@ func (k *Kemono) filesOf(root string, posts []kemonoPost, group bool) []File {
 	for _, post := range posts {
 		folder := ""
 		if group {
-			folder = SafeFolder(util.FirstNonEmpty(post.Title, post.ID))
+			folder = folderName(util.FirstNonEmpty(post.Title, post.ID))
 		}
 		for _, item := range append([]kemonoAttachment{post.File}, post.Attachments...) {
 			if item.Path == "" || seen[item.Path] {
@@ -203,14 +203,12 @@ type kemonoAttachment struct {
 	Path string `json:"path"`
 }
 
-// SafeFolder trims a title down to something usable as a directory name.
-func SafeFolder(title string) string {
-	title = strings.TrimSpace(title)
-	if len(title) > 80 {
-		title = strings.TrimSpace(title[:80])
+// folderName trims a post title down to a readable directory name. The
+// downloader sanitises every path component anyway; this only keeps a
+// rambling title from becoming a rambling folder.
+func folderName(title string) string {
+	if runes := []rune(strings.TrimSpace(title)); len(runes) > 80 {
+		return strings.TrimSpace(string(runes[:80]))
 	}
-	if title == "" {
-		return ""
-	}
-	return title
+	return strings.TrimSpace(title)
 }

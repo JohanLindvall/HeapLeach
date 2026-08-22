@@ -115,13 +115,8 @@ func hostOf(rawURL string) string {
 // away a connection because there are already too many, rather than a
 // problem with the request itself.
 func refusedExtraConnection(err error) bool {
-	var status *httpx.StatusError
-	if errors.As(err, &status) {
-		switch status.Code {
-		case http.StatusTooManyRequests, http.StatusServiceUnavailable:
-			return true
-		}
-		return false
+	if httpx.HasStatus(err, http.StatusTooManyRequests, http.StatusServiceUnavailable) {
+		return true
 	}
 	// A host at its connection limit commonly just drops or refuses the
 	// TCP connection rather than answering.

@@ -23,7 +23,7 @@ func YouTubeScript() (path string, cleanup func(), err error) {
 		return installed, func() {}, nil
 	}
 
-	file, err := os.CreateTemp("", "down-yt-*.sh")
+	file, err := os.CreateTemp("", "heapleach-yt-*.sh")
 	if err != nil {
 		return "", nil, fmt.Errorf("stage download script: %w", err)
 	}

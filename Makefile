@@ -26,6 +26,20 @@ CONCURRENCY ?= 4
 
 DIST      := backend/internal/webui/dist
 
+# What the exported binary is made of, so `make build` can tell a stale
+# binary from a current one and do nothing when there is nothing to do.
+#
+# The frontend counts as much as the Go does: it is compiled into the binary,
+# so a UI edit leaves it just as out of date as an extractor edit would. The
+# embed directory itself is excluded — it is build output, rewritten by every
+# frontend build, and treating it as a source would mean never settling.
+GO_SOURCES := $(shell find backend -name '*.go' -not -path '$(DIST)/*' 2>/dev/null) \
+              backend/go.mod backend/go.sum
+UI_SOURCES := $(shell find frontend -type f \
+                \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \
+                -not -path 'frontend/node_modules/*' -not -path 'frontend/dist/*' 2>/dev/null)
+BUILD_SOURCES := $(GO_SOURCES) $(UI_SOURCES) Dockerfile
+
 # Optional helpers the service uses when present: yt-dlp resolves YouTube,
 # ffmpeg rewraps and muxes. `make dependencies` puts static builds in ./bin,
 # where the service looks before falling back to PATH.
@@ -60,7 +74,14 @@ help:
 	@echo "             DOWNLOADS=$(DOWNLOADS) IMAGE=$(IMAGE):$(TAG)"
 
 ## build: build in Docker and export the standalone binary to ./bin/heapleach
-build: $(BIN_DIR)
+build: $(BINARY)
+
+# The rule that does the work. Its prerequisites are the sources the binary
+# is made of, which is what lets `build` be asked for freely: it is a no-op
+# while the binary is newer than all of them, and it rebuilds the moment one
+# changes. Anything that runs the binary depends on this rather than on the
+# file existing, since a stale binary is exactly what looks like a bug.
+$(BINARY): $(BUILD_SOURCES) | $(BIN_DIR)
 	@echo ">> building in Docker, exporting binary to $(BINARY)"
 	DOCKER_BUILDKIT=1 docker build \
 	  --target export \
@@ -68,6 +89,9 @@ build: $(BIN_DIR)
 	  --output type=local,dest=$(BIN_DIR) \
 	  -f Dockerfile .
 	@chmod +x $(BINARY)
+	@# BuildKit writes the file with the timestamp it had in the image, which
+	@# can predate the sources and would leave the target permanently stale.
+	@touch $(BINARY)
 	@echo ">> $(BINARY) ($$(du -h $(BINARY) | cut -f1)) — self-contained, UI embedded"
 
 ## binary: alias for build
@@ -243,10 +267,6 @@ tidy:
 
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
-
-# Built on demand: `make run` only invokes Docker when the binary is missing.
-$(BINARY):
-	@$(MAKE) --no-print-directory build
 
 ## clean: remove build output and restore the embed placeholder
 clean: frontend-clean

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -64,8 +65,11 @@ type Manager struct {
 	subs      map[chan []byte]struct{}
 	closeOnce sync.Once
 
-	dirtyMu sync.Mutex
-	dirty   bool
+	// dirty records a state change worth pushing to subscribers even though
+	// nothing is transferring. It is taken rather than peeked at and cleared
+	// separately, so a change landing while a snapshot is being built sets
+	// the flag again and is published on the next tick instead of being lost.
+	dirty atomic.Bool
 }
 
 // New builds a Manager. Call Start before use.
@@ -654,13 +658,12 @@ func (m *Manager) broadcast() {
 			if active {
 				m.sampleLocked(now)
 			}
-			if !active && !m.takeDirty() {
+			if !m.dirty.Swap(false) && !active {
 				m.mu.Unlock()
 				continue
 			}
 			snap := m.snapshotLocked()
 			m.mu.Unlock()
-			m.clearDirty()
 
 			payload, err := json.Marshal(snap)
 			if err != nil {
@@ -730,20 +733,6 @@ func (m *Manager) signal() {
 	}
 }
 
-func (m *Manager) markDirty() {
-	m.dirtyMu.Lock()
-	m.dirty = true
-	m.dirtyMu.Unlock()
-}
-
-func (m *Manager) takeDirty() bool {
-	m.dirtyMu.Lock()
-	defer m.dirtyMu.Unlock()
-	return m.dirty
-}
-
-func (m *Manager) clearDirty() {
-	m.dirtyMu.Lock()
-	m.dirty = false
-	m.dirtyMu.Unlock()
-}
+// markDirty asks the broadcaster to publish, for a change no running
+// transfer would otherwise carry to the browser.
+func (m *Manager) markDirty() { m.dirty.Store(true) }

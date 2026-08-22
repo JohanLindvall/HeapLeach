@@ -84,6 +84,10 @@ func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
 		"https://pornone.com/funny/a-clip/1/":             "pornone",
 		"https://pixhost.to/gallery/abc123":               "pixhost",
 		"https://pixhost.to/show/9999/1_a.jpg":            "pixhost",
+		"https://www.suvobox.com/a/abcd1234":              "suvobox",
+		"https://suvobox.com/f/abcd1234":                  "suvobox",
+		"https://www.imagepond.net/i/abcd1234":            "imagepond",
+		"https://imagepond.net/i/a-title-slug":            "imagepond",
 		"https://yandex.kz/video/preview/1234567890":      "yandex",
 		"https://nobody.example.test/some/file.bin":       "direct",
 		"https://nobody.example.test/videos/1/some-clip/": "direct",
@@ -109,7 +113,7 @@ func TestRegistryAcceptsExtraKVSHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := reg.Find(u).Name(); got != "tube" {
-		t.Errorf("a host from DOWN_KVS_HOSTS went to %q, want the kvs extractor", got)
+		t.Errorf("a host from HEAPLEACH_KVS_HOSTS went to %q, want the kvs extractor", got)
 	}
 }
 

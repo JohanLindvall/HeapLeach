@@ -1,9 +1,9 @@
 // Package tools locates the optional external programs the downloader uses
 // when they are available.
 //
-// A binary sitting next to downd wins over one on PATH, so the static builds
-// `make dependencies` drops in ./bin are picked up without touching the
-// system, and without depending on how the service was launched.
+// A binary sitting next to the running executable wins over one on PATH, so
+// the static builds `make dependencies` drops in ./bin are picked up without
+// touching the system, and without depending on how the service was launched.
 package tools
 
 import (

@@ -1242,6 +1242,7 @@ code, .mono {
     'main actions'
     'bar  actions'
     'meta actions'
+    'note note'
     'err  err';
   gap: 0.28rem 0.75rem;
   padding: 0.58rem 0.2rem;
@@ -1313,8 +1314,21 @@ code, .mono {
   background: color-mix(in srgb, var(--resolving) 15%, transparent);
   border: 1px solid color-mix(in srgb, var(--resolving) 32%, transparent);
 }
+/* Parts joined, for a file that arrives as a playlist rather than one body. */
+.item__segments { color: var(--text-dim); }
+
 .item__pct { margin-left: auto; }
 .item__error { grid-area: err; }
+
+/* A note is a transfer waiting on purpose — a busy host being given time —
+   so it reads as information rather than as the failure an error is. */
+.item__note {
+  grid-area: note;
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--queued);
+  overflow-wrap: anywhere;
+}
 
 .item__actions {
   grid-area: actions;
@@ -1666,7 +1680,7 @@ code, .mono {
 
   .item {
     grid-template-columns: 1fr;
-    grid-template-areas: 'main' 'bar' 'meta' 'err' 'actions';
+    grid-template-areas: 'main' 'bar' 'meta' 'note' 'err' 'actions';
     gap: 0.32rem;
   }
 

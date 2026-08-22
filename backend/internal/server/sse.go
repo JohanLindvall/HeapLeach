@@ -28,7 +28,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Send the current state at once so the page renders without waiting
 	// for the first change.
-	payload, err := jsonBytes(s.mgr.Snapshot())
+	payload, err := json.Marshal(s.mgr.Snapshot())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -70,9 +70,4 @@ func writeEvent(w http.ResponseWriter, rc *http.ResponseController, payload []by
 		return false
 	}
 	return rc.Flush() == nil
-}
-
-// jsonBytes marshals compactly for the wire.
-func jsonBytes(v any) ([]byte, error) {
-	return json.Marshal(v)
 }

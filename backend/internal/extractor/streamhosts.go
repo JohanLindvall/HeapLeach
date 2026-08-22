@@ -56,25 +56,10 @@ func (s *Streamtape) Match(u *url.URL) bool { return matchesHosts(u, streamtapeH
 // Extract resolves an embed or watch page.
 func (s *Streamtape) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	page := u.String()
-	link, title, err := s.media(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	name := title + ".mp4"
-	return &Result{Title: title, Files: []File{{
-		Name:    name,
-		URL:     link,
-		Size:    -1,
-		Headers: httpx.Referer(page),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			fresh, freshTitle, err := s.media(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh, Name: freshTitle + ".mp4", Size: -1,
-				Headers: httpx.Referer(page)}, nil
-		},
-	}}}, nil
+	return refetchedVideo(ctx, ".mp4", httpx.Referer(page), func(ctx context.Context) (string, string, error) {
+		link, title, err := s.media(ctx, page)
+		return title, link, err
+	})
 }
 
 func (s *Streamtape) media(ctx context.Context, page string) (link, title string, err error) {
@@ -161,25 +146,10 @@ func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	// The embed page is the one carrying the token endpoint; a /d/ link is
 	// the same video behind a landing page.
 	page := strings.Replace(u.String(), "/d/", "/e/", 1)
-	link, title, err := d.media(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	name := title + ".mp4"
-	return &Result{Title: title, Files: []File{{
-		Name:    name,
-		URL:     link,
-		Size:    -1,
-		Headers: httpx.Referer(page),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			fresh, freshTitle, err := d.media(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh, Name: freshTitle + ".mp4", Size: -1,
-				Headers: httpx.Referer(page)}, nil
-		},
-	}}}, nil
+	return refetchedVideo(ctx, ".mp4", httpx.Referer(page), func(ctx context.Context) (string, string, error) {
+		link, title, err := d.media(ctx, page)
+		return title, link, err
+	})
 }
 
 func (d *DoodStream) media(ctx context.Context, page string) (link, title string, err error) {
@@ -241,24 +211,10 @@ func (m *MixDrop) Match(u *url.URL) bool { return matchesHosts(u, mixdropHosts) 
 func (m *MixDrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	// The embed page carries the player; /f/ is a landing page around it.
 	page := strings.Replace(u.String(), "/f/", "/e/", 1)
-	link, title, err := m.media(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: []File{{
-		Name:    title + ".mp4",
-		URL:     link,
-		Size:    -1,
-		Headers: httpx.Referer(page),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			fresh, freshTitle, err := m.media(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh, Name: freshTitle + ".mp4", Size: -1,
-				Headers: httpx.Referer(page)}, nil
-		},
-	}}}, nil
+	return refetchedVideo(ctx, ".mp4", httpx.Referer(page), func(ctx context.Context) (string, string, error) {
+		link, title, err := m.media(ctx, page)
+		return title, link, err
+	})
 }
 
 func (m *MixDrop) media(ctx context.Context, page string) (link, title string, err error) {

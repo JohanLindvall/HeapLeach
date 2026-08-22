@@ -109,8 +109,11 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			break
 		}
 		// The file was already in the destination at the right length.
-		// alreadyOnDisk has recorded it; there is nothing left to rename.
+		// alreadyOnDisk has recorded it; there is nothing left to rename,
+		// and whatever partial state an earlier run left is dead weight.
 		if errors.Is(err, errAlreadyComplete) {
+			_ = os.Remove(part)
+			clearTransferState(part)
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -118,11 +121,22 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		}
 
 		// A busy host has not failed; it has asked us to come back. Those
-		// attempts are unlimited and do not spend the retry budget, which
-		// exists for transfers that are actually going wrong. Cancelling
-		// the job is what stops this.
+		// attempts do not spend the retry budget, which exists for
+		// transfers that are actually going wrong — but patience only pays
+		// where trying again can change the answer. An item with a
+		// resolver re-signs its link or rotates to another mirror each
+		// time; one without asks the same URL the same way, and if that
+		// keeps answering with a web page it is almost always because the
+		// URL *is* a web page — a pasted link no extractor recognised — so
+		// those attempts are capped rather than retried forever.
 		var busy *busyHostError
 		if errors.As(err, &busy) {
+			m.mu.Lock()
+			rotates := it.resolve != nil
+			m.mu.Unlock()
+			if !rotates && busyWaits >= config.BusyRetryLimit {
+				return pageNotAFile(busy)
+			}
 			busyWaits++
 			wait := util.Backoff(busyWaits-1, m.timings.busyBase, m.timings.busyMax)
 			m.note(it, fmt.Sprintf("host busy — retrying in %s (attempt %d)",
@@ -162,6 +176,10 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	if err := os.Rename(part, dest); err != nil {
 		return fmt.Errorf("finalise %s: %w", name, err)
 	}
+	// Cleared here rather than inside each transfer path, so the resume
+	// sidecar is also removed when an attempt ends early — a 416 for a part
+	// file that is already whole, or a restored table with nothing left.
+	clearTransferState(part)
 	// Any transport stream is worth rewrapping, however it arrived.
 	dest = m.remuxToMP4(ctx, dest)
 	m.setPath(it, filepath.Join(rel, filepath.Base(dest)))
@@ -321,7 +339,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 		return "", err
 	}
 
-	go watchForStall(attemptCtx, it, abort, &stalled, m.stallTimeout(), m.throttle.isPaused)
+	go watchForStall(attemptCtx, it.downloaded.Load, abort, &stalled, m.stallTimeout(), m.throttle.isPaused)
 
 	// Without a known length there is nothing to divide up.
 	if total <= 0 {
@@ -369,7 +387,6 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	if err := closeFile(f, name); err != nil {
 		return "", err
 	}
-	clearTransferState(part)
 	return name, nil
 }
 
@@ -455,16 +472,20 @@ func closeFile(f *os.File, name string) error {
 	return nil
 }
 
-// watchForStall aborts the attempt when the item's byte counter stops
+// watchForStall aborts the attempt when the sampled byte counter stops
 // moving for StallTimeout. It exits as soon as the attempt context is done,
 // so a completed transfer leaves nothing running.
-func watchForStall(ctx context.Context, it *Item, abort context.CancelFunc, stalled *atomic.Bool,
+//
+// progress is whichever counter proves bytes are arriving: the item's own
+// for an HTTP transfer, and a fetched-bytes counter for a playlist, whose
+// item counter only advances when a whole part lands in order.
+func watchForStall(ctx context.Context, progress func() int64, abort context.CancelFunc, stalled *atomic.Bool,
 	timeout time.Duration, paused func() bool) {
 	interval := timeout / 3
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	last := it.downloaded.Load()
+	last := progress()
 	var idle time.Duration
 
 	for {
@@ -478,7 +499,7 @@ func watchForStall(ctx context.Context, it *Item, abort context.CancelFunc, stal
 				idle = 0
 				continue
 			}
-			current := it.downloaded.Load()
+			current := progress()
 			if current != last {
 				last, idle = current, 0
 				continue
@@ -618,13 +639,26 @@ func chooseName(current, fromServer string) string {
 	}
 }
 
-// busyHostError means the host answered a request for file bytes with a web
-// page. It is transient by nature, so it is worth another attempt.
+// busyHostError means a request for file bytes was answered with a web page.
+//
+// For a host that hands out several storage servers, or signs a link per
+// visit, that is transient and asking again lands somewhere else. For a URL
+// with nothing to re-resolve it usually means the opposite — the URL is a
+// web page, and no extractor recognised the site — so the two are worded
+// apart once the retries have been spent.
 type busyHostError struct{ url string }
 
 func (e *busyHostError) Error() string {
-	return fmt.Sprintf("%s: host returned a web page instead of the file "+
+	return fmt.Sprintf("%s: the host returned a web page instead of the file "+
 		"(its storage server is busy, or the link has expired)", e.url)
+}
+
+// pageNotAFile explains the same answer for a URL that cannot be resolved
+// again, where repeating the request can only produce the same page.
+func pageNotAFile(err *busyHostError) error {
+	return fmt.Errorf("%s: this URL serves a web page, not a file — no extractor here "+
+		"recognises the site, so there is nothing to read the media location out of",
+		err.url)
 }
 
 // rejectWebPage catches a host answering a file request with a web page.

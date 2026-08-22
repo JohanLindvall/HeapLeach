@@ -226,8 +226,9 @@ func runHeadless(ctx context.Context, cfg *config.Config, manager *download.Mana
 // loadConfig layers command-line flags over the environment.
 //
 // The download directory can be given three ways; the most explicit wins:
-// a positional argument, then -dir, then DOWN_DIR. Flags default to the
-// environment's values so `DOWN_DIR=... heapleach` keeps working unchanged.
+// a positional argument, then -dir, then HEAPLEACH_DIR. Flags default to the
+// environment's values so `HEAPLEACH_DIR=... heapleach` keeps working
+// unchanged.
 func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	cfg, err := config.FromEnv()
 	if err != nil {
@@ -322,7 +323,7 @@ file failed. A "-" argument reads URLs from standard input, one per
 line (blank lines and #comments are ignored).
 
 Files are saved to the download directory, which may be given as an
-argument, with -dir, or through DOWN_DIR. The argument wins.
+argument, with -dir, or through HEAPLEACH_DIR. The argument wins.
 Currently: %s
 
 Options:
@@ -330,9 +331,11 @@ Options:
 	flags.PrintDefaults()
 	fmt.Fprint(out, `
 Environment:
-  DOWN_ADDR, DOWN_DIR, DOWN_CONCURRENCY, DOWN_MAX_RETRIES, DOWN_STREAMS,
-  DOWN_SLOW_SPEED, DOWN_MAX_SPEED, DOWN_STALL_TIMEOUT, DOWN_DEBUG, DOWN_OPEN,
-  DOWN_USER_AGENT, DOWN_LANGUAGE, DOWN_GOFILE_SECRET
+  HEAPLEACH_ADDR, HEAPLEACH_DIR, HEAPLEACH_CONCURRENCY, HEAPLEACH_MAX_RETRIES,
+  HEAPLEACH_STREAMS, HEAPLEACH_SLOW_SPEED, HEAPLEACH_MAX_SPEED,
+  HEAPLEACH_STALL_TIMEOUT, HEAPLEACH_DEBUG, HEAPLEACH_OPEN,
+  HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE, HEAPLEACH_GOFILE_SECRET,
+  HEAPLEACH_KVS_HOSTS
 
 Examples:
   heapleach ~/Downloads

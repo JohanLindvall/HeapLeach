@@ -161,6 +161,8 @@ once, up front, instead of as a wall of failed transfers.
 | **4chan** | `/<board>/thread/<id>` | The site's read-only JSON API; every attachment in a thread. |
 | **streamtape, doodstream, mixdrop** | watch and embed pages | Each assembles its link inside the player: two halves joined at an offset the page states, a token endpoint plus a random tail, or a packed script naming the delivery host. Every one of them reads the numbers it needs off the page rather than hard-coding what they were. |
 | **pixhost** | `/gallery/<code>`, `/show/<group>/<file>` | A gallery's thumbnails say where the full images are: the two links differ only by host prefix and one path segment. Deriving them resolves a gallery of fifty in one request instead of fifty, and a mapping that ever changed would fail visibly with a 404 rather than quietly fetching thumbnails. |
+| **suvobox** | `/a/<id>`, `/f/<id>` | The album listing states every file's id, its full name with extension and its size, so a whole album resolves in one request with real names in the queue from the start. The bytes come from the media host's `?raw=1`, which needs no token — the site's own signed `?dl=1` link would only expire while an item waited its turn. |
+| **imagepond** | `/i/<code>`, and the title-slug form of the same page | The metadata names the item, but for a video it names the *poster frame*, and it has been seen misreporting a QuickTime file as MP4 — so the player element's own `data-src` is read first and the metadata is the fallback. Profile pages list their items client-side and are not supported. |
 | **yandex** | `/video/preview/<id>`, on any of its country domains | Yandex hosts none of this: a preview is a viewer wrapped around somebody else's video, and the page links the source beside the player. That link is what is followed, and the video is left to yt-dlp, which knows far more hosts than this program does. Needs `make dependencies`. |
 | **ok.ru** | `/video/<id>`, `/videoembed/<id>` | The watch page carries an empty rendition list for a logged-out caller, and the player's metadata endpoint answers the same way; the embed page, which exists to be framed elsewhere, carries the same structure filled in. Links are signed with an expiry and the requesting address, so they resolve at download time. |
 | *anything else* | any `http(s)` URL | Treated as a direct file link; the name and size come from the response headers. |
@@ -202,9 +204,12 @@ ffmpeg the `.ts` is kept and plays fine.
   so a working download is never failed by trying to go faster.
 - **Patient with busy hosts.** Gofile answers a request for a file on a busy
   storage server by redirecting to its own web page. That is detected rather
-  than saved to disk, and retried indefinitely with backoff — rotating
-  through the file's other storage servers where it has them — because a busy
-  host has not failed, it has asked us to come back.
+  than saved to disk, and retried with backoff — rotating through the file's
+  other storage servers where it has them — because a busy host has not
+  failed, it has asked us to come back. Patience is spent only where trying
+  again can change the answer: a URL with nothing to re-resolve, which is
+  usually a page no extractor recognised, is told so after a few attempts
+  instead of retrying forever.
 - **Pause and resume** the whole queue. Transfers park inside their reads
   rather than being torn down, so a short pause costs nothing and a long one
   falls back on the same resume every other interruption uses.
@@ -220,8 +225,13 @@ ffmpeg the `.ts` is kept and plays fine.
 - **Notices a stalled transfer.** A connection that stops delivering without
   closing is invisible to a read timeout; if the byte counter has not moved
   for `-stall-timeout`, the attempt is abandoned and retried, resuming from
-  what is on disk.
-- **Live progress** over server-sent events: per-file bytes, rate, ETA.
+  what is on disk. Playlist downloads are watched the same way, against the
+  bytes actually arriving rather than against whole parts landing — a large
+  part fetched slowly is progress, a silent connection is not.
+- **Live progress** over server-sent events: per-file bytes, rate, ETA, and
+  parts joined for a file that arrives as a playlist and so has no byte total
+  until its last part lands. A transfer waiting on purpose says so, rather
+  than looking like one that has died.
 - **Cancel and retry** a whole job or a single file.
 - **Resume** — partial files are kept and continued with a `Range` request;
   a cancelled 100 MB download restarts where it stopped.

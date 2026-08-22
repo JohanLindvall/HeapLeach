@@ -3,6 +3,7 @@
 package webui
 
 import (
+	"bytes"
 	"embed"
 	"io/fs"
 )
@@ -28,15 +29,5 @@ func Built() bool {
 
 func containsPlaceholder(b []byte) bool {
 	const marker = "data-heapleach-placeholder"
-	return len(b) < 4096 && contains(b, marker)
-}
-
-func contains(haystack []byte, needle string) bool {
-	n := len(needle)
-	for i := 0; i+n <= len(haystack); i++ {
-		if string(haystack[i:i+n]) == needle {
-			return true
-		}
-	}
-	return false
+	return len(b) < 4096 && bytes.Contains(b, []byte(marker))
 }

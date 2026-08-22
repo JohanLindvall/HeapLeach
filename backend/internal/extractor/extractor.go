@@ -141,6 +141,8 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewTNAFlix(client),
 		NewPornOne(client),
 		NewPixhost(client),
+		NewImagePond(client),
+		NewSuvobox(client),
 		NewFapello(client),
 		NewCoomerFans(client),
 		NewOKru(client),

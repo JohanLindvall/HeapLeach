@@ -229,6 +229,12 @@ func frame(snap download.Snapshot, r *renderer, started time.Time) []string {
 				return lines
 			}
 			lines = append(lines, r.itemRow(it))
+			// A note explains a wait the numbers cannot: without it a
+			// transfer being patient with a busy host is indistinguishable
+			// from one that has died.
+			if it.Note != "" {
+				lines = append(lines, r.paintColour(yellow, "      "+it.Note))
+			}
 			shown++
 		}
 	}

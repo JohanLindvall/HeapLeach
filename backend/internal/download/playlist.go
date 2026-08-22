@@ -1,15 +1,19 @@
 package download
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -115,32 +119,41 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// The item's own counter only advances when a whole part lands in
+	// order, so the watchdog samples raw fetched bytes instead: a large
+	// part arriving slowly is progress, a connection gone silent is not.
+	var (
+		fetched atomic.Int64
+		stalled atomic.Bool
+	)
+	go watchForStall(ctx, fetched.Load, cancel, &stalled, m.stallTimeout(), m.throttle.isPaused)
+	fail := func(err error) (string, error) {
+		return "", annotateTransfer(name, err, &stalled, m.stallTimeout())
+	}
+
 	results := make(chan fetchedSegment, workers)
 	slots := make(chan struct{}, workers)
 
 	var wg sync.WaitGroup
 	go func() {
+		defer close(results)
+		defer wg.Wait()
 		for i := start; i < len(segments); i++ {
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():
-				break
-			}
-			if ctx.Err() != nil {
-				break
+				return
 			}
 			wg.Add(1)
 			go func(index int) {
 				defer wg.Done()
-				data, err := m.fetchSegment(ctx, segments[index], headers)
+				data, err := m.fetchSegment(ctx, segments[index], headers, &fetched)
 				select {
 				case results <- fetchedSegment{index: index, data: data, err: err}:
 				case <-ctx.Done():
 				}
 			}(i)
 		}
-		wg.Wait()
-		close(results)
 	}()
 
 	it.streams.Store(int32(workers))
@@ -156,7 +169,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 			//nolint:revive // drain so the producer goroutines can exit
 			for range results {
 			}
-			return "", fmt.Errorf("segment %d of %d: %w", outcome.index+1, len(segments), outcome.err)
+			return fail(fmt.Errorf("segment %d of %d: %w", outcome.index+1, len(segments), outcome.err))
 		}
 		pending[outcome.index] = outcome.data
 
@@ -185,7 +198,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return fail(err)
 	}
 	if next != len(segments) {
 		return "", fmt.Errorf("joined %d of %d segments", next, len(segments))
@@ -204,30 +217,12 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 // playlistStateEvery is how often progress is checkpointed, in segments.
 const playlistStateEvery = 20
 
-// fetchSegment retrieves one part in full.
-//
-// A playlist part arrives as one whole response rather than a stream, so
-// the throttle is consulted around the fetch instead of inside it: once to
-// wait out a pause before starting, and once afterwards to pay for the
-// bytes. The rate is therefore right on average across a playlist rather
-// than smooth within a single part.
-func (m *Manager) fetchSegment(ctx context.Context, rawURL string, headers httpx.Header) ([]byte, error) {
+// fetchSegment retrieves one part in full, retrying on its own so a single
+// dropped connection does not sink the whole playlist.
+func (m *Manager) fetchSegment(ctx context.Context, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
-		if _, err := m.throttle.take(ctx, 1); err != nil {
-			return nil, err
-		}
-		req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		for header, value := range headers {
-			req.Header.Set(header, value)
-		}
-		req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
-
-		data, err := m.client.Bytes(req)
+		data, err := m.fetchSegmentOnce(ctx, rawURL, headers, fetched)
 		if err == nil {
-			m.chargeThrottle(ctx, len(data))
 			return data, nil
 		}
 		if ctx.Err() != nil {
@@ -241,6 +236,64 @@ func (m *Manager) fetchSegment(ctx context.Context, rawURL string, headers httpx
 		}
 	}
 }
+
+// fetchSegmentOnce streams one part into memory.
+//
+// The body is read through the shared throttle, so a pause parks mid-part
+// and a rate cap holds inside a part rather than only between parts, and
+// every read is counted into fetched so the stall watchdog sees a large part
+// arriving slowly as the progress it is. The body is read directly rather
+// than through Client.Bytes, whose in-memory cap is sized for pages and
+// would silently truncate a media part larger than it.
+func (m *Manager) fetchSegmentOnce(ctx context.Context, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
+	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	for header, value := range headers {
+		req.Header.Set(header, value)
+	}
+	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, statusError(req.URL, resp)
+	}
+
+	var buf bytes.Buffer
+	if resp.ContentLength > 0 && resp.ContentLength <= config.MaxSegmentBytes {
+		buf.Grow(int(resp.ContentLength))
+	}
+	// One byte past the ceiling, so reaching it is detectable rather than
+	// arriving as a part that is quietly short.
+	body := io.TeeReader(
+		io.LimitReader(m.throttled(ctx, resp.Body), config.MaxSegmentBytes+1),
+		countInto(fetched))
+	if _, err := buf.ReadFrom(body); err != nil {
+		return nil, fmt.Errorf("read %s: %w", req.URL.Redacted(), err)
+	}
+	if int64(buf.Len()) > config.MaxSegmentBytes {
+		return nil, fmt.Errorf("%s: part exceeds %d bytes, which no real one does",
+			req.URL.Redacted(), int64(config.MaxSegmentBytes))
+	}
+	return buf.Bytes(), nil
+}
+
+// countInto is a writer that only tallies what passes through it.
+func countInto(n *atomic.Int64) io.Writer {
+	return writerFunc(func(p []byte) (int, error) {
+		n.Add(int64(len(p)))
+		return len(p), nil
+	})
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // setSegmentProgress publishes how far through a playlist a transfer is,
 // which is the only meaningful progress when the total length is unknown

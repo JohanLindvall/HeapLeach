@@ -102,6 +102,15 @@ const (
 	// MaxResponseBytes caps a buffered JSON or HTML body held in memory.
 	MaxResponseBytes = 8 << 20
 
+	// MaxSegmentBytes caps one playlist part, which is assembled in memory
+	// before being appended in order. Set far above any real part — those
+	// are seconds of video — so it never truncates a genuine one; it is a
+	// bound against a server that misreports a length or never stops
+	// sending, which would otherwise be unbounded allocation. Reaching it
+	// is an error rather than a short read: silently joining a truncated
+	// part would produce a corrupt file that looks finished.
+	MaxSegmentBytes = 256 << 20
+
 	// RequestRetryBase and RequestRetryMax bound the backoff between
 	// retries of a single HTTP request.
 	RequestRetryBase = 400 * time.Millisecond
@@ -114,10 +123,18 @@ const (
 
 	// BusyRetryBase and BusyRetryMax bound the wait between attempts at a
 	// host that is merely busy. Such a host is not failing, it is asking us
-	// to come back later, so these attempts are unlimited in number and
-	// only the interval is capped.
+	// to come back later, so for items that can re-resolve — rotating to a
+	// mirror, or minting a fresh signed link — these attempts are unlimited
+	// in number and only the interval is capped.
 	BusyRetryBase = 2 * time.Second
 	BusyRetryMax  = 60 * time.Second
+
+	// BusyRetryLimit caps those attempts for an item with no resolver,
+	// where every retry asks the same URL the same way. A host that keeps
+	// answering such a request with a web page is not busy — the URL is a
+	// web page, usually one no extractor recognised — and retrying forever
+	// would sit in the queue as "host busy" without end.
+	BusyRetryLimit = 5
 
 	// MaxRetryAfter caps how long a server's Retry-After can park a worker.
 	MaxRetryAfter = 2 * time.Minute
