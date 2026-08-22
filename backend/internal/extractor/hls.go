@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -202,6 +203,43 @@ func parseAttributes(line string) map[string]string {
 	}
 	flush()
 	return attrs
+}
+
+// playlistExtension names the container the joined segments will be in, read
+// off the variant's own URL.
+func playlistExtension(v hlsVariant) string {
+	if strings.Contains(strings.ToLower(v.URL), "cmaf") || strings.Contains(v.URL, ".mp4") {
+		return ".mp4"
+	}
+	return ".ts"
+}
+
+// segmentsExtension names the container the joined segments will be in,
+// asking the segments themselves before falling back to the variant's URL.
+//
+// The fallback alone is not to be trusted, because several packagers build
+// the manifest path out of the *source* file's name: Akamai's ".mp4.csmil/"
+// and nginx-vod-module's urlsets both put ".mp4" in the path of a stream
+// whose parts are MPEG-TS, and a .ts file named .mp4 is one players refuse
+// and remux.go never converts. The segments are what actually get written,
+// so they are what the file is named after.
+//
+// The last segment is read rather than the first, which on a fragmented
+// stream is the initialisation segment named by EXT-X-MAP — though either
+// answers the same here, since an init segment is ".mp4" and the parts it
+// leads are ".m4s", and both name the same container.
+func segmentsExtension(segments []string, variant hlsVariant) string {
+	if len(segments) > 0 {
+		if u, err := url.Parse(segments[len(segments)-1]); err == nil {
+			switch strings.ToLower(path.Ext(u.Path)) {
+			case ".ts":
+				return ".ts"
+			case ".mp4", ".m4s":
+				return ".mp4"
+			}
+		}
+	}
+	return playlistExtension(variant)
 }
 
 // resolvePlaylist follows a master playlist down to its segment list.

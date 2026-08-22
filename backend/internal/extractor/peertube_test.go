@@ -525,16 +525,16 @@ func TestPeerTubePlaylistURL(t *testing.T) {
 	}
 }
 
-// TestPeerTubeSegmentExt pins how a joined playlist is named: MPEG-TS parts
-// keep their own container, and fragmented MP4 parts — including the
+// TestPeerTubeSegmentNaming pins how a joined playlist is named: MPEG-TS
+// parts keep their own container, and fragmented MP4 parts — including the
 // initialisation segment that leads them and names nothing — become a .mp4.
-func TestPeerTubeSegmentExt(t *testing.T) {
+func TestPeerTubeSegmentNaming(t *testing.T) {
+	variant := hlsVariant{URL: "https://media.example.com/hls/master.m3u8"}
 	tests := []struct {
 		name     string
 		segments []string
 		want     string
 	}{
-		{name: "no segments", want: ".mp4"},
 		{
 			name:     "fragmented mp4, led by an init segment",
 			segments: []string{"https://media.example.com/hls/init.mp4", "https://media.example.com/hls/0.mp4"},
@@ -548,8 +548,8 @@ func TestPeerTubeSegmentExt(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := peerTubeSegmentExt(tc.segments); got != tc.want {
-				t.Errorf("peerTubeSegmentExt = %q, want %q", got, tc.want)
+			if got := segmentsExtension(tc.segments, variant); got != tc.want {
+				t.Errorf("segmentsExtension = %q, want %q", got, tc.want)
 			}
 		})
 	}

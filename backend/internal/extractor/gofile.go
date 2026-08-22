@@ -131,6 +131,11 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 
 // collect appends c's files to res, recursing into subfolders.
 func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password, dir string, depth int, res *Result) error {
+	// The shared listing ceiling, for a share that is really somebody's whole
+	// drive: past it the queue has stopped being something anyone meant.
+	if len(res.Files) >= config.MaxListingFiles {
+		return nil
+	}
 	if c.Type == "file" {
 		if c.Link == "" {
 			return nil
@@ -202,7 +207,11 @@ func (g *Gofile) fetchContent(ctx context.Context, id, token, password string) (
 
 	var merged *gofileContent
 
-	for page := 1; ; page++ {
+	// Bounded the way every paginated listing here is: the API says when the
+	// pages end, and the cap is the backstop against one that keeps saying
+	// there is more. MaxAlbumPages of FolderPageSize children per folder sits
+	// at the same order as MaxListingFiles, which bounds the job as a whole.
+	for page := 1; page <= config.MaxAlbumPages; page++ {
 		q := url.Values{
 			"page":          {strconv.Itoa(page)},
 			"pageSize":      {strconv.Itoa(config.FolderPageSize)},
@@ -245,6 +254,9 @@ func (g *Gofile) fetchContent(ctx context.Context, id, token, password string) (
 			return merged, nil
 		}
 	}
+	// The cap bit before the API said it was done; what is in hand is a
+	// truncated listing, which is still worth more than an error.
+	return merged, nil
 }
 
 // websiteToken reproduces gofile's client-side request signature.
@@ -301,12 +313,15 @@ func (g *Gofile) explain(err error) error {
 }
 
 func (g *Gofile) statusError(status string) error {
+	// Folded for comparison: gofile camel-cases its statuses ("error-wrongToken")
+	// and the markers here are fragments of them.
+	folded := strings.ToLower(status)
 	switch {
-	case strings.Contains(status, "passwordRequired"), strings.Contains(status, "password"):
+	case strings.Contains(folded, "password"):
 		return ErrPasswordRequired
-	case strings.Contains(status, "notFound"):
+	case strings.Contains(folded, "notfound"):
 		return errors.New("gofile: content not found (removed or wrong link)")
-	case strings.Contains(status, "token"):
+	case strings.Contains(folded, "token"):
 		return errGofileStaleToken
 	}
 	return fmt.Errorf("gofile: api returned %q", status)

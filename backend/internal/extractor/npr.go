@@ -195,13 +195,7 @@ func nprFiles(entries []nprAudio) []File {
 	// programme's own page is all one strand and a folder would say nothing;
 	// a section or front page is a handful of them at once, and reads as a
 	// heap without.
-	distinct := make(map[string]bool)
-	for _, entry := range entries {
-		if program := entry.program(); program != "" {
-			distinct[program] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(entries, nprAudio.program)
 
 	used := make(map[string]int, len(entries))
 	files := make([]File, 0, len(entries))

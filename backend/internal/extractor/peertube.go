@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -73,8 +72,9 @@ type PeerTube struct {
 //
 // The list is a convenience and not the boundary of what works, which is
 // just as well: no list of seven can stand in for seventeen hundred. Hosts
-// nobody named are reached two other ways — HEAPLEACH_PEERTUBE_HOSTS adds
-// them at runtime, and peerTubeSniff recognises the rest from their own API.
+// nobody named are reached two other ways — the "peertube" family of
+// HEAPLEACH_EXTRA_HOSTS adds them at runtime, and peerTubeSniff recognises
+// the rest from their own API.
 var peerTubeKnownHosts = []string{
 	"framatube.org",
 	"tilvids.com",
@@ -132,9 +132,6 @@ func NewPeerTubeSites(cfg *config.Config, client *httpx.Client) []Extractor {
 	}
 	return out
 }
-
-// peerTubeExtraHosts reads HEAPLEACH_PEERTUBE_HOSTS, which accepts the
-// separators someone is likely to type.
 
 func (p *PeerTube) Name() string { return peerTubeLabel(p.host) }
 
@@ -345,12 +342,14 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 	// and joined, with no ranges and no resume.
 	if playlist := peerTubePlaylistURL(video); playlist != "" {
 		headers := peerTubeFileHeaders(u, playlist, opts.Password)
-		segments, _, err := resolvePlaylist(ctx, client, playlist, headers)
+		segments, variant, err := resolvePlaylist(ctx, client, playlist, headers)
 		if err != nil {
 			return nil, "", fmt.Errorf("%s: %s: %w", label, title, err)
 		}
 		return []File{{
-			Name:     title + peerTubeSegmentExt(segments),
+			// Current instances serve fragmented MP4 and older ones MPEG-TS;
+			// the segments say which. See segmentsExtension.
+			Name:     title + segmentsExtension(segments, variant),
 			Size:     -1,
 			Headers:  headers,
 			Segments: segments,
@@ -533,22 +532,6 @@ func peerTubeFileName(title string, candidate peerTubeCandidate) string {
 	return title + "-" + candidate.Label + ext
 }
 
-// peerTubeSegmentExt names a joined playlist after what its parts actually
-// are. Current instances serve fragmented MP4 and older ones MPEG-TS, and
-// only the latter needs a name of its own — every fragmented variant, and
-// the initialisation segment leading it, concatenates into a plain .mp4. The
-// last segment is read rather than the first, which on a fragmented stream is
-// that initialisation segment and names nothing.
-func peerTubeSegmentExt(segments []string) string {
-	if len(segments) == 0 {
-		return ".mp4"
-	}
-	if strings.EqualFold(path.Ext(util.NameFromURL(segments[len(segments)-1])), ".ts") {
-		return ".ts"
-	}
-	return ".mp4"
-}
-
 // ---------------------------------------------------------------- listings
 
 // peerTubeListingResult expands a channel, account or playlist.
@@ -661,34 +644,10 @@ func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint stri
 func peerTubeExpand(ctx context.Context, client *httpx.Client, u *url.URL,
 	ids []string, label string, opts Options) []File {
 
-	groups := make([][]File, len(ids))
-
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for i, id := range ids {
-		wg.Add(1)
-		go func(i int, id string) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			files, _, err := peerTubeVideoFiles(ctx, client, u, id, label, opts)
-			if err != nil {
-				return
-			}
-			groups[i] = files
-		}(i, id)
-	}
-	wg.Wait()
-
-	var files []File
-	for _, group := range groups {
-		files = append(files, group...)
-	}
-	return files
+	return FanOut(ctx, ids, func(ctx context.Context, id string) ([]File, error) {
+		files, _, err := peerTubeVideoFiles(ctx, client, u, id, label, opts)
+		return files, err
+	})
 }
 
 // ------------------------------------------------------------------- sniff

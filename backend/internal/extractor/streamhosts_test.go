@@ -77,6 +77,22 @@ func TestUnpackJSLeavesUnpackedScriptsAlone(t *testing.T) {
 	}
 }
 
+// A payload word long enough to overflow the index accumulator — a hex token
+// inside a URL is the ordinary case — must pass through verbatim rather than
+// wrap negative and panic the word lookup.
+func TestUnpackJSSurvivesLongPayloadWords(t *testing.T) {
+	const packed = `eval(function(p,a,c,k,e,d){}` +
+		`('0="deadbeefdeadbeefdeadbeefdeadbeef"',36,2,'MDCore|unused'.split('|'),0,{}))`
+
+	got, ok := unpackJS(packed)
+	if !ok {
+		t.Fatal("a packed script was not recognised")
+	}
+	if !strings.Contains(got, "deadbeefdeadbeefdeadbeefdeadbeef") {
+		t.Errorf("the long token did not survive: %s", got)
+	}
+}
+
 // TestPackerIndex covers the alphabet, whose third range only appears once a
 // word list outgrows base 36 — the case that is easy to get wrong and rare
 // enough not to notice.
@@ -97,6 +113,11 @@ func TestPackerIndex(t *testing.T) {
 		{word: "z", base: 20, valid: false}, // a digit the base does not have
 		{word: "-", base: 36, valid: false}, // not a digit at all
 		{word: "", base: 36, valid: false},
+		// A long run of base digits is an ordinary word — a hex token in a
+		// URL, say — not an index. Unbounded it overflows the accumulator,
+		// and a wrapped-negative value would panic the caller's word lookup.
+		{word: "deadbeefdeadbeefdeadbeefdeadbeef", base: 36, valid: false},
+		{word: strings.Repeat("z", 64), base: 62, valid: false},
 	}
 	for _, tc := range tests {
 		got, ok := packerIndex(tc.word, tc.base)

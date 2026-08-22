@@ -264,8 +264,8 @@ func TestRaiCsmilPlaylistNamesTheContainerFromItsSegments(t *testing.T) {
 	}
 
 	segments := parseMediaPlaylist("#EXTM3U\n#EXTINF:6,\nseg-1-f2-v1-a1.ts\n#EXTINF:6,\nseg-2-f2-v1-a1.ts\n", base)
-	if got := raiExtension(segments); got != ".ts" {
-		t.Errorf("raiExtension = %q, want .ts: the segments are MPEG-TS whatever the path says", got)
+	if got := segmentsExtension(segments, hlsVariant{}); got != ".ts" {
+		t.Errorf("segmentsExtension = %q, want .ts: the segments are MPEG-TS whatever the path says", got)
 	}
 }
 
@@ -278,12 +278,12 @@ func TestRaiExtension(t *testing.T) {
 		"https://cdn.example.test/a/chunk-1":                                  ".ts",
 	}
 	for segment, want := range tests {
-		if got := raiExtension([]string{segment}); got != want {
-			t.Errorf("raiExtension(%s) = %q, want %q", segment, got, want)
+		if got := segmentsExtension([]string{segment}, hlsVariant{}); got != want {
+			t.Errorf("segmentsExtension(%s, -) = %q, want %q", segment, got, want)
 		}
 	}
-	if got := raiExtension(nil); got != ".ts" {
-		t.Errorf("raiExtension(nil) = %q, want .ts", got)
+	if got := segmentsExtension(nil, hlsVariant{}); got != ".ts" {
+		t.Errorf("segmentsExtension(nil, hlsVariant{}) = %q, want .ts", got)
 	}
 }
 

@@ -214,13 +214,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ep := range episodes {
-		if ep.season != "" {
-			distinct[ep.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep srfEpisodeRef) string { return ep.season })
 
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
@@ -389,32 +383,14 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 	}
 
 	return &File{
-		Name:     srfPlaylistExtension(variant, segments),
+		// Named off the segments, not the variant URL: Akamai packages these
+		// out of a stored MP4 and names the path after it — ".mp4.csmil/"
+		// over MPEG-TS parts. See segmentsExtension.
+		Name:     segmentsExtension(segments, variant),
 		Size:     -1,
 		Headers:  headers,
 		Segments: segments,
 	}, title, nil
-}
-
-// srfPlaylistExtension names the container the joined segments will be in.
-//
-// playlistExtension reads the variant's own URL, and on this host that URL
-// lies. SRF's playlists are packaged by Akamai out of a stored MP4, and the
-// packaging path is named after the source:
-// ".../x_,q40,q60,.mp4.csmil/index-f1-v1-a1.m3u8" — from which
-// playlistExtension concludes ".mp4", while the segments behind it are
-// "segment-1-f1-v1-a1.ts" with no initialisation segment anywhere. Saving a
-// transport stream as ".mp4" is not fatal, since players sniff, but it is a
-// claim about the file that is untrue. The segments are what actually gets
-// written, so they are what it is named after, and the shared rule is the
-// fallback for a playlist that lists nothing recognisable.
-func srfPlaylistExtension(variant hlsVariant, segments []string) string {
-	if len(segments) > 0 {
-		if ext := strings.ToLower(path.Ext(util.NameFromURL(segments[0]))); ext != "" {
-			return ext
-		}
-	}
-	return playlistExtension(variant)
 }
 
 // srfJoin names a programme by its show and its own title.

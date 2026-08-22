@@ -326,6 +326,14 @@ func isWordByte(c byte) bool {
 	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
+// packerIndexMax bounds the value a token may decode to. A packed index is
+// small — it names a position in the word list — while the payload also
+// carries ordinary words whose characters all happen to be digits of the
+// base: a long lowercase run, a hex token inside a URL. Read without a bound
+// those overflow the accumulator, and a wrapped-negative "index" would pass
+// the caller's range check and panic the word lookup.
+const packerIndexMax = 1 << 30
+
 // packerIndex reads a token as a number in the packer's alphabet: digits,
 // then lowercase, then uppercase — the last of which only appears once the
 // word list outgrows base 36.
@@ -343,7 +351,7 @@ func packerIndex(word string, base int) (int, bool) {
 		default:
 			return 0, false
 		}
-		if digit >= base {
+		if digit >= base || value > (packerIndexMax-digit)/base {
 			return 0, false
 		}
 		value = value*base + digit

@@ -1,8 +1,11 @@
 package extractor
 
 import (
+	"path"
 	"strings"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // The fixtures below are synthetic, but every trap in them is one the real
@@ -315,7 +318,7 @@ func TestRTPSegmentExtensionIgnoresTheUrlsetPath(t *testing.T) {
 	if len(segments) != 2 {
 		t.Fatalf("parsed %d segments, want 2", len(segments))
 	}
-	if got := rtpSegmentExtension(segments, best); got != ".ts" {
+	if got := segmentsExtension(segments, best); got != ".ts" {
 		t.Errorf("extension %q, want .ts", got)
 	}
 }
@@ -324,14 +327,14 @@ func TestRTPSegmentExtensionIgnoresTheUrlsetPath(t *testing.T) {
 // today, where the general helper is still the best answer available.
 func TestRTPSegmentExtensionFallsBack(t *testing.T) {
 	fragmented := hlsVariant{URL: "https://cdn.example.test/cmaf/index.m3u8"}
-	if got := rtpSegmentExtension([]string{"https://cdn.example.test/cmaf/seg-1.m4s"}, fragmented); got != ".mp4" {
+	if got := segmentsExtension([]string{"https://cdn.example.test/cmaf/seg-1.m4s"}, fragmented); got != ".mp4" {
 		t.Errorf("fMP4 segments gave %q, want .mp4", got)
 	}
-	if got := rtpSegmentExtension(nil, fragmented); got != ".mp4" {
+	if got := segmentsExtension(nil, fragmented); got != ".mp4" {
 		t.Errorf("with no segments to read, got %q, want playlistExtension's answer", got)
 	}
 	unknown := hlsVariant{URL: "https://cdn.example.test/a/index.m3u8"}
-	if got := rtpSegmentExtension([]string{"https://cdn.example.test/a/seg-1"}, unknown); got != ".ts" {
+	if got := segmentsExtension([]string{"https://cdn.example.test/a/seg-1"}, unknown); got != ".ts" {
 		t.Errorf("nameless segments gave %q, want playlistExtension's answer", got)
 	}
 }
@@ -366,7 +369,7 @@ func TestRTPPlainMediaIsPreferredForRadio(t *testing.T) {
 	if got := rtpPlainMediaURL(rtpRadioEpisode); got != want {
 		t.Errorf("found %q, want %q", got, want)
 	}
-	if got := rtpLinkExtension(want); got != ".mp3" {
+	if got := strings.ToLower(path.Ext(util.NameFromURL(want))); got != ".mp3" {
 		t.Errorf("extension %q, want .mp3", got)
 	}
 	// A video page must not be read this way: its `var f` is an object.
@@ -562,21 +565,6 @@ func TestRTPRefusedCarriesTheReason(t *testing.T) {
 	err := &rtpRefused{page: "https://www.rtp.pt/play/p2/e21/x", reason: "DRM protected"}
 	if got := err.Error(); got != "rtpplay: https://www.rtp.pt/play/p2/e21/x: DRM protected" {
 		t.Errorf("Error() = %q", got)
-	}
-}
-
-func TestRTPLinkExtension(t *testing.T) {
-	tests := map[string]string{
-		"https://cdn.example.test/a/b.MP3?x=1":  ".mp3",
-		"https://cdn.example.test/a/seg-1.ts":   ".ts",
-		"https://cdn.example.test/a/seg-1":      "",
-		"https://cdn.example.test/a/master.m3u": ".m3u",
-		"::not a url":                           "",
-	}
-	for link, want := range tests {
-		if got := rtpLinkExtension(link); got != want {
-			t.Errorf("rtpLinkExtension(%q) = %q, want %q", link, got, want)
-		}
 	}
 }
 

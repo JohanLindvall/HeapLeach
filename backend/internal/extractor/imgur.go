@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"path"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -384,36 +383,13 @@ func (w *imgurPageWalk) add(page []imgurEntry) bool {
 // interleave. One post that will not load is skipped, because on a listing of
 // hundreds the rest are still worth having.
 func (i *Imgur) expand(ctx context.Context, entries []imgurEntry) []File {
-	groups := make([][]File, len(entries))
-
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for n, entry := range entries {
+	return FanOut(ctx, entries, func(ctx context.Context, entry imgurEntry) ([]File, error) {
 		if file, ok := entry.media(); ok {
-			groups[n] = []File{file}
-			continue
+			return []File{file}, nil
 		}
-		wg.Add(1)
-		go func(n int, id string) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			if files, _, err := i.postFiles(ctx, id); err == nil {
-				groups[n] = files
-			}
-		}(n, entry.Hash)
-	}
-	wg.Wait()
-
-	var files []File
-	for _, group := range groups {
-		files = append(files, group...)
-	}
-	return files
+		files, _, err := i.postFiles(ctx, entry.Hash)
+		return files, err
+	})
 }
 
 // media builds the file for a row that is the media rather than a post, and

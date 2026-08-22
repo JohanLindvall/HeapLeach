@@ -188,13 +188,7 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ep := range episodes {
-		if ep.season != "" {
-			distinct[ep.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep nrkEpisodeRef) string { return ep.season })
 
 	result := &Result{Title: util.FirstNonEmpty(title, ref.slug)}
 	var refused string

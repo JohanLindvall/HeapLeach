@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -201,14 +200,4 @@ type kemonoPost struct {
 type kemonoAttachment struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
-}
-
-// folderName trims a post title down to a readable directory name. The
-// downloader sanitises every path component anyway; this only keeps a
-// rambling title from becoming a rambling folder.
-func folderName(title string) string {
-	if runes := []rune(strings.TrimSpace(title)); len(runes) > 80 {
-		return strings.TrimSpace(string(runes[:80]))
-	}
-	return strings.TrimSpace(title)
 }

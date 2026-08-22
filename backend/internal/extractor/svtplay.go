@@ -97,29 +97,35 @@ func (s *SVTPlay) series(ctx context.Context, u *url.URL) (*Result, error) {
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ep := range episodes {
-		if ep.season != "" {
-			distinct[ep.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep svtEpisodeRef) string { return ep.season })
 
-	result := &Result{Title: util.FirstNonEmpty(title, slug)}
-	for _, ep := range episodes {
+	// Every episode is its own API call, and a series runs to hundreds;
+	// fetched one after another the job would sit resolving for minutes
+	// before a byte moved. FanOut keeps the listing's own order regardless,
+	// and an expired or geo-blocked episode is dropped rather than sinking
+	// the rest.
+	type svtResolved struct {
+		file    *File
+		program string
+	}
+	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep svtEpisodeRef) ([]svtResolved, error) {
 		file, program, episodeTitle, err := s.episode(ctx, ep.videoID)
 		if err != nil {
-			// One expired or geo-blocked episode should not sink the rest.
-			continue
-		}
-		if result.Title == slug && program != "" {
-			result.Title = program
+			return nil, err
 		}
 		file.Name = util.FirstNonEmpty(ep.name, episodeTitle, program, ep.videoID) + file.Name
 		if nest {
 			file.Dir = ep.season
 		}
-		result.Files = append(result.Files, *file)
+		return []svtResolved{{file: file, program: program}}, nil
+	})
+
+	result := &Result{Title: util.FirstNonEmpty(title, slug)}
+	for _, r := range resolved {
+		if result.Title == slug && r.program != "" {
+			result.Title = r.program
+		}
+		result.Files = append(result.Files, *r.file)
 	}
 	if len(result.Files) == 0 {
 		return nil, fmt.Errorf("svtplay: none of the %d episodes of %s are playable "+
@@ -236,14 +242,6 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 		Headers:  headers,
 		Segments: segments,
 	}, meta.ProgramTitle, meta.EpisodeTitle, nil
-}
-
-// playlistExtension names the container the joined segments will be in.
-func playlistExtension(v hlsVariant) string {
-	if strings.Contains(strings.ToLower(v.URL), "cmaf") || strings.Contains(v.URL, ".mp4") {
-		return ".mp4"
-	}
-	return ".ts"
 }
 
 // svtVideo is the part of the player API response we use.

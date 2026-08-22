@@ -7,7 +7,6 @@ import (
 	"path"
 	"regexp"
 	"strings"
-	"sync"
 	"unicode"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -323,40 +322,17 @@ func (b *BitChute) channelName(ctx context.Context, segment string) string {
 // queue follows the channel's own order however the requests interleave, and
 // a video that will not resolve is dropped rather than failing the rest.
 func (b *BitChute) expand(ctx context.Context, videos []bitchuteVideo) []File {
-	found := make([]*File, len(videos))
-
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for i, video := range videos {
-		wg.Add(1)
-		go func(i int, video bitchuteVideo) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			media, err := b.media(ctx, video.ID)
-			if err != nil {
-				return
-			}
-			file, err := b.file(ctx, bitchuteVideoName(video), media)
-			if err != nil {
-				return
-			}
-			found[i] = &file
-		}(i, video)
-	}
-	wg.Wait()
-
-	files := make([]File, 0, len(found))
-	for _, file := range found {
-		if file != nil {
-			files = append(files, *file)
+	return FanOut(ctx, videos, func(ctx context.Context, video bitchuteVideo) ([]File, error) {
+		media, err := b.media(ctx, video.ID)
+		if err != nil {
+			return nil, err
 		}
-	}
-	return files
+		file, err := b.file(ctx, bitchuteVideoName(video), media)
+		if err != nil {
+			return nil, err
+		}
+		return []File{file}, nil
+	})
 }
 
 // ----------------------------------------------------------------- shared

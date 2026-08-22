@@ -710,11 +710,11 @@ func mediaPageIsHTMLType(kind string) bool {
 	return kind == "text/html" || kind == "application/xhtml+xml"
 }
 
-// mediaPageIsHLSType reports whether a type names a playlist, in either of
-// the two spellings hosts use.
+// mediaPageIsHLSType reports whether a type names a playlist, consulting the
+// one table of playlist spellings so this and the manifest sniff cannot
+// drift apart.
 func mediaPageIsHLSType(kind string) bool {
-	return kind == "application/vnd.apple.mpegurl" || kind == "application/x-mpegurl" ||
-		kind == "audio/mpegurl" || kind == "audio/x-mpegurl"
+	return hlsManifestMediaTypes[kind]
 }
 
 // mediaPageIsMediaType reports whether a declared type is something this can

@@ -240,13 +240,7 @@ func (p *PBS) show(ctx context.Context, u *url.URL, slug string) (*Result, error
 	// Only nest by season when there is more than one to tell apart. A show
 	// whose page is all specials has no season anywhere, and a folder named
 	// after nothing helps nobody.
-	distinct := make(map[string]bool)
-	for _, episode := range episodes {
-		if episode.season != "" {
-			distinct[episode.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep pbsEpisode) string { return ep.season })
 
 	result := &Result{Title: slug}
 	for _, episode := range episodes {

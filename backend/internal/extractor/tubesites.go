@@ -102,9 +102,18 @@ func NewXHamster(client *httpx.Client) *XHamster { return &XHamster{client: clie
 
 func (x *XHamster) Name() string { return "xhamster" }
 
+// Match accepts any host with an "xhamster" label, the way bunkr covers its
+// domain rotation: xhamster.com, xhamster.desi, m.xhamster.com. A bare
+// substring test would also claim unrelated hosts that merely contain the
+// name ("notxhamster.example").
 func (x *XHamster) Match(u *url.URL) bool {
 	host := strings.ToLower(u.Hostname())
-	return strings.Contains(host, "xhamster.")
+	for _, label := range strings.Split(host, ".") {
+		if strings.HasPrefix(label, "xhamster") {
+			return true
+		}
+	}
+	return false
 }
 
 // Extract picks the best rendition, re-reading the page at download time
@@ -252,6 +261,12 @@ func jsonObjectAfter(doc string, marker *regexp.Regexp) (string, error) {
 		return "", fmt.Errorf("no player configuration found")
 	}
 	start := strings.LastIndex(doc[:loc[1]], "{")
+	if start < 0 {
+		// Guards a marker that does not itself end in the opening brace,
+		// which the current callers' do; without this a future marker would
+		// index the document at -1.
+		return "", fmt.Errorf("no object after the player configuration marker")
+	}
 	depth, inString, escaped := 0, false, false
 	for i := start; i < len(doc); i++ {
 		c := doc[i]

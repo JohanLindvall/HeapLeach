@@ -229,13 +229,7 @@ func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRe
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ref := range refs {
-		if ref.season != "" {
-			distinct[ref.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(refs, func(ref zdfRef) string { return ref.season })
 
 	outcomes := FanOut(ctx, refs, func(ctx context.Context, ref zdfRef) ([]zdfOutcome, error) {
 		return []zdfOutcome{z.video(ctx, ref, nest, reach)}, nil

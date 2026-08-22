@@ -724,19 +724,19 @@ func TestSRFPlaylistExtensionBelievesTheSegments(t *testing.T) {
 		"https://cdn.example.test/hls/a_,q40,q60,.mp4.csmil/segment-1-f1-v1-a1.ts",
 		"https://cdn.example.test/hls/a_,q40,q60,.mp4.csmil/segment-2-f1-v1-a1.ts",
 	}
-	if got := srfPlaylistExtension(variant, segments); got != ".ts" {
+	if got := segmentsExtension(segments, variant); got != ".ts" {
 		t.Errorf("extension = %q, want .ts — the segments are what gets written", got)
 	}
 
 	// A fragmented-MP4 playlist leads with its initialisation segment, and
 	// naming after that is right for the same reason.
 	fmp4 := []string{"https://cdn.example.test/cmaf/init.mp4", "https://cdn.example.test/cmaf/1.m4s"}
-	if got := srfPlaylistExtension(variant, fmp4); got != ".mp4" {
+	if got := segmentsExtension(fmp4, variant); got != ".mp4" {
 		t.Errorf("extension = %q, want .mp4", got)
 	}
 
 	// Nothing to read: the shared rule is the fallback rather than a guess.
-	if got := srfPlaylistExtension(variant, nil); got != playlistExtension(variant) {
+	if got := segmentsExtension(nil, variant); got != playlistExtension(variant) {
 		t.Errorf("extension = %q, want the shared rule's answer", got)
 	}
 }

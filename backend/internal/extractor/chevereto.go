@@ -9,7 +9,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -430,47 +429,26 @@ func cheveretoAlbumLinks(root *html.Node, base *url.URL) []cheveretoAlbum {
 func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []cheveretoAlbum,
 	opts Options) []File {
 
-	groups := make([][]File, len(albums))
-
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for i, album := range albums {
-		wg.Add(1)
-		go func(i int, album cheveretoAlbum) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			u, err := ParseURL(album.URL)
-			if err != nil {
-				return
-			}
-			doc, err := cheveretoFetch(ctx, client, u, opts)
-			if err != nil {
-				return
-			}
-			root, err := parseHTML(doc)
-			if err != nil {
-				return
-			}
-			listing := cheveretoWalk(ctx, client, u, root, doc, opts)
-			dir := util.FirstNonEmpty(album.Name, listing.title)
-			for j := range listing.files {
-				listing.files[j].Dir = dir
-			}
-			groups[i] = listing.files
-		}(i, album)
-	}
-	wg.Wait()
-
-	var files []File
-	for _, group := range groups {
-		files = append(files, group...)
-	}
-	return files
+	return FanOut(ctx, albums, func(ctx context.Context, album cheveretoAlbum) ([]File, error) {
+		u, err := ParseURL(album.URL)
+		if err != nil {
+			return nil, err
+		}
+		doc, err := cheveretoFetch(ctx, client, u, opts)
+		if err != nil {
+			return nil, err
+		}
+		root, err := parseHTML(doc)
+		if err != nil {
+			return nil, err
+		}
+		listing := cheveretoWalk(ctx, client, u, root, doc, opts)
+		dir := util.FirstNonEmpty(album.Name, listing.title)
+		for j := range listing.files {
+			listing.files[j].Dir = dir
+		}
+		return listing.files, nil
+	})
 }
 
 // -------------------------------------------------------------- pagination

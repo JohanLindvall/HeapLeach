@@ -21,8 +21,9 @@ import (
 // so this extractor only identifies the video and lets yt-dlp do the rest.
 type YouTube struct{}
 
-// ytdlpBinary is the tool this extractor depends on.
-const ytdlpBinary = "yt-dlp"
+// ytdlpBinary is the tool this extractor depends on, spelled once in the
+// package that locates it.
+const ytdlpBinary = tools.YtDlp
 
 // ytdlpMaxEntries bounds how many videos one playlist expands to.
 const ytdlpMaxEntries = 500

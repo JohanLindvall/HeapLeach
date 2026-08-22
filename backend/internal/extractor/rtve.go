@@ -215,13 +215,7 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ep := range episodes {
-		if ep.Season != "" {
-			distinct[ep.Season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep rtveVideo) string { return ep.Season })
 
 	outcomes := FanOut(ctx, episodes, func(ctx context.Context, ep rtveVideo) ([]rtveOutcome, error) {
 		file, err := r.episode(ctx, ep)
@@ -433,7 +427,9 @@ func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 		return nil, fmt.Errorf("rtve: %s: %w", video.ID, err)
 	}
 	return &File{
-		Name:     video.name() + rtveExtension(segments, variant),
+		// Named off the segments, not the variant URL, whose directory naming
+		// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.
+		Name:     video.name() + segmentsExtension(segments, variant),
 		Size:     -1,
 		Headers:  headers,
 		Segments: segments,
@@ -452,21 +448,6 @@ func rtveByExtension(links []string, ext string) string {
 		}
 	}
 	return ""
-}
-
-// rtveExtension names the container the joined segments will be in.
-//
-// playlistExtension reads the variant's own URL, and that same directory
-// naming misleads it: ".mp4" occurs in the path of a stream whose parts are
-// MPEG-TS. A .ts file named .mp4 is one players refuse and remux.go never
-// converts, so the parts are asked what they are before the URL is.
-func rtveExtension(segments []string, variant hlsVariant) string {
-	if len(segments) > 0 {
-		if u, err := url.Parse(segments[0]); err == nil && strings.EqualFold(path.Ext(u.Path), ".ts") {
-			return ".ts"
-		}
-	}
-	return playlistExtension(variant)
 }
 
 // rtveRefused is RTVE declining to serve something to this caller. It is a

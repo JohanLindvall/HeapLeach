@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -241,13 +240,7 @@ func raiItems(listing raiSet, label string, seen map[string]bool) []raiEntry {
 // needs none: a folder every file goes in says nothing, and two programmes
 // fetched separately would then share it.
 func raiNest(entries []raiEntry) bool {
-	distinct := make(map[string]bool)
-	for _, entry := range entries {
-		if entry.label != "" {
-			distinct[entry.label] = true
-		}
-	}
-	return len(distinct) > 1
+	return nestByLabel(entries, func(entry raiEntry) string { return entry.label })
 }
 
 // raiResolved is what expanding one entry produced: a file, or Rai's own words
@@ -321,7 +314,11 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	// resolve eagerly, and no File.Resolve is needed to keep a long queue
 	// alive.
 	return &File{
-		Name:     raiExtension(segments),
+		// Named off the segments alone: Rai's .csmil packaging puts ".mp4" in
+		// the path of MPEG-TS streams — about half the catalogue — so the
+		// variant URL is not consulted even as a fallback, and a zero variant
+		// leaves the default at ".ts". See segmentsExtension.
+		Name:     segmentsExtension(segments, hlsVariant{}),
 		Size:     -1,
 		Headers:  headers,
 		Segments: segments,
@@ -476,25 +473,6 @@ func raiLabel(block, set string) string {
 		return set
 	}
 	return block + " - " + set
-}
-
-// raiExtension names the container the joined segments will be in, read off a
-// segment rather than off the variant URL.
-//
-// playlistExtension reads the URL, and that is wrong for Rai's .csmil
-// packaging, whose every path below ".mp4.csmil/" contains ".mp4" while the
-// segments in it are MPEG-TS. It is not an edge case: about half the
-// catalogue is served that way.
-func raiExtension(segments []string) string {
-	if len(segments) == 0 {
-		return ".ts"
-	}
-	switch ext := strings.ToLower(path.Ext(util.NameFromURL(segments[0]))); ext {
-	case ".mp4", ".m4s":
-		return ".mp4"
-	default:
-		return ".ts"
-	}
 }
 
 // raiEmpty reports whether a JSON value carries nothing. Rai fills its DRM and

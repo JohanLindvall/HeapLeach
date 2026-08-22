@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -128,8 +127,9 @@ var foolFuukaSites = []foolFuukaSite{
 //     pass a challenge, on every path. Left out the way booru.go leaves out
 //     danbooru.donmai.us: a name in this list is a promise.
 //
-// HEAPLEACH_FOOLFUUKA_HOSTS adds any of them back for whoever can reach them,
-// which is the same escape kvssites.go offers and exists for the same reason:
+// The "foolfuuka" family of HEAPLEACH_EXTRA_HOSTS adds any of them back for
+// whoever can reach them, which is the same escape kvssites.go offers and
+// exists for the same reason:
 // what these hosts do is decided by their operators, not by a release.
 
 // FoolFuuka's read-only API. The paths are fixed across installs — that is
@@ -164,7 +164,8 @@ const foolFuukaMaxBoardLen = 5
 // its own hosts and named for itself in the UI, exactly as a hand-written
 // host would be.
 //
-// HEAPLEACH_FOOLFUUKA_HOSTS appends installs at runtime. An archive named that
+// The "foolfuuka" family of HEAPLEACH_EXTRA_HOSTS appends installs at
+// runtime. An archive named that
 // way is addressed at its own origin and labelled by its first domain label,
 // which is all the table itself carries for the ones compiled in.
 func NewFoolFuukaSites(cfg *config.Config, client *httpx.Client) []Extractor {
@@ -461,59 +462,43 @@ func (f *FoolFuuka) index(ctx context.Context, t foolFuukaTarget) (*Result, erro
 	}, nil
 }
 
-// expand reads every thread on an index page, several at a time.
-//
-// Results are collected by index rather than appended as they arrive, so the
-// job lists its files in the board's own order however the requests
-// interleave. A thread that will not load is skipped rather than failing the
-// page: the other fourteen are still worth having. What comes back alongside
-// them is the first failure, kept for the case where there are no other
-// fourteen — see index.
+// expand reads every thread on an index page, several at a time. FanOut
+// supplies the bounded concurrency, the board's own ordering and the
+// skip-on-failure; what it drops is the failure itself, and here the first
+// one is worth keeping for the case where no thread opened at all — see
+// index — so it travels as a value beside the files.
 func (f *FoolFuuka) expand(ctx context.Context, board string, threads []string) ([]File, error) {
-	groups := make([][]File, len(threads))
-	failures := make([]error, len(threads))
-
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for i, num := range threads {
-		wg.Add(1)
-		go func(i int, num string) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				failures[i] = ctx.Err()
-				return
-			}
-			entries, err := f.call(ctx, foolFuukaThreadAPI, url.Values{
-				"board": {board}, "num": {num},
-			})
-			if err != nil {
-				failures[i] = err
-				return
-			}
-			if len(entries) == 0 {
-				return
-			}
-			// A folder per thread, because a board page is fifteen
-			// conversations rather than one and several hundred files in a
-			// single directory lose which was which.
-			groups[i] = f.files(entries[0].posts(), num)
-		}(i, num)
+	type expanded struct {
+		files []File
+		err   error
 	}
-	wg.Wait()
-
-	var files []File
-	for _, group := range groups {
-		files = append(files, group...)
-	}
-	for _, err := range failures {
+	outcomes := FanOut(ctx, threads, func(ctx context.Context, num string) ([]expanded, error) {
+		entries, err := f.call(ctx, foolFuukaThreadAPI, url.Values{
+			"board": {board}, "num": {num},
+		})
 		if err != nil {
-			return files, err
+			return []expanded{{err: err}}, nil
+		}
+		if len(entries) == 0 {
+			return nil, nil
+		}
+		// A folder per thread, because a board page is fifteen
+		// conversations rather than one and several hundred files in a
+		// single directory lose which was which.
+		return []expanded{{files: f.files(entries[0].posts(), num)}}, nil
+	})
+
+	var (
+		files    []File
+		firstErr error
+	)
+	for _, outcome := range outcomes {
+		files = append(files, outcome.files...)
+		if firstErr == nil {
+			firstErr = outcome.err
 		}
 	}
-	return files, nil
+	return files, firstErr
 }
 
 // search walks a board's search results.

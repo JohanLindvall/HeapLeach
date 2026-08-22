@@ -201,7 +201,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	if link := rtpPlainMediaURL(doc); link != "" {
 		name := util.FirstNonEmpty(title, util.NameFromURL(link), program)
 		return &File{
-			Name:    name + rtpLinkExtension(link),
+			Name:    name + strings.ToLower(path.Ext(util.NameFromURL(link))),
 			URL:     link,
 			Size:    -1,
 			Headers: headers,
@@ -223,7 +223,10 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	}
 	name := util.FirstNonEmpty(title, program)
 	return &File{
-		Name:     name + rtpSegmentExtension(segments, variant),
+		// Named off the segments, not the variant URL: RTP's manifests are
+		// nginx-vod-module urlsets, which spell the source MP4s out in the
+		// path of an MPEG-TS stream. See segmentsExtension.
+		Name:     name + segmentsExtension(segments, variant),
 		Size:     -1,
 		Headers:  headers,
 		Segments: segments,
@@ -508,35 +511,6 @@ func rtpUnavailable(root *html.Node) string {
 		return ""
 	}
 	return textOf(n)
-}
-
-// rtpSegmentExtension names the container the joined segments will be in.
-//
-// playlistExtension cannot answer this one and would answer it wrongly. RTP's
-// manifests are nginx-vod-module urlsets, which spell the source MP4s out in
-// the path — twice over, for a two-rendition set — so it would call an
-// MPEG-TS stream ".mp4" and leave a file that nothing opens. The segments
-// themselves are unambiguous, so they are what is asked, and playlistExtension
-// remains the answer for a host that names its segments some other way.
-func rtpSegmentExtension(segments []string, variant hlsVariant) string {
-	if len(segments) > 0 {
-		switch rtpLinkExtension(segments[0]) {
-		case ".ts":
-			return ".ts"
-		case ".mp4", ".m4s":
-			return ".mp4"
-		}
-	}
-	return playlistExtension(variant)
-}
-
-// rtpLinkExtension is the suffix of a URL's own path, ignoring any query.
-func rtpLinkExtension(link string) string {
-	u, err := ParseURL(link)
-	if err != nil {
-		return ""
-	}
-	return strings.ToLower(path.Ext(u.Path))
 }
 
 // rtpRefused is RTP declining an episode, carrying the reason. It is a type

@@ -499,9 +499,9 @@ func TestARDExtensionReadsTheSegments(t *testing.T) {
 
 	if got := playlistExtension(variant); got != ".mp4" {
 		t.Fatalf("the shared rule now answers %q for this URL; "+
-			"if it reads the segments too, ardExtension can go", got)
+			"if it reads the segments too, the segments must", got)
 	}
-	if got := ardExtension(segments, variant); got != ".ts" {
+	if got := segmentsExtension(segments, variant); got != ".ts" {
 		t.Errorf("extension %q, want .ts — the segments are MPEG-TS", got)
 	}
 }
@@ -511,14 +511,14 @@ func TestARDExtensionReadsTheSegments(t *testing.T) {
 // best answer available.
 func TestARDExtensionFallsBackToTheVariant(t *testing.T) {
 	variant := hlsVariant{URL: "https://cdn.example.test/cmaf/index.m3u8"}
-	if got := ardExtension([]string{"https://cdn.example.test/cmaf/chunk?n=1"}, variant); got != ".mp4" {
+	if got := segmentsExtension([]string{"https://cdn.example.test/cmaf/chunk?n=1"}, variant); got != ".mp4" {
 		t.Errorf("extension %q, want the shared rule's answer for a cmaf URL", got)
 	}
-	if got := ardExtension(nil, hlsVariant{URL: "https://cdn.example.test/a/index.m3u8"}); got != ".ts" {
+	if got := segmentsExtension(nil, hlsVariant{URL: "https://cdn.example.test/a/index.m3u8"}); got != ".ts" {
 		t.Errorf("extension %q, want .ts", got)
 	}
 	// An initialisation segment leads the list for fragmented MP4.
-	if got := ardExtension([]string{"https://cdn.example.test/a/init.mp4"}, hlsVariant{}); got != ".mp4" {
+	if got := segmentsExtension([]string{"https://cdn.example.test/a/init.mp4"}, hlsVariant{}); got != ".mp4" {
 		t.Errorf("extension %q, want .mp4", got)
 	}
 }

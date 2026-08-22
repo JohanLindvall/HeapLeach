@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -198,13 +197,7 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ep := range episodes {
-		if ep.season != "" {
-			distinct[ep.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep ardEpisodeRef) string { return ep.season })
 
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
@@ -390,31 +383,14 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 		return nil, "", "", fmt.Errorf("ard: %s: %w", id, err)
 	}
 	return &File{
-		Name:     ardExtension(segments, variant),
+		// Named off the segments, not the variant URL: ARD's packager builds
+		// manifest paths out of the source file's name, ".mp4.csmil/" over
+		// MPEG-TS parts. See segmentsExtension.
+		Name:     segmentsExtension(segments, variant),
 		Size:     -1,
 		Headers:  headers,
 		Segments: segments,
 	}, show, episode, nil
-}
-
-// ardExtension names the container the joined segments will be in.
-//
-// playlistExtension answers from the variant's own URL, and ARD's packager
-// makes that URL lie: it builds the manifest path out of the name of the
-// source file, so an MPEG-TS stream is served from ".../<name>.mp4.csmil/"
-// and the shared rule reads that ".mp4" and calls a pile of TS segments an
-// MP4. A segment's own name cannot be misread that way, so it is what is
-// asked, and the shared rule is kept for the case where it says nothing.
-func ardExtension(segments []string, variant hlsVariant) string {
-	if len(segments) > 0 {
-		switch strings.ToLower(path.Ext(util.NameFromURL(segments[0]))) {
-		case ".ts":
-			return ".ts"
-		case ".mp4", ".m4s":
-			return ".mp4"
-		}
-	}
-	return playlistExtension(variant)
 }
 
 // ardJoin names something by its programme and its episode together.

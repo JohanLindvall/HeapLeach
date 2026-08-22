@@ -247,13 +247,7 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 	}
 
 	// Only nest by season when there is more than one to tell apart.
-	distinct := make(map[string]bool)
-	for _, ep := range episodes {
-		if ep.season != "" {
-			distinct[ep.season] = true
-		}
-	}
-	nest := len(distinct) > 1
+	nest := nestByLabel(episodes, func(ep vrtEpisodeRef) string { return ep.season })
 
 	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep vrtEpisodeRef) ([]vrtOutcome, error) {
 		file, _, episode, err := v.episode(ctx, ep.id)

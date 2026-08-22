@@ -302,13 +302,13 @@ func TestRTVEExtensionAsksTheSegments(t *testing.T) {
 	if got := playlistExtension(variant); got != ".mp4" {
 		t.Fatalf("the trap has gone: playlistExtension = %q, and it was expected to be misled", got)
 	}
-	if got := rtveExtension(segments, variant); got != ".ts" {
-		t.Errorf("rtveExtension = %q, want .ts", got)
+	if got := segmentsExtension(segments, variant); got != ".ts" {
+		t.Errorf("segmentsExtension = %q, want .ts", got)
 	}
 	// With no segments to ask, and for a stream whose parts really are
 	// fragmented MP4, the general rule stands.
-	if got := rtveExtension(nil, variant); got != ".mp4" {
-		t.Errorf("rtveExtension with nothing to ask = %q, want the general answer", got)
+	if got := segmentsExtension(nil, variant); got != ".mp4" {
+		t.Errorf("segmentsExtension with nothing to ask = %q, want the general answer", got)
 	}
 }
 

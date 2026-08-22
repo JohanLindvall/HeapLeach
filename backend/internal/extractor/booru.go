@@ -1,7 +1,6 @@
 package extractor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -588,31 +587,6 @@ func gelbooru01Image(thumb string) string {
 	u.RawPath = ""
 	return u.String()
 }
-
-// flexValue accepts a field that some boards send as a JSON string and
-// others as a number — ids, and directories that may be a plain number or a
-// nested path like "44/29".
-type flexValue string
-
-func (f *flexValue) UnmarshalJSON(raw []byte) error {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 || string(raw) == "null" {
-		*f = ""
-		return nil
-	}
-	if raw[0] == '"' {
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return err
-		}
-		*f = flexValue(text)
-		return nil
-	}
-	*f = flexValue(raw)
-	return nil
-}
-
-func (f flexValue) String() string { return string(f) }
 
 // booruPost is the union of the fields the families use to locate a file.
 type booruPost struct {

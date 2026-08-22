@@ -136,7 +136,7 @@ type StreamCipher struct {
 type Target struct {
 	// URL is the direct link to fetch.
 	URL string
-	// Headers replace the File's headers when non-nil.
+	// Headers replace the File's headers when non-empty.
 	Headers httpx.Header
 	// Size is the length in bytes, or 0/-1 when unknown.
 	Size int64

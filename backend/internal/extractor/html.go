@@ -130,6 +130,16 @@ func trimSiteSuffix(title string) string {
 	return util.TrimTitleSuffix(title, " | ", " - ")
 }
 
+// folderName trims a title down to a readable directory name. The
+// downloader sanitises every path component anyway; this only keeps a
+// rambling title from becoming a rambling folder.
+func folderName(title string) string {
+	if runes := []rune(strings.TrimSpace(title)); len(runes) > 80 {
+		return strings.TrimSpace(string(runes[:80]))
+	}
+	return strings.TrimSpace(title)
+}
+
 // humanSize matches the "57.80 MB" shape listings print next to a file.
 var humanSize = regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB|KIB|MIB|GIB|TIB)\b`)
 
