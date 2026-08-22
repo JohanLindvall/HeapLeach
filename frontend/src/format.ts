@@ -1,6 +1,14 @@
 /** Human-readable byte count, e.g. "1.4 GB". */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  // Truncated to whole bytes first, exactly as the Go side's int64 parameter
+  // does it. Every branch below is bounded by toFixed, so this one — which
+  // interpolates the number as it stands — is the only way a fractional value
+  // could reach the screen. And a rate is fractional: it is smoothed
+  // server-side, so a transfer that stops decays through 12.9, 7.7, 4.6
+  // rather than to zero, which renders as "1.237576767 B/s" and takes the
+  // column layout with it.
+  bytes = Math.trunc(bytes);
   if (bytes < 1000) return `${bytes} B`;
 
   const units = ['kB', 'MB', 'GB', 'TB', 'PB'];

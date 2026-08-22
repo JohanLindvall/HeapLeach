@@ -41,6 +41,17 @@ func TestFormatSpeed(t *testing.T) {
 	if got := formatSpeed(1_000_000); got != "1.0 MB/s" {
 		t.Errorf("formatSpeed(1MB) = %q", got)
 	}
+	// A rate is smoothed, so a transfer that stops decays through fractional
+	// values rather than reaching zero. Both sides of the contract have to
+	// render those as whole bytes: this one is handed an int64 and cannot do
+	// otherwise, while its browser twin interpolated the number as it stood
+	// and printed "1.237576767 B/s", taking the column layout with it.
+	if got := formatSpeed(1.237576767); got != "1 B/s" {
+		t.Errorf("fractional rate = %q, want it rendered as whole bytes", got)
+	}
+	if got := formatSpeed(0.194449); got != "0 B/s" {
+		t.Errorf("a rate below one byte = %q, want %q", got, "0 B/s")
+	}
 }
 
 func TestFormatDuration(t *testing.T) {
