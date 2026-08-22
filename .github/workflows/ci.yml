@@ -61,6 +61,12 @@ jobs:
         working-directory: backend
         run: go vet ./...
 
+      # README.md's supported-site inventory is generated from the registry,
+      # so a new extractor cannot ship undocumented — or, worse, be documented
+      # as something it is not.
+      - name: Host list is current
+        run: make hosts-check
+
       # Race detection is worth the time here: the download engine writes one
       # file from several connections at once.
       - name: Test

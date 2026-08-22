@@ -18,11 +18,22 @@ type Direct struct {
 // NewDirect builds the fallback extractor.
 func NewDirect(client *httpx.Client) *Direct { return &Direct{client: client} }
 
-// directSniff recognises a shape rather than a host. It returns false to mean
-// "not mine", and the URL then falls through to whatever would have happened
-// anyway — which is what makes a wrong guess free, and is the contract every
-// sniff here keeps.
-type directSniff func(context.Context, *httpx.Client, *url.URL, Options) (*Result, bool)
+// directSniff recognises a shape rather than a host, and answers one of three
+// ways.
+//
+//	nil, nil    not mine — fall through to whatever would have happened
+//	            anyway, which is what makes a wrong guess free
+//	res, nil    recognised and resolved
+//	nil, err    recognised, and then it went wrong
+//
+// That third case is why this returns an error at all. Once a response has
+// identified itself — a body opening #EXTM3U, a generator tag naming the
+// software — falling through would hand the document back to the direct
+// fallback, which would save the manifest or the page shell to disk and
+// report a finished download. That is the exact failure these sniffs exist to
+// prevent, so a sniff that has committed says what went wrong instead of
+// pretending it never looked.
+type directSniff func(context.Context, *httpx.Client, *url.URL, Options) (*Result, error)
 
 // directSniffs are tried in order, most specific first.
 //
@@ -36,36 +47,43 @@ type directSniff func(context.Context, *httpx.Client, *url.URL, Options) (*Resul
 // Ordering matters where two could match the same URL: the ones that key off
 // an unmistakable marker come before the ones that read markup for a guess.
 var directSniffs = []directSniff{
+	// The KVS path shape: /videos/<id>/<slug>/. It leads because for a URL
+	// laid out that way the guess is very likely right, so it should not
+	// pay for anyone else's probe first.
+	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+		res, _ := kvsSniff(ctx, c, u)
+		return res, nil
+	},
 	// A manifest is unambiguous — it says #EXTM3U on its first line — and
 	// pasting one is common enough that getting it wrong is the defect this
-	// list mainly exists to fix.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, bool) {
-		if !hlsSniffable(u) {
-			return nil, false
-		}
-		res, err := hlsSniff(ctx, c, u)
-		return res, err == nil && res != nil
+	// list mainly exists to fix. It is also the one sniff that reports
+	// rather than falls through, for the reason on directSniff.
+	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+		return hlsSniff(ctx, c, u)
 	},
-	// A published API answering to its own version is proof, not a guess.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, opts Options) (*Result, bool) {
-		res, ok, _ := peerTubeSniff(ctx, c, u, opts)
-		return res, ok
+	// A published API answering with its own version is proof, not a guess.
+	func(ctx context.Context, c *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+		res, ok, err := peerTubeSniff(ctx, c, u, opts)
+		if !ok {
+			return nil, nil
+		}
+		return res, err
 	},
 	// A generator meta tag naming the software, likewise.
-	cheveretoSniff,
-	// The KVS path shape: /videos/<id>/<slug>/, which is specific enough to
-	// be worth one GET on a host nobody registered.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, bool) {
-		return kvsSniff(ctx, c, u)
+	func(ctx context.Context, c *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+		res, _ := cheveretoSniff(ctx, c, u, opts)
+		return res, nil
 	},
 	// An autoindex announces itself in its title.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, bool) {
-		return autoindexSniff(ctx, c, u)
+	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+		res, _ := autoindexSniff(ctx, c, u)
+		return res, nil
 	},
 	// Last, and least certain: an ordinary page that happens to carry a
 	// video in its markup or its metadata.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, bool) {
-		return mediaPageSniff(ctx, c, u)
+	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+		res, _ := mediaPageSniff(ctx, c, u)
+		return res, nil
 	},
 }
 
@@ -83,7 +101,10 @@ func (d *Direct) Match(*url.URL) bool { return true }
 // have happened anyway.
 func (d *Direct) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	for _, sniff := range directSniffs {
-		if res, ok := sniff(ctx, d.client, u, opts); ok {
+		switch res, err := sniff(ctx, d.client, u, opts); {
+		case err != nil:
+			return nil, err
+		case res != nil:
 			return res, nil
 		}
 	}

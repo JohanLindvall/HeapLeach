@@ -234,6 +234,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	extractors = append(extractors, NewHandoffs(client)...)
 	extractors = append(extractors, NewPeerTubeSites(cfg, client)...)
 	extractors = append(extractors, NewCheveretoSites(cfg, client)...)
+	extractors = append(extractors, NewFoolFuukaSites(cfg, client)...)
 	extractors = append(extractors, NewKVSSites(cfg, client)...)
 
 	// Last of all, the generic capabilities: a bare HLS manifest is a

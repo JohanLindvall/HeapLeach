@@ -251,6 +251,11 @@ const (
 	// with a much smaller natural size — a video is a job on its own.
 	MaxListingVideos = 1000
 
+	// MaxSearchResults bounds a search that pages until it runs out. A
+	// search is an open question rather than a named thing, so unlike an
+	// album it has no natural end and the cap is what supplies one.
+	MaxSearchResults = 1000
+
 	// MaxTimelinePages bounds how many pages of a social timeline are
 	// walked. Unlike an album, a timeline has no end.
 	MaxTimelinePages = 40
