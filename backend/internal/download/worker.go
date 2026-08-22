@@ -34,7 +34,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	approx := it.SizeApprox
 	m.mu.Unlock()
 
-	dir := filepath.Join(m.cfg.DownloadDir, rel)
+	dir := filepath.Join(m.DownloadDir(), rel)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}

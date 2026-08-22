@@ -66,6 +66,14 @@ type Manager struct {
 	// across every job so eight files never become eighty connections.
 	hosts *hostLimiter
 
+	// dir is where finished files go. It lives here rather than being read
+	// from cfg because the UI can move it while transfers are running, and
+	// a field two goroutines write and read needs a lock of its own — a
+	// small one, since a transfer reads it once at the start rather than
+	// per byte.
+	dirMu sync.RWMutex
+	dir   string
+
 	subsMu    sync.Mutex
 	subs      map[chan []byte]struct{}
 	closeOnce sync.Once
@@ -88,6 +96,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		jobs:       make(map[string]*Job),
 		parts:      make(map[string]struct{}),
 		hostActive: make(map[string]int),
+		dir:        cfg.DownloadDir,
 		throttle:   newThrottle(cfg.SpeedLimit),
 		limit:      cfg.Concurrency,
 		streams:    cfg.Streams,
@@ -591,6 +600,40 @@ func (m *Manager) SetStreams(n int) error {
 // ErrNotFound is returned for an unknown job or item id.
 var ErrNotFound = errors.New("not found")
 
+// DownloadDir is where finished files are being written.
+func (m *Manager) DownloadDir() string {
+	m.dirMu.RLock()
+	defer m.dirMu.RUnlock()
+	return m.dir
+}
+
+// SetDownloadDir moves the destination, creating the directory and proving it
+// writable first — the same checks startup makes, since a directory named
+// from the UI is no more trustworthy than one named on the command line.
+//
+// Transfers already running keep the destination they started with: their
+// path was settled when the worker took the item, and moving a part file
+// mid-flight would break the resume that part file exists for. Everything
+// still queued goes to the new place. That is worth knowing rather than
+// hiding, so the API says it back to the caller.
+func (m *Manager) SetDownloadDir(path string) error {
+	dir, err := config.PrepareDir(path)
+	if err != nil {
+		return err
+	}
+
+	m.dirMu.Lock()
+	changed := dir != m.dir
+	m.dir = dir
+	m.dirMu.Unlock()
+
+	if changed {
+		m.log.Info("download directory changed", "dir", dir)
+		m.markDirty()
+	}
+	return nil
+}
+
 // SetPaused stops or resumes the whole queue.
 //
 // Pausing holds the connections open rather than dropping them: a running
@@ -608,6 +651,26 @@ func (m *Manager) SetPaused(paused bool) {
 
 // Paused reports whether the queue is held.
 func (m *Manager) Paused() bool { return m.throttle.isPaused() }
+
+// Busy reports whether anything is still going to happen: a transfer
+// running, an item waiting for a slot, or a source still being scraped.
+//
+// A job that is only resolving counts, and has to: it has no items yet, so
+// the queue looks empty at exactly the moment work is about to arrive.
+func (m *Manager) Busy() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.running > 0 || len(m.queue) > 0 {
+		return true
+	}
+	for _, job := range m.jobs {
+		if job.resolving {
+			return true
+		}
+	}
+	return false
+}
 
 // SetSpeedLimit caps total throughput in bytes per second. Zero is
 // unlimited. The cap is shared: it bounds everything moving at once, not
@@ -657,7 +720,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		Queued:      0,
 		Paused:      m.throttle.isPaused(),
 		SpeedLimit:  m.throttle.currentLimit(),
-		DownloadDir: m.cfg.DownloadDir,
+		DownloadDir: m.DownloadDir(),
 		HostCount:   len(m.reg.Hosts()),
 	}
 	// Newest first: the job someone just added belongs at the top.

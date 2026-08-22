@@ -594,6 +594,37 @@ code, .mono {
   font-size: 0.72rem;
 }
 
+/* It is a button now, so it has to stop looking like one of the page's own
+   controls while still inviting a click. */
+button.jobs__dir {
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.18s var(--ease), color 0.18s var(--ease);
+}
+
+button.jobs__dir:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.jobs__dir--editing {
+  max-width: 34ch;
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.jobs__dir-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  outline: none;
+}
+
 /* While the queue is held the rate is meaningless, so the header says what
    is actually going on instead of counting a decaying average down to zero. */
 .stat__value--held {

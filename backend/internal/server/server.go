@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -20,12 +21,43 @@ type Server struct {
 	mgr    *download.Manager
 	log    *slog.Logger
 	static http.Handler
+
+	// lastSeen is when a browser last said anything, as Unix nanoseconds.
+	// streams counts the event streams open right now.
+	//
+	// Together these answer "is anyone there", which a bare desktop run
+	// needs in order to know when to stop. They are two signals rather than
+	// one because they fail in opposite directions: an open tab makes no
+	// requests once its stream is established, so lastSeen alone would call
+	// a watching browser absent — and a stream can be held by a machine
+	// nobody is sitting at, so the request time is what proves recency.
+	lastSeen atomic.Int64
+	streams  atomic.Int64
 }
 
 // New builds the HTTP handler set.
 func New(cfg *config.Config, mgr *download.Manager, log *slog.Logger, assets fs.FS) *Server {
-	return &Server{cfg: cfg, mgr: mgr, log: log, static: spaHandler(assets)}
+	s := &Server{cfg: cfg, mgr: mgr, log: log, static: spaHandler(assets)}
+	// Counted from startup rather than from zero, so a process that is
+	// never visited still gets its full grace period before deciding
+	// nobody is coming.
+	s.lastSeen.Store(time.Now().UnixNano())
+	return s
 }
+
+// Idle reports whether nothing is downloading and no browser is watching,
+// and for how long that has been true.
+//
+// A stream open right now means someone is there, whatever the clock says.
+func (s *Server) Idle() (bool, time.Duration) {
+	if s.mgr.Busy() || s.streams.Load() > 0 {
+		return false, 0
+	}
+	return true, time.Since(time.Unix(0, s.lastSeen.Load()))
+}
+
+// seen records that a browser is alive.
+func (s *Server) seen() { s.lastSeen.Store(time.Now().UnixNano()) }
 
 // Handler returns the root mux.
 func (s *Server) Handler() http.Handler {
@@ -91,6 +123,9 @@ func serveIndex(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 // which is long-lived and would only ever log once.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every request counts as someone being there, including the ones
+		// too dull to log — a page load is the clearest sign of all.
+		s.seen()
 		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/events" {
 			next.ServeHTTP(w, r)
 			return

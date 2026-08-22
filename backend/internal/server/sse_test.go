@@ -84,6 +84,13 @@ func TestManagerCloseIsIdempotent(t *testing.T) {
 }
 
 func newTestServer(t *testing.T) (*download.Manager, http.Handler) {
+	manager, srv := newTestParts(t)
+	return manager, srv.Handler()
+}
+
+// newTestParts returns the Server itself, for the tests that need to look at
+// what it knows rather than only at what it serves.
+func newTestParts(t *testing.T) (*download.Manager, *Server) {
 	t.Helper()
 
 	cfg := &config.Config{
@@ -106,5 +113,5 @@ func newTestServer(t *testing.T) (*download.Manager, http.Handler) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return manager, New(cfg, manager, log, assets).Handler()
+	return manager, New(cfg, manager, log, assets)
 }

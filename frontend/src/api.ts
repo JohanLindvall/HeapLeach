@@ -82,6 +82,21 @@ export function setSpeedLimit(speedLimit: number): Promise<Snapshot> {
   });
 }
 
+/**
+ * Move where finished files are written.
+ *
+ * Transfers already running keep the destination they started with — their
+ * path was settled when the transfer began, and a part file that moved
+ * mid-flight could not be resumed. Everything still queued goes to the new
+ * place.
+ */
+export function setDownloadDir(downloadDir: string): Promise<Snapshot> {
+  return request<Snapshot>('/api/settings', {
+    method: 'POST',
+    body: JSON.stringify({ downloadDir }),
+  });
+}
+
 /** Forget every finished job. Files on disk are left alone. */
 export function clearFinished(): Promise<{ removed: number }> {
   return request<{ removed: number }>('/api/clear', { method: 'POST' });

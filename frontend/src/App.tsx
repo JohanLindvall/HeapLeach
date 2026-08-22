@@ -9,15 +9,17 @@ import {
   retryJob,
   setConcurrency,
   setPaused,
+  setDownloadDir,
   setSpeedLimit,
   setStreams,
 } from './api';
 import { AddForm } from './components/AddForm';
+import { DownloadDir } from './components/DownloadDir';
 import { JobCard } from './components/JobCard';
 import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar, matchesFilter, type Filter } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
-import { DownloadIcon, FolderIcon, TrashIcon } from './components/Icons';
+import { DownloadIcon, TrashIcon } from './components/Icons';
 import type { JobView } from './types';
 import { useLiveState } from './useLiveState';
 import { useProgress } from './useProgress';
@@ -185,10 +187,10 @@ export default function App() {
                   }}
                 />
               )}
-              <span className="jobs__dir" title={`Files are saved to ${snapshot.downloadDir}`}>
-                <FolderIcon />
-                <code>{snapshot.downloadDir}</code>
-              </span>
+              <DownloadDir
+                value={snapshot.downloadDir}
+                onChange={(dir) => run(() => setDownloadDir(dir))}
+              />
               {finishedCount > 0 && (
                 <button
                   type="button"

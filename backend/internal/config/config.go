@@ -62,6 +62,10 @@ type Config struct {
 	Timeout      time.Duration
 	Debug        bool
 	OpenBrowser  bool
+	// ExitWhenIdle ends the process once there is nothing left to download
+	// and no browser is watching. Set only for a bare invocation, which is
+	// a desktop session rather than a service: see applyBareDefaults.
+	ExitWhenIdle bool
 
 	// URLs, when non-empty, switch the process out of server mode: they
 	// are downloaded straight to DownloadDir and then it exits. Set only
@@ -125,8 +129,58 @@ func FromEnv() (*Config, error) {
 	}
 
 	c.Debug = env("DEBUG", "") != ""
-	c.OpenBrowser = env("OPEN", "") != ""
+	c.OpenBrowser, _ = EnvBool("OPEN")
 	return c, nil
+}
+
+// EnvBool reads a setting that can be turned off as well as on, reporting
+// both the value and whether it was set at all.
+//
+// Most switches here are on when present and absent otherwise, which cannot
+// express "no". HEAPLEACH_OPEN has to: a bare run opens a browser by default,
+// so somebody who does not want one — running over SSH, or on a machine with
+// no desktop — needs a way to say so, and setting the variable to anything
+// would otherwise turn it further on.
+func EnvBool(name string) (value, set bool) {
+	switch strings.ToLower(LookupEnv(name)) {
+	case "":
+		return false, false
+	case "0", "false", "no", "off":
+		return false, true
+	default:
+		return true, true
+	}
+}
+
+// PrepareDir expands, resolves and creates a download directory, and proves
+// it can be written to.
+//
+// Split out of Prepare because the destination is no longer settled at
+// startup: the UI can move it while the program runs, and a directory chosen
+// then has to be checked exactly as carefully as one chosen on the command
+// line — the difference between the two is only when the user said it.
+func PrepareDir(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("no download directory given")
+	}
+	expanded, err := expandHome(path)
+	if err != nil {
+		return "", err
+	}
+	dir, err := filepath.Abs(expanded)
+	if err != nil {
+		return "", fmt.Errorf("resolve download dir: %w", err)
+	}
+	if info, err := os.Stat(dir); err == nil && !info.IsDir() {
+		return "", fmt.Errorf("download path %s exists but is not a directory", dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("create download dir: %w", err)
+	}
+	if err := checkWritable(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 // Prepare validates the settled configuration and makes the download
@@ -151,25 +205,12 @@ func (c *Config) Prepare() error {
 	if c.StallTimeout <= 0 {
 		return fmt.Errorf("stall-timeout must be positive, got %s", c.StallTimeout)
 	}
-	if strings.TrimSpace(c.DownloadDir) == "" {
-		return fmt.Errorf("no download directory given")
-	}
-
-	dir, err := expandHome(c.DownloadDir)
+	dir, err := PrepareDir(c.DownloadDir)
 	if err != nil {
 		return err
 	}
-	if c.DownloadDir, err = filepath.Abs(dir); err != nil {
-		return fmt.Errorf("resolve download dir: %w", err)
-	}
-
-	if info, err := os.Stat(c.DownloadDir); err == nil && !info.IsDir() {
-		return fmt.Errorf("download path %s exists but is not a directory", c.DownloadDir)
-	}
-	if err := os.MkdirAll(c.DownloadDir, 0o755); err != nil {
-		return fmt.Errorf("create download dir: %w", err)
-	}
-	return checkWritable(c.DownloadDir)
+	c.DownloadDir = dir
+	return nil
 }
 
 // expandHome resolves a leading ~ so a shell-quoted path still works.

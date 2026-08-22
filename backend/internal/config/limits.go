@@ -168,6 +168,17 @@ const (
 
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout = 10 * time.Second
+
+	// IdleExitAfter is how long a bare run keeps going once it has nothing
+	// to download and nothing is watching it. Long enough to survive a
+	// reload or a browser restart, short enough that closing the tab is a
+	// way of quitting.
+	IdleExitAfter = time.Minute
+
+	// IdleCheckInterval is how often that is tested. Coarse on purpose:
+	// the deadline is a minute, so a few seconds either way is noise, and
+	// this runs for the whole life of the process.
+	IdleCheckInterval = 5 * time.Second
 )
 
 // Extraction tuning.

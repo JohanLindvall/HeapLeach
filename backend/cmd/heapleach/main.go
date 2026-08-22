@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
@@ -94,9 +95,10 @@ func run() error {
 		log.Warn("frontend is a placeholder — run `make frontend` to build the UI")
 	}
 
+	api := server.New(cfg, manager, log, assets)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           server.New(cfg, manager, log, assets).Handler(),
+		Handler:           api.Handler(),
 		ReadHeaderTimeout: config.ReadHeaderTimeout,
 		// No WriteTimeout: /api/events is a long-lived stream.
 		IdleTimeout: config.IdleTimeout,
@@ -129,11 +131,18 @@ func run() error {
 		}
 	}
 
+	idle := make(chan struct{})
+	if cfg.ExitWhenIdle {
+		go watchForIdle(ctx, api, idle)
+	}
+
 	select {
 	case err := <-errs:
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 		log.Info("shutting down")
+	case <-idle:
+		log.Info("nothing left to download and no browser watching; exiting")
 	}
 
 	// Stop the manager first. http.Server.Shutdown waits for in-flight
@@ -149,6 +158,35 @@ func run() error {
 		return fmt.Errorf("shutdown: %w", err)
 	}
 	return nil
+}
+
+// watchForIdle closes done once the program has had nothing to do and nobody
+// watching for long enough to conclude it is finished.
+//
+// This runs only for a bare invocation, which is a desktop session rather
+// than a service: someone double-clicked the binary, downloaded what they
+// wanted and closed the tab. Staying resident after that leaves a background
+// process nobody asked for and no longer has a window onto — and, next time,
+// a second one beside it.
+//
+// Anything with an argument keeps running until it is stopped, because that
+// is a choice about how to run the program and outliving the browser may be
+// the whole point of it.
+func watchForIdle(ctx context.Context, api *server.Server, done chan<- struct{}) {
+	ticker := time.NewTicker(config.IdleCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if idle, since := api.Idle(); idle && since >= config.IdleExitAfter {
+				close(done)
+				return
+			}
+		}
+	}
 }
 
 // serviceURL renders a browsable URL for a bound listener, turning the
@@ -307,11 +345,44 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 			len(dirs), strings.Join(dirs, " "))
 	}
 	cfg.Password = password
+	applyBareDefaults(cfg, args)
 
 	if err := cfg.Prepare(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// applyBareDefaults makes `heapleach` on its own do the obvious thing: serve
+// on a free port on this machine and open it.
+//
+// Someone who runs the binary with nothing after it has not chosen a port,
+// and the two things that could be assumed instead are both worse. A fixed
+// 8080 collides with whatever else is already using it — and it collides
+// silently from the user's point of view, since all they see is a program
+// that would not start. Binding every interface offers the queue to the
+// network, which is not a decision a bare invocation should make on someone's
+// behalf. So: loopback, and let the kernel pick the port. The process is the
+// only thing that can know which port it got, so it also opens the browser.
+//
+// Any argument at all turns this off, because an argument is a choice and
+// guessing over it would be worse than the fixed default ever was. So does an
+// address from the environment, which is how the container image keeps
+// binding a mapped port rather than hiding on its own loopback.
+func applyBareDefaults(cfg *config.Config, args []string) {
+	if len(args) > 0 || config.LookupEnv("ADDR") != "" {
+		return
+	}
+	cfg.Addr = "127.0.0.1:0"
+	cfg.ExitWhenIdle = true
+	// Opening a browser is the one part of this someone may genuinely not
+	// want — over SSH, or on a machine with no desktop — so an explicit
+	// HEAPLEACH_OPEN wins either way and only silence means yes.
+	if open, chosen := config.EnvBool("OPEN"); chosen {
+		cfg.OpenBrowser = open
+		return
+	}
+	cfg.OpenBrowser = true
 }
 
 // usage prints the help text, showing the values the environment supplies as
@@ -321,8 +392,13 @@ func usage(flags *flag.FlagSet, cfg *config.Config) {
 	fmt.Fprintf(out, `heapleach — parallel bulk downloader
 
 Usage:
+  heapleach                                       serve the UI and open it
   heapleach [options] [download-dir]              serve the web UI
   heapleach [options] <url>... [download-dir]     download and exit
+
+Run on its own, heapleach takes a free port on this machine and opens your
+browser at it — nothing to choose and nothing to collide with. Give it any
+argument and it uses the settings below instead.
 
 With no URLs heapleach serves its web UI. Given URLs it downloads them to
 disk, animating progress on the terminal, and exits non-zero if any

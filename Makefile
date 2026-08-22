@@ -19,8 +19,6 @@ TAG       ?= latest
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 PORT      ?= 8080
-# `make run` takes any free port by default; the binary reports the real one.
-ADDR      ?= 127.0.0.1:0
 DOWNLOADS ?= $(HOME)/Downloads
 CONCURRENCY ?= 4
 
@@ -60,7 +58,7 @@ UID_GID   := $(shell id -u):$(shell id -g)
 HAVE_NPM  := $(shell command -v npm 2>/dev/null)
 HAVE_GO   := $(shell command -v go 2>/dev/null)
 
-.PHONY: help build binary image run run-image stop logs shell dev dev-backend dev-frontend \
+.PHONY: help build binary image run-image stop logs shell dev dev-backend dev-frontend \
         frontend frontend-clean screenshots dist tag native test test-live fmt vet tidy lock dependencies \
         hosts hosts-check \
         clean distclean
@@ -71,7 +69,7 @@ help:
 	@echo
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  make /' | column -t -s ':'
 	@echo
-	@echo "  Variables: ADDR=$(ADDR) (run) PORT=$(PORT) (run-image)"
+	@echo "  Variables: PORT=$(PORT) (run-image)"
 	@echo "             DOWNLOADS=$(DOWNLOADS) IMAGE=$(IMAGE):$(TAG)"
 
 ## build: build in Docker and export the standalone binary to ./bin/heapleach
@@ -106,13 +104,6 @@ image:
 	  -t $(IMAGE):$(TAG) \
 	  -f Dockerfile .
 	@echo ">> built $(IMAGE):$(TAG)"
-
-## run: build if needed, serve on ~/Downloads on a free port, open a browser
-run: $(BINARY)
-	@mkdir -p "$(DOWNLOADS)"
-	@# The binary binds the port, so it is the only thing that can know
-	@# which one it got — it logs the URL and opens it itself.
-	@exec $(BINARY) -addr "$(ADDR)" -open -concurrency $(CONCURRENCY) "$(DOWNLOADS)"
 
 ## run-image: run the container image instead of the host binary
 run-image: image

@@ -23,6 +23,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// The stream is long-lived; the per-write deadlines still apply.
 	_ = rc.SetWriteDeadline(time.Time{})
 
+	// An open stream is a browser watching, which is what keeps a bare run
+	// alive; the closing decrement is what eventually lets it stop.
+	s.streams.Add(1)
+	defer func() {
+		s.streams.Add(-1)
+		s.seen()
+	}()
+
 	events, unsubscribe := s.mgr.Subscribe()
 	defer unsubscribe()
 

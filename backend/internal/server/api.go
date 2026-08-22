@@ -78,13 +78,20 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 // request carries only what changed.
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Concurrency *int   `json:"concurrency"`
-		Streams     *int   `json:"streams"`
-		Paused      *bool  `json:"paused"`
-		SpeedLimit  *int64 `json:"speedLimit"`
+		Concurrency *int    `json:"concurrency"`
+		Streams     *int    `json:"streams"`
+		Paused      *bool   `json:"paused"`
+		SpeedLimit  *int64  `json:"speedLimit"`
+		DownloadDir *string `json:"downloadDir"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
+	}
+	if req.DownloadDir != nil {
+		if err := s.mgr.SetDownloadDir(*req.DownloadDir); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if req.Concurrency != nil {
 		if err := s.mgr.SetConcurrency(*req.Concurrency); err != nil {

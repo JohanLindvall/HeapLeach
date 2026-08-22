@@ -50,21 +50,31 @@ install alongside.
 
 ```bash
 tar -xzf heapleach_*_linux_amd64.tar.gz
-./heapleach                 # serves the UI, saving to your Downloads folder
+./heapleach
 ```
+
+That is the whole thing. Run on its own it takes a free port on your own
+machine, opens your browser at it, and saves to your Downloads folder —
+nothing to choose and nothing to collide with, since the kernel picks the
+port and the process is the only thing that could know which one it got.
+
+It also **stops on its own**: once nothing is downloading and no browser has
+been in touch for a minute, it exits. Closing the tab is how you quit, and
+you never accumulate forgotten copies of it in the background. An open tab
+counts as being in touch, so leaving one up keeps it running.
+
+Give it any argument and it stops guessing: the settings under **Usage**
+below apply as written, it binds `:8080`, and it runs until you stop it —
+because that is a way of deploying the program, and outliving the browser may
+be the whole point. `HEAPLEACH_OPEN=0` suppresses the browser if you want the
+rest of the bare behaviour without it.
 
 Or build it yourself:
 
 ```bash
-make run        # builds if needed, serves on your Downloads folder on a free
-                # port, and opens your browser at the address it picked
-```
-
-Or build and run it yourself:
-
-```bash
 make build                  # builds in Docker, writes ./bin/heapleach
-./bin/heapleach ~/Downloads     # serves http://localhost:8080
+./bin/heapleach             # same as above
+./bin/heapleach ~/Videos    # explicit: :8080, no browser, saves there
 ```
 
 No local Go or Node needed — the toolchain lives in the build image, and only
@@ -76,16 +86,15 @@ Prefer to run it as a container:
 make run-image                 # builds the image and runs it
 ```
 
-`make run` and `make run-image` save to `~/Downloads`; override with
-`make run DOWNLOADS=/mnt/media`.
-
-`make run` binds port 0, so it never collides with something already
-listening; the process reports the address it was given and opens it. Pin one
-with `make run ADDR=:8080`.
+The container maps a fixed port rather than taking a free one, since a port
+only the container knows about is one nothing outside it can reach. It saves
+to `~/Downloads`; override with `make run-image DOWNLOADS=/mnt/media`, and
+change the mapped port with `PORT=9000`.
 
 ## Usage
 
 ```
+heapleach                                     serve the UI and open it
 heapleach [options] [download-dir]            serve the web UI
 heapleach [options] <url>... [download-dir]   download and exit
 
@@ -366,6 +375,13 @@ ffmpeg the `.ts` is kept and plays fine.
 - **A searchable queue.** Type `/` and filter hundreds of jobs by title,
   source, host or filename; `Esc` clears. Scrolling is not a retrieval
   strategy.
+- **The destination is changeable while it runs.** Click the path in the
+  header, type another. It is expanded, created and proved writable exactly as
+  a directory named on the command line is, and it says why if it cannot be
+  used. Transfers already running keep the destination they started with —
+  their path was settled when they began, and a part file that moved
+  mid-flight could not be resumed — so the change takes hold from the next
+  queued file onward.
 - **Cancel and retry** a whole job or a single file.
 - **Resume** — partial files are kept and continued with a `Range` request;
   a cancelled 100 MB download restarts where it stopped.
@@ -435,7 +451,7 @@ and a flag beats the environment.
 | `HEAPLEACH_EXTRA_HOSTS` | unset | Extra hosts for a platform family, as `family:host,host;family:host` — for example `peertube:tube.example;kvs:tube2.example`. Every family here is software many sites run, so a list compiled into a binary can only ever trail them; this adds installs without a rebuild. Families: `kvs`, `peertube`, `chevereto`, `foolfuuka`, `fediverse`. |
 | `HEAPLEACH_KVS_HOSTS` | unset | The original KVS-only form of the above, still honoured. |
 | `HEAPLEACH_DEBUG` | unset | Debug logging. Flag: `-debug`. |
-| `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. |
+| `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. A bare run does this anyway, so this is mostly how to say **no**: `HEAPLEACH_OPEN=0` (also `false`, `no`, `off`) suppresses it, for a machine with no desktop or a session over SSH. |
 
 ## HTTP API
 
@@ -460,8 +476,7 @@ curl -X POST localhost:8080/api/downloads \
 ## Development
 
 ```bash
-make run          # build if needed, serve on a free port, open a browser
-make run-image    # same, but from the container image
+make run-image    # build and run the container image
 make dev          # Go API on :8080 + Vite dev server on :5173 (hot reload)
 make dev-backend  # API only
 make test         # Go unit tests
