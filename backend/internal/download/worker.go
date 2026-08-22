@@ -229,7 +229,11 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 			}
 		}
 		if primaryIdx < 0 {
-			return name, nil // every segment already finished
+			// Every segment already finished: the previous run had the whole
+			// file. Credit the byte counter, or a completed item would report
+			// 0 of its known size.
+			m.setProgress(it, state.Size)
+			return name, nil
 		}
 		validator = state.Validator
 	} else if fi, err := os.Stat(part); err == nil {
@@ -280,8 +284,10 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	case http.StatusPartialContent:
 		// Resuming as asked.
 	case http.StatusRequestedRangeNotSatisfiable:
-		// We already hold every byte the server has.
+		// We already hold every byte the server has. Credit the counter, or
+		// the finished item would report 0 of a known size.
 		if offset > 0 {
+			m.setProgress(it, offset)
 			return name, nil
 		}
 		return "", statusError(req.URL, resp)
@@ -310,7 +316,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 			name = chooseName(name, SafeName(fromServer))
 		}
 	}
-	if v := util.FirstNonEmpty(resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")); v != "" {
+	if v := util.FirstNonEmpty(resp.Header.Get(httpx.HeaderETag), resp.Header.Get(httpx.HeaderLastModified)); v != "" {
 		validator = v
 	}
 
@@ -435,7 +441,7 @@ func streamsFor(configured int, total int64, resp *http.Response) int {
 	if resp.StatusCode != http.StatusPartialContent {
 		return 1 // the server ignored our range, so it will ignore the rest
 	}
-	if strings.EqualFold(resp.Header.Get("Accept-Ranges"), "none") {
+	if strings.EqualFold(resp.Header.Get(httpx.HeaderAcceptRanges), "none") {
 		return 1
 	}
 	return configured
@@ -756,7 +762,7 @@ func transferRetryDelay(attempt int) time.Duration {
 // statusError builds an error carrying a short slice of the response body,
 // which is usually where these hosts put the real reason.
 func statusError(u *url.URL, resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, config.ErrorBodySample))
 	return &httpx.StatusError{
 		Code:   resp.StatusCode,
 		Status: resp.Status,

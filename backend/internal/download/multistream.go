@@ -109,16 +109,21 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 	// spawn is only ever called from run and from the supervisor, and the
 	// supervisor holds a WaitGroup slot for its whole life, so the counter
 	// cannot reach zero while another Add is possible.
-	// extra marks a segment created by splitting, which holds a host slot
-	// and may be handed back if the host turns the connection away.
-	spawn := func(seg *segment, body io.ReadCloser, extra bool) {
+	//
+	// reserved names the host an extra connection's slot was charged against,
+	// and "" marks a primary, which is never budgeted. It is captured at
+	// reservation time and travels with the goroutine, because a retry may
+	// re-resolve the item onto another mirror host mid-flight: releasing
+	// whatever host the URL names by then would leak the slot that was
+	// actually taken. Every reservation is released here and only here.
+	spawn := func(seg *segment, body io.ReadCloser, reserved string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if extra {
-				defer t.manager.hosts.release(t.host())
+			if reserved != "" {
+				defer t.manager.hosts.release(reserved)
 			}
-			if err := t.pump(ctx, seg, body, extra); err != nil {
+			if err := t.pump(ctx, seg, body, reserved); err != nil {
 				fail(err)
 			}
 		}()
@@ -127,14 +132,14 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		t.supervise(ctx, func(seg *segment, extra bool) { spawn(seg, nil, extra) })
+		t.supervise(ctx, func(seg *segment, reserved string) { spawn(seg, nil, reserved) })
 	}()
 
-	spawn(primarySeg, primary, false)
+	spawn(primarySeg, primary, "")
 	// Segments restored from a previous run need their own connections.
 	for _, seg := range t.table.snapshot() {
 		if seg != primarySeg && !seg.done() {
-			spawn(seg, nil, false)
+			spawn(seg, nil, "")
 		}
 	}
 
@@ -155,7 +160,7 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 
 // supervise watches throughput and opens another connection while the
 // transfer is slow, up to the configured ceiling.
-func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, bool)) {
+func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, string)) {
 	ticker := time.NewTicker(t.pollInterval)
 	defer ticker.Stop()
 
@@ -167,6 +172,10 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 		// connection was opened, so the next stable reading can be compared
 		// against it. Zero means no addition is awaiting judgement.
 		speedBeforeAdd float64
+		// lastAddHost is the host that connection's slot was charged against,
+		// so a verdict on it penalises the host that was actually asked even
+		// if the item has since rotated to another mirror.
+		lastAddHost string
 	)
 	meter := newSpeedMeter(config.SpeedWindow, t.item.downloaded.Load())
 
@@ -210,9 +219,9 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 			if speedBeforeAdd > 0 {
 				if speed < speedBeforeAdd*config.ThroughputRegressionRatio {
 					t.crowded = true
-					limit := t.manager.hosts.penalise(t.host())
+					limit := t.manager.hosts.penalise(lastAddHost)
 					t.manager.log.Debug("host is slower with more connections; stopping",
-						"item", t.item.ID, "host", t.host(), "before", int64(speedBeforeAdd),
+						"item", t.item.ID, "host", lastAddHost, "before", int64(speedBeforeAdd),
 						"after", int64(speed), "limit", limit)
 				}
 				speedBeforeAdd = 0
@@ -221,23 +230,28 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 			if !t.shouldAddStream(speed, lastAdd) {
 				continue
 			}
-			// Only attempt what this host has shown it will tolerate.
-			if !t.manager.hosts.reserve(t.host()) {
+			// Only attempt what this host has shown it will tolerate. The
+			// host is captured here so the release — and any penalty — hits
+			// the budget the reservation came out of, whatever host the item
+			// has rotated to by then.
+			host := t.host()
+			if !t.manager.hosts.reserve(host) {
 				continue
 			}
 			seg := t.table.split(config.MinSegmentSize)
 			if seg == nil {
-				t.manager.hosts.release(t.host())
+				t.manager.hosts.release(host)
 				continue
 			}
 			lastAdd = time.Now()
 			speedBeforeAdd = speed
+			lastAddHost = host
 			// The rate is about to change; judge the new one from scratch.
 			meter.reset(current)
 			t.manager.log.Debug("opening another connection",
 				"item", t.item.ID, "streams", t.table.count(),
 				"speed", int64(speed), "from", seg.start)
-			spawn(seg, true)
+			spawn(seg, host)
 		}
 	}
 }
@@ -268,11 +282,14 @@ func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bo
 }
 
 // pump fetches one segment, retrying it on its own so a single dropped
-// connection does not sink the whole transfer.
-func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.ReadCloser, extra bool) error {
+// connection does not sink the whole transfer. reserved is the host an extra
+// connection's slot was charged against, and "" for a primary; the slot
+// itself is released by spawn, never here.
+func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.ReadCloser, reserved string) error {
 	t.item.streams.Add(1)
 	defer t.item.streams.Add(-1)
 
+	extra := reserved != ""
 	for attempt := 0; ; attempt++ {
 		if body == nil {
 			opened, err := t.open(ctx, seg, extra)
@@ -284,9 +301,9 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 				// range back and settle for the connections we have,
 				// rather than failing a download that is working.
 				if extra && refusedExtraConnection(err) && t.table.retire(seg) {
-					limit := t.manager.hosts.penalise(t.host())
+					limit := t.manager.hosts.penalise(reserved)
 					t.manager.log.Debug("host refused another connection",
-						"item", t.item.ID, "host", t.host(), "limit", limit, "err", err)
+						"item", t.item.ID, "host", reserved, "limit", limit, "err", err)
 					return nil
 				}
 				if attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
@@ -430,7 +447,7 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool) 
 		}
 		// Otherwise If-Range did not match: this is the whole file from a
 		// different version, so everything on disk is suspect.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, config.ErrorBodySample))
 		return nil, errFileChanged
 	default:
 		defer resp.Body.Close()

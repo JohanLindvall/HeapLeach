@@ -74,18 +74,20 @@ func (l *hostLimiter) release(host string) {
 	}
 }
 
-// penalise records that a host refused an extra connection, lowering what
-// will be attempted against it from now on. The slot is released too, since
-// the connection it was taken for never came up.
+// penalise records that a host pushed back against an extra connection,
+// lowering what will be attempted against it from now on.
+//
+// It only lowers the limit. The caller still holds the slot it reserved —
+// every reservation is released exactly once, by whoever took it — so the
+// active count here still includes the connection that was refused, and
+// settling one below it is settling just below what was in flight when the
+// refusal came. A further refusal at the same level steps the limit down
+// once more, which is what walks a host that keeps refusing to zero.
 func (l *hostLimiter) penalise(host string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	b := l.budgetLocked(host)
-	if b.active > 0 {
-		b.active--
-	}
-	// Settle just below whatever was in flight when the refusal came.
 	if b.limit > b.active {
 		b.limit = b.active
 	}

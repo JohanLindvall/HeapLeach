@@ -13,6 +13,15 @@ import (
 	"sync"
 )
 
+// The helper binaries the downloader can put to work. Named here, in the
+// package that locates them, so the download engine and the extractors spell
+// them identically.
+const (
+	YtDlp   = "yt-dlp"
+	FFmpeg  = "ffmpeg"
+	FFprobe = "ffprobe"
+)
+
 var (
 	mu       sync.Mutex
 	resolved = map[string]string{}

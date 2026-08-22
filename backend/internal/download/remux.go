@@ -7,19 +7,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // Joined MPEG-TS segments are already playable, so remuxing is a convenience
 // rather than a requirement: it only rewraps the same streams into an .mp4
 // container. Nothing is re-encoded, so it is quick and lossless, and when
 // ffmpeg is not installed the .ts file is simply kept as-is.
-
-// remuxTimeout bounds the rewrap. Copying streams is fast even for a long
-// programme, so a stuck ffmpeg should not hold a worker indefinitely.
-const remuxTimeout = 30 * time.Minute
 
 // remuxToMP4 rewraps a transport stream as MP4, returning the path to use.
 // Any failure leaves the original untouched and returns it.
@@ -29,7 +26,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 	}
 	// tools.Find rather than the bare PATH lookup, so the static build
 	// `make dependencies` places next to the binary is honoured here too.
-	ffmpeg, ok := tools.Find("ffmpeg")
+	ffmpeg, ok := tools.Find(tools.FFmpeg)
 	if !ok {
 		m.log.Debug("ffmpeg not installed; keeping the transport stream", "path", filepath.Base(path))
 		return path
@@ -41,7 +38,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 		return path
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, remuxTimeout)
+	ctx, cancel := context.WithTimeout(ctx, config.RemuxTimeout)
 	defer cancel()
 
 	// Conversion is only worth doing if it is lossless, so every attempt is
@@ -56,7 +53,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 	maps := simpleMaps()
 	mapsWithoutSubs := simpleMapsWithoutSubtitles()
 	hasSubtitles := true
-	if ffprobe, ok := tools.Find("ffprobe"); ok {
+	if ffprobe, ok := tools.Find(tools.FFprobe); ok {
 		if streams, err := probeMedia(ctx, ffprobe, path); err == nil {
 			video, audio, subtitles := selectStreams(streams)
 			if len(video)+len(audio) > 0 {
@@ -105,7 +102,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 	if runErr != nil {
 		m.log.Debug("not losslessly convertible; keeping the transport stream",
 			"path", filepath.Base(path), "err", runErr,
-			"ffmpeg", strings.TrimSpace(truncateOutput(string(output))))
+			"ffmpeg", util.Truncate(string(output), 300))
 		return path
 	}
 
@@ -140,13 +137,4 @@ func mapArgs(video, audio, subtitles []int) []string {
 // gives up on subtitles MP4 cannot hold.
 func simpleMapsWithoutSubtitles() []string {
 	return []string{"-map", "0:v:0?", "-map", "0:a:0?", "-c", "copy"}
-}
-
-// truncateOutput keeps an ffmpeg diagnostic short enough to log.
-func truncateOutput(s string) string {
-	const limit = 300
-	if len(s) <= limit {
-		return s
-	}
-	return s[:limit] + "..."
 }

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // FirstNonEmpty returns the first non-empty string, or "" when all are empty.
@@ -55,14 +56,20 @@ func SortBy(values []string, less func(a, b string) bool) {
 	sort.Slice(values, func(i, j int) bool { return less(values[i], values[j]) })
 }
 
-// Truncate collapses whitespace and caps a string at n characters, for
-// embedding a remote response in an error message.
+// Truncate collapses whitespace and caps a string at n bytes, for embedding
+// a remote response in an error message. The cut lands on a rune boundary,
+// so a multi-byte character is dropped whole rather than split into the
+// replacement-character noise an invalid tail renders as.
 func Truncate(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
 
 // NameFromURL derives a filename from a URL's path, ignoring the query

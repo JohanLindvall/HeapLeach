@@ -37,7 +37,7 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	}
 	defer cleanup()
 
-	ytdlp, ok := tools.Find("yt-dlp")
+	ytdlp, ok := tools.Find(tools.YtDlp)
 	if !ok {
 		return fmt.Errorf("yt-dlp is not installed — run `make dependencies` to fetch it " +
 			"into the folder holding heapleach, or put it on PATH")
@@ -47,7 +47,7 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	cmd.Env = append(os.Environ(), "YTDLP="+ytdlp)
 	// ffmpeg is optional: without it the script asks for a single already
 	// muxed stream instead of a pair it could not join.
-	if ffmpeg, ok := tools.Find("ffmpeg"); ok {
+	if ffmpeg, ok := tools.Find(tools.FFmpeg); ok {
 		cmd.Env = append(cmd.Env, "FFMPEG="+ffmpeg)
 	}
 	// The helper spawns yt-dlp, which spawns ffmpeg; cancelling has to take

@@ -176,9 +176,15 @@ export function accumulate(previous: Progress, snapshot: Snapshot): Progress {
 
   // Forget ids for jobs the user cleared, so the set cannot grow forever.
   // Re-adding a cleared job legitimately counts as a fresh download.
+  // Membership goes through a Set: this runs on every snapshot tick, and a
+  // linear scan per id turns a multi-thousand-file job quadratic.
   const retained = previous.countedItems.filter((id) => liveIds.has(id));
+  const retainedSet = new Set(retained);
   for (const id of counted) {
-    if (liveIds.has(id) && !retained.includes(id)) retained.push(id);
+    if (liveIds.has(id) && !retainedSet.has(id)) {
+      retainedSet.add(id);
+      retained.push(id);
+    }
   }
 
   return {

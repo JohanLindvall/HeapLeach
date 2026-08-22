@@ -149,6 +149,19 @@ const (
 
 	// MaxRetryAfter caps how long a server's Retry-After can park a worker.
 	MaxRetryAfter = 2 * time.Minute
+
+	// ErrorBodySample is how much of a failed response's body is kept for the
+	// error message, which is usually where these hosts put the real reason.
+	ErrorBodySample = 4 << 10
+
+	// PlaylistStateEvery is how often a playlist transfer checkpoints its
+	// progress, in segments joined.
+	PlaylistStateEvery = 20
+
+	// RemuxTimeout bounds the lossless rewrap of a finished transport stream.
+	// Copying streams is fast even for a long programme, so a stuck ffmpeg
+	// should not hold a worker indefinitely.
+	RemuxTimeout = 30 * time.Minute
 )
 
 // Server tuning.

@@ -110,6 +110,52 @@ func TestHostLimiterLearnsFromRefusal(t *testing.T) {
 	}
 }
 
+// A penalty lowers the limit and nothing else: the slot the refused
+// connection reserved is still held, and is released exactly once by whoever
+// took it. Penalising used to release as well, so a refusal was released
+// twice and the count drifted under concurrent extras.
+func TestHostLimiterPenaliseKeepsSlot(t *testing.T) {
+	limiter := newHostLimiter(4)
+	limiter.reserve("busy.test")
+	limiter.reserve("busy.test")
+
+	if got := limiter.penalise("busy.test"); got != 1 {
+		t.Errorf("limit after refusal with 2 in flight = %d, want 1", got)
+	}
+	// Both slots are still charged, so nothing fits under the new limit yet.
+	if limiter.reserve("busy.test") {
+		t.Error("reserved a slot while the refused connection still held one")
+	}
+	limiter.release("busy.test")
+	limiter.release("busy.test")
+	if !limiter.reserve("busy.test") {
+		t.Error("no slot free after both holders released")
+	}
+	if limiter.reserve("busy.test") {
+		t.Error("handed out a second slot against a learned limit of one")
+	}
+}
+
+// The slot travels with the host it was reserved against. An item that
+// rotates to another mirror between reserve and release must still release
+// the original host, or its budget leaks for the life of the process.
+func TestHostLimiterReleaseUsesReservedHost(t *testing.T) {
+	limiter := newHostLimiter(1)
+	if !limiter.reserve("a.test") {
+		t.Fatal("could not take the only slot")
+	}
+	// Releasing the wrong key must not free a.test's slot...
+	limiter.release("b.test")
+	if limiter.reserve("a.test") {
+		t.Error("a release against another host freed this host's slot")
+	}
+	// ...and releasing the reserved key must.
+	limiter.release("a.test")
+	if !limiter.reserve("a.test") {
+		t.Error("the slot was not reusable after its own release")
+	}
+}
+
 func TestRefusedExtraConnection(t *testing.T) {
 	cases := []struct {
 		name string

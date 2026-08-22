@@ -28,10 +28,14 @@ export function formatEta(remaining: number, bytesPerSecond: number): string {
 /** Duration in seconds as a compact string. */
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
+  // Rounded to whole seconds before being split into fields, the way the Go
+  // side does it: rounding the remainder afterwards would render 119.7s as
+  // "1m 60s".
+  const whole = Math.round(seconds);
+  if (whole < 60) return `${whole}s`;
 
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
+  const minutes = Math.floor(whole / 60);
+  if (minutes < 60) return `${minutes}m ${whole % 60}s`;
 
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ${minutes % 60}m`;

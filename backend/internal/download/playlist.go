@@ -191,7 +191,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 			it.downloaded.Store(written)
 			<-slots // a written segment frees its slot, bounding memory
 
-			if next%playlistStateEvery == 0 || next == len(segments) {
+			if next%config.PlaylistStateEvery == 0 || next == len(segments) {
 				_ = savePlaylistState(part, playlistState{Index: next, Bytes: written, Total: len(segments)})
 			}
 			m.setSegmentProgress(it, next, len(segments))
@@ -213,9 +213,6 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	clearPlaylistState(part)
 	return name, nil
 }
-
-// playlistStateEvery is how often progress is checkpointed, in segments.
-const playlistStateEvery = 20
 
 // fetchSegment retrieves one part in full, retrying on its own so a single
 // dropped connection does not sink the whole playlist.

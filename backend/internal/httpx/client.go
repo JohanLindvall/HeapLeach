@@ -179,7 +179,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		case retryableStatus(resp.StatusCode):
 			wait := retryAfter(resp)
 			drain(resp)
-			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.String()}
+			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
 			if attempt < c.maxRetries {
 				if err := util.SleepCtx(req.Context(), max(wait, retryDelay(attempt))); err != nil {
 					return nil, err
