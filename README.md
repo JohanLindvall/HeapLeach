@@ -167,7 +167,7 @@ once, up front, instead of as a wall of failed transfers.
 | **youtube** | videos and playlists | Handed to yt-dlp, which is the only practical way in: YouTube withholds playback URLs behind BotGuard attestation on top of its signature and throttling parameters. Needs `make dependencies`. |
 | **odysee, dailymotion, bilibili, niconico, rumble, bandcamp, soundcloud, mixcloud** | videos and tracks | Also handed to yt-dlp, each for a reason recorded in the code so nobody re-derives it: Bilibili signs its playback URLs and ships demuxed DASH; Niconico's HLS is demuxed too, so there is nothing self-contained to fetch; Dailymotion fingerprints TLS and no longer offers a progressive rendition; Bandcamp answers with a client challenge; SoundCloud needs a client id scraped from a rotating bundle; Mixcloud obfuscates its stream URLs; Rumble puts an interstitial in front of its media endpoint. Needs `make dependencies`. |
 | **vimeo** | `/<id>`, `/<id>/<hash>`, channel and group links, `player.vimeo.com/video/<id>` | Everything goes through the **embed player** rather than the watch page: the watch page answers a non-browser client with a bot check, and yt-dlp's own path through it demands an account, while the player URL an iframe loads is served to anyone. The stream is demuxed — video renditions plus a separate audio group — and carries no progressive MP4, so yt-dlp muxes it. Needs `make dependencies`. |
-| **booru** | tag searches and posts on 16 image boards | One adapter per API family — Danbooru, e621, Moebooru, Gelbooru 0.2, Philomena — which is how a handful of engines covers a lot of sites. |
+| **booru** | tag searches and posts on 19 image boards, plus the booru.org network | One adapter per API family — Danbooru, e621, Moebooru, Gelbooru 0.2, Philomena — which is how a handful of engines covers a lot of sites. |
 | **4chan** | `/<board>/thread/<id>` | The site's read-only JSON API; every attachment in a thread. |
 | **streamtape, doodstream, mixdrop** | watch and embed pages | Each assembles its link inside the player: two halves joined at an offset the page states, a token endpoint plus a random tail, or a packed script naming the delivery host. Every one of them reads the numbers it needs off the page rather than hard-coding what they were. |
 | **pixhost** | `/gallery/<code>`, `/show/<group>/<file>` | A gallery's thumbnails say where the full images are: the two links differ only by host prefix and one path segment. Deriving them resolves a gallery of fifty in one request instead of fifty, and a mapping that ever changed would fail visibly with a 404 rather than quietly fetching thumbnails. |
@@ -187,7 +187,7 @@ once, up front, instead of as a wall of failed transfers.
 | **foolfuuka** (family) | `/{board}/thread/<n>` on the 4chan archives | Where threads persist after 4chan drops them, through an API modelled on 4chan's own — and better than it, since each post carries the poster's original filename and an exact size. |
 | **mediawiki** (family) | `Category:`, `File:`, articles, on any wiki | Commons, every Wikipedia, Fandom, any open wiki. A documented, versioned, keyless API returning untouched originals — the least likely thing here ever to break. |
 | **nrk, rúv, ard, zdf, srf, vrt, npo, raiplay, rtve, rtp, pbs, npr, abc listen, bbc sounds** | programmes, series and episodes | svtplay's siblings, thirteen more of them. Each checks the broadcaster's own DRM flag, skips what is protected, and passes the site's own geo-block message through verbatim rather than replacing it with a guess. Whether one of these is here or on the yt-dlp list above is decided by one thing: whether any rendition carries audio and video in the *same* segments. Those that do are fetched directly; those that do not would concatenate into a silent video, so they are muxed by yt-dlp instead. ARD and RTVE hand back plain rangeable files with exact lengths, so they get the whole engine — splitting, resume and the skip check. |
-| **vidmoly, streamable, wetransfer, suvobox** | see above | Vidmoly is the highest-traffic embed host here; three of its four advertised domains are dead, so everything routes through the one that works. |
+| **vidmoly, streamable, wetransfer** | see above | Vidmoly is the highest-traffic embed host here; three of its four advertised domains are dead, so everything routes through the one that works. |
 | **feeds** | any RSS or Atom feed | One file per `<enclosure>`, oldest first, since an archive wants the beginning. |
 | *a bare `.m3u8`* | any adaptive manifest | Joined into a playable file. A `.mpd` is refused with a reason rather than saved: DASH is usually demuxed, so concatenating it would yield a silent video. |
 | *a directory listing* | Apache, nginx, lighttpd autoindex | Walked recursively, with sizes and structure taken from the listing. Also covers IPFS gateway directories. |
@@ -200,11 +200,12 @@ mega, mediafire, ok.ru, cyberdrop, streamable, wetransfer and the three
 streaming hosts are **resolved at download time**, not when the link is
 queued — otherwise a large queue would start failing halfway down.
 
-Five of the entries above are **platform families**: one extractor covering
+Seven of the entries above are **platform families**: one extractor covering
 every site running a piece of software, rather than one per site. That is
 where the reach comes from — the KVS row is seven named tube sites plus an
-unbounded tail recognised by the shape of its URLs, the booru row is twenty
-boards through six API families, and PeerTube alone is some 1,795 instances.
+unbounded tail recognised by the shape of its URLs, the booru row is
+nineteen named boards through seven API families, and PeerTube alone is some
+1,795 instances.
 A family is always the better trade, and the ones here key off something that
 cannot rot: a version endpoint, a `generator` tag, or the `nodeinfo`
 specification.
@@ -416,6 +417,8 @@ gallery-dl uses:
 | Moebooru | yande.re, konachan, sakugabooru |
 | Gelbooru 0.2 | safebooru, tbib, hypnohub, xbooru |
 | Philomena | derpibooru, ponybooru, furbooru, twibooru |
+| szurubooru | snootbooru, foalcon |
+| Gelbooru 0.1 | the booru.org network, one board per subdomain, scraped — it has no JSON API |
 
 Paste a tag search or a post link. A listing with no tags fetches the
 board's latest posts; a bare domain is rejected, since that is far more
@@ -428,9 +431,9 @@ listed as supported and quietly broken.
 
 ## Optional helpers
 
-YouTube needs `yt-dlp`; `ffmpeg` lets SVT Play output `.mp4` instead of `.ts`
-and lets YouTube merge separate video and audio tracks. Neither is required
-for the other hosts.
+YouTube — and every host marked "Needs `make dependencies`" above — is
+fetched by `yt-dlp`. `ffmpeg` rewraps any finished `.ts` as `.mp4` and lets
+yt-dlp merge separate video and audio tracks. Everything else needs neither.
 
 ```bash
 make dependencies    # static yt-dlp + ffmpeg into ./bin
@@ -462,8 +465,10 @@ and a flag beats the environment.
 | `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
 | `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
 | `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |
-| `HEAPLEACH_EXTRA_HOSTS` | unset | Extra hosts for a platform family, as `family:host,host;family:host` — for example `peertube:tube.example;kvs:tube2.example`. Every family here is software many sites run, so a list compiled into a binary can only ever trail them; this adds installs without a rebuild. Families: `kvs`, `peertube`, `chevereto`, `foolfuuka`, `fediverse`. |
+| `HEAPLEACH_EXTRA_HOSTS` | unset | Extra hosts for a platform family, as `family:host,host;family:host` — for example `peertube:tube.example;kvs:tube2.example`. Every family here is software many sites run, so a list compiled into a binary can only ever trail them; this adds installs without a rebuild. Families: `kvs`, `peertube`, `chevereto`, `foolfuuka`, `fediverse`, `mediawiki`. |
 | `HEAPLEACH_KVS_HOSTS` | unset | The original KVS-only form of the above, still honoured. |
+| `HEAPLEACH_IA_FORMATS` | unset | Archive.org format labels to keep, overriding the per-mediatype rendition policy — the escape for when an item's interesting rendition is one the policy passes over. |
+| `HEAPLEACH_UTLS` | unset | `HEAPLEACH_UTLS=0` turns the browser-shaped TLS handshake off and uses Go's standard one. A few hosts (wiki.gg) challenge the default fingerprint; a few others require it. |
 | `HEAPLEACH_DEBUG` | unset | Debug logging. Flag: `-debug`. |
 | `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. A bare run does this anyway, so this is mostly how to say **no**: `HEAPLEACH_OPEN=0` (also `false`, `no`, `off`) suppresses it, for a machine with no desktop or a session over SSH. |
 
@@ -475,7 +480,7 @@ and a flag beats the environment.
 | `GET` | `/api/state` | Current snapshot. |
 | `GET` | `/api/events` | SSE stream of snapshots. |
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
-| `POST` | `/api/settings` | `{"concurrency": n, "streams": n}` |
+| `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…"}` — each optional, so a request carries only what changed. |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `DELETE` | `/api/jobs/{id}` | Cancel and forget. |
