@@ -38,8 +38,36 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 		cfg.StallTimeout != 45*time.Second || !cfg.Debug {
 		t.Errorf("cfg = %+v", cfg)
 	}
-	if len(cfg.KVSHosts) != 3 || cfg.KVSHosts[2] != "three.example" {
-		t.Errorf("KVSHosts = %v, want commas and spaces both to separate", cfg.KVSHosts)
+	kvs := cfg.ExtraHostsFor(FamilyKVS)
+	if len(kvs) != 3 || kvs[2] != "three.example" {
+		t.Errorf("kvs hosts = %v, want commas and spaces both to separate", kvs)
+	}
+}
+
+// One setting carries every family's additions; the original KVS-only
+// variable still works, because someone is relying on it.
+func TestExtraHostsGroupsByFamily(t *testing.T) {
+	t.Setenv("HEAPLEACH_KVS_HOSTS", "tube.example")
+	t.Setenv("HEAPLEACH_EXTRA_HOSTS",
+		"peertube:one.example,two.example; chevereto:pics.example ;kvs:another.example")
+
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ExtraHostsFor(FamilyPeerTube); len(got) != 2 || got[0] != "one.example" {
+		t.Errorf("peertube = %v", got)
+	}
+	if got := cfg.ExtraHostsFor(FamilyChevereto); len(got) != 1 || got[0] != "pics.example" {
+		t.Errorf("chevereto = %v", got)
+	}
+	// The legacy variable and the new one name the same family and both
+	// count, rather than one silently replacing the other.
+	if got := cfg.ExtraHostsFor(FamilyKVS); len(got) != 2 {
+		t.Errorf("kvs = %v, want the legacy variable and the grouped one merged", got)
+	}
+	if got := cfg.ExtraHostsFor("nothing-configured"); got != nil {
+		t.Errorf("unconfigured family = %v, want nil", got)
 	}
 }
 

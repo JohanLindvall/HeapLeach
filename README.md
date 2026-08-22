@@ -301,7 +301,8 @@ and a flag beats the environment.
 | `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
 | `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
 | `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |
-| `HEAPLEACH_KVS_HOSTS` | unset | Extra Kernel Video Sharing hosts, comma- or space-separated. That platform is sold to far more sites than any built-in list names, so this adds them without a rebuild. |
+| `HEAPLEACH_EXTRA_HOSTS` | unset | Extra hosts for a platform family, as `family:host,host;family:host` — for example `peertube:tube.example;kvs:tube2.example`. Every family here is software many sites run, so a list compiled into a binary can only ever trail them; this adds installs without a rebuild. Families: `kvs`, `peertube`, `chevereto`, `foolfuuka`, `fediverse`. |
+| `HEAPLEACH_KVS_HOSTS` | unset | The original KVS-only form of the above, still honoured. |
 | `HEAPLEACH_DEBUG` | unset | Debug logging. Flag: `-debug`. |
 | `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. |
 

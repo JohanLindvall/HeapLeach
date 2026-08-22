@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -278,43 +277,16 @@ func coomerFansIsPost(link string) bool {
 	return len(segs) >= 2 && segs[0] == "p"
 }
 
-// expand reads every post page, several at a time.
-//
-// Results are collected by index rather than appended as they arrive, so the
-// job lists its files in the order the creator's page did however the
-// requests interleave. One post that will not load is skipped rather than
-// failing the job: on a page of hundreds, the rest are still worth having.
+// expand reads every post page, several at a time. FanOut supplies the
+// bounded concurrency, the ordering and the skip-on-failure; see fanout.go
+// for why each of those matters.
 func (c *CoomerFans) expand(ctx context.Context, links []string) []File {
-	groups := make([][]File, len(links))
-
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for i, link := range links {
-		wg.Add(1)
-		go func(i int, link string) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			u, err := ParseURL(link)
-			if err != nil {
-				return
-			}
-			files, _, err := c.postFiles(ctx, u)
-			if err != nil {
-				return
-			}
-			groups[i] = files
-		}(i, link)
-	}
-	wg.Wait()
-
-	var files []File
-	for _, group := range groups {
-		files = append(files, group...)
-	}
-	return files
+	return FanOut(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+		u, err := ParseURL(link)
+		if err != nil {
+			return nil, err
+		}
+		files, _, err := c.postFiles(ctx, u)
+		return files, err
+	})
 }

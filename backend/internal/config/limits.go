@@ -79,6 +79,17 @@ const (
 	// so eight are not opened at once on a brief dip.
 	StreamAddCooldown = 3 * time.Second
 
+	// ThroughputRegressionRatio is how much of its previous rate a transfer
+	// must keep after a connection is added for that connection to count as
+	// harmless. Below it, the host is being made slower by parallelism and
+	// no more connections are opened.
+	//
+	// Well under 1 on purpose: throughput is noisy, and the only case worth
+	// acting on is the unmistakable one. Archive.org drops by two orders of
+	// magnitude, so a generous threshold still catches it while leaving an
+	// ordinary fluctuation alone.
+	ThroughputRegressionRatio = 0.7
+
 	// SegmentStateInterval is how often segment progress is written to the
 	// sidecar file that makes a part-finished transfer resumable.
 	SegmentStateInterval = 5 * time.Second
@@ -203,6 +214,21 @@ const (
 	// Listings also stop early once a page adds nothing new, so this is a
 	// backstop against a site that keeps answering with the last page.
 	MaxAlbumPages = 200
+
+	// MaxListingFiles bounds how many files one submitted URL may resolve
+	// to. Several hosts will happily describe more than anyone meant to ask
+	// for — a maxed category on a gallery site is thousands of albums, an
+	// archive collection is unbounded, a directory tree can be walked
+	// forever — and a job of a hundred thousand files is a mistake being
+	// carried out efficiently rather than a download. An extractor that
+	// reaches this should say what it dropped, the way a truncated listing
+	// is worse than a refused one.
+	MaxListingFiles = 20000
+
+	// MaxDirectoryDepth bounds recursion into a directory listing that
+	// links to itself, directly or through a symlink. A visited set catches
+	// the simple loop; this catches the rest.
+	MaxDirectoryDepth = 12
 )
 
 // Terminal display tuning, for runs that download straight to disk.

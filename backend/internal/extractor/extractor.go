@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -22,6 +23,18 @@ type File struct {
 	// URL is the direct link to fetch. Empty when Resolve supplies it.
 	URL string
 	// Size is the length in bytes, or -1 when the host did not report one.
+	//
+	// Exact means exact: the downloader skips a file whose length already
+	// matches what is on disk, so a Size that is merely close is worse than
+	// no Size at all. Two rules follow.
+	//
+	// A length read off a listing page and rounded for display sets
+	// SizeApprox as well. And an extractor that REWRITES a URL must drop
+	// the size the host gave it — imgur publishes the length of a GIF and
+	// serves an MP4 of the same image up to fifteen times smaller, so
+	// carrying that number over would have the skip check compare against a
+	// length the file can never reach. Use -1, not SizeApprox, which would
+	// still claim the right order of magnitude.
 	Size int64
 	// SizeApprox marks a Size that was read off a listing page and rounded
 	// for display ("57.80 MB"). It is good enough to total a job with, but
@@ -49,6 +62,54 @@ type File struct {
 	// (bunkr, turbo) use this: a link signed while the item sat in the
 	// queue would already have expired by the time its turn came.
 	Resolve func(ctx context.Context) (*Target, error)
+	// Pace, when set, holds the downloader back from this host. Nil is the
+	// normal case: go as fast as the queue's own settings allow.
+	Pace *Pace
+	// Reject, when set, is given the response a transfer is about to write
+	// — the URL redirects actually landed on, and the headers — and may
+	// refuse it.
+	//
+	// The downloader already refuses a web page served in place of a file,
+	// because a host that does that reports a length that agrees with the
+	// page and the result records as a complete download. Some hosts have
+	// the same failure in a form no general rule can catch: imgur answers a
+	// deleted image with a redirect to a real 503-byte PNG, correct content
+	// type, correct length, and 206 to a ranged request. Nothing about the
+	// response is wrong except that it is not the file.
+	//
+	// Only the extractor knows what its host's dead end looks like, so this
+	// is where that knowledge goes. A rejection is final: it means the
+	// resource is gone, not that the attempt went badly, so it is never
+	// retried.
+	Reject func(finalURL string, header http.Header) error
+}
+
+// Pace is how an extractor says "fetch this gently".
+//
+// Most hosts want nothing of the sort, and the queue's own concurrency and
+// stream settings are the right answer. A few actively punish parallelism
+// instead of refusing it — archive.org serves one connection at 7.6 MB/s and
+// three at 21 kB/s each, per address, and goes on doing so for minutes after
+// the connections are gone.
+//
+// That is invisible to every defence the downloader already has. Nothing is
+// refused, so `hostLimiter.penalise` never fires; the bytes keep moving, so
+// `watchForStall` is satisfied; and the transfer looks *slow*, which is
+// precisely the condition that makes the supervisor open more connections.
+// The engine would otherwise talk itself into the worst case and stay there.
+//
+// So a host that behaves this way declares it, and the extractor is where
+// that knowledge belongs: the downloader cannot infer from a clean 206 that
+// the host resents being asked twice.
+type Pace struct {
+	// Streams caps connections opened for one file. 1 disables splitting.
+	// Zero means the queue's own ceiling applies.
+	Streams int
+	// Files caps transfers to this host running at once, across every job.
+	// Zero means the queue's own concurrency applies. Capping Streams alone
+	// is not enough: several files at one connection each is still several
+	// connections to the same host.
+	Files int
 }
 
 // StreamCipher describes payload that arrives encrypted.

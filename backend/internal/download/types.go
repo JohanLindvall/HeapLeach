@@ -2,6 +2,7 @@ package download
 
 import (
 	"context"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -75,7 +76,18 @@ type Item struct {
 	// the item rather than to a resolved target: the URL is re-minted per
 	// attempt, the key never changes.
 	cipher *extractor.StreamCipher
-	cancel context.CancelFunc
+	// pace, when set, holds this item back from a host that punishes
+	// parallelism rather than refusing it. See extractor.Pace.
+	pace *extractor.Pace
+	// reject, when set, recognises this host's way of answering a dead
+	// resource with a valid-looking body. See extractor.File.Reject.
+	reject func(string, http.Header) error
+	// hostKey is the remote this item is charged against while it runs. It
+	// is fixed at dispatch rather than read from URL later, because a
+	// resolver may point the item at a different host mid-flight and the
+	// release must match the reservation.
+	hostKey string
+	cancel  context.CancelFunc
 
 	// inFlight is true from the moment the dispatcher hands this item to a
 	// worker until that worker has fully finished with it. Status alone

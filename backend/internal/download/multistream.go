@@ -34,6 +34,11 @@ type segmentedTransfer struct {
 	maxStreams int
 	slowBelow  int64
 
+	// crowded records that opening a connection measurably slowed this
+	// transfer down, so no more are opened. Touched only by the supervisor
+	// goroutine.
+	crowded bool
+
 	// Timings, overridable so tests need not wait out the real intervals.
 	pollInterval  time.Duration
 	probeInterval time.Duration
@@ -158,6 +163,10 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 		sinceProbe time.Duration
 		sinceSave  time.Duration
 		lastAdd    time.Time
+		// speedBeforeAdd is what the transfer was managing when the last
+		// connection was opened, so the next stable reading can be compared
+		// against it. Zero means no addition is awaiting judgement.
+		speedBeforeAdd float64
 	)
 	meter := newSpeedMeter(config.SpeedWindow, t.item.downloaded.Load())
 
@@ -186,8 +195,30 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 			current := t.item.downloaded.Load()
 			speed, stable := meter.observe(current, sinceProbe)
 			sinceProbe = 0
+			if !stable {
+				continue
+			}
 
-			if !stable || !t.shouldAddStream(speed, lastAdd) {
+			// Did the last connection actually help? A host that punishes
+			// parallelism rather than refusing it answers every request with
+			// a clean 206 and simply serves everyone slower, so nothing else
+			// here notices: the budget never drops, the stall watchdog sees
+			// bytes moving, and the transfer looks slow — which is the very
+			// condition that opens another connection. Left alone that is a
+			// feedback loop into the worst case. Measuring the answer breaks
+			// it, and generalises past the one host that prompted it.
+			if speedBeforeAdd > 0 {
+				if speed < speedBeforeAdd*config.ThroughputRegressionRatio {
+					t.crowded = true
+					limit := t.manager.hosts.penalise(t.host())
+					t.manager.log.Debug("host is slower with more connections; stopping",
+						"item", t.item.ID, "host", t.host(), "before", int64(speedBeforeAdd),
+						"after", int64(speed), "limit", limit)
+				}
+				speedBeforeAdd = 0
+			}
+
+			if !t.shouldAddStream(speed, lastAdd) {
 				continue
 			}
 			// Only attempt what this host has shown it will tolerate.
@@ -200,6 +231,7 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 				continue
 			}
 			lastAdd = time.Now()
+			speedBeforeAdd = speed
 			// The rate is about to change; judge the new one from scratch.
 			meter.reset(current)
 			t.manager.log.Debug("opening another connection",
@@ -213,6 +245,11 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 // shouldAddStream decides whether another connection is worth opening.
 func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bool {
 	if t.table.count() >= t.maxStreams {
+		return false
+	}
+	// Adding a connection already made this host slower once. Asking again
+	// would only repeat the experiment with a worse starting point.
+	if t.crowded {
 		return false
 	}
 	// A paused or rate-limited transfer looks exactly like a slow one: the

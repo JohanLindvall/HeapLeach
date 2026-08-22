@@ -106,7 +106,9 @@ func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
 // TestRegistryAcceptsExtraKVSHosts covers the escape hatch for a platform
 // whose site list outruns any release.
 func TestRegistryAcceptsExtraKVSHosts(t *testing.T) {
-	reg := testRegistry(t, &config.Config{KVSHosts: []string{"tube.example.test"}})
+	reg := testRegistry(t, &config.Config{
+		ExtraHosts: map[string][]string{config.FamilyKVS: {"tube.example.test"}},
+	})
 
 	u, err := ParseURL("https://tube.example.test/videos/1/x/")
 	if err != nil {

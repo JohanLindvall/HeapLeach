@@ -38,6 +38,11 @@ type Manager struct {
 	running int
 	limit   int
 	streams int
+	// hostActive counts transfers in flight per host, for the few hosts
+	// that ask to be approached gently (extractor.Pace). Only paced items
+	// consult it, but every dispatched item is counted, so a mixed queue
+	// still sees the truth.
+	hostActive map[string]int
 
 	wake chan struct{}
 	ctx  context.Context
@@ -76,21 +81,22 @@ type Manager struct {
 func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log *slog.Logger) *Manager {
 	ctx, stop := context.WithCancel(context.Background())
 	return &Manager{
-		cfg:      cfg,
-		reg:      reg,
-		client:   client.Streaming(),
-		log:      log,
-		jobs:     make(map[string]*Job),
-		parts:    make(map[string]struct{}),
-		throttle: newThrottle(cfg.SpeedLimit),
-		limit:    cfg.Concurrency,
-		streams:  cfg.Streams,
-		timings:  defaultDownloadTimings(),
-		hosts:    newHostLimiter(config.MaxConnectionsPerHost),
-		wake:     make(chan struct{}, 1),
-		ctx:      ctx,
-		stop:     stop,
-		subs:     make(map[chan []byte]struct{}),
+		cfg:        cfg,
+		reg:        reg,
+		client:     client.Streaming(),
+		log:        log,
+		jobs:       make(map[string]*Job),
+		parts:      make(map[string]struct{}),
+		hostActive: make(map[string]int),
+		throttle:   newThrottle(cfg.SpeedLimit),
+		limit:      cfg.Concurrency,
+		streams:    cfg.Streams,
+		timings:    defaultDownloadTimings(),
+		hosts:      newHostLimiter(config.MaxConnectionsPerHost),
+		wake:       make(chan struct{}, 1),
+		ctx:        ctx,
+		stop:       stop,
+		subs:       make(map[chan []byte]struct{}),
 	}
 }
 
@@ -211,6 +217,8 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		Status:     StatusQueued,
 		resolve:    f.Resolve,
 		cipher:     f.Cipher,
+		pace:       f.Pace,
+		reject:     f.Reject,
 	}
 }
 
@@ -233,6 +241,10 @@ func (m *Manager) dispatch() {
 			}
 			m.running++
 			it.inFlight = true
+			// Charged here and released in runItem, so the reservation
+			// spans exactly the worker's ownership of the item.
+			it.hostKey = m.hostKeyLocked(it)
+			m.hostActive[it.hostKey]++
 			if itemHeld != nil {
 				itemHeld(it, true)
 			}
@@ -251,23 +263,63 @@ func (m *Manager) dispatch() {
 	}
 }
 
-// nextLocked pops the next runnable item, skipping ones cancelled while
-// they sat in the queue. Caller holds mu.
+// nextLocked takes the next runnable item out of the queue. Caller holds mu.
+//
+// Three things can disqualify the item at the front. It may have been
+// cancelled while it sat there, in which case it is dropped. A worker may
+// still own it, which inFlight reports and which must never be handed out
+// twice. Or its host may already be running as many transfers as it will
+// tolerate — and that one is a *skip*, not a drop: the item keeps its place
+// and a later one is started instead, so one gentle host cannot idle the
+// whole pool behind it.
 func (m *Manager) nextLocked() *Item {
 	// A paused queue starts nothing new. Transfers already running park
 	// inside their reads instead, so they keep their place in the file.
-	if m.throttle.isPaused() {
+	if m.throttle.isPaused() || m.running >= m.limit {
 		return nil
 	}
-	for m.running < m.limit && len(m.queue) > 0 {
-		it := m.queue[0]
-		m.queue = m.queue[1:]
-		// inFlight guards against handing out an item a worker still owns.
-		if it.Status == StatusQueued && !it.inFlight {
-			return it
+
+	var chosen *Item
+	kept := m.queue[:0]
+	for _, it := range m.queue {
+		switch {
+		case chosen != nil:
+			kept = append(kept, it)
+		case it.Status != StatusQueued || it.inFlight:
+			// Cancelled where it stood, or still owned: forget it.
+		case m.hostFullLocked(it):
+			kept = append(kept, it)
+		default:
+			chosen = it
 		}
 	}
-	return nil
+	m.queue = kept
+	return chosen
+}
+
+// hostFullLocked reports whether an item's host is already running as many
+// transfers as its pace allows. Caller holds mu.
+func (m *Manager) hostFullLocked(it *Item) bool {
+	if it.pace == nil || it.pace.Files <= 0 {
+		return false
+	}
+	return m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files
+}
+
+// hostKeyLocked names the remote an item will be charged against.
+//
+// An item with a resolver has no URL yet, so the job's own source stands in.
+// That is the right answer rather than a fallback: a paced host's items come
+// from that host's own listing, and the storage server a resolver eventually
+// picks belongs to it either way. Caller holds mu.
+func (m *Manager) hostKeyLocked(it *Item) string {
+	if it.URL != "" {
+		return hostOf(it.URL)
+	}
+	if job, ok := m.jobs[it.JobID]; ok && job.Source != "" {
+		return hostOf(job.Source)
+	}
+	return ""
 }
 
 // itemHeld, when set, brackets the span in which a worker owns an item —
@@ -315,6 +367,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		m.enqueueLocked(it)
 	}
 	m.running--
+	if m.hostActive[it.hostKey]--; m.hostActive[it.hostKey] <= 0 {
+		delete(m.hostActive, it.hostKey)
+	}
+	it.hostKey = ""
 	m.mu.Unlock()
 
 	m.markDirty()

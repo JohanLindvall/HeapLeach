@@ -17,3 +17,6 @@ CLAUDE.md
 
 # Release archives from `make dist`.
 /dist/
+
+# Agent worktrees and scratch state, transient by nature.
+.claude/

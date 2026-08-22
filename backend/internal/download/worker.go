@@ -199,6 +199,11 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	headers := maps.Clone(it.Headers)
 	payload := it.cipher
 	maxStreams := m.streams
+	// A host that asks to be approached gently only ever lowers the
+	// ceiling; it can never raise it above what the user configured.
+	if it.pace != nil && it.pace.Streams > 0 {
+		maxStreams = min(maxStreams, it.pace.Streams)
+	}
 	m.mu.Unlock()
 
 	if rawURL == "" {
@@ -287,6 +292,12 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	}
 
 	if err := rejectWebPage(resp, name); err != nil {
+		return "", err
+	}
+	// The host's own dead end, which no general rule catches — see
+	// extractor.File.Reject. Checked against the URL redirects landed on,
+	// since that is usually what gives it away.
+	if err := m.rejectByHost(it, resp); err != nil {
 		return "", err
 	}
 
@@ -687,10 +698,37 @@ func rejectWebPage(resp *http.Response, name string) error {
 	return &busyHostError{url: resp.Request.URL.Redacted()}
 }
 
+// errDeadResource marks a rejection by the extractor's own Reject: the host
+// answered with something that is not the file and never will be.
+var errDeadResource = errors.New("the host says this file is gone")
+
+// rejectByHost applies the extractor's own response guard, if it set one.
+func (m *Manager) rejectByHost(it *Item, resp *http.Response) error {
+	m.mu.Lock()
+	reject := it.reject
+	m.mu.Unlock()
+	if reject == nil {
+		return nil
+	}
+
+	final := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		final = resp.Request.URL.String()
+	}
+	if err := reject(final, resp.Header); err != nil {
+		return fmt.Errorf("%w: %w", errDeadResource, err)
+	}
+	return nil
+}
+
 // retryableTransfer reports whether a failed pass is worth repeating. A
 // definitive client error (404, 403, ...) is not.
 func retryableTransfer(err error) bool {
 	if httpx.IsCanceled(err) {
+		return false
+	}
+	// The host said the resource is gone. Asking again gets the same answer.
+	if errors.Is(err, errDeadResource) {
 		return false
 	}
 	var busy *busyHostError

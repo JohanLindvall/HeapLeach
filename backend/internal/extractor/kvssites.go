@@ -61,8 +61,8 @@ const kvsMaxAlternates = 6
 // would be.
 func NewKVSSites(cfg *config.Config, client *httpx.Client) []Extractor {
 	hosts := kvsKnownHosts
-	if cfg != nil && len(cfg.KVSHosts) > 0 {
-		hosts = append(append([]string(nil), hosts...), cfg.KVSHosts...)
+	if extra := cfg.ExtraHostsFor(config.FamilyKVS); len(extra) > 0 {
+		hosts = append(append([]string(nil), hosts...), extra...)
 	}
 	out := make([]Extractor, 0, len(hosts))
 	for _, host := range util.Dedupe(hosts) {
