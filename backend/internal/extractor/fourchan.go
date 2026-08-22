@@ -15,6 +15,10 @@ import (
 // which needs no key and is served from a separate host to the boards.
 type FourChan struct {
 	client *httpx.Client
+	// api and files are the two hosts this reads, kept as fields only so a
+	// test can point them at a fixture server.
+	api   string
+	files string
 }
 
 const (
@@ -24,7 +28,9 @@ const (
 )
 
 // NewFourChan builds the 4chan extractor.
-func NewFourChan(client *httpx.Client) *FourChan { return &FourChan{client: client} }
+func NewFourChan(client *httpx.Client) *FourChan {
+	return &FourChan{client: client, api: fourChanAPI, files: fourChanFiles}
+}
 
 func (f *FourChan) Name() string { return "4chan" }
 
@@ -50,7 +56,7 @@ func (f *FourChan) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 			FileSize int64  `json:"fsize"`
 		} `json:"posts"`
 	}
-	endpoint := fmt.Sprintf("%s/%s/thread/%s.json", fourChanAPI, url.PathEscape(board), url.PathEscape(thread))
+	endpoint := fmt.Sprintf("%s/%s/thread/%s.json", f.api, url.PathEscape(board), url.PathEscape(thread))
 	if err := f.client.GetJSON(ctx, endpoint, httpx.Referer(fourChanRoot+"/"), &payload); err != nil {
 		return nil, fmt.Errorf("4chan: fetch thread %s/%s: %w", board, thread, err)
 	}
@@ -73,7 +79,7 @@ func (f *FourChan) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 			// The stored name keeps posts in order and unique; the poster's
 			// original name is not, and often collides.
 			Name:    stored,
-			URL:     fourChanFiles + "/" + board + "/" + stored,
+			URL:     f.files + "/" + board + "/" + stored,
 			Size:    size,
 			Headers: headers,
 		})
