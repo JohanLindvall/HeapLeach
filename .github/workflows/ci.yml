@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes an older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The UI is compiled into the binary, so it is built first and the Go
+      # build below embeds the real thing rather than the placeholder. This
+      # also runs tsc, which is where a type error surfaces.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the UI
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Formatting
+        working-directory: backend
+        run: |
+          unformatted=$(gofmt -l ./internal ./cmd)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      # Race detection is worth the time here: the download engine writes one
+      # file from several connections at once.
+      - name: Test
+        working-directory: backend
+        run: go test ./... -race -count=1
+
+      - name: Build
+        working-directory: backend
+        run: CGO_ENABLED=0 go build -trimpath ./cmd/...

@@ -1,0 +1,14 @@
+# Keep the build context small and force a clean frontend build in-image.
+.git
+.gitignore
+bin/
+downloads/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+backend/internal/webui/dist/
+**/*.tsbuildinfo
+**/.DS_Store
+README.md
+docker-compose.yml
+Makefile

@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The build stamps the version from the tag, but a shallow clone
+          # leaves `git describe` blind, which is what every other build here
+          # uses.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # A tag that cannot pass its own tests should not become a download.
+      - name: Test
+        working-directory: backend
+        run: go test ./... -count=1
+
+      # One Linux runner builds all of them: the program is pure Go with cgo
+      # off, so the targets differ only by GOOS and GOARCH.
+      - name: Build the archives
+        run: make dist VERSION=${{ github.ref_name }}
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "HeapLeach ${{ github.ref_name }}" \
+            --generate-notes

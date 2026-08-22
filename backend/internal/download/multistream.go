@@ -1,0 +1,421 @@
+package download
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
+)
+
+// segmentedTransfer fetches one file over one or more connections, writing
+// each segment straight to its own offset in the part file.
+type segmentedTransfer struct {
+	manager *Manager
+	item    *Item
+	file    io.WriterAt
+	table   *segmentTable
+	part    string
+	name    string
+
+	// validator is the ETag or Last-Modified of the copy already on disk.
+	// It is sent as If-Range so a file that changed underneath us produces
+	// a plain 200 we can detect, rather than bytes from a different version.
+	validator string
+
+	maxStreams int
+	slowBelow  int64
+
+	// Timings, overridable so tests need not wait out the real intervals.
+	pollInterval  time.Duration
+	probeInterval time.Duration
+	addCooldown   time.Duration
+	saveInterval  time.Duration
+}
+
+// downloadTimings groups the intervals the download loop waits out, kept in
+// one place so tests need not sit through the production values.
+type downloadTimings struct {
+	poll     time.Duration
+	probe    time.Duration
+	cooldown time.Duration
+	save     time.Duration
+	busyBase time.Duration
+	busyMax  time.Duration
+}
+
+func defaultDownloadTimings() downloadTimings {
+	return downloadTimings{
+		poll:     config.SegmentPollInterval,
+		probe:    config.StreamProbeInterval,
+		cooldown: config.StreamAddCooldown,
+		save:     config.SegmentStateInterval,
+		busyBase: config.BusyRetryBase,
+		busyMax:  config.BusyRetryMax,
+	}
+}
+
+// withDefaults fills in any timing left unset.
+func (t *segmentedTransfer) withDefaults() *segmentedTransfer {
+	if t.pollInterval <= 0 {
+		t.pollInterval = config.SegmentPollInterval
+	}
+	if t.probeInterval <= 0 {
+		t.probeInterval = config.StreamProbeInterval
+	}
+	if t.addCooldown <= 0 {
+		t.addCooldown = config.StreamAddCooldown
+	}
+	if t.saveInterval <= 0 {
+		t.saveInterval = config.SegmentStateInterval
+	}
+	return t
+}
+
+// run drives the transfer to completion. primary is the already-open body
+// of the request that discovered the file; it belongs to primarySeg, so
+// that request is put to work rather than thrown away.
+func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primary io.ReadCloser) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
+	)
+	fail := func(err error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+
+	// spawn is only ever called from run and from the supervisor, and the
+	// supervisor holds a WaitGroup slot for its whole life, so the counter
+	// cannot reach zero while another Add is possible.
+	// extra marks a segment created by splitting, which holds a host slot
+	// and may be handed back if the host turns the connection away.
+	spawn := func(seg *segment, body io.ReadCloser, extra bool) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if extra {
+				defer t.manager.hosts.release(t.host())
+			}
+			if err := t.pump(ctx, seg, body, extra); err != nil {
+				fail(err)
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t.supervise(ctx, func(seg *segment, extra bool) { spawn(seg, nil, extra) })
+	}()
+
+	spawn(primarySeg, primary, false)
+	// Segments restored from a previous run need their own connections.
+	for _, seg := range t.table.snapshot() {
+		if seg != primarySeg && !seg.done() {
+			spawn(seg, nil, false)
+		}
+	}
+
+	wg.Wait()
+	t.saveState()
+
+	errMu.Lock()
+	err := firstErr
+	errMu.Unlock()
+	if err != nil {
+		return err
+	}
+	if !t.table.complete() {
+		return fmt.Errorf("incomplete transfer: got %d of %d bytes", t.table.written(), t.table.size)
+	}
+	return nil
+}
+
+// supervise watches throughput and opens another connection while the
+// transfer is slow, up to the configured ceiling.
+func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, bool)) {
+	ticker := time.NewTicker(t.pollInterval)
+	defer ticker.Stop()
+
+	var (
+		sinceProbe time.Duration
+		sinceSave  time.Duration
+		lastAdd    time.Time
+	)
+	meter := newSpeedMeter(config.SpeedWindow, t.item.downloaded.Load())
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Checked on the short tick so finishing is not delayed by the
+			// much longer probe interval.
+			if t.table.complete() {
+				return
+			}
+
+			sinceSave += t.pollInterval
+			if sinceSave >= t.saveInterval {
+				sinceSave = 0
+				t.saveState()
+			}
+
+			sinceProbe += t.pollInterval
+			if sinceProbe < t.probeInterval {
+				continue
+			}
+
+			current := t.item.downloaded.Load()
+			speed, stable := meter.observe(current, sinceProbe)
+			sinceProbe = 0
+
+			if !stable || !t.shouldAddStream(speed, lastAdd) {
+				continue
+			}
+			// Only attempt what this host has shown it will tolerate.
+			if !t.manager.hosts.reserve(t.host()) {
+				continue
+			}
+			seg := t.table.split(config.MinSegmentSize)
+			if seg == nil {
+				t.manager.hosts.release(t.host())
+				continue
+			}
+			lastAdd = time.Now()
+			// The rate is about to change; judge the new one from scratch.
+			meter.reset(current)
+			t.manager.log.Debug("opening another connection",
+				"item", t.item.ID, "streams", t.table.count(),
+				"speed", int64(speed), "from", seg.start)
+			spawn(seg, true)
+		}
+	}
+}
+
+// shouldAddStream decides whether another connection is worth opening.
+func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bool {
+	if t.table.count() >= t.maxStreams {
+		return false
+	}
+	// A paused or rate-limited transfer looks exactly like a slow one: the
+	// bytes are not moving. Splitting it further would open connections
+	// that cannot help, because the ceiling is shared across all of them —
+	// and with several files running, every one of them would fan out at
+	// once for the same wrong reason.
+	if t.manager.throttle.isPaused() || t.manager.throttle.limiting() {
+		return false
+	}
+	if speed >= float64(t.slowBelow) {
+		return false
+	}
+	// Let the previous addition settle before judging the rate again.
+	return lastAdd.IsZero() || time.Since(lastAdd) >= t.addCooldown
+}
+
+// pump fetches one segment, retrying it on its own so a single dropped
+// connection does not sink the whole transfer.
+func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.ReadCloser, extra bool) error {
+	t.item.streams.Add(1)
+	defer t.item.streams.Add(-1)
+
+	for attempt := 0; ; attempt++ {
+		if body == nil {
+			opened, err := t.open(ctx, seg, extra)
+			if err != nil {
+				if errors.Is(err, errFileChanged) || ctx.Err() != nil {
+					return err
+				}
+				// The host is turning away extra connections. Give the
+				// range back and settle for the connections we have,
+				// rather than failing a download that is working.
+				if extra && refusedExtraConnection(err) && t.table.retire(seg) {
+					limit := t.manager.hosts.penalise(t.host())
+					t.manager.log.Debug("host refused another connection",
+						"item", t.item.ID, "host", t.host(), "limit", limit, "err", err)
+					return nil
+				}
+				if attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
+					return err
+				}
+				if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+					return err
+				}
+				// An expired signed link is the usual cause; refresh it.
+				_ = t.manager.resolveTarget(ctx, t.item)
+				continue
+			}
+			body = opened
+		}
+
+		err := t.copy(ctx, seg, body)
+		body = nil
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
+			return err
+		}
+		if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+			return err
+		}
+		_ = t.manager.resolveTarget(ctx, t.item)
+	}
+}
+
+// copy drains one response body into the segment's slice of the file.
+//
+// WriteAt is a positional write, so concurrent segments writing to
+// non-overlapping offsets of the same handle is safe and needs no locking.
+func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.ReadCloser) error {
+	defer body.Close()
+
+	buf := make([]byte, config.CopyBufferSize)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pos, end := seg.pos.Load(), seg.end.Load()
+		if pos >= end {
+			// Confirm under the table lock: the segment may have just been
+			// extended to take back a range another connection gave up.
+			if t.table.finish(seg) {
+				return nil
+			}
+			continue
+		}
+
+		// Never read past this segment's end: the supervisor may have
+		// shrunk it to hand the tail to another connection.
+		limit := int64(len(buf))
+		if remaining := end - pos; remaining < limit {
+			limit = remaining
+		}
+
+		// Every connection draws from the one shared bucket, so the cap is
+		// a total across the queue rather than a per-stream allowance.
+		// This is also where a paused transfer parks.
+		allowed, err := t.manager.throttle.take(ctx, int(limit))
+		if err != nil {
+			return err
+		}
+		limit = int64(allowed)
+
+		n, readErr := body.Read(buf[:limit])
+		if n > 0 {
+			if _, err := t.file.WriteAt(buf[:n], pos); err != nil {
+				return fmt.Errorf("write at %d: %w", pos, err)
+			}
+			seg.pos.Store(pos + int64(n))
+			t.item.downloaded.Add(int64(n))
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				if t.table.finish(seg) {
+					return nil
+				}
+				return io.ErrUnexpectedEOF
+			}
+			return readErr
+		}
+	}
+}
+
+// open requests a segment's remaining range. An extra connection does not
+// retry: if the host turns it away, that answer is wanted immediately so the
+// range can be handed back rather than held while the retry budget drains.
+func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool) (io.ReadCloser, error) {
+	m := t.manager
+
+	m.mu.Lock()
+	rawURL := t.item.URL
+	headers := maps.Clone(t.item.Headers)
+	m.mu.Unlock()
+
+	if rawURL == "" {
+		return nil, errors.New("no download URL")
+	}
+	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
+	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
+
+	pos, end := seg.pos.Load(), seg.end.Load()
+	req.Header.Set(httpx.HeaderRange,
+		"bytes="+strconv.FormatInt(pos, 10)+"-"+strconv.FormatInt(end-1, 10))
+	if t.validator != "" {
+		req.Header.Set(httpx.HeaderIfRange, t.validator)
+	}
+
+	do := m.client.Do
+	if extra {
+		do = m.client.DoOnce
+	}
+	resp, err := do(req)
+	if err != nil {
+		return nil, err
+	}
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+		return resp.Body, nil
+	case http.StatusOK:
+		defer resp.Body.Close()
+		// A web page here means the host bounced us, not that the file
+		// changed; saying so makes the retry message honest.
+		if err := rejectWebPage(resp, t.name); err != nil {
+			return nil, err
+		}
+		// Otherwise If-Range did not match: this is the whole file from a
+		// different version, so everything on disk is suspect.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		return nil, errFileChanged
+	default:
+		defer resp.Body.Close()
+		return nil, statusError(req.URL, resp)
+	}
+}
+
+// host is the remote this transfer is talking to.
+func (t *segmentedTransfer) host() string {
+	t.manager.mu.Lock()
+	defer t.manager.mu.Unlock()
+	return hostOf(t.item.URL)
+}
+
+// saveState records segment progress so an interrupted transfer resumes
+// rather than starting over.
+func (t *segmentedTransfer) saveState() {
+	err := saveTransferState(t.part, &transferState{
+		Size:      t.table.size,
+		Validator: t.validator,
+		Segments:  t.table.state(),
+	})
+	if err != nil {
+		t.manager.log.Debug("could not save resume state", "item", t.item.ID, "err", err)
+	}
+}
