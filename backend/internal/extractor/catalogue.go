@@ -147,7 +147,25 @@ func (m *Mediafire) Sites() []string  { return []string{"mediafire.com"} }
 func (g *GoogleDrive) Sites() []string {
 	return []string{"drive.google.com", "drive.usercontent.google.com", "docs.google.com"}
 }
-func (s *SVTPlay) Sites() []string { return []string{"svtplay.se"} }
+func (s *SVTPlay) Sites() []string  { return []string{"svtplay.se"} }
+func (r *RUV) Sites() []string      { return []string{"ruv.is"} }
+func (a *ARD) Sites() []string      { return []string{"ardmediathek.de"} }
+func (z *ZDF) Sites() []string      { return []string{"zdf.de"} }
+func (s *SRF) Sites() []string      { return []string{"srf.ch", "playsuisse.ch"} }
+func (v *VRTMax) Sites() []string   { return []string{"vrt.be"} }
+func (n *NPOStart) Sites() []string { return []string{"npo.nl", "npostart.nl"} }
+func (r *RaiPlay) Sites() []string  { return []string{"raiplay.it"} }
+func (r *RTVE) Sites() []string     { return []string{"rtve.es"} }
+func (r *RTPPlay) Sites() []string  { return []string{"rtp.pt"} }
+func (p *PBS) Sites() []string      { return []string{"pbs.org"} }
+func (n *NPR) Sites() []string      { return []string{"npr.org"} }
+
+// These two claim one section of a very large domain rather than the domain,
+// so the catalogue says which. A row reading "bbc.co.uk" would promise
+// iPlayer and the news site along with it, and the generated list is read as
+// a statement of what works.
+func (a *ABCListen) Sites() []string { return []string{"abc.net.au/listen"} }
+func (b *BBCSounds) Sites() []string { return []string{"bbc.co.uk/sounds"} }
 func (y *YouTube) Sites() []string {
 	return []string{"youtube.com", "youtu.be", "youtube-nocookie.com"}
 }

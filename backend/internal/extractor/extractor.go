@@ -190,6 +190,24 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewMediafire(client),
 		NewGoogleDrive(client),
 		NewSVTPlay(client),
+		// Public broadcasters, all the same job as SVT Play: an open
+		// metadata endpoint, a DRM check, and either a plain rangeable file
+		// or a self-contained HLS rendition. The ones whose streams carry
+		// audio apart are on the yt-dlp handoff list instead — see
+		// handoffs.go, where the reason is stated once for all of them.
+		NewRUV(client),
+		NewARD(client),
+		NewZDF(client),
+		NewSRF(client),
+		NewVRTMax(client),
+		NewNPOStart(client),
+		NewRaiPlay(client),
+		NewRTVE(client),
+		NewRTPPlay(client),
+		NewPBS(client),
+		NewNPR(client),
+		NewABCListen(client),
+		NewBBCSounds(client),
 		NewYouTube(),
 		NewVimeo(),
 		NewYandex(client),

@@ -80,8 +80,11 @@ func (k *KVS) Name() string {
 
 func (k *KVS) Match(u *url.URL) bool { return util.HostMatches(u.Host, k.host) }
 
-// Extract resolves a video page to its best available media URL.
+// Extract resolves a video page, or a member's whole public catalogue.
 func (k *KVS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+	if listing, ok := kvsMemberPath(u); ok {
+		return kvsMember(ctx, k.client, listing, k.Name())
+	}
 	return kvsExtract(ctx, k.client, u, k.Name())
 }
 
