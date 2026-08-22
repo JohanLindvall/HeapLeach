@@ -396,7 +396,8 @@ func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterA
 	m.setProgress(it, offset)
 
 	writer := &offsetWriter{dst: dst, at: offset}
-	buf := make([]byte, config.CopyBufferSize)
+	buf, release := borrowChunk()
+	defer release()
 	_, err := io.CopyBuffer(&progressWriter{item: it, w: writer}, m.throttled(ctx, body), buf)
 	return err
 }

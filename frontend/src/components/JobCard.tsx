@@ -23,8 +23,12 @@ export function JobCard({
   onCancelItem,
   onRetryItem,
 }: JobCardProps) {
-  // Multi-file jobs start collapsed to keep a long queue scannable.
-  const [open, setOpen] = useState(job.total <= 1);
+  // Multi-file jobs stay collapsed to keep a long queue scannable. Derived
+  // until the user chooses, rather than captured at mount: a job is usually
+  // mounted while still resolving, when its count is 0 — deciding then
+  // would leave every album expanded.
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? job.total <= 1;
 
   const percent = job.sizeKnown ? percentOf(job.downloaded, job.size) : null;
   const busy = job.status === 'running' || job.status === 'queued' || job.status === 'resolving';
@@ -37,7 +41,7 @@ export function JobCard({
           type="button"
           className={`job__toggle ${open ? 'is-open' : ''}`}
           aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => setUserOpen(!open)}
           disabled={job.items.length === 0}
         >
           <ChevronIcon />
@@ -81,9 +85,17 @@ export function JobCard({
       <ProgressBar percent={percent} status={job.status} label={`${job.title} progress`} />
 
       <div className="job__meta">
-        <span className="job__source" title={job.source}>
+        {/* A real link: being able to revisit the page a job came from is
+            half the point of keeping the source around. */}
+        <a
+          className="job__source"
+          href={job.source}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={`Open ${job.source}`}
+        >
           {job.source}
-        </span>
+        </a>
         <span className="job__numbers">
           {formatBytes(job.downloaded)}
           {job.size > 0 && job.sizeKnown && ` / ${formatBytes(job.size)}`}

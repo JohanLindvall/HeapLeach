@@ -290,7 +290,8 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.ReadCloser) error {
 	defer body.Close()
 
-	buf := make([]byte, config.CopyBufferSize)
+	buf, release := borrowChunk()
+	defer release()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

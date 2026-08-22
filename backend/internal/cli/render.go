@@ -166,9 +166,23 @@ func (r *renderer) fit(line string) string {
 		width++
 	}
 	// Whatever colour the truncated tail was carrying has to be closed, or
-	// it bleeds into the rest of the screen.
-	b.WriteString("\x1b[0m")
+	// it bleeds into the rest of the screen. A line with no colour to close
+	// gets no reset: NO_COLOR promised the output would carry no escapes.
+	if strings.Contains(line, "\x1b") {
+		b.WriteString("\x1b[0m")
+	}
 	return b.String()
+}
+
+// setWidth follows the terminal through a resize. Narrower lines take effect
+// on the next frame; the frame already on screen may glitch once when the
+// terminal shrinks, since its rows were painted at the old width, and the
+// next paint replaces it.
+func (r *renderer) setWidth(width int) {
+	if width < 40 {
+		width = 40
+	}
+	r.width = width
 }
 
 // paintColour wraps s in an SGR pair, or returns it untouched when colour is

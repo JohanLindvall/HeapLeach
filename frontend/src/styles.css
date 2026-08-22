@@ -542,6 +542,34 @@ code, .mono {
   min-width: 0;
 }
 
+/* Queue search. A bulk downloader's queue runs to hundreds of jobs, and
+   scrolling is not a retrieval strategy. */
+.jobs__search {
+  width: clamp(8rem, 18vw, 13rem);
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--edge-flat);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+
+.jobs__search::placeholder {
+  color: var(--text-faint);
+}
+
+.jobs__search:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.jobs__search::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
 /* Where files land. The RTL trick ellipsises the front of a long path so
    the meaningful tail stays visible. */
 .jobs__dir {
@@ -1197,6 +1225,13 @@ code, .mono {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.job__source:hover {
+  color: var(--accent-b);
+  text-decoration: underline;
 }
 
 .job__numbers {
@@ -1534,6 +1569,9 @@ code, .mono {
 
 @media (max-width: 900px) {
   .header {
+    /* Stacked, the header is a third of a phone screen; pinning that over
+       the queue would leave a letterbox to scroll in. It scrolls away. */
+    position: static;
     flex-direction: column;
     align-items: stretch;
     gap: 0.8rem;
@@ -1692,8 +1730,19 @@ code, .mono {
   .notices {
     right: 0.5rem;
     left: 0.5rem;
-    bottom: 0.5rem;
+    /* Clear of the iPhone home indicator. */
+    bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
     max-width: none;
+  }
+
+  .jobs__search {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  .main {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
   }
 }
 

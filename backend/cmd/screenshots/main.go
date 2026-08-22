@@ -180,6 +180,32 @@ func scene() download.Snapshot {
 			}},
 		},
 		{
+			// A playlist transfer: no byte total until the last part lands,
+			// so parts joined is the progress on show.
+			ID: "j6", Title: "Northern Waters — Episode 2", Host: "svtplay",
+			Source: "https://example.com/video/8Ur3Nc", Status: download.StatusRunning,
+			CreatedAt: now.Add(-70 * time.Second),
+			Total:     1, Active: 1, Downloaded: 210 * MB, Speed: 8.8 * MB,
+			Items: []download.ItemView{{
+				ID: "i15", Name: "northern-waters-e02.ts", Status: download.StatusRunning,
+				Size: -1, Downloaded: 210 * MB, Speed: 8.8 * MB, Streams: 4,
+				SegmentsDone: 96, SegmentsTotal: 240, Elapsed: 24,
+			}},
+		},
+		{
+			// A transfer waiting on purpose, saying so rather than looking
+			// like one that has died.
+			ID: "j7", Title: "Glacier Hike — Full Album", Host: "gofile",
+			Source: "https://example.com/d/Wt5pQz", Status: download.StatusRunning,
+			CreatedAt: now.Add(-50 * time.Second), SizeKnown: true,
+			Total: 1, Active: 1, Size: 3200 * MB, Downloaded: 48 * MB,
+			Items: []download.ItemView{{
+				ID: "i16", Name: "glacier-hike-full.mkv", Status: download.StatusRunning,
+				Size: 3200 * MB, Downloaded: 48 * MB, Elapsed: 41,
+				Note: "host busy — retrying in 16s (attempt 3)",
+			}},
+		},
+		{
 			ID: "j4", Title: "Field Recordings vol. 3", Host: "gofile",
 			Source: "https://example.com/d/Rm2xVt", Status: download.StatusQueued,
 			CreatedAt: now.Add(-90 * time.Second), SizeKnown: true,

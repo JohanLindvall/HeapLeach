@@ -6,28 +6,29 @@ import (
 	"time"
 )
 
-// formatBytes renders a byte count the way a download client should: three
-// significant figures at most, so the number stops jittering as it grows.
+// formatBytes renders a byte count in SI units, matching the web UI digit
+// for digit — the same transfer must not read "1.5 GB" in the terminal and
+// "1.6 GB" in the browser. At most three significant figures, so the number
+// stops jittering as it grows.
 func formatBytes(n int64) string {
 	if n < 0 {
 		return "?"
 	}
-	const unit = 1024
-	if n < unit {
+	if n < 1000 {
 		return fmt.Sprintf("%d B", n)
 	}
-	div, exp := int64(unit), 0
-	for v := n / unit; v >= unit && exp < 4; v /= unit {
-		div *= unit
-		exp++
+	value, unit := float64(n)/1000, 0
+	for value >= 1000 && unit < len(byteUnits)-1 {
+		value /= 1000
+		unit++
 	}
-	value := float64(n) / float64(div)
-	format := "%.1f %cB"
-	if value >= 100 {
-		format = "%.0f %cB"
+	if value < 10 {
+		return fmt.Sprintf("%.1f %s", value, byteUnits[unit])
 	}
-	return fmt.Sprintf(format, value, "KMGTP"[exp])
+	return fmt.Sprintf("%.0f %s", value, byteUnits[unit])
 }
+
+var byteUnits = []string{"kB", "MB", "GB", "TB", "PB"}
 
 // formatSpeed renders bytes per second.
 func formatSpeed(bps float64) string {

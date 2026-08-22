@@ -232,6 +232,9 @@ ffmpeg the `.ts` is kept and plays fine.
   parts joined for a file that arrives as a playlist and so has no byte total
   until its last part lands. A transfer waiting on purpose says so, rather
   than looking like one that has died.
+- **A searchable queue.** Type `/` and filter hundreds of jobs by title,
+  source, host or filename; `Esc` clears. Scrolling is not a retrieval
+  strategy.
 - **Cancel and retry** a whole job or a single file.
 - **Resume** — partial files are kept and continued with a `Range` request;
   a cancelled 100 MB download restarts where it stopped.

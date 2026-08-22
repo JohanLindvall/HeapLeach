@@ -18,6 +18,7 @@ import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar, matchesFilter, type Filter } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
 import { DownloadIcon, FolderIcon, TrashIcon } from './components/Icons';
+import type { JobView } from './types';
 import { useLiveState } from './useLiveState';
 import { useProgress } from './useProgress';
 import { useSpeedHistory } from './useSpeedHistory';
@@ -32,19 +33,52 @@ interface Notice {
 }
 
 const NOTICE_TTL_MS = 6000;
+const ERROR_NOTICE_TTL_MS = 10000;
+
+/** Case-insensitive match against everything a user knows a job by. */
+function matchesQuery(job: JobView, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return (
+    job.title.toLowerCase().includes(q) ||
+    job.source.toLowerCase().includes(q) ||
+    job.host.toLowerCase().includes(q) ||
+    job.items.some((item) => item.name.toLowerCase().includes(q))
+  );
+}
 
 export default function App() {
   const { snapshot, connection } = useLiveState();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
+  const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
   const nextNoticeId = useRef(0);
 
   const notify = useCallback((message: string, kind: NoticeKind): void => {
     const id = nextNoticeId.current++;
     setNotices((current) => [...current, { id, message, kind }]);
+    // Errors linger: a toast the user did not see in time is a toast that
+    // never happened.
     window.setTimeout(() => {
       setNotices((current) => current.filter((n) => n.id !== id));
-    }, NOTICE_TTL_MS);
+    }, kind === 'error' ? ERROR_NOTICE_TTL_MS : NOTICE_TTL_MS);
+  }, []);
+
+  // "/" focuses the queue search from anywhere that is not already a text
+  // field, the way every searchable list on the web works.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      event.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   const speedSeries = useSpeedHistory(snapshot?.speed ?? 0);
@@ -82,7 +116,9 @@ export default function App() {
 
   // A plain filter, deliberately: this sits after the early return above,
   // so a hook here would be called conditionally and break the hook order.
-  const visible = snapshot.jobs.filter((job) => matchesFilter(job, filter));
+  const visible = snapshot.jobs.filter(
+    (job) => matchesFilter(job, filter) && matchesQuery(job, query),
+  );
   const finishedCount = snapshot.jobs.filter(
     (job) => job.status === 'done' || job.status === 'failed' || job.status === 'canceled',
   ).length;
@@ -132,6 +168,23 @@ export default function App() {
               {visible.length > 0 && <span className="jobs__count">{visible.length}</span>}
             </h2>
             <div className="jobs__tools">
+              {(snapshot.jobs.length > 0 || query) && (
+                <input
+                  ref={searchRef}
+                  type="search"
+                  className="jobs__search"
+                  placeholder="Search  /"
+                  aria-label="Search downloads"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setQuery('');
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              )}
               <span className="jobs__dir" title={`Files are saved to ${snapshot.downloadDir}`}>
                 <FolderIcon />
                 <code>{snapshot.downloadDir}</code>
@@ -155,11 +208,16 @@ export default function App() {
                 <DownloadIcon size={26} />
               </span>
               <p className="empty__title">
-                {filter === 'all' ? 'Nothing queued yet' : 'Nothing here'}
+                {query
+                  ? 'No matches'
+                  : filter === 'all'
+                    ? 'Nothing queued yet'
+                    : 'Nothing here'}
               </p>
               <p className="empty__body">
-                Paste one or more links above. Anything without an extractor of its own is
-                treated as a direct file link.
+                {query
+                  ? `Nothing in the queue matches “${query}”.`
+                  : 'Paste one or more links above. Anything without an extractor of its own is treated as a direct file link.'}
               </p>
             </div>
           ) : (

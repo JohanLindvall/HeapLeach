@@ -8,6 +8,8 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 )
 
+// The values are SI and must match what the web UI prints for the same
+// count: one product, one set of numbers.
 func TestFormatBytes(t *testing.T) {
 	cases := []struct {
 		in   int64
@@ -16,11 +18,14 @@ func TestFormatBytes(t *testing.T) {
 		{-1, "?"},
 		{0, "0 B"},
 		{512, "512 B"},
-		{1024, "1.0 KB"},
-		{1536, "1.5 KB"},
-		{102400, "100 KB"},
-		{1048576, "1.0 MB"},
-		{1610612736, "1.5 GB"},
+		{999, "999 B"},
+		{1000, "1.0 kB"},
+		{1536, "1.5 kB"},
+		{102400, "102 kB"},
+		{1000000, "1.0 MB"},
+		{999_449_999, "999 MB"},
+		{1610612736, "1.6 GB"},
+		{5_000_000_000_000, "5.0 TB"},
 	}
 	for _, tc := range cases {
 		if got := formatBytes(tc.in); got != tc.want {
@@ -33,8 +38,8 @@ func TestFormatSpeed(t *testing.T) {
 	if got := formatSpeed(0); got != "—" {
 		t.Errorf("idle speed = %q, want an em dash", got)
 	}
-	if got := formatSpeed(1048576); got != "1.0 MB/s" {
-		t.Errorf("formatSpeed(1MiB) = %q", got)
+	if got := formatSpeed(1_000_000); got != "1.0 MB/s" {
+		t.Errorf("formatSpeed(1MB) = %q", got)
 	}
 }
 
@@ -210,7 +215,7 @@ func TestTrackerAnnouncesEachEventOnce(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected two completion lines, got %v", lines)
 	}
-	if !strings.Contains(lines[0], "one.bin") || !strings.Contains(lines[0], "1.0 KB") {
+	if !strings.Contains(lines[0], "one.bin") || !strings.Contains(lines[0], "1.0 kB") {
 		t.Errorf("done line = %q", lines[0])
 	}
 	if !strings.Contains(lines[1], "two.bin") || strings.Contains(lines[1], "second line") {

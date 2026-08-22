@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
@@ -86,24 +85,17 @@ func (w *decryptingWriter) WriteAt(p []byte, off int64) (int, error) {
 	return w.dst.WriteAt(plain, off)
 }
 
-// cryptBuffers recycles the scratch space a write decrypts into.
+// cryptScratch lends a buffer of exactly n bytes and a function to return
+// it, drawing from the shared chunk pool.
 //
 // Decrypting in place is not an option even though it would be free:
 // io.WriterAt may not modify the slice it is handed, and both callers here
 // mean it — each reuses one read buffer for the whole transfer, so scribbling
 // on it would corrupt the next read rather than merely being impolite.
-var cryptBuffers = sync.Pool{
-	New: func() any {
-		buf := make([]byte, config.CopyBufferSize)
-		return &buf
-	},
-}
-
-// cryptScratch lends a buffer of exactly n bytes and a function to return it.
 func cryptScratch(n int) ([]byte, func()) {
 	if n > config.CopyBufferSize {
 		return make([]byte, n), func() {}
 	}
-	buf := cryptBuffers.Get().(*[]byte)
-	return (*buf)[:n], func() { cryptBuffers.Put(buf) }
+	buf, release := borrowChunk()
+	return buf[:n], release
 }

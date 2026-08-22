@@ -207,11 +207,15 @@ func runHeadless(ctx context.Context, cfg *config.Config, manager *download.Mana
 	// -debug interleaves log lines with the display, so plain progress
 	// lines are the only readable option there.
 	animate := cli.IsTerminal(os.Stdout) && !cfg.Debug
+	termWidth := func() int {
+		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+			return w
+		}
+		return config.CLIDefaultWidth
+	}
 	width := config.CLIDefaultWidth
 	if animate {
-		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
-			width = w
-		}
+		width = termWidth()
 	}
 	return cli.Run(ctx, manager, cli.Options{
 		URLs:     cfg.URLs,
@@ -220,6 +224,9 @@ func runHeadless(ctx context.Context, cfg *config.Config, manager *download.Mana
 		Animate:  animate,
 		Colour:   animate && os.Getenv("NO_COLOR") == "",
 		Width:    width,
+		// Re-checked per frame, so a resized terminal keeps a legible
+		// display instead of an unravelling one.
+		TermWidth: termWidth,
 	})
 }
 

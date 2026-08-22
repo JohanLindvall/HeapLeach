@@ -32,6 +32,12 @@ type Options struct {
 	Colour bool
 	// Width is the terminal width in columns.
 	Width int
+	// TermWidth, when set, is asked for the current width on every frame,
+	// so the display follows the terminal through a resize instead of
+	// painting for the size it happened to have at startup — a shrink
+	// would otherwise wrap every line and corrupt the repaint arithmetic
+	// for the rest of the run.
+	TermWidth func() int
 }
 
 // ErrIncomplete reports that the run finished with work that did not
@@ -84,6 +90,11 @@ func Run(ctx context.Context, mgr *download.Manager, opts Options) error {
 		}
 
 		if opts.Animate {
+			if opts.TermWidth != nil {
+				if w := opts.TermWidth(); w > 0 {
+					r.setWidth(w)
+				}
+			}
 			r.paint(frame(snap, r, started))
 		} else if time.Since(lastPlain) >= config.CLIPlainInterval {
 			lastPlain = time.Now()

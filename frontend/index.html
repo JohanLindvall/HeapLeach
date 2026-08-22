@@ -2,8 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover lets the page extend under a phone's rounded
+         corners; the layout keeps clear of them with safe-area insets. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
+    <!-- Colours the browser chrome around the page on mobile. -->
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#06070f" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#eef1f9" />
     <script>
       // Stamp the theme before first paint, so a light-mode visitor never
       // sees a flash of the dark default while the bundle loads.

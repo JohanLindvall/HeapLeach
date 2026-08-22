@@ -44,6 +44,19 @@ jobs:
             echo "gofmt would change:"; echo "$unformatted"; exit 1
           fi
 
+      # The repository's own rule: nothing tracked may link to specific
+      # content — live URLs go stale, and belong in the untracked live tests.
+      # The patterns require real-shaped ids, so the deliberately fake ones
+      # in fixtures (AAAAAAAA, abcd1234, /videos/1/x/) stay out of reach.
+      - name: No live content URLs
+        run: |
+          hits=$(git ls-files -z | xargs -0 grep -nE \
+            'gofile\.io/d/[A-Za-z0-9]{6,}|thisvid\.com/videos/[0-9]{6,}|youtube\.com/watch\?v=[A-Za-z0-9_-]{11}|mega\.nz/(file|folder)/[A-Za-z0-9_-]{8}#[A-Za-z0-9_-]{16,}|imagepond\.net/i/[A-Za-z0-9]{16,}|suvobox\.com/[af]/[a-f0-9]{12,}' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "tracked files carry live content URLs:"; echo "$hits"; exit 1
+          fi
+
       - name: Vet
         working-directory: backend
         run: go vet ./...
@@ -52,7 +65,13 @@ jobs:
       # file from several connections at once.
       - name: Test
         working-directory: backend
-        run: go test ./... -race -count=1
+        run: go test ./... -race -count=1 -coverprofile=cover.out
+
+      # Advisory, not a gate: the number belongs in the log where a drop is
+      # visible in review, without a threshold that invites gaming it.
+      - name: Coverage
+        working-directory: backend
+        run: go tool cover -func=cover.out | tail -1
 
       - name: Build
         working-directory: backend

@@ -460,10 +460,13 @@ func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
 	}
 }
 
-// A busy host is not a failing one. Its attempts must be unlimited and must
-// not spend the retry budget, which exists for transfers that are genuinely
-// going wrong — otherwise a gofile link on a busy storage server gives up
-// after three tries instead of waiting for the server to free up.
+// A busy host is not a failing one. Its attempts must not spend the retry
+// budget, which exists for transfers that are genuinely going wrong —
+// otherwise a gofile link on a busy storage server gives up after three
+// tries instead of waiting for the server to free up. The number of busy
+// answers here deliberately fits inside BusyRetryLimit, which is where a
+// resolver-less item stops; TestBusyCap* pin the boundary itself from both
+// sides.
 func TestBusyHostRetriesBeyondTheRetryBudget(t *testing.T) {
 	payload := make([]byte, 1<<20) // small enough that nothing is split
 	if _, err := rand.Read(payload); err != nil {
