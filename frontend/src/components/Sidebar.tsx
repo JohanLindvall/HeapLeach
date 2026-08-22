@@ -7,7 +7,6 @@ interface SidebarProps {
   readonly jobs: JobView[];
   readonly filter: Filter;
   readonly onFilter: (filter: Filter) => void;
-  readonly downloadDir: string;
 }
 
 /** Which filter a job belongs to. */
@@ -31,7 +30,7 @@ const GROUPS: { key: Filter; label: string; dot: Status | 'all' }[] = [
   { key: 'failed', label: 'Stopped', dot: 'failed' },
 ];
 
-export function Sidebar({ jobs, filter, onFilter, downloadDir }: SidebarProps) {
+export function Sidebar({ jobs, filter, onFilter }: SidebarProps) {
   return (
     <aside className="sidebar">
       <nav className="sidebar__nav" aria-label="Filter downloads">
@@ -52,13 +51,6 @@ export function Sidebar({ jobs, filter, onFilter, downloadDir }: SidebarProps) {
           );
         })}
       </nav>
-
-      <div className="sidebar__section">
-        <h2 className="sidebar__heading">Saving to</h2>
-        <code className="sidebar__path" title={downloadDir}>
-          {downloadDir}
-        </code>
-      </div>
     </aside>
   );
 }

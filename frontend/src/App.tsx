@@ -151,12 +151,7 @@ export default function App() {
       </header>
 
       <div className="shell">
-        <Sidebar
-          jobs={snapshot.jobs}
-          filter={filter}
-          onFilter={setFilter}
-          downloadDir={snapshot.downloadDir}
-        />
+        <Sidebar jobs={snapshot.jobs} filter={filter} onFilter={setFilter} />
 
         <main className="main">
         <AddForm onNotice={notify} />

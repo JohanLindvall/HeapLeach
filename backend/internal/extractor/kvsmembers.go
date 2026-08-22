@@ -17,25 +17,24 @@ import (
 
 // A member's public videos on a Kernel Video Sharing install.
 //
-// The platform lists them at /members/<id>/public_videos/, fifteen at a time,
-// and pages through them with its own asynchronous block loader rather than
-// with an ordinary URL: appending ?mode=async&function=get_block&block_id=...
-// &from=<n> returns just the listing fragment. The paged path a reader would
-// guess at — /public_videos/2/ — is a 404.
+// The platform lists them at /members/<id>/public_videos/, forty-eight at a
+// time, and pages them at /public_videos/<n>/. The walk follows the listing's
+// own "next" anchor rather than building those paths itself, which is both
+// simpler and the only version that cannot be wrong about where the pages
+// stop: the last one carries no next link at all.
 //
-// Two things decide the shape of the walk below.
+// That deserves a note, because the platform offers a second mechanism that
+// looks right and is not. Appending ?mode=async&function=get_block&block_id=
+// ...&from=<n> returns the listing as a bare fragment, which is what the
+// site's own scripts use — but the from parameter is ignored on a member
+// listing. Every page comes back as page one, byte for byte, and a walk built
+// on it stops at the first repeat having quietly collected only the first
+// forty-eight of however many there are. It looks like it works, which is the
+// worst way for it to fail.
 //
-// Asking for a page past the end returns the FIRST page again, byte for byte,
-// rather than an empty one. So the stop condition cannot be "the page was
-// empty"; it is "the page added nothing new", which is what bunkr's albums
-// and fapello's listings already do here for the same reason. The listing
-// also states its own total — "Showing 1 - 15 of 15 videos" — which is read
-// where it can be, as a second and cheaper way to know when to stop.
-//
-// The block id is read off the first page rather than compiled in. It is
-// derivable from the section name, but the container is right there in the
-// markup and taking it from the page means an install that names its blocks
-// differently still works.
+// The stated total — "Showing 49 - 64 of 64" — is read as a second stop, and
+// pages are deduplicated, so a listing that ever does repeat itself ends the
+// walk rather than looping.
 //
 // This is only offered on the hosts registered as KVS. The direct-link
 // sniffer deliberately does not look at /members/ paths: that is far too
@@ -47,11 +46,7 @@ import (
 // unambiguously theirs and reachable without an account.
 const kvsMemberSection = "public_videos"
 
-// kvsListingBlock finds the container the platform puts its listing in, whose
-// id names the block to ask for the next page of.
-var kvsListingBlock = regexp.MustCompile(`id="(list_videos_[a-z0-9_]+)_items"`)
-
-// kvsShowingTotal reads the "Showing 1 - 15 of 15 videos" line, which is how
+// kvsShowingTotal reads the "Showing 49 - 64 of 64 videos" line, which is how
 // the listing states how far it goes.
 var kvsShowingTotal = regexp.MustCompile(`Showing\s+\d+\s*-\s*\d+\s+of\s+(\d+)`)
 
@@ -108,22 +103,19 @@ func kvsMember(ctx context.Context, client *httpx.Client, listing, label string)
 // kvsMemberPages walks the listing and collects every video page it names.
 func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label string) ([]string, string, error) {
 	var (
-		pages []string
-		title string
-		block string
-		total int
-		seen  = make(map[string]bool)
+		pages   []string
+		title   string
+		total   int
+		seen    = make(map[string]bool)
+		visited = make(map[string]bool)
+		target  = listing
 	)
 
-	for page := 1; page <= config.MaxAlbumPages; page++ {
-		target := listing
-		if page > 1 {
-			if block == "" {
-				break // the first page named no block, so there is no second
-			}
-			target = fmt.Sprintf("%s?mode=async&function=get_block&block_id=%s&sort_by=&from=%d",
-				listing, url.QueryEscape(block), page)
+	for page := 1; page <= config.MaxAlbumPages && target != ""; page++ {
+		if visited[target] {
+			break // the listing pointed back at a page already walked
 		}
+		visited[target] = true
 
 		doc, err := client.GetString(ctx, target, httpx.Referer(listing))
 		if err != nil {
@@ -138,9 +130,6 @@ func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label st
 		}
 		if page == 1 {
 			title = kvsMemberTitle(root, doc)
-			if m := kvsListingBlock.FindStringSubmatch(doc); m != nil {
-				block = m[1]
-			}
 			if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
 				total, _ = strconv.Atoi(m[1])
 			}
@@ -155,8 +144,6 @@ func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label st
 			pages = append(pages, link)
 			added++
 		}
-		// Past the end the platform serves the first page again rather than
-		// an empty one, so "nothing new" is the only reliable stop.
 		if added == 0 {
 			break
 		}
@@ -166,8 +153,34 @@ func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label st
 		if len(pages) >= config.MaxListingFiles {
 			break
 		}
+		// The listing itself says where the next page is, and says nothing
+		// on the last one. That is the stop condition; everything above is
+		// a guard against a listing that misreports itself.
+		target = kvsNextPage(root, listing)
 	}
 	return pages, title, nil
+}
+
+// kvsNextPage follows the listing's own "next" control.
+func kvsNextPage(root *html.Node, base string) string {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	next := findFirst(root, func(n *html.Node) bool {
+		return hasClass(n, "pagination-next")
+	})
+	if next == nil {
+		return ""
+	}
+	// The class sits on the list item, with the link inside it.
+	if isElem(next, atom.A) {
+		return resolveRef(baseURL, attr(next, "href"))
+	}
+	if a := findFirst(next, func(n *html.Node) bool { return isElem(n, atom.A) }); a != nil {
+		return resolveRef(baseURL, attr(a, "href"))
+	}
+	return ""
 }
 
 // kvsListingVideos reads the video pages a listing links to.

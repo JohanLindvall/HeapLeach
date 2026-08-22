@@ -356,35 +356,6 @@ code, .mono {
   color: var(--text);
 }
 
-.sidebar__section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  min-width: 0;
-}
-
-.sidebar__heading {
-  font-size: 0.62rem;
-  font-weight: 620;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--text-faint);
-}
-
-.sidebar__path {
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  background: var(--surface-2);
-  border: 1px solid var(--edge-flat);
-  border-radius: var(--r-sm);
-  padding: 0.35rem 0.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
-
 /* The live throughput graph, the thing that makes a transfer feel alive.
    Fixed dimensions and its own clipping box, so a spike cannot push the
    figures beside it onto a second row or draw outside the header. */
@@ -589,9 +560,21 @@ code, .mono {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Right-to-left so the ellipsis eats the FRONT of a long path, which is
+     the half nobody needs — you want the tail. The catch is that a leading
+     "/" is bidi-neutral, so an RTL paragraph puts it at the far end and
+     /home/jl/Downloads reads as home/jl/Downloads/. The fix is the
+     left-to-right mark below, which gives that slash a direction to follow.
+     unicode-bidi: plaintext also straightens the text out, but it takes the
+     ellipsis back to the end with it, which is the behaviour being bought
+     here in the first place. */
   direction: rtl;
   text-align: left;
   font-size: 0.72rem;
+}
+
+.jobs__dir code::before {
+  content: '\200E';
 }
 
 /* It is a button now, so it has to stop looking like one of the page's own
@@ -1595,7 +1578,6 @@ button.jobs__dir:hover {
 
   .filter { padding: 0.32rem 0.6rem; }
   .filter.is-active { box-shadow: none; border: 1px solid var(--edge-flat); }
-  .sidebar__section { display: none; }
 }
 
 @media (max-width: 900px) {

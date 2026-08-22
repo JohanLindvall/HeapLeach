@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// A listing page shaped like the platform's, carrying the three things the
-// walk depends on and the trap it has to survive: the block id that names the
-// next page, the stated total, video tiles — and the site's own furniture,
-// which is linked exactly like the tiles are and must not be mistaken for
-// them. One tile is repeated, because the platform prints a video twice when
-// it is both recent and popular.
+// A listing page shaped like the platform's, carrying what the walk depends
+// on and the trap it has to survive: the stated total, the pagination the
+// walk follows, video tiles — and the site's own furniture, which is linked
+// exactly like the tiles are and must not be mistaken for them. One tile is
+// repeated, because the platform prints a video twice when it is both recent
+// and popular.
 const kvsMemberListing = `<!DOCTYPE html><html><head>
 <title>Someone's Profile | Example Tube</title>
 </head><body>
@@ -21,7 +21,7 @@ const kvsMemberListing = `<!DOCTYPE html><html><head>
   <a href="https://other.example.test/videos/1/elsewhere/">A video on another site</a>
 </nav>
 <div class="headline"><h2>Someone's Public Videos</h2>
-  <span>Showing 1 - 3 of 3 videos</span>
+  <span>Showing 1 - 3 of 5 videos</span>
 </div>
 <div class="thumbs-items" id="list_videos_public_videos_items">
   <a href="https://tube.example.test/videos/11/first-clip/" class="tumbpu"><span>First</span></a>
@@ -29,6 +29,26 @@ const kvsMemberListing = `<!DOCTYPE html><html><head>
   <a href="https://tube.example.test/videos/11/first-clip/" class="tumbpu"><span>First again</span></a>
   <a href="https://tube.example.test/videos/13/third-clip/" class="tumbpu"><span>Third</span></a>
 </div>
+<div class="pagination"><ul class="pagination-list">
+  <li class="active false"><span>1</span></li>
+  <li><a class="selective" href="/members/4242/public_videos/2/">2</a></li>
+  <li class="pagination-next"><a class="selective" href="/members/4242/public_videos/2/"><i class="ico-pagination-right"></i></a></li>
+</ul></div>
+</body></html>`
+
+// The last page. The platform prints the pagination list without a next
+// control, which is the only signal that the walk has reached the end.
+const kvsMemberLastPage = `<!DOCTYPE html><html><body>
+<div class="headline"><h2>Someone's Public Videos</h2>
+  <span>Showing 4 - 5 of 5 videos</span>
+</div>
+<div class="thumbs-items" id="list_videos_public_videos_items">
+  <a href="https://tube.example.test/videos/14/fourth-clip/" class="tumbpu"><span>Fourth</span></a>
+</div>
+<div class="pagination"><ul class="pagination-list">
+  <li><a class="selective" href="/members/4242/public_videos/">1</a></li>
+  <li class="active false"><span>2</span></li>
+</ul></div>
 </body></html>`
 
 func TestKVSMemberPathAcceptsAnySection(t *testing.T) {
@@ -118,20 +138,43 @@ func TestKVSMemberTitleFallsBackToTheHeading(t *testing.T) {
 	}
 }
 
-// The two values the walk reads out of the first page to know how to ask for
-// the second, and when to stop asking.
-func TestKVSListingBlockAndTotal(t *testing.T) {
-	m := kvsListingBlock.FindStringSubmatch(kvsMemberListing)
-	if m == nil || m[1] != "list_videos_public_videos" {
-		t.Errorf("block id = %v, want list_videos_public_videos", m)
+// How the walk moves and how it stops. The next control is on the list item
+// rather than on the anchor, so reading the href means descending into it.
+func TestKVSNextPageFollowsThePaginationControl(t *testing.T) {
+	const base = "https://tube.example.test/members/4242/public_videos/"
+
+	root, err := parseHTML(kvsMemberListing)
+	if err != nil {
+		t.Fatal(err)
 	}
-	n := kvsShowingTotal.FindStringSubmatch(kvsMemberListing)
-	if n == nil || n[1] != "3" {
-		t.Errorf("total = %v, want 3", n)
+	want := "https://tube.example.test/members/4242/public_videos/2/"
+	if got := kvsNextPage(root, base); got != want {
+		t.Errorf("next page = %q, want %q", got, want)
 	}
-	// A listing with neither is still walkable — it simply stops after the
-	// page it could read.
-	if kvsListingBlock.MatchString(`<div class="thumbs-items">`) {
-		t.Error("matched a container with no block id")
+
+	// The last page carries a pagination list but no next control, and that
+	// absence is the whole stop condition — a walk that missed it would ask
+	// for a page that does not exist.
+	last, err := parseHTML(kvsMemberLastPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kvsNextPage(last, base); got != "" {
+		t.Errorf("next page on the last page = %q, want none", got)
+	}
+}
+
+// The total the listing states, which stops the walk even if a site ever
+// paginates in a circle.
+func TestKVSShowingTotal(t *testing.T) {
+	m := kvsShowingTotal.FindStringSubmatch(kvsMemberListing)
+	if m == nil || m[1] != "5" {
+		t.Errorf("total = %v, want 5", m)
+	}
+	// Real listings say "Showing 49 - 64 of 64 videos" on a later page; the
+	// total is the last number, not the first.
+	m = kvsShowingTotal.FindStringSubmatch(kvsMemberLastPage)
+	if m == nil || m[1] != "5" {
+		t.Errorf("total on a later page = %v, want 5", m)
 	}
 }

@@ -34,7 +34,14 @@ cleanup() {
 trap cleanup EXIT
 
 shoot() { # shoot <output> <width> <height> <url>
+  # Reduced motion is not a preference here, it is what makes the capture
+  # deterministic. The job cards animate in from opacity 0, and the virtual
+  # clock can land the screenshot mid-animation — which photographs a queue
+  # of seven downloads as an empty page, convincingly enough to be mistaken
+  # for a bug in the UI. The stylesheet already honours the setting, so this
+  # asks for the settled state, which is what a picture should show anyway.
   "$chrome" --headless --disable-gpu --no-sandbox --hide-scrollbars \
+    --force-prefers-reduced-motion \
     --user-data-dir="$work/chrome" \
     --window-size="$2,$3" --screenshot="$1" \
     --virtual-time-budget=4000 "$4" >/dev/null 2>&1
