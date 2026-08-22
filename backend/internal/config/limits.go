@@ -229,6 +229,37 @@ const (
 	// links to itself, directly or through a symlink. A visited set catches
 	// the simple loop; this catches the rest.
 	MaxDirectoryDepth = 12
+
+	// MaxAutoindexDepth and MaxAutoindexDirs bound a walk of an open
+	// directory listing. Depth is the same guard as MaxDirectoryDepth; the
+	// directory count is the one that matters in practice, since a shallow
+	// tree can still be very wide.
+	MaxAutoindexDepth = MaxDirectoryDepth
+	MaxAutoindexDirs  = 500
+
+	// MaxAutoindexFiles is what a directory walk may return, and is the
+	// listing cap under another name so a change to one is a change to
+	// both.
+	MaxAutoindexFiles = MaxListingFiles
+
+	// MaxListingPosts bounds how many entries a paginated account or
+	// gallery listing is followed for. Hosts that publish everything a
+	// creator ever posted will happily page for a very long time.
+	MaxListingPosts = 5000
+
+	// MaxListingVideos bounds a channel listing, which is the same idea
+	// with a much smaller natural size — a video is a job on its own.
+	MaxListingVideos = 1000
+
+	// MaxTimelinePages bounds how many pages of a social timeline are
+	// walked. Unlike an album, a timeline has no end.
+	MaxTimelinePages = 40
+
+	// ManifestSniffBytes is how much of a response is read to decide
+	// whether it is an HLS manifest. A manifest announces itself on the
+	// first line, so this only has to survive a byte-order mark and some
+	// whitespace.
+	ManifestSniffBytes = 1 << 10
 )
 
 // Terminal display tuning, for runs that download straight to disk.

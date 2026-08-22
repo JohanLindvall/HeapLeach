@@ -204,6 +204,18 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPixhost(client),
 		NewImagePond(client),
 		NewSuvobox(client),
+		NewCyberdrop(client),
+		NewImgur(client),
+		NewCivitai(client),
+		NewBitChute(client),
+		NewStreamable(client),
+		NewWeTransfer(client),
+		NewVidmoly(client),
+		NewNRK(client),
+		NewPornPics(client),
+		NewArchiveOrg(cfg, client),
+		NewFeeds(client),
+		NewAutoindex(client),
 		NewFapello(client),
 		NewCoomerFans(client),
 		NewOKru(client),
@@ -211,12 +223,35 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewDoodStream(client),
 		NewMixDrop(client),
 	}
-	// One extractor per Kernel Video Sharing install, so each is matched
-	// and named like any other host. The fallback sniffs for the same
-	// player on hosts no list names.
+	// Platform families: one extractor covering every install of a piece of
+	// software, named and matched per install where a list is worth having
+	// and sniffed by shape where it is not. Registered after the
+	// hand-written hosts, since a named host is always the better answer.
+	extractors = append(extractors,
+		NewFediverse(client),
+		NewMediaWiki(cfg, client),
+	)
+	extractors = append(extractors, NewHandoffs(client)...)
+	extractors = append(extractors, NewPeerTubeSites(cfg, client)...)
+	extractors = append(extractors, NewCheveretoSites(cfg, client)...)
 	extractors = append(extractors, NewKVSSites(cfg, client)...)
 
-	return &Registry{extractors: extractors, fallback: NewDirect(client)}
+	// Last of all, the generic capabilities: a bare HLS manifest is a
+	// manifest whatever host serves it, and these must never take a URL a
+	// named host would have claimed.
+	extractors = append(extractors, NewHLSDirect(client))
+
+	reg := &Registry{fallback: NewDirect(client)}
+	// The link harvester resolves what it finds through the registry it is
+	// part of, so it is handed that registry rather than building one. It
+	// claims no host: only an explicit "links:" prefix reaches it.
+	//
+	// It leads the list because every other Match looks at the host alone.
+	// A harvest of a page that happens to live on a supported host would
+	// otherwise be routed to that host's extractor, which would try to
+	// fetch "links://..." and fail on the scheme.
+	reg.extractors = append([]Extractor{NewLinks(client, reg)}, extractors...)
+	return reg
 }
 
 // Hosts lists the supported host labels, for the startup log.
@@ -231,12 +266,24 @@ func (r *Registry) Hosts() []string {
 // Find returns the extractor for a URL. It never returns nil: unrecognised
 // hosts get the direct-link extractor.
 func (r *Registry) Find(u *url.URL) Extractor {
+	ex, _ := r.Known(u)
+	return ex
+}
+
+// Known returns the extractor for a URL and whether a host actually claimed
+// it, as opposed to the fallback matching it the way it matches everything.
+//
+// Find cannot answer that, and the link harvester needs it answered: it reads
+// a page full of links of which a handful are downloads and the rest are
+// navigation, and "is this a host we support" is the only thing separating
+// the two.
+func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 	for _, e := range r.extractors {
 		if e.Match(u) {
-			return e
+			return e, true
 		}
 	}
-	return r.fallback
+	return r.fallback, false
 }
 
 // Extract parses rawURL and resolves it.
@@ -264,6 +311,12 @@ func ParseURL(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, errors.New("empty URL")
+	}
+	// A "links:" prefix asks for the page to be read for the links it
+	// carries rather than downloaded. It is recognised here because this is
+	// where raw input becomes a URL, and Find only ever sees one.
+	if page, ok := linksInput(raw); ok {
+		return linksURL(page)
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw

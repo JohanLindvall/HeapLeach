@@ -38,6 +38,7 @@ const (
 	AcceptHTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 
 	ContentTypeJSON = "application/json"
+	ContentTypeForm = "application/x-www-form-urlencoded"
 
 	// EncodingIdentity asks for the raw bytes. A transparently compressed
 	// body would make the progress total disagree with what lands on disk.

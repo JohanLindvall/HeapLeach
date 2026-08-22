@@ -15,6 +15,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
+	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 )
 
 // Options configure a headless run.
@@ -421,7 +422,14 @@ func firstLine(s string) string {
 // directory. Only the schemes the extractors can actually fetch count.
 func IsURL(s string) bool {
 	lower := strings.ToLower(s)
-	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return true
+	}
+	// The link harvester's prefix is not a scheme, but it arrives in the
+	// same position — and taken for a directory it would be *created*, so
+	// `heapleach links:https://…` would silently make a folder named after
+	// the URL instead of downloading anything.
+	return extractor.IsHarvest(s)
 }
 
 // ReadURLs collects one URL per line, ignoring blanks and # comments, so a

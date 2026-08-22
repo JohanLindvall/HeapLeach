@@ -46,9 +46,14 @@ type Config struct {
 	// there is nothing family-specific about the reasoning and six
 	// near-identical environment variables would be worse than one.
 	ExtraHosts map[string][]string
-	MaxRetries int
-	Streams    int
-	SlowSpeed  int64
+	// ArchiveFormats overrides which archive.org renditions are taken. An
+	// item there routinely offers the same film six times, so the extractor
+	// picks per media type; this is the escape for when its taste is wrong,
+	// and exists for the same reason the host lists above do.
+	ArchiveFormats []string
+	MaxRetries     int
+	Streams        int
+	SlowSpeed      int64
 	// SpeedLimit caps total throughput in bytes per second; 0 is unlimited.
 	SpeedLimit int64
 	// StallTimeout is how long a transfer may make no progress before the
@@ -74,18 +79,19 @@ type Config struct {
 // even when an argument overrides it.
 func FromEnv() (*Config, error) {
 	c := &Config{
-		Addr:         env("ADDR", ":8080"),
-		DownloadDir:  env("DIR", defaultDir()),
-		Concurrency:  DefaultConcurrency,
-		UserAgent:    env("USER_AGENT", DefaultUserAgent),
-		Language:     env("LANGUAGE", DefaultLanguage),
-		GofileSecret: env("GOFILE_SECRET", FallbackGofileSecret),
-		ExtraHosts:   extraHosts(),
-		MaxRetries:   DefaultMaxRetries,
-		Streams:      DefaultStreams,
-		SlowSpeed:    DefaultSlowSpeed,
-		StallTimeout: StallTimeout,
-		Timeout:      DefaultTimeout,
+		Addr:           env("ADDR", ":8080"),
+		DownloadDir:    env("DIR", defaultDir()),
+		Concurrency:    DefaultConcurrency,
+		UserAgent:      env("USER_AGENT", DefaultUserAgent),
+		Language:       env("LANGUAGE", DefaultLanguage),
+		GofileSecret:   env("GOFILE_SECRET", FallbackGofileSecret),
+		ExtraHosts:     extraHosts(),
+		ArchiveFormats: envList("IA_FORMATS"),
+		MaxRetries:     DefaultMaxRetries,
+		Streams:        DefaultStreams,
+		SlowSpeed:      DefaultSlowSpeed,
+		StallTimeout:   StallTimeout,
+		Timeout:        DefaultTimeout,
 	}
 
 	var err error
@@ -337,6 +343,7 @@ const (
 	FamilyChevereto = "chevereto"
 	FamilyFoolFuuka = "foolfuuka"
 	FamilyFediverse = "fediverse"
+	FamilyMediaWiki = "mediawiki"
 )
 
 // ExtraHostsFor returns the additional hosts configured for one family.
