@@ -130,6 +130,56 @@ var handoffSites = []handoffSite{
 		why:     "its media endpoint sits behind a browser challenge",
 		oembed:  rumbleOEmbed,
 	},
+
+	// Public broadcasters that are DRM-free and perfectly reachable, and
+	// still cannot be fetched natively — every one of them for the same
+	// reason, which is worth stating once here rather than seven times
+	// below: their streams carry video and audio in separate renditions.
+	//
+	// HeapLeach joins HLS parts by concatenating them, so a demuxed
+	// variant produces a silent video that looks like a finished download.
+	// hlsVariant.muxed() refuses exactly that, which is the right answer
+	// and leaves nothing to fetch. yt-dlp has ffmpeg and can mux, so these
+	// go to it. That is not a judgement about the host: several of these
+	// are easier to reach than hosts implemented natively here — Arte's
+	// API answers anyone in six languages — and the sibling broadcasters
+	// that happen to mux their audio in (SVT, NRK, RÚV, VRT and the rest)
+	// are native for that reason alone.
+	{
+		name:    "arte",
+		domains: []string{"arte.tv"},
+		why:     "its renditions carry video and audio apart, so they have to be muxed",
+	},
+	{
+		name:    "orf",
+		domains: []string{"orf.at", "tvthek.orf.at", "on.orf.at"},
+		why:     "its streams are demuxed, and its API wants a credential published in the page",
+	},
+	{
+		name:    "yle",
+		domains: []string{"areena.yle.fi", "arenan.yle.fi"},
+		why:     "no variant it offers is self-contained, so the audio must be muxed back in",
+	},
+	{
+		name:    "drtv",
+		domains: []string{"dr.dk"},
+		why:     "its variants are video-only, and are byte ranges of one file rather than parts",
+	},
+	{
+		name:    "rtbf",
+		domains: []string{"rtbf.be", "auvio.rtbf.be"},
+		why:     "its packager offers no self-contained rendition to fetch",
+	},
+	{
+		name:    "francetv",
+		domains: []string{"france.tv"},
+		why:     "most of its catalogue is DASH, which needs muxing this cannot do",
+	},
+	{
+		name:    "radio-canada",
+		domains: []string{"radio-canada.ca", "ici.radio-canada.ca"},
+		why:     "its streams carry video and audio apart, so they have to be muxed",
+	},
 }
 
 // NewHandoffs builds one extractor per host, so each is matched on its own
