@@ -104,6 +104,15 @@ body,
   height: 100%;
 }
 
+/* Reserve the scrollbar's gutter whether or not a scrollbar is showing. The
+   page scrolls on the root element and the shell below is centred, so a
+   filter that empties the list shortens the page, drops the scrollbar and
+   slides the whole layout sideways. Overlay scrollbars reserve nothing and
+   never shifted, so this costs them nothing. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   background: var(--bg);
