@@ -364,9 +364,11 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		if it.Size <= 0 {
 			it.Size = it.downloaded.Load()
 		}
+		m.logFinishedLocked(it, "download complete")
 	case ctx.Err() != nil || httpx.IsCanceled(err):
 		it.Status = StatusCanceled
 		it.Err = ""
+		m.logFinishedLocked(it, "download canceled")
 	case m.deferStalledLocked(it, err):
 		// The stall watchdog gave up on this attempt, and the item has just
 		// been sent to the back of the queue with its part file intact —
@@ -392,6 +394,22 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 
 	m.markDirty()
 	m.signal()
+}
+
+// logFinishedLocked records one finished transfer, so a backend log holds a
+// line for every download rather than only for the ones that went wrong. A
+// skipped item moved no bytes, and saying so is more use than a size with a
+// zero elapsed time beside it. Caller holds mu.
+func (m *Manager) logFinishedLocked(it *Item, msg string) {
+	if it.Skipped {
+		m.log.Info("already downloaded", "item", it.ID, "name", it.Name, "path", it.Path)
+		return
+	}
+	args := []any{"item", it.ID, "name", it.Name, "path", it.Path, "bytes", it.downloaded.Load()}
+	if !it.startedAt.IsZero() {
+		args = append(args, "took", it.finishedAt.Sub(it.startedAt).Round(time.Millisecond))
+	}
+	m.log.Info(msg, args...)
 }
 
 // CancelJob stops a job and everything under it.
