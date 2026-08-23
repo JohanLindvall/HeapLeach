@@ -126,7 +126,7 @@ export default function App() {
   ).length;
 
   return (
-    <div className="app">
+    <div className={connection === 'offline' ? 'app app--polling' : 'app'}>
       <header className="header">
         <div className="header__brand">
           <span className="header__mark" aria-hidden="true">

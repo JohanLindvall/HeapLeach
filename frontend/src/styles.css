@@ -54,6 +54,17 @@
   --emoji: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Progress fills are re-pointed at a fresh value every ProgressTick
+     (400ms, `internal/config/limits.go`), so they are the one thing here
+     that must NOT use `--ease`. That curve is an ease-out quint: it covers
+     most of the distance in the first third of its duration and then
+     crawls, so every tick reads as a lurch followed by a stall. A fill has
+     to travel at a constant speed and still be moving when the next
+     snapshot lands, which means linear timing over slightly longer than one
+     tick — the headroom absorbs jitter, and the lag it trades away is a
+     fraction of a tick. */
+  --fill-motion: 500ms linear;
 }
 
 :root[data-theme='light'] {
@@ -223,6 +234,13 @@ code, .mono {
   min-height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+/* Without the event stream the UI polls every 2s instead of every
+   ProgressTick, so a fill sized for the tick would arrive early and wait
+   out the rest of the gap — the same stutter, five times longer. */
+.app--polling {
+  --fill-motion: 2100ms linear;
 }
 
 .app--loading {
@@ -996,7 +1014,7 @@ button.jobs__dir:hover {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--resolving), var(--accent-b));
   box-shadow: 0 0 12px -2px var(--accent-glow);
-  transition: width 0.6s var(--ease);
+  transition: width var(--fill-motion);
 }
 
 .session {
@@ -1412,7 +1430,7 @@ button.jobs__dir:hover {
   border-radius: inherit;
   overflow: hidden;
   background: var(--canceled);
-  transition: width 0.4s var(--ease);
+  transition: width var(--fill-motion);
 }
 
 .progress--running .progress__fill {
