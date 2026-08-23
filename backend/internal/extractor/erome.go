@@ -72,12 +72,7 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 	)
 
 	for page := 1; page <= eromeMaxProfilePages && len(albums) < eromeMaxAlbums; page++ {
-		pageURL := *u
-		if page > 1 {
-			query := pageURL.Query()
-			query.Set("page", strconv.Itoa(page))
-			pageURL.RawQuery = query.Encode()
-		}
+		pageURL := eromeProfilePage(u, page)
 
 		doc, err := e.client.GetString(ctx, pageURL.String(), httpx.Referer(eromeReferer+"/"))
 		if err != nil {
@@ -100,18 +95,10 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 			)
 		}
 
-		var found int
-		for _, anchor := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
-			href := resolveRef(&pageURL, attr(anchor, "href"))
-			if !isEromeAlbum(href) || seen[href] {
-				continue
-			}
-			seen[href] = true
-			albums = append(albums, href)
-			found++
-		}
+		found := eromeAlbumLinks(root, &pageURL, seen)
+		albums = append(albums, found...)
 		// Nothing new on this page means there are no further pages.
-		if found == 0 {
+		if len(found) == 0 {
 			break
 		}
 	}
@@ -120,20 +107,34 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 		return nil, fmt.Errorf("erome: no albums on profile %s", u.Redacted())
 	}
 
-	result := &Result{Title: title}
-	for _, link := range albums {
+	// Every album needs its own page read for the media it holds, and a
+	// profile runs to hundreds; one after another leaves the job resolving
+	// for minutes before a byte moves. FanOut keeps the profile's own order
+	// however the requests interleave, and an unavailable album is skipped
+	// rather than sinking the rest.
+	resolved := FanOut(ctx, albums, func(ctx context.Context, link string) ([]eromeAlbum, error) {
 		albumURL, err := ParseURL(link)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		album, err := e.album(ctx, albumURL)
 		if err != nil {
-			// One unavailable album should not sink the whole profile.
-			continue
+			return nil, err
 		}
-		folder := util.FirstNonEmpty(album.Title, util.PathSegments(albumURL)[1])
-		for _, file := range album.Files {
-			file.Dir = path.Join(file.Dir, folder)
+		// isEromeAlbum has already established the /a/<id> shape, so the
+		// id is there to be read.
+		return []eromeAlbum{{
+			title: album.Title,
+			id:    util.PathSegments(albumURL)[1],
+			files: album.Files,
+		}}, nil
+	})
+
+	result := &Result{Title: title}
+	folders := eromeFolders(resolved)
+	for i, album := range resolved {
+		for _, file := range album.files {
+			file.Dir = path.Join(file.Dir, folders[i])
 			result.Files = append(result.Files, file)
 		}
 	}
@@ -142,6 +143,85 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 			u.Redacted(), len(albums))
 	}
 	return result, nil
+}
+
+// eromeAlbum is one of a profile's albums, once its page has been read.
+type eromeAlbum struct {
+	title string
+	id    string
+	files []File
+}
+
+// eromeFolders names the folder each album's files are filed under.
+//
+// The album's own title is what a person recognises, so that is the name.
+// But a title is not unique within a profile — a creator posting a series
+// gives every part the same one, and reposts carry whatever title they were
+// given elsewhere — and two albums sharing a folder interleave their files
+// and report the profile as holding one album fewer than it does. So where a
+// title repeats, every album carrying it takes its own id alongside: the site
+// mints those, they are unique, and they never change.
+//
+// Only the repeats are qualified. An album whose title is its own keeps
+// exactly the folder it has always had, so a re-run skips what it already
+// holds rather than fetching it again into a renamed one.
+func eromeFolders(albums []eromeAlbum) []string {
+	seen := make(map[string]int, len(albums))
+	for _, album := range albums {
+		seen[album.title]++
+	}
+
+	names := make([]string, len(albums))
+	for i, album := range albums {
+		switch {
+		case album.title == "":
+			// Nothing to disambiguate against, and the id is already unique.
+			names[i] = album.id
+		case seen[album.title] > 1:
+			names[i] = album.title + " " + album.id
+		default:
+			names[i] = album.title
+		}
+	}
+	return names
+}
+
+// eromeProfilePage is the URL of one page of a profile.
+//
+// Whatever the profile URL already carried is kept, and on this host that is
+// load-bearing rather than tidiness: a profile lists its own albums under
+// ?t=posts and the ones it has reposted under ?t=reposts, which are
+// different sets. A page number appended without the tab would walk the
+// default listing from page two onward — collecting the wrong albums, and
+// silently, since they are albums either way.
+func eromeProfilePage(u *url.URL, page int) url.URL {
+	next := *u
+	if page > 1 {
+		query := next.Query()
+		query.Set("page", strconv.Itoa(page))
+		next.RawQuery = query.Encode()
+	}
+	return next
+}
+
+// eromeAlbumLinks reads the album links one page of a profile lists, in the
+// order the page gives them and skipping any already collected.
+//
+// Kept apart from the fetch so a fixture can stand in for the page. The
+// profile's own furniture links out to the site's sections and to other
+// creators, so what makes a link an album is its shape rather than where it
+// sits in the markup.
+func eromeAlbumLinks(root *html.Node, base *url.URL, seen map[string]bool) []string {
+	var out []string
+	for _, anchor := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
+		href := resolveRef(base, attr(anchor, "href"))
+		if !isEromeAlbum(href) || seen[href] {
+			continue
+		}
+		seen[href] = true
+		out = append(out, href)
+	}
+	return out
 }
 
 // isEromeAlbum reports whether a link points at an album page.
