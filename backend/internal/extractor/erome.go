@@ -3,6 +3,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 	"strconv"
@@ -65,42 +66,9 @@ func (e *Erome) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 // profile walks a user's pages and expands every album they list, filing
 // each album's media into its own folder.
 func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
-	var (
-		albums []string
-		seen   = make(map[string]bool)
-		title  string
-	)
-
-	for page := 1; page <= eromeMaxProfilePages && len(albums) < eromeMaxAlbums; page++ {
-		pageURL := eromeProfilePage(u, page)
-
-		doc, err := e.client.GetString(ctx, pageURL.String(), httpx.Referer(eromeReferer+"/"))
-		if err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("erome: fetch profile: %w", err)
-			}
-			break // ran past the last page
-		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, fmt.Errorf("erome: %w", err)
-		}
-		if title == "" {
-			title = util.FirstNonEmpty(
-				strings.TrimSpace(textOf(orEmpty(findFirst(root, func(n *html.Node) bool {
-					return isElem(n, atom.H1)
-				})))),
-				trimSiteSuffix(firstTitleOf(doc)),
-				strings.Join(util.PathSegments(u), "-"),
-			)
-		}
-
-		found := eromeAlbumLinks(root, &pageURL, seen)
-		albums = append(albums, found...)
-		// Nothing new on this page means there are no further pages.
-		if len(found) == 0 {
-			break
-		}
+	albums, title, limited, err := e.profileAlbums(ctx, u)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(albums) == 0 {
@@ -130,7 +98,7 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 		}}, nil
 	})
 
-	result := &Result{Title: title}
+	result := &Result{Title: eromeProfileTitle(title, limited)}
 	folders := eromeFolders(resolved)
 	for i, album := range resolved {
 		for _, file := range album.files {
@@ -143,6 +111,73 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 			u.Redacted(), len(albums))
 	}
 	return result, nil
+}
+
+// profileAlbums walks a profile's pages for the albums they list, and
+// reports what the walk learned along the way: the profile's own name, and
+// whether the host cut the listing short rather than the listing ending.
+//
+// Kept apart from the expansion so a fixture can stand in for the pages —
+// the expansion fetches an album apiece, which a test of the walk has no
+// business doing.
+func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string, title string, limited bool, err error) {
+	seen := make(map[string]bool)
+
+	for page := 1; page <= eromeMaxProfilePages && len(albums) < eromeMaxAlbums; page++ {
+		pageURL := eromeProfilePage(u, page)
+
+		doc, err := e.client.GetString(ctx, pageURL.String(), httpx.Referer(eromeReferer+"/"))
+		if err != nil {
+			if page == 1 {
+				return nil, "", false, fmt.Errorf("erome: fetch profile: %w", err)
+			}
+			// A page that will not load is ordinarily the end of the
+			// listing: asking past the last one is how the walk learns
+			// where to stop. A rate limit is not that. The host has said
+			// come back, the client has already waited it out as far as it
+			// will go, and reading it as the end would hand back part of a
+			// profile as though it were the whole of it.
+			limited = httpx.HasStatus(err, http.StatusTooManyRequests)
+			break
+		}
+		root, err := parseHTML(doc)
+		if err != nil {
+			return nil, "", false, fmt.Errorf("erome: %w", err)
+		}
+		if title == "" {
+			title = util.FirstNonEmpty(
+				strings.TrimSpace(textOf(orEmpty(findFirst(root, func(n *html.Node) bool {
+					return isElem(n, atom.H1)
+				})))),
+				trimSiteSuffix(firstTitleOf(doc)),
+				strings.Join(util.PathSegments(u), "-"),
+			)
+		}
+
+		found := eromeAlbumLinks(root, &pageURL, seen)
+		albums = append(albums, found...)
+		// Nothing new on this page means there are no further pages.
+		if len(found) == 0 {
+			break
+		}
+	}
+	return albums, title, limited, nil
+}
+
+// eromeProfileTitle names the job, admitting a listing the host cut short.
+//
+// An extractor has no logger, and a Result carries nothing but a title and
+// its files, so the title is the only place a partial answer can be
+// declared — and it is a good one, being what names the job in the UI and
+// the folder on disk, which is exactly where somebody comparing the two
+// against the profile will look. Handing back the first two pages of a
+// profile without a word would be indistinguishable from that profile
+// having two pages.
+func eromeProfileTitle(title string, limited bool) string {
+	if !limited {
+		return title
+	}
+	return title + " (partial — rate limited)"
 }
 
 // eromeAlbum is one of a profile's albums, once its page has been read.

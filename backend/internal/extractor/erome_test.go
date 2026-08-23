@@ -221,3 +221,116 @@ func TestEromeFoldersLeaveUniqueTitlesAlone(t *testing.T) {
 		}
 	}
 }
+
+// A listing the host cut short must not pass for a complete one. Asking past
+// the last page is how the walk finds its end, so a page that will not load
+// is ordinarily just that — but a rate limit means the opposite, and the
+// title is the only place a Result can say so.
+func TestEromeProfileTitleAdmitsARateLimit(t *testing.T) {
+	if got := eromeProfileTitle("creator", false); got != "creator" {
+		t.Errorf("title = %q, want the profile's own name untouched", got)
+	}
+	got := eromeProfileTitle("creator", true)
+	if got == "creator" {
+		t.Fatal("a listing cut short by the host was reported as a whole profile")
+	}
+	if !strings.Contains(got, "creator") {
+		t.Errorf("title = %q, want it to still name the profile", got)
+	}
+	if !strings.Contains(got, "rate limited") {
+		t.Errorf("title = %q, want it to say why it is partial", got)
+	}
+}
+
+// A profile page for the walk tests, whose album links name the site
+// outright: the walk resolves each href against the page it came from, and
+// what makes a link an album is that it is on erome. A fixture served from a
+// stand-in would otherwise resolve its relative links against that stand-in
+// and be discarded, which is the same rule keeping other creators' links out
+// of a profile.
+const eromeWalkPage = `<html><head><title>creator - EroMe</title></head><body>
+  <h1>creator</h1>
+  <a href="/explore">Explore</a>
+  <a href="https://www.erome.com/a/AAAA1111">One</a>
+  <a href="https://www.erome.com/a/BBBB2222">Two</a>
+  <a href="https://www.erome.com/a/CCCC3333">Three</a>
+</body></html>`
+
+// The walk over a profile's pages, fed by a stand-in: no album is opened
+// here, so what is under test is only how the walk reads what it is given.
+func eromeWalkServer(t *testing.T, handler http.HandlerFunc) (*Erome, string) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL
+}
+
+// A later page that will not load is ordinarily the end of the listing, and
+// the walk is right to stop there and keep what it has.
+func TestEromeProfileAlbumsStopsAtTheEnd(t *testing.T) {
+	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(eromeWalkPage))
+	})
+	u, _ := ParseURL(base + "/creator?t=posts")
+
+	albums, title, limited, err := e.profileAlbums(context.Background(), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(albums) != 3 {
+		t.Errorf("collected %d albums, want the 3 page one lists", len(albums))
+	}
+	if title != "creator" {
+		t.Errorf("title = %q, want the profile's own heading", title)
+	}
+	if limited {
+		t.Error("an ordinary end of listing was reported as a rate limit")
+	}
+}
+
+// A rate limit is the opposite: the host has said come back, the client has
+// already waited it out as far as it goes, and what came back is part of a
+// profile rather than the whole of it. The walk has to say so, or the caller
+// cannot tell a short profile from a truncated one.
+func TestEromeProfileAlbumsReportsARateLimit(t *testing.T) {
+	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			// The host naming its own interval is believed, so this keeps
+			// the test to the behaviour rather than to the waiting.
+			w.Header().Set(httpx.HeaderRetryAfter, "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(eromeWalkPage))
+	})
+	u, _ := ParseURL(base + "/creator?t=posts")
+
+	albums, _, limited, err := e.profileAlbums(context.Background(), u)
+	if err != nil {
+		t.Fatalf("a rate limit on page two lost the pages already walked: %v", err)
+	}
+	if len(albums) != 3 {
+		t.Errorf("collected %d albums, want page one's 3 kept", len(albums))
+	}
+	if !limited {
+		t.Fatal("a rate limit was read as the end of the listing")
+	}
+}
+
+// The first page is different: nothing has been collected yet, so there is
+// no partial answer to hand back and the failure is the answer.
+func TestEromeProfileAlbumsFailsOnTheFirstPage(t *testing.T) {
+	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpx.HeaderRetryAfter, "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	u, _ := ParseURL(base + "/creator?t=posts")
+
+	if _, _, _, err := e.profileAlbums(context.Background(), u); err == nil {
+		t.Fatal("a profile whose first page never loaded was reported as empty rather than failed")
+	}
+}

@@ -229,6 +229,10 @@ func TestGelbooru01KeepsWhatItGot(t *testing.T) {
 			_, _ = io.WriteString(w, full.String())
 			return
 		}
+		// A real limiter names its interval; stating one keeps this test to
+		// the walk's behaviour rather than to the client's waiting, which
+		// has tests of its own.
+		w.Header().Set(httpx.HeaderRetryAfter, "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	t.Cleanup(srv.Close)
@@ -247,6 +251,10 @@ func TestGelbooru01KeepsWhatItGot(t *testing.T) {
 // is a failure, not an empty job.
 func TestBooruFirstPageFailureIsAnError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A real limiter names its interval; stating one keeps this test to
+		// the walk's behaviour rather than to the client's waiting, which
+		// has tests of its own.
+		w.Header().Set(httpx.HeaderRetryAfter, "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	t.Cleanup(srv.Close)

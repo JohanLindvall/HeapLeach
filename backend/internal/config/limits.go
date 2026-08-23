@@ -147,6 +147,28 @@ const (
 	// would sit in the queue as "host busy" without end.
 	BusyRetryLimit = 5
 
+	// RateLimitRetryBase and RateLimitRetryMax bound the wait between
+	// attempts at a host that answered 429.
+	//
+	// A rate limit is the same thing one layer down as a busy host is to the
+	// downloader: not a failure but a request to come back, and answered the
+	// same way rather than with the backoff that exists for things going
+	// wrong. That one starts at 400ms, which is right for a connection that
+	// dropped and useless against a limiter — three attempts spend under
+	// three seconds and ask again well inside whatever window the host is
+	// counting, so the whole budget is gone before the limit has begun to
+	// lift. These are the busy-host intervals, for the same reason.
+	RateLimitRetryBase = 2 * time.Second
+	RateLimitRetryMax  = 60 * time.Second
+
+	// RateLimitRetries is how many times a 429 is waited out. It is counted
+	// apart from the ordinary retry budget, which a rate limit must not
+	// spend: a request that waits out a limiter and then meets a dropped
+	// connection should still have its own retries left. Four doublings
+	// from the base is around half a minute of patience, or whatever longer
+	// interval the host asked for in Retry-After.
+	RateLimitRetries = 4
+
 	// MaxRetryAfter caps how long a server's Retry-After can park a worker.
 	MaxRetryAfter = 2 * time.Minute
 

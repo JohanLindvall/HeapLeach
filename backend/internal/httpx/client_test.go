@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // testClient builds a client with retries but no browser-shaped transport,
@@ -335,24 +337,34 @@ func TestHasStatus(t *testing.T) {
 func TestRetryAfterForms(t *testing.T) {
 	resp := &http.Response{Header: http.Header{}}
 
+	// A header that is not there at all is a different answer from one that
+	// says zero, which is what a rate limit's schedule turns on.
+	if wait, stated := retryAfter(resp); stated || wait != 0 {
+		t.Errorf("absent header = (%s, %v), want (0, false)", wait, stated)
+	}
+	resp.Header.Set(HeaderRetryAfter, "0")
+	if wait, stated := retryAfter(resp); !stated || wait != 0 {
+		t.Errorf("zero seconds = (%s, %v), want (0, true) — the host said come back now", wait, stated)
+	}
+
 	resp.Header.Set(HeaderRetryAfter, "3")
-	if got := retryAfter(resp); got != 3*time.Second {
+	if got, _ := retryAfter(resp); got != 3*time.Second {
 		t.Errorf("seconds form = %s", got)
 	}
 
 	resp.Header.Set(HeaderRetryAfter, time.Now().Add(2*time.Second).UTC().Format(http.TimeFormat))
-	if got := retryAfter(resp); got <= 0 || got > 2*time.Second {
+	if got, _ := retryAfter(resp); got <= 0 || got > 2*time.Second {
 		t.Errorf("date form = %s, want a positive wait up to 2s", got)
 	}
 
 	// A hostile or broken value cannot park a worker for an hour.
 	resp.Header.Set(HeaderRetryAfter, "9999999")
-	if got := retryAfter(resp); got > 2*time.Minute {
+	if got, _ := retryAfter(resp); got > 2*time.Minute {
 		t.Errorf("cap ignored: %s", got)
 	}
 
 	resp.Header.Set(HeaderRetryAfter, "soon")
-	if got := retryAfter(resp); got != 0 {
+	if got, _ := retryAfter(resp); got != 0 {
 		t.Errorf("unparseable value should mean no wait, got %s", got)
 	}
 }
@@ -402,5 +414,136 @@ func TestStreamingClientSharesEverythingButTheTimeout(t *testing.T) {
 	}
 	if s.hc.Jar != c.hc.Jar {
 		t.Error("streaming client must share the cookie jar")
+	}
+}
+
+// rateLimitedClient is testClient with the rate limit's waits shortened, so
+// the behaviour is exercised without sitting out the production intervals.
+func rateLimitedClient(t *testing.T, retries int) *Client {
+	t.Helper()
+	c := testClient(t, retries)
+	c.rateLimitBase = 2 * time.Millisecond
+	c.rateLimitMax = 10 * time.Millisecond
+	return c
+}
+
+// A 429 is the host asking us to come back, so it is waited out rather than
+// counted as a failure — several times over, and past the point where the
+// ordinary retry budget would have given up.
+func TestDoWaitsOutARateLimit(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		fmt.Fprint(w, "payload")
+	}))
+	defer srv.Close()
+
+	// No ordinary retries at all: the rate limit must not be drawing on them.
+	c := rateLimitedClient(t, 0)
+	req, err := c.NewRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := c.Bytes(req)
+	if err != nil {
+		t.Fatalf("Bytes after three 429s: %v", err)
+	}
+	if string(body) != "payload" {
+		t.Errorf("body = %q, want the payload once the limit lifted", body)
+	}
+	if got := calls.Load(); got != 4 {
+		t.Errorf("made %d attempts, want 4 — three refused and the one that worked", got)
+	}
+}
+
+// Waiting out a limiter must leave the ordinary budget untouched: a request
+// that is rate-limited and then meets a dropped connection still has its own
+// retries in hand.
+func TestRateLimitDoesNotSpendTheRetryBudget(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch calls.Add(1) {
+		case 1, 2:
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 3:
+			w.WriteHeader(http.StatusServiceUnavailable) // a genuine transient failure
+		default:
+			fmt.Fprint(w, "payload")
+		}
+	}))
+	defer srv.Close()
+
+	// One ordinary retry, which the 503 needs and the two 429s must not have
+	// taken.
+	c := rateLimitedClient(t, 1)
+	req, err := c.NewRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Bytes(req); err != nil {
+		t.Fatalf("Bytes: %v — the rate limit spent the retry the 503 needed", err)
+	}
+	if got := calls.Load(); got != 4 {
+		t.Errorf("made %d attempts, want 4", got)
+	}
+}
+
+// Patience is bounded: a host that never lets up is reported as the rate
+// limit it is, rather than being asked forever.
+func TestDoGivesUpOnAPermanentRateLimit(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := rateLimitedClient(t, 0)
+	req, err := c.NewRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Bytes(req)
+	if err == nil {
+		t.Fatal("a host that always refuses was never reported")
+	}
+	if !HasStatus(err, http.StatusTooManyRequests) {
+		t.Errorf("err = %v, want it to carry the 429 the host actually sent", err)
+	}
+	// The first attempt plus the rate limit's own budget, and nothing from
+	// the ordinary one.
+	if want := int32(config.RateLimitRetries + 1); calls.Load() != want {
+		t.Errorf("made %d attempts, want %d", calls.Load(), want)
+	}
+}
+
+// A host naming its own interval is believed over the schedule here, which
+// is why Retry-After is read at all.
+func TestRateLimitHonoursRetryAfter(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set(HeaderRetryAfter, "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		fmt.Fprint(w, "payload")
+	}))
+	defer srv.Close()
+
+	c := rateLimitedClient(t, 0) // its own waits are milliseconds; the host asks for a second
+	req, err := c.NewRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := c.Bytes(req); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(start); waited < time.Second {
+		t.Errorf("waited %s, want at least the second the host asked for", waited.Round(time.Millisecond))
 	}
 }

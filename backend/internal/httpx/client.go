@@ -29,6 +29,11 @@ type Client struct {
 	ua         string
 	acceptLang string
 	maxRetries int
+
+	// The intervals a rate limit is waited out with, kept as fields so a
+	// test need not sit through the production values.
+	rateLimitBase time.Duration
+	rateLimitMax  time.Duration
 }
 
 // New builds a Client. timeout bounds a single non-streaming request; the
@@ -63,9 +68,11 @@ func New(userAgent, acceptLanguage string, maxRetries int, timeout time.Duration
 			Transport:     transport,
 			CheckRedirect: checkRedirect,
 		},
-		ua:         userAgent,
-		acceptLang: acceptLanguage,
-		maxRetries: maxRetries,
+		ua:            userAgent,
+		acceptLang:    acceptLanguage,
+		maxRetries:    maxRetries,
+		rateLimitBase: config.RateLimitRetryBase,
+		rateLimitMax:  config.RateLimitRetryMax,
 	}
 }
 
@@ -157,7 +164,14 @@ func HasStatus(err error, codes ...int) bool {
 // Do executes req, retrying transient failures with exponential backoff.
 // The returned response body is still open and belongs to the caller.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	var lastErr error
+	var (
+		lastErr error
+		// A rate limit keeps a budget of its own. It is not a failure but a
+		// request to come back, so it must not spend the retries that exist
+		// for things going wrong — a request that waits out a limiter and
+		// then meets a dropped connection still has its own left.
+		limited int
+	)
 	for attempt := 0; ; attempt++ {
 		attemptReq := req.Clone(req.Context())
 		if req.GetBody != nil {
@@ -176,8 +190,33 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 				return nil, ctxErr
 			}
 			lastErr = err
+		case resp.StatusCode == http.StatusTooManyRequests:
+			// The host is counting requests and has had enough of ours.
+			// Waited out on the rate limit's own schedule: the ordinary
+			// backoff starts at a few hundred milliseconds, which asks
+			// again well inside whatever window is being counted and
+			// exhausts the budget before the limit has begun to lift.
+			// A host that names its own interval is believed, in either
+			// direction: it is the authority on the limiter, and waiting
+			// longer than it asked serves nobody. The escalating schedule
+			// below is for the common case of a 429 that names nothing.
+			wait, stated := retryAfter(resp)
+			drain(resp)
+			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
+			if limited >= config.RateLimitRetries {
+				return nil, lastErr
+			}
+			limited++
+			if !stated {
+				wait = util.Backoff(limited-1, c.rateLimitBase, c.rateLimitMax)
+			}
+			if err := util.SleepCtx(req.Context(), wait); err != nil {
+				return nil, err
+			}
+			attempt-- // waiting out a limiter is not a failed attempt
+			continue
 		case retryableStatus(resp.StatusCode):
-			wait := retryAfter(resp)
+			wait, _ := retryAfter(resp)
 			drain(resp)
 			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
 			if attempt < c.maxRetries {
@@ -313,21 +352,30 @@ func retryableStatus(code int) bool {
 	return false
 }
 
-// retryAfter reads the Retry-After header in either of its two legal forms.
-func retryAfter(resp *http.Response) time.Duration {
+// retryAfter reads the Retry-After header in either of its two legal forms,
+// and reports whether the host stated one at all.
+//
+// That second answer is what a rate limit turns on. A host naming an
+// interval is the authority on its own limiter and is believed in either
+// direction, a shorter one included; a host naming nothing has said only
+// "too many", and is left to the escalating schedule. Without the flag the
+// two are indistinguishable, since both come out as a zero wait.
+func retryAfter(resp *http.Response) (time.Duration, bool) {
 	v := strings.TrimSpace(resp.Header.Get(HeaderRetryAfter))
 	if v == "" {
-		return 0
+		return 0, false
 	}
 	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
-		return min(time.Duration(secs)*time.Second, config.MaxRetryAfter)
+		return min(time.Duration(secs)*time.Second, config.MaxRetryAfter), true
 	}
 	if when, err := http.ParseTime(v); err == nil {
 		if d := time.Until(when); d > 0 {
-			return min(d, config.MaxRetryAfter)
+			return min(d, config.MaxRetryAfter), true
 		}
+		// A moment already past says the wait is over rather than absent.
+		return 0, true
 	}
-	return 0
+	return 0, false
 }
 
 // retryDelay is the backoff between attempts at a single request.
