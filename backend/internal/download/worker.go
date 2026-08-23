@@ -156,6 +156,16 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			continue
 		}
 
+		// A stall is handed straight back rather than retried in place.
+		// Retrying here would pin this worker for another StallTimeout
+		// against a host that has stopped serving, while the queue waits
+		// behind it; runItem sends the item to the back of the queue
+		// instead, so whatever can move, moves.
+		var stall *stalledError
+		if errors.As(err, &stall) {
+			return err
+		}
+
 		if attempt >= m.cfg.MaxRetries || !retryableTransfer(err) {
 			return err
 		}
@@ -460,6 +470,20 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// stalledError reports an attempt the stall watchdog aborted: the byte
+// counter sat still for the whole timeout. It is a type rather than a
+// message because a stall is handled unlike any other failure — the item is
+// sent to the back of the queue instead of burning retries in place against
+// a host that has stopped serving. See Manager.deferStalledLocked.
+type stalledError struct {
+	name  string
+	after time.Duration
+}
+
+func (e *stalledError) Error() string {
+	return fmt.Sprintf("transfer %s stalled: no data for %s", e.name, e.after)
+}
+
 // annotateTransfer turns a failed transfer into a reportable error, naming a
 // stall as such rather than as the cancellation it manifests as.
 func annotateTransfer(name string, err error, stalled *atomic.Bool, after time.Duration) error {
@@ -467,7 +491,7 @@ func annotateTransfer(name string, err error, stalled *atomic.Bool, after time.D
 		// Deliberately not wrapping: the underlying error is the context
 		// cancellation the watchdog raised, and reporting that as the
 		// cause would make a stall look like the user cancelling.
-		return fmt.Errorf("transfer %s stalled: no data for %s", name, after)
+		return &stalledError{name: name, after: after}
 	}
 	return fmt.Errorf("transfer %s: %w", name, err)
 }

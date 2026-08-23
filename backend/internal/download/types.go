@@ -98,11 +98,16 @@ type Item struct {
 	// retryPending records a retry requested while inFlight; the worker
 	// re-queues the item on its way out.
 	retryPending bool
-	speed        float64
-	lastBytes    int64
-	lastSample   time.Time
-	startedAt    time.Time
-	finishedAt   time.Time
+	// stallDefers counts the times a stall has sent this item to the back
+	// of the queue. Bounded by the retry budget, so a host that never
+	// resumes serving still fails the item rather than cycling it forever;
+	// reset whenever the item is queued afresh on a user's say-so.
+	stallDefers int
+	speed       float64
+	lastBytes   int64
+	lastSample  time.Time
+	startedAt   time.Time
+	finishedAt  time.Time
 }
 
 // Job is one submitted URL and everything behind it.

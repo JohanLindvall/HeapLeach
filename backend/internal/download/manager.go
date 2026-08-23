@@ -258,6 +258,9 @@ func (m *Manager) dispatch() {
 				itemHeld(it, true)
 			}
 			it.Status = StatusRunning
+			// A note written while the item waited — a stall deferral's,
+			// say — describes a state that has just ended.
+			it.Note = ""
 			it.startedAt = time.Now()
 			it.lastSample = it.startedAt
 			it.lastBytes = it.downloaded.Load()
@@ -364,6 +367,11 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	case ctx.Err() != nil || httpx.IsCanceled(err):
 		it.Status = StatusCanceled
 		it.Err = ""
+	case m.deferStalledLocked(it, err):
+		// The stall watchdog gave up on this attempt, and the item has just
+		// been sent to the back of the queue with its part file intact —
+		// see deferStalledLocked. Nothing more to record here: the deferral
+		// wrote the item's state itself.
 	default:
 		it.Status = StatusFailed
 		it.Err = err.Error()
@@ -516,11 +524,54 @@ func (m *Manager) enqueueLocked(it *Item) {
 	it.Err = ""
 	it.Note = ""
 	it.speed = 0
+	it.stallDefers = 0
 	it.startedAt = time.Time{}
 	it.finishedAt = time.Time{}
 	it.downloaded.Store(0)
 	it.lastBytes = 0
 	m.queue = append(m.queue, it)
+}
+
+// deferStalledLocked sends a stalled item to the back of the queue instead
+// of failing it, and reports whether it did. Caller holds mu.
+//
+// A stall is usually the host's condition rather than the item's — bunkr's
+// CDN, measured, serves an address at full speed for a few hundred megabytes
+// and then throttles it to a trickle for everything, on fresh connections
+// included. Retrying such an item in place pins a worker for StallTimeout a
+// time while the whole queue waits behind it; sending it to the back frees
+// the slot at once, lets everything that can move take its turn, and comes
+// back to this item after the widest interval the queue can offer — with
+// the part file and sidecar intact, so its next turn resumes rather than
+// restarts.
+//
+// The patience is the same retry budget the in-place retries used to spend,
+// paid at the back of the queue instead of at the front: past MaxRetries
+// deferrals the next stall is a failure, so a host that never resumes still
+// terminates the item — and the headless run with it. A retry the user
+// asked for meanwhile takes precedence and starts the item over with a
+// clean slate.
+func (m *Manager) deferStalledLocked(it *Item, err error) bool {
+	var stall *stalledError
+	if !errors.As(err, &stall) || it.retryPending {
+		return false
+	}
+	limit := 0
+	if m.cfg != nil {
+		limit = m.cfg.MaxRetries
+	}
+	if it.stallDefers >= limit {
+		return false
+	}
+
+	defers := it.stallDefers + 1
+	m.enqueueLocked(it) // clears the counter along with the rest; restore it
+	it.stallDefers = defers
+	it.Note = fmt.Sprintf("stalled — no data for %s; sent to the back of the queue (%d of %d)",
+		stall.after, defers, limit)
+	m.log.Info("transfer stalled; deferred to the back of the queue",
+		"item", it.ID, "name", it.Name, "defers", defers, "limit", limit)
+	return true
 }
 
 // RemoveJob cancels a job and forgets it. Files already on disk stay.

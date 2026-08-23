@@ -377,12 +377,19 @@ ffmpeg the `.ts` is kept and plays fine.
   the destination is not downloaded again — checked against the length the
   server reports, so it works even for hosts that publish no sizes. Sizes
   read off listing pages are rounded, and are never used to make that call.
-- **Notices a stalled transfer.** A connection that stops delivering without
-  closing is invisible to a read timeout; if the byte counter has not moved
-  for `-stall-timeout`, the attempt is abandoned and retried, resuming from
-  what is on disk. Playlist downloads are watched the same way, against the
-  bytes actually arriving rather than against whole parts landing — a large
-  part fetched slowly is progress, a silent connection is not.
+- **Notices a stalled transfer — and steps around it.** A connection that
+  stops delivering without closing is invisible to a read timeout; if the
+  byte counter has not moved for `-stall-timeout`, the attempt is abandoned
+  and the item goes to the **back of the queue** with its partial file
+  intact, so a host that has stopped serving does not pin a worker while
+  everything behind it waits. Its next turn resumes from disk; a host that
+  never resumes still fails the item once the retry budget is spent.
+  Playlist downloads are watched the same way, against the bytes actually
+  arriving rather than against whole parts landing — a large part fetched
+  slowly is progress, a silent connection is not. And a stalled transfer is
+  never "helped" by splitting it further: slow means more room than one
+  connection uses, stalled means the host is serving nothing, and the two
+  get opposite answers.
 - **Live progress** over server-sent events: per-file bytes, rate, ETA, and
   parts joined for a file that arrives as a playlist and so has no byte total
   until its last part lands. A transfer waiting on purpose says so, rather

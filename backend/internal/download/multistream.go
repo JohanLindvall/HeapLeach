@@ -177,7 +177,8 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 		// if the item has since rotated to another mirror.
 		lastAddHost string
 	)
-	meter := newSpeedMeter(config.SpeedWindow, t.item.downloaded.Load())
+	lastCount := t.item.downloaded.Load()
+	meter := newSpeedMeter(config.SpeedWindow, lastCount)
 
 	for {
 		select {
@@ -202,8 +203,31 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 			}
 
 			current := t.item.downloaded.Load()
-			speed, stable := meter.observe(current, sinceProbe)
+			moved := current != lastCount
+			lastCount = current
+			elapsed := sinceProbe
 			sinceProbe = 0
+
+			// A whole probe window with nothing arriving is a stall, not
+			// slowness, and the two call for opposite answers. Slow means
+			// the path to this host has more room than one connection uses;
+			// stalled means the host is serving nothing on the connections
+			// it already has, and will serve nothing on one more — opening
+			// it just spends a budget slot proving so. The pending verdict
+			// is thrown out rather than delivered for the same reason:
+			// judged against a stalled window, the last addition would read
+			// as a collapse and penalise the host's budget for the rest of
+			// the process, when what actually happened is that the host
+			// stopped serving everyone. If the connection is truly dead,
+			// the stall watchdog aborts the whole attempt; nothing here has
+			// to.
+			if !moved {
+				meter.reset(current)
+				speedBeforeAdd = 0
+				continue
+			}
+
+			speed, stable := meter.observe(current, elapsed)
 			if !stable {
 				continue
 			}
