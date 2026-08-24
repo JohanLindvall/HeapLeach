@@ -249,6 +249,7 @@ section and the binary disagree.
 | `drive` | `docs.google.com`, `drive.google.com`, `drive.usercontent.google.com` |
 | `dropbox` | `dropbox.com`, `dropboxusercontent.com` |
 | `drtv` | `dr.dk` |
+| `eporner` | `eporner.com` |
 | `erome` | `erome.com` |
 | `fapello` | `fapello.com` |
 | `fapster` | `fapster.xyz` |

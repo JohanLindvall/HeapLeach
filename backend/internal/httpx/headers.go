@@ -24,6 +24,7 @@ const (
 	HeaderOrigin             = "Origin"
 	HeaderRange              = "Range"
 	HeaderReferer            = "Referer"
+	HeaderRequestedWith      = "X-Requested-With"
 	HeaderRetryAfter         = "Retry-After"
 	HeaderUserAgent          = "User-Agent"
 
@@ -42,6 +43,10 @@ const (
 
 	ContentTypeJSON = "application/json"
 	ContentTypeForm = "application/x-www-form-urlencoded"
+
+	// RequestedWithXHR marks a request the page would make from script.
+	// Some players answer their own endpoints only to it.
+	RequestedWithXHR = "XMLHttpRequest"
 
 	// EncodingIdentity asks for the raw bytes. A transparently compressed
 	// body would make the progress total disagree with what lands on disk.
