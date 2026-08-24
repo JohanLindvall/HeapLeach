@@ -26,6 +26,7 @@ make run-image      # run the container image (passes --user so bind mounts work
 make native         # build on the host (needs Go; uses Docker for the UI if Node is absent)
 make dev            # Go API on :8080 + Vite dev server on :5173 (needs Go and Node)
 make frontend       # compile the UI into the Go embed dir (Docker if npm is absent)
+make hosts          # regenerate README's supported-site inventory from the registry
 make dependencies   # fetch static yt-dlp and ffmpeg into ./bin (see tools.Find)
 make dist           # cross-compile the release archives into ./dist
 make tag            # cut a release: make tag V=v1.2.3 — CI builds and publishes
@@ -202,6 +203,18 @@ Two traps that cost time here:
 `extractor.Extractor` is `Name/Match/Extract`. `Registry.Find` walks the
 registered hosts and falls back to `Direct`, which matches everything — so it
 **never returns nil**. Register new hosts in `NewRegistry`.
+
+The supported-site table in README.md is **generated** from the registry by
+`make hosts`, between two markers, and `make hosts-check` fails CI when the
+file and the code disagree — so edit the extractor, never that table. Adding
+a host is then one line in `NewRegistry` plus `make hosts` in the same
+commit. Note the optional half of the contract: `SiteLister` may be skipped
+only when an extractor's `Name()` *is* its domain, since the catalogue then
+uses the name as the site. An extractor named for the site without its TLD —
+"eporner" for `eporner.com` — has to implement `Sites()`, or the inventory
+quietly advertises the label as the host. `hosts-check` compares the
+regenerated file against git, so it also fails on a correct regeneration that
+has not been committed yet.
 
 The important subtlety is `File.Resolve`:
 

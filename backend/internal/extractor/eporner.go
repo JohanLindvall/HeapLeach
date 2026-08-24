@@ -30,6 +30,7 @@ type Eporner struct{ client *httpx.Client }
 const (
 	epornerRoot   = "https://www.eporner.com"
 	epornerDomain = "www.eporner.com"
+	epornerSite   = "eporner.com"
 	epornerExt    = ".mp4"
 
 	// The player hash arrives as four groups of eight hexadecimal digits.
@@ -48,7 +49,12 @@ func NewEporner(client *httpx.Client) *Eporner { return &Eporner{client: client}
 
 func (e *Eporner) Name() string { return "eporner" }
 
-func (e *Eporner) Match(u *url.URL) bool { return util.HostMatches(u.Host, "eporner.com") }
+func (e *Eporner) Match(u *url.URL) bool { return util.HostMatches(u.Host, epornerSite) }
+
+// Sites names the domain. The optional half of the catalogue contract is
+// only skippable when an extractor's name is its host, and this one's is
+// not: without this the inventory reports the label "eporner" as the site.
+func (e *Eporner) Sites() []string { return []string{epornerSite} }
 
 // Extract handles one video or a profile tab that lists them.
 func (e *Eporner) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
