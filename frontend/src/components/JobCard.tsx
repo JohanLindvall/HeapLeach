@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf } from '../format';
 import type { JobView } from '../types';
 import { CancelIcon, ChevronIcon, RetryIcon, TrashIcon } from './Icons';
 import { ItemRow } from './ItemRow';
 import { ProgressBar } from './ProgressBar';
+import { useVirtualRows } from '../useVirtualRows';
 
 interface JobCardProps {
   readonly job: JobView;
@@ -29,6 +30,13 @@ export function JobCard({
   // would leave every album expanded.
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const open = userOpen ?? job.total <= 1;
+
+  // A job of thousands of files is a list only the browser suffers for
+  // holding whole, so a long one is rendered a viewport at a time. Closed,
+  // it has no rows at all and nothing to window.
+  const listRef = useRef<HTMLUListElement>(null);
+  const rows = useVirtualRows(listRef, open ? job.items.length : 0);
+  const shown = rows ? job.items.slice(rows.start, rows.end) : job.items;
 
   const percent = job.sizeKnown ? percentOf(job.downloaded, job.size) : null;
   const busy = job.status === 'running' || job.status === 'queued' || job.status === 'resolving';
@@ -113,15 +121,25 @@ export function JobCard({
       )}
 
       {open && job.items.length > 0 && (
-        <ul className="job__items">
-          {job.items.map((item) => (
+        <ul className="job__items" ref={listRef}>
+          {rows && rows.padTop > 0 && (
+            <li className="job__gap" style={{ height: rows.padTop }} aria-hidden="true" />
+          )}
+          {shown.map((item, index) => (
             <ItemRow
               key={item.id}
               item={item}
+              /* A windowed list holds a fraction of its rows, so each one
+                 has to say where in the whole it sits. */
+              position={rows ? rows.start + index + 1 : undefined}
+              total={rows ? job.items.length : undefined}
               onCancel={() => onCancelItem(item.id)}
               onRetry={() => onRetryItem(item.id)}
             />
           ))}
+          {rows && rows.padBottom > 0 && (
+            <li className="job__gap" style={{ height: rows.padBottom }} aria-hidden="true" />
+          )}
         </ul>
       )}
     </article>

@@ -7,10 +7,17 @@ interface ItemRowProps {
   readonly item: ItemView;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
+  /**
+   * Where this row sits in the whole list, one-based, and how long that list
+   * is. Set only when the list is windowed, where the document holds too
+   * few rows to say either on its own.
+   */
+  readonly position?: number;
+  readonly total?: number;
 }
 
 /** One file: name, live progress, and the action that fits its state. */
-export function ItemRow({ item, onCancel, onRetry }: ItemRowProps) {
+export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowProps) {
   const running = item.status === 'running';
   const active = running || item.status === 'queued';
 
@@ -22,7 +29,7 @@ export function ItemRow({ item, onCancel, onRetry }: ItemRowProps) {
     : percentOf(item.downloaded, item.size);
 
   return (
-    <li className={`item item--${item.status}`}>
+    <li className={`item item--${item.status}`} aria-posinset={position} aria-setsize={total}>
       <div className="item__main">
         <span className="item__name" title={item.path ?? item.name}>
           {item.dir && <span className="item__dir">{item.dir}/</span>}

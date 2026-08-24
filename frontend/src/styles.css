@@ -1310,6 +1310,13 @@ button.jobs__dir:hover {
   flex-direction: column;
 }
 
+/* Stands in for the rows a windowed list keeps out of the document, so the
+   scrollbar still measures the whole of it. */
+.job__gap {
+  flex: none;
+  pointer-events: none;
+}
+
 .item {
   display: grid;
   font-variant-numeric: tabular-nums;
