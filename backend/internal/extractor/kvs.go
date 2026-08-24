@@ -22,20 +22,61 @@ const kvsHashLength = 32
 // kvsScrambledPrefix marks a URL that needs unscrambling.
 const kvsScrambledPrefix = "function/0/"
 
-// flashvarsPattern finds the player configuration object.
-var flashvarsPattern = regexp.MustCompile(`(?s)flashvars\s*=\s*\{(.*?)\n\s*\}`)
+// flashvarsStart finds the player configuration's opening brace.
+var flashvarsStart = regexp.MustCompile(`flashvars\s*=\s*\{`)
+
+// flashvarsBlock returns the body of the player configuration object.
+//
+// The object is scanned rather than matched against a closing pattern,
+// because installs disagree about where the brace goes: some put it on a
+// line of its own, others pack the whole object onto one line and close it
+// with "};" immediately behind the last value. Scanning also means a brace
+// inside a quoted value cannot end the object early, which is the way any
+// terminator pattern eventually gets it wrong.
+func flashvarsBlock(doc string) (string, bool) {
+	loc := flashvarsStart.FindStringIndex(doc)
+	if loc == nil {
+		return "", false
+	}
+	body := doc[loc[1]:] // just past the opening brace
+	depth := 1
+	inQuote := false
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if inQuote {
+			switch c {
+			case '\\':
+				i++ // an escaped character cannot close the value
+			case '\'':
+				inQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inQuote = true
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return body[:i], true
+			}
+		}
+	}
+	return "", false
+}
 
 // flashvarEntry matches one `key: 'value'` pair, tolerating escaped quotes.
 var flashvarEntry = regexp.MustCompile(`(\w+)\s*:\s*'((?:[^'\\]|\\.)*)'`)
 
 // parseFlashvars pulls the player configuration out of a KVS page.
 func parseFlashvars(doc string) (map[string]string, error) {
-	block := flashvarsPattern.FindStringSubmatch(doc)
-	if block == nil {
+	block, ok := flashvarsBlock(doc)
+	if !ok {
 		return nil, fmt.Errorf("no player configuration found")
 	}
 	out := make(map[string]string)
-	for _, m := range flashvarEntry.FindAllStringSubmatch(block[1], -1) {
+	for _, m := range flashvarEntry.FindAllStringSubmatch(block, -1) {
 		out[m[1]] = unescapeJSString(m[2])
 	}
 	if len(out) == 0 {

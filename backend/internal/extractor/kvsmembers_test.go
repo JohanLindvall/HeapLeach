@@ -178,3 +178,66 @@ func TestKVSShowingTotal(t *testing.T) {
 		t.Errorf("total on a later page = %v, want 5", m)
 	}
 }
+
+// A section that is itself the member's own videos is kept rather than
+// rewritten. Guessing the name wrong is not a 404 on this platform: an
+// unknown member section answers with a generic block of the site's newest
+// videos under the member's own URL, which reads as a listing and downloads
+// somebody else's work.
+func TestKVSMemberPathKeepsTheMembersOwnSection(t *testing.T) {
+	cases := map[string]string{
+		"https://tube.example.test/members/4242/videos/":          "https://tube.example.test/members/4242/videos/",
+		"https://tube.example.test/members/4242/uploaded_videos/": "https://tube.example.test/members/4242/uploaded_videos/",
+		"https://tube.example.test/members/4242/public_videos/":   "https://tube.example.test/members/4242/public_videos/",
+		"https://tube.example.test/members/4242/VIDEOS/":          "https://tube.example.test/members/4242/videos/",
+		// Not the member's own work, so it still falls back.
+		"https://tube.example.test/members/4242/favourite_videos/": "https://tube.example.test/members/4242/public_videos/",
+		"https://tube.example.test/members/4242/":                  "https://tube.example.test/members/4242/public_videos/",
+	}
+	for raw, want := range cases {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := kvsMemberPath(u)
+		if !ok || got != want {
+			t.Errorf("kvsMemberPath(%q) = %q, %v; want %q, true", raw, got, ok, want)
+		}
+	}
+}
+
+// Some installs page the member listing in script and leave the "next"
+// control pointing at "#", so the async form is the only way on.
+func TestKVSAsyncPage(t *testing.T) {
+	const listing = "https://tube.example.test/members/4242/videos/"
+	got := kvsAsyncPage(listing, "list_videos_uploaded_videos", 3)
+	want := listing + "?mode=async&function=get_block&block_id=list_videos_uploaded_videos&from_videos=3"
+	if got != want {
+		t.Errorf("kvsAsyncPage = %q, want %q", got, want)
+	}
+	// With no block to name there is no request to make, and the walk ends
+	// rather than fetching something arbitrary.
+	if got := kvsAsyncPage(listing, "", 2); got != "" {
+		t.Errorf("kvsAsyncPage with no block = %q, want empty", got)
+	}
+}
+
+func TestKVSListingBlock(t *testing.T) {
+	root, err := parseHTML(`<html><body>
+	  <div class="headline"><h1>Someone's Videos (356)</h1></div>
+	  <div id="list_videos_uploaded_videos_filter_list" data-block-id="list_videos_uploaded_videos"></div>
+	</body></html>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := kvsListingBlock(root), "list_videos_uploaded_videos"; got != want {
+		t.Errorf("kvsListingBlock = %q, want %q", got, want)
+	}
+	bare, err := parseHTML(`<html><body><div class="list"></div></body></html>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kvsListingBlock(bare); got != "" {
+		t.Errorf("kvsListingBlock on a page with no block = %q, want empty", got)
+	}
+}

@@ -49,6 +49,7 @@ var kvsKnownHosts = []string{
 	"porntrex.com",
 	"pornhits.com",
 	"fapster.xyz",
+	"xxthots.com",
 }
 
 // kvsMaxAlternates bounds the numbered alternate renditions a page is read

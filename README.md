@@ -311,6 +311,7 @@ section and the binary disagree.
 | `vrtmax` | `vrt.be` |
 | `wetransfer` | `we.tl`, `wetransfer.com` |
 | `xhamster` | `xhamster.*` |
+| `xxthots` | `xxthots.com` |
 | `yandex` | `yandex.*` |
 | `yle` | `areena.yle.fi`, `arenan.yle.fi` |
 | `youtube` | `youtu.be`, `youtube-nocookie.com`, `youtube.com` |

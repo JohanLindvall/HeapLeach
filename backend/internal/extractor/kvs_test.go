@@ -87,3 +87,50 @@ func TestParseFlashvarsMissing(t *testing.T) {
 		t.Error("want an error when the page has no player configuration")
 	}
 }
+
+// Installs disagree about where the player configuration's closing brace
+// goes. This one packs the whole object onto a single line and closes it
+// with "};" immediately behind the last value, which no terminator pattern
+// anchored to a newline can find.
+func TestParseFlashvarsClosingOnTheSameLine(t *testing.T) {
+	const page = `<script>
+	  var flashvars = {
+	                    video_id: '42264',                    video_title: 'A Clip',                    license_code: '$998877665544332',                    video_url: 'function/0/https://x.test/get_file/6/abc/42000/42264/42264_720p.mp4/',                    postfix: '_720p.mp4',                    embed: '0'                  };
+	  kt_player('kt_player', '/player/kt_player.swf?v=12.2.11', '100%', '100%', flashvars);
+	</script>`
+	vars, err := parseFlashvars(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"video_id":     "42264",
+		"video_title":  "A Clip",
+		"license_code": "$998877665544332",
+		"postfix":      "_720p.mp4",
+		"embed":        "0",
+	} {
+		if got := vars[key]; got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// A brace inside a quoted value must not end the object early, which is the
+// way a terminator pattern eventually gets it wrong.
+func TestParseFlashvarsBraceInsideAValue(t *testing.T) {
+	const page = `<script>flashvars = {
+		video_title: 'Braces } and { in the name',
+		video_url: 'https://x.test/a.mp4?cb={rand}',
+		postfix: '.mp4'
+	}</script>`
+	vars, err := parseFlashvars(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := vars["video_title"], "Braces } and { in the name"; got != want {
+		t.Errorf("video_title = %q, want %q", got, want)
+	}
+	if got, want := vars["postfix"], ".mp4"; got != want {
+		t.Errorf("postfix = %q, want %q — the object ended at a brace inside a value", got, want)
+	}
+}

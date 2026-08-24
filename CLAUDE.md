@@ -250,10 +250,26 @@ Host-specific notes:
   `kvssites.go` builds one extractor per known install, so each is matched
   and named like a hand-written host. Because a compiled-in list can only
   ever trail a platform sold to hundreds of sites, there are two escapes:
-  `HEAPLEACH_KVS_HOSTS` adds hosts at runtime, and `kvsSniff` — called from the
-  `Direct` fallback — recognises the `/videos/<id>/<slug>/` shape and tries
-  the page before treating it as a file. A page that turns out not to be one
-  falls through to what would have happened anyway.
+  the `kvs` family of `HEAPLEACH_EXTRA_HOSTS` adds installs at runtime (the
+  older `HEAPLEACH_KVS_HOSTS` still works and folds into that family), and
+  `kvsSniff` — called from the `Direct` fallback — recognises the
+  `/videos/<id>/<slug>/` shape and tries the page before treating it as a
+  file. A page that turns out not to be one falls through to what would have
+  happened anyway.
+
+  Installs vary more than one product suggests, and three differences have
+  each looked like working code. The flashvars object is **scanned** rather
+  than matched to a closing pattern: some installs put the brace on its own
+  line, others pack the object onto one line and close it with `};` behind
+  the last value, and a brace inside a quoted value must not end it early.
+  A member listing's section is **kept, not rewritten** — an unknown member
+  section is not a 404 here, it answers with a generic block of the site's
+  newest videos under the member's own URL, which reads as a listing and
+  downloads a stranger's work. And where an install pages the listing in
+  script, leaving "next" pointing at `#`, `kvsAsyncPage` asks for the block
+  directly; note that the `from` parameter this platform also accepts on a
+  member listing is *ignored*, handing back page one forever, so the walk
+  deduplicates and stops on a page that adds nothing either way.
 - **vimeo** goes through the embed player, and that single choice is what
   makes it work: `vimeo.com/<id>` answers a non-browser client with a bot
   check, the player's JSON config endpoint answers 403, and yt-dlp's own
@@ -589,8 +605,10 @@ directory the environment named, even when an argument overrides it.
 
 Download directory precedence: positional argument → `-dir` → `HEAPLEACH_DIR`.
 
-`HEAPLEACH_KVS_HOSTS` is the one setting that names hosts rather than tuning
-behaviour, for the reason above: the KVS host list rots faster than releases.
+`HEAPLEACH_EXTRA_HOSTS` is the one setting that names hosts rather than
+tuning behaviour, for the reason above: these platform host lists rot faster
+than releases. It reads `family:host,host;family:host`, and the older
+`HEAPLEACH_KVS_HOSTS` is still honoured as the `kvs` family.
 
 `main.go` calls `net.Listen` itself rather than `srv.ListenAndServe`, so an
 address of `:0` can be resolved to the port the kernel actually assigned and

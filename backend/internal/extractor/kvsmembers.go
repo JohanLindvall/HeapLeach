@@ -41,10 +41,22 @@ import (
 // ordinary a URL shape to spend a request on for every unrecognised site,
 // where /videos/<id>/<slug>/ is specific enough to be worth the guess.
 
-// kvsMemberSection is the listing this fetches. A profile has several —
-// favourites, albums, friends — and only a member's own public videos are
+// kvsMemberSection is the listing this falls back to. A profile has several
+// — favourites, albums, friends — and only a member's own videos are
 // unambiguously theirs and reachable without an account.
 const kvsMemberSection = "public_videos"
+
+// kvsMemberSections are the names installs give that same listing. Which one
+// exists varies, and guessing wrong is not a 404: this platform answers an
+// unknown member section with a generic block of the site's newest videos,
+// served under the member's own URL. That reads as a perfectly good listing
+// and quietly downloads somebody else's work, so a section the caller
+// actually named is kept rather than rewritten.
+var kvsMemberSections = map[string]bool{
+	"public_videos":   true,
+	"videos":          true,
+	"uploaded_videos": true,
+}
 
 // kvsShowingTotal reads the "Showing 49 - 64 of 64 videos" line, which is how
 // the listing states how far it goes.
@@ -65,7 +77,11 @@ func kvsMemberPath(u *url.URL) (listing string, ok bool) {
 	if _, err := strconv.Atoi(segs[1]); err != nil {
 		return "", false
 	}
-	return fmt.Sprintf("%s/members/%s/%s/", util.Origin(u), segs[1], kvsMemberSection), true
+	section := kvsMemberSection
+	if len(segs) >= 3 && kvsMemberSections[strings.ToLower(segs[2])] {
+		section = strings.ToLower(segs[2])
+	}
+	return fmt.Sprintf("%s/members/%s/%s/", util.Origin(u), segs[1], section), true
 }
 
 // kvsMember resolves a profile into one file per public video.
@@ -109,6 +125,7 @@ func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label st
 		seen    = make(map[string]bool)
 		visited = make(map[string]bool)
 		target  = listing
+		block   string
 	)
 
 	for page := 1; page <= config.MaxAlbumPages && target != ""; page++ {
@@ -157,6 +174,12 @@ func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label st
 		// on the last one. That is the stop condition; everything above is
 		// a guard against a listing that misreports itself.
 		target = kvsNextPage(root, listing)
+		if target == "" {
+			if page == 1 {
+				block = kvsListingBlock(root)
+			}
+			target = kvsAsyncPage(listing, block, page+1)
+		}
 	}
 	return pages, title, nil
 }
@@ -181,6 +204,34 @@ func kvsNextPage(root *html.Node, base string) string {
 		return resolveRef(baseURL, attr(a, "href"))
 	}
 	return ""
+}
+
+// kvsListingBlock reads the id of the list block a page renders, which is
+// what an async page request has to name.
+func kvsListingBlock(root *html.Node) string {
+	n := findFirst(root, func(n *html.Node) bool { return attr(n, "data-block-id") != "" })
+	if n == nil {
+		return ""
+	}
+	return attr(n, "data-block-id")
+}
+
+// kvsAsyncPage builds the listing's own async page request, for installs
+// that page the member listing entirely in script and leave the "next"
+// control pointing at "#" — there is no anchor to follow on those.
+//
+// Note what this is not. The same platform takes a ?from=<n> on a member
+// listing and ignores it, handing back page one every time; a walk built on
+// that collects the first page over and over and stops thinking it is done.
+// The parameter that actually pages is named for the block it pages. The
+// walk deduplicates and stops on a page that adds nothing either way, so an
+// install that ignores this one as well ends the walk rather than looping.
+func kvsAsyncPage(listing, block string, page int) string {
+	if block == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s?mode=async&function=get_block&block_id=%s&from_videos=%d",
+		listing, url.QueryEscape(block), page)
 }
 
 // kvsListingVideos reads the video pages a listing links to.
