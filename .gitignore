@@ -13,7 +13,6 @@ backend/internal/webui/dist/*
 *live_test.go
 
 # Personal working notes, not part of the project.
-CLAUDE.md
 
 # Release archives from `make dist`.
 /dist/
