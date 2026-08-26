@@ -164,3 +164,49 @@ func mustParse(t *testing.T, raw string) *url.URL {
 	}
 	return u
 }
+
+// Retrying must ask the tools package to look again.
+//
+// The commonest reason a job fails with no items at all is a helper binary
+// that was not installed, and being told so is what sends someone off to
+// install it. `tools.Find` caches its misses, so without this the running
+// service goes on insisting the tool is absent however often the user
+// retries — which is precisely the moment they expect it to have noticed.
+func TestRetryRechecksTools(t *testing.T) {
+	var rechecks int
+	original := recheckTools
+	recheckTools = func() { rechecks++ }
+	t.Cleanup(func() { recheckTools = original })
+
+	item := &Item{ID: "item", Status: StatusFailed}
+	m := &Manager{jobs: map[string]*Job{
+		"job": {ID: "job", Items: []*Item{item}},
+	}}
+
+	if err := m.RetryJob("job"); err != nil {
+		t.Fatalf("RetryJob: %v", err)
+	}
+	if rechecks != 1 {
+		t.Errorf("RetryJob asked for %d rechecks, want 1", rechecks)
+	}
+
+	// A queued item refuses a second retry, so put it back where it was.
+	item.Status = StatusFailed
+	if err := m.RetryItem("job", "item"); err != nil {
+		t.Fatalf("RetryItem: %v", err)
+	}
+	if rechecks != 2 {
+		t.Errorf("RetryItem did not ask for a recheck (total %d, want 2)", rechecks)
+	}
+
+	// The recheck comes before the job is even looked up, which is what
+	// keeps it out of the way of the branch that follows: a job with no
+	// items re-runs its extractor instead of requeueing anything, and that
+	// is the very case a missing helper produces.
+	if err := m.RetryJob("gone"); err != ErrNotFound {
+		t.Fatalf("RetryJob on an unknown id = %v, want ErrNotFound", err)
+	}
+	if rechecks != 3 {
+		t.Errorf("a retry that found no job skipped the recheck (total %d, want 3)", rechecks)
+	}
+}

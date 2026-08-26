@@ -28,7 +28,9 @@ var (
 )
 
 // Find returns the path to a named tool, preferring one installed alongside
-// the running binary. The result is cached: these do not appear mid-run.
+// the running binary. The answer is cached, misses included, so a job that
+// needs a tool nobody has installed does not walk PATH once per file.
+// Recheck drops the misses when that assumption stops holding.
 func Find(name string) (string, bool) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -46,6 +48,25 @@ func Reset() {
 	mu.Lock()
 	defer mu.Unlock()
 	resolved = map[string]string{}
+}
+
+// Recheck forgets the tools that were not found, so the next Find looks for
+// them again.
+//
+// A miss is the one cached answer that goes stale: being told a helper is
+// missing is exactly what sends someone off to install it, and until now the
+// running service went on insisting it was absent. Retrying is when they
+// expect that to have been noticed, so that is where this is called from.
+// What was found stays found — a path that resolved once does not stop
+// existing, and re-walking PATH for it would buy nothing.
+func Recheck() {
+	mu.Lock()
+	defer mu.Unlock()
+	for name, path := range resolved {
+		if path == "" {
+			delete(resolved, name)
+		}
+	}
 }
 
 func locate(name string) string {

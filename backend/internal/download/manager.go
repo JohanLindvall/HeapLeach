@@ -17,6 +17,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/tools"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
@@ -468,6 +469,8 @@ func cancelItemLocked(it *Item) {
 // RetryJob requeues every failed or cancelled item, re-resolving the source
 // first when the job never produced any items.
 func (m *Manager) RetryJob(id string) error {
+	recheckTools()
+
 	m.mu.Lock()
 	job, ok := m.jobs[id]
 	if !ok {
@@ -505,6 +508,8 @@ func (m *Manager) RetryJob(id string) error {
 
 // RetryItem requeues a single file.
 func (m *Manager) RetryItem(jobID, itemID string) error {
+	recheckTools()
+
 	m.mu.Lock()
 	it, ok := m.findItemLocked(jobID, itemID)
 	if !ok {
@@ -525,6 +530,14 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	m.signal()
 	return nil
 }
+
+// recheckTools is tools.Recheck, kept behind a variable so tests can observe
+// it. A retry is a user saying "try that again", and the commonest reason a
+// job failed outright is a helper binary that was not installed — so it is
+// also the moment to stop believing that it still is not. Called before the
+// lock: the tools package guards itself, and there is no reason to hold mu
+// across it.
+var recheckTools = tools.Recheck
 
 // enqueueLocked returns an item to the queue for a fresh attempt. An item a
 // worker still owns is only marked: that worker re-queues it as it exits, so

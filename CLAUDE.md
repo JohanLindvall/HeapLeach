@@ -451,7 +451,13 @@ survives completion, because `runItem` clears notes when an item finishes.
 **External transfers** (`external.go`, `internal/tools`) cover pages where
 reaching the media needs more than HTTP. `tools.Find` resolves a helper
 binary next to the running executable before falling back to PATH, which is
-what makes `make dependencies` work without a system install. The download
+what makes `make dependencies` work without a system install. It caches
+misses as firmly as hits, so `RetryJob` and `RetryItem` call `tools.Recheck`
+first: being told a helper is missing is what sends someone off to install
+it, and a service that went on insisting it was absent turned a working
+install into a puzzle. Hits are kept — a path that resolved once does not
+stop existing. Note that a *newly added* job still meets the cached miss;
+only retrying looks again. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal
 item state. Two things to know: `--print` implies `--quiet` in yt-dlp, so
