@@ -20,6 +20,10 @@ const (
 	YtDlp   = "yt-dlp"
 	FFmpeg  = "ffmpeg"
 	FFprobe = "ffprobe"
+	// Deno runs the player JavaScript YouTube signs its media URLs with.
+	// yt-dlp looks for it on PATH by itself; naming it here is what lets a
+	// copy next to the binary be found too, the way the others are.
+	Deno = "deno"
 )
 
 var (

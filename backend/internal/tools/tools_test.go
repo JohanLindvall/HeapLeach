@@ -3,6 +3,7 @@ package tools
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -187,5 +188,53 @@ func TestYouTubeScriptPrefersAnInstalledCopy(t *testing.T) {
 	defer cleanup()
 	if path != "/opt/heapleach/"+ScriptName {
 		t.Errorf("an installed copy must win over the embedded one, got %q", path)
+	}
+}
+
+// The script turns DENO into the flag yt-dlp wants, and asks for nothing
+// when there is no runtime to point at.
+//
+// yt-dlp finds deno on PATH unaided, so this only matters for the copy the
+// service keeps next to its binary — which is the copy `make dependencies`
+// installs, and the one PATH does not reach.
+func TestDownloadScriptPassesOnAJSRuntime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the download helper is a shell script")
+	}
+	dir := t.TempDir()
+
+	// A stand-in for yt-dlp that reports the arguments it was handed.
+	ytdlp := filepath.Join(dir, "yt-dlp-stub")
+	stub := "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n"
+	if err := os.WriteFile(ytdlp, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	script := filepath.Join(dir, ScriptName)
+	if err := os.WriteFile(script, ytDownloadScript, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// A bare environment: an inherited DENO or FFMPEG would decide the
+	// answer before the test did.
+	run := func(extra ...string) string {
+		t.Helper()
+		cmd := exec.Command(script, "https://example.test/watch", dir)
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "YTDLP=" + ytdlp}, extra...)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("running the helper: %v", err)
+		}
+		return string(out)
+	}
+
+	if got := run(); strings.Contains(got, "--js-runtimes") {
+		t.Errorf("nothing to point at, but the script asked for a runtime anyway:\n%s", got)
+	}
+
+	deno := filepath.Join(dir, "deno")
+	got := run("DENO=" + deno)
+	if !strings.Contains(got, "--js-runtimes") || !strings.Contains(got, "deno:"+deno) {
+		t.Errorf("DENO was set, but the script did not pass it on:\n%s", got)
 	}
 }

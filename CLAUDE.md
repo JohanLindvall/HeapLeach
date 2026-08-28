@@ -460,10 +460,15 @@ stop existing. Note that a *newly added* job still meets the cached miss;
 only retrying looks again. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal
-item state. Two things to know: `--print` implies `--quiet` in yt-dlp, so
-`--progress` is required or no progress is emitted at all; and cancelling
+item state. Three things to know: `--print` implies `--quiet` in yt-dlp, so
+`--progress` is required or no progress is emitted at all; cancelling
 must kill the whole process group, since the script spawns yt-dlp which
-spawns ffmpeg.
+spawns ffmpeg; and `DENO` is passed by path rather than left to be found,
+because yt-dlp looks for a JavaScript runtime on PATH and `./bin` is exactly
+where PATH does not reach. Extraction still works without one, but yt-dlp
+calls that deprecated and warns that formats may be missing — measured on an
+ordinary video it made no difference to the format list, so this is
+insurance against the deprecation rather than a fix for anything visible.
 
 **Playlist transfers** (`playlist.go`, plus `hls.go` in the extractor
 package) handle files that arrive as an ordered list of parts rather than

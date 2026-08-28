@@ -39,18 +39,23 @@ UI_SOURCES := $(shell find frontend -type f \
 BUILD_SOURCES := $(GO_SOURCES) $(UI_SOURCES) Dockerfile
 
 # Optional helpers the service uses when present: yt-dlp resolves YouTube,
-# ffmpeg rewraps and muxes. `make dependencies` puts static builds in ./bin,
-# where the service looks before falling back to PATH.
+# ffmpeg rewraps and muxes, and deno runs the player JavaScript YouTube signs
+# its media URLs with — yt-dlp has deprecated extracting without a runtime.
+# `make dependencies` puts static builds in ./bin, where the service looks
+# before falling back to PATH.
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_M),aarch64)
 YTDLP_ASSET  := yt-dlp_linux_aarch64
 FFMPEG_ASSET := ffmpeg-master-latest-linuxarm64-gpl.tar.xz
+DENO_ASSET   := deno-aarch64-unknown-linux-gnu.zip
 else
 YTDLP_ASSET  := yt-dlp_linux
 FFMPEG_ASSET := ffmpeg-master-latest-linux64-gpl.tar.xz
+DENO_ASSET   := deno-x86_64-unknown-linux-gnu.zip
 endif
 YTDLP_URL  := https://github.com/yt-dlp/yt-dlp/releases/latest/download/$(YTDLP_ASSET)
 FFMPEG_URL := https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$(FFMPEG_ASSET)
+DENO_URL   := https://github.com/denoland/deno/releases/latest/download/$(DENO_ASSET)
 NODE_IMAGE := node:24-alpine
 UID_GID   := $(shell id -u):$(shell id -g)
 
@@ -194,7 +199,7 @@ else
 endif
 	@echo ">> UI built into $(DIST)"
 
-## dependencies: fetch static yt-dlp and ffmpeg into ./bin for the service
+## dependencies: fetch static yt-dlp, ffmpeg and deno into ./bin for the service
 dependencies: $(BIN_DIR)
 	@echo ">> yt-dlp  ($(YTDLP_ASSET))"
 	@curl -fsSL --retry 3 -o "$(BIN_DIR)/yt-dlp.tmp" "$(YTDLP_URL)"
@@ -207,8 +212,21 @@ dependencies: $(BIN_DIR)
 	  mv "$$tmp/ffmpeg" "$$tmp/ffprobe" "$(BIN_DIR)/" && \
 	  rm -rf "$$tmp"
 	@chmod +x "$(BIN_DIR)/ffmpeg" "$(BIN_DIR)/ffprobe"
+	@echo ">> deno    ($(DENO_ASSET))"
+	@# deno publishes zips and nothing else, so this one step needs unzip
+	@# where the others get by on tar. Say so rather than failing inside a
+	@# pipeline that has already downloaded 40MB.
+	@command -v unzip >/dev/null 2>&1 || { \
+	  echo "unzip is required to unpack deno; install it and re-run" >&2; exit 1; }
+	@tmp=$$(mktemp -d) && \
+	  curl -fsSL --retry 3 -o "$$tmp/deno.zip" "$(DENO_URL)" && \
+	  unzip -oq "$$tmp/deno.zip" -d "$$tmp" && \
+	  mv "$$tmp/deno" "$(BIN_DIR)/" && \
+	  rm -rf "$$tmp"
+	@chmod +x "$(BIN_DIR)/deno"
 	@printf '   yt-dlp %s\n' "$$($(BIN_DIR)/yt-dlp --version 2>/dev/null)"
 	@$(BIN_DIR)/ffmpeg -version 2>/dev/null | head -1 | sed 's/^/   /'
+	@$(BIN_DIR)/deno --version 2>/dev/null | head -1 | sed 's/^/   /'
 	@echo ">> ready in $(BIN_DIR)/ — the service prefers these over PATH"
 
 ## lock: generate frontend/package-lock.json (reproducible installs)

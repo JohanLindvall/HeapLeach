@@ -12,6 +12,7 @@
 # Environment:
 #   YTDLP   path to yt-dlp                 (default: yt-dlp from PATH)
 #   FFMPEG  path to ffmpeg                 (optional; enables merging)
+#   DENO    path to a deno binary          (optional; runs the player JS)
 #
 # Lines the service reads back from stdout:
 #   PROGRESS <downloaded-bytes> <total-bytes>
@@ -57,6 +58,13 @@ args=(
 )
 if [ -n "${FFMPEG:-}" ]; then
   args+=(--ffmpeg-location "$FFMPEG")
+fi
+# yt-dlp looks for deno on PATH unaided; this is for the copy next to the
+# binary, which is where the service keeps its helpers and PATH does not
+# reach. Without a runtime it still extracts, for now, but says it is
+# deprecated and that formats may be missing.
+if [ -n "${DENO:-}" ]; then
+  args+=(--js-runtimes "deno:$DENO")
 fi
 
 exec "$ytdlp" "${args[@]}" "$url"

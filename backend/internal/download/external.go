@@ -50,6 +50,14 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	if ffmpeg, ok := tools.Find(tools.FFmpeg); ok {
 		cmd.Env = append(cmd.Env, "FFMPEG="+ffmpeg)
 	}
+	// So is a JavaScript runtime, but less so every month: YouTube signs its
+	// media URLs from player code that has to be run to be answered, and
+	// yt-dlp has deprecated extracting without one. It finds deno on PATH by
+	// itself; passing a path is what reaches a copy sitting next to the
+	// binary, where `make dependencies` puts it.
+	if deno, ok := tools.Find(tools.Deno); ok {
+		cmd.Env = append(cmd.Env, "DENO="+deno)
+	}
 	// The helper spawns yt-dlp, which spawns ffmpeg; cancelling has to take
 	// the whole group down, not just the script.
 	setProcessGroup(cmd)

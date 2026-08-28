@@ -442,14 +442,19 @@ listed as supported and quietly broken.
 
 YouTube — and every host marked "Needs `make dependencies`" above — is
 fetched by `yt-dlp`. `ffmpeg` rewraps any finished `.ts` as `.mp4` and lets
-yt-dlp merge separate video and audio tracks. Everything else needs neither.
+yt-dlp merge separate video and audio tracks. `deno` runs the player
+JavaScript YouTube signs its media URLs with: yt-dlp still extracts without
+a runtime, but warns that doing so is deprecated and that formats may be
+missing. Everything else needs none of them.
 
 ```bash
-make dependencies    # static yt-dlp + ffmpeg into ./bin
+make dependencies    # static yt-dlp + ffmpeg + deno into ./bin
 ```
 
 The service looks for these **next to the heapleach binary first**, then on
 PATH — so the copies in `./bin` are picked up without touching the system.
+That is also why deno is passed to the helper by path: yt-dlp finds one on
+PATH by itself, and `./bin` is the place it would not look.
 
 The YouTube download itself runs through `yt-download.sh` rather than inline
 Go, so the recipe is in one readable place. A copy of that script placed
@@ -597,7 +602,7 @@ flowchart TD
 
     download --> tools
     extractor --> tools
-    tools["tools<br>locates yt-dlp and ffmpeg"]
+    tools["tools<br>locates yt-dlp, ffmpeg and deno"]
     base["config · util<br>every tunable, and the dependency-free helpers"]
 ```
 
@@ -631,7 +636,7 @@ backend/
   internal/config/  settings and every shared tunable constant
   internal/util/    shared helpers (no dependencies)
   internal/httpx/   HTTP client: browser headers, redirects, retry/backoff
-  internal/tools/   locates the optional yt-dlp and ffmpeg
+  internal/tools/   locates the optional yt-dlp, ffmpeg and deno
   internal/extractor/  one file per host + a direct-link fallback
   internal/download/   worker pool, resumable transfers, progress
   internal/server/     JSON API, SSE, embedded-asset serving
