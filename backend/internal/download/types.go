@@ -127,6 +127,13 @@ type Job struct {
 	// status derived from the items.
 	canceled bool
 	cancel   context.CancelFunc
+	// restored marks a job read back from the state file with work left in
+	// it. Its items describe what was found last time, which is enough to
+	// show but not to fetch: the links they were reached by have expired, or
+	// were never written down at all because a resolver mints them per
+	// attempt. So the source is read again before anything is transferred,
+	// and the part files on disk supply the bytes already fetched.
+	restored bool
 }
 
 // ItemView is the JSON shape of an item sent to the browser.

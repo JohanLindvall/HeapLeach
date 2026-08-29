@@ -68,6 +68,18 @@ func run() error {
 	registry := extractor.NewRegistry(cfg, client)
 
 	manager := download.New(cfg, registry, client, log)
+	// Before Start, so the restored queue is in place by the time anything
+	// can look at it. Nothing is fetched here: whatever was unfinished comes
+	// back held, and the queue is paused so it stays that way until asked.
+	// A part file on disk is what makes the bytes resumable; this is what
+	// makes the list of them survive.
+	if unfinished, err := manager.Restore(); err != nil {
+		log.Warn("could not read the saved queue", "err", err)
+	} else if unfinished > 0 {
+		manager.SetPaused(true)
+		log.Info("restored an unfinished queue, held until resumed",
+			"jobs", unfinished, "file", cfg.StateFile)
+	}
 	manager.Start()
 	// Close is idempotent; this covers the error paths below.
 	defer manager.Close()

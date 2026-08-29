@@ -31,8 +31,17 @@ const (
 
 // Config is the resolved runtime configuration.
 type Config struct {
-	Addr         string
-	DownloadDir  string
+	Addr        string
+	DownloadDir string
+	// StateFile is where the queue is written so a restart can pick it up
+	// again. Empty disables the whole mechanism, which is what a run given
+	// URLs on the command line wants: it downloads and exits, and has no
+	// queue worth outliving it.
+	//
+	// Deliberately not under DownloadDir: that moves while the service runs,
+	// and state that followed it would be split across every destination
+	// ever used.
+	StateFile    string
 	Concurrency  int
 	UserAgent    string
 	Language     string
@@ -85,6 +94,7 @@ func FromEnv() (*Config, error) {
 	c := &Config{
 		Addr:           env("ADDR", ":8080"),
 		DownloadDir:    env("DIR", defaultDir()),
+		StateFile:      env("STATE", defaultStateFile()),
 		Concurrency:    DefaultConcurrency,
 		UserAgent:      env("USER_AGENT", DefaultUserAgent),
 		Language:       env("LANGUAGE", DefaultLanguage),
@@ -187,6 +197,12 @@ func PrepareDir(path string) (string, error) {
 // directory usable, failing fast rather than letting every transfer discover
 // the same problem separately.
 func (c *Config) Prepare() error {
+	// URLs on the command line mean download these and quit. There is no
+	// queue to outlive the process, and writing one would leave a service
+	// started later picking up a list the user thought was long finished.
+	if len(c.URLs) > 0 {
+		c.StateFile = ""
+	}
 	if c.Concurrency < 1 || c.Concurrency > MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 1 and %d, got %d", MaxConcurrency, c.Concurrency)
 	}
@@ -267,6 +283,27 @@ func defaultDir() string {
 	}
 	// No home directory at all: the working directory beats nothing.
 	return "downloads"
+}
+
+// defaultStateFile is where the queue is remembered between runs.
+//
+// XDG_STATE_HOME is the right shelf for it by the specification's own
+// description — state that should persist between restarts but is not
+// precious enough to be config or data. Windows and macOS have no such
+// convention worth honouring here, so both get the same place under the home
+// directory rather than a platform tour for one small file.
+func defaultStateFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		// Nowhere to remember anything: the queue simply does not outlive
+		// the process, which is what happened before it could.
+		return ""
+	}
+	base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
+	if base == "" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		base = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(base, "heapleach", "queue.json")
 }
 
 // userDownloadDir resolves the platform's download folder.

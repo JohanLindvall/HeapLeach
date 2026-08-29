@@ -28,6 +28,15 @@ const (
 	// Fast enough to feel live, slow enough to stay cheap with many items.
 	ProgressTick = 400 * time.Millisecond
 
+	// StateSaveInterval is how often the queue is written out. Slow on
+	// purpose: the file records what each item is and how it ended, never
+	// how many bytes it has moved, so between one status change and the next
+	// there is nothing new to write. A crash loses at most the statuses that
+	// changed inside one interval, and the part files on disk — which are
+	// what actually make a transfer resumable — are not written by this at
+	// all.
+	StateSaveInterval = 10 * time.Second
+
 	// DiskSampleInterval is how often the destination's free space is
 	// measured. Far slower than the progress tick on purpose: it is a
 	// syscall against a filesystem that may well be a network mount, and

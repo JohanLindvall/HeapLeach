@@ -87,6 +87,12 @@ type Manager struct {
 	subs      map[chan []byte]struct{}
 	closeOnce sync.Once
 
+	// Where the queue is written so a restart can pick it up again, and the
+	// fingerprint of what was last written — an idle queue is not worth
+	// rewriting every interval. Both belong to the saver goroutine alone.
+	stateFile  string
+	statePrint uint64
+
 	// dirty records a state change worth pushing to subscribers even though
 	// nothing is transferring. It is taken rather than peeked at and cleared
 	// separately, so a change landing while a snapshot is being built sets
@@ -106,6 +112,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		parts:      make(map[string]struct{}),
 		hostActive: make(map[string]int),
 		dir:        cfg.DownloadDir,
+		stateFile:  cfg.StateFile,
 		throttle:   newThrottle(cfg.SpeedLimit),
 		limit:      cfg.Concurrency,
 		streams:    cfg.Streams,
@@ -125,9 +132,10 @@ func (m *Manager) Start() {
 	// full disk until the first sample landed.
 	m.sampleDisk(time.Now())
 
-	m.wg.Add(2)
+	m.wg.Add(3)
 	go m.dispatch()
 	go m.broadcast()
+	go m.saver()
 }
 
 // Close cancels every in-flight transfer, waits for the workers to exit and
@@ -135,6 +143,20 @@ func (m *Manager) Start() {
 // can both defer it and call it explicitly at the right moment.
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
+		// Before the cancellation, not after it. Stopping cancels every
+		// transfer in flight, and a worker winding down marks its item
+		// canceled — which is indistinguishable, once written, from an item
+		// the user cancelled on purpose, and would restore as nothing left
+		// to do. Recorded here they are still running, which the state file
+		// writes down as queued: the honest description of a transfer the
+		// process did not live to finish.
+		//
+		// The cost is that a file completing during the wind-down is
+		// recorded as queued instead of done. That resolves itself — the
+		// next run finds it whole on disk and skips it — where the other way
+		// round silently abandons an unfinished download.
+		m.persist()
+
 		m.stop()
 		m.wg.Wait()
 
@@ -491,6 +513,14 @@ func (m *Manager) RetryJob(id string) error {
 		return ErrNotFound
 	}
 	job.canceled = false
+	// A restored job is re-read rather than re-queued, for the same reason
+	// resuming the whole queue re-reads it: its items are last run's record,
+	// not somewhere the files can be fetched from. Dropping them puts it on
+	// the path below that resolves a job with nothing in it.
+	if job.restored {
+		job.restored = false
+		job.Items = nil
+	}
 
 	if len(job.Items) == 0 {
 		// The extractor itself failed; run it again.
@@ -738,9 +768,56 @@ func (m *Manager) SetDownloadDir(path string) error {
 func (m *Manager) SetPaused(paused bool) {
 	m.throttle.setPaused(paused)
 	if !paused {
+		// Releasing the queue is the word a restored job was waiting for.
+		m.resumeRestored()
 		// Workers freed while paused left the queue untouched.
 		m.signal()
 	}
+	m.markDirty()
+}
+
+// resumeRestored sets going every job that came back from the state file
+// with work left in it.
+//
+// Their items are dropped rather than queued. What was read back describes
+// what the last run found, which is worth showing and useless to fetch from:
+// the links are expired or were never written down. Resolution builds the
+// real list, and the files already on disk are skipped as it goes — so the
+// job picks up where it left off without this having to work out where that
+// was.
+func (m *Manager) resumeRestored() {
+	type pending struct {
+		job *Job
+		ctx context.Context
+	}
+
+	m.mu.Lock()
+	var starting []pending
+	for _, id := range m.order {
+		job, ok := m.jobs[id]
+		if !ok || !job.restored {
+			continue
+		}
+		job.restored = false
+		job.Err = ""
+		job.canceled = false
+		job.Items = nil
+		job.resolving = true
+
+		ctx, cancel := context.WithCancel(m.ctx)
+		job.cancel = cancel
+		starting = append(starting, pending{job: job, ctx: ctx})
+	}
+	m.mu.Unlock()
+
+	if len(starting) == 0 {
+		return
+	}
+	for _, p := range starting {
+		m.wg.Add(1)
+		go m.resolve(p.ctx, p.job)
+	}
+	m.log.Info("resuming restored jobs", "jobs", len(starting))
 	m.markDirty()
 }
 

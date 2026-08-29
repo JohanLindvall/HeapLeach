@@ -151,6 +151,25 @@ It is created if missing, `~` is expanded, and the process refuses to start
 if the directory cannot be written to — so a permission problem surfaces
 once, up front, instead of as a wall of failed transfers.
 
+The queue itself is remembered between runs, in
+`~/.local/state/heapleach/queue.json` (`XDG_STATE_HOME` is honoured, and
+`HEAPLEACH_STATE` overrides both). Restarting brings back the list, and
+anything unfinished comes back **held** rather than running: press resume, or
+retry the one job you want, and it picks up from the part files already on
+disk. Nothing is fetched until you say so, so a machine that reboots at
+3 a.m. does not start saturating the line on its own.
+
+An unfinished job is read from its source again rather than replayed. That is
+not caution but necessity: several hosts sign their media links for twenty
+minutes or so, and the ones that do carry no link at all until it is minted
+per attempt, so a stored URL would be a dead one. Re-reading gives fresh
+links, files already complete are skipped, and part-finished ones resume.
+
+The file is written with mode `0600`, because it lists everything you are
+downloading and carries the password for any source that needed one. Given
+URLs on the command line the whole mechanism is off: that mode downloads and
+exits, and has no queue worth outliving it.
+
 The UI shows what is left on that filesystem beside the path, and says it in
 red once a tenth or less remains: a queue can be larger than the room for it,
 and the useful moment to notice is before the last block goes rather than

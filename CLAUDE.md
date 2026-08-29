@@ -440,6 +440,32 @@ Three consequences worth keeping in mind:
 - A nil `*throttle` is valid and inert (unlimited, never paused). The tests
   build `&Manager{}` by hand, and that has to keep working.
 
+**The queue outlives the process** (`persist.go`, `state.go`). Written every
+`config.StateSaveInterval`, atomically and 0600, and skipped entirely when
+nothing but byte counters has moved — the fingerprint covers identities and
+statuses, never progress, because the part file on disk is the authority on
+how far a transfer got.
+
+Three things here were each got wrong first:
+
+- **No item URL is stored.** Signed links expire in minutes, and a `Resolve`
+  host has no URL until one is minted — it is a closure, which no file holds.
+  So `Restore` marks an unfinished job `restored` and its source is read
+  again on resume; `alreadyOnDisk` skips what is complete and the part files
+  carry the rest.
+- **Resolution appends to `job.Items`**, so a restored job's items must be
+  dropped before it is re-read or every file in it doubles. Both `SetPaused`
+  (resuming) and `RetryJob` clear them, and
+  `TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem` holds that
+  in place.
+- **`Close` persists before `stop()`, not after `wg.Wait()`.** Stopping
+  cancels every transfer, and a worker winding down marks its item cancelled
+  — which restores as a job with nothing left to do, silently abandoning the
+  download. Recorded before the cancellation they are still running, which is
+  written down as queued. The cost is that a file completing during the
+  wind-down is recorded queued and re-checked next run, which is the
+  harmless direction.
+
 **Free space** is sampled on its own cadence (`config.DiskSampleInterval`,
 seconds rather than the progress tick's milliseconds) and never under `mu`:
 `Statfs` is a syscall and the destination may be a network mount, so it obeys
