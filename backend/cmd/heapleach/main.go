@@ -69,15 +69,16 @@ func run() error {
 
 	manager := download.New(cfg, registry, client, log)
 	// Before Start, so the restored queue is in place by the time anything
-	// can look at it. Nothing is fetched here: whatever was unfinished comes
-	// back held, and the queue is paused so it stays that way until asked.
-	// A part file on disk is what makes the bytes resumable; this is what
-	// makes the list of them survive.
+	// can look at it. Nothing is fetched here, and nothing restored is
+	// queued, so unfinished work waits for a retry without the whole queue
+	// having to be held to achieve it — a global pause would stop the next
+	// thing the user adds just as effectively, which is not what "resume on
+	// your say-so" was meant to buy. A part file on disk is what makes the
+	// bytes resumable; this is what makes the list of them survive.
 	if unfinished, err := manager.Restore(); err != nil {
 		log.Warn("could not read the saved queue", "err", err)
 	} else if unfinished > 0 {
-		manager.SetPaused(true)
-		log.Info("restored an unfinished queue, held until resumed",
+		log.Info("restored an unfinished queue, held until retried",
 			"jobs", unfinished, "file", cfg.StateFile)
 	}
 	manager.Start()

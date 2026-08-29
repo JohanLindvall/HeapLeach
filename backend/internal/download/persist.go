@@ -66,6 +66,15 @@ func (m *Manager) Restore() (unfinished int, err error) {
 		if jobHasWorkLeft(job) {
 			job.restored = true
 			unfinished++
+			// Without this the items read as "queued", which is what an item
+			// about to start says — and these are waiting on a person, not on
+			// a worker. Note is exactly the field for a wait that the numbers
+			// cannot explain, and the UI already shows it.
+			for _, it := range job.Items {
+				if it.Status != StatusDone && it.Status != StatusCanceled {
+					it.Note = "held since the last run — retry this job to pick it up"
+				}
+			}
 		}
 		m.jobs[job.ID] = job
 		m.order = append(m.order, job.ID)

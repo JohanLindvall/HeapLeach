@@ -393,3 +393,72 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 		t.Errorf("unfinished = %d, want 1 — the interrupted download was abandoned", unfinished)
 	}
 }
+
+// Restoring must not stop the next thing the user adds.
+//
+// The first cut of this held unfinished work by pausing the whole queue,
+// which also held every job added afterwards: the service came back, a fresh
+// URL was submitted, and it sat at "queued" forever with nothing to explain
+// why. Restored items are not put in the dispatch queue at all, so they are
+// already held on their own account, and the pause bought nothing for it.
+func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("data"))
+	}))
+	defer server.Close()
+
+	// A state file holding one unfinished job.
+	file := filepath.Join(t.TempDir(), "queue.json")
+	seed := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	seed.jobs["old"] = &Job{
+		ID: "old", Source: "https://example.test/interrupted", Title: "interrupted",
+		Items: []*Item{{ID: "a", Name: "half.bin", Status: StatusQueued, Size: 500}},
+	}
+	seed.order = []string{"old"}
+	seed.persist()
+
+	m, _ := newTestManager(t)
+	m.stateFile = file
+	unfinished, err := m.Restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unfinished != 1 {
+		t.Fatalf("unfinished = %d, want 1", unfinished)
+	}
+	if m.Paused() {
+		t.Error("restoring paused the queue, which stops work the user adds next")
+	}
+
+	// The restored job says why it is sitting still, rather than looking
+	// like something about to start.
+	m.mu.Lock()
+	note := m.jobs["old"].Items[0].Note
+	m.mu.Unlock()
+	if note == "" {
+		t.Error("a held item explains nothing about why it is waiting")
+	}
+
+	// A job added now must run to completion regardless.
+	jobID, err := m.Add(server.URL+"/fresh.bin", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemID := waitForItem(t, m, jobID)
+	if !waitForCond(20*time.Second, func() bool {
+		return itemStatus(m, jobID, itemID) == StatusDone
+	}) {
+		t.Fatalf("a freshly added download never ran (status %q) — the restore is holding it",
+			itemStatus(m, jobID, itemID))
+	}
+
+	// And the restored one is still held, not quietly started.
+	m.mu.Lock()
+	restored := m.jobs["old"].restored
+	m.mu.Unlock()
+	if !restored {
+		t.Error("the restored job started on its own; it was meant to wait for a retry")
+	}
+}

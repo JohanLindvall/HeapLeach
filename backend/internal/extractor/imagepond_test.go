@@ -2,6 +2,7 @@ package extractor
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // A viewer page shaped like the site's, holding the two traps this extractor
@@ -308,4 +311,192 @@ func TestImagePondMatch(t *testing.T) {
 	if i.Match(other) {
 		t.Error("matched an unrelated host")
 	}
+}
+
+// An album listing shaped like the site's. The traps it holds are both real:
+// the card link is an Alpine expression rather than an href, and the video
+// card's thumbnail comes from the media host while the image cards' come
+// from a /i/<code>/thumb route — so nothing can key on the thumbnail to find
+// the item. The name sits in a <p> identified only by utility classes.
+const imagePondAlbumPage = `<!DOCTYPE html><html><head>
+<title>Holiday pictures - ImagePond</title>
+</head><body>
+<a href="https://www.imagepond.net/">home</a>
+<img src="https://media.imagepond.net/media/images/site-logo_aaa000.png" alt="logo">
+<h1>Holiday pictures</h1>
+<div class="group block relative" :class="manageMode ? 'cursor-pointer' : ''">
+  <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/voCUUYAj'"
+     @click="manageMode &amp;&amp; toggleImageSelection(2043960)" class="block">
+    <div class="aspect-square">
+      <img src="https://media.imagepond.net/media/videos/20260820_221249_TfNxuyl0_thumb.jpg" alt="">
+    </div>
+    <p class="mt-1.5 text-xs text-gray-400 truncate">20260820_221249.mp4</p>
+  </a>
+</div>
+<div class="group block relative">
+  <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/TSAehpVs'" class="block">
+    <div class="aspect-square">
+      <img src="https://www.imagepond.net/i/TSAehpVs/thumb/300" alt="">
+    </div>
+    <p class="mt-1.5 text-xs text-gray-400 truncate">Screenshot_20260827_093756_Chrome.jpg</p>
+  </a>
+</div>
+<div class="group block relative">
+  <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/TSAehpVs'" class="block">
+    <p class="truncate">Screenshot_20260827_093756_Chrome.jpg</p>
+  </a>
+</div>
+<a href="https://www.imagepond.net/a/OtherAlbum">another album</a>
+<a href="https://www.imagepond.net/i/TSAehpVs/direct">download</a>
+</body></html>`
+
+func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
+	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
+	root, err := parseHTML(imagePondAlbumPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files := imagePondAlbumFiles(root, base, func(page, code string) func(context.Context) (*Target, error) {
+		return func(context.Context) (*Target, error) { return &Target{URL: page + "#" + code}, nil }
+	})
+
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want 2 — the repeated card is one item, and the "+
+			"album link, the /direct link and the site furniture are none", len(files))
+	}
+	// Names come from the card, so the queue shows them before anything resolves.
+	if files[0].Name != "20260820_221249.mp4" {
+		t.Errorf("first name = %q", files[0].Name)
+	}
+	if files[1].Name != "Screenshot_20260827_093756_Chrome.jpg" {
+		t.Errorf("second name = %q", files[1].Name)
+	}
+	// No URL up front: the media address is a fetch further on.
+	for _, f := range files {
+		if f.URL != "" {
+			t.Errorf("%s carries a URL before resolving: %q", f.Name, f.URL)
+		}
+		if f.Resolve == nil {
+			t.Errorf("%s has no resolver", f.Name)
+		}
+	}
+	// And the resolver is pointed at the item page, not the album.
+	target, err := files[0].Resolve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.URL != "https://www.imagepond.net/i/voCUUYAj#voCUUYAj" {
+		t.Errorf("resolver aimed at %q", target.URL)
+	}
+}
+
+func TestImagePondCardLinkReadsTheAlpineExpression(t *testing.T) {
+	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
+	cases := []struct {
+		name, markup, want string
+	}{
+		{
+			"the ternary's item operand wins over the javascript one",
+			`<a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/abc123'">x</a>`,
+			"https://www.imagepond.net/i/abc123",
+		},
+		{
+			"a plain href still works",
+			`<a href="https://www.imagepond.net/i/abc123">x</a>`,
+			"https://www.imagepond.net/i/abc123",
+		},
+		{
+			"a relative operand resolves against the album",
+			`<a :href="m ? 'javascript:void(0)' : '/i/abc123'">x</a>`,
+			"https://www.imagepond.net/i/abc123",
+		},
+		{
+			"the download route is not an item page",
+			`<a href="https://www.imagepond.net/i/abc123/direct">x</a>`,
+			"",
+		},
+		{
+			"another album is not an item",
+			`<a href="https://www.imagepond.net/a/Other">x</a>`,
+			"",
+		},
+		{
+			"a foreign host is not an item however shaped",
+			`<a href="https://elsewhere.test/i/abc123">x</a>`,
+			"",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := parseHTML("<html><body>" + tc.markup + "</body></html>")
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := findFirst(root, func(n *html.Node) bool { return isElem(n, atom.A) })
+			if a == nil {
+				t.Fatal("no anchor in the fixture")
+			}
+			if got := imagePondCardLink(a, base); got != tc.want {
+				t.Errorf("imagePondCardLink = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestImagePondAlbumEndToEnd(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/a/"):
+			_, _ = io.WriteString(w, imagePondAlbumPage)
+		case strings.HasPrefix(r.URL.Path, "/i/"):
+			_, _ = io.WriteString(w, imagePondVideoPage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// The fixture names the real host, so the album is fetched from the test
+	// server while its cards still point at imagepond.net; only the listing
+	// hop is under test here.
+	ip := NewImagePond(httpx.New("test/1.0", "en", 0, 10*time.Second))
+	res, err := ip.Extract(context.Background(), mustURL(t, server.URL+"/a/AXxfH2Fp"), Options{})
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if res.Title != "Holiday pictures" {
+		t.Errorf("title = %q, want the album's h1", res.Title)
+	}
+	if len(res.Files) != 2 {
+		t.Fatalf("got %d files, want 2", len(res.Files))
+	}
+	// One fetch for the whole listing: the per-item hops are deferred.
+	if hits != 1 {
+		t.Errorf("album cost %d fetches, want 1 — items resolve at download time", hits)
+	}
+}
+
+func TestImagePondRejectsAProfilePage(t *testing.T) {
+	ip := NewImagePond(httpx.New("test/1.0", "en", 0, time.Second))
+	_, err := ip.Extract(context.Background(), mustURL(t, "https://www.imagepond.net/someone"), Options{})
+	if err == nil {
+		t.Fatal("a profile page resolved")
+	}
+	if !strings.Contains(err.Error(), "/a/<code>") {
+		t.Errorf("the refusal should name the album route it now accepts: %v", err)
+	}
+}
+
+// mustURL parses a test URL or fails the test.
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+	return u
 }
