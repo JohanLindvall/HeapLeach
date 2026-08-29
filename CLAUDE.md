@@ -45,6 +45,12 @@ go test ./internal/download/ -run TestSafeName -v          # single test
 go test ./internal/download/ -run 'Enqueue|DoubleRuns' -v   # subset
 ```
 
+Frontend tests are vitest over the pure logic (`format.ts`,
+`gamification.ts`) — `make test-frontend` runs them, in Docker when npm is
+absent, and CI runs them after the build. The formatBytes cases mirror
+`internal/cli/cli_test.go` digit for digit on purpose: the two sides render
+the same numbers, and the paired tables are what hold them together.
+
 Node is **not** installed on this machine — the frontend builds via Docker.
 `make build` and `make frontend` both handle that automatically.
 

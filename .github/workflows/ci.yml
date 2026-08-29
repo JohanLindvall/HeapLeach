@@ -31,6 +31,10 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run build
 
+      - name: Test the UI
+        working-directory: frontend
+        run: npm test
+
       - uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod

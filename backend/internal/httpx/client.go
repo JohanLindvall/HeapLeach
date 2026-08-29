@@ -123,6 +123,13 @@ func (c *Client) NewRequest(ctx context.Context, method, url string, body []byte
 		buf := body
 		req.ContentLength = int64(len(buf))
 		req.GetBody = func() (io.ReadCloser, error) {
+			// NoBody, not a reader over zero bytes: the transport treats a
+			// plain empty reader as a length it does not know and switches
+			// to chunked encoding, so an empty POST would go out with no
+			// Content-Length — which picky endpoints refuse.
+			if len(buf) == 0 {
+				return http.NoBody, nil
+			}
 			return io.NopCloser(bytes.NewReader(buf)), nil
 		}
 	}

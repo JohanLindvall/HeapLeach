@@ -64,7 +64,7 @@ HAVE_NPM  := $(shell command -v npm 2>/dev/null)
 HAVE_GO   := $(shell command -v go 2>/dev/null)
 
 .PHONY: help build binary image run-image stop logs shell dev dev-backend dev-frontend \
-        frontend frontend-clean screenshots dist tag native test test-live fmt vet tidy lock dependencies \
+        frontend frontend-clean screenshots dist tag native test test-frontend test-live fmt vet tidy lock dependencies \
         hosts hosts-check \
         clean distclean
 
@@ -274,6 +274,19 @@ hosts-check: hosts
 ## test: run the Go unit tests
 test:
 	cd backend && go test ./...
+
+## test-frontend: run the UI's unit tests (Docker when npm is absent)
+test-frontend:
+ifdef HAVE_NPM
+	cd frontend && npm install --no-audit --no-fund && npm test
+else
+	docker run --rm \
+	  -v "$(CURDIR)":/w -w /w/frontend \
+	  -u $(UID_GID) \
+	  -e npm_config_cache=/tmp/.npm -e HOME=/tmp \
+	  $(NODE_IMAGE) \
+	  sh -c 'npm install --no-audit --no-fund >/dev/null && npm test'
+endif
 
 ## test-live: run the extractor tests against the real sites (needs network)
 test-live:

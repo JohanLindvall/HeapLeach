@@ -3,6 +3,7 @@
 package server
 
 import (
+	"bytes"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -116,7 +117,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(string(body)))
+	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(body))
 }
 
 // logRequests records API calls at debug level, skipping the SSE stream,

@@ -23,7 +23,6 @@ type Fapello struct {
 }
 
 const (
-	fapelloRoot = "https://fapello.com"
 	// fapelloMaxPages bounds the walk; paging past the end wraps back to
 	// the first page rather than returning nothing, so the real stop
 	// condition is a page that adds nothing new.

@@ -474,8 +474,8 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 	}, nil
 }
 
-// npoNotFound is NPO answering a slug it does not know.
-var npoNotFound = errors.New("no such episode or series")
+// errNPONotFound is NPO answering a slug it does not know.
+var errNPONotFound = errors.New("no such episode or series")
 
 // errNPOThrottled is the edge in front of npo.nl turning a caller away, said
 // in words. Left as it arrives it is a page of HTML inside a 403 with
@@ -513,7 +513,7 @@ func (n *NPOStart) fetch(ctx context.Context, endpoint, key, value string, out a
 		return err
 	}
 	if npoEmpty(raw) {
-		return npoNotFound
+		return errNPONotFound
 	}
 	return json.Unmarshal(raw, out)
 }

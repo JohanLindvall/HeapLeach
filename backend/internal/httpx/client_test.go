@@ -2,8 +2,10 @@ package httpx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -545,5 +547,95 @@ func TestRateLimitHonoursRetryAfter(t *testing.T) {
 	}
 	if waited := time.Since(start); waited < time.Second {
 		t.Errorf("waited %s, want at least the second the host asked for", waited.Round(time.Millisecond))
+	}
+}
+
+func TestGetStringAsksLikeANavigation(t *testing.T) {
+	var got http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("<html>page</html>"))
+	}))
+	defer server.Close()
+
+	body, err := testClient(t, 0).GetString(context.Background(), server.URL, Header{"X-Custom": "yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "<html>page</html>" {
+		t.Errorf("body = %q", body)
+	}
+	// A page fetch has to look like a browser navigating, not like script:
+	// several hosts read exactly these to decide which of the two they are
+	// answering.
+	if accept := got.Get(HeaderAccept); !strings.HasPrefix(accept, "text/html") {
+		t.Errorf("Accept = %q, want the navigation form", accept)
+	}
+	if dest := got.Get(HeaderSecFetchDest); dest != "document" {
+		t.Errorf("Sec-Fetch-Dest = %q, want document", dest)
+	}
+	if mode := got.Get(HeaderSecFetchMode); mode != "navigate" {
+		t.Errorf("Sec-Fetch-Mode = %q, want navigate", mode)
+	}
+	if v := got.Get("X-Custom"); v != "yes" {
+		t.Errorf("extra header lost: %q", v)
+	}
+}
+
+func TestPostJSONRoundTrip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := r.Header.Get(HeaderContentType); ct != ContentTypeJSON {
+			t.Errorf("Content-Type = %q", ct)
+		}
+		var in struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"echo": in.ID})
+	}))
+	defer server.Close()
+
+	var out struct {
+		Echo string `json:"echo"`
+	}
+	err := testClient(t, 0).PostJSON(context.Background(), server.URL, nil,
+		map[string]string{"id": "abc123"}, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Echo != "abc123" {
+		t.Errorf("echo = %q", out.Echo)
+	}
+}
+
+// A caller that wants no answer back still needs the failure: fire-and-forget
+// posts exist here, silently swallowed errors do not.
+func TestPostJSONWithoutOutStillReportsFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "no", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	err := testClient(t, 0).PostJSON(context.Background(), server.URL, nil, map[string]string{}, nil)
+	if !HasStatus(err, http.StatusForbidden) {
+		t.Errorf("err = %v, want the 403 to surface", err)
+	}
+}
+
+// A nil in must still send a body: some endpoints refuse a bodyless POST.
+func TestPostJSONWithNilBodySendsAnEmptyOne(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.ContentLength != 0 || len(body) != 0 {
+			t.Errorf("body = %q (length %d), want empty", body, r.ContentLength)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	if err := testClient(t, 0).PostJSON(context.Background(), server.URL, nil, nil, nil); err != nil {
+		t.Fatal(err)
 	}
 }

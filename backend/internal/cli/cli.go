@@ -379,9 +379,13 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 	if failed > 0 {
 		mark, tint = "✗", red
 	}
+	files := fmt.Sprintf("%d file", done)
+	if done != 1 {
+		files += "s"
+	}
 	fmt.Fprintf(out, "%s %s%s\n",
 		r.paintColour(tint, mark),
-		fmt.Sprintf("%d file(s), %s in %s", done, formatBytes(bytes), formatDuration(elapsed)),
+		fmt.Sprintf("%s, %s in %s", files, formatBytes(bytes), formatDuration(elapsed)),
 		r.paintColour(dim, rate))
 
 	if failed > 0 {

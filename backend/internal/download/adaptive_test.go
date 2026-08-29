@@ -71,8 +71,11 @@ func TestSpeedMeterResetClearsHistory(t *testing.T) {
 func TestHostLimiterBoundsExtraConnections(t *testing.T) {
 	limiter := newHostLimiter(2)
 
-	if !limiter.reserve("example.test") || !limiter.reserve("example.test") {
-		t.Fatal("could not take the two slots on offer")
+	if !limiter.reserve("example.test") {
+		t.Fatal("could not take the first slot on offer")
+	}
+	if !limiter.reserve("example.test") {
+		t.Fatal("could not take the second slot on offer")
 	}
 	if limiter.reserve("example.test") {
 		t.Error("handed out a third slot against a ceiling of two")

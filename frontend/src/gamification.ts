@@ -1,4 +1,4 @@
-import type { ItemView, JobView, Snapshot } from './types';
+import type { ItemView, Snapshot } from './types';
 
 /**
  * A light progression layer over the download stats: enough to make a long
@@ -206,12 +206,4 @@ function bytesOf(item: ItemView): number {
 export function newlyUnlocked(progress: Progress, hostCount: number): Achievement[] {
   const have = new Set(progress.unlocked);
   return ACHIEVEMENTS.filter((a) => !have.has(a.id) && a.earned(progress, hostCount));
-}
-
-/** Completed-vs-total across every job, for the session ring. */
-export function jobTotals(jobs: JobView[]): { done: number; total: number } {
-  return jobs.reduce(
-    (acc, job) => ({ done: acc.done + job.done, total: acc.total + job.total }),
-    { done: 0, total: 0 },
-  );
 }

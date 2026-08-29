@@ -43,9 +43,9 @@ export function AddForm({ onNotice }: AddFormProps) {
     }
   };
 
-  const count = urls
-    .split(/\s+/)
-    .filter((line) => line.trim().length > 0).length;
+  // Split on any whitespace, exactly as the server does; only the empty
+  // piece a leading newline produces needs filtering out.
+  const count = urls.split(/\s+/).filter((piece) => piece.length > 0).length;
 
   return (
     <form className="card add" onSubmit={(e) => void submit(e)}>

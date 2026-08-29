@@ -358,8 +358,12 @@ func TestNPRPageWithNoAudioSaysSo(t *testing.T) {
 // block into the first.
 func TestNPRSeenIgnoresAnEmptyKey(t *testing.T) {
 	seen := make(map[string]bool)
-	if nprSeen(seen, "") || nprSeen(seen, "") {
+	if nprSeen(seen, "") {
 		t.Error("an empty key was taken for an identity")
+	}
+	// Asked again: the first ask must not have recorded it either.
+	if nprSeen(seen, "") {
+		t.Error("an empty key was remembered by the first ask")
 	}
 	if nprSeen(seen, "a") {
 		t.Error("a fresh key read as already seen")
