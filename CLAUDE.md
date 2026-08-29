@@ -236,6 +236,18 @@ The important subtlety is `File.Resolve`:
   stall, without ever leaving a file with no source left, buys nothing over
   rotating blindly. `MirrorHosts` builds the list when the alternatives
   differ only by host, which is how gofile's storage servers are expressed.
+- **bunkr cannot use it, because bunkr does not mirror.** Its metadata
+  endpoint (`_001_v2`) names exactly one storage server per file in a plain
+  `mediafiles` string — never a list — and the signed path is scoped to that
+  one server: a live probe against a file on `no5.scdn.st` got 404 from
+  `no1`–`no4` (the file is genuinely not there) and NXDOMAIN from `no6`+ (the
+  hosts do not exist). So there is no alternate to rotate to, blind `noN`
+  guessing only manufactures 404s, and a file whose one server is down fails
+  rather than failing over — which is correct, since nowhere else has it. The
+  resolver re-signs against that same host each attempt for the fresh token,
+  not for a new location. To re-verify if bunkr's storage ever changes, POST
+  `{"id": <fileID>}` to `<dlHost>/api/_001_v2` and read `mediafiles`: more
+  than one server there would be the first sign rotation had become possible.
 
 `File.Cipher` is the other addition to the contract: a host that serves
 ciphertext sets it, and the downloader decrypts on the way to disk. Only
