@@ -580,7 +580,7 @@ code, .mono {
   border: 1px solid var(--edge-flat);
   color: var(--text-faint);
   min-width: 0;
-  max-width: 34ch;
+  max-width: 46ch;
 }
 
 .jobs__dir code {
@@ -602,6 +602,26 @@ code, .mono {
 
 .jobs__dir code::before {
   content: '\200E';
+}
+
+/* Free space, beside the directory it belongs to. The path gives up width
+   for it rather than the other way round: the path already ellipsises from
+   the front and stays readable at the tail, while a truncated byte count
+   would be a wrong number rather than a shortened one. */
+.jobs__free {
+  flex: none;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--edge-flat);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+/* A tenth of the filesystem left is worth reading as a warning rather than
+   as furniture, since a queue can be bigger than what remains. */
+.jobs__free--low {
+  color: var(--failed);
+  font-weight: 560;
 }
 
 /* It is a button now, so it has to stop looking like one of the page's own

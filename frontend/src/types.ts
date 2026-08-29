@@ -80,6 +80,13 @@ export interface Snapshot {
   /** Ceiling on total throughput in bytes per second; 0 is unlimited. */
   speedLimit: number;
   downloadDir: string;
+  /**
+   * What may still be written at downloadDir, and the size of the filesystem
+   * holding it. Both zero when the destination could not be measured — a
+   * full disk reports zero free too, so only the total tells them apart.
+   */
+  diskFree: number;
+  diskTotal: number;
   hostCount: number;
 }
 

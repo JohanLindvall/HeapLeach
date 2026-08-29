@@ -242,7 +242,11 @@ func scene() download.Snapshot {
 		SpeedLimit:  25 * MB,
 		Speed:       23.7 * MB,
 		DownloadDir: "/home/you/Downloads",
-		HostCount:   35,
+		// A disk with room, so the picture shows the ordinary reading rather
+		// than the warning a nearly-full one draws.
+		DiskFree:  412 * 1000 * 1000 * 1000,
+		DiskTotal: 1000 * 1000 * 1000 * 1000,
+		HostCount: 35,
 	}
 }
 

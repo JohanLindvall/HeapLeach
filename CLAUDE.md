@@ -440,6 +440,19 @@ Three consequences worth keeping in mind:
 - A nil `*throttle` is valid and inert (unlimited, never paused). The tests
   build `&Manager{}` by hand, and that has to keep working.
 
+**Free space** is sampled on its own cadence (`config.DiskSampleInterval`,
+seconds rather than the progress tick's milliseconds) and never under `mu`:
+`Statfs` is a syscall and the destination may be a network mount, so it obeys
+the same rule workers do. `diskSpace` is split per platform beside
+`process_unix.go`; the unix half reads `Bavail`, not `Bfree`, since the
+blocks reserved for root are not room a download can use. A reading that
+moved marks the state dirty in its own right — a disk filling from elsewhere
+is exactly what the figure is for, and an idle queue would otherwise never
+mention it, while a disk that is not moving keeps that queue quiet. Both
+`DiskFree` and `DiskTotal` are published because zero free is ambiguous on
+its own: a full disk and an unreadable directory report it alike, and only
+the total separates them.
+
 **Skipping what is already downloaded** happens twice, on purpose. Once
 before connecting, when the extractor gave an exact length; and once after
 the response headers arrive, which is the only check available for hosts

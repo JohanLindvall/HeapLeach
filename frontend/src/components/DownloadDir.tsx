@@ -1,10 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
+import { formatBytes } from '../format';
 import { FolderIcon } from './Icons';
 
 interface DownloadDirProps {
   readonly value: string;
   readonly onChange: (dir: string) => void;
+  /** Bytes still writable there, and the size of the filesystem holding it. */
+  readonly free: number;
+  readonly total: number;
 }
+
+/**
+ * Below this share of the filesystem left, the figure stops being a footnote
+ * and starts being a warning. A queue can be hundreds of gigabytes, so the
+ * useful moment to notice is well before the last block goes.
+ */
+const LOW_FRACTION = 0.1;
 
 /**
  * Where finished files land, and a way to change it.
@@ -19,7 +30,7 @@ interface DownloadDirProps {
  * shown always comes back from the snapshot, so what is displayed is the
  * directory actually in force rather than what was typed.
  */
-export function DownloadDir({ value, onChange }: DownloadDirProps) {
+export function DownloadDir({ value, onChange, free, total }: DownloadDirProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const input = useRef<HTMLInputElement>(null);
@@ -41,16 +52,31 @@ export function DownloadDir({ value, onChange }: DownloadDirProps) {
     if (next && next !== value) onChange(next);
   };
 
+  // A total of zero is a destination that could not be measured, not one
+  // with no room: reporting "0 B free" for a directory that has simply gone
+  // missing would be worse than saying nothing.
+  const measured = total > 0;
+  const low = measured && free < total * LOW_FRACTION;
+
   if (!editing) {
     return (
       <button
         type="button"
         className="jobs__dir"
         onClick={open}
-        title={`Saving to ${value} — click to change`}
+        title={
+          measured
+            ? `Saving to ${value} — ${formatBytes(free)} free of ${formatBytes(total)}. Click to change.`
+            : `Saving to ${value} — click to change`
+        }
       >
         <FolderIcon />
         <code>{value}</code>
+        {measured && (
+          <span className={low ? 'jobs__free jobs__free--low' : 'jobs__free'}>
+            {formatBytes(free)} free
+          </span>
+        )}
       </button>
     );
   }

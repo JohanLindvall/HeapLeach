@@ -28,6 +28,12 @@ const (
 	// Fast enough to feel live, slow enough to stay cheap with many items.
 	ProgressTick = 400 * time.Millisecond
 
+	// DiskSampleInterval is how often the destination's free space is
+	// measured. Far slower than the progress tick on purpose: it is a
+	// syscall against a filesystem that may well be a network mount, and
+	// free space does not move fast enough to be worth asking oftener.
+	DiskSampleInterval = 5 * time.Second
+
 	// CopyBufferSize is the transfer chunk size: large enough that the
 	// progress counter is not bumped per packet, small enough to stay
 	// responsive to cancellation.

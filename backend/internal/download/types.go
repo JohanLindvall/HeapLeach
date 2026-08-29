@@ -190,6 +190,13 @@ type Snapshot struct {
 	SpeedLimit  int64   `json:"speedLimit"`
 	Speed       float64 `json:"speed"`
 	DownloadDir string  `json:"downloadDir"`
+	// DiskFree is what may still be written at DownloadDir, and DiskTotal
+	// the size of the filesystem holding it. Both are zero when the
+	// destination could not be measured, which is why free is not reported
+	// on its own: a genuinely full disk reads as zero too, and only the
+	// total tells the two apart.
+	DiskFree  int64 `json:"diskFree"`
+	DiskTotal int64 `json:"diskTotal"`
 	// HostCount is how many hosts have an extractor of their own. The names
 	// were once sent too, for a list in the UI that only ever restated what
 	// the build supported; the count is all anything still reads.

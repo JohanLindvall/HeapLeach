@@ -75,6 +75,14 @@ type Manager struct {
 	dirMu sync.RWMutex
 	dir   string
 
+	// Free space at that directory, and the size of the filesystem holding
+	// it. Sampled by the broadcaster alone, which is why the timestamp is a
+	// plain field; the figures are atomic because /api/state reads them from
+	// whatever goroutine is serving the request.
+	diskSampled time.Time
+	diskFree    atomic.Int64
+	diskTotal   atomic.Int64
+
 	subsMu    sync.Mutex
 	subs      map[chan []byte]struct{}
 	closeOnce sync.Once
@@ -112,6 +120,11 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 
 // Start launches the dispatcher and the progress broadcaster.
 func (m *Manager) Start() {
+	// Measure once up front: the first snapshot a browser is sent is built
+	// before the broadcaster has ticked, and a zero there would draw as a
+	// full disk until the first sample landed.
+	m.sampleDisk(time.Now())
+
 	m.wg.Add(2)
 	go m.dispatch()
 	go m.broadcast()
@@ -803,6 +816,8 @@ func (m *Manager) snapshotLocked() Snapshot {
 		Paused:      m.throttle.isPaused(),
 		SpeedLimit:  m.throttle.currentLimit(),
 		DownloadDir: m.DownloadDir(),
+		DiskFree:    m.diskFree.Load(),
+		DiskTotal:   m.diskTotal.Load(),
 		HostCount:   len(m.reg.Hosts()),
 	}
 	// Newest first: the job someone just added belongs at the top.
@@ -854,6 +869,8 @@ func (m *Manager) broadcast() {
 		case <-m.ctx.Done():
 			return
 		case now := <-ticker.C:
+			m.sampleDisk(now)
+
 			m.mu.Lock()
 			active := m.running > 0
 			if active {
@@ -873,6 +890,39 @@ func (m *Manager) broadcast() {
 			}
 			m.publish(payload)
 		}
+	}
+}
+
+// sampleDisk refreshes the destination's free space, at its own cadence.
+//
+// Deliberately outside mu: Statfs is a syscall, the destination may be a
+// network mount, and the locking rule here is that mu is never held across
+// anything that can block. Only the broadcaster calls this, so the timestamp
+// needs no guarding of its own; the figures do, since /api/state reads them
+// from whichever goroutine asked.
+//
+// A change is published in its own right. A disk filling up from somewhere
+// else is exactly what this number exists to show, and an idle queue would
+// otherwise never mention it — while a disk that is not moving marks nothing
+// dirty, so an idle queue stays quiet.
+func (m *Manager) sampleDisk(now time.Time) {
+	if !m.diskSampled.IsZero() && now.Sub(m.diskSampled) < config.DiskSampleInterval {
+		return
+	}
+	m.diskSampled = now
+
+	free, total, err := diskSpace(m.DownloadDir())
+	if err != nil {
+		// A destination that cannot be measured reports nothing rather than
+		// a zero, which reads as a disk with no room left.
+		free, total = 0, 0
+	}
+	// Both swaps, every time: || would short-circuit past the second and
+	// leave the total behind whenever the free figure had moved.
+	freeMoved := m.diskFree.Swap(free) != free
+	totalMoved := m.diskTotal.Swap(total) != total
+	if freeMoved || totalMoved {
+		m.markDirty()
 	}
 }
 

@@ -151,6 +151,12 @@ It is created if missing, `~` is expanded, and the process refuses to start
 if the directory cannot be written to — so a permission problem surfaces
 once, up front, instead of as a wall of failed transfers.
 
+The UI shows what is left on that filesystem beside the path, and says it in
+red once a tenth or less remains: a queue can be larger than the room for it,
+and the useful moment to notice is before the last block goes rather than
+after. A destination that cannot be measured shows nothing at all rather than
+zero, which would read as a disk with no room left.
+
 ## Supported links
 
 | Host | Accepts | How it resolves |
