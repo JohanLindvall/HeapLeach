@@ -18,8 +18,12 @@ import (
 const bandzooglePage = `<!DOCTYPE html><html><head>
 <title>A Band Name - Official Site</title>
 </head><body>
+<h2>Discography</h2>
+
+<section class="album">
+<h3>An Album Name</h3>
 <div class="zoogle-music-player" data-controller="zoogle-media-player">
-<ul>
+<ol class="track-list" data-offset="20" data-load-more="false">
   <li class="track-list-item">
     <div class="track-number-play">
       <a type="audio/mp3" data-id="111" data-artist="A Band Name" data-duration="2:01"
@@ -37,9 +41,22 @@ const bandzooglePage = `<!DOCTYPE html><html><head>
     </div>
   </li>
   <li class="track-list-item">
-    <!-- The same recording under a second player, which is how a page that
-         lists one album twice presents it: the id is the same and only the
-         path differs, so nothing keyed on the path would notice. -->
+    <!-- No number printed beside it, and no title either: the path names it. -->
+    <a type="audio/mp3" data-id="113" data-dest="/player/900/tracks/untitled-113.mp3"
+       data-zoogle-track="true" class="track-icon play" href="#"></a>
+  </li>
+</ol>
+</div>
+</section>
+
+<section class="album">
+<!-- The same album under a second player, which is how these pages present
+     one release in two places: the ids repeat and only the path differs, so
+     nothing keyed on the path would notice. -->
+<h3>An Album Name</h3>
+<div class="zoogle-music-player" data-controller="zoogle-media-player">
+<ol class="track-list" data-offset="20" data-load-more="false">
+  <li class="track-list-item">
     <div class="track-number-play">
       <a type="audio/mp3" data-id="111" data-artist="A Band Name"
          data-title="First Song" data-dest="/player/901/tracks/111.mp3"
@@ -47,13 +64,26 @@ const bandzooglePage = `<!DOCTYPE html><html><head>
       <span class="track-number"> 1 </span>
     </div>
   </li>
-  <li class="track-list-item">
-    <!-- No number printed beside it, and no title either: the path names it. -->
-    <a type="audio/mp3" data-id="113" data-dest="/player/900/tracks/untitled-113.mp3"
-       data-zoogle-track="true" class="track-icon play" href="#"></a>
-  </li>
-</ul>
+</ol>
 </div>
+</section>
+
+<section class="album">
+<h3>A Second Album</h3>
+<div class="zoogle-music-player" data-controller="zoogle-media-player">
+<ol class="track-list" data-offset="20" data-load-more="false">
+  <li class="track-list-item">
+    <div class="track-number-play">
+      <a type="audio/mp3" data-id="221" data-artist="A Band Name"
+         data-title="Another First Song" data-dest="/player/902/tracks/221.mp3"
+         data-zoogle-track="true" class="track-icon play" href="#"></a>
+      <span class="track-number"> 1 </span>
+    </div>
+  </li>
+</ol>
+</div>
+</section>
+
 <a href="/merch">Not a track</a>
 <a data-zoogle-track="true" href="#">A track anchor with nowhere to fetch from</a>
 </body></html>`
@@ -79,8 +109,8 @@ func TestBandzoogleReadsEveryTrackOnce(t *testing.T) {
 	if artist != "A Band Name" {
 		t.Errorf("artist = %q", artist)
 	}
-	if len(files) != 3 {
-		t.Fatalf("got %d tracks, want 3 — the recording listed under two "+
+	if len(files) != 4 {
+		t.Fatalf("got %d tracks, want 4 — the recording listed under two "+
 			"players is one track, and the anchor with no destination is none",
 			len(files))
 	}
@@ -124,8 +154,8 @@ func TestBandzoogleSniffRecognisesThePlatform(t *testing.T) {
 	if res.Title != "A Band Name" {
 		t.Errorf("title = %q, want the artist the tracks name", res.Title)
 	}
-	if len(res.Files) != 3 {
-		t.Errorf("got %d tracks, want 3", len(res.Files))
+	if len(res.Files) != 4 {
+		t.Errorf("got %d tracks, want 4", len(res.Files))
 	}
 }
 
@@ -201,8 +231,8 @@ func TestBandzoogleReachedThroughTheDirectFallback(t *testing.T) {
 	if ex.Name() != "direct" {
 		t.Logf("routed via %s", ex.Name())
 	}
-	if len(res.Files) != 3 {
-		t.Fatalf("got %d tracks through the registry, want 3", len(res.Files))
+	if len(res.Files) != 4 {
+		t.Fatalf("got %d tracks through the registry, want 4", len(res.Files))
 	}
 	if res.Files[0].Name != "01 First Song.mp3" {
 		t.Errorf("first track named %q", res.Files[0].Name)
@@ -323,5 +353,37 @@ func TestBandzoogleNumber(t *testing.T) {
 				t.Errorf("bandzoogleNumber = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Numbering restarts with each album, so two albums on one page put two
+// track 1s in the same directory unless they are foldered apart. That is
+// what this page does, and what the destination directory showed when it
+// was not done: an "01" from each album sitting side by side.
+func TestBandzoogleFoldersTracksByAlbum(t *testing.T) {
+	base := mustURL(t, "https://aband.example.test/")
+	root, err := parseHTML(bandzooglePage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _ := bandzoogleTracks(root, base)
+
+	byDir := map[string][]string{}
+	for _, f := range files {
+		byDir[f.Dir] = append(byDir[f.Dir], f.Name)
+	}
+	if len(byDir) != 2 {
+		t.Fatalf("tracks landed in %d folders, want one per album: %v", len(byDir), byDir)
+	}
+	if got := byDir["An Album Name"]; len(got) != 3 {
+		t.Errorf("first album holds %v", got)
+	}
+	if got := byDir["A Second Album"]; len(got) != 1 || got[0] != "01 Another First Song.mp3" {
+		t.Errorf("second album holds %v", got)
+	}
+	// The section heading above both albums must never become a folder: the
+	// walk has to stop before it reaches something holding two players.
+	if _, wrong := byDir["Discography"]; wrong {
+		t.Error("a track was filed under the heading that encloses every album")
 	}
 }

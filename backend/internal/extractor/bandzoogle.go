@@ -94,16 +94,72 @@ func (b *Bandzoogle) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	if err != nil {
 		return nil, fmt.Errorf("bandzoogle: fetch %s: %w", u.Redacted(), err)
 	}
-	return bandzoogleParse(doc, u)
+	return bandzoogleParse(ctx, b.client, doc, u)
 }
 
-// bandzoogleParse turns a page that has already been fetched into its tracks.
-func bandzoogleParse(doc string, u *url.URL) (*Result, error) {
+// bandzoogleMaxPages bounds the walk over a listing's continuations. Far
+// above any real album, so it stops a broken page looping rather than
+// truncating a long one.
+const bandzoogleMaxPages = 20
+
+// bandzoogleParse turns a page that has already been fetched into its tracks,
+// following the rest of any listing that says it has more.
+//
+// A track list shows twenty and says so: data-offset names where it stopped
+// and data-load-more whether anything follows. Asking for the same page with
+// ?offset=N returns the remainder, itself saying whether more follows again.
+// Without this an album of twenty-five arrived as twenty, which is not a
+// failure anything reports — the page looks complete and the last five are
+// simply absent.
+func bandzoogleParse(ctx context.Context, client *httpx.Client, doc string, u *url.URL) (*Result, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, fmt.Errorf("bandzoogle: parse %s: %w", u.Redacted(), err)
 	}
+
 	files, artist := bandzoogleTracks(root, u)
+	seen := make(map[string]bool, len(files))
+	for _, f := range files {
+		seen[f.URL] = true
+	}
+
+	followed := map[string]bool{"": true}
+	pending := bandzoogleMore(root)
+	for pages := 0; pages < bandzoogleMaxPages && len(pending) > 0; pages++ {
+		offset := pending[0]
+		pending = pending[1:]
+		if followed[offset] {
+			continue
+		}
+		followed[offset] = true
+
+		next := *u
+		q := next.Query()
+		q.Set("offset", offset)
+		next.RawQuery = q.Encode()
+
+		more, err := client.GetString(ctx, next.String(), httpx.Referer(util.Origin(u)+"/"))
+		if err != nil {
+			// What is already in hand is worth more than nothing: a listing
+			// whose tail will not load is short, not broken.
+			break
+		}
+		moreRoot, err := parseHTML(more)
+		if err != nil {
+			break
+		}
+		added, moreArtist := bandzoogleTracks(moreRoot, u)
+		artist = util.FirstNonEmpty(artist, moreArtist)
+		for _, f := range added {
+			if seen[f.URL] {
+				continue
+			}
+			seen[f.URL] = true
+			files = append(files, f)
+		}
+		pending = append(pending, bandzoogleMore(moreRoot)...)
+	}
+
 	if len(files) == 0 {
 		return nil, fmt.Errorf("bandzoogle: no playable tracks on %s — the page "+
 			"names a player but nothing it could fetch", u.Redacted())
@@ -114,6 +170,25 @@ func bandzoogleParse(doc string, u *url.URL) (*Result, error) {
 		u.Hostname(),
 	)
 	return &Result{Title: title, Files: files}, nil
+}
+
+// bandzoogleMore reports the offsets of listings that say they have more to
+// give. A list that has shown everything says so, which is what ends the walk.
+func bandzoogleMore(root *html.Node) []string {
+	var out []string
+	for _, list := range findAll(root, func(n *html.Node) bool {
+		return isElem(n, atom.Ol) && hasClass(n, "track-list")
+	}) {
+		if !strings.EqualFold(attr(list, "data-load-more"), "true") {
+			continue
+		}
+		offset := strings.TrimSpace(attr(list, "data-offset"))
+		if _, err := strconv.Atoi(offset); err != nil {
+			continue
+		}
+		out = append(out, offset)
+	}
+	return util.Dedupe(out)
 }
 
 // bandzoogleTracks reads the track anchors, and reports the artist they name.
@@ -155,13 +230,64 @@ func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist stri
 			name = bandzoogleNumber(a) + name + bandzoogleExt(link)
 		}
 		files = append(files, File{
-			Name:    util.FirstNonEmpty(name, util.NameFromURL(link)),
+			Name: util.FirstNonEmpty(name, util.NameFromURL(link)),
+			// Foldered by album, because the numbering restarts with each
+			// one. A page carrying two albums puts two track 1s in the same
+			// directory otherwise, where they sort next to each other and
+			// the numbers say nothing about either.
+			Dir:     bandzoogleAlbum(a),
 			URL:     link,
 			Size:    -1,
 			Headers: httpx.Referer(util.Origin(base) + "/"),
 		})
 	}
 	return files, artist
+}
+
+// bandzoogleAlbum names the album a track sits in, or "" when the page does
+// not group it under one.
+//
+// The name is a heading, and headings are a theme's business rather than the
+// software's, so this asks for the nearest one that shares an ancestor with
+// the track — and stops the moment that ancestor holds more than one player.
+// Each album has a player of its own, so two of them means the walk has
+// climbed into whatever section encloses several albums, whose heading names
+// none of them. Without that guard a track would be filed under "Discography".
+func bandzoogleAlbum(a *html.Node) string {
+	for n, depth := a.Parent, 0; n != nil && depth < 12; n, depth = n.Parent, depth+1 {
+		if bandzooglePlayers(n) > 1 {
+			return ""
+		}
+		heading := findFirst(n, func(c *html.Node) bool {
+			switch {
+			case isElem(c, atom.H1), isElem(c, atom.H2), isElem(c, atom.H3),
+				isElem(c, atom.H4), isElem(c, atom.H5), isElem(c, atom.H6):
+				return strings.TrimSpace(textOf(c)) != ""
+			}
+			return false
+		})
+		if heading != nil {
+			return collapseSpace(textOf(heading))
+		}
+	}
+	return ""
+}
+
+// bandzooglePlayers counts the distinct players whose tracks sit under n,
+// which is how the walk above knows it has left one album's markup.
+func bandzooglePlayers(n *html.Node) int {
+	seen := make(map[string]bool)
+	for _, a := range findAll(n, isBandzoogleTrack) {
+		u, err := url.Parse(attr(a, bandzoogleDestAttr))
+		if err != nil {
+			continue
+		}
+		segs := util.PathSegments(u)
+		if len(segs) >= 2 && segs[0] == "player" {
+			seen[segs[1]] = true
+		}
+	}
+	return len(seen)
 }
 
 // bandzoogleNumber is the track's position on the page, as a filename
@@ -239,5 +365,5 @@ func bandzoogleSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Re
 	if !strings.Contains(doc, bandzoogleTrackAttr) {
 		return nil, nil
 	}
-	return bandzoogleParse(doc, u)
+	return bandzoogleParse(ctx, client, doc, u)
 }
