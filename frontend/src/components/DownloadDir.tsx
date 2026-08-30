@@ -8,6 +8,8 @@ interface DownloadDirProps {
   /** Bytes still writable there, and the size of the filesystem holding it. */
   readonly free: number;
   readonly total: number;
+  /** Room that must be left before another transfer starts. */
+  readonly minFree: number;
 }
 
 /**
@@ -30,7 +32,7 @@ const LOW_FRACTION = 0.1;
  * shown always comes back from the snapshot, so what is displayed is the
  * directory actually in force rather than what was typed.
  */
-export function DownloadDir({ value, onChange, free, total }: DownloadDirProps) {
+export function DownloadDir({ value, onChange, free, total, minFree }: DownloadDirProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const input = useRef<HTMLInputElement>(null);
@@ -61,7 +63,10 @@ export function DownloadDir({ value, onChange, free, total }: DownloadDirProps) 
   // control drops the path at that width — but only when there is a figure
   // to drop it for, which is what the modifier below says.
   const measured = total > 0;
-  const low = measured && free < total * LOW_FRACTION;
+  // Below the floor nothing new starts, so the figure stops being a warning
+  // and becomes the reason the queue is sitting still.
+  const held = measured && minFree > 0 && free < minFree;
+  const low = held || (measured && free < total * LOW_FRACTION);
 
   if (!editing) {
     return (
@@ -70,16 +75,19 @@ export function DownloadDir({ value, onChange, free, total }: DownloadDirProps) 
         className={measured ? 'jobs__dir jobs__dir--measured' : 'jobs__dir'}
         onClick={open}
         title={
-          measured
-            ? `Saving to ${value} — ${formatBytes(free)} free of ${formatBytes(total)}. Click to change.`
-            : `Saving to ${value} — click to change`
+          held
+            ? `Saving to ${value} — ${formatBytes(free)} free, below the ${formatBytes(minFree)} ` +
+              'floor, so downloads are waiting. Free some space and they resume by themselves.'
+            : measured
+              ? `Saving to ${value} — ${formatBytes(free)} free of ${formatBytes(total)}. Click to change.`
+              : `Saving to ${value} — click to change`
         }
       >
         <FolderIcon />
         <code>{value}</code>
         {measured && (
           <span className={low ? 'jobs__free jobs__free--low' : 'jobs__free'}>
-            {formatBytes(free)} free
+            {held ? `${formatBytes(free)} free — downloads held` : `${formatBytes(free)} free`}
           </span>
         )}
       </button>

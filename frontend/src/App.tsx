@@ -186,6 +186,7 @@ export default function App() {
                 value={snapshot.downloadDir}
                 free={snapshot.diskFree}
                 total={snapshot.diskTotal}
+                minFree={snapshot.diskMinFree}
                 onChange={(dir) => run(() => setDownloadDir(dir))}
               />
               {finishedCount > 0 && (

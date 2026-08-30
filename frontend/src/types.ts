@@ -87,6 +87,12 @@ export interface Snapshot {
    */
   diskFree: number;
   diskTotal: number;
+  /**
+   * Room that must be left before another transfer starts. Below it the
+   * queue waits rather than filling the disk, and saying so is the only
+   * thing that separates a held queue from a slow one.
+   */
+  diskMinFree: number;
   hostCount: number;
 }
 

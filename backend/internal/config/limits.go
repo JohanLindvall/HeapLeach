@@ -10,6 +10,17 @@ const (
 	// remote host, and hammering it invites rate limiting.
 	MaxConcurrency = 32
 
+	// DefaultMinFreeDisk is how much room must be left at the destination
+	// before another transfer starts. A bulk downloader fills a disk faster
+	// than anyone watches it, and the failure when it does is not a clean
+	// one: the transfer in flight dies partway with "no space left on
+	// device", and so does every one behind it.
+	//
+	// Ten gibibytes rather than a percentage: what makes the difference is
+	// having room for the next file and for whatever else on the machine
+	// needs to write, and neither scales with how large the disk is.
+	DefaultMinFreeDisk = 10 << 30
+
 	// DefaultConcurrency is the starting number of parallel transfers.
 	DefaultConcurrency = 4
 

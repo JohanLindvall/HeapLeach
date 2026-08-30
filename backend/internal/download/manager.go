@@ -87,6 +87,11 @@ type Manager struct {
 	subs      map[chan []byte]struct{}
 	closeOnce sync.Once
 
+	// minFree is how much room must be left at the destination before
+	// another transfer is started; zero disables the check. Fixed at
+	// construction, so it needs no lock.
+	minFree int64
+
 	// Where the queue is written so a restart can pick it up again, and the
 	// fingerprint of what was last written — an idle queue is not worth
 	// rewriting every interval. Both belong to the saver goroutine alone.
@@ -113,6 +118,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		hostActive: make(map[string]int),
 		dir:        cfg.DownloadDir,
 		stateFile:  cfg.StateFile,
+		minFree:    cfg.MinFreeDisk,
 		throttle:   newThrottle(cfg.SpeedLimit),
 		limit:      cfg.Concurrency,
 		streams:    cfg.Streams,
@@ -326,6 +332,12 @@ func (m *Manager) nextLocked() *Item {
 	if m.throttle.isPaused() || m.running >= m.limit {
 		return nil
 	}
+	// Nor does one with no room to write into. Transfers already running are
+	// left alone: their bytes are on disk either way, and abandoning one
+	// near its end would throw away more room than it recovered.
+	if m.lowOnSpace() {
+		return nil
+	}
 
 	var chosen *Item
 	kept := m.queue[:0]
@@ -344,6 +356,27 @@ func (m *Manager) nextLocked() *Item {
 	m.queue = kept
 	return chosen
 }
+
+// lowOnSpace reports whether the destination has too little room left to
+// start another transfer.
+//
+// It reads the figure the broadcaster samples rather than asking the
+// filesystem, so it costs nothing on a path the dispatcher walks constantly
+// and never blocks the lock it is called under. That figure is at most one
+// DiskSampleInterval old, which a floor measured in gigabytes can absorb.
+//
+// A destination that could not be measured reports zero for both, and is
+// never treated as full: refusing to download because the check itself
+// failed would be a worse failure than the one it guards against.
+func (m *Manager) lowOnSpace() bool {
+	if m.minFree <= 0 || m.diskTotal.Load() <= 0 {
+		return false
+	}
+	return m.diskFree.Load() < m.minFree
+}
+
+// MinFreeDisk is the room that must be left before another transfer starts.
+func (m *Manager) MinFreeDisk() int64 { return m.minFree }
 
 // hostFullLocked reports whether an item's host is already running as many
 // transfers as its pace allows. Caller holds mu.
@@ -895,6 +928,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		DownloadDir: m.DownloadDir(),
 		DiskFree:    m.diskFree.Load(),
 		DiskTotal:   m.diskTotal.Load(),
+		DiskMinFree: m.minFree,
 		HostCount:   len(m.reg.Hosts()),
 	}
 	// Newest first: the job someone just added belongs at the top.

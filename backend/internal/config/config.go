@@ -5,7 +5,9 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,6 +67,11 @@ type Config struct {
 	SlowSpeed      int64
 	// SpeedLimit caps total throughput in bytes per second; 0 is unlimited.
 	SpeedLimit int64
+	// MinFreeDisk is how much room must be left at the destination before
+	// another transfer is started. Nothing new begins below it and the queue
+	// waits, which is what keeps a long run from filling the disk it is
+	// writing to. Zero disables the check.
+	MinFreeDisk int64
 	// StallTimeout is how long a transfer may make no progress before the
 	// attempt is abandoned and retried from what is already on disk.
 	StallTimeout time.Duration
@@ -106,6 +113,7 @@ func FromEnv() (*Config, error) {
 		SlowSpeed:      DefaultSlowSpeed,
 		StallTimeout:   StallTimeout,
 		Timeout:        DefaultTimeout,
+		MinFreeDisk:    DefaultMinFreeDisk,
 	}
 
 	var err error
@@ -138,9 +146,73 @@ func FromEnv() (*Config, error) {
 		c.StallTimeout = d
 	}
 
+	if v := env("MIN_FREE", ""); v != "" {
+		n, err := ParseSize(v)
+		if err != nil {
+			return nil, fmt.Errorf("%sMIN_FREE: %w", envPrefix, err)
+		}
+		c.MinFreeDisk = n
+	}
+
 	c.Debug = env("DEBUG", "") != ""
 	c.OpenBrowser, _ = EnvBool("OPEN")
 	return c, nil
+}
+
+// ParseSize reads a byte count written as a plain number or with a unit.
+//
+// Both conventions are accepted because both are meant: kB/MB/GB are powers
+// of a thousand, as every disk and every figure this program prints uses,
+// and KiB/MiB/GiB are powers of 1024, which is what a filesystem reports. A
+// bare number is bytes. The distinction is worth honouring rather than
+// guessing at — the two differ by 7% at the gigabyte, which is the
+// difference between a floor that holds and one that does not.
+func ParseSize(raw string) (int64, error) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return 0, errors.New("no size given")
+	}
+
+	digits := strings.TrimRight(text, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ ")
+	unit := strings.ToLower(strings.TrimSpace(text[len(digits):]))
+
+	value, err := strconv.ParseFloat(strings.TrimSpace(digits), 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a size", raw)
+	}
+	if value < 0 {
+		return 0, fmt.Errorf("%q is negative", raw)
+	}
+
+	multiplier, ok := sizeUnits[unit]
+	if !ok {
+		return 0, fmt.Errorf("%q has an unknown unit %q", raw, unit)
+	}
+	scaled := value * float64(multiplier)
+	if scaled > math.MaxInt64 {
+		return 0, fmt.Errorf("%q does not fit in an int64", raw)
+	}
+	return int64(scaled), nil
+}
+
+// sizeUnits are the suffixes ParseSize accepts. "b" and "" are bytes; the
+// single letters follow the decimal convention the rest of the program
+// prints in, and the "i" forms are binary.
+var sizeUnits = map[string]int64{
+	"":    1,
+	"b":   1,
+	"k":   1_000,
+	"kb":  1_000,
+	"m":   1_000_000,
+	"mb":  1_000_000,
+	"g":   1_000_000_000,
+	"gb":  1_000_000_000,
+	"t":   1_000_000_000_000,
+	"tb":  1_000_000_000_000,
+	"kib": 1 << 10,
+	"mib": 1 << 20,
+	"gib": 1 << 30,
+	"tib": 1 << 40,
 }
 
 // EnvBool reads a setting that can be turned off as well as on, reporting

@@ -170,6 +170,13 @@ downloading and carries the password for any source that needed one. Given
 URLs on the command line the whole mechanism is off: that mode downloads and
 exits, and has no queue worth outliving it.
 
+A transfer only starts when at least `HEAPLEACH_MIN_FREE` — 10 GiB by
+default — is still free there. Below that the queue **waits** rather than
+failing: nothing new begins, transfers already running finish normally, and
+the moment room is made the queue picks up by itself with nothing to re-add.
+The figure says `downloads held` while that is the case, so a queue sitting
+still is never a mystery. Set it to `0` to turn the check off.
+
 The UI shows what is left on that filesystem beside the path, and says it in
 red once a tenth or less remains: a queue can be larger than the room for it,
 and the useful moment to notice is before the last block goes rather than
@@ -505,6 +512,7 @@ and a flag beats the environment.
 | `HEAPLEACH_SLOW_SPEED` | `2000000` | Bytes/sec below which extra connections are opened. Flag: `-slow-speed`. |
 | `HEAPLEACH_MAX_SPEED` | `0` | Ceiling on total download rate in bytes/sec; `0` is unlimited. Flag: `-max-speed`. |
 | `HEAPLEACH_STALL_TIMEOUT` | `90s` | How long a transfer may make no progress before the attempt is retried. Flag: `-stall-timeout`. |
+| `HEAPLEACH_MIN_FREE` | `10GiB` | Room that must be left at the destination before another transfer starts. Below it the queue waits rather than filling the disk. Accepts `10GiB`, `250GB`, `1.5TB` or a plain byte count; `0` turns the check off. |
 | `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
 | `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
 | `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |

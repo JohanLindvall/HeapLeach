@@ -204,6 +204,10 @@ type Snapshot struct {
 	// total tells the two apart.
 	DiskFree  int64 `json:"diskFree"`
 	DiskTotal int64 `json:"diskTotal"`
+	// DiskMinFree is the room that must be left before another transfer is
+	// started. The UI needs it to say why a queue is sitting still, which is
+	// otherwise indistinguishable from one that is merely slow.
+	DiskMinFree int64 `json:"diskMinFree"`
 	// HostCount is how many hosts have an extractor of their own. The names
 	// were once sent too, for a list in the UI that only ever restated what
 	// the build supported; the count is all anything still reads.

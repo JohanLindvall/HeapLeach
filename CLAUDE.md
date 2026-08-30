@@ -484,6 +484,18 @@ Three things here were each got wrong first:
   wind-down is recorded queued and re-checked next run, which is the
   harmless direction.
 
+**The free-space floor** (`config.MinFreeDisk`, 10 GiB) gates `nextLocked`,
+which is to say it gates *starting* a transfer. Three choices in that:
+running transfers are left alone, because their bytes are on disk either way
+and abandoning one near its end frees less than it wastes; the queue waits
+rather than failing, so making room is the whole remedy and nothing has to be
+re-added; and a destination that could not be measured is never treated as
+full, since refusing to download because the check itself failed is a worse
+failure than the one it guards. It reads the sampled figure rather than
+asking the filesystem, so the dispatcher's hot path costs nothing and never
+blocks under `mu`. `DiskMinFree` rides along in the snapshot because a held
+queue and a slow one look identical without it.
+
 **Free space** is sampled on its own cadence (`config.DiskSampleInterval`,
 seconds rather than the progress tick's milliseconds) and never under `mu`:
 `Statfs` is a syscall and the destination may be a network mount, so it obeys

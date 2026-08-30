@@ -214,3 +214,85 @@ func TestExpandHomeVarRejectsRelativePaths(t *testing.T) {
 		t.Errorf("absolute passthrough: %q", got)
 	}
 }
+
+func TestParseSize(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"0", 0},
+		{"1024", 1024},
+		{" 4096 ", 4096},
+		{"512B", 512},
+		// Decimal units, matching every figure the program prints.
+		{"10GB", 10_000_000_000},
+		{"10 gb", 10_000_000_000},
+		{"2M", 2_000_000},
+		{"1t", 1_000_000_000_000},
+		// Binary units, matching what a filesystem reports. The two differ
+		// by 7% at the gigabyte, which is why both are honoured rather than
+		// one being guessed at.
+		{"10GiB", 10 << 30},
+		{"1KiB", 1024},
+		{"1 mib", 1 << 20},
+		// Fractions, since "1.5GB" is how a person writes it.
+		{"1.5GB", 1_500_000_000},
+	}
+	for _, tc := range cases {
+		got, err := ParseSize(tc.in)
+		if err != nil {
+			t.Errorf("ParseSize(%q): %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseSize(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{"", "   ", "GB", "-5", "-1GB", "12 parsecs", "1.2.3", "0x10"} {
+		if got, err := ParseSize(bad); err == nil {
+			t.Errorf("ParseSize(%q) = %d, want an error", bad, got)
+		}
+	}
+}
+
+func TestMinFreeDiskFromEnv(t *testing.T) {
+	t.Run("defaults to ten gibibytes", func(t *testing.T) {
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MinFreeDisk != DefaultMinFreeDisk {
+			t.Errorf("MinFreeDisk = %d, want %d", cfg.MinFreeDisk, DefaultMinFreeDisk)
+		}
+	})
+
+	t.Run("takes a unit", func(t *testing.T) {
+		t.Setenv("HEAPLEACH_MIN_FREE", "250GB")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MinFreeDisk != 250_000_000_000 {
+			t.Errorf("MinFreeDisk = %d, want 250000000000", cfg.MinFreeDisk)
+		}
+	})
+
+	t.Run("zero turns the check off", func(t *testing.T) {
+		t.Setenv("HEAPLEACH_MIN_FREE", "0")
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MinFreeDisk != 0 {
+			t.Errorf("MinFreeDisk = %d, want 0", cfg.MinFreeDisk)
+		}
+	})
+
+	t.Run("nonsense is reported rather than ignored", func(t *testing.T) {
+		t.Setenv("HEAPLEACH_MIN_FREE", "plenty")
+		if _, err := FromEnv(); err == nil {
+			t.Error("an unparseable floor was accepted")
+		}
+	})
+}
