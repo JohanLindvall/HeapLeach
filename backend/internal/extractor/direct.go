@@ -74,6 +74,11 @@ var directSniffs = []directSniff{
 		res, _ := cheveretoSniff(ctx, c, u, opts)
 		return res, nil
 	},
+	// A band-site player labels its own track anchors, which is as good as a
+	// generator tag and costs the same one fetch.
+	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+		return bandzoogleSniff(ctx, c, u)
+	},
 	// An autoindex announces itself in its title.
 	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
 		res, _ := autoindexSniff(ctx, c, u)

@@ -222,6 +222,18 @@ quietly advertises the label as the host. `hosts-check` compares the
 regenerated file against git, so it also fails on a correct regeneration that
 has not been committed yet.
 
+**bandzoogle** is the third platform family, and the first with an empty host
+list: it is website software musicians rent, so every install answers on its
+owner's own domain and there is nothing to compile in. It is reached entirely
+through the direct-fallback sniff, with `HEAPLEACH_EXTRA_HOSTS`'s
+`bandzoogle` family for naming one outright. The marker is `data-zoogle-track`
+on the track anchors, which the player script binds to rather than a theme
+supplying, and the same anchor carries the title, the artist and the audio
+path — so nothing is read from the surrounding markup, which differs from one
+band's site to the next. The audio path redirects to storage signed for a
+couple of hours, minted per request, so the player link is what goes on the
+File; the signed one would go stale in a long queue.
+
 The important subtlety is `File.Resolve`:
 
 - Most hosts set `File.URL` at extraction time.

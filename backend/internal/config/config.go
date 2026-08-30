@@ -494,6 +494,10 @@ const (
 	FamilyFoolFuuka = "foolfuuka"
 	FamilyFediverse = "fediverse"
 	FamilyMediaWiki = "mediawiki"
+	// FamilyBandzoogle names the band-site platform. It ships with no hosts
+	// of its own: every install answers on the band's own domain, so there
+	// is no list to compile in and the sniff is what finds them.
+	FamilyBandzoogle = "bandzoogle"
 )
 
 // ExtraHostsFor returns the additional hosts configured for one family.
