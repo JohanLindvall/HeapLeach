@@ -37,10 +37,12 @@ const bandzooglePage = `<!DOCTYPE html><html><head>
     </div>
   </li>
   <li class="track-list-item">
-    <!-- The same track again, as a second player on the page repeats it. -->
+    <!-- The same recording under a second player, which is how a page that
+         lists one album twice presents it: the id is the same and only the
+         path differs, so nothing keyed on the path would notice. -->
     <div class="track-number-play">
       <a type="audio/mp3" data-id="111" data-artist="A Band Name"
-         data-title="First Song" data-dest="/player/900/tracks/111.mp3"
+         data-title="First Song" data-dest="/player/901/tracks/111.mp3"
          data-zoogle-track="true" class="track-icon play" href="#"></a>
       <span class="track-number"> 1 </span>
     </div>
@@ -78,8 +80,9 @@ func TestBandzoogleReadsEveryTrackOnce(t *testing.T) {
 		t.Errorf("artist = %q", artist)
 	}
 	if len(files) != 3 {
-		t.Fatalf("got %d tracks, want 3 — the repeat is one track and the "+
-			"anchor with no destination is none", len(files))
+		t.Fatalf("got %d tracks, want 3 — the recording listed under two "+
+			"players is one track, and the anchor with no destination is none",
+			len(files))
 	}
 
 	// Numbered as the page prints them, padded so a directory listing sorts

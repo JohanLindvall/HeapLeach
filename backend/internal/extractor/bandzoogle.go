@@ -45,6 +45,10 @@ type Bandzoogle struct {
 // rather than a theme's: it is what the player script binds to.
 const bandzoogleTrackAttr = "data-zoogle-track"
 
+// bandzoogleIDAttr identifies the recording, which is what tells one track
+// from another when a page lists the same album under two players.
+const bandzoogleIDAttr = "data-id"
+
 // bandzoogleDestAttr carries the path the audio is served from.
 const bandzoogleDestAttr = "data-dest"
 
@@ -122,10 +126,24 @@ func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist stri
 	seen := make(map[string]bool)
 	for _, a := range findAll(root, isBandzoogleTrack) {
 		link := resolveRef(base, attr(a, bandzoogleDestAttr))
-		if link == "" || seen[link] {
+		if link == "" {
 			continue
 		}
-		seen[link] = true
+		// Keyed on the track's own id, not on the link. A page carries a
+		// player per album and the same recording appears under more than
+		// one of them, which makes the *paths* differ — /player/A/tracks/9
+		// and /player/B/tracks/9 — while the recording is the one thing they
+		// have in common. Keyed on the link, one album listed twice queued
+		// every track twice: 44 entries for 24 songs, each repeat fetched
+		// only to be dropped by the already-on-disk check.
+		key := strings.TrimSpace(attr(a, bandzoogleIDAttr))
+		if key == "" {
+			key = link
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 
 		if artist == "" {
 			artist = strings.TrimSpace(attr(a, "data-artist"))
