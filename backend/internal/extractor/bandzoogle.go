@@ -267,11 +267,29 @@ func bandzoogleAlbum(a *html.Node) string {
 			return false
 		})
 		if heading != nil {
-			return collapseSpace(textOf(heading))
+			return bandzoogleAlbumName(textOf(heading))
 		}
 	}
 	return ""
 }
+
+// bandzoogleAlbumName tidies a heading into something worth being a folder.
+//
+// These headings wrap the release in typographic quotes — EP „Name“ — which
+// say nothing a directory needs and read as noise in a file browser. Only the
+// quoting characters go: apostrophes stay, because those sit inside words
+// rather than around them, and a title that owns one would be left misspelt.
+func bandzoogleAlbumName(heading string) string {
+	return collapseSpace(bandzoogleDecoration.Replace(heading))
+}
+
+// bandzoogleDecoration drops the marks used to quote a title, in the several
+// spellings the web writes them.
+var bandzoogleDecoration = strings.NewReplacer(
+	`„`, "", `“`, "", `”`, "", `"`, "",
+	`«`, "", `»`, "", `‹`, "", `›`, "",
+	`‟`, "", `〝`, "", `〞`, "",
+)
 
 // bandzooglePlayers counts the distinct players whose tracks sit under n,
 // which is how the walk above knows it has left one album's markup.
