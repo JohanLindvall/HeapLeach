@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -119,9 +120,7 @@ func bandzoogleParse(doc string, u *url.URL) (*Result, error) {
 // varies from one band's site to the next.
 func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist string) {
 	seen := make(map[string]bool)
-	for _, a := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.A) && attr(n, bandzoogleTrackAttr) != ""
-	}) {
+	for _, a := range findAll(root, isBandzoogleTrack) {
 		link := resolveRef(base, attr(a, bandzoogleDestAttr))
 		if link == "" || seen[link] {
 			continue
@@ -135,7 +134,7 @@ func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist stri
 		// a track the page did not name falls back to that path's own.
 		name := strings.TrimSpace(attr(a, "data-title"))
 		if name != "" {
-			name += bandzoogleExt(link)
+			name = bandzoogleNumber(a) + name + bandzoogleExt(link)
 		}
 		files = append(files, File{
 			Name:    util.FirstNonEmpty(name, util.NameFromURL(link)),
@@ -145,6 +144,45 @@ func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist stri
 		})
 	}
 	return files, artist
+}
+
+// bandzoogleNumber is the track's position on the page, as a filename
+// prefix, or "" when the page does not print one.
+//
+// The number is not on the anchor — the software puts it in a sibling span —
+// so the walk goes up from the anchor looking for one. It stops the moment it
+// reaches an element holding more than a single track, because the list that
+// encloses them all contains every number and would hand back a neighbour's.
+//
+// Padded to two digits so a directory listing sorts the way the album plays,
+// which a bare "2" beside a "10" does not. Numbering restarts per album and
+// several albums share a page, but a title never appears under two different
+// numbers here, so this neither creates collisions nor breaks the skip that
+// already folds the repeats together.
+func bandzoogleNumber(a *html.Node) string {
+	for n, depth := a.Parent, 0; n != nil && depth < 3; n, depth = n.Parent, depth+1 {
+		if len(findAll(n, isBandzoogleTrack)) > 1 {
+			return ""
+		}
+		span := findFirst(n, func(c *html.Node) bool { return hasClass(c, "track-number") })
+		if span == nil {
+			continue
+		}
+		digits := strings.TrimSpace(textOf(span))
+		position, err := strconv.Atoi(digits)
+		if err != nil || position <= 0 {
+			return ""
+		}
+		return fmt.Sprintf("%02d ", position)
+	}
+	return ""
+}
+
+// isBandzoogleTrack reports whether a node is one of the player's track
+// anchors, which is both how they are found and how the number walk above
+// knows it has climbed past the track it started from.
+func isBandzoogleTrack(n *html.Node) bool {
+	return isElem(n, atom.A) && attr(n, bandzoogleTrackAttr) != ""
 }
 
 // bandzoogleExt is the audio extension the link carries, defaulting to .mp3

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,23 +21,32 @@ const bandzooglePage = `<!DOCTYPE html><html><head>
 <div class="zoogle-music-player" data-controller="zoogle-media-player">
 <ul>
   <li class="track-list-item">
-    <a type="audio/mp3" data-id="111" data-artist="A Band Name" data-duration="2:01"
-       data-title="First Song" data-dest="/player/900/tracks/111.mp3"
-       data-zoogle-track="true" class="track-icon play" href="#"></a>
+    <div class="track-number-play">
+      <a type="audio/mp3" data-id="111" data-artist="A Band Name" data-duration="2:01"
+         data-title="First Song" data-dest="/player/900/tracks/111.mp3"
+         data-zoogle-track="true" class="track-icon play" href="#"></a>
+      <span class="track-number"> 1 </span>
+    </div>
   </li>
   <li class="track-list-item">
-    <a type="audio/mp3" data-id="112" data-artist="A Band Name" data-duration="1:12"
-       data-title="Second Song" data-dest="/player/900/tracks/112.mp3"
-       data-zoogle-track="true" class="track-icon play" href="#"></a>
+    <div class="track-number-play">
+      <a type="audio/mp3" data-id="112" data-artist="A Band Name" data-duration="1:12"
+         data-title="Second Song" data-dest="/player/900/tracks/112.mp3"
+         data-zoogle-track="true" class="track-icon play" href="#"></a>
+      <span class="track-number"> 12 </span>
+    </div>
   </li>
   <li class="track-list-item">
     <!-- The same track again, as a second player on the page repeats it. -->
-    <a type="audio/mp3" data-id="111" data-artist="A Band Name"
-       data-title="First Song" data-dest="/player/900/tracks/111.mp3"
-       data-zoogle-track="true" class="track-icon play" href="#"></a>
+    <div class="track-number-play">
+      <a type="audio/mp3" data-id="111" data-artist="A Band Name"
+         data-title="First Song" data-dest="/player/900/tracks/111.mp3"
+         data-zoogle-track="true" class="track-icon play" href="#"></a>
+      <span class="track-number"> 1 </span>
+    </div>
   </li>
   <li class="track-list-item">
-    <!-- No title: the path has to name it. -->
+    <!-- No number printed beside it, and no title either: the path names it. -->
     <a type="audio/mp3" data-id="113" data-dest="/player/900/tracks/untitled-113.mp3"
        data-zoogle-track="true" class="track-icon play" href="#"></a>
   </li>
@@ -74,9 +82,11 @@ func TestBandzoogleReadsEveryTrackOnce(t *testing.T) {
 			"anchor with no destination is none", len(files))
 	}
 
+	// Numbered as the page prints them, padded so a directory listing sorts
+	// the way the album plays.
 	want := []struct{ name, link string }{
-		{"First Song.mp3", "https://aband.example.test/player/900/tracks/111.mp3"},
-		{"Second Song.mp3", "https://aband.example.test/player/900/tracks/112.mp3"},
+		{"01 First Song.mp3", "https://aband.example.test/player/900/tracks/111.mp3"},
+		{"12 Second Song.mp3", "https://aband.example.test/player/900/tracks/112.mp3"},
 		{"untitled-113.mp3", "https://aband.example.test/player/900/tracks/untitled-113.mp3"},
 	}
 	for i, w := range want {
@@ -191,7 +201,7 @@ func TestBandzoogleReachedThroughTheDirectFallback(t *testing.T) {
 	if len(res.Files) != 3 {
 		t.Fatalf("got %d tracks through the registry, want 3", len(res.Files))
 	}
-	if !strings.HasSuffix(res.Files[0].Name, ".mp3") {
+	if res.Files[0].Name != "01 First Song.mp3" {
 		t.Errorf("first track named %q", res.Files[0].Name)
 	}
 }
@@ -253,4 +263,62 @@ func TestBandzoogleSniffKeepsOutOfTheWay(t *testing.T) {
 			t.Error("a page that named a player and offered nothing was passed over silently")
 		}
 	})
+}
+
+func TestBandzoogleNumber(t *testing.T) {
+	cases := []struct{ name, markup, want string }{
+		{
+			"the number beside the track",
+			`<li><div class="track-number-play">
+				<a data-zoogle-track="true" data-dest="/x.mp3"></a>
+				<span class="track-number"> 7 </span></div></li>`,
+			"07 ",
+		},
+		{
+			"two digits are not padded further",
+			`<li><div class="track-number-play">
+				<a data-zoogle-track="true" data-dest="/x.mp3"></a>
+				<span class="track-number">14</span></div></li>`,
+			"14 ",
+		},
+		{
+			"no number printed",
+			`<li><div class="track-number-play">
+				<a data-zoogle-track="true" data-dest="/x.mp3"></a></div></li>`,
+			"",
+		},
+		{
+			"something that is not a number",
+			`<li><div class="track-number-play">
+				<a data-zoogle-track="true" data-dest="/x.mp3"></a>
+				<span class="track-number">bonus</span></div></li>`,
+			"",
+		},
+		{
+			// The list holding every track also holds every number. Climbing
+			// into it would hand this track its neighbour's position.
+			"a neighbour's number is never borrowed",
+			`<ul>
+				<li><a data-zoogle-track="true" data-dest="/a.mp3"></a></li>
+				<li><a data-zoogle-track="true" data-dest="/b.mp3"></a>
+				    <span class="track-number">9</span></li>
+			</ul>`,
+			"",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := parseHTML("<html><body>" + tc.markup + "</body></html>")
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := findFirst(root, isBandzoogleTrack)
+			if a == nil {
+				t.Fatal("no track anchor in the fixture")
+			}
+			if got := bandzoogleNumber(a); got != tc.want {
+				t.Errorf("bandzoogleNumber = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
