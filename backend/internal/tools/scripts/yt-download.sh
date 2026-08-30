@@ -29,11 +29,59 @@ if ! command -v "$ytdlp" >/dev/null 2>&1; then
   exit 127
 fi
 
+
+# best_audio_per_language builds the format selector, keeping every language
+# a video offers rather than only the one yt-dlp would rank first.
+#
+# A dubbed release is the case this exists for: the default `ba` takes the
+# single best audio, which for a video whose original track is Spanish means
+# the English dub beside it is silently dropped. Asking for each language by
+# name keeps them all, and the player picks.
+#
+# Naming them is necessary because `mergeall[vcodec=none]` — the documented
+# way to take "all audio" — takes all *formats*, which is every bitrate and
+# codec of every language: the video this was written against offers 28 audio
+# formats for its 4 languages, so that would fetch seven copies of each.
+#
+# The languages have to be asked for, which costs one extraction before the
+# download. Any failure falls back to the single-audio selector, because a
+# download that works with one language beats no download at all.
+best_audio_per_language() {
+  local langs selector lang
+  langs=$("$ytdlp" "${probe_args[@]}" --print '%(formats.:.language)s' "$url" 2>/dev/null |
+    tr -d "[]'\"" | tr ',' '\n' |
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+    grep -E '^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$' |
+    sort -u) || true
+
+  selector=''
+  for lang in $langs; do
+    selector="$selector+ba[language=$lang]"
+  done
+
+  # One language needs no naming, and none means the probe told us nothing.
+  if [ -z "$selector" ] || [ "$(printf '%s\n' $langs | wc -l)" -lt 2 ]; then
+    echo 'bv*+ba/b'
+    return
+  fi
+  # The plain pair trails it, so a video whose languages cannot all be had
+  # still downloads rather than failing the selector outright.
+  echo "bv*$selector/bv*+ba/b"
+}
+
+# probe_args are the flags the language probe shares with the download: the
+# runtime and the player it needs, and nothing that would fetch bytes.
+probe_args=(--no-warnings --no-playlist --simulate)
+if [ -n "${DENO:-}" ]; then
+  probe_args+=(--js-runtimes "deno:$DENO")
+fi
+
+# Chosen here rather than earlier because the probe above is what decides it.
 # Without ffmpeg only a single already-muxed stream can be saved, so ask for
-# one rather than letting yt-dlp pick a pair it then cannot join.
+# one rather than letting yt-dlp pick a set it then cannot join.
 if [ -z "$format" ]; then
   if [ -n "${FFMPEG:-}" ]; then
-    format='bv*+ba/b'
+    format=$(best_audio_per_language)
   else
     format='b'
   fi
@@ -51,6 +99,9 @@ args=(
   --fragment-retries 10
   --concurrent-fragments 4
   --format "$format"
+  # Without this yt-dlp keeps one audio stream however many the selector
+  # asked for, and the extra languages are downloaded and then discarded.
+  --audio-multistreams
   --paths "$outdir"
   --output '%(title).200B [%(id)s].%(ext)s'
   # The format id comes last and is what marks one stream from the next: a
@@ -63,6 +114,15 @@ args=(
 if [ -n "${FFMPEG:-}" ]; then
   args+=(--ffmpeg-location "$FFMPEG")
 fi
+# Merging several languages together loses what each one was: ffmpeg labels
+# every track with the first one's tag, so a file with Arabic, English,
+# Spanish and Portuguese arrives claiming to be English four times over, and
+# a player has no way to offer the choice the tracks were fetched for. The
+# metadata pass is what restores them — at the cost of a second pass over the
+# finished file, so it is asked for only when there are languages to label.
+case "$format" in
+*language=*) args+=(--embed-metadata) ;;
+esac
 # yt-dlp looks for deno on PATH unaided; this is for the copy next to the
 # binary, which is where the service keeps its helpers and PATH does not
 # reach. Without a runtime it still extracts, for now, but says it is

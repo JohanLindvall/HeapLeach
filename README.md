@@ -466,7 +466,11 @@ listed as supported and quietly broken.
 ## Optional helpers
 
 YouTube — and every host marked "Needs `make dependencies`" above — is
-fetched by `yt-dlp`. `ffmpeg` rewraps any finished `.ts` as `.mp4` and lets
+fetched by `yt-dlp`, which is asked for **every audio language a video
+carries** rather than only the one it ranks first: a dubbed release puts its
+original track at the top, so the English beside it would otherwise be
+dropped. The languages arrive as separate tracks in one file, labelled, for
+the player to choose between. `ffmpeg` rewraps any finished `.ts` as `.mp4` and lets
 yt-dlp merge separate video and audio tracks. `deno` runs the player
 JavaScript YouTube signs its media URLs with: yt-dlp still extracts without
 a runtime, but warns that doing so is deprecated and that formats may be

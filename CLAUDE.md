@@ -517,7 +517,24 @@ stop existing. Note that a *newly added* job still meets the cached miss;
 only retrying looks again. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal
-item state. Its progress line is the fiddliest part, and both of its traps produced a
+item state. Its **format selector keeps every audio language**, not just the best one.
+A dubbed release ranks its original track first, so `ba` alone hands back
+Spanish and silently drops the English beside it. Each language is therefore
+named — `bv*+ba[language=en-US]+ba[language=ar]+…` — which costs one
+extraction before the download to learn what they are, falls back to the
+plain pair whenever that probe says nothing useful, and skips the naming
+entirely for the single-language case that is most videos. Two flags are
+load-bearing and neither is obvious: without `--audio-multistreams` yt-dlp
+downloads the extra languages and then keeps one, and without
+`--embed-metadata` the merge labels every track with the first one's tag, so
+four languages arrive all claiming to be English and a player cannot offer
+the choice. That second pass rewrites the finished file, so it is asked for
+only when there is more than one language to label. `mergeall[vcodec=none]`,
+the documented way to take "all audio", is not what is wanted: it takes all
+*formats*, which for the video this was written against is 28 — seven
+encodings of each of its four languages.
+
+Its progress line is the fiddliest part, and both of its traps produced a
 display that looked plausible and was wrong. yt-dlp reports **one file at a
 time**, so a merged download reports the video stream and then the audio,
 each counting from zero with a total of its own — passed through as they

@@ -238,3 +238,101 @@ func TestDownloadScriptPassesOnAJSRuntime(t *testing.T) {
 		t.Errorf("DENO was set, but the script did not pass it on:\n%s", got)
 	}
 }
+
+// runDownloadScript runs the helper against a stand-in yt-dlp and returns the
+// arguments it was handed. The stub answers the language probe from `langs`
+// and echoes its arguments for the download call, which is how the format
+// the script settled on can be read back.
+func runDownloadScript(t *testing.T, langs string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the download helper is a shell script")
+	}
+	dir := t.TempDir()
+
+	ytdlp := filepath.Join(dir, "yt-dlp-stub")
+	// --simulate is what separates the two calls: the probe passes it and
+	// the download does not. Keying on --print would match both, since the
+	// download uses it to report the finished file.
+	stub := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"--simulate\" ]; then echo '" + langs + "'; exit 0; fi\n" +
+		"done\n" +
+		"for a in \"$@\"; do echo \"$a\"; done\n"
+	if err := os.WriteFile(ytdlp, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	script := filepath.Join(dir, ScriptName)
+	if err := os.WriteFile(script, ytDownloadScript, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(script, "https://example.test/watch", dir)
+	// FFMPEG set, since merging is what any of this depends on.
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "YTDLP=" + ytdlp, "FFMPEG=/usr/bin/true"}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("running the helper: %v", err)
+	}
+	return string(out)
+}
+
+// A dubbed release is the case this exists for: the default selector takes
+// the single best audio, so a video whose original track is Spanish loses the
+// English dub beside it. Each language is asked for by name instead.
+func TestDownloadScriptAsksForEveryAudioLanguage(t *testing.T) {
+	// The shape yt-dlp reports: one entry per format, so languages repeat.
+	got := runDownloadScript(t, "['ar', 'en-US', 'pt-BR', 'ar', 'es-US', 'en-US']")
+
+	for _, want := range []string{
+		"ba[language=ar]", "ba[language=en-US]", "ba[language=es-US]", "ba[language=pt-BR]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("selector does not ask for %s:\n%s", want, got)
+		}
+	}
+	// Named once each, however many formats carried them.
+	if n := strings.Count(got, "ba[language=ar]"); n != 1 {
+		t.Errorf("Arabic asked for %d times, want once", n)
+	}
+	// Merging drops the per-track tags without this, leaving every language
+	// labelled the same and the choice they were fetched for unavailable.
+	if !strings.Contains(got, "--embed-metadata") {
+		t.Error("several languages merged without the metadata pass that labels them")
+	}
+	// And more than one is only kept if this is asked for.
+	if !strings.Contains(got, "--audio-multistreams") {
+		t.Error("the extra languages would be downloaded and then discarded")
+	}
+}
+
+// One language needs no naming, and must not pay for a second pass over the
+// finished file to relabel a track that is already right.
+func TestDownloadScriptLeavesASingleLanguageAlone(t *testing.T) {
+	got := runDownloadScript(t, "['en', 'en', 'en']")
+
+	if strings.Contains(got, "language=") {
+		t.Errorf("a single-language video was asked for by name:\n%s", got)
+	}
+	if !strings.Contains(got, "bv*+ba/b") {
+		t.Errorf("selector = %s, want the plain pair", got)
+	}
+	if strings.Contains(got, "--embed-metadata") {
+		t.Error("a second pass over the file was run with nothing to relabel")
+	}
+}
+
+// A probe that answers with nothing usable must not stop the download: one
+// language working beats no download at all.
+func TestDownloadScriptFallsBackWhenTheProbeSaysNothing(t *testing.T) {
+	for _, langs := range []string{"", "[]", "['none', 'None']", "garbage output"} {
+		got := runDownloadScript(t, langs)
+		if !strings.Contains(got, "bv*+ba/b") {
+			t.Errorf("probe %q gave selector:\n%s\nwant the fallback", langs, got)
+		}
+		if strings.Contains(got, "--embed-metadata") {
+			t.Errorf("probe %q asked for a metadata pass it has no languages for", langs)
+		}
+	}
+}
