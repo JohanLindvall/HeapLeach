@@ -517,7 +517,19 @@ stop existing. Note that a *newly added* job still meets the cached miss;
 only retrying looks again. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal
-item state. Three things to know: `--print` implies `--quiet` in yt-dlp, so
+item state. Its progress line is the fiddliest part, and both of its traps produced a
+display that looked plausible and was wrong. yt-dlp reports **one file at a
+time**, so a merged download reports the video stream and then the audio,
+each counting from zero with a total of its own — passed through as they
+arrive, a 154MB download finished reading "5 MB / 5 MB". The format id ends
+the progress template so the streams can be told apart and added up, with a
+collapsed byte counter standing in when an overridden script predates that
+field. And a fragmented download has no length to state, so the total comes
+back as a **float** average — `129456458.22222222` — which `ParseInt` refuses;
+the error was dropped, every honest total with it, and one early estimate
+that happened to be whole stuck for the whole download as "158 MB / 712 B".
+
+Three further things to know: `--print` implies `--quiet` in yt-dlp, so
 `--progress` is required or no progress is emitted at all; cancelling
 must kill the whole process group, since the script spawns yt-dlp which
 spawns ffmpeg; and `DENO` is passed by path rather than left to be found,

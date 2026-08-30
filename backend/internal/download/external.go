@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,20 +119,38 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 func (m *Manager) readExternalProgress(it *Item, stdout io.Reader) string {
 	var produced string
 
+	// yt-dlp reports one file at a time, and a merged download is two of
+	// them: the video stream and then the audio, each counting from zero.
+	// Passed straight through, the item would show whichever is in flight —
+	// finishing at "5 MB of 5 MB" for a download of 154. So the streams
+	// already done are carried in base and every report is added to it.
+	var (
+		stream   string
+		base     int64
+		streamed int64
+	)
+
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		switch {
 		case strings.HasPrefix(line, "PROGRESS "):
-			done, total, ok := parseProgress(strings.TrimPrefix(line, "PROGRESS "))
+			done, total, id, ok := parseProgress(strings.TrimPrefix(line, "PROGRESS "))
 			if !ok {
 				continue
 			}
-			it.downloaded.Store(done)
+			if newExternalStream(id, stream, done, streamed) {
+				base += streamed
+				streamed = 0
+			}
+			stream = id
+			streamed = done
+
+			it.downloaded.Store(base + done)
 			if total > 0 {
 				m.mu.Lock()
-				it.Size = total
+				it.Size = base + total
 				m.mu.Unlock()
 			}
 		case strings.HasPrefix(line, "FILE "):
@@ -141,19 +160,71 @@ func (m *Manager) readExternalProgress(it *Item, stdout io.Reader) string {
 	return produced
 }
 
-// parseProgress reads a "<downloaded> <total>" pair, tolerating the "NA"
-// yt-dlp emits when a total is not yet known.
-func parseProgress(fields string) (done, total int64, ok bool) {
+// newExternalStream reports whether this line belongs to a different file
+// from the last one.
+//
+// The format id says so outright, and is what the shipped helper reports. A
+// copy of that script installed beside the binary overrides the built-in one
+// and may predate the field, so a counter that has collapsed to a fraction
+// of where it was stands in: fetching several fragments at once makes the
+// figure wobble backwards by a fraction of a percent, which this is well
+// clear of, while a new stream restarts it from almost nothing.
+func newExternalStream(id, previous string, done, streamed int64) bool {
+	if id != "" || previous != "" {
+		return id != previous
+	}
+	return streamed > 0 && done*2 < streamed
+}
+
+// parseProgress reads a "<downloaded> <total> [<format-id>]" line, tolerating
+// the "NA" yt-dlp emits when a total is not yet known.
+func parseProgress(fields string) (done, total int64, stream string, ok bool) {
 	parts := strings.Fields(fields)
 	if len(parts) == 0 {
-		return 0, 0, false
+		return 0, 0, "", false
 	}
-	done, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		return 0, 0, false
+	done, ok = parseByteCount(parts[0])
+	if !ok {
+		return 0, 0, "", false
 	}
 	if len(parts) > 1 {
-		total, _ = strconv.ParseInt(parts[1], 10, 64)
+		// Only on success: a discarded ok would let a refused value through
+		// as the total, which is the shape of the bug this replaced.
+		if n, valid := parseByteCount(parts[1]); valid {
+			total = n
+		}
 	}
-	return done, total, true
+	// The format id is last and optional, so an older helper script that
+	// does not report one still parses.
+	if len(parts) > 2 && parts[2] != "NA" {
+		stream = parts[2]
+	}
+	return done, total, stream, true
+}
+
+// parseByteCount reads a count yt-dlp may state as an integer or as a float.
+//
+// A fragmented download has no length to report — the manifest names parts,
+// not bytes — so yt-dlp answers with a running estimate averaged over the
+// fragments so far, and that arrives as "129456458.22222222". Read as an
+// integer it is not a number at all, which is how a whole download came to
+// report its size as the first estimate that happened to land on a whole
+// byte: every honest one after it was discarded, leaving "158 MB / 712 B",
+// a bar pinned at full and no ETA.
+//
+// The fractional part is an artefact of the averaging rather than a quantity,
+// so it is truncated. Anything not a finite, non-negative number is refused
+// rather than folded to zero, since zero here means "no total yet".
+func parseByteCount(s string) (int64, bool) {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if n < 0 {
+			return 0, false
+		}
+		return n, true
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 {
+		return 0, false
+	}
+	return int64(f), true
 }

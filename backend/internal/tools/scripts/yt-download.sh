@@ -15,7 +15,7 @@
 #   DENO    path to a deno binary          (optional; runs the player JS)
 #
 # Lines the service reads back from stdout:
-#   PROGRESS <downloaded-bytes> <total-bytes>
+#   PROGRESS <downloaded-bytes> <total-bytes> [<format-id>]
 #   FILE <final-path>
 set -euo pipefail
 
@@ -53,7 +53,11 @@ args=(
   --format "$format"
   --paths "$outdir"
   --output '%(title).200B [%(id)s].%(ext)s'
-  --progress-template 'download:PROGRESS %(progress.downloaded_bytes)s %(progress.total_bytes,progress.total_bytes_estimate)s'
+  # The format id comes last and is what marks one stream from the next: a
+  # merged download reports the video's progress and then the audio's, each
+  # counting from zero, so without it the item ends up showing the audio
+  # stream's few megabytes as the whole file.
+  --progress-template 'download:PROGRESS %(progress.downloaded_bytes)s %(progress.total_bytes,progress.total_bytes_estimate)s %(info.format_id)s'
   --print 'after_move:FILE %(filepath)s'
 )
 if [ -n "${FFMPEG:-}" ]; then
