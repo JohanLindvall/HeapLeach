@@ -1687,7 +1687,18 @@ button.jobs__dir:hover {
 @media (max-width: 560px) {
   body { font-size: 14px; }
 
+  /* The path is the half a phone has no room for; what is left on the disk
+     is the half worth keeping, so the control sheds the path rather than
+     going away with it. A destination that could not be measured has nothing
+     to say and stays hidden, and the editor stays reachable either way. */
   .jobs__dir { display: none; }
+  .jobs__dir--measured,
+  .jobs__dir--editing { display: flex; }
+  .jobs__dir--measured code { display: none; }
+  .jobs__dir--measured .jobs__free {
+    padding-left: 0;
+    border-left: none;
+  }
 
   /* Filters become a scrolling strip rather than wrapping onto three rows
      and pushing the queue off the first screen. */

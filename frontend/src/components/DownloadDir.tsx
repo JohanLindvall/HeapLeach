@@ -55,6 +55,11 @@ export function DownloadDir({ value, onChange, free, total }: DownloadDirProps) 
   // A total of zero is a destination that could not be measured, not one
   // with no room: reporting "0 B free" for a directory that has simply gone
   // missing would be worse than saying nothing.
+  //
+  // It also decides what a phone shows. There is no room there for both the
+  // path and the figure, and the figure is the one worth having, so the
+  // control drops the path at that width — but only when there is a figure
+  // to drop it for, which is what the modifier below says.
   const measured = total > 0;
   const low = measured && free < total * LOW_FRACTION;
 
@@ -62,7 +67,7 @@ export function DownloadDir({ value, onChange, free, total }: DownloadDirProps) 
     return (
       <button
         type="button"
-        className="jobs__dir"
+        className={measured ? 'jobs__dir jobs__dir--measured' : 'jobs__dir'}
         onClick={open}
         title={
           measured
