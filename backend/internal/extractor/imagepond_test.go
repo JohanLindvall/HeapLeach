@@ -500,3 +500,61 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	}
 	return u
 }
+
+// A link straight to the media host is the file itself. Match claims that
+// host along with the site — one is a subdomain of the other — so if this
+// route did not exist nothing else would handle it, and the URL would be
+// refused for not being a page.
+func TestImagePondTakesAMediaHostLinkAsTheFile(t *testing.T) {
+	ip := NewImagePond(httpx.New("test/1.0", "en", 0, time.Second))
+	raw := "https://media.imagepond.net/media/videos/SomeClip_abc123.mp4"
+
+	res, err := ip.Extract(context.Background(), mustURL(t, raw), Options{})
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(res.Files) != 1 {
+		t.Fatalf("got %d files, want 1", len(res.Files))
+	}
+	f := res.Files[0]
+	if f.URL != raw {
+		t.Errorf("url = %q, want the link as given", f.URL)
+	}
+	if f.Name != "SomeClip_abc123.mp4" {
+		t.Errorf("name = %q, want the filename from the path", f.Name)
+	}
+	// No page to read, so nothing to resolve later.
+	if f.Resolve != nil {
+		t.Error("a direct file link should need no resolver")
+	}
+	if f.Headers[httpx.HeaderReferer] == "" {
+		t.Error("the referer every other file here carries is missing")
+	}
+}
+
+func TestImagePondMediaFile(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{
+			"a stored video",
+			"https://media.imagepond.net/media/videos/clip_abc123.mp4",
+			"https://media.imagepond.net/media/videos/clip_abc123.mp4",
+		},
+		{
+			// Asked for by name rather than found on a page, so it is what
+			// was wanted — unlike imagePondHosted, which must skip these.
+			"a thumbnail asked for by name",
+			"https://media.imagepond.net/media/videos/clip_abc123_thumb.jpg",
+			"https://media.imagepond.net/media/videos/clip_abc123_thumb.jpg",
+		},
+		{"the site host is not the media host", "https://www.imagepond.net/i/abc123", ""},
+		{"no filename to save under", "https://media.imagepond.net/", ""},
+		{"a foreign host", "https://media.elsewhere.test/media/videos/x.mp4", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := imagePondMediaFile(mustURL(t, tc.in)); got != tc.want {
+				t.Errorf("imagePondMediaFile(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

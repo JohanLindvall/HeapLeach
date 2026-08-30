@@ -35,6 +35,10 @@ import (
 // the site's own /i/<code>/direct route, which answers with a redirect to
 // that same stored file. See imagePondDirect.
 //
+// A link to the media host itself — media.imagepond.net/… — is the stored
+// file, and is taken as given: Match claims that host along with the site,
+// since one is a subdomain of the other, so nothing else would handle it.
+//
 // Albums (/a/<code>) are served whole and server-side, so one fetch names
 // every item. What that page does *not* carry is the media: each card links
 // only to the item's own viewer, so the file behind it is resolved per item,
@@ -69,8 +73,26 @@ func (i *ImagePond) Name() string { return "imagepond" }
 
 func (i *ImagePond) Match(u *url.URL) bool { return util.HostMatches(u.Host, "imagepond.net") }
 
-// Extract resolves a viewer page (/i/<code>) or an album (/a/<code>).
+// Extract resolves a viewer page (/i/<code>), an album (/a/<code>), or a link
+// to the stored file itself.
 func (i *ImagePond) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+	// The media host serves the files the pages point at, and Match claims
+	// it along with the site — one is a subdomain of the other. A link to it
+	// is already the answer the other two routes go looking for, so it is
+	// taken as it stands rather than rejected for not being a page.
+	if link := imagePondMediaFile(u); link != "" {
+		name := util.FirstNonEmpty(util.NameFromURL(link), "imagepond-file")
+		return &Result{Title: name, Files: []File{{
+			Name: name,
+			URL:  link,
+			Size: -1,
+			// Not required — the host serves these to anyone — but sent for
+			// the same reason every other file here carries it, so one host
+			// tightening up later does not become a puzzle.
+			Headers: httpx.Referer(imagePondRoot + "/"),
+		}}}, nil
+	}
+
 	segs := util.PathSegments(u)
 	switch {
 	case len(segs) >= 2 && segs[0] == "a":
@@ -78,9 +100,25 @@ func (i *ImagePond) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 	case len(segs) >= 2 && segs[0] == "i":
 		return i.item(ctx, u, segs[1])
 	}
-	return nil, fmt.Errorf("imagepond: %s is neither an item page (/i/<code>) nor an "+
-		"album (/a/<code>) — profile pages list their items client-side, so there is "+
-		"nothing in them to read", u.Redacted())
+	return nil, fmt.Errorf("imagepond: %s is not an item page (/i/<code>), an album "+
+		"(/a/<code>), or a file on %s — profile pages list their items client-side, "+
+		"so there is nothing in them to read", u.Redacted(), imagePondMedia)
+}
+
+// imagePondMediaFile keeps a link that already addresses a stored file.
+//
+// Unlike imagePondHosted, which reads links out of a page and has to tell the
+// file from the poster frame generated beside it, this one is given the link
+// by the user: a thumbnail asked for by name is a thumbnail wanted, so
+// nothing is filtered but the host and the absence of a filename.
+func imagePondMediaFile(u *url.URL) string {
+	if !util.HostMatches(u.Host, imagePondMedia) {
+		return ""
+	}
+	if util.NameFromURL(u.String()) == "" {
+		return ""
+	}
+	return u.String()
 }
 
 // item resolves one viewer page to the file behind it.
