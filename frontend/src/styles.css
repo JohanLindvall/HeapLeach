@@ -1695,6 +1695,15 @@ button.jobs__dir:hover {
   .jobs__dir--measured,
   .jobs__dir--editing { display: flex; }
   .jobs__dir--measured code { display: none; }
+  /* And it does not give way. Everything else in this row can be recovered
+     by scrolling or by asking again; how much room is left cannot, and it is
+     the one number that decides whether the next queue is worth starting. So
+     the search field yields the width instead. */
+  .jobs__dir--measured { flex: none; }
+  /* Narrower than any real phone — a zoomed page, say — the row runs out of
+     width even with the search field at nothing. Wrapping costs a line;
+     overflowing would set the whole page sliding sideways. */
+  .jobs__tools { flex-wrap: wrap; }
   .jobs__dir--measured .jobs__free {
     padding-left: 0;
     border-left: none;
