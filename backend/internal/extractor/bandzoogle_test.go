@@ -391,17 +391,19 @@ func TestBandzoogleFoldersTracksByAlbum(t *testing.T) {
 func TestBandzoogleAlbumName(t *testing.T) {
 	cases := map[string]string{
 		// The decoration a heading wraps a release in says nothing a folder
-		// needs, and the spacing closes up behind it.
+		// needs, and the spacing closes up behind it. German quotes are the
+		// pair that prompted this; the others are the same idea spelled the
+		// ways the web spells it.
 		`EP „Ein Erfundener Titel“`: "EP Ein Erfundener Titel",
-		`"Quoted Title"`:   "Quoted Title",
-		`Album «Name»`:     "Album Name",
-		`  Spaced   Out  `: "Spaced Out",
+		`"Quoted Title"`:            "Quoted Title",
+		`Album «Name»`:              "Album Name",
+		`  Spaced   Out  `:          "Spaced Out",
 		// Nothing to strip.
 		"A Plain Release Name": "A Plain Release Name",
 		// An apostrophe sits inside a word rather than around a title, so
 		// taking it would leave the name misspelt.
 		"Don't Stop (extended)": "Don't Stop (extended)",
-		"Rock ’n’ Roll":          "Rock ’n’ Roll",
+		"Rock ’n’ Roll":         "Rock ’n’ Roll",
 	}
 	for in, want := range cases {
 		if got := bandzoogleAlbumName(in); got != want {

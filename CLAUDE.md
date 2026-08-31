@@ -98,12 +98,23 @@ UI is built inside the container and only `bin/heapleach` is exported — so a
 build cannot disturb the tracked placeholder. Release notes are GitHub's
 auto-generated changelog link; the `tag` target authors no body.
 
-### No live URLs in the repository
+### No live URLs or real filenames in the repository
 
 Nothing tracked may contain a link to a specific piece of content — no
-video pages, albums, profiles, threads or signed media URLs. This applies to
-code, tests, README.md, this file, and commit messages alike. Such links go
-stale, and a downloader's repository is not the place to catalogue them.
+video pages, albums, profiles, threads or signed media URLs — **nor the name
+of a real file on any of these hosts**. That second half is the one that gets
+forgotten: a fixture built by viewing a live page tends to arrive with the
+page's own filenames still in it, and a test asserting on a real release or
+track name is the same mistake wearing different clothes. Both are as stale,
+and as much a catalogue of somebody's content, as a link would be.
+
+This applies to code, tests, README.md, this file, and commit messages alike.
+
+Invent the names. A fixture proves the parser reads `data-title`; it does not
+matter whose title it is, and `First Song` tests the code exactly as well as
+a real one does. Where the *shape* is what is under test — typographic quotes
+around a release, an apostrophe inside a word — invent something with that
+shape rather than reaching for the example that prompted it.
 
 What is fine, and necessary:
 
@@ -118,8 +129,10 @@ under test and does not care whose host a path belongs to; real-world
 correctness belongs in the live tests. Generate the expected value with the
 implementation once, then pin it.
 
-`.gitignore` carries `*live_test.go` to keep the live tests out. Before
-committing, it is worth checking that nothing new slipped in:
+`.gitignore` carries `*live_test.go` to keep the live tests out — which is
+also where a URL or filename taken from a real page belongs, since those
+files never reach the repository. Before committing, it is worth checking
+that nothing new slipped in:
 
 ```bash
 git ls-files -z | xargs -0 grep -nE 'gofile\.io/d/[A-Za-z0-9]|thisvid\.com/videos/|youtube\.com/watch\?v=|mega\.nz/(file|folder)/[A-Za-z0-9_-]{4}'
