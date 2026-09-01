@@ -139,8 +139,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			busyWaits++
 			wait := util.Backoff(busyWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.note(it, fmt.Sprintf("host busy — retrying in %s (attempt %d)",
-				wait.Round(time.Second), busyWaits))
+			m.note(it, busyNote(rotates, wait, busyWaits))
 			m.log.Info("host busy, waiting", "item", it.ID, "name", name,
 				"attempt", busyWaits, "wait", wait)
 			if err := util.SleepCtx(ctx, wait); err != nil {
@@ -693,6 +692,23 @@ type busyHostError struct{ url string }
 func (e *busyHostError) Error() string {
 	return fmt.Sprintf("%s: the host returned a web page instead of the file "+
 		"(its storage server is busy, or the link has expired)", e.url)
+}
+
+// busyNote says what an item is waiting for, in the terms of what was
+// actually observed. A host with a resolver may really be busy, because the
+// next attempt asks a freshly signed link or another mirror — "busy" is a
+// fair reading of a page where a file was expected. An item without one asks
+// the identical URL the identical way, so calling that a busy host is a guess
+// dressed as a diagnosis; the page is the only fact in evidence, and the
+// attempts are capped, so the note reports both and lets the count show that
+// this ends.
+func busyNote(rotates bool, wait time.Duration, attempt int) string {
+	if rotates {
+		return fmt.Sprintf("host busy — retrying in %s (attempt %d)",
+			wait.Round(time.Second), attempt)
+	}
+	return fmt.Sprintf("got a web page, not a file — retrying in %s (attempt %d of %d)",
+		wait.Round(time.Second), attempt, config.BusyRetryLimit)
 }
 
 // pageNotAFile explains the same answer for a URL that cannot be resolved
