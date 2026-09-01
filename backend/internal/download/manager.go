@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -932,8 +933,8 @@ func (m *Manager) snapshotLocked() Snapshot {
 		HostCount:   len(m.reg.Hosts()),
 	}
 	// Newest first: the job someone just added belongs at the top.
-	for i := len(m.order) - 1; i >= 0; i-- {
-		job, ok := m.jobs[m.order[i]]
+	for _, v := range slices.Backward(m.order) {
+		job, ok := m.jobs[v]
 		if !ok {
 			continue
 		}

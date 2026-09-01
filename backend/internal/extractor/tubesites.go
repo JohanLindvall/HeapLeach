@@ -108,7 +108,7 @@ func (x *XHamster) Name() string { return "xhamster" }
 // name ("notxhamster.example").
 func (x *XHamster) Match(u *url.URL) bool {
 	host := strings.ToLower(u.Hostname())
-	for _, label := range strings.Split(host, ".") {
+	for label := range strings.SplitSeq(host, ".") {
 		if strings.HasPrefix(label, "xhamster") {
 			return true
 		}

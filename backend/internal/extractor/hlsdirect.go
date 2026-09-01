@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -148,7 +149,7 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 // downloadable, so the tag alone never refuses one.
 func hlsLiveEdge(doc string) (bool, string) {
 	var event bool
-	for _, line := range strings.Split(doc, "\n") {
+	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == hlsEndListTag:
@@ -183,8 +184,8 @@ var hlsGenericNames = map[string]bool{
 // distinguishes one such download from the next.
 func hlsName(u *url.URL) string {
 	segs := util.PathSegments(u)
-	for i := len(segs) - 1; i >= 0; i-- {
-		seg := strings.TrimSuffix(segs[i], path.Ext(segs[i]))
+	for _, seg := range slices.Backward(segs) {
+		seg := strings.TrimSuffix(seg, path.Ext(seg))
 		if seg != "" && !hlsGenericNames[strings.ToLower(seg)] {
 			return seg
 		}

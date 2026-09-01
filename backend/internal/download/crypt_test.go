@@ -91,13 +91,11 @@ func TestDecryptingWriterIsOrderIndependent(t *testing.T) {
 	// is derived per call, so nothing may be shared between writers.
 	var wg sync.WaitGroup
 	for _, p := range pieces {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if n, err := dst.WriteAt(p.data, p.off); err != nil || n != len(p.data) {
 				t.Errorf("WriteAt(%d bytes at %d) = %d, %v", len(p.data), p.off, n, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

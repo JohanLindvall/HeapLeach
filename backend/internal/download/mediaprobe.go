@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"sort"
+	"slices"
 	"strconv"
 )
 
@@ -148,6 +148,6 @@ func indexesOf(chosen map[string]mediaStream) []int {
 	for _, s := range chosen {
 		out = append(out, s.Index)
 	}
-	sort.Ints(out)
+	slices.Sort(out)
 	return out
 }

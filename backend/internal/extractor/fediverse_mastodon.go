@@ -156,7 +156,7 @@ func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID, until
 	api, pageSize := mastodonPaging(pixelfed)
 
 	var all []mastodonStatus
-	for page := 0; page < config.MaxTimelinePages; page++ {
+	for page := range config.MaxTimelinePages {
 		query := url.Values{}
 		query.Set("limit", strconv.Itoa(pageSize))
 		query.Set("only_media", "true")

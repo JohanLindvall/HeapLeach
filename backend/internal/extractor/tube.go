@@ -1,9 +1,10 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -83,13 +84,27 @@ func bestCandidate(candidates []mediaCandidate) (mediaCandidate, bool) {
 	if len(usable) == 0 {
 		return mediaCandidate{}, false
 	}
-	sort.SliceStable(usable, func(i, j int) bool {
-		if usable[i].Quality != usable[j].Quality {
-			return usable[i].Quality > usable[j].Quality
-		}
-		return !usable[i].IsHLS && usable[j].IsHLS
+	slices.SortStableFunc(usable, func(a, b mediaCandidate) int {
+		return cmp.Or(
+			cmp.Compare(b.Quality, a.Quality), // highest first
+			cmpBool(a.IsHLS, b.IsHLS),         // a plain file before a playlist
+		)
 	})
 	return usable[0], true
+}
+
+// cmpBool orders false before true, so a ranking can prefer the candidates
+// that have a property by comparing b to a, and the ones without it by
+// comparing a to b — the same way cmp.Compare reads for numbers.
+func cmpBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case b:
+		return -1
+	default:
+		return 1
+	}
 }
 
 // mediaURLPattern finds direct media links embedded in a page.

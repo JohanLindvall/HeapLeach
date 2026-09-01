@@ -2,14 +2,16 @@ package extractor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -515,9 +517,7 @@ func (f *FoolFuuka) expand(ctx context.Context, board string, threads []string) 
 // page, which without this would queue the same file twice.
 func (f *FoolFuuka) search(ctx context.Context, t foolFuukaTarget) (*Result, error) {
 	query := url.Values{"board": {t.board}}
-	for name, values := range t.search {
-		query[name] = values
-	}
+	maps.Copy(query, t.search)
 
 	var files []File
 	seen := make(map[string]bool)
@@ -864,12 +864,11 @@ func (p *foolFuukaPosts) UnmarshalJSON(raw []byte) error {
 	// as text. The text is then the tie-break, and it has to be one: a
 	// stable sort would be no help when the order going in is a map's, which
 	// is to say different on every run.
-	sort.Slice(list, func(i, j int) bool {
-		a, b := foolFuukaNumber(list[i].Num), foolFuukaNumber(list[j].Num)
-		if a != b {
-			return a < b
-		}
-		return list[i].Num.String() < list[j].Num.String()
+	slices.SortFunc(list, func(a, b foolFuukaPost) int {
+		return cmp.Or(
+			cmp.Compare(foolFuukaNumber(a.Num), foolFuukaNumber(b.Num)),
+			strings.Compare(a.Num.String(), b.Num.String()),
+		)
 	})
 	*p = list
 	return nil

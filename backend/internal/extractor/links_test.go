@@ -457,7 +457,7 @@ func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
 	var page strings.Builder
 	page.WriteString(`<html><head><title>Big thread</title></head><body>`)
-	for i := 0; i < posted; i++ {
+	for i := range posted {
 		fmt.Fprintf(&page, `<a href="https://files.example.test/f%d">f%d</a>`, i, i)
 	}
 	page.WriteString(`</body></html>`)

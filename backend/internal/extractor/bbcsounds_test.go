@@ -211,7 +211,7 @@ func TestBBCBestDownloadIsStableAcrossRuns(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &download); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		variant, ok := download.best()
 		if !ok || variant.FileURL != "https://open.live.example.test/high.mp3" {
 			t.Fatalf("run %d chose %q", i, variant.FileURL)

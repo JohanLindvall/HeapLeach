@@ -197,7 +197,7 @@ func (l *urlList) UnmarshalJSON(b []byte) error {
 // comma-separated paste works too.
 func splitURLs(s string) []string {
 	var out []string
-	for _, field := range strings.Fields(s) {
+	for field := range strings.FieldsSeq(s) {
 		field = strings.Trim(field, ",;\"'<>")
 		if field != "" {
 			out = append(out, field)

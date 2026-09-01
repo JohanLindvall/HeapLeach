@@ -1,6 +1,9 @@
 package extractor
 
-import "sort"
+import (
+	"slices"
+	"strings"
+)
 
 // What the program supports, asked of the program rather than written down.
 //
@@ -57,10 +60,10 @@ func (r *Registry) Catalogue() []HostInfo {
 			info.Sites = lister.Sites()
 			info.ByShape = len(info.Sites) == 0
 		}
-		sort.Strings(info.Sites)
+		slices.Sort(info.Sites)
 		out = append(out, info)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b HostInfo) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 

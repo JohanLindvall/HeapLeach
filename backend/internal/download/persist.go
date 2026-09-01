@@ -161,11 +161,11 @@ func (m *Manager) persist() {
 	// The byte counters move constantly and are never written down, so a
 	// queue that is merely transferring fingerprints the same as it did a
 	// moment ago and costs nothing beyond building the record.
-	if print := st.fingerprint(); print == m.statePrint {
+	print := st.fingerprint()
+	if print == m.statePrint {
 		return
-	} else {
-		m.statePrint = print
 	}
+	m.statePrint = print
 
 	st.Saved = time.Now()
 	if err := saveState(m.stateFile, st); err != nil {

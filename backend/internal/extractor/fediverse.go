@@ -101,6 +101,15 @@ const (
 // fediDialects maps nodeinfo's software.name onto the API family it speaks.
 // Names are lower-cased before the lookup, since the field is free text.
 var fediDialects = map[string]fediDialect{
+	// The Mastodon API proper, and the servers that reimplement it. Listed
+	// so a failure on one of them is reported as what it is rather than as
+	// the consequence of a guessed dialect.
+	"mastodon":   fediMastodon,
+	"pleroma":    fediMastodon,
+	"akkoma":     fediMastodon,
+	"gotosocial": fediMastodon,
+	"hometown":   fediMastodon,
+
 	"pixelfed": fediPixelfed,
 	"lemmy":    fediLemmy,
 

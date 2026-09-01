@@ -80,7 +80,7 @@ func (k *Kemono) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 	}
 
 	var all []kemonoPost
-	for page := 0; page < kemonoMaxPages; page++ {
+	for page := range kemonoMaxPages {
 		posts, err := k.posts(ctx, root, service, creator, page*kemonoPageSize)
 		if err != nil {
 			if page == 0 {

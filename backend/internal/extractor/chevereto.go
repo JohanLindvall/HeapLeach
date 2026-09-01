@@ -227,7 +227,7 @@ func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *
 	seen := make(map[string]bool)
 	page := u
 
-	for i := 0; i < config.MaxAlbumPages; i++ {
+	for i := range config.MaxAlbumPages {
 		if i > 0 {
 			fetched, err := cheveretoFetch(ctx, client, page, opts)
 			if err != nil {

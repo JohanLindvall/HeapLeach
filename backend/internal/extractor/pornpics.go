@@ -196,7 +196,7 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL) (*Result, error) {
 		files []File
 		seen  = make(map[string]bool)
 	)
-	for page := 0; page < config.MaxAlbumPages; page++ {
+	for page := range config.MaxAlbumPages {
 		fresh := make([]string, 0, len(links))
 		for _, link := range links {
 			if !seen[link] {

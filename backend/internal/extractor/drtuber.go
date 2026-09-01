@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -112,7 +112,7 @@ func drtuberRenditions(files map[string]string) []mediaCandidate {
 	for name := range files {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 
 	var out []mediaCandidate
 	for _, name := range names {

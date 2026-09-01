@@ -129,7 +129,7 @@ func TestFoolFuukaThreadOrderIsTheSameEveryRun(t *testing.T) {
 		"502":{"title":null,"media":null}}}}`
 
 	var first []string
-	for run := 0; run < 25; run++ {
+	for run := range 25 {
 		entries, err := foolFuukaDecode([]byte(body))
 		if err != nil {
 			t.Fatalf("foolFuukaDecode: %v", err)
@@ -561,7 +561,7 @@ func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *FoolFuuka {
 // foolFuukaSearchPage renders one page of results, numbered from base.
 func foolFuukaSearchPage(base int) string {
 	var posts []string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		num := base + i
 		posts = append(posts, fmt.Sprintf(`{"num":"%d","title":null,"media":{
 			"media":"%d.jpg","media_filename":"upload.jpg",

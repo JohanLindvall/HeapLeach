@@ -8,8 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,8 +139,7 @@ func newTracker() *tracker {
 func (t *tracker) events(snap download.Snapshot, r *renderer) []string {
 	var out []string
 	// Snapshots arrive newest-first; announce in submission order.
-	for i := len(snap.Jobs) - 1; i >= 0; i-- {
-		job := snap.Jobs[i]
+	for _, job := range slices.Backward(snap.Jobs) {
 		if !t.jobs[job.ID] && job.Status != download.StatusResolving {
 			t.jobs[job.ID] = true
 			out = append(out, r.jobLine(job))
@@ -291,10 +289,7 @@ func (r *renderer) itemRow(it download.ItemView) string {
 	right := r.itemStats(it, fraction)
 	// The stats block is a fixed width, so the name column — and with it
 	// every bar — starts at the same place on every row.
-	nameWidth := r.width - config.CLIBarWidth - statsWidth - 5
-	if nameWidth < 12 {
-		nameWidth = 12
-	}
+	nameWidth := max(r.width-config.CLIBarWidth-statsWidth-5, 12)
 
 	fill, track := barParts(fraction, config.CLIBarWidth)
 	return "  " + pad(it.Name, nameWidth) + " " +
@@ -389,7 +384,7 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 		r.paintColour(dim, rate))
 
 	if failed > 0 {
-		sort.Strings(names[download.StatusFailed])
+		slices.Sort(names[download.StatusFailed])
 		fmt.Fprintf(out, "%s\n", r.paintColour(red,
 			fmt.Sprintf("  %d failed: %s", failed,
 				truncate(strings.Join(names[download.StatusFailed], ", "), 200))))
@@ -444,7 +439,7 @@ func ReadURLs(r io.Reader) ([]string, error) {
 		return nil, err
 	}
 	var urls []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -452,13 +447,4 @@ func ReadURLs(r io.Reader) ([]string, error) {
 		urls = append(urls, line)
 	}
 	return urls, nil
-}
-
-// IsTerminal reports whether f is an interactive terminal.
-func IsTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
 }

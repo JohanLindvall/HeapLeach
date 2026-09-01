@@ -129,8 +129,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// keeps answering with a web page it is almost always because the
 		// URL *is* a web page — a pasted link no extractor recognised — so
 		// those attempts are capped rather than retried forever.
-		var busy *busyHostError
-		if errors.As(err, &busy) {
+		if busy, ok := errors.AsType[*busyHostError](err); ok {
 			m.mu.Lock()
 			rotates := it.resolve != nil
 			m.mu.Unlock()
@@ -160,8 +159,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// against a host that has stopped serving, while the queue waits
 		// behind it; runItem sends the item to the back of the queue
 		// instead, so whatever can move, moves.
-		var stall *stalledError
-		if errors.As(err, &stall) {
+		if _, ok := errors.AsType[*stalledError](err); ok {
 			return err
 		}
 
@@ -777,12 +775,10 @@ func retryableTransfer(err error) bool {
 	if errors.Is(err, errDeadResource) {
 		return false
 	}
-	var busy *busyHostError
-	if errors.As(err, &busy) {
+	if _, ok := errors.AsType[*busyHostError](err); ok {
 		return true
 	}
-	var se *httpx.StatusError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*httpx.StatusError](err); ok {
 		switch se.Code {
 		case http.StatusRequestTimeout, http.StatusTooManyRequests:
 			return true

@@ -1,5 +1,7 @@
 package httpx
 
+import "maps"
+
 // Header is a set of request headers to apply on top of the client defaults.
 // Extractors return one per file so the downloader can replay exactly what a
 // host needs on every attempt.
@@ -57,12 +59,8 @@ const (
 // Either may be nil.
 func (h Header) Merge(extra Header) Header {
 	out := make(Header, len(h)+len(extra))
-	for k, v := range h {
-		out[k] = v
-	}
-	for k, v := range extra {
-		out[k] = v
-	}
+	maps.Copy(out, h)
+	maps.Copy(out, extra)
 	return out
 }
 

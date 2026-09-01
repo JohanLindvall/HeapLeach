@@ -300,8 +300,7 @@ func TestRUVGlobalFailureIsNotAGeoBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refused playlist resolved anyway")
 	}
-	var refusal *ruvRefused
-	if errors.As(err, &refusal) {
+	if _, ok := errors.AsType[*ruvRefused](err); ok {
 		t.Errorf("a Global episode was reported as Iceland-only: %v", err)
 	}
 	if session.outsideIceland {

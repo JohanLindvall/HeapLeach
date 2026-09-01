@@ -37,8 +37,7 @@ func main() {
 	if err := run(); err != nil {
 		// The CLI has already explained itself for -h, -version and bad
 		// flags; anything else gets the usual one-line report.
-		var exit *exitError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[*exitError](err); ok {
 			os.Exit(exit.code)
 		}
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -257,7 +256,7 @@ func newLogger(debug, headless bool) *slog.Logger {
 func runHeadless(ctx context.Context, cfg *config.Config, manager *download.Manager) error {
 	// -debug interleaves log lines with the display, so plain progress
 	// lines are the only readable option there.
-	animate := cli.IsTerminal(os.Stdout) && !cfg.Debug
+	animate := term.IsTerminal(int(os.Stdout.Fd())) && !cfg.Debug
 	termWidth := func() int {
 		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
 			return w

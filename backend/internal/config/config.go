@@ -324,8 +324,8 @@ func checkWritable(dir string) error {
 	probe, err := os.CreateTemp(dir, ".heapleach-write-probe-*")
 	if err != nil {
 		return fmt.Errorf("download dir %s is not writable by uid %d: %w\n"+
-			"hint: when bind-mounting a host directory, run the container as its owner, "+
-			"e.g. docker run --user $(id -u):$(id -g) ...", dir, os.Getuid(), err)
+			"hint: when bind-mounting a host directory, run the container as its owner "+
+			"(docker run --user $(id -u):$(id -g), or `make run-image`, which does)", dir, os.Getuid(), err)
 	}
 	name := probe.Name()
 	_ = probe.Close()
@@ -475,7 +475,7 @@ func extraHosts() map[string][]string {
 	}
 
 	add(FamilyKVS, envList("KVS_HOSTS"))
-	for _, group := range strings.Split(LookupEnv("EXTRA_HOSTS"), ";") {
+	for group := range strings.SplitSeq(LookupEnv("EXTRA_HOSTS"), ";") {
 		family, list, ok := strings.Cut(group, ":")
 		if !ok {
 			continue

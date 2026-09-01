@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -141,8 +142,8 @@ func ardTarget(u *url.URL) ardRef {
 // ardID picks the content id out of a path's segments. The season segment is
 // long enough to be taken for one, so it is named and stepped over.
 func ardID(segs []string) string {
-	for i := len(segs) - 1; i >= 0; i-- {
-		if seg := segs[i]; len(seg) >= ardMinIDLen && !strings.HasPrefix(seg, ardSeasonPrefix) {
+	for _, seg := range slices.Backward(segs) {
+		if len(seg) >= ardMinIDLen && !strings.HasPrefix(seg, ardSeasonPrefix) {
 			return seg
 		}
 	}
@@ -208,8 +209,7 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 			// One refused episode must not sink the rest, but its reason is
 			// kept: when every episode is refused they are refused for the
 			// same reason, and reporting it once is the only useful answer.
-			var refused *ardRefused
-			if errors.As(err, &refused) {
+			if refused, ok := errors.AsType[*ardRefused](err); ok {
 				return []ardResolved{{refusal: refused.reason}}, nil
 			}
 			return nil, err

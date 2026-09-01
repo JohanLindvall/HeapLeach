@@ -225,8 +225,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 			// A refusal comes back as a *result* rather than an error,
 			// because FanOut drops what fails and the reason is the one
 			// thing worth keeping when a whole show is refused for it.
-			var blocked *srfBlocked
-			if errors.As(err, &blocked) {
+			if blocked, ok := errors.AsType[*srfBlocked](err); ok {
 				return []srfResolved{{blocked: blocked.reason}}, nil
 			}
 			return nil, err

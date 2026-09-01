@@ -117,23 +117,19 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 	// whatever host the URL names by then would leak the slot that was
 	// actually taken. Every reservation is released here and only here.
 	spawn := func(seg *segment, body io.ReadCloser, reserved string) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if reserved != "" {
 				defer t.manager.hosts.release(reserved)
 			}
 			if err := t.pump(ctx, seg, body, reserved); err != nil {
 				fail(err)
 			}
-		}()
+		})
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		t.supervise(ctx, func(seg *segment, reserved string) { spawn(seg, nil, reserved) })
-	}()
+	})
 
 	spawn(primarySeg, primary, "")
 	// Segments restored from a previous run need their own connections.

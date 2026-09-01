@@ -1,13 +1,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -438,15 +439,13 @@ func (d bbcDownload) best() (bbcVariant, bool) {
 	if len(names) == 0 {
 		return bbcVariant{}, false
 	}
-	sort.Slice(names, func(i, j int) bool {
-		a, b := d.QualityVariants[names[i]], d.QualityVariants[names[j]]
-		switch {
-		case a.Bitrate != b.Bitrate:
-			return a.Bitrate > b.Bitrate
-		case bbcQualityRank(names[i]) != bbcQualityRank(names[j]):
-			return bbcQualityRank(names[i]) < bbcQualityRank(names[j])
-		}
-		return names[i] < names[j]
+	slices.SortFunc(names, func(x, y string) int {
+		a, b := d.QualityVariants[x], d.QualityVariants[y]
+		return cmp.Or(
+			cmp.Compare(b.Bitrate, a.Bitrate), // highest first
+			cmp.Compare(bbcQualityRank(x), bbcQualityRank(y)),
+			strings.Compare(x, y),
+		)
 	})
 	return d.QualityVariants[names[0]], true
 }

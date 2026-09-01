@@ -127,7 +127,7 @@ func okruWhyNot(meta *okruMetadata) string {
 // that says the video is gone is believed at once.
 func (o *OKru) metadata(ctx context.Context, id string) (*okruMetadata, error) {
 	var last *okruMetadata
-	for attempt := 0; attempt < config.ExtractRetries; attempt++ {
+	for attempt := range config.ExtractRetries {
 		if attempt > 0 {
 			wait := util.Backoff(attempt-1, config.RequestRetryBase, config.RequestRetryMax)
 			if err := util.SleepCtx(ctx, wait); err != nil {

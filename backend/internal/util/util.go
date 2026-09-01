@@ -10,7 +10,6 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"path"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -49,11 +48,6 @@ func Remove(values []string, v string) []string {
 		}
 	}
 	return values
-}
-
-// SortBy sorts values in place using a less function.
-func SortBy(values []string, less func(a, b string) bool) {
-	sort.Slice(values, func(i, j int) bool { return less(values[i], values[j]) })
 }
 
 // Truncate collapses whitespace and caps a string at n bytes, for embedding
@@ -106,7 +100,7 @@ func HostMatches(host, domain string) bool {
 // PathSegments splits a URL path into its non-empty segments.
 func PathSegments(u *url.URL) []string {
 	var out []string
-	for _, s := range strings.Split(u.Path, "/") {
+	for s := range strings.SplitSeq(u.Path, "/") {
 		if s != "" {
 			out = append(out, s)
 		}

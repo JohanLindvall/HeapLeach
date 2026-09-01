@@ -216,10 +216,7 @@ func (t *throttle) reserve(want int) (n int, wait time.Duration, gate chan struc
 		return n, 0, nil
 	}
 
-	wait = time.Duration((1 - t.tokens) / float64(t.limit) * float64(time.Second))
-	if wait < config.ThrottleMinWait {
-		wait = config.ThrottleMinWait
-	}
+	wait = max(time.Duration((1-t.tokens)/float64(t.limit)*float64(time.Second)), config.ThrottleMinWait)
 	return 0, wait, t.gate
 }
 

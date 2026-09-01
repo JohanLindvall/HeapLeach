@@ -331,7 +331,7 @@ func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title
 	query.Set("cmlimit", strconv.Itoa(mediaWikiPageSize))
 
 	var out []string
-	for page := 0; page < config.MaxAlbumPages; page++ {
+	for range config.MaxAlbumPages {
 		resp, err := m.call(ctx, site.api, query)
 		if err != nil {
 			return nil, err
@@ -395,7 +395,7 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 	page := mediaWikiSpecialPage(title)
 	if !mediaWikiUploadPages[page] {
 		return nil, fmt.Errorf("mediawiki: %s is not a page that lists files — "+
-			"Special:ListFiles and Special:NewFiles are, as is any Category:", title)
+			"Special:ListFiles and Special:NewFiles are, as is any category page", title)
 	}
 	newest := mediaWikiNewestPages[page]
 	if !newest && m.wikimedia(u.Host) {
@@ -818,11 +818,11 @@ func mediaWikiClean(raw string) string {
 // this install keeps its scripts and so where api.php is.
 func mediaWikiScriptPath(path string) (string, bool) {
 	const script = "index.php"
-	i := strings.Index(path, script)
-	if i < 0 {
+	before, _, ok := strings.Cut(path, script)
+	if !ok {
 		return "", false
 	}
-	return path[:i] + "api.php", true
+	return before + "api.php", true
 }
 
 // mediaWikiDepth reads how far into subcategories the URL asked to go.

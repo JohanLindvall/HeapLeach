@@ -1,11 +1,12 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -77,7 +78,7 @@ func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
 		variants []hlsVariant
 		pending  *hlsVariant
 	)
-	for _, line := range strings.Split(doc, "\n") {
+	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "":
@@ -111,7 +112,7 @@ func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
 // the variant's segments, so only the ones that have a URI count.
 func parseAudioGroups(doc string) map[string]bool {
 	groups := make(map[string]bool)
-	for _, line := range strings.Split(doc, "\n") {
+	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "#EXT-X-MEDIA:") {
 			continue
@@ -134,14 +135,12 @@ func bestVariant(variants []hlsVariant) (hlsVariant, bool) {
 		return hlsVariant{}, false
 	}
 	ranked := append([]hlsVariant(nil), variants...)
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if a, b := ranked[i].muxed(), ranked[j].muxed(); a != b {
-			return a // self-contained first
-		}
-		if a, b := ranked[i].height(), ranked[j].height(); a != b {
-			return a > b
-		}
-		return ranked[i].Bandwidth > ranked[j].Bandwidth
+	slices.SortStableFunc(ranked, func(a, b hlsVariant) int {
+		return cmp.Or(
+			cmpBool(b.muxed(), a.muxed()), // self-contained first
+			cmp.Compare(b.height(), a.height()),
+			cmp.Compare(b.Bandwidth, a.Bandwidth),
+		)
 	})
 	return ranked[0], true
 }
@@ -151,7 +150,7 @@ func bestVariant(variants []hlsVariant) (hlsVariant, bool) {
 // must lead the concatenated output.
 func parseMediaPlaylist(doc string, base *url.URL) []string {
 	var segments []string
-	for _, line := range strings.Split(doc, "\n") {
+	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "":

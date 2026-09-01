@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -245,9 +247,7 @@ func (g *Gofile) fetchContent(ctx context.Context, id, token, password string) (
 		if merged == nil {
 			merged = &env.Data
 		} else {
-			for k, v := range env.Data.Children {
-				merged.Children[k] = v
-			}
+			maps.Copy(merged.Children, env.Data.Children)
 			merged.ChildrenIDs = append(merged.ChildrenIDs, env.Data.ChildrenIDs...)
 		}
 		if !env.Metadata.HasNextPage || len(env.Data.Children) == 0 {
@@ -392,8 +392,8 @@ func (c *gofileContent) orderedChildren() []*gofileContent {
 			rest = append(rest, id)
 		}
 	}
-	util.SortBy(rest, func(a, b string) bool {
-		return strings.ToLower(c.Children[a].Name) < strings.ToLower(c.Children[b].Name)
+	slices.SortFunc(rest, func(a, b string) int {
+		return strings.Compare(strings.ToLower(c.Children[a].Name), strings.ToLower(c.Children[b].Name))
 	})
 	for _, id := range rest {
 		child := c.Children[id]

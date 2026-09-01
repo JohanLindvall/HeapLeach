@@ -181,8 +181,7 @@ func wetransferName(id string) string { return "wetransfer-" + id }
 // the message is read back out of the body the error captured, not out of the
 // response that never happened.
 func wetransferFailure(id string, err error) error {
-	var status *httpx.StatusError
-	if errors.As(err, &status) {
+	if status, ok := errors.AsType[*httpx.StatusError](err); ok {
 		var out struct {
 			Message string `json:"message"`
 		}

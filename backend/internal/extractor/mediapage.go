@@ -427,13 +427,11 @@ func mediaPageOpenGraph(root *html.Node, base *url.URL) (mediaFinding, bool) {
 			quality = qualityOf(link)
 		}
 		return mediaFinding{
-			mediaCandidate: mediaCandidate{
-				URL:     link,
-				Quality: quality,
-				IsHLS:   mediaPageIsHLS(link, declared),
-			},
-			Type: declared,
-			Size: -1,
+			URL:     link,
+			Quality: quality,
+			IsHLS:   mediaPageIsHLS(link, declared),
+			Type:    declared,
+			Size:    -1,
 		}, true
 	}
 	return mediaFinding{}, false
@@ -454,13 +452,11 @@ func mediaPageTwitterStream(root *html.Node, base *url.URL) (mediaFinding, bool)
 		return mediaFinding{}, false
 	}
 	return mediaFinding{
-		mediaCandidate: mediaCandidate{
-			URL:     link,
-			Quality: qualityOf(link),
-			IsHLS:   mediaPageIsHLS(link, declared),
-		},
-		Type: declared,
-		Size: -1,
+		URL:     link,
+		Quality: qualityOf(link),
+		IsHLS:   mediaPageIsHLS(link, declared),
+		Type:    declared,
+		Size:    -1,
 	}, true
 }
 
@@ -541,14 +537,12 @@ func linkedDataObject(obj map[string]any, base *url.URL) (mediaFinding, bool) {
 		quality = qualityOf(link)
 	}
 	return mediaFinding{
-		mediaCandidate: mediaCandidate{
-			URL:     link,
-			Quality: quality,
-			IsHLS:   mediaPageIsHLS(link, declared),
-		},
-		Title: linkedDataString(obj["name"]),
-		Type:  declared,
-		Size:  -1,
+		URL:     link,
+		Quality: quality,
+		IsHLS:   mediaPageIsHLS(link, declared),
+		Title:   linkedDataString(obj["name"]),
+		Type:    declared,
+		Size:    -1,
 	}, true
 }
 
@@ -566,10 +560,8 @@ func linkedDataIsMedia(value any) bool {
 	case string:
 		return linkedDataMediaTypes[strings.ToLower(strings.TrimSpace(v))]
 	case []any:
-		for _, item := range v {
-			if linkedDataIsMedia(item) {
-				return true
-			}
+		if slices.ContainsFunc(v, linkedDataIsMedia) {
+			return true
 		}
 	}
 	return false

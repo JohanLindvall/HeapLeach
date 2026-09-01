@@ -186,7 +186,7 @@ func gofileFreshUntil(header http.Header, now time.Time) time.Time {
 
 // gofileMaxAge reads the max-age a Cache-Control header states.
 func gofileMaxAge(control string) (time.Duration, bool) {
-	for _, part := range strings.Split(control, ",") {
+	for part := range strings.SplitSeq(control, ",") {
 		value, ok := strings.CutPrefix(strings.TrimSpace(part), "max-age=")
 		if !ok {
 			continue

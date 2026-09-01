@@ -20,7 +20,7 @@ import (
 func TestPlaylistJoinsPartsInOrder(t *testing.T) {
 	const parts = 24
 	var payload [][]byte
-	for i := 0; i < parts; i++ {
+	for i := range parts {
 		payload = append(payload, bytes.Repeat([]byte{byte(i)}, 1000+i))
 	}
 

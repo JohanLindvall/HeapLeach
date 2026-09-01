@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -111,11 +112,11 @@ func vimeoPlayerURL(id, hash string) string {
 // it is the hash an unlisted link carries.
 func vimeoVideoID(u *url.URL) (id, hash string) {
 	segs := util.PathSegments(u)
-	for i := len(segs) - 1; i >= 0; i-- {
-		if !vimeoIsID(segs[i]) {
+	for i, seg := range slices.Backward(segs) {
+		if !vimeoIsID(seg) {
 			continue
 		}
-		id = segs[i]
+		id = seg
 		if i+1 < len(segs) && !vimeoIsID(segs[i+1]) {
 			hash = segs[i+1]
 		}

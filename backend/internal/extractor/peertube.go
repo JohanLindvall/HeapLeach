@@ -1,13 +1,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -168,9 +169,9 @@ func peerTubeLabel(host string) string {
 	if len(labels) > 1 {
 		labels = labels[:len(labels)-1]
 	}
-	for i := len(labels) - 1; i >= 0; i-- {
-		if !peerTubeGenericLabels[labels[i]] {
-			return labels[i]
+	for _, label := range slices.Backward(labels) {
+		if !peerTubeGenericLabels[label] {
+			return label
 		}
 	}
 	return labels[0]
@@ -491,18 +492,13 @@ func peerTubeBest(candidates []peerTubeCandidate) (peerTubeCandidate, bool) {
 		return peerTubeCandidate{}, false
 	}
 	ranked := append([]peerTubeCandidate(nil), candidates...)
-	sort.SliceStable(ranked, func(i, j int) bool {
-		a, b := ranked[i], ranked[j]
-		if a.HasVideo != b.HasVideo {
-			return a.HasVideo
-		}
-		if a.Resolution != b.Resolution {
-			return a.Resolution > b.Resolution
-		}
-		if a.Progressive != b.Progressive {
-			return a.Progressive
-		}
-		return a.Size > b.Size
+	slices.SortStableFunc(ranked, func(a, b peerTubeCandidate) int {
+		return cmp.Or(
+			cmpBool(b.HasVideo, a.HasVideo), // video first
+			cmp.Compare(b.Resolution, a.Resolution),
+			cmpBool(b.Progressive, a.Progressive), // a plain file over a playlist
+			cmp.Compare(b.Size, a.Size),
+		)
 	})
 	return ranked[0], true
 }

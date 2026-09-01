@@ -128,7 +128,7 @@ func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([
 	var all []misskeyNote
 	until := ""
 
-	for page := 0; page < config.MaxTimelinePages; page++ {
+	for page := range config.MaxTimelinePages {
 		body := struct {
 			UserID    string `json:"userId"`
 			Limit     int    `json:"limit"`

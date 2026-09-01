@@ -62,7 +62,7 @@ func TestDrTuberRenditionsAreOrderedDeterministically(t *testing.T) {
 		"c": "https://cdn.example.test/c/synthetic.mp4",
 	}
 	first := drtuberRenditions(files)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		got := drtuberRenditions(files)
 		for j := range got {
 			if got[j].URL != first[j].URL {

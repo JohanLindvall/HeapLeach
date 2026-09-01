@@ -281,7 +281,7 @@ type megaDecrypted struct {
 // whose attributes carry mega's magic prefix is the right one — the same
 // check that catches a wrong key is exactly the test needed here.
 func (d *megaDecrypted) decrypt(share []byte) {
-	for _, entry := range strings.Split(string(d.node.Key), "/") {
+	for entry := range strings.SplitSeq(string(d.node.Key), "/") {
 		_, wrapped, ok := strings.Cut(entry, ":")
 		if !ok {
 			wrapped = entry

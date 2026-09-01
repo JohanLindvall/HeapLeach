@@ -267,7 +267,7 @@ func (b *BitChute) channel(ctx context.Context, segment string) (*Result, error)
 func (b *BitChute) channelVideos(ctx context.Context, segment string) ([]bitchuteVideo, error) {
 	var all []bitchuteVideo
 
-	for page := 0; page < config.MaxAlbumPages; page++ {
+	for page := range config.MaxAlbumPages {
 		var out struct {
 			Videos []bitchuteVideo `json:"videos"`
 		}

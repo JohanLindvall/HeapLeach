@@ -79,7 +79,7 @@ const (
 // errRaiDemuxed is the one packaging this cannot take. It is a value rather
 // than a formatted string because expanding a programme has to recognise it
 // among the reasons an entry produced nothing.
-var errRaiDemuxed = errors.New("Rai serves this one with its audio in a rendition of " +
+var errRaiDemuxed = errors.New("the audio of this one is served in a rendition of " +
 	"its own, and joining segments end to end cannot put the two back together")
 
 // NewRaiPlay builds the RaiPlay extractor.
@@ -260,8 +260,7 @@ type raiResolved struct {
 func (r *RaiPlay) resolve(ctx context.Context, entry raiEntry) ([]raiResolved, error) {
 	file, title, err := r.episode(ctx, entry.page)
 	if err != nil {
-		var refusal *raiRefused
-		if errors.As(err, &refusal) {
+		if refusal, ok := errors.AsType[*raiRefused](err); ok {
 			return []raiResolved{{refused: refusal.reason()}}, nil
 		}
 		return nil, err

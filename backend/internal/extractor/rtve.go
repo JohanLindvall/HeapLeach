@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -162,9 +163,9 @@ func rtveTarget(u *url.URL) rtveRef {
 		return rtveRef{}
 	}
 	rest := segs[2:]
-	for i := len(rest) - 1; i >= 0; i-- {
-		if rtveIsID(rest[i]) {
-			return rtveRef{video: rest[i]}
+	for _, r := range slices.Backward(rest) {
+		if rtveIsID(r) {
+			return rtveRef{video: r}
 		}
 	}
 	return rtveRef{series: rest[0]}

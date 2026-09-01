@@ -239,7 +239,7 @@ func TestTrackerAnnouncesEachEventOnce(t *testing.T) {
 func TestFrameRowsAreBounded(t *testing.T) {
 	r := newRenderer(discardWriter{}, 100, true, false)
 	var items []download.ItemView
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		items = append(items, download.ItemView{
 			ID: string(rune('a' + i%26)), Name: "file.bin",
 			Status: download.StatusRunning, Size: 100, Downloaded: 50,

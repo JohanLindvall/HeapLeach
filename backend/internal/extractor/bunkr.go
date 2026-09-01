@@ -44,7 +44,7 @@ func (b *Bunkr) Name() string { return "bunkr" }
 // covers the domain rotation without needing a hard-coded list.
 func (b *Bunkr) Match(u *url.URL) bool {
 	host := strings.ToLower(u.Hostname())
-	for _, label := range strings.Split(host, ".") {
+	for label := range strings.SplitSeq(host, ".") {
 		if strings.HasPrefix(label, "bunkr") {
 			return true
 		}

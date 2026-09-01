@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -151,9 +152,9 @@ func pbsTargetOf(u *url.URL) *pbsTarget {
 	// id is taken as the last numeric segment rather than by a pattern per
 	// path.
 	if util.HostMatches(u.Host, "player.pbs.org") {
-		for i := len(segs) - 1; i >= 0; i-- {
-			if pbsIsID(segs[i]) {
-				return &pbsTarget{id: segs[i]}
+		for _, seg := range slices.Backward(segs) {
+			if pbsIsID(seg) {
+				return &pbsTarget{id: seg}
 			}
 		}
 		return nil
@@ -404,11 +405,11 @@ func pbsIsProgressive(final *url.URL, mediaType string) bool {
 // ends. Cutting at the terminating "};" instead would be a guess about what a
 // title or a synopsis may contain; a JSON decoder does not have to guess.
 func pbsBridgeOf(doc string) (*pbsBridge, error) {
-	start := strings.Index(doc, pbsBridgeVar)
-	if start < 0 {
+	_, after, ok := strings.Cut(doc, pbsBridgeVar)
+	if !ok {
 		return nil, pbsPageError(doc)
 	}
-	rest := doc[start+len(pbsBridgeVar):]
+	rest := after
 	open := strings.Index(rest, "{")
 	if open < 0 {
 		return nil, pbsPageError(doc)

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -233,7 +233,7 @@ func epornerPlayerHash(raw string) string {
 		return ""
 	}
 	var out strings.Builder
-	for i := 0; i < epornerHashGroups; i++ {
+	for i := range epornerHashGroups {
 		n, err := strconv.ParseUint(raw[i*epornerHashGroupLen:(i+1)*epornerHashGroupLen], 16, 64)
 		if err != nil {
 			return ""
@@ -302,7 +302,7 @@ func epornerCandidates(raw json.RawMessage) []mediaCandidate {
 	for label := range byLabel {
 		labels = append(labels, label)
 	}
-	sort.Strings(labels) // map order is random; keep the choice reproducible
+	slices.Sort(labels) // map order is random; keep the choice reproducible
 	candidates := make([]mediaCandidate, 0, len(labels))
 	for _, label := range labels {
 		src := byLabel[label]

@@ -269,11 +269,11 @@ func TestFeedTolerantParsing(t *testing.T) {
 // so what was recovered is whole entries — worth keeping rather than turning
 // a dropped connection into no download at all.
 func TestFeedTruncatedDocument(t *testing.T) {
-	cut := strings.Index(feedRSSFixture, "<title>Bonus</title>")
-	if cut < 0 {
+	before, _, ok := strings.Cut(feedRSSFixture, "<title>Bonus</title>")
+	if !ok {
 		t.Fatal("fixture no longer contains the item the cut is made at")
 	}
-	res, err := feedResult([]byte(feedRSSFixture[:cut]), feedTestURL(t))
+	res, err := feedResult([]byte(before), feedTestURL(t))
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}

@@ -511,7 +511,7 @@ func TestArchiveDownloadURLEscapesPerSegment(t *testing.T) {
 // minute of broadcast.
 func TestArchiveCapsTheFileCount(t *testing.T) {
 	doc := &archiveDoc{Metadata: archiveItem{Identifier: "a-big-item", MediaType: "data"}}
-	for i := 0; i < config.MaxListingFiles+10; i++ {
+	for i := range config.MaxListingFiles + 10 {
 		doc.Files = append(doc.Files, archiveFile{
 			Name:   fmt.Sprintf("page-%05d.jp2", i),
 			Source: "original",

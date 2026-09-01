@@ -1,10 +1,11 @@
 package download
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -227,7 +228,7 @@ func (t *segmentTable) state() []segmentState {
 	for _, s := range t.segs {
 		out = append(out, segmentState{Start: s.start, Pos: s.pos.Load(), End: s.end.Load()})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	slices.SortFunc(out, func(a, b segmentState) int { return cmp.Compare(a.Start, b.Start) })
 	return out
 }
 

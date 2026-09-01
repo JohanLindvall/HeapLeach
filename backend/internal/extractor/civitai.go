@@ -240,7 +240,7 @@ func civitaiNextPage(current, raw string) string {
 // than quietly returning most of it.
 func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, error) {
 	var last error
-	for attempt := 0; attempt < config.ExtractRetries; attempt++ {
+	for attempt := range config.ExtractRetries {
 		if attempt > 0 {
 			wait := util.Backoff(attempt-1, config.RequestRetryBase, config.RequestRetryMax)
 			if err := util.SleepCtx(ctx, wait); err != nil {

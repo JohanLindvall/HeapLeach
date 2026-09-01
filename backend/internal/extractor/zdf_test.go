@@ -489,7 +489,7 @@ func TestZDFRegionIsProbedOnceAndNamed(t *testing.T) {
 
 	z := &ZDF{client: zdfTestClient()}
 	reach := newZDFReach(z.client)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := z.file(context.Background(), &res.Document, reach)
 		if err == nil {
 			t.Fatal("a programme the media host refuses was accepted")

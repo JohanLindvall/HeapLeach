@@ -328,7 +328,7 @@ func (i *Imgur) listing(ctx context.Context, target imgurTarget) (*Result, error
 func (i *Imgur) listingEntries(ctx context.Context, base string) ([]imgurEntry, error) {
 	walk := imgurPageWalk{seen: make(map[string]bool)}
 
-	for page := 0; page < config.MaxAlbumPages; page++ {
+	for page := range config.MaxAlbumPages {
 		endpoint := fmt.Sprintf("%s%s/page/%d/hit.json?scrolled", imgurRoot, base, page)
 
 		var body struct {
