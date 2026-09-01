@@ -27,6 +27,7 @@ make native         # build on the host (needs Go; uses Docker for the UI if Nod
 make dev            # Go API on :8080 + Vite dev server on :5173 (needs Go and Node)
 make frontend       # compile the UI into the Go embed dir (Docker if npm is absent)
 make hosts          # regenerate README's supported-site inventory from the registry
+make check          # what CI runs: gofmt, vet, hosts-check, the Go and UI test suites
 make dependencies   # fetch static yt-dlp and ffmpeg into ./bin (see tools.Find)
 make dist           # cross-compile the release archives into ./dist
 make tag            # cut a release: make tag V=v1.2.3 — CI builds and publishes
@@ -782,7 +783,11 @@ error fails `make build`.
 State comes entirely from the SSE snapshot via `useLiveState`, which falls
 back to polling `/api/state` when the stream is unavailable. Components
 render straight from the payload — the server precomputes job aggregates so
-the UI does no derivation. Everything the snapshot carries is rendered
+the UI does no derivation. The one vocabulary the UI does own is in
+`status.ts`: which statuses count as active, terminal or retryable, and the
+sidebar's filters and the search built on them. The sidebar, the cards and
+the "Clear finished" count all ask it rather than keeping lists of literals
+of their own, and it is where the pure-logic tests for that live. Everything the snapshot carries is rendered
 somewhere: `note` explains a deliberate wait, and `segmentsDone`/`Total` are
 the only progress a playlist has, since it has no byte total until its last
 part lands. A field the UI stops reading should come out of the payload

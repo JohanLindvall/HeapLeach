@@ -55,27 +55,37 @@ export function useProgress(
           : next;
 
       // Notify outside the reducer so React never sees a side effect during
-      // a state update.
+      // a state update — which in development it runs twice on purpose.
       if (fresh.length > 0) {
         queueMicrotask(() => {
           for (const achievement of fresh) unlockRef.current(achievement);
         });
       }
 
-      const changed =
-        updated.filesCompleted !== current.filesCompleted ||
-        updated.bytesDownloaded !== current.bytesDownloaded ||
-        updated.peakSpeed !== current.peakSpeed ||
-        updated.maxParallel !== current.maxParallel ||
-        updated.unlocked.length !== current.unlocked.length ||
-        updated.hostsUsed.length !== current.hostsUsed.length ||
-        updated.countedItems.length !== current.countedItems.length;
-
-      if (!changed) return current;
-      save(updated);
-      return updated;
+      // Returning the same object is what tells React nothing changed; a
+      // fresh one on every tick would re-render the panel forty times a
+      // minute for the same numbers.
+      return sameProgress(updated, current) ? current : updated;
     });
   }, [snapshot]);
 
+  // Persisted as a consequence of the state settling rather than from inside
+  // the updater, for the same reason the notification is.
+  useEffect(() => {
+    if (progress !== EMPTY_PROGRESS) save(progress);
+  }, [progress]);
+
   return progress;
+}
+
+function sameProgress(a: Progress, b: Progress): boolean {
+  return (
+    a.filesCompleted === b.filesCompleted &&
+    a.bytesDownloaded === b.bytesDownloaded &&
+    a.peakSpeed === b.peakSpeed &&
+    a.maxParallel === b.maxParallel &&
+    a.unlocked.length === b.unlocked.length &&
+    a.hostsUsed.length === b.hostsUsed.length &&
+    a.countedItems.length === b.countedItems.length
+  );
 }

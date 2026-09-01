@@ -1,4 +1,5 @@
 import { formatBytes, formatEta, formatSpeed, percentOf } from '../format';
+import { isActive } from '../status';
 import type { ItemView } from '../types';
 import { CancelIcon, RetryIcon } from './Icons';
 import { ProgressBar } from './ProgressBar';
@@ -19,7 +20,7 @@ interface ItemRowProps {
 /** One file: name, live progress, and the action that fits its state. */
 export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowProps) {
   const running = item.status === 'running';
-  const active = running || item.status === 'queued';
+  const active = isActive(item.status);
 
   // A playlist has no byte total until its last part lands, so parts joined
   // is the only progress it can honestly show.

@@ -16,8 +16,5 @@
  * it as a link, and guessing wrong queues rubbish.
  */
 export function linksIn(text: string): string[] {
-  return text
-    .split(/\s+/)
-    .map((piece) => piece.trim())
-    .filter((piece) => /^https?:\/\/\S/i.test(piece));
+  return text.split(/\s+/).filter((piece) => /^https?:\/\/\S/i.test(piece));
 }

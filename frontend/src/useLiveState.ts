@@ -7,6 +7,13 @@ const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 
 /**
+ * How often to poll while the stream is down. Slower than the stream's own
+ * tick on purpose: this is a fallback, and the stylesheet lengthens the
+ * progress-fill motion to match it (see .app--polling).
+ */
+const POLL_INTERVAL_MS = 2000;
+
+/**
  * Subscribes to the server's event stream and returns the latest snapshot.
  *
  * The server pushes the entire state on every tick, so a missed message is
@@ -66,7 +73,7 @@ export function useLiveState(): { snapshot: Snapshot | null; connection: Connect
           .catch(() => undefined);
       };
       poll();
-      pollTimer = window.setInterval(poll, 2000);
+      pollTimer = window.setInterval(poll, POLL_INTERVAL_MS);
     };
 
     connect();

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf } from '../format';
+import { isActive, isRetryable } from '../status';
 import type { JobView } from '../types';
 import { CancelIcon, ChevronIcon, RetryIcon, TrashIcon } from './Icons';
 import { ItemRow } from './ItemRow';
@@ -39,8 +40,8 @@ export function JobCard({
   const shown = rows ? job.items.slice(rows.start, rows.end) : job.items;
 
   const percent = job.sizeKnown ? percentOf(job.downloaded, job.size) : null;
-  const busy = job.status === 'running' || job.status === 'queued' || job.status === 'resolving';
-  const retryable = job.status === 'failed' || job.status === 'canceled';
+  const busy = isActive(job.status);
+  const retryable = isRetryable(job.status);
 
   return (
     <article className={`card job job--${job.status}`}>

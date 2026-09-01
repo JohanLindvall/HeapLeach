@@ -50,50 +50,33 @@ export function fetchState(): Promise<Snapshot> {
   return request<Snapshot>('/api/state');
 }
 
-/** Change the number of parallel transfers. */
-export function setConcurrency(concurrency: number): Promise<Snapshot> {
-  return request<Snapshot>('/api/settings', {
-    method: 'POST',
-    body: JSON.stringify({ concurrency }),
-  });
-}
-
-/** Change how many connections one slow file may be split across. */
-export function setStreams(streams: number): Promise<Snapshot> {
-  return request<Snapshot>('/api/settings', {
-    method: 'POST',
-    body: JSON.stringify({ streams }),
-  });
-}
-
-/** Hold or release the whole queue. */
-export function setPaused(paused: boolean): Promise<Snapshot> {
-  return request<Snapshot>('/api/settings', {
-    method: 'POST',
-    body: JSON.stringify({ paused }),
-  });
-}
-
-/** Cap total throughput in bytes per second; 0 lifts the cap. */
-export function setSpeedLimit(speedLimit: number): Promise<Snapshot> {
-  return request<Snapshot>('/api/settings', {
-    method: 'POST',
-    body: JSON.stringify({ speedLimit }),
-  });
-}
-
 /**
- * Move where finished files are written.
- *
- * Transfers already running keep the destination they started with — their
- * path was settled when the transfer began, and a part file that moved
- * mid-flight could not be resumed. Everything still queued goes to the new
- * place.
+ * The runtime settings, each optional: a request carries only what changed,
+ * and the server applies the fields it finds.
  */
-export function setDownloadDir(downloadDir: string): Promise<Snapshot> {
+export interface Settings {
+  /** Parallel transfers. */
+  concurrency: number;
+  /** Connections one slow file may be split across. */
+  streams: number;
+  /** Hold or release the whole queue. */
+  paused: boolean;
+  /** Ceiling on total throughput in bytes per second; 0 lifts the cap. */
+  speedLimit: number;
+  /**
+   * Where finished files are written. Transfers already running keep the
+   * destination they started with — their path was settled when the transfer
+   * began, and a part file that moved mid-flight could not be resumed.
+   * Everything still queued goes to the new place.
+   */
+  downloadDir: string;
+}
+
+/** Change one or more settings; the answer is the state as it now stands. */
+export function updateSettings(patch: Partial<Settings>): Promise<Snapshot> {
   return request<Snapshot>('/api/settings', {
     method: 'POST',
-    body: JSON.stringify({ downloadDir }),
+    body: JSON.stringify(patch),
   });
 }
 

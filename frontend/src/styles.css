@@ -163,7 +163,7 @@ h1, h2, h3 {
   letter-spacing: -0.022em;
 }
 
-code, .mono {
+code {
   font-family: var(--mono);
   font-size: 0.86em;
   font-variant-ligatures: none;
@@ -1538,15 +1538,28 @@ button.jobs__dir:hover {
   pointer-events: none;
 }
 
+/* A notice goes away on its own, but one that has been read is in the way
+   until then, so each is a button that dismisses itself. The container
+   passes clicks through; the notices themselves take them. */
 .notice {
+  pointer-events: auto;
   padding: 0.65rem 0.9rem;
+  border: 1px solid var(--edge-flat);
   border-radius: var(--r-md);
   background: var(--surface-solid);
-  border: 1px solid var(--edge-flat);
   box-shadow: var(--shadow-lg);
+  color: inherit;
+  font: inherit;
   font-size: 0.81rem;
+  line-height: inherit;
+  text-align: left;
   overflow-wrap: anywhere;
+  cursor: pointer;
   animation: rise 0.26s var(--ease);
+}
+
+.notice:hover {
+  border-color: var(--edge-hi);
 }
 
 .notice--error {

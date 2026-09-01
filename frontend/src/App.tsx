@@ -7,20 +7,16 @@ import {
   removeJob,
   retryItem,
   retryJob,
-  setConcurrency,
-  setPaused,
-  setDownloadDir,
-  setSpeedLimit,
-  setStreams,
+  updateSettings,
 } from './api';
 import { AddForm } from './components/AddForm';
 import { DownloadDir } from './components/DownloadDir';
 import { JobCard } from './components/JobCard';
 import { ProgressPanel } from './components/ProgressPanel';
-import { Sidebar, matchesFilter, type Filter } from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
 import { DownloadIcon, TrashIcon } from './components/Icons';
-import type { JobView } from './types';
+import { isTerminal, matchesFilter, matchesQuery, type Filter } from './status';
 import { useLiveState } from './useLiveState';
 import { useProgress } from './useProgress';
 import { useSpeedHistory } from './useSpeedHistory';
@@ -37,17 +33,7 @@ interface Notice {
 const NOTICE_TTL_MS = 6000;
 const ERROR_NOTICE_TTL_MS = 10000;
 
-/** Case-insensitive match against everything a user knows a job by. */
-function matchesQuery(job: JobView, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return (
-    job.title.toLowerCase().includes(q) ||
-    job.source.toLowerCase().includes(q) ||
-    job.host.toLowerCase().includes(q) ||
-    job.items.some((item) => item.name.toLowerCase().includes(q))
-  );
-}
+const IDLE_TITLE = 'HeapLeach — bulk downloader';
 
 export default function App() {
   const { snapshot, connection } = useLiveState();
@@ -57,15 +43,20 @@ export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const nextNoticeId = useRef(0);
 
-  const notify = useCallback((message: string, kind: NoticeKind): void => {
-    const id = nextNoticeId.current++;
-    setNotices((current) => [...current, { id, message, kind }]);
-    // Errors linger: a toast the user did not see in time is a toast that
-    // never happened.
-    window.setTimeout(() => {
-      setNotices((current) => current.filter((n) => n.id !== id));
-    }, kind === 'error' ? ERROR_NOTICE_TTL_MS : NOTICE_TTL_MS);
+  const dismiss = useCallback((id: number): void => {
+    setNotices((current) => current.filter((n) => n.id !== id));
   }, []);
+
+  const notify = useCallback(
+    (message: string, kind: NoticeKind): void => {
+      const id = nextNoticeId.current++;
+      setNotices((current) => [...current, { id, message, kind }]);
+      // Errors linger: a toast the user did not see in time is a toast that
+      // never happened.
+      window.setTimeout(() => dismiss(id), kind === 'error' ? ERROR_NOTICE_TTL_MS : NOTICE_TTL_MS);
+    },
+    [dismiss],
+  );
 
   // "/" focuses the queue search from anywhere that is not already a text
   // field, the way every searchable list on the web works.
@@ -100,12 +91,12 @@ export default function App() {
     [notify],
   );
 
+  // Keyed on the count rather than the snapshot, which arrives twice a
+  // second: the title only has to change when the number does.
+  const active = snapshot?.active ?? 0;
   useEffect(() => {
-    document.title =
-      snapshot && snapshot.active > 0
-        ? `↓ ${snapshot.active} downloading — HeapLeach`
-        : 'HeapLeach — bulk downloader';
-  }, [snapshot]);
+    document.title = active > 0 ? `↓ ${active} downloading — HeapLeach` : IDLE_TITLE;
+  }, [active]);
 
   if (!snapshot) {
     return (
@@ -121,9 +112,7 @@ export default function App() {
   const visible = snapshot.jobs.filter(
     (job) => matchesFilter(job, filter) && matchesQuery(job, query),
   );
-  const finishedCount = snapshot.jobs.filter(
-    (job) => job.status === 'done' || job.status === 'failed' || job.status === 'canceled',
-  ).length;
+  const finishedCount = snapshot.jobs.filter((job) => isTerminal(job.status)).length;
 
   return (
     <div className={connection === 'offline' ? 'app app--polling' : 'app'}>
@@ -143,10 +132,10 @@ export default function App() {
           speedSeries={speedSeries}
           theme={theme}
           onToggleTheme={toggleTheme}
-          onConcurrencyChange={(value) => run(() => setConcurrency(value))}
-          onStreamsChange={(value) => run(() => setStreams(value))}
-          onTogglePause={() => run(() => setPaused(!snapshot.paused))}
-          onSpeedLimitChange={(value) => run(() => setSpeedLimit(value))}
+          onConcurrencyChange={(concurrency) => run(() => updateSettings({ concurrency }))}
+          onStreamsChange={(streams) => run(() => updateSettings({ streams }))}
+          onTogglePause={() => run(() => updateSettings({ paused: !snapshot.paused }))}
+          onSpeedLimitChange={(speedLimit) => run(() => updateSettings({ speedLimit }))}
         />
       </header>
 
@@ -154,96 +143,100 @@ export default function App() {
         <Sidebar jobs={snapshot.jobs} filter={filter} onFilter={setFilter} />
 
         <main className="main">
-        <AddForm onNotice={notify} />
+          <AddForm onNotice={notify} />
 
-        <ProgressPanel progress={progress} hostCount={snapshot.hostCount} />
+          <ProgressPanel progress={progress} hostCount={snapshot.hostCount} />
 
-        <section className="jobs" aria-label="Downloads">
-          <div className="jobs__head">
-            <h2>
-              Downloads
-              {visible.length > 0 && <span className="jobs__count">{visible.length}</span>}
-            </h2>
-            <div className="jobs__tools">
-              {(snapshot.jobs.length > 0 || query) && (
-                <input
-                  ref={searchRef}
-                  type="search"
-                  className="jobs__search"
-                  placeholder="Search  /"
-                  aria-label="Search downloads"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      setQuery('');
-                      e.currentTarget.blur();
-                    }
-                  }}
+          <section className="jobs" aria-label="Downloads">
+            <div className="jobs__head">
+              <h2>
+                Downloads
+                {visible.length > 0 && <span className="jobs__count">{visible.length}</span>}
+              </h2>
+              <div className="jobs__tools">
+                {(snapshot.jobs.length > 0 || query) && (
+                  <input
+                    ref={searchRef}
+                    type="search"
+                    className="jobs__search"
+                    placeholder="Search  /"
+                    aria-label="Search downloads"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setQuery('');
+                        e.currentTarget.blur();
+                      }
+                    }}
+                  />
+                )}
+                <DownloadDir
+                  value={snapshot.downloadDir}
+                  free={snapshot.diskFree}
+                  total={snapshot.diskTotal}
+                  minFree={snapshot.diskMinFree}
+                  onChange={(downloadDir) => run(() => updateSettings({ downloadDir }))}
                 />
-              )}
-              <DownloadDir
-                value={snapshot.downloadDir}
-                free={snapshot.diskFree}
-                total={snapshot.diskTotal}
-                minFree={snapshot.diskMinFree}
-                onChange={(dir) => run(() => setDownloadDir(dir))}
-              />
-              {finishedCount > 0 && (
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--sm"
-                  onClick={() => run(clearFinished)}
-                >
-                  <TrashIcon />
-                  Clear finished ({finishedCount})
-                </button>
-              )}
+                {finishedCount > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => run(clearFinished)}
+                  >
+                    <TrashIcon />
+                    Clear finished ({finishedCount})
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
 
-          {visible.length === 0 ? (
-            <div className="empty">
-              <span className="empty__icon" aria-hidden="true">
-                <DownloadIcon size={26} />
-              </span>
-              <p className="empty__title">
-                {query
-                  ? 'No matches'
-                  : filter === 'all'
-                    ? 'Nothing queued yet'
-                    : 'Nothing here'}
-              </p>
-              <p className="empty__body">
-                {query
-                  ? `Nothing in the queue matches “${query}”.`
-                  : 'Paste one or more links above. Anything without an extractor of its own is treated as a direct file link.'}
-              </p>
-            </div>
-          ) : (
-            <div className="jobs__list">
-              {visible.map((job) => (
-                <JobCard
-                  key={job.id}
-                  job={job}
-                  onCancel={() => run(() => cancelJob(job.id))}
-                  onRetry={() => run(() => retryJob(job.id))}
-                  onRemove={() => run(() => removeJob(job.id))}
-                  onCancelItem={(itemId) => run(() => cancelItem(job.id, itemId))}
-                  onRetryItem={(itemId) => run(() => retryItem(job.id, itemId))}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+            {visible.length === 0 ? (
+              <div className="empty">
+                <span className="empty__icon" aria-hidden="true">
+                  <DownloadIcon size={26} />
+                </span>
+                <p className="empty__title">
+                  {query ? 'No matches' : filter === 'all' ? 'Nothing queued yet' : 'Nothing here'}
+                </p>
+                <p className="empty__body">
+                  {query
+                    ? `Nothing in the queue matches “${query}”.`
+                    : 'Paste one or more links above. Anything without an extractor of its own is treated as a direct file link.'}
+                </p>
+              </div>
+            ) : (
+              <div className="jobs__list">
+                {visible.map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onCancel={() => run(() => cancelJob(job.id))}
+                    onRetry={() => run(() => retryJob(job.id))}
+                    onRemove={() => run(() => removeJob(job.id))}
+                    onCancelItem={(itemId) => run(() => cancelItem(job.id, itemId))}
+                    onRetryItem={(itemId) => run(() => retryItem(job.id, itemId))}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
         </main>
       </div>
 
+      {/* Each notice dismisses itself when clicked, so one that has been
+          read need not sit in the corner for the rest of its allotted time. */}
       <div className="notices" role="status" aria-live="polite">
         {notices.map((notice) => (
-          <div key={notice.id} className={`notice notice--${notice.kind}`}>
+          <button
+            key={notice.id}
+            type="button"
+            className={`notice notice--${notice.kind}`}
+            title="Dismiss"
+            onClick={() => dismiss(notice.id)}
+          >
             {notice.message}
-          </div>
+          </button>
         ))}
       </div>
     </div>
