@@ -273,6 +273,13 @@ func isEromeAlbum(raw string) bool {
 func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
 	doc, err := e.client.GetString(ctx, u.String(), httpx.Referer(eromeReferer+"/"))
 	if err != nil {
+		// A deleted album is answered with 410 and a full page of the
+		// site's own furniture, which the status error would quote 200
+		// characters of. The code already says everything there is to
+		// know, so it is said instead of shown.
+		if httpx.HasStatus(err, http.StatusGone) {
+			return nil, fmt.Errorf("erome: the album %s has been deleted", u.Redacted())
+		}
 		return nil, fmt.Errorf("erome: fetch album: %w", err)
 	}
 	root, err := parseHTML(doc)

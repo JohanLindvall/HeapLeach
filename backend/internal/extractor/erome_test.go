@@ -334,3 +334,29 @@ func TestEromeProfileAlbumsFailsOnTheFirstPage(t *testing.T) {
 		t.Fatal("a profile whose first page never loaded was reported as empty rather than failed")
 	}
 }
+
+// A deleted album answers 410 with a full page of the site's own furniture.
+// The status error would quote the first 200 characters of that markup at
+// the user, which says nothing the code has not already said.
+func TestEromeDeletedAlbumIsReportedPlainly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusGone)
+		_, _ = w.Write([]byte(`<!DOCTYPE html><html lang="en"><head>` +
+			`<meta charset="utf-8"><meta name="RATING" content="RTA-5042-1996-1400-1577-RTA">` +
+			`</head><body><h1>Album deleted</h1></body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	u, _ := ParseURL(srv.URL + "/a/AAAA")
+	_, err := e.Extract(context.Background(), u, Options{})
+	if err == nil {
+		t.Fatal("a deleted album was accepted")
+	}
+	if !strings.Contains(err.Error(), "deleted") {
+		t.Errorf("error %q does not say the album is gone", err)
+	}
+	if strings.Contains(err.Error(), "<") {
+		t.Errorf("error quotes the page's markup: %q", err)
+	}
+}
