@@ -27,6 +27,7 @@ import (
 // asked for them, so they are resolved when the item starts rather than when
 // the page is read.
 type OKru struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -48,13 +49,11 @@ var okruQualities = []string{
 }
 
 // NewOKru builds the odnoklassniki extractor.
-func NewOKru(client *httpx.Client) *OKru { return &OKru{client: client} }
+func NewOKru(client *httpx.Client) *OKru {
+	return &OKru{hostSet: hostSet{"ok.ru", "odnoklassniki.ru"}, client: client}
+}
 
 func (o *OKru) Name() string { return "ok.ru" }
-
-func (o *OKru) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "ok.ru") || util.HostMatches(u.Host, "odnoklassniki.ru")
-}
 
 // Extract resolves a video page to its best rendition.
 func (o *OKru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

@@ -58,6 +58,7 @@ import (
 // says which question to ask, not what the answer is. See zdfReach for who
 // asks it.
 type ZDF struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -115,11 +116,9 @@ var zdfRegions = map[string]string{
 }
 
 // NewZDF builds the ZDF extractor.
-func NewZDF(client *httpx.Client) *ZDF { return &ZDF{client: client} }
+func NewZDF(client *httpx.Client) *ZDF { return &ZDF{hostSet: hostSet{"zdf.de"}, client: client} }
 
 func (z *ZDF) Name() string { return "zdf" }
-
-func (z *ZDF) Match(u *url.URL) bool { return util.HostMatches(u.Host, "zdf.de") }
 
 // Extract handles a single video, a show page that lists many, and the hub
 // pages that are neither.

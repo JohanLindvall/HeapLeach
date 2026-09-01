@@ -47,6 +47,7 @@ import (
 // Profile pages are still not handled: those render their listing
 // client-side, so the delivered HTML names none of the items.
 type ImagePond struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -67,11 +68,11 @@ const (
 )
 
 // NewImagePond builds the imagepond extractor.
-func NewImagePond(client *httpx.Client) *ImagePond { return &ImagePond{client: client} }
+func NewImagePond(client *httpx.Client) *ImagePond {
+	return &ImagePond{hostSet: hostSet{"imagepond.net"}, client: client}
+}
 
 func (i *ImagePond) Name() string { return "imagepond" }
-
-func (i *ImagePond) Match(u *url.URL) bool { return util.HostMatches(u.Host, "imagepond.net") }
 
 // Extract resolves a viewer page (/i/<code>), an album (/a/<code>), or a link
 // to the stored file itself.

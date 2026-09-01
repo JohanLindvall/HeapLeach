@@ -3,10 +3,11 @@ package extractor
 import (
 	"encoding/json"
 	"errors"
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )

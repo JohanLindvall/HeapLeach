@@ -25,6 +25,7 @@ import (
 // worth knowing only to say why it is not used — a signed link expires while
 // an item waits its turn, and this one buys nothing over the plain path.
 type Suvobox struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -42,11 +43,11 @@ const (
 )
 
 // NewSuvobox builds the suvobox extractor.
-func NewSuvobox(client *httpx.Client) *Suvobox { return &Suvobox{client: client} }
+func NewSuvobox(client *httpx.Client) *Suvobox {
+	return &Suvobox{hostSet: hostSet{"suvobox.com"}, client: client}
+}
 
 func (s *Suvobox) Name() string { return "suvobox" }
-
-func (s *Suvobox) Match(u *url.URL) bool { return util.HostMatches(u.Host, "suvobox.com") }
 
 // Extract resolves an album or a single file.
 func (s *Suvobox) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

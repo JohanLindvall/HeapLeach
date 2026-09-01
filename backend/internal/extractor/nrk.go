@@ -43,6 +43,7 @@ import (
 // which names the series and the episode in fields of their own and leaves
 // both empty when there is no series to name.
 type NRK struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -68,15 +69,12 @@ const (
 // rather than something that can be looked up.
 var nrkEpisodeLink = regexp.MustCompile(`/episode/([A-Za-z][A-Za-z0-9]{5,})`)
 
-// NewNRK builds the NRK TV extractor.
-func NewNRK(client *httpx.Client) *NRK { return &NRK{client: client} }
+// NewNRK builds the NRK TV extractor. It takes tv.nrk.no alone: radio and the
+// news site share the same player API but not the catalogue below, and
+// claiming them would promise more than this resolves.
+func NewNRK(client *httpx.Client) *NRK { return &NRK{hostSet: hostSet{"tv.nrk.no"}, client: client} }
 
 func (n *NRK) Name() string { return "nrk" }
-
-// Match takes tv.nrk.no alone. Radio and the news site share the same player
-// API but not the catalogue below, and matching them would promise more than
-// this resolves.
-func (n *NRK) Match(u *url.URL) bool { return util.HostMatches(u.Host, "tv.nrk.no") }
 
 // Extract handles a single programme, one season, or a whole series.
 func (n *NRK) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

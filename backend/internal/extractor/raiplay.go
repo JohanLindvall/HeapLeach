@@ -54,6 +54,7 @@ import (
 // page document, which is proper UTF-8; the refusal sentence is ASCII and
 // survives intact.
 type RaiPlay struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -83,11 +84,11 @@ var errRaiDemuxed = errors.New("the audio of this one is served in a rendition o
 	"its own, and joining segments end to end cannot put the two back together")
 
 // NewRaiPlay builds the RaiPlay extractor.
-func NewRaiPlay(client *httpx.Client) *RaiPlay { return &RaiPlay{client: client} }
+func NewRaiPlay(client *httpx.Client) *RaiPlay {
+	return &RaiPlay{hostSet: hostSet{"raiplay.it"}, client: client}
+}
 
 func (r *RaiPlay) Name() string { return "raiplay" }
-
-func (r *RaiPlay) Match(u *url.URL) bool { return util.HostMatches(u.Host, "raiplay.it") }
 
 // Extract handles a single video or a programme, which expands to every
 // episode and clip the programme lists.

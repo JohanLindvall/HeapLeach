@@ -19,7 +19,7 @@ import (
 // on top of the signature and throttling parameters that already required
 // running its player JavaScript. yt-dlp exists to keep up with exactly that,
 // so this extractor only identifies the video and lets yt-dlp do the rest.
-type YouTube struct{}
+type YouTube struct{ hostSet }
 
 // ytdlpBinary is the tool this extractor depends on, spelled once in the
 // package that locates it.
@@ -29,15 +29,11 @@ const ytdlpBinary = tools.YtDlp
 const ytdlpMaxEntries = 500
 
 // NewYouTube builds the YouTube extractor.
-func NewYouTube() *YouTube { return &YouTube{} }
+func NewYouTube() *YouTube {
+	return &YouTube{hostSet: hostSet{"youtube.com", "youtu.be", "youtube-nocookie.com"}}
+}
 
 func (y *YouTube) Name() string { return "youtube" }
-
-func (y *YouTube) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "youtube.com") ||
-		util.HostMatches(u.Host, "youtu.be") ||
-		util.HostMatches(u.Host, "youtube-nocookie.com")
-}
 
 // Extract names the video, or every video of a playlist, leaving the actual
 // download to the helper script.

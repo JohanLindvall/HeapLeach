@@ -38,6 +38,7 @@ import (
 // video together, so the segments join into something playable and the
 // external downloader is not needed.
 type Vidmoly struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -55,7 +56,7 @@ const (
 )
 
 // vidmolyHosts are the domains a link may arrive on.
-var vidmolyHosts = []string{"vidmoly.me", "vidmoly.to", "vidmoly.biz", "vidmoly.net"}
+var vidmolyHosts = hostSet{"vidmoly.me", "vidmoly.to", "vidmoly.biz", "vidmoly.net"}
 
 // vidmolyCodePattern is what a file code may consist of.
 var vidmolyCodePattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
@@ -76,11 +77,11 @@ var vidmolySources = regexp.MustCompile(`(?s)\bsources\s*:\s*\[(.*?)]`)
 var vidmolyFile = regexp.MustCompile(`["']?file["']?\s*:\s*["']([^"']+)["']`)
 
 // NewVidmoly builds the vidmoly extractor.
-func NewVidmoly(client *httpx.Client) *Vidmoly { return &Vidmoly{client: client} }
+func NewVidmoly(client *httpx.Client) *Vidmoly {
+	return &Vidmoly{hostSet: vidmolyHosts, client: client}
+}
 
 func (v *Vidmoly) Name() string { return "vidmoly" }
-
-func (v *Vidmoly) Match(u *url.URL) bool { return matchesHosts(u, vidmolyHosts) }
 
 // Extract resolves any of the site's link shapes to one playable file.
 func (v *Vidmoly) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

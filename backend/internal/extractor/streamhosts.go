@@ -33,9 +33,12 @@ import (
 // Streamtape assembles its link from two halves the page never joins in the
 // markup: an incomplete one in a hidden element, and the remainder in a
 // script that appends it minus a few leading characters.
-type Streamtape struct{ client *httpx.Client }
+type Streamtape struct {
+	hostSet
+	client *httpx.Client
+}
 
-var streamtapeHosts = []string{
+var streamtapeHosts = hostSet{
 	"streamtape.com", "streamtape.net", "streamtape.to", "streamtape.xyz",
 	"streamtape.cc", "streamtape.site", "streamta.pe", "strcloud.link",
 }
@@ -47,11 +50,11 @@ var streamtapeLink = regexp.MustCompile(
 		`\(?\s*['"]([^'"]*)['"]\s*\)?\s*\.\s*substring\(\s*(\d+)\s*\)`)
 
 // NewStreamtape builds the streamtape extractor.
-func NewStreamtape(client *httpx.Client) *Streamtape { return &Streamtape{client: client} }
+func NewStreamtape(client *httpx.Client) *Streamtape {
+	return &Streamtape{hostSet: streamtapeHosts, client: client}
+}
 
 func (s *Streamtape) Name() string { return "streamtape" }
-
-func (s *Streamtape) Match(u *url.URL) bool { return matchesHosts(u, streamtapeHosts) }
 
 // Extract resolves an embed or watch page.
 func (s *Streamtape) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -119,9 +122,12 @@ func streamtapeReferer(page string) string {
 // DoodStream hands out its link in two steps: the page names a token
 // endpoint, and that endpoint returns a prefix which the player completes
 // with a random tail, the token and a timestamp.
-type DoodStream struct{ client *httpx.Client }
+type DoodStream struct {
+	hostSet
+	client *httpx.Client
+}
 
-var doodHosts = []string{
+var doodHosts = hostSet{
 	"doodstream.com", "dood.to", "dood.so", "dood.watch", "dood.la", "dood.ws",
 	"dood.sh", "dood.yt", "dood.re", "dood.li", "ds2play.com", "d0o0d.com",
 	"do0od.com", "dooood.com", "vidply.com",
@@ -135,11 +141,11 @@ var doodPassPath = regexp.MustCompile(`(/pass_md5/[^'"\s]+)`)
 const doodTailLength = 10
 
 // NewDoodStream builds the doodstream extractor.
-func NewDoodStream(client *httpx.Client) *DoodStream { return &DoodStream{client: client} }
+func NewDoodStream(client *httpx.Client) *DoodStream {
+	return &DoodStream{hostSet: doodHosts, client: client}
+}
 
 func (d *DoodStream) Name() string { return "doodstream" }
-
-func (d *DoodStream) Match(u *url.URL) bool { return matchesHosts(u, doodHosts) }
 
 // Extract resolves a watch or embed page.
 func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -189,9 +195,12 @@ func (d *DoodStream) media(ctx context.Context, page string) (link, title string
 
 // MixDrop keeps its link inside a packed script, which unpacks to an
 // assignment naming the delivery host.
-type MixDrop struct{ client *httpx.Client }
+type MixDrop struct {
+	hostSet
+	client *httpx.Client
+}
 
-var mixdropHosts = []string{
+var mixdropHosts = hostSet{
 	"mixdrop.co", "mixdrop.to", "mixdrop.ag", "mixdrop.bz", "mixdrop.ch",
 	"mixdrop.club", "mixdrop.gl", "mixdrop.is", "mixdrop.my", "mixdrop.sx",
 	"mixdrop.ps", "mixdrp.co", "mixdrp.to", "mdbekjwqa.pw",
@@ -201,11 +210,11 @@ var mixdropHosts = []string{
 var mixdropURL = regexp.MustCompile(`MDCore\.(?:wurl|vsrc)\s*=\s*["']([^"']+)["']`)
 
 // NewMixDrop builds the mixdrop extractor.
-func NewMixDrop(client *httpx.Client) *MixDrop { return &MixDrop{client: client} }
+func NewMixDrop(client *httpx.Client) *MixDrop {
+	return &MixDrop{hostSet: mixdropHosts, client: client}
+}
 
 func (m *MixDrop) Name() string { return "mixdrop" }
-
-func (m *MixDrop) Match(u *url.URL) bool { return matchesHosts(u, mixdropHosts) }
 
 // Extract resolves a file or embed page.
 func (m *MixDrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -246,16 +255,6 @@ func (m *MixDrop) media(ctx context.Context, page string) (link, title string, e
 }
 
 // ------------------------------------------------------------------ shared
-
-// matchesHosts reports whether a URL belongs to any of a host list.
-func matchesHosts(u *url.URL, hosts []string) bool {
-	for _, host := range hosts {
-		if util.HostMatches(u.Host, host) {
-			return true
-		}
-	}
-	return false
-}
 
 // randomToken returns n alphanumeric characters, for hosts whose player
 // completes a link with a nonce the server only checks the length of.

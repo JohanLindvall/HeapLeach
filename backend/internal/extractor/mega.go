@@ -35,6 +35,7 @@ import (
 // they are resolved at download time like bunkr's and turbo's rather than at
 // extraction time.
 type Mega struct {
+	hostSet
 	client *httpx.Client
 	// seq numbers API requests. Mega uses it to collapse a retried request
 	// with the one before it instead of doing the work twice.
@@ -48,13 +49,11 @@ const (
 )
 
 // NewMega builds the mega extractor.
-func NewMega(client *httpx.Client) *Mega { return &Mega{client: client} }
+func NewMega(client *httpx.Client) *Mega {
+	return &Mega{hostSet: hostSet{"mega.nz", "mega.co.nz"}, client: client}
+}
 
 func (m *Mega) Name() string { return "mega" }
-
-func (m *Mega) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "mega.nz") || util.HostMatches(u.Host, "mega.co.nz")
-}
 
 // Extract resolves a public link into its files.
 func (m *Mega) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

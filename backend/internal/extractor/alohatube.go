@@ -32,6 +32,7 @@ import (
 // deliberately not used: it pointed at a second wrapper rather than at the
 // video, so the frame the page actually plays is the more direct answer.
 type AlohaTube struct {
+	hostSet
 	client   *httpx.Client
 	registry *Registry
 }
@@ -42,12 +43,10 @@ const alohaRoot = "https://www.alohatube.com"
 // through the registry it is part of, so it is handed that registry rather
 // than building one.
 func NewAlohaTube(client *httpx.Client, registry *Registry) *AlohaTube {
-	return &AlohaTube{client: client, registry: registry}
+	return &AlohaTube{hostSet: hostSet{"alohatube.com"}, client: client, registry: registry}
 }
 
 func (a *AlohaTube) Name() string { return "alohatube" }
-
-func (a *AlohaTube) Match(u *url.URL) bool { return util.HostMatches(u.Host, "alohatube.com") }
 
 // Extract finds the embedded player and resolves it where it lives.
 func (a *AlohaTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

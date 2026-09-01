@@ -18,7 +18,10 @@ import (
 // ---------------------------------------------------------------- pornhub
 
 // PornHub reads the player configuration embedded in a video page.
-type PornHub struct{ client *httpx.Client }
+type PornHub struct {
+	hostSet
+	client *httpx.Client
+}
 
 const pornhubRoot = "https://www.pornhub.com"
 
@@ -26,11 +29,11 @@ const pornhubRoot = "https://www.pornhub.com"
 var pornhubFlashvars = regexp.MustCompile(`var\s+flashvars_\d+\s*=\s*\{`)
 
 // NewPornHub builds the pornhub extractor.
-func NewPornHub(client *httpx.Client) *PornHub { return &PornHub{client: client} }
+func NewPornHub(client *httpx.Client) *PornHub {
+	return &PornHub{hostSet: hostSet{"pornhub.com"}, client: client}
+}
 
 func (p *PornHub) Name() string { return "pornhub" }
-
-func (p *PornHub) Match(u *url.URL) bool { return util.HostMatches(u.Host, "pornhub.com") }
 
 // Extract resolves a video page to its best rendition.
 func (p *PornHub) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -141,16 +144,19 @@ func (x *XHamster) best(ctx context.Context, page string) (string, mediaCandidat
 // ---------------------------------------------------------------- tnaflix
 
 // TNAFlix lists its renditions as plain signed links in the page.
-type TNAFlix struct{ client *httpx.Client }
+type TNAFlix struct {
+	hostSet
+	client *httpx.Client
+}
 
 const tnaflixRoot = "https://www.tnaflix.com"
 
 // NewTNAFlix builds the tnaflix extractor.
-func NewTNAFlix(client *httpx.Client) *TNAFlix { return &TNAFlix{client: client} }
+func NewTNAFlix(client *httpx.Client) *TNAFlix {
+	return &TNAFlix{hostSet: hostSet{"tnaflix.com"}, client: client}
+}
 
 func (t *TNAFlix) Name() string { return "tnaflix" }
-
-func (t *TNAFlix) Match(u *url.URL) bool { return util.HostMatches(u.Host, "tnaflix.com") }
 
 // Extract picks the best rendition, re-reading the page at download time
 // because the links carry an expiry.
@@ -178,7 +184,10 @@ func (t *TNAFlix) best(ctx context.Context, page string) (string, mediaCandidate
 
 // PornOne lists its renditions as <source> elements on the page, signed with
 // an expiry, so they are re-read when the item starts.
-type PornOne struct{ client *httpx.Client }
+type PornOne struct {
+	hostSet
+	client *httpx.Client
+}
 
 const pornoneRoot = "https://pornone.com"
 
@@ -187,11 +196,11 @@ const pornoneRoot = "https://pornone.com"
 var pornoneDimensions = regexp.MustCompile(`_(\d{2,5})x(\d{2,5})_`)
 
 // NewPornOne builds the pornone extractor.
-func NewPornOne(client *httpx.Client) *PornOne { return &PornOne{client: client} }
+func NewPornOne(client *httpx.Client) *PornOne {
+	return &PornOne{hostSet: hostSet{"pornone.com"}, client: client}
+}
 
 func (p *PornOne) Name() string { return "pornone" }
-
-func (p *PornOne) Match(u *url.URL) bool { return util.HostMatches(u.Host, "pornone.com") }
 
 // Extract picks the largest rendition, re-reading the page at download time
 // because the links carry an expiry.

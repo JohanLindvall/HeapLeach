@@ -45,9 +45,9 @@ import (
 // direct-link fallback sniffs a Chevereto-shaped URL for the software's own
 // fingerprint, which covers the self-hosted tail without naming a host.
 type Chevereto struct {
-	client  *httpx.Client
-	name    string
-	domains []string
+	hostSet
+	client *httpx.Client
+	name   string
 }
 
 // cheveretoSite is one install this build ships knowing about.
@@ -128,21 +128,12 @@ func NewCheveretoSites(cfg *config.Config, client *httpx.Client) []Extractor {
 		for _, domain := range site.domains {
 			domains = append(domains, strings.ToLower(domain))
 		}
-		out = append(out, &Chevereto{client: client, name: site.name, domains: domains})
+		out = append(out, &Chevereto{hostSet: domains, client: client, name: site.name})
 	}
 	return out
 }
 
 func (c *Chevereto) Name() string { return c.name }
-
-func (c *Chevereto) Match(u *url.URL) bool {
-	for _, domain := range c.domains {
-		if util.HostMatches(u.Host, domain) {
-			return true
-		}
-	}
-	return false
-}
 
 // Extract resolves an album, a user's listing, or a single item.
 func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

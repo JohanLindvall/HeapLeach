@@ -24,6 +24,7 @@ import (
 // Single viewer pages take the other route and read the image straight off
 // the page, because there is no saving to be had from one request either way.
 type Pixhost struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -33,11 +34,11 @@ const pixhostRoot = "https://pixhost.to"
 const pixhostImageID = "image"
 
 // NewPixhost builds the pixhost extractor.
-func NewPixhost(client *httpx.Client) *Pixhost { return &Pixhost{client: client} }
+func NewPixhost(client *httpx.Client) *Pixhost {
+	return &Pixhost{hostSet: hostSet{"pixhost.to"}, client: client}
+}
 
 func (p *Pixhost) Name() string { return "pixhost" }
-
-func (p *Pixhost) Match(u *url.URL) bool { return util.HostMatches(u.Host, "pixhost.to") }
 
 // Extract resolves a gallery or a single image.
 func (p *Pixhost) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

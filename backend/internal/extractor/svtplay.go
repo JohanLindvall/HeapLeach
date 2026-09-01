@@ -19,6 +19,7 @@ import (
 // together and hands back its segment list, which concatenates into a
 // playable file without needing to be muxed.
 type SVTPlay struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -49,11 +50,11 @@ const svtSeasonsQuery = `query($slug:String!){
 var svtVideoLink = regexp.MustCompile(`/video/([A-Za-z0-9_-]{4,})[/"]`)
 
 // NewSVTPlay builds the SVT Play extractor.
-func NewSVTPlay(client *httpx.Client) *SVTPlay { return &SVTPlay{client: client} }
+func NewSVTPlay(client *httpx.Client) *SVTPlay {
+	return &SVTPlay{hostSet: hostSet{"svtplay.se"}, client: client}
+}
 
 func (s *SVTPlay) Name() string { return "svtplay" }
-
-func (s *SVTPlay) Match(u *url.URL) bool { return util.HostMatches(u.Host, "svtplay.se") }
 
 // Extract handles a single video (/video/<id>/...) or a series page, which
 // expands to every episode listed on it.

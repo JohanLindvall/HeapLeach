@@ -53,6 +53,7 @@ import (
 // series that has seasons. They are recognised by their ids instead: see
 // ardWithoutVariants.
 type ARD struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -80,11 +81,11 @@ const (
 )
 
 // NewARD builds the ARD Mediathek extractor.
-func NewARD(client *httpx.Client) *ARD { return &ARD{client: client} }
+func NewARD(client *httpx.Client) *ARD {
+	return &ARD{hostSet: hostSet{"ardmediathek.de"}, client: client}
+}
 
 func (a *ARD) Name() string { return "ard" }
-
-func (a *ARD) Match(u *url.URL) bool { return util.HostMatches(u.Host, "ardmediathek.de") }
 
 // Extract handles a single video, or a programme that expands to every
 // episode listed under it.

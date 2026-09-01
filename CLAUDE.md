@@ -227,13 +227,17 @@ The supported-site table in README.md is **generated** from the registry by
 `make hosts`, between two markers, and `make hosts-check` fails CI when the
 file and the code disagree — so edit the extractor, never that table. Adding
 a host is then one line in `NewRegistry` plus `make hosts` in the same
-commit. Note the optional half of the contract: `SiteLister` may be skipped
-only when an extractor's `Name()` *is* its domain, since the catalogue then
-uses the name as the site. An extractor named for the site without its TLD —
-"eporner" for `eporner.com` — has to implement `Sites()`, or the inventory
-quietly advertises the label as the host. `hosts-check` compares the
-regenerated file against git, so it also fails on a correct regeneration that
-has not been committed yet.
+commit. Note the optional half of the contract, `SiteLister`. An extractor
+that claims a plain list of domains embeds a `hostSet` (`hosts.go`): one
+declaration that answers both `Match` and `Sites`, so the inventory cannot
+disagree with the matcher, and `catalogue_test.go` checks that every host so
+declared routes back to the extractor declaring it. Only an extractor whose
+`Match` is more than a host list — a section of a domain, a wildcard TLD, a
+document shape — writes `Sites()` by hand, in `catalogue.go`; and one that
+skips it altogether must be named for its domain, since the catalogue then
+uses the name as the site. `hosts-check` compares the regenerated file
+against git, so it also fails on a correct regeneration that has not been
+committed yet.
 
 **bandzoogle** is the third platform family, and the first with an empty host
 list: it is website software musicians rent, so every install answers on its

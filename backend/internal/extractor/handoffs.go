@@ -64,6 +64,7 @@ import (
 // mean resolving the collection here, which is the work these hosts were
 // handed over to avoid.
 type Handoff struct {
+	hostSet
 	client *httpx.Client
 	site   handoffSite
 }
@@ -187,21 +188,12 @@ var handoffSites = []handoffSite{
 func NewHandoffs(client *httpx.Client) []Extractor {
 	out := make([]Extractor, 0, len(handoffSites))
 	for _, site := range handoffSites {
-		out = append(out, &Handoff{client: client, site: site})
+		out = append(out, &Handoff{hostSet: site.domains, client: client, site: site})
 	}
 	return out
 }
 
 func (h *Handoff) Name() string { return h.site.name }
-
-func (h *Handoff) Match(u *url.URL) bool {
-	for _, domain := range h.site.domains {
-		if util.HostMatches(u.Host, domain) {
-			return true
-		}
-	}
-	return false
-}
 
 // Extract names the media and hands the page to the external downloader.
 func (h *Handoff) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

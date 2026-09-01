@@ -42,6 +42,7 @@ import (
 // and covers the one real flake seen under parallel load — a transient nginx
 // 404 that succeeded on immediate retry.
 type BitChute struct {
+	hostSet
 	client *httpx.Client
 	// api and site are the two roots this reads, kept as fields rather than
 	// used as constants so the paging, the fan-out and the embed fallback
@@ -91,12 +92,10 @@ var bitchuteSeedHosts = []string{
 
 // NewBitChute builds the bitchute extractor.
 func NewBitChute(client *httpx.Client) *BitChute {
-	return &BitChute{client: client, api: bitchuteAPI, site: bitchuteRoot}
+	return &BitChute{hostSet: hostSet{"bitchute.com"}, client: client, api: bitchuteAPI, site: bitchuteRoot}
 }
 
 func (b *BitChute) Name() string { return "bitchute" }
-
-func (b *BitChute) Match(u *url.URL) bool { return util.HostMatches(u.Host, "bitchute.com") }
 
 // Extract resolves a video page or a channel. The embed page is accepted as
 // well: it names the same video, and it is the shape a link copied out of an

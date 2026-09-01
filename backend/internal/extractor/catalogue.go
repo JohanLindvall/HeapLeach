@@ -76,32 +76,6 @@ func (b *Booru) Sites() []string {
 	return out
 }
 
-// Sites lists the instances known at build time. The set is open — an
-// unlisted install is recognised by its own API — but naming the ones that
-// ship is what a reader wants.
-func (p *PeerTube) Sites() []string { return []string{p.host} }
-
-// Sites names the one install this extractor was built for.
-func (c *Chevereto) Sites() []string { return c.domains }
-
-// Sites names the one archive this extractor was built for.
-func (f *FoolFuuka) Sites() []string { return f.site.domains }
-
-// Sites names the one KVS install this extractor was built for.
-func (k *KVS) Sites() []string { return []string{k.host} }
-
-// Sites lists the domains this host rotates through.
-func (s *Streamtape) Sites() []string { return streamtapeHosts }
-
-// Sites lists the domains this host rotates through.
-func (d *DoodStream) Sites() []string { return doodHosts }
-
-// Sites lists the domains this host rotates through.
-func (m *MixDrop) Sites() []string { return mixdropHosts }
-
-// Sites lists the domains this host rotates through.
-func (v *Vidmoly) Sites() []string { return vidmolyHosts }
-
 // Sites lists the instances of the software this covers.
 func (k *Kemono) Sites() []string {
 	out := make([]string, 0, len(kemonoHosts))
@@ -110,9 +84,6 @@ func (k *Kemono) Sites() []string {
 	}
 	return out
 }
-
-// Sites names the platform this hands to an external downloader.
-func (h *Handoff) Sites() []string { return h.site.domains }
 
 // Sites returns nothing: the harvester claims no host of its own, and reaches
 // whatever the page it is pointed at links to.
@@ -135,29 +106,18 @@ func (a *Autoindex) Sites() []string { return nil }
 // Sites returns nothing: any URL may turn out to be a feed.
 func (f *Feeds) Sites() []string { return nil }
 
-// The rest name their own domains. These are one-liners rather than a field
-// on each extractor because the domains are already stated in each Match,
-// and a second copy that could disagree with the first is worse than a
-// method here that a reader can check against it in one glance.
-func (g *Gofile) Sites() []string     { return []string{"gofile.io"} }
-func (m *Mega) Sites() []string       { return []string{"mega.nz", "mega.co.nz"} }
-func (b *Bunkr) Sites() []string      { return []string{"bunkr.*"} }
-func (e *Erome) Sites() []string      { return []string{"erome.com"} }
-func (p *Pixeldrain) Sites() []string { return []string{"pixeldrain.com", "nova.storage"} }
-func (t *Turbo) Sites() []string      { return []string{"turbo.cr", "turbocdn.st"} }
-func (d *Dropbox) Sites() []string    { return []string{"dropbox.com", "dropboxusercontent.com"} }
-func (m *Mediafire) Sites() []string  { return []string{"mediafire.com"} }
+// The rest claim something a plain host list cannot express — a section of a
+// domain, a wildcard TLD, an exact host without its subdomains, a domain and
+// a path shape — so each keeps a Match of its own and states here what that
+// Match amounts to. Everything that claims a plain list embeds a hostSet
+// instead, and needs no line here: see hosts.go.
+func (b *Bunkr) Sites() []string { return []string{"bunkr.*"} }
 func (g *GoogleDrive) Sites() []string {
 	return []string{"drive.google.com", "drive.usercontent.google.com", "docs.google.com"}
 }
-func (s *SVTPlay) Sites() []string  { return []string{"svtplay.se"} }
-func (r *RUV) Sites() []string      { return []string{"ruv.is"} }
-func (a *ARD) Sites() []string      { return []string{"ardmediathek.de"} }
-func (z *ZDF) Sites() []string      { return []string{"zdf.de"} }
 func (s *SRF) Sites() []string      { return []string{"srf.ch", "playsuisse.ch"} }
 func (v *VRTMax) Sites() []string   { return []string{"vrt.be"} }
 func (n *NPOStart) Sites() []string { return []string{"npo.nl", "npostart.nl"} }
-func (r *RaiPlay) Sites() []string  { return []string{"raiplay.it"} }
 func (r *RTVE) Sites() []string     { return []string{"rtve.es"} }
 func (r *RTPPlay) Sites() []string  { return []string{"rtp.pt"} }
 func (p *PBS) Sites() []string      { return []string{"pbs.org"} }
@@ -169,36 +129,14 @@ func (n *NPR) Sites() []string      { return []string{"npr.org"} }
 // a statement of what works.
 func (a *ABCListen) Sites() []string { return []string{"abc.net.au/listen"} }
 func (b *BBCSounds) Sites() []string { return []string{"bbc.co.uk/sounds"} }
-func (y *YouTube) Sites() []string {
-	return []string{"youtube.com", "youtu.be", "youtube-nocookie.com"}
-}
-func (v *Vimeo) Sites() []string    { return []string{"vimeo.com", "player.vimeo.com"} }
-func (y *Yandex) Sites() []string   { return []string{"yandex.*"} }
-func (f *FourChan) Sites() []string { return []string{"4chan.org", "4channel.org"} }
-func (r *RedGifs) Sites() []string  { return []string{"redgifs.com"} }
-func (p *PornHub) Sites() []string  { return []string{"pornhub.com"} }
-func (x *XHamster) Sites() []string { return []string{"xhamster.*"} }
-func (t *TNAFlix) Sites() []string  { return []string{"tnaflix.com"} }
-func (p *PornOne) Sites() []string  { return []string{"pornone.com"} }
-func (d *DrTuber) Sites() []string  { return []string{"drtuber.com"} }
+func (y *Yandex) Sites() []string    { return []string{"yandex.*"} }
+func (x *XHamster) Sites() []string  { return []string{"xhamster.*"} }
 
 // AlohaTube hosts nothing: it is listed because a link to it resolves,
 // not because its videos live there.
-func (a *AlohaTube) Sites() []string { return []string{"alohatube.com"} }
-func (p *Pixhost) Sites() []string   { return []string{"pixhost.to"} }
-func (i *ImagePond) Sites() []string {
-	return []string{"imagepond.net"}
-}
-func (s *Suvobox) Sites() []string    { return []string{"suvobox.com"} }
-func (f *Fapello) Sites() []string    { return []string{"fapello.com"} }
-func (c *CoomerFans) Sites() []string { return []string{"coomerfans.com"} }
-func (o *OKru) Sites() []string       { return []string{"ok.ru", "odnoklassniki.ru"} }
 func (i *Imgur) Sites() []string      { return []string{"imgur.com"} }
-func (c *Cyberdrop) Sites() []string  { return []string{"cyberdrop.cr"} }
 func (c *Civitai) Sites() []string    { return []string{"civitai.com"} }
-func (b *BitChute) Sites() []string   { return []string{"bitchute.com"} }
 func (s *Streamable) Sites() []string { return []string{"streamable.com"} }
 func (w *WeTransfer) Sites() []string { return []string{"wetransfer.com", "we.tl"} }
-func (n *NRK) Sites() []string        { return []string{"nrk.no", "tv.nrk.no"} }
 func (p *PornPics) Sites() []string   { return []string{"pornpics.com"} }
 func (a *ArchiveOrg) Sites() []string { return []string{"archive.org"} }

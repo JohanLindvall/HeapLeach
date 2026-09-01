@@ -14,6 +14,7 @@ import (
 // FourChan resolves 4chan threads through the site's read-only JSON API,
 // which needs no key and is served from a separate host to the boards.
 type FourChan struct {
+	hostSet
 	client *httpx.Client
 	// api and files are the two hosts this reads, kept as fields only so a
 	// test can point them at a fixture server.
@@ -29,14 +30,10 @@ const (
 
 // NewFourChan builds the 4chan extractor.
 func NewFourChan(client *httpx.Client) *FourChan {
-	return &FourChan{client: client, api: fourChanAPI, files: fourChanFiles}
+	return &FourChan{hostSet: hostSet{"4chan.org", "4channel.org"}, client: client, api: fourChanAPI, files: fourChanFiles}
 }
 
 func (f *FourChan) Name() string { return "4chan" }
-
-func (f *FourChan) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "4chan.org") || util.HostMatches(u.Host, "4channel.org")
-}
 
 // Extract lists every attachment in a thread.
 func (f *FourChan) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

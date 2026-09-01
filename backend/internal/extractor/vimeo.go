@@ -32,14 +32,12 @@ import (
 // directly and end up with a playable file. Joining the two streams needs
 // ffmpeg, which is exactly what the external downloader is for, so the
 // player URL is handed to yt-dlp.
-type Vimeo struct{}
+type Vimeo struct{ hostSet }
 
 // NewVimeo builds the vimeo extractor.
-func NewVimeo() *Vimeo { return &Vimeo{} }
+func NewVimeo() *Vimeo { return &Vimeo{hostSet: hostSet{"vimeo.com", "player.vimeo.com"}} }
 
 func (v *Vimeo) Name() string { return "vimeo" }
-
-func (v *Vimeo) Match(u *url.URL) bool { return util.HostMatches(u.Host, "vimeo.com") }
 
 // Extract names the video and leaves the download to the helper script.
 func (v *Vimeo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

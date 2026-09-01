@@ -19,6 +19,7 @@ import (
 // being fetched. The thumbnails differ from the full-size file by a "_300px"
 // suffix, which is simply dropped.
 type Fapello struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -33,13 +34,11 @@ const (
 var fapelloThumbSuffix = regexp.MustCompile(`_\d+px(\.[A-Za-z0-9]+)$`)
 
 // NewFapello builds the fapello extractor.
-func NewFapello(client *httpx.Client) *Fapello { return &Fapello{client: client} }
+func NewFapello(client *httpx.Client) *Fapello {
+	return &Fapello{hostSet: hostSet{"fapello.com"}, client: client}
+}
 
 func (f *Fapello) Name() string { return "fapello" }
-
-func (f *Fapello) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "fapello.com")
-}
 
 // Extract walks a model's pages and collects everything of theirs.
 func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

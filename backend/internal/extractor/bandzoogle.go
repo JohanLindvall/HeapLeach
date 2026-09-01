@@ -36,9 +36,9 @@ import (
 // leave a queue failing partway down. The same judgement imagepond's /direct
 // route gets, for the same reason.
 type Bandzoogle struct {
-	client  *httpx.Client
-	name    string
-	domains []string
+	hostSet
+	client *httpx.Client
+	name   string
 }
 
 // bandzoogleTrackAttr marks a track anchor, and is the software's own doing
@@ -63,28 +63,15 @@ func NewBandzoogleSites(cfg *config.Config, client *httpx.Client) []Extractor {
 	for _, host := range hosts {
 		name, _, _ := strings.Cut(host, ".")
 		out = append(out, &Bandzoogle{
+			hostSet: hostSet{strings.ToLower(host)},
 			client:  client,
 			name:    name,
-			domains: []string{strings.ToLower(host)},
 		})
 	}
 	return out
 }
 
 func (b *Bandzoogle) Name() string { return b.name }
-
-func (b *Bandzoogle) Match(u *url.URL) bool {
-	for _, domain := range b.domains {
-		if util.HostMatches(u.Host, domain) {
-			return true
-		}
-	}
-	return false
-}
-
-// Sites reports the domains this install answers on, so the generated
-// inventory names the host rather than the extractor's label.
-func (b *Bandzoogle) Sites() []string { return b.domains }
 
 // Extract reads every track on the page. The host was named outright, so a
 // page that cannot be fetched or holds no player is an error rather than

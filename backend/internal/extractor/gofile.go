@@ -36,6 +36,7 @@ import (
 // expires the next link is refused here rather than sent — one wrong secret
 // costs one request, not one per link in the queue.
 type Gofile struct {
+	hostSet
 	client   *httpx.Client
 	fallback string
 	lang     string
@@ -85,6 +86,7 @@ const (
 // NewGofile builds the gofile extractor.
 func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 	return &Gofile{
+		hostSet:   hostSet{"gofile.io"},
 		client:    client,
 		fallback:  cfg.GofileSecret,
 		lang:      cfg.Language,
@@ -93,8 +95,6 @@ func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 }
 
 func (g *Gofile) Name() string { return "gofile" }
-
-func (g *Gofile) Match(u *url.URL) bool { return util.HostMatches(u.Host, "gofile.io") }
 
 // Extract resolves a share code into its files, walking nested folders.
 func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

@@ -45,6 +45,7 @@ import (
 // DDoS-Guard fronts both the site and the API and passes cookieless requests,
 // so nothing here carries a session.
 type Cyberdrop struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -67,14 +68,14 @@ const (
 	cyberdropSizeClass = "file-size"
 )
 
-// NewCyberdrop builds the cyberdrop extractor.
-func NewCyberdrop(client *httpx.Client) *Cyberdrop { return &Cyberdrop{client: client} }
+// NewCyberdrop builds the cyberdrop extractor. It claims cyberdrop.cr alone;
+// see the type comment for why the sibling domains are deliberately left to
+// the fallback.
+func NewCyberdrop(client *httpx.Client) *Cyberdrop {
+	return &Cyberdrop{hostSet: hostSet{"cyberdrop.cr"}, client: client}
+}
 
 func (c *Cyberdrop) Name() string { return "cyberdrop" }
-
-// Match accepts cyberdrop.cr alone; see the type comment for why the sibling
-// domains are deliberately left to the fallback.
-func (c *Cyberdrop) Match(u *url.URL) bool { return util.HostMatches(u.Host, "cyberdrop.cr") }
 
 // Extract resolves an album or a single file.
 func (c *Cyberdrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

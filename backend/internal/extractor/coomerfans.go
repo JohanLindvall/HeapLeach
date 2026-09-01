@@ -28,6 +28,7 @@ import (
 // item starts rather than when the page is read. Image links are plain and
 // need no such treatment.
 type CoomerFans struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -40,11 +41,11 @@ const (
 )
 
 // NewCoomerFans builds the coomerfans extractor.
-func NewCoomerFans(client *httpx.Client) *CoomerFans { return &CoomerFans{client: client} }
+func NewCoomerFans(client *httpx.Client) *CoomerFans {
+	return &CoomerFans{hostSet: hostSet{"coomerfans.com"}, client: client}
+}
 
 func (c *CoomerFans) Name() string { return "coomerfans" }
-
-func (c *CoomerFans) Match(u *url.URL) bool { return util.HostMatches(u.Host, "coomerfans.com") }
 
 // Extract resolves a creator's page or a single post.
 func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

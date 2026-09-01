@@ -31,6 +31,7 @@ import (
 //     on any URL laid out like a KVS video page, which covers the tail
 //     without naming a single host. See kvsSniff.
 type KVS struct {
+	hostSet
 	client *httpx.Client
 	host   string
 }
@@ -67,7 +68,8 @@ func NewKVSSites(cfg *config.Config, client *httpx.Client) []Extractor {
 	}
 	out := make([]Extractor, 0, len(hosts))
 	for _, host := range util.Dedupe(hosts) {
-		out = append(out, &KVS{client: client, host: strings.ToLower(host)})
+		host = strings.ToLower(host)
+		out = append(out, &KVS{hostSet: hostSet{host}, client: client, host: host})
 	}
 	return out
 }
@@ -78,8 +80,6 @@ func (k *KVS) Name() string {
 	name, _, _ := strings.Cut(k.host, ".")
 	return name
 }
-
-func (k *KVS) Match(u *url.URL) bool { return util.HostMatches(u.Host, k.host) }
 
 // Extract resolves a video page, or a member's whole public catalogue.
 func (k *KVS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

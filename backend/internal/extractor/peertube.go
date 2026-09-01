@@ -64,6 +64,7 @@ import (
 // directory as much as a store. The link is followed exactly as given and
 // never rebuilt against the instance.
 type PeerTube struct {
+	hostSet
 	client *httpx.Client
 	host   string
 }
@@ -129,14 +130,13 @@ func NewPeerTubeSites(cfg *config.Config, client *httpx.Client) []Extractor {
 
 	out := make([]Extractor, 0, len(hosts))
 	for _, host := range util.Dedupe(hosts) {
-		out = append(out, &PeerTube{client: client, host: strings.ToLower(host)})
+		host = strings.ToLower(host)
+		out = append(out, &PeerTube{hostSet: hostSet{host}, client: client, host: host})
 	}
 	return out
 }
 
 func (p *PeerTube) Name() string { return peerTubeLabel(p.host) }
-
-func (p *PeerTube) Match(u *url.URL) bool { return util.HostMatches(u.Host, p.host) }
 
 // Extract resolves a video, channel, account or playlist page.
 func (p *PeerTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

@@ -64,6 +64,7 @@ import (
 //     would throw away just as thoroughly. It is walked with a token decoder
 //     instead. See foolFuukaDecode.
 type FoolFuuka struct {
+	hostSet
 	client *httpx.Client
 	site   foolFuukaSite
 }
@@ -192,7 +193,7 @@ func NewFoolFuukaSites(cfg *config.Config, client *httpx.Client) []Extractor {
 
 	out := make([]Extractor, 0, len(sites))
 	for _, site := range sites {
-		out = append(out, &FoolFuuka{client: client, site: site})
+		out = append(out, &FoolFuuka{hostSet: site.domains, client: client, site: site})
 	}
 	return out
 }
@@ -220,15 +221,6 @@ func foolFuukaLabel(host string) string {
 }
 
 func (f *FoolFuuka) Name() string { return f.site.name }
-
-func (f *FoolFuuka) Match(u *url.URL) bool {
-	for _, domain := range f.site.domains {
-		if util.HostMatches(u.Host, domain) {
-			return true
-		}
-	}
-	return false
-}
 
 // Extract resolves a thread, a single post, a board index page or a search.
 func (f *FoolFuuka) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

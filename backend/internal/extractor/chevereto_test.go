@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"golang.org/x/net/html"

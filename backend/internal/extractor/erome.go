@@ -21,6 +21,7 @@ import (
 // CDN checks Referer, and that each item is rendered twice (once for the
 // inline player, once for the lightbox), so the list needs de-duplicating.
 type Erome struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -28,11 +29,11 @@ type Erome struct {
 const eromeReferer = "https://www.erome.com"
 
 // NewErome builds the erome extractor.
-func NewErome(client *httpx.Client) *Erome { return &Erome{client: client} }
+func NewErome(client *httpx.Client) *Erome {
+	return &Erome{hostSet: hostSet{"erome.com"}, client: client}
+}
 
 func (e *Erome) Name() string { return "erome" }
-
-func (e *Erome) Match(u *url.URL) bool { return util.HostMatches(u.Host, "erome.com") }
 
 // eromeSections are the paths that are not usernames, so a profile is never
 // confused with one of the site's own pages.

@@ -28,6 +28,7 @@ import (
 // served by an error that says which program is talking than by one that
 // repeats the domain back at them.
 type Pixeldrain struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -46,13 +47,11 @@ const (
 const pixeldrainMaxFiles = 5000
 
 // NewPixeldrain builds the pixeldrain extractor.
-func NewPixeldrain(client *httpx.Client) *Pixeldrain { return &Pixeldrain{client: client} }
+func NewPixeldrain(client *httpx.Client) *Pixeldrain {
+	return &Pixeldrain{hostSet: hostSet{"pixeldrain.com", "nova.storage"}, client: client}
+}
 
 func (p *Pixeldrain) Name() string { return "pixeldrain" }
-
-func (p *Pixeldrain) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "pixeldrain.com") || util.HostMatches(u.Host, "nova.storage")
-}
 
 // Extract lists a whole album, a shared directory, or a single file.
 func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

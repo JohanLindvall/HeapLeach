@@ -15,17 +15,16 @@ import (
 // timestamp roughly twenty minutes out, so signing is deferred to download
 // time via Resolve.
 type Turbo struct {
+	hostSet
 	client *httpx.Client
 }
 
 // NewTurbo builds the turbo.cr extractor.
-func NewTurbo(client *httpx.Client) *Turbo { return &Turbo{client: client} }
+func NewTurbo(client *httpx.Client) *Turbo {
+	return &Turbo{hostSet: hostSet{"turbo.cr", "turbocdn.st"}, client: client}
+}
 
 func (t *Turbo) Name() string { return "turbo" }
-
-func (t *Turbo) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "turbo.cr") || util.HostMatches(u.Host, "turbocdn.st")
-}
 
 // Extract produces a single lazily-signed entry.
 func (t *Turbo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

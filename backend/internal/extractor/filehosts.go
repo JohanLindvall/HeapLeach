@@ -27,7 +27,10 @@ import (
 // ---------------------------------------------------------------- dropbox
 
 // Dropbox turns a share link into the download it stands for.
-type Dropbox struct{ client *httpx.Client }
+type Dropbox struct {
+	hostSet
+	client *httpx.Client
+}
 
 const (
 	dropboxRoot = "https://www.dropbox.com"
@@ -38,13 +41,11 @@ const (
 )
 
 // NewDropbox builds the dropbox extractor.
-func NewDropbox(client *httpx.Client) *Dropbox { return &Dropbox{client: client} }
+func NewDropbox(client *httpx.Client) *Dropbox {
+	return &Dropbox{hostSet: hostSet{"dropbox.com", "dropboxusercontent.com"}, client: client}
+}
 
 func (d *Dropbox) Name() string { return "dropbox" }
-
-func (d *Dropbox) Match(u *url.URL) bool {
-	return util.HostMatches(u.Host, "dropbox.com") || util.HostMatches(u.Host, "dropboxusercontent.com")
-}
 
 // Extract rewrites the link to ask for the bytes rather than the viewer.
 //
@@ -86,7 +87,10 @@ func dropboxIsFolder(u *url.URL) bool {
 // -------------------------------------------------------------- mediafire
 
 // Mediafire resolves file pages and folder shares.
-type Mediafire struct{ client *httpx.Client }
+type Mediafire struct {
+	hostSet
+	client *httpx.Client
+}
 
 const (
 	mediafireRoot = "https://www.mediafire.com"
@@ -100,11 +104,11 @@ const (
 )
 
 // NewMediafire builds the mediafire extractor.
-func NewMediafire(client *httpx.Client) *Mediafire { return &Mediafire{client: client} }
+func NewMediafire(client *httpx.Client) *Mediafire {
+	return &Mediafire{hostSet: hostSet{"mediafire.com"}, client: client}
+}
 
 func (m *Mediafire) Name() string { return "mediafire" }
-
-func (m *Mediafire) Match(u *url.URL) bool { return util.HostMatches(u.Host, "mediafire.com") }
 
 // Extract resolves either a single file page or a folder share.
 func (m *Mediafire) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

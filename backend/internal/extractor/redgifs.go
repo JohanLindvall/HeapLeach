@@ -20,6 +20,7 @@ import (
 // with no account behind it, so this is only a preliminary step rather than
 // a login. Tokens are reused until they age out.
 type RedGifs struct {
+	hostSet
 	client *httpx.Client
 
 	mu       sync.Mutex
@@ -36,11 +37,11 @@ const (
 )
 
 // NewRedGifs builds the redgifs extractor.
-func NewRedGifs(client *httpx.Client) *RedGifs { return &RedGifs{client: client} }
+func NewRedGifs(client *httpx.Client) *RedGifs {
+	return &RedGifs{hostSet: hostSet{"redgifs.com"}, client: client}
+}
 
 func (r *RedGifs) Name() string { return "redgifs" }
-
-func (r *RedGifs) Match(u *url.URL) bool { return util.HostMatches(u.Host, "redgifs.com") }
 
 // Extract handles a single item (/watch/<id>) or a user's whole feed
 // (/users/<name>).

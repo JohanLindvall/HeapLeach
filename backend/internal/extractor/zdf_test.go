@@ -664,7 +664,7 @@ func TestZDFRank(t *testing.T) {
 }
 
 func TestZDFMatch(t *testing.T) {
-	z := &ZDF{}
+	z := NewZDF(nil)
 	tests := map[string]bool{
 		"https://www.zdf.de/dokus/a-show-100":                       true,
 		"https://zdf.de/video/dokus/a-show-100/a-programme-100":     true,

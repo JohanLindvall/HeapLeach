@@ -25,7 +25,10 @@ import (
 // both an expiry and the requesting address, so they are minted at download
 // time rather than at extraction time: a profile of a hundred videos would
 // otherwise start failing partway down its own queue.
-type Eporner struct{ client *httpx.Client }
+type Eporner struct {
+	hostSet
+	client *httpx.Client
+}
 
 const (
 	epornerRoot   = "https://www.eporner.com"
@@ -45,16 +48,11 @@ const (
 )
 
 // NewEporner builds the eporner extractor.
-func NewEporner(client *httpx.Client) *Eporner { return &Eporner{client: client} }
+func NewEporner(client *httpx.Client) *Eporner {
+	return &Eporner{hostSet: hostSet{epornerSite}, client: client}
+}
 
 func (e *Eporner) Name() string { return "eporner" }
-
-func (e *Eporner) Match(u *url.URL) bool { return util.HostMatches(u.Host, epornerSite) }
-
-// Sites names the domain. The optional half of the catalogue contract is
-// only skippable when an extractor's name is its host, and this one's is
-// not: without this the inventory reports the label "eporner" as the site.
-func (e *Eporner) Sites() []string { return []string{epornerSite} }
 
 // Extract handles one video or a profile tab that lists them.
 func (e *Eporner) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

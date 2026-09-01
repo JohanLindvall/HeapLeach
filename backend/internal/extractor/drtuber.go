@@ -31,7 +31,10 @@ import (
 //
 // The links it hands back are signed and carry an expiry a few minutes out,
 // so the configuration is read again when the item actually starts.
-type DrTuber struct{ client *httpx.Client }
+type DrTuber struct {
+	hostSet
+	client *httpx.Client
+}
 
 const drtuberRoot = "https://www.drtuber.com"
 
@@ -46,11 +49,11 @@ var drtuberID = regexp.MustCompile(`^/(?:video|embed)/(\d+)`)
 var drtuberQualities = map[string]int{"lq": 320, "hq": 720, "4k": 2160}
 
 // NewDrTuber builds the drtuber extractor.
-func NewDrTuber(client *httpx.Client) *DrTuber { return &DrTuber{client: client} }
+func NewDrTuber(client *httpx.Client) *DrTuber {
+	return &DrTuber{hostSet: hostSet{"drtuber.com"}, client: client}
+}
 
 func (d *DrTuber) Name() string { return "drtuber" }
-
-func (d *DrTuber) Match(u *url.URL) bool { return util.HostMatches(u.Host, "drtuber.com") }
 
 // Extract resolves a video page to its best rendition, re-reading the
 // configuration at download time because the links expire.

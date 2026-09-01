@@ -50,6 +50,7 @@ import (
 // extraction, so a wholly Iceland-only series costs one failed request
 // rather than one per episode.
 type RUV struct {
+	hostSet
 	client *httpx.Client
 }
 
@@ -92,13 +93,12 @@ const ruvProgramQuery = `query getEpisode($programID: Int!) {
 }`
 
 // NewRUV builds the RÚV extractor.
-func NewRUV(client *httpx.Client) *RUV { return &RUV{client: client} }
+func NewRUV(client *httpx.Client) *RUV { return &RUV{hostSet: hostSet{"ruv.is"}, client: client} }
 
 func (r *RUV) Name() string { return "ruv" }
 
 // Match takes ruv.is and everything under it. The stations are separate
 // paths rather than separate hosts, and the API lives on a subdomain.
-func (r *RUV) Match(u *url.URL) bool { return util.HostMatches(u.Host, "ruv.is") }
 
 // Extract handles one episode or a whole programme, which are the same
 // request: the listing already carries every stream URL, so a link naming an
