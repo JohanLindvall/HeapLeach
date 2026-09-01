@@ -304,10 +304,12 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,
 		fmt.Sprintf("connections to split a slow file across (1-%d)", config.MaxStreams))
-	flags.Int64Var(&cfg.SlowSpeed, "slow-speed", cfg.SlowSpeed,
-		"bytes per second below which extra connections are opened")
-	flags.Int64Var(&cfg.SpeedLimit, "max-speed", cfg.SpeedLimit,
-		"total download rate ceiling in bytes per second (0 is unlimited)")
+	flags.Var(sizeFlag{&cfg.SlowSpeed}, "slow-speed",
+		"rate below which extra connections are opened, per second (2MB, 500kB, or bytes)")
+	flags.Var(sizeFlag{&cfg.SpeedLimit}, "max-speed",
+		"ceiling on the total download rate, per second (5MB, 1GB, or bytes; 0 is unlimited)")
+	flags.Var(sizeFlag{&cfg.MinFreeDisk}, "min-free",
+		"room to leave at the destination before starting another transfer (10GiB, 250GB, or bytes; 0 turns the check off)")
 	flags.DurationVar(&cfg.StallTimeout, "stall-timeout", cfg.StallTimeout,
 		"abandon and retry a transfer that makes no progress for this long")
 	flags.BoolVar(&cfg.Debug, "debug", cfg.Debug, "verbose logging")
@@ -363,6 +365,28 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// sizeFlag is a byte count on the command line, read the way the
+// environment reads one: with or without a unit. The default it prints is
+// rendered the same way, so `-h` shows 2MB rather than 2000000 and 10GiB
+// rather than a number nobody would recognise as ten gibibytes.
+type sizeFlag struct{ n *int64 }
+
+func (f sizeFlag) String() string {
+	if f.n == nil {
+		return "0"
+	}
+	return config.FormatSize(*f.n)
+}
+
+func (f sizeFlag) Set(s string) error {
+	n, err := config.ParseSize(s)
+	if err != nil {
+		return err
+	}
+	*f.n = n
+	return nil
 }
 
 // applyBareDefaults makes `heapleach` on its own do the obvious thing: serve
@@ -426,18 +450,21 @@ Options:
 	flags.PrintDefaults()
 	fmt.Fprint(out, `
 Environment:
-  HEAPLEACH_ADDR, HEAPLEACH_DIR, HEAPLEACH_CONCURRENCY, HEAPLEACH_MAX_RETRIES,
-  HEAPLEACH_STREAMS, HEAPLEACH_SLOW_SPEED, HEAPLEACH_MAX_SPEED,
-  HEAPLEACH_STALL_TIMEOUT, HEAPLEACH_DEBUG, HEAPLEACH_OPEN,
-  HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE, HEAPLEACH_GOFILE_SECRET,
-  HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host), HEAPLEACH_KVS_HOSTS,
-  HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS
+  HEAPLEACH_ADDR, HEAPLEACH_DIR, HEAPLEACH_STATE, HEAPLEACH_CONCURRENCY,
+  HEAPLEACH_MAX_RETRIES, HEAPLEACH_STREAMS, HEAPLEACH_SLOW_SPEED,
+  HEAPLEACH_MAX_SPEED, HEAPLEACH_MIN_FREE, HEAPLEACH_STALL_TIMEOUT,
+  HEAPLEACH_DEBUG, HEAPLEACH_OPEN, HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE,
+  HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
+  HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS
+
+Sizes take a unit: 5MB, 1.5GB, 10GiB, or a plain byte count.
 
 Examples:
   heapleach ~/Downloads
   heapleach -concurrency 8 -addr :9000 /mnt/media
   heapleach https://example.com/d/abc123 ~/Downloads
   heapleach -streams 8 https://example.com/a/one https://example.com/a/two
+  heapleach -max-speed 5MB -min-free 50GB /mnt/media
   cat urls.txt | heapleach - ~/Downloads
 `)
 }

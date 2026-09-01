@@ -235,9 +235,10 @@ declared routes back to the extractor declaring it. Only an extractor whose
 `Match` is more than a host list — a section of a domain, a wildcard TLD, a
 document shape — writes `Sites()` by hand, in `catalogue.go`; and one that
 skips it altogether must be named for its domain, since the catalogue then
-uses the name as the site. `hosts-check` compares the regenerated file
-against git, so it also fails on a correct regeneration that has not been
-committed yet.
+uses the name as the site. `hosts-check` regenerates into a copy and
+compares it with README.md as it stands, so it judges the working tree
+whatever else is in flight there; in CI the tree is the commit, which is
+what makes a regeneration that was never committed fail the build.
 
 **bandzoogle** is the third platform family, and the first with an empty host
 list: it is website software musicians rent, so every install answers on its

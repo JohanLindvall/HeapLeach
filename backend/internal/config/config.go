@@ -126,17 +126,15 @@ func FromEnv() (*Config, error) {
 	if c.Streams, err = envInt("STREAMS", c.Streams); err != nil {
 		return nil, err
 	}
-	slow, err := envInt("SLOW_SPEED", int(c.SlowSpeed))
-	if err != nil {
+	if c.SlowSpeed, err = envSize("SLOW_SPEED", c.SlowSpeed); err != nil {
 		return nil, err
 	}
-	c.SlowSpeed = int64(slow)
-
-	ceiling, err := envInt("MAX_SPEED", int(c.SpeedLimit))
-	if err != nil {
+	if c.SpeedLimit, err = envSize("MAX_SPEED", c.SpeedLimit); err != nil {
 		return nil, err
 	}
-	c.SpeedLimit = int64(ceiling)
+	if c.MinFreeDisk, err = envSize("MIN_FREE", c.MinFreeDisk); err != nil {
+		return nil, err
+	}
 
 	if v := env("STALL_TIMEOUT", ""); v != "" {
 		d, err := time.ParseDuration(v)
@@ -144,14 +142,6 @@ func FromEnv() (*Config, error) {
 			return nil, fmt.Errorf("%sSTALL_TIMEOUT: %w", envPrefix, err)
 		}
 		c.StallTimeout = d
-	}
-
-	if v := env("MIN_FREE", ""); v != "" {
-		n, err := ParseSize(v)
-		if err != nil {
-			return nil, fmt.Errorf("%sMIN_FREE: %w", envPrefix, err)
-		}
-		c.MinFreeDisk = n
 	}
 
 	c.Debug = env("DEBUG", "") != ""
@@ -213,6 +203,33 @@ var sizeUnits = map[string]int64{
 	"mib": 1 << 20,
 	"gib": 1 << 30,
 	"tib": 1 << 40,
+}
+
+// FormatSize renders a byte count the way ParseSize reads it, exactly: a
+// value that is a whole number of some unit is written in that unit, and
+// anything else as plain bytes, so what is printed as a default can be
+// pasted back as a setting without changing it. Both conventions are tried
+// and the shorter wins — ten gibibytes reads as 10GiB, not 10737418240.
+func FormatSize(n int64) string {
+	if n <= 0 {
+		return strconv.FormatInt(n, 10)
+	}
+	best := strconv.FormatInt(n, 10)
+	for _, unit := range []struct {
+		suffix string
+		size   int64
+	}{
+		{"TB", 1_000_000_000_000}, {"GB", 1_000_000_000}, {"MB", 1_000_000}, {"kB", 1_000},
+		{"TiB", 1 << 40}, {"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10},
+	} {
+		if n%unit.size != 0 {
+			continue
+		}
+		if s := strconv.FormatInt(n/unit.size, 10) + unit.suffix; len(s) < len(best) {
+			best = s
+		}
+	}
+	return best
 }
 
 // EnvBool reads a setting that can be turned off as well as on, reporting
@@ -292,6 +309,9 @@ func (c *Config) Prepare() error {
 	}
 	if c.StallTimeout <= 0 {
 		return fmt.Errorf("stall-timeout must be positive, got %s", c.StallTimeout)
+	}
+	if c.MinFreeDisk < 0 {
+		return fmt.Errorf("min-free cannot be negative, got %d", c.MinFreeDisk)
 	}
 	dir, err := PrepareDir(c.DownloadDir)
 	if err != nil {
@@ -533,6 +553,21 @@ func envInt(name string, def int) (int, error) {
 		return def, nil
 	}
 	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
+	}
+	return n, nil
+}
+
+// envSize reads a byte count that may carry a unit — 5MB, 10GiB — since a
+// rate or a floor is far easier to state that way than as a run of zeroes.
+// A bare number is still bytes, so what worked before still works.
+func envSize(name string, def int64) (int64, error) {
+	v := LookupEnv(name)
+	if v == "" {
+		return def, nil
+	}
+	n, err := ParseSize(v)
 	if err != nil {
 		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
 	}

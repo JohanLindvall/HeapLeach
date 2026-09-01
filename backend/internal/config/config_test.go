@@ -256,6 +256,62 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
+// The rates are sizes too, and a size is far easier to state with a unit
+// than as a run of zeroes. A bare number still means bytes.
+func TestRatesFromEnvTakeUnits(t *testing.T) {
+	t.Setenv("HEAPLEACH_SLOW_SPEED", "500kB")
+	t.Setenv("HEAPLEACH_MAX_SPEED", "5MB")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SlowSpeed != 500_000 {
+		t.Errorf("SlowSpeed = %d, want 500000", cfg.SlowSpeed)
+	}
+	if cfg.SpeedLimit != 5_000_000 {
+		t.Errorf("SpeedLimit = %d, want 5000000", cfg.SpeedLimit)
+	}
+
+	t.Setenv("HEAPLEACH_MAX_SPEED", "2500000")
+	if cfg, err = FromEnv(); err != nil || cfg.SpeedLimit != 2_500_000 {
+		t.Errorf("a bare byte count: %d, %v", cfg.SpeedLimit, err)
+	}
+
+	t.Setenv("HEAPLEACH_MAX_SPEED", "fast")
+	if _, err := FromEnv(); err == nil {
+		t.Error("an unparseable rate was accepted")
+	}
+}
+
+// What FormatSize prints, ParseSize reads back to the same number — that is
+// the whole contract, since the printed form is the default `-h` shows.
+func TestFormatSizeRoundTrips(t *testing.T) {
+	tests := map[int64]string{
+		0:                 "0",
+		1:                 "1",
+		999:               "999",
+		1_000:             "1kB",
+		2_000_000:         "2MB",
+		5_000_000_000:     "5GB",
+		1_000_000_000_000: "1TB",
+		10 << 30:          "10GiB",
+		1 << 20:           "1MiB",
+		1 << 40:           "1TiB",
+		1_500_000:         "1500kB",
+		12_345:            "12345",
+	}
+	for n, want := range tests {
+		got := FormatSize(n)
+		if got != want {
+			t.Errorf("FormatSize(%d) = %q, want %q", n, got, want)
+		}
+		back, err := ParseSize(got)
+		if err != nil || back != n {
+			t.Errorf("ParseSize(%q) = %d, %v; want %d", got, back, err, n)
+		}
+	}
+}
+
 func TestMinFreeDiskFromEnv(t *testing.T) {
 	t.Run("defaults to ten gibibytes", func(t *testing.T) {
 		cfg, err := FromEnv()

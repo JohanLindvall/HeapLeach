@@ -89,6 +89,61 @@ func TestOtherFlags(t *testing.T) {
 	}
 }
 
+// The byte-count flags read units, print their defaults in units, and
+// -min-free exists at all: the floor had been environment-only, which is a
+// strange gap for the one setting that decides whether a run fills a disk.
+func TestSizeFlagsTakeUnits(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := loadConfig([]string{"-max-speed", "5MB", "-slow-speed", "750kB", "-min-free", "20GiB", dir}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SpeedLimit != 5_000_000 {
+		t.Errorf("max-speed = %d", cfg.SpeedLimit)
+	}
+	if cfg.SlowSpeed != 750_000 {
+		t.Errorf("slow-speed = %d", cfg.SlowSpeed)
+	}
+	if cfg.MinFreeDisk != 20<<30 {
+		t.Errorf("min-free = %d", cfg.MinFreeDisk)
+	}
+
+	cfg, err = loadConfig([]string{"-max-speed", "3000000", "-min-free", "0", dir}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SpeedLimit != 3_000_000 || cfg.MinFreeDisk != 0 {
+		t.Errorf("bare numbers: max-speed %d, min-free %d", cfg.SpeedLimit, cfg.MinFreeDisk)
+	}
+
+	var help strings.Builder
+	if _, err := loadConfig([]string{"-h"}, &help); err == nil {
+		t.Fatal("-h should exit")
+	}
+	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE"} {
+		if !strings.Contains(help.String(), want) {
+			t.Errorf("help does not mention %q", want)
+		}
+	}
+
+	// A value the flag cannot read is refused by the flag package itself,
+	// which prints the reason and the usage; the exit status is all that
+	// comes back.
+	for _, tc := range []struct{ arg, want string }{
+		{"-max-speed=fast", "not a size"},
+		{"-min-free=-1GB", "negative"},
+	} {
+		var out strings.Builder
+		_, err := loadConfig([]string{tc.arg, dir}, &out)
+		if exit, ok := errors.AsType[*exitError](err); !ok || exit.code != 2 {
+			t.Errorf("%s: err = %v, want exit status 2", tc.arg, err)
+		}
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("%s: the output does not say %q:\n%s", tc.arg, tc.want, out.String())
+		}
+	}
+}
+
 func TestRejectsBadInput(t *testing.T) {
 	dir := t.TempDir()
 	notADir := filepath.Join(dir, "a-file")

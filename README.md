@@ -503,7 +503,8 @@ rebuilding.
 ## Configuration
 
 Every setting has an environment variable; the common ones also have a flag,
-and a flag beats the environment.
+and a flag beats the environment. Sizes and rates take a unit — `5MB`,
+`1.5GB`, `10GiB` — or a plain byte count.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -512,10 +513,11 @@ and a flag beats the environment.
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. |
 | `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per transfer. Flag: `-retries`. A busy host is exempt and retries forever. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI. |
-| `HEAPLEACH_SLOW_SPEED` | `2000000` | Bytes/sec below which extra connections are opened. Flag: `-slow-speed`. |
-| `HEAPLEACH_MAX_SPEED` | `0` | Ceiling on total download rate in bytes/sec; `0` is unlimited. Flag: `-max-speed`. |
+| `HEAPLEACH_SLOW_SPEED` | `2MB` | Rate per second below which extra connections are opened. Flag: `-slow-speed`. |
+| `HEAPLEACH_MAX_SPEED` | `0` | Ceiling on the total download rate per second; `0` is unlimited. Flag: `-max-speed`. Also settable live in the UI. |
 | `HEAPLEACH_STALL_TIMEOUT` | `90s` | How long a transfer may make no progress before the attempt is retried. Flag: `-stall-timeout`. |
-| `HEAPLEACH_MIN_FREE` | `10GiB` | Room that must be left at the destination before another transfer starts. Below it the queue waits rather than filling the disk. Accepts `10GiB`, `250GB`, `1.5TB` or a plain byte count; `0` turns the check off. |
+| `HEAPLEACH_MIN_FREE` | `10GiB` | Room that must be left at the destination before another transfer starts. Below it the queue waits rather than filling the disk; `0` turns the check off. Flag: `-min-free`. |
+| `HEAPLEACH_STATE` | `~/.local/state/heapleach/queue.json` (`$XDG_STATE_HOME` when set) | Where the queue is written so a restart can pick it up. Unfinished jobs come back held, and are re-read when retried or when the queue is resumed; nothing is fetched until then. Empty disables it. A run given URLs on the command line never writes one. |
 | `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
 | `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
 | `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |
@@ -657,7 +659,8 @@ which of the two is watching.
 make run-image    # build and run the container image
 make dev          # Go API on :8080 + Vite dev server on :5173 (hot reload)
 make dev-backend  # API only
-make test         # Go unit tests
+make test         # Go unit tests, with the race detector
+make check        # everything CI checks: gofmt, vet, the host list, both test suites
 make test-live    # extractors against the real sites (needs network)
 make frontend     # build the UI into the Go embed directory
 make lock         # regenerate frontend/package-lock.json
@@ -718,10 +721,11 @@ way to check a release before tagging one.
 
 ## Notes
 
-- Jobs live in memory. Restarting loses the queue; finished files stay put.
-  A `.part` file carries a `.part.state` sidecar recording per-connection
-  progress, so an interrupted multi-connection transfer resumes rather than
-  starting over. Both can be deleted safely.
+- The queue is written to `HEAPLEACH_STATE` every few seconds, so a restart
+  finds its unfinished jobs held and re-reads them on retry; finished files
+  stay put. A `.part` file carries a `.part.state` sidecar recording
+  per-connection progress, so an interrupted multi-connection transfer
+  resumes rather than starting over. Both can be deleted safely.
 - These sites change their plumbing without warning. `make test-live` is the
   fastest way to find out which extractor broke.
 - Be a good citizen: the defaults are deliberately modest, and the client
