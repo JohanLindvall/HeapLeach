@@ -1,10 +1,21 @@
 import { useState, type FormEvent } from 'react';
 import { addUrls, ApiError } from '../api';
-import { DownloadIcon } from './Icons';
+import { linksIn } from '../links';
+import { ClipboardIcon, DownloadIcon } from './Icons';
 
 interface AddFormProps {
   readonly onNotice: (message: string, kind: 'info' | 'error') => void;
 }
+
+/**
+ * Reading the clipboard needs a secure context — https, or localhost — and
+ * the browser's permission. Deciding once, here, keeps a button that could
+ * never work from appearing at all: served over plain http to another
+ * machine the API is simply absent, and an offer that always fails is worse
+ * than no offer.
+ */
+const CAN_READ_CLIPBOARD =
+  typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function';
 
 /** URL entry: accepts a paste of many links, one per line. */
 export function AddForm({ onNotice }: AddFormProps) {
@@ -12,6 +23,31 @@ export function AddForm({ onNotice }: AddFormProps) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // Returns whether anything was queued, so the caller can decide what to
+  // clear: text the user typed is theirs to lose only once it is safely in
+  // the queue, and a clipboard grab must not empty a box it never filled.
+  const send = async (text: string): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const result = await addUrls(text, password);
+      if (result.accepted.length > 0) {
+        onNotice(
+          `Queued ${result.accepted.length} link${result.accepted.length === 1 ? '' : 's'}.`,
+          'info',
+        );
+      }
+      for (const bad of result.rejected) {
+        onNotice(`${bad.url}: ${bad.error}`, 'error');
+      }
+      return result.accepted.length > 0;
+    } catch (error) {
+      onNotice(error instanceof ApiError ? error.message : 'Could not reach the server.', 'error');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
@@ -22,25 +58,28 @@ export function AddForm({ onNotice }: AddFormProps) {
       onNotice('Paste at least one URL first.', 'error');
       return;
     }
+    if (await send(trimmed)) setUrls('');
+  };
 
-    setBusy(true);
+  // The whole point is to skip the paste, so this queues what it finds
+  // rather than filling the box and waiting for a second click. readText is
+  // called first thing in the handler because some browsers only allow the
+  // read while the click that asked for it is still being handled.
+  const queueClipboard = async (): Promise<void> => {
+    if (busy) return;
+    let text: string;
     try {
-      const result = await addUrls(trimmed, password);
-      if (result.accepted.length > 0) {
-        setUrls('');
-        onNotice(
-          `Queued ${result.accepted.length} link${result.accepted.length === 1 ? '' : 's'}.`,
-          'info',
-        );
-      }
-      for (const bad of result.rejected) {
-        onNotice(`${bad.url}: ${bad.error}`, 'error');
-      }
-    } catch (error) {
-      onNotice(error instanceof ApiError ? error.message : 'Could not reach the server.', 'error');
-    } finally {
-      setBusy(false);
+      text = await navigator.clipboard.readText();
+    } catch {
+      onNotice('The browser would not hand over the clipboard.', 'error');
+      return;
     }
+    const links = linksIn(text);
+    if (links.length === 0) {
+      onNotice('No link in the clipboard.', 'error');
+      return;
+    }
+    await send(links.join('\n'));
   };
 
   // Split on any whitespace, exactly as the server does; only the empty
@@ -91,6 +130,18 @@ export function AddForm({ onNotice }: AddFormProps) {
             <span className="add__count">
               {count} link{count === 1 ? '' : 's'}
             </span>
+          )}
+          {CAN_READ_CLIPBOARD && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              title="Queue the links in the clipboard"
+              disabled={busy}
+              onClick={() => void queueClipboard()}
+            >
+              <ClipboardIcon />
+              Clipboard
+            </button>
           )}
           <button type="submit" className="btn btn--primary" disabled={busy}>
             <DownloadIcon />
