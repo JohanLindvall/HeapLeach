@@ -86,7 +86,14 @@ type Manager struct {
 
 	subsMu    sync.Mutex
 	subs      map[chan []byte]struct{}
+	closed    bool // set under subsMu by Close; a late Subscribe is answered closed
 	closeOnce sync.Once
+
+	// hostCount is how many extractors the registry holds, fixed at
+	// construction. It rides in every snapshot, and asking the registry to
+	// list its names on each progress tick allocated a slice to count and
+	// drop.
+	hostCount int
 
 	// minFree is how much room must be left at the destination before
 	// another transfer is started; zero disables the check. Fixed at
@@ -109,9 +116,14 @@ type Manager struct {
 // New builds a Manager. Call Start before use.
 func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log *slog.Logger) *Manager {
 	ctx, stop := context.WithCancel(context.Background())
+	hostCount := 0
+	if reg != nil {
+		hostCount = len(reg.Hosts())
+	}
 	return &Manager{
 		cfg:        cfg,
 		reg:        reg,
+		hostCount:  hostCount,
 		client:     client.Streaming(),
 		log:        log,
 		jobs:       make(map[string]*Job),
@@ -168,6 +180,7 @@ func (m *Manager) Close() {
 		m.wg.Wait()
 
 		m.subsMu.Lock()
+		m.closed = true
 		for ch := range m.subs {
 			close(ch)
 			delete(m.subs, ch)
@@ -375,9 +388,6 @@ func (m *Manager) lowOnSpace() bool {
 	}
 	return m.diskFree.Load() < m.minFree
 }
-
-// MinFreeDisk is the room that must be left before another transfer starts.
-func (m *Manager) MinFreeDisk() int64 { return m.minFree }
 
 // hostFullLocked reports whether an item's host is already running as many
 // transfers as its pace allows. Caller holds mu.
@@ -930,7 +940,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		DiskFree:    m.diskFree.Load(),
 		DiskTotal:   m.diskTotal.Load(),
 		DiskMinFree: m.minFree,
-		HostCount:   len(m.reg.Hosts()),
+		HostCount:   m.hostCount,
 	}
 	// Newest first: the job someone just added belongs at the top.
 	for _, v := range slices.Backward(m.order) {
@@ -952,10 +962,22 @@ func (m *Manager) snapshotLocked() Snapshot {
 
 // Subscribe returns a channel of serialised snapshots and an unsubscribe
 // function. The channel is closed when the manager shuts down.
+//
+// A subscriber arriving after Close gets a channel that is closed already.
+// The alternative — one nobody will ever close — would hold an event stream
+// open through shutdown: http.Server.Shutdown waits for in-flight requests
+// without cancelling their contexts, so a browser reloading in the moment
+// between the manager closing and the listener closing would turn a clean
+// exit into a wait for the deadline and an error.
 func (m *Manager) Subscribe() (<-chan []byte, func()) {
 	ch := make(chan []byte, 1)
 
 	m.subsMu.Lock()
+	if m.closed {
+		m.subsMu.Unlock()
+		close(ch)
+		return ch, func() {}
+	}
 	m.subs[ch] = struct{}{}
 	m.subsMu.Unlock()
 
@@ -982,13 +1004,22 @@ func (m *Manager) broadcast() {
 			return
 		case now := <-ticker.C:
 			m.sampleDisk(now)
+			listening := m.hasSubscribers()
 
 			m.mu.Lock()
 			active := m.running > 0
 			if active {
 				m.sampleLocked(now)
 			}
-			if !m.dirty.Swap(false) && !active {
+			// With nobody subscribed there is no one to build a snapshot
+			// for: a headless run polls Snapshot itself, and a browser that
+			// connects later is sent the state as its first frame. The
+			// rates above are still sampled, since the terminal reads
+			// them, and dirty is left standing for whoever arrives next.
+			// What is saved is encoding every item of every job — tens of
+			// thousands of them on a large listing — twice a second for no
+			// reader.
+			if !listening || (!m.dirty.Swap(false) && !active) {
 				m.mu.Unlock()
 				continue
 			}
@@ -1065,6 +1096,13 @@ func (m *Manager) sampleLocked(now time.Time) {
 			it.lastBytes, it.lastSample = current, now
 		}
 	}
+}
+
+// hasSubscribers reports whether anyone is waiting on the event stream.
+func (m *Manager) hasSubscribers() bool {
+	m.subsMu.Lock()
+	defer m.subsMu.Unlock()
+	return len(m.subs) > 0
 }
 
 // publish sends a payload to every subscriber, replacing any snapshot a slow

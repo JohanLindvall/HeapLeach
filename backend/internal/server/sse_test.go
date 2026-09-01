@@ -66,6 +66,39 @@ func TestEventStreamEndsWhenManagerCloses(t *testing.T) {
 	}
 }
 
+// The same requirement from the other side: a stream opened after the
+// manager has closed — a browser reloading in the moment between the manager
+// closing and the listener closing — must end at once rather than hold
+// Shutdown to its deadline.
+func TestEventStreamOpenedAfterCloseEndsAtOnce(t *testing.T) {
+	manager, handler := newTestServer(t)
+	manager.Close()
+
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		resp, err := http.Get(srv.URL + "/api/events")
+		if err != nil {
+			done <- err
+			return
+		}
+		defer resp.Body.Close()
+		_, err = io.Copy(io.Discard, resp.Body)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reading the stream: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stream opened after Close stayed open; shutdown would hang")
+	}
+}
+
 func TestManagerCloseIsIdempotent(t *testing.T) {
 	manager, _ := newTestServer(t)
 

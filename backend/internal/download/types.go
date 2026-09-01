@@ -260,6 +260,7 @@ func (j *Job) view() JobView {
 		Total:     len(j.Items),
 		SizeKnown: true,
 	}
+	var t itemTally
 	for _, it := range j.Items {
 		iv := it.view()
 		v.Items = append(v.Items, iv)
@@ -271,23 +272,49 @@ func (j *Job) view() JobView {
 		} else if iv.Status != StatusDone {
 			v.SizeKnown = false
 		}
-		switch iv.Status {
-		case StatusDone:
-			v.Done++
-		case StatusFailed:
-			v.Failed++
-		case StatusCanceled:
-			v.Canceled++
-		case StatusRunning:
-			v.Active++
-		}
+		t.count(iv.Status)
 	}
-	v.Status = j.status()
+	v.Done, v.Failed, v.Canceled, v.Active = t.done, t.failed, t.canceled, t.running
+	v.Status = j.statusFrom(t)
 	return v
 }
 
+// itemTally is how many of a job's items are in each state that decides
+// anything. The view and the status both need it, and the view is built on
+// every progress tick for every item, so it is counted once and shared
+// rather than walked twice.
+type itemTally struct {
+	done, failed, canceled, running int
+}
+
+func (t *itemTally) count(s Status) {
+	switch s {
+	case StatusDone:
+		t.done++
+	case StatusFailed:
+		t.failed++
+	case StatusCanceled:
+		t.canceled++
+	case StatusRunning:
+		t.running++
+	}
+}
+
+// tally counts the job's items.
+func (j *Job) tally() itemTally {
+	var t itemTally
+	for _, it := range j.Items {
+		t.count(it.Status)
+	}
+	return t
+}
+
 // status derives the job state from its phase and its items.
-func (j *Job) status() Status {
+func (j *Job) status() Status { return j.statusFrom(j.tally()) }
+
+// statusFrom derives the job state from its phase and an already counted
+// tally of its items.
+func (j *Job) statusFrom(t itemTally) Status {
 	switch {
 	case j.resolving:
 		return StatusResolving
@@ -297,29 +324,13 @@ func (j *Job) status() Status {
 		return StatusFailed
 	case len(j.Items) == 0:
 		return StatusQueued
-	}
-
-	var done, failed, canceled, running int
-	for _, it := range j.Items {
-		switch it.Status {
-		case StatusDone:
-			done++
-		case StatusFailed:
-			failed++
-		case StatusCanceled:
-			canceled++
-		case StatusRunning:
-			running++
-		}
-	}
-	switch {
-	case running > 0:
+	case t.running > 0:
 		return StatusRunning
-	case done+failed+canceled < len(j.Items):
+	case t.done+t.failed+t.canceled < len(j.Items):
 		return StatusQueued
-	case failed > 0:
+	case t.failed > 0:
 		return StatusFailed
-	case done > 0:
+	case t.done > 0:
 		return StatusDone
 	default:
 		return StatusCanceled
