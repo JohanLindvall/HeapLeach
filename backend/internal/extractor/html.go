@@ -42,6 +42,18 @@ func attr(n *html.Node, key string) string {
 	return ""
 }
 
+// hasAttr reports whether an attribute is present, whatever its value.
+// Valueless HTML attributes ("allowfullscreen") parse to an empty string,
+// which attr cannot tell apart from an absent one.
+func hasAttr(n *html.Node, key string) bool {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
 // hasClass reports whether the node carries a class token.
 func hasClass(n *html.Node, class string) bool {
 	return strings.Contains(" "+attr(n, "class")+" ", " "+class+" ")

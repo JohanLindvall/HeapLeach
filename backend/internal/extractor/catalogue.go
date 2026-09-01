@@ -177,7 +177,12 @@ func (p *PornHub) Sites() []string  { return []string{"pornhub.com"} }
 func (x *XHamster) Sites() []string { return []string{"xhamster.*"} }
 func (t *TNAFlix) Sites() []string  { return []string{"tnaflix.com"} }
 func (p *PornOne) Sites() []string  { return []string{"pornone.com"} }
-func (p *Pixhost) Sites() []string  { return []string{"pixhost.to"} }
+func (d *DrTuber) Sites() []string  { return []string{"drtuber.com"} }
+
+// AlohaTube hosts nothing: it is listed because a link to it resolves,
+// not because its videos live there.
+func (a *AlohaTube) Sites() []string { return []string{"alohatube.com"} }
+func (p *Pixhost) Sites() []string   { return []string{"pixhost.to"} }
 func (i *ImagePond) Sites() []string {
 	return []string{"imagepond.net"}
 }

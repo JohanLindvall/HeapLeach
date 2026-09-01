@@ -218,6 +218,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPornHub(client),
 		NewXHamster(client),
 		NewTNAFlix(client),
+		NewDrTuber(client),
 		NewPornOne(client),
 		NewEporner(client),
 		NewPixhost(client),
@@ -272,6 +273,11 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// otherwise be routed to that host's extractor, which would try to
 	// fetch "links://..." and fail on the scheme.
 	reg.extractors = append([]Extractor{NewLinks(client, reg)}, extractors...)
+	// The aggregator hosts nothing either, and resolves the frame it finds
+	// through the registry for the same reason, so it is wired the same way
+	// once the registry exists. It claims one host, so its position among
+	// the rest does not matter.
+	reg.extractors = append(reg.extractors, NewAlohaTube(client, reg))
 	return reg
 }
 
