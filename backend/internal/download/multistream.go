@@ -55,16 +55,20 @@ type downloadTimings struct {
 	save     time.Duration
 	busyBase time.Duration
 	busyMax  time.Duration
+	// progressRetry is the flat wait before resuming an attempt that moved
+	// bytes and then lost its connection.
+	progressRetry time.Duration
 }
 
 func defaultDownloadTimings() downloadTimings {
 	return downloadTimings{
-		poll:     config.SegmentPollInterval,
-		probe:    config.StreamProbeInterval,
-		cooldown: config.StreamAddCooldown,
-		save:     config.SegmentStateInterval,
-		busyBase: config.BusyRetryBase,
-		busyMax:  config.BusyRetryMax,
+		poll:          config.SegmentPollInterval,
+		probe:         config.StreamProbeInterval,
+		cooldown:      config.StreamAddCooldown,
+		save:          config.SegmentStateInterval,
+		busyBase:      config.BusyRetryBase,
+		busyMax:       config.BusyRetryMax,
+		progressRetry: config.ProgressRetryDelay,
 	}
 }
 

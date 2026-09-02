@@ -158,6 +158,16 @@ const (
 	TransferRetryBase = 1 * time.Second
 	TransferRetryMax  = 20 * time.Second
 
+	// ProgressRetryDelay is how long a transfer waits before resuming after
+	// a connection dropped on an attempt that was moving bytes. Such an
+	// attempt is not counted against the retry budget — see Manager.transfer
+	// — and the wait is flat rather than backed off, because backoff exists
+	// to stop hammering a host that is failing, and a host that served part
+	// of the file a moment ago is not failing. Long enough for a CDN node to
+	// come back or a half-open connection to time out of a table somewhere;
+	// short enough that a worker is not idled for nothing.
+	ProgressRetryDelay = 30 * time.Second
+
 	// BusyRetryBase and BusyRetryMax bound the wait between attempts at a
 	// host that is merely busy. Such a host is not failing, it is asking us
 	// to come back later, so for items that can re-resolve — rotating to a

@@ -670,13 +670,21 @@ func (m *Manager) enqueueLocked(it *Item) {
 // asked for meanwhile takes precedence and starts the item over with a
 // clean slate.
 func (m *Manager) deferStalledLocked(it *Item, err error) bool {
-	var stall *stalledError
-	if !errors.As(err, &stall) || it.retryPending {
+	stall, ok := errors.AsType[*stalledError](err)
+	if !ok || it.retryPending {
 		return false
 	}
 	limit := 0
 	if m.cfg != nil {
 		limit = m.cfg.MaxRetries
+	}
+	// A stall that came after bytes had landed is the connection's failure
+	// rather than the transfer's, exactly as a dropped connection is to
+	// transfer: the host served the file a moment ago and the part file is
+	// further along than it was. The budget counts stalls in a row that
+	// moved nothing, so this one starts the count over.
+	if stall.moved {
+		it.stallDefers = 0
 	}
 	if it.stallDefers >= limit {
 		return false

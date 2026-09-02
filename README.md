@@ -402,6 +402,15 @@ ffmpeg the `.ts` is kept and plays fine.
   again can change the answer: a URL with nothing to re-resolve, which is
   usually a page no extractor recognised, is told so after a few attempts
   instead of retrying forever.
+- **Forgives a dropped connection that was getting somewhere.** A transfer
+  that loses its connection after moving bytes resumes from its part file
+  thirty seconds later, and that attempt is not counted against the
+  retries: the budget counts attempts *in a row* that move nothing, and one
+  that moved anything starts the count over. A stall after progress is
+  treated the same way. So a CDN that drops every few dozen megabytes still
+  finishes a large file instead of failing it three drops in — and since
+  every such attempt leaves more on disk than it found, a finite file
+  cannot cycle forever.
 - **Pause and resume** the whole queue. Transfers park inside their reads
   rather than being torn down, so a short pause costs nothing and a long one
   falls back on the same resume every other interruption uses.
@@ -511,7 +520,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. |
-| `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per transfer. Flag: `-retries`. A busy host is exempt and retries forever. |
+| `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. A busy host is exempt and retries forever. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI. |
 | `HEAPLEACH_SLOW_SPEED` | `2MB` | Rate per second below which extra connections are opened. Flag: `-slow-speed`. |
 | `HEAPLEACH_MAX_SPEED` | `0` | Ceiling on the total download rate per second; `0` is unlimited. Flag: `-max-speed`. Also settable live in the UI. |

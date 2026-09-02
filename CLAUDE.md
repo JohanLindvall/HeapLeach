@@ -690,12 +690,34 @@ Other behaviours that span files:
   queue with its part file intact, so a host that has stopped serving does
   not hold a worker slot while the queue waits — bounded by the retry
   budget, past which the next stall is a failure, so the headless run still
-  terminates. Its next turn resumes from disk. Relatedly, the stream
+  terminates. Its next turn resumes from disk. A stall that came after bytes
+  had landed starts that count over, for the reason in the next bullet.
+  Relatedly, the stream
   supervisor treats stalled and slow as opposites: a probe window in which
   no bytes arrived opens no extra connection, and discards any pending
   before/after verdict rather than reading the stall as "parallelism made it
   slower" — a verdict that would penalise the host's budget for the rest of
   the process over a condition the host imposed on everyone.
+- **The retry budget counts attempts in a row that moved nothing.** An
+  attempt that received bytes and then lost its connection — a CDN node
+  dropping every few dozen megabytes, a NAT forgetting a long connection —
+  is one connection failing on a host that was serving the file a moment
+  ago, not the transfer going nowhere. `Manager.transfer` therefore resumes
+  it from the part file after a flat `config.ProgressRetryDelay` (30s) and
+  starts the attempt count over, so `MaxRetries` bounds consecutive
+  unproductive attempts rather than the whole life of a large file on a
+  flaky host. The judgement is made against the disk, not the wire:
+  `onDisk` reads what the part file held before the attempt — the segment
+  sidecar's tally, the playlist checkpoint, or the file's length — and the
+  position afterwards has to be further. Bytes arriving is not enough, and
+  `TestStalledTransferYieldsTheWorkerSlot` is why: its server ignores
+  `Range` and serves the same first 8 KB on every turn, which receives
+  plenty and gets nowhere, and judged by bytes alone would be deferred
+  forever. Nor can `Item.downloaded` from before the attempt serve as the
+  baseline, since `enqueueLocked` zeroes it on every re-queue. This cannot
+  cycle forever on a finite file, since every such attempt left more on
+  disk than it found. Tests live in
+  `internal/download/progress_retry_test.go`.
 - A master playlist's `CODECS` describes the whole presentation, not the
   variant's own segments, so a variant that names a separate `AUDIO` group
   advertises audio it does not carry. `hlsVariant.muxed` therefore checks

@@ -99,6 +99,10 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			final string
 			err   error
 		)
+		// How far the part file had got before this attempt, so its own
+		// contribution can be told afterwards: an attempt that got the file
+		// further is judged apart from one that got it nowhere, below.
+		before := onDisk(part, len(it.Segments))
 		if isPlaylist {
 			final, err = m.transferPlaylist(ctx, it, part, name)
 		} else {
@@ -154,16 +158,61 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			continue
 		}
 
+		// Moved means the file is further along than the disk held when the
+		// attempt began — not that bytes arrived, which is a different thing:
+		// a server that ignores Range and starts over on every request
+		// delivers plenty and gets nowhere. The counter is the position the
+		// attempt reached, since every path sets it from what it resumed at
+		// and advances it as bytes land.
+		moved := it.downloaded.Load() > before
+
 		// A stall is handed straight back rather than retried in place.
 		// Retrying here would pin this worker for another StallTimeout
 		// against a host that has stopped serving, while the queue waits
 		// behind it; runItem sends the item to the back of the queue
-		// instead, so whatever can move, moves.
-		if _, ok := errors.AsType[*stalledError](err); ok {
+		// instead, so whatever can move, moves. It is told whether bytes
+		// landed first, since that decides what the deferral costs.
+		if stall, ok := errors.AsType[*stalledError](err); ok {
+			stall.moved = moved
 			return err
 		}
 
-		if attempt >= m.cfg.MaxRetries || !retryableTransfer(err) {
+		if !retryableTransfer(err) {
+			return err
+		}
+
+		// An attempt that moved bytes and then lost its connection is not
+		// the transfer going wrong but one connection going wrong, on a host
+		// that was serving the file a moment ago — a CDN node dropping every
+		// few dozen megabytes, a NAT table forgetting a long connection. The
+		// retry budget exists for transfers that get nowhere, so this
+		// attempt does not spend it: the count starts over, and the next
+		// attempt resumes from the part file after a flat wait rather than
+		// a backoff. A budget of MaxRetries is then MaxRetries attempts *in
+		// a row* that moved nothing, which is what "going nowhere" means.
+		//
+		// This cannot cycle forever on a finite file: every attempt that
+		// takes this path left more on disk than it found. A host that
+		// serves a few bytes per connection makes for a slow download, not
+		// an endless one, and the cancel is always there.
+		if moved {
+			wait := m.timings.progressRetry
+			m.note(it, fmt.Sprintf("connection dropped — resuming in %s", wait.Round(time.Second)))
+			m.log.Info("connection dropped after progress; resuming", "item", it.ID, "name", name,
+				"gained", it.downloaded.Load()-before, "wait", wait, "err", err)
+			if err := util.SleepCtx(ctx, wait); err != nil {
+				return err
+			}
+			m.note(it, "")
+			// Signed links expire; mint a fresh one before resuming.
+			if err := m.resolveTarget(ctx, it); err != nil {
+				return err
+			}
+			attempt = -1 // the loop's increment makes the next one a first
+			continue
+		}
+
+		if attempt >= m.cfg.MaxRetries {
 			return err
 		}
 		m.log.Info("retrying download", "item", it.ID, "name", name, "attempt", attempt+1, "err", err)
@@ -426,6 +475,34 @@ func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterA
 	return err
 }
 
+// onDisk reports how far the part file has got, as the next attempt will
+// find it: the segment sidecar's tally where there is one, the playlist
+// checkpoint's where the file is a playlist, and otherwise the file's own
+// length. Read before an attempt and compared with the position afterwards,
+// it is what separates an attempt that got the file further from one that
+// merely received bytes — a server that restarts from zero on every request
+// does the second without the first, and a retry judged by bytes alone
+// would chase it forever.
+func onDisk(part string, segments int) int64 {
+	if segments > 0 {
+		if st := loadPlaylistState(part, segments); st != nil {
+			return st.Bytes
+		}
+		return 0
+	}
+	if st := loadTransferState(part); st != nil {
+		var held int64
+		for _, seg := range st.Segments {
+			held += seg.Pos - seg.Start
+		}
+		return held
+	}
+	if fi, err := os.Stat(part); err == nil {
+		return fi.Size()
+	}
+	return 0
+}
+
 // setProgress resets the byte counter and the rate-sampling baseline.
 func (m *Manager) setProgress(it *Item, done int64) {
 	m.mu.Lock()
@@ -475,6 +552,10 @@ func (w *offsetWriter) Write(p []byte) (int, error) {
 type stalledError struct {
 	name  string
 	after time.Duration
+	// moved records that bytes landed before the counter stopped, which
+	// makes the stall a connection's failure rather than the transfer's:
+	// deferStalledLocked then starts its count over instead of spending it.
+	moved bool
 }
 
 func (e *stalledError) Error() string {
