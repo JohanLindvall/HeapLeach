@@ -8,6 +8,30 @@ import (
 	"time"
 )
 
+func TestEnvBoolSeparatesUnsetFromFalse(t *testing.T) {
+	// LookupEnv supplies the HEAPLEACH_ prefix, so the setting is named
+	// without it and the variable with it.
+	const name = "TEST_FLAG"
+	cases := map[string][2]bool{
+		"":      {false, false},
+		"0":     {false, true},
+		"false": {false, true},
+		"No":    {false, true},
+		"OFF":   {false, true},
+		"1":     {true, true},
+		"true":  {true, true},
+		"yes":   {true, true},
+		"on":    {true, true},
+	}
+	for raw, want := range cases {
+		t.Setenv(envPrefix+name, raw)
+		value, set := EnvBool(name)
+		if value != want[0] || set != want[1] {
+			t.Errorf("EnvBool(%q) = (%v, %v), want (%v, %v)", raw, value, set, want[0], want[1])
+		}
+	}
+}
+
 func TestFromEnvDefaults(t *testing.T) {
 	cfg, err := FromEnv()
 	if err != nil {

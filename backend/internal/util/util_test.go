@@ -122,6 +122,57 @@ func TestTrimTitleSuffix(t *testing.T) {
 	}
 }
 
+func TestTruncateCollapsesAndCutsOnARuneBoundary(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"  runs   of\n\twhitespace  ", 40, "runs of whitespace"},
+		{"abcdefgh", 5, "abcde..."},
+		// A cut inside "é" would leave half a rune; the character goes whole.
+		{"caf\u00e9 au lait", 4, "caf..."},
+		{"", 3, ""},
+	}
+	for _, tc := range cases {
+		if got := Truncate(tc.in, tc.n); got != tc.want {
+			t.Errorf("Truncate(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+		}
+	}
+}
+
+func TestOriginDropsEverythingAfterTheHost(t *testing.T) {
+	u, err := url.Parse("https://user:pw@example.test:8443/a/b?c=d#e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Origin(u); got != "https://example.test:8443" {
+		t.Errorf("Origin = %q", got)
+	}
+}
+
+func TestDecodeBase64TakesEverySpelling(t *testing.T) {
+	// "hi?>" encodes to a string that differs between the two alphabets and
+	// needs padding, so the four spellings are genuinely different inputs.
+	const want = "hi?>"
+	for _, in := range []string{"aGk/Pg==", "aGk/Pg", "aGk_Pg==", "aGk_Pg", " aGk_Pg \n"} {
+		got, err := DecodeBase64(in)
+		if err != nil {
+			t.Errorf("DecodeBase64(%q): %v", in, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("DecodeBase64(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"", "   ", "===", "not base64!"} {
+		if _, err := DecodeBase64(in); err == nil {
+			t.Errorf("DecodeBase64(%q) decoded without complaint", in)
+		}
+	}
+}
+
 func TestBackoffGrowsAndIsCapped(t *testing.T) {
 	const base, cap = 100 * time.Millisecond, time.Second
 

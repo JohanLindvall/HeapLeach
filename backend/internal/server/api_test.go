@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/download"
+	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 )
 
 func postJSON(t *testing.T, handler http.Handler, path, body string) *httptest.ResponseRecorder {
@@ -138,6 +141,34 @@ func TestSettingsValidatesAndApplies(t *testing.T) {
 	// A body carrying nothing changes nothing and still answers with state.
 	if rec := postJSON(t, handler, "/api/settings", `{}`); rec.Code != http.StatusOK {
 		t.Errorf("empty settings = %d", rec.Code)
+	}
+}
+
+// The manager's errors carry their meaning as sentinel values, and the
+// status each maps to is what a client branches on: a password prompt is
+// only ever shown for a 401.
+func TestWriteManagerErrorMapsTheSentinels(t *testing.T) {
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{download.ErrNotFound, http.StatusNotFound},
+		{extractor.ErrPasswordRequired, http.StatusUnauthorized},
+		{fmt.Errorf("gofile: %w", extractor.ErrPasswordRequired), http.StatusUnauthorized},
+		{errors.New("anything else"), http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		writeManagerError(rec, tc.err)
+		if rec.Code != tc.want {
+			t.Errorf("%v -> %d, want %d", tc.err, rec.Code, tc.want)
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Error == "" {
+			t.Errorf("%v: body %q is not an error document", tc.err, rec.Body.String())
+		}
 	}
 }
 
