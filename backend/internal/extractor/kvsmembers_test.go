@@ -122,7 +122,7 @@ func TestKVSMemberTitleIsTheMemberNotTheSection(t *testing.T) {
 	}
 	// "Someone's Public Videos" names a section as much as a person, and it
 	// is the person a folder should be called after.
-	if got := kvsMemberTitle(root, kvsMemberListing); got != "Someone" {
+	if got := kvsMemberTitle(root); got != "Someone" {
 		t.Errorf("title = %q, want %q", got, "Someone")
 	}
 }
@@ -133,7 +133,7 @@ func TestKVSMemberTitleFallsBackToTheHeading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := kvsMemberTitle(root, doc); got != "Latest Videos" {
+	if got := kvsMemberTitle(root); got != "Latest Videos" {
 		t.Errorf("title = %q, want the heading as it stands", got)
 	}
 }

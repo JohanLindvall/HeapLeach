@@ -84,7 +84,7 @@ func mediaPageSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Res
 	}
 
 	title := util.FirstNonEmpty(
-		mediaPageTitle(root, doc),
+		mediaPageTitle(root),
 		found.Title,
 		strings.Trim(u.Path, "/"),
 		u.Hostname(),
@@ -606,10 +606,10 @@ func linkedDataInt(value any) int {
 // itself, and a great many sites simply copy their <title> into it. The cost
 // is a title whose own dash is meaningful losing what follows it, which is a
 // name on disk, not a wrong download.
-func mediaPageTitle(root *html.Node, doc string) string {
+func mediaPageTitle(root *html.Node) string {
 	return trimSiteSuffix(util.FirstNonEmpty(
 		metaContent(root, "og:title"),
-		firstTitleOf(doc),
+		firstText(root, atomTitle),
 	))
 }
 

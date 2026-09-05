@@ -217,12 +217,17 @@ func (p *PornOne) best(ctx context.Context, page string) (string, mediaCandidate
 	if err != nil {
 		return "", mediaCandidate{}, fmt.Errorf("pornone: fetch %s: %w", page, err)
 	}
-	best, ok := bestCandidate(pornoneRenditions(doc))
+	root, err := parseHTML(doc)
+	if err != nil {
+		return "", mediaCandidate{}, fmt.Errorf("pornone: %s: %w", page, err)
+	}
+	best, ok := bestCandidate(pornoneRenditions(root))
 	if !ok {
 		return "", mediaCandidate{}, fmt.Errorf("pornone: no playable rendition on %s "+
 			"(the video may have been removed)", page)
 	}
-	return util.FirstNonEmpty(firstHeading(doc), pageTitle(doc), "pornone"), best, nil
+	title := util.FirstNonEmpty(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle)), "pornone")
+	return title, best, nil
 }
 
 // pornoneRenditions reads the <source> elements the player offers.
@@ -231,11 +236,7 @@ func (p *PornOne) best(ctx context.Context, page string) (string, mediaCandidate
 // a page can be marked 720p while its own name says 1920x1080. The name is
 // what the encoder wrote, so it decides, and the attribute is only a
 // fallback for a rendition whose name carries no dimensions.
-func pornoneRenditions(doc string) []mediaCandidate {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil
-	}
+func pornoneRenditions(root *html.Node) []mediaCandidate {
 	var out []mediaCandidate
 	for _, n := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Source) }) {
 		link := attr(n, "src")
@@ -276,6 +277,23 @@ func jsonObjectAfter(doc string, marker *regexp.Regexp) (string, error) {
 		// index the document at -1.
 		return "", fmt.Errorf("no object after the player configuration marker")
 	}
+	end, ok := scanObject(doc, start, '"')
+	if !ok {
+		return "", fmt.Errorf("player configuration is truncated")
+	}
+	return doc[start:end], nil
+}
+
+// scanObject finds the end of the brace-delimited object that opens at
+// doc[start], and reports the index just past its closing brace.
+//
+// String literals delimited by quote are stepped over whole, backslash
+// escapes included, so a brace inside a value cannot end the object early.
+// The quote character is a parameter because the two configurations read
+// here disagree about it: a JSON object quotes with '"', a KVS flashvars
+// block with '\”. A document that ends before the object closes reports
+// false.
+func scanObject(doc string, start int, quote byte) (int, bool) {
 	depth, inString, escaped := 0, false, false
 	for i := start; i < len(doc); i++ {
 		c := doc[i]
@@ -286,20 +304,20 @@ func jsonObjectAfter(doc string, marker *regexp.Regexp) (string, error) {
 				escaped = false
 			case c == '\\':
 				escaped = true
-			case c == '"':
+			case c == quote:
 				inString = false
 			}
-		case c == '"':
+		case c == quote:
 			inString = true
 		case c == '{':
 			depth++
 		case c == '}':
 			if depth--; depth == 0 {
-				return doc[start : i+1], nil
+				return i + 1, true
 			}
 		}
 	}
-	return "", fmt.Errorf("player configuration is truncated")
+	return 0, false
 }
 
 // firstHeading reads the page's own <h1>, which names a video where the

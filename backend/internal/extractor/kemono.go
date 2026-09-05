@@ -2,6 +2,7 @@ package extractor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -149,20 +150,24 @@ func (k *Kemono) post(ctx context.Context, root, service, creator, id string) (k
 	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/post/%s",
 		root, url.PathEscape(service), url.PathEscape(creator), url.PathEscape(id))
 
+	// The post arrives wrapped on current instances and bare on older ones.
+	// One response is read both ways rather than asked for twice: the body
+	// is the same either way, and only the envelope differs.
+	var raw json.RawMessage
+	if err := k.get(ctx, endpoint, root, &raw); err != nil {
+		return kemonoPost{}, fmt.Errorf("kemono: post %s: %w", id, err)
+	}
 	var payload struct {
 		Post kemonoPost `json:"post"`
 	}
-	if err := k.get(ctx, endpoint, root, &payload); err != nil {
+	if err := json.Unmarshal(raw, &payload); err == nil && payload.Post.ID != "" {
+		return payload.Post, nil
+	}
+	var direct kemonoPost
+	if err := json.Unmarshal(raw, &direct); err != nil {
 		return kemonoPost{}, fmt.Errorf("kemono: post %s: %w", id, err)
 	}
-	if payload.Post.ID == "" {
-		// Older instances return the post unwrapped.
-		var direct kemonoPost
-		if err := k.get(ctx, endpoint, root, &direct); err == nil {
-			return direct, nil
-		}
-	}
-	return payload.Post, nil
+	return direct, nil
 }
 
 // creatorName looks up a display name, falling back to the id.

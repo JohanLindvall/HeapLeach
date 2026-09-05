@@ -173,12 +173,14 @@ var epornerTitleSuffix = regexp.MustCompile(`(?i)\s*[-|]\s*EPORNER\b.*$`)
 // epornerTitle reads a video page's own title, preferring the exact name the
 // page states in its linked data over the document title.
 func epornerTitle(doc string) string {
-	if root, err := parseHTML(doc); err == nil {
-		if name := epornerLinkedName(root); name != "" {
-			return name
-		}
+	root, err := parseHTML(doc)
+	if err != nil {
+		return ""
 	}
-	return strings.TrimSpace(epornerTitleSuffix.ReplaceAllString(firstTitleOf(doc), ""))
+	if name := epornerLinkedName(root); name != "" {
+		return name
+	}
+	return strings.TrimSpace(epornerTitleSuffix.ReplaceAllString(firstText(root, atomTitle), ""))
 }
 
 // epornerLinkedName reads the VideoObject name out of a page's JSON-LD. The

@@ -162,19 +162,15 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
 			"paste a link to one rather than to the site", label, u.Redacted())
 	}
 
-	doc, err := cheveretoFetch(ctx, client, u, opts)
+	doc, root, err := cheveretoFetch(ctx, client, u, opts)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", label, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("%s: parse %s: %w", label, u.Redacted(), err)
 	}
 	if requireFingerprint && !cheveretoFingerprint(root, doc) {
 		return nil, fmt.Errorf("%s: %s is not a Chevereto page", label, u.Redacted())
 	}
 
-	listing := cheveretoWalk(ctx, client, u, root, doc, opts)
+	listing := cheveretoWalk(ctx, client, u, root, opts)
 	switch {
 	case len(listing.files) > 0:
 		return &Result{Title: listing.title, Files: listing.files}, nil
@@ -212,21 +208,17 @@ type cheveretoAlbum struct {
 // pagination, because a listing asked for a page past its last tends to answer
 // with the last one again rather than with nothing.
 func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node,
-	doc string, opts Options) *cheveretoListing {
+	opts Options) *cheveretoListing {
 
-	out := &cheveretoListing{title: cheveretoTitle(root, doc, u)}
+	out := &cheveretoListing{title: cheveretoTitle(root, u)}
 	seen := make(map[string]bool)
 	page := u
 
 	for i := range config.MaxAlbumPages {
 		if i > 0 {
-			fetched, err := cheveretoFetch(ctx, client, page, opts)
-			if err != nil {
+			var err error
+			if _, root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
 				break // a later page failing still leaves the earlier ones
-			}
-			root, err = parseHTML(fetched)
-			if err != nil {
-				break
 			}
 		}
 
@@ -425,15 +417,11 @@ func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []chevere
 		if err != nil {
 			return nil, err
 		}
-		doc, err := cheveretoFetch(ctx, client, u, opts)
+		_, root, err := cheveretoFetch(ctx, client, u, opts)
 		if err != nil {
 			return nil, err
 		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, err
-		}
-		listing := cheveretoWalk(ctx, client, u, root, doc, opts)
+		listing := cheveretoWalk(ctx, client, u, root, opts)
 		dir := util.FirstNonEmpty(album.Name, listing.title)
 		for j := range listing.files {
 			listing.files[j].Dir = dir
@@ -600,10 +588,10 @@ func cheveretoOriginal(link string) string {
 //
 // The metadata carries it in full; the page's own heading is truncated to fit
 // its box on several themes, which is why it is not read first.
-func cheveretoTitle(root *html.Node, doc string, u *url.URL) string {
+func cheveretoTitle(root *html.Node, u *url.URL) string {
 	return util.FirstNonEmpty(
 		strings.TrimSpace(metaContent(root, "og:title")),
-		trimSiteSuffix(firstTitleOf(doc)),
+		trimSiteSuffix(firstText(root, atomTitle)),
 		strings.Trim(u.Path, "/"),
 	)
 }
@@ -611,22 +599,24 @@ func cheveretoTitle(root *html.Node, doc string, u *url.URL) string {
 // ----------------------------------------------------------- password gate
 
 // cheveretoFetch reads a page, unlocking it first when it turns out to be the
-// password gate rather than the content.
-func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (string, error) {
+// password gate rather than the content. It hands back the document and its
+// parse together: the gate check has to parse it anyway, and every caller
+// goes on to read the tree.
+func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (string, *html.Node, error) {
 	page := u.String()
 	doc, err := client.GetString(ctx, page, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
-		return "", fmt.Errorf("fetch %s: %w", u.Redacted(), err)
+		return "", nil, fmt.Errorf("fetch %s: %w", u.Redacted(), err)
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", u.Redacted(), err)
+		return "", nil, fmt.Errorf("parse %s: %w", u.Redacted(), err)
 	}
 	if !cheveretoGated(root) {
-		return doc, nil
+		return doc, root, nil
 	}
 	if opts.Password == "" {
-		return "", ErrPasswordRequired
+		return "", nil, ErrPasswordRequired
 	}
 	return cheveretoUnlock(ctx, client, u, root, opts.Password)
 }
@@ -640,7 +630,7 @@ func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts 
 // gate prints as a hidden field; an install with a captcha on the gate is out
 // of reach either way, and says so by answering with the gate again.
 func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
-	root *html.Node, password string) (string, error) {
+	root *html.Node, password string) (string, *html.Node, error) {
 
 	form := url.Values{}
 	form.Set(cheveretoPasswordField, password)
@@ -650,7 +640,7 @@ func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
 
 	req, err := client.NewRequest(ctx, http.MethodPost, u.String(), []byte(form.Encode()))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeForm)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
@@ -659,19 +649,19 @@ func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
 
 	body, err := client.Bytes(req)
 	if err != nil {
-		return "", fmt.Errorf("unlock %s: %w", u.Redacted(), err)
+		return "", nil, fmt.Errorf("unlock %s: %w", u.Redacted(), err)
 	}
 	doc := string(body)
 	unlocked, err := parseHTML(doc)
 	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", u.Redacted(), err)
+		return "", nil, fmt.Errorf("parse %s: %w", u.Redacted(), err)
 	}
 	// The gate answers a wrong password with itself, so the way to tell a
 	// refusal from an acceptance is that the form is still there.
 	if cheveretoGated(unlocked) {
-		return "", fmt.Errorf("the password for %s was not accepted", u.Redacted())
+		return "", nil, fmt.Errorf("the password for %s was not accepted", u.Redacted())
 	}
-	return doc, nil
+	return doc, unlocked, nil
 }
 
 // cheveretoGated reports whether a page is the password gate.

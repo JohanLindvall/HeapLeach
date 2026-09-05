@@ -468,7 +468,7 @@ func TestRTPEpisodeLinksKeepTheSeasonsOwn(t *testing.T) {
 	ref := rtpRef{program: "p1", page: "https://www.rtp.pt/play/p1/a-programme"}
 	seen := make(map[string]bool)
 
-	got := rtpEpisodeLinks(rtpSeasonPage, ref, seen)
+	got := rtpEpisodeLinks(mustParseDoc(t, rtpSeasonPage), ref, seen)
 	want := []rtpEpisodeRef{
 		{id: "e13", page: "https://www.rtp.pt/play/p1/e13/a-programme"},
 		{id: "e12", page: "https://www.rtp.pt/play/p1/e12/a-programme"},
@@ -485,11 +485,12 @@ func TestRTPEpisodeLinksKeepTheSeasonsOwn(t *testing.T) {
 
 	// The endpoint answers with a bare fragment; the same collector reads it,
 	// and the seen set is what stops the walk repeating itself.
-	more := rtpEpisodeLinks(rtpListingFragment, ref, seen)
+	fragment := mustParseDoc(t, rtpListingFragment)
+	more := rtpEpisodeLinks(fragment, ref, seen)
 	if len(more) != 2 || more[0].id != "e10" || more[1].id != "e9" {
 		t.Errorf("listing fragment gave %+v", more)
 	}
-	if again := rtpEpisodeLinks(rtpListingFragment, ref, seen); len(again) != 0 {
+	if again := rtpEpisodeLinks(fragment, ref, seen); len(again) != 0 {
 		t.Errorf("the same page contributed %d episodes twice", len(again))
 	}
 }

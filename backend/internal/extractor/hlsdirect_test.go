@@ -300,9 +300,10 @@ func TestHLSSniffRecognisesAManifestServedAsText(t *testing.T) {
 		t.Fatalf("got %+v, want one file of three segments", res.Files)
 	}
 	// One request settles what it is, and the resolution reads it properly
-	// afterwards — the sniff only ever sees the opening bytes.
-	if got := seen.Load(); got != 3 {
-		t.Errorf("the host saw %d requests, want the sniff plus two reads of the playlist", got)
+	// afterwards — the sniff only ever sees the opening bytes. The live
+	// check reads the same document the resolver fetched, not a fresh copy.
+	if got := seen.Load(); got != 2 {
+		t.Errorf("the host saw %d requests, want the sniff plus one read of the playlist", got)
 	}
 }
 

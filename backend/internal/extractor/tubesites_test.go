@@ -16,7 +16,7 @@ const pornonePlayerPage = `<html><body>
 </body></html>`
 
 func TestPornOneRenditionsTrustTheFilename(t *testing.T) {
-	renditions := pornoneRenditions(pornonePlayerPage)
+	renditions := pornoneRenditions(mustParseDoc(t, pornonePlayerPage))
 	if len(renditions) != 2 {
 		t.Fatalf("read %d renditions, want 2", len(renditions))
 	}
@@ -45,7 +45,7 @@ func TestPornOneRenditionsFallBackToTheAttribute(t *testing.T) {
   <source src="https://s1.example.test/vid2/TOKEN/1/1/high.mp4" label="1080p" res="1080"/>
 </video></body></html>`
 
-	best, ok := bestCandidate(pornoneRenditions(page))
+	best, ok := bestCandidate(pornoneRenditions(mustParseDoc(t, page)))
 	if !ok {
 		t.Fatal("no rendition was chosen")
 	}
@@ -55,7 +55,7 @@ func TestPornOneRenditionsFallBackToTheAttribute(t *testing.T) {
 }
 
 func TestPornOneRenditionsOnAPageWithNoPlayer(t *testing.T) {
-	if got := pornoneRenditions(`<html><body>This video has been removed.</body></html>`); len(got) != 0 {
+	if got := pornoneRenditions(mustParseDoc(t, `<html><body>This video has been removed.</body></html>`)); len(got) != 0 {
 		t.Errorf("found %d renditions on a page with no player", len(got))
 	}
 }

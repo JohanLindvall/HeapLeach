@@ -97,12 +97,19 @@ func textOf(n *html.Node) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// firstText returns the text of the first element with the given tag.
-func firstText(root *html.Node, a atom.Atom) string {
-	if n := findFirst(root, func(n *html.Node) bool { return isElem(n, a) }); n != nil {
+// textOfFirst returns the text of the first node matching pred, or "" when
+// nothing does — the shape every title lookup has, and one that otherwise
+// needs a nil guard at each site.
+func textOfFirst(root *html.Node, pred func(*html.Node) bool) string {
+	if n := findFirst(root, pred); n != nil {
 		return textOf(n)
 	}
 	return ""
+}
+
+// firstText returns the text of the first element with the given tag.
+func firstText(root *html.Node, a atom.Atom) string {
+	return textOfFirst(root, func(n *html.Node) bool { return isElem(n, a) })
 }
 
 // metaContent reads <meta property=... content=...> (or name=...).

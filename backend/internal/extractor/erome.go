@@ -147,10 +147,8 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string,
 		}
 		if title == "" {
 			title = util.FirstNonEmpty(
-				strings.TrimSpace(textOf(orEmpty(findFirst(root, func(n *html.Node) bool {
-					return isElem(n, atom.H1)
-				})))),
-				trimSiteSuffix(firstTitleOf(doc)),
+				firstText(root, atom.H1),
+				trimSiteSuffix(firstText(root, atomTitle)),
 				strings.Join(util.PathSegments(u), "-"),
 			)
 		}
@@ -289,11 +287,11 @@ func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
 	}
 
 	title := util.FirstNonEmpty(
-		strings.TrimSpace(textOf(orEmpty(findFirst(root, func(n *html.Node) bool {
+		textOfFirst(root, func(n *html.Node) bool {
 			return isElem(n, atom.H1) && hasClass(n, "album-title-page")
-		})))),
+		}),
 		metaContent(root, "og:title"),
-		trimSiteSuffix(firstText(root, atom.Title)),
+		trimSiteSuffix(firstText(root, atomTitle)),
 	)
 
 	var urls []string
@@ -349,12 +347,4 @@ func isEromeMedia(raw string) bool {
 		}
 	}
 	return false
-}
-
-// orEmpty guards textOf against a nil node.
-func orEmpty(n *html.Node) *html.Node {
-	if n == nil {
-		return &html.Node{Type: html.TextNode}
-	}
-	return n
 }

@@ -257,7 +257,7 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	// The rendered page is page one of the listing, so the walk starts at two
 	// rather than fetching what is already in hand.
 	seen := make(map[string]bool)
-	episodes := rtpEpisodeLinks(doc, ref, seen)
+	episodes := rtpEpisodeLinks(root, ref, seen)
 	capped := false
 	for page := 2; ; page++ {
 		if page > config.MaxAlbumPages {
@@ -309,8 +309,7 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 			// One refused episode must not sink the rest, but its reason is
 			// kept: when every episode is refused it is refused for the same
 			// reason, and RTP's own words for it beat anything concluded here.
-			var refusal *rtpRefused
-			if refused == "" && errors.As(out.err, &refusal) {
+			if refusal, ok := errors.AsType[*rtpRefused](out.err); ok && refused == "" {
 				refused = refusal.reason
 			}
 			continue
@@ -361,7 +360,11 @@ func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int, seen map[st
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: episode listing page %d of %s: %w", page, ref.program, err)
 	}
-	return rtpEpisodeLinks(doc, ref, seen), nil
+	root, err := parseHTML(doc)
+	if err != nil {
+		return nil, fmt.Errorf("rtpplay: episode listing page %d of %s: %w", page, ref.program, err)
+	}
+	return rtpEpisodeLinks(root, ref, seen), nil
 }
 
 // rtpEpisodeLinks collects the episode links a listing document carries, in
@@ -372,11 +375,7 @@ func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int, seen map[st
 // wraps the same markup in a site. Restricting the links to this programme is
 // what keeps the two honest — a page also carries navigation into other
 // programmes, and an episode id is only unique beneath its own.
-func rtpEpisodeLinks(doc string, ref rtpRef, seen map[string]bool) []rtpEpisodeRef {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil
-	}
+func rtpEpisodeLinks(root *html.Node, ref rtpRef, seen map[string]bool) []rtpEpisodeRef {
 	base, err := ParseURL(ref.page)
 	if err != nil {
 		return nil

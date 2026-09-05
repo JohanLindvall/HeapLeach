@@ -241,35 +241,58 @@ func segmentsExtension(segments []string, variant hlsVariant) string {
 	return playlistExtension(variant)
 }
 
-// resolvePlaylist follows a master playlist down to its segment list.
-func resolvePlaylist(ctx context.Context, client *httpx.Client, manifestURL string, headers httpx.Header) ([]string, hlsVariant, error) {
+// hlsMedia is a manifest followed down to its media playlist.
+type hlsMedia struct {
+	Segments []string
+	// Variant is the rendition chosen out of a master playlist, or — when
+	// the manifest was already a media playlist — the manifest itself, with
+	// nothing but its URL filled in. Comparing that URL with the one asked
+	// for is how a caller tells the two apart.
+	Variant hlsVariant
+	// Doc is the media playlist's own text, for the caller that needs to
+	// read more off it than the segment list — whether it has ended, say.
+	Doc string
+}
+
+// resolveMediaPlaylist follows a master playlist down to its media playlist.
+func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL string, headers httpx.Header) (*hlsMedia, error) {
 	base, err := ParseURL(manifestURL)
 	if err != nil {
-		return nil, hlsVariant{}, err
+		return nil, err
 	}
 	doc, err := client.GetString(ctx, manifestURL, headers)
 	if err != nil {
-		return nil, hlsVariant{}, fmt.Errorf("fetch playlist: %w", err)
+		return nil, fmt.Errorf("fetch playlist: %w", err)
 	}
 
 	variant := hlsVariant{URL: manifestURL}
 	if variants := parseMasterPlaylist(doc, base); len(variants) > 0 {
 		best, ok := bestVariant(variants)
 		if !ok {
-			return nil, hlsVariant{}, fmt.Errorf("no usable variant in playlist")
+			return nil, fmt.Errorf("no usable variant in playlist")
 		}
 		variant = best
 		if base, err = ParseURL(best.URL); err != nil {
-			return nil, hlsVariant{}, err
+			return nil, err
 		}
 		if doc, err = client.GetString(ctx, best.URL, headers); err != nil {
-			return nil, hlsVariant{}, fmt.Errorf("fetch variant playlist: %w", err)
+			return nil, fmt.Errorf("fetch variant playlist: %w", err)
 		}
 	}
 
 	segments := parseMediaPlaylist(doc, base)
 	if len(segments) == 0 {
-		return nil, hlsVariant{}, fmt.Errorf("playlist lists no segments")
+		return nil, fmt.Errorf("playlist lists no segments")
 	}
-	return segments, variant, nil
+	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc}, nil
+}
+
+// resolvePlaylist follows a master playlist down to its segment list, which
+// is all that nearly every caller wants of it.
+func resolvePlaylist(ctx context.Context, client *httpx.Client, manifestURL string, headers httpx.Header) ([]string, hlsVariant, error) {
+	media, err := resolveMediaPlaylist(ctx, client, manifestURL, headers)
+	if err != nil {
+		return nil, hlsVariant{}, err
+	}
+	return media.Segments, media.Variant, nil
 }

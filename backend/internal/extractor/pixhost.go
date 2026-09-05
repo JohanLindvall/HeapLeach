@@ -51,24 +51,23 @@ func (p *Pixhost) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	if err != nil {
 		return nil, fmt.Errorf("pixhost: fetch %s: %w", u.Redacted(), err)
 	}
+	root, err := parseHTML(doc)
+	if err != nil {
+		return nil, fmt.Errorf("pixhost: parse %s: %w", u.Redacted(), err)
+	}
 
 	switch segs[0] {
 	case "gallery":
-		return pixhostGallery(doc, u)
+		return pixhostGallery(root, u)
 	case "show":
-		return pixhostImage(doc, u)
+		return pixhostImage(root, u)
 	}
 	return nil, fmt.Errorf("pixhost: %s is neither a gallery (/gallery/<code>) "+
 		"nor an image (/show/<group>/<file>)", u.Redacted())
 }
 
 // pixhostGallery reads every image out of a gallery listing.
-func pixhostGallery(doc string, u *url.URL) (*Result, error) {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("pixhost: parse %s: %w", u.Redacted(), err)
-	}
-
+func pixhostGallery(root *html.Node, u *url.URL) (*Result, error) {
 	seen := make(map[string]bool)
 	var files []File
 	for _, img := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Img) }) {
@@ -90,15 +89,11 @@ func pixhostGallery(doc string, u *url.URL) (*Result, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("pixhost: no images in %s (the gallery may have been removed)", u.Redacted())
 	}
-	return &Result{Title: pixhostTitle(doc, u), Files: files}, nil
+	return &Result{Title: pixhostTitle(root, u), Files: files}, nil
 }
 
 // pixhostImage reads the one image a viewer page shows.
-func pixhostImage(doc string, u *url.URL) (*Result, error) {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("pixhost: parse %s: %w", u.Redacted(), err)
-	}
+func pixhostImage(root *html.Node, u *url.URL) (*Result, error) {
 	img := findFirst(root, func(n *html.Node) bool {
 		return isElem(n, atom.Img) && attr(n, "id") == pixhostImageID
 	})
@@ -123,9 +118,9 @@ func pixhostImage(doc string, u *url.URL) (*Result, error) {
 //
 // The document title carries it; the first heading on the page does not,
 // being a content warning rather than the gallery's name.
-func pixhostTitle(doc string, u *url.URL) string {
+func pixhostTitle(root *html.Node, u *url.URL) string {
 	return util.FirstNonEmpty(
-		trimSiteSuffix(firstTitleOf(doc)),
+		trimSiteSuffix(firstText(root, atomTitle)),
 		strings.Trim(u.Path, "/"),
 	)
 }

@@ -91,17 +91,18 @@ func (h *HLSDirect) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, error) {
 	headers := httpx.Referer(util.Origin(u) + "/")
 
-	segments, variant, err := resolvePlaylist(ctx, client, u.String(), headers)
+	media, err := resolveMediaPlaylist(ctx, client, u.String(), headers)
 	if err != nil {
 		return nil, fmt.Errorf("hls: %s: %w", u.Redacted(), err)
 	}
 
-	// resolvePlaylist reports the variant it settled on, and hands the URL
-	// back unchanged when the document was a media playlist rather than a
-	// master. That is what tells the two apart here, and the distinction
-	// matters: a media playlist declares no codecs at all, so muxed() is
-	// false for one and checking it unconditionally would refuse every bare
-	// playlist a user pastes.
+	// The resolver reports the variant it settled on, and hands the URL back
+	// unchanged when the document was a media playlist rather than a master.
+	// That is what tells the two apart here, and the distinction matters: a
+	// media playlist declares no codecs at all, so muxed() is false for one
+	// and checking it unconditionally would refuse every bare playlist a
+	// user pastes.
+	variant := media.Variant
 	if variant.URL != u.String() && !variant.muxed() {
 		return nil, fmt.Errorf("hls: %s offers no rendition that carries its own audio — every one of them "+
 			"keeps it in a separate track — so joining any single variant would save video with no sound. "+
@@ -109,16 +110,7 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 			"which has ffmpeg to mux the two back together", u.Redacted())
 	}
 
-	// The live check needs the media playlist itself, which resolvePlaylist
-	// reads and does not hand back. Re-reading it costs one request for a few
-	// kilobytes of text and leaves that function — which two other extractors
-	// call — exactly as it is. Widening a shared signature to serve one
-	// caller is the worse trade.
-	media, err := client.GetString(ctx, variant.URL, headers)
-	if err != nil {
-		return nil, fmt.Errorf("hls: %s: re-read the media playlist: %w", u.Redacted(), err)
-	}
-	if live, why := hlsLiveEdge(media); live {
+	if live, why := hlsLiveEdge(media.Doc); live {
 		return nil, fmt.Errorf("hls: %s is still being written — %s. Downloading it now would save however "+
 			"much of the stream exists at this moment, under a name that says it is the whole thing. Wait "+
 			"for the stream to end, or hand the page to the external downloader (yt-dlp), which can follow "+
@@ -133,7 +125,7 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 		// already-downloaded check could act on.
 		Size:     -1,
 		Headers:  headers,
-		Segments: segments,
+		Segments: media.Segments,
 	}}}, nil
 }
 

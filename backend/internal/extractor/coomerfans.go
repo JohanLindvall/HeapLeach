@@ -171,7 +171,7 @@ func coomerFansPost(doc string, base *url.URL) (string, []coomerFansItem, error)
 		return "", nil, fmt.Errorf("no post body (the post may have been removed)")
 	}
 
-	title := coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstTitleOf(doc)))
+	title := coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))
 
 	seen := make(map[string]bool)
 	var media []coomerFansItem
@@ -233,7 +233,7 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL) ([]string, strin
 			break
 		}
 		if title == "" {
-			title = coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstTitleOf(doc)))
+			title = coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))
 		}
 
 		added := 0

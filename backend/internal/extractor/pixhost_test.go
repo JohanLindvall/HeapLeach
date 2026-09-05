@@ -26,7 +26,7 @@ func TestPixhostGallery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := pixhostGallery(pixhostGalleryPage, u)
+	res, err := pixhostGallery(mustParseDoc(t, pixhostGalleryPage), u)
 	if err != nil {
 		t.Fatalf("pixhostGallery: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestPixhostGalleryReportsAnEmptyPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = pixhostGallery(`<html><body><p>Gallery not found</p></body></html>`, u)
+	_, err = pixhostGallery(mustParseDoc(t, `<html><body><p>Gallery not found</p></body></html>`), u)
 	if err == nil {
 		t.Fatal("a gallery with no images was accepted")
 	}
@@ -77,7 +77,7 @@ func TestPixhostImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := pixhostImage(page, u)
+	res, err := pixhostImage(mustParseDoc(t, page), u)
 	if err != nil {
 		t.Fatalf("pixhostImage: %v", err)
 	}

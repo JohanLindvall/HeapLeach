@@ -38,32 +38,13 @@ func flashvarsBlock(doc string) (string, bool) {
 	if loc == nil {
 		return "", false
 	}
-	body := doc[loc[1]:] // just past the opening brace
-	depth := 1
-	inQuote := false
-	for i := 0; i < len(body); i++ {
-		c := body[i]
-		if inQuote {
-			switch c {
-			case '\\':
-				i++ // an escaped character cannot close the value
-			case '\'':
-				inQuote = false
-			}
-			continue
-		}
-		switch c {
-		case '\'':
-			inQuote = true
-		case '{':
-			depth++
-		case '}':
-			if depth--; depth == 0 {
-				return body[:i], true
-			}
-		}
+	// The match ends on the opening brace; the scan starts there and the
+	// body handed back is what sits between the braces.
+	end, ok := scanObject(doc, loc[1]-1, '\'')
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return doc[loc[1] : end-1], true
 }
 
 // flashvarEntry matches one `key: 'value'` pair, tolerating escaped quotes.

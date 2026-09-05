@@ -328,7 +328,7 @@ func TestMediaPageTitle(t *testing.T) {
 		`<html><body>nothing</body></html>`: "",
 	}
 	for doc, want := range tests {
-		if got := mediaPageTitle(mustParseDoc(t, doc), doc); got != want {
+		if got := mediaPageTitle(mustParseDoc(t, doc)); got != want {
 			t.Errorf("title = %q, want %q\n  from %s", got, want, doc)
 		}
 	}

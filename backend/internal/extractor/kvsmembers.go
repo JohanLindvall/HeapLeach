@@ -146,7 +146,7 @@ func kvsMemberPages(ctx context.Context, client *httpx.Client, listing, label st
 			break
 		}
 		if page == 1 {
-			title = kvsMemberTitle(root, doc)
+			title = kvsMemberTitle(root)
 			if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
 				total, _ = strconv.Atoi(m[1])
 			}
@@ -262,12 +262,12 @@ func kvsListingVideos(root *html.Node, base string) []string {
 
 // kvsMemberTitle names the job after the member, which is what a folder full
 // of their videos should be called.
-func kvsMemberTitle(root *html.Node, doc string) string {
+func kvsMemberTitle(root *html.Node) string {
 	heading := strings.TrimSpace(firstText(root, atom.H2))
 	// The heading reads "<name>'s Public Videos"; the possessive is the
 	// name, and the rest is a section label nobody wants in a folder name.
 	if name, _, ok := strings.Cut(heading, "'s "); ok && name != "" {
 		return name
 	}
-	return util.FirstNonEmpty(heading, trimSiteSuffix(firstTitleOf(doc)))
+	return util.FirstNonEmpty(heading, trimSiteSuffix(firstText(root, atomTitle)))
 }
