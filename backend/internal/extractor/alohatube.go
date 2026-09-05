@@ -76,8 +76,8 @@ func (a *AlohaTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
 		return nil, fmt.Errorf("alohatube: %s embeds a player from %s, which no extractor "+
-			"here claims — yt-dlp is what fetches from those, and it is not installed; "+
-			"run `make dependencies`, or put it on PATH", u.Redacted(), alohaHostOf(frames[0]))
+			"here claims — yt-dlp is what fetches from those, and %s",
+			u.Redacted(), alohaHostOf(frames[0]), tools.NotInstalled(ytdlpBinary))
 	}
 	title, err := ytdlpTitle(ctx, ytdlp, frames[0])
 	if err != nil {

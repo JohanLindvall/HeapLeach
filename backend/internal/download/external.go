@@ -3,6 +3,7 @@ package download
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -40,8 +41,7 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 
 	ytdlp, ok := tools.Find(tools.YtDlp)
 	if !ok {
-		return fmt.Errorf("yt-dlp is not installed — run `make dependencies` to fetch it " +
-			"into the folder holding heapleach, or put it on PATH")
+		return errors.New(tools.NotInstalled(tools.YtDlp))
 	}
 
 	cmd := exec.CommandContext(ctx, script, source, dir)

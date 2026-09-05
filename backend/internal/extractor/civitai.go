@@ -239,26 +239,22 @@ func civitaiNextPage(current, raw string) string {
 // one, so an overload that outlasts the attempts fails the extraction rather
 // than quietly returning most of it.
 func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, error) {
-	var last error
-	for attempt := range config.ExtractRetries {
-		if attempt > 0 {
-			wait := util.Backoff(attempt-1, config.RequestRetryBase, config.RequestRetryMax)
-			if err := util.SleepCtx(ctx, wait); err != nil {
-				return nil, err
-			}
-		}
+	overloaded := func(_ *civitaiListing, err error) bool {
+		return httpx.HasStatus(err, http.StatusServiceUnavailable)
+	}
+	payload, err := withExtractRetries(ctx, func() (*civitaiListing, error) {
 		var payload civitaiListing
 		err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload)
-		if err == nil {
-			return &payload, nil
-		}
-		last = err
-		if !httpx.HasStatus(err, http.StatusServiceUnavailable) {
-			return nil, fmt.Errorf("civitai: %w", err)
-		}
+		return &payload, err
+	}, overloaded)
+	switch {
+	case err == nil:
+		return payload, nil
+	case overloaded(nil, err):
+		return nil, fmt.Errorf("civitai: the image search stayed overloaded, so this listing "+
+			"is incomplete rather than empty — try again shortly: %w", err)
 	}
-	return nil, fmt.Errorf("civitai: the image search stayed overloaded, so this listing "+
-		"is incomplete rather than empty — try again shortly: %w", last)
+	return nil, fmt.Errorf("civitai: %w", err)
 }
 
 // model reads a model's showcase images, which the image listing cannot

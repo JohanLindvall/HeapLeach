@@ -178,8 +178,7 @@ func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*
 			// reason is kept, though: when every episode is refused they are
 			// refused for the same reason, and saying it once is the whole
 			// point of recognising it.
-			var refusal *ruvRefused
-			if refused == "" && errors.As(err, &refusal) {
+			if refusal, ok := errors.AsType[*ruvRefused](err); ok && refused == "" {
 				refused = refusal.message
 			}
 			continue

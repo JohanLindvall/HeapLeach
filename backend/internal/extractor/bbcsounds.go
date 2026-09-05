@@ -182,7 +182,7 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 		// outranks an ordinary failure, since it is the one that explains a
 		// container that resolves to nothing at all.
 		if refused == nil {
-			errors.As(r.refusal, &refused)
+			refused, _ = errors.AsType[*bbcRefused](r.refusal)
 		}
 		if failed == nil {
 			failed = r.refusal
@@ -322,8 +322,8 @@ func (b *BBCSounds) stream(ctx context.Context, vpid string) (string, error) {
 // fact worth having. Neither status is retried by the client, which is what
 // makes the body available here at all.
 func bbcRefusal(pid string, err error) error {
-	var status *httpx.StatusError
-	if !errors.As(err, &status) || status.Body == "" {
+	status, ok := errors.AsType[*httpx.StatusError](err)
+	if !ok || status.Body == "" {
 		return nil
 	}
 	var doc struct {

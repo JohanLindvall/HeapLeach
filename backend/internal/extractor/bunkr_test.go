@@ -121,22 +121,6 @@ func TestLastAlbumPage(t *testing.T) {
 	}
 }
 
-func TestBunkrFormatNumber(t *testing.T) {
-	cases := []struct {
-		in   any
-		want string
-	}{
-		{"1755000000", "1755000000"},
-		{float64(1755000000), "1755000000"}, // JSON numbers arrive as float64
-		{nil, ""},
-	}
-	for _, tc := range cases {
-		if got := formatNumber(tc.in); got != tc.want {
-			t.Errorf("formatNumber(%v) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 func TestBunkrLinkLabel(t *testing.T) {
 	root, err := parseHTML(`<a href="/f/x"><img alt="from the alt"></a>` +
 		`<a id="second" href="/f/y">from the text</a>`)

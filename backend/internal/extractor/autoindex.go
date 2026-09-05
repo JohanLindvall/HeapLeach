@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -244,22 +243,11 @@ func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *a
 // user actually named — was already read on its own, where its failure is
 // reported.
 func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) {
-	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for _, node := range nodes {
-		wg.Add(1)
-		go func(node *autoindexNode) {
-			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
-			}
-			_ = a.read(ctx, node)
-		}(node)
-	}
-	wg.Wait()
+	// The nodes are filled in place; FanOut is used for its bounded, ordered
+	// scheduling and nothing is collected from it.
+	FanOut(ctx, nodes, func(ctx context.Context, node *autoindexNode) ([]struct{}, error) {
+		return nil, a.read(ctx, node)
+	})
 }
 
 // read fetches one directory and fills in its files and subdirectories.

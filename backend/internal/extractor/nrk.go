@@ -197,8 +197,7 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 			// Its reason is kept, though: when every episode is refused it
 			// is refused for the same reason, and NRK's own words for it
 			// are better than anything this could conclude.
-			var refusal *nrkRefused
-			if refused == "" && errors.As(err, &refusal) {
+			if refusal, ok := errors.AsType[*nrkRefused](err); ok && refused == "" {
 				refused = refusal.message
 			}
 			continue

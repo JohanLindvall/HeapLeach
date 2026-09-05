@@ -264,11 +264,11 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 	result := &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id))}
 	var refused, failed string
 	for _, out := range resolved {
-		var refusal *vrtRefused
+		refusal, refusedHere := errors.AsType[*vrtRefused](out.err)
 		switch {
 		case out.file != nil:
 			result.Files = append(result.Files, *out.file)
-		case errors.As(out.err, &refusal):
+		case refusedHere:
 			// A whole season refused is a whole season refused for one
 			// reason, and VRT's code for it is the only thing the caller can
 			// act on. A refusal therefore outranks a transport failure.
@@ -626,8 +626,8 @@ func vrtReason(code string) string {
 // answers one with HTTP 400 and a body of a single field, so the code arrives
 // inside the status error rather than in a document of its own.
 func vrtRefusalCode(err error) string {
-	var status *httpx.StatusError
-	if !errors.As(err, &status) || status.Code != http.StatusBadRequest {
+	status, ok := errors.AsType[*httpx.StatusError](err)
+	if !ok || status.Code != http.StatusBadRequest {
 		return ""
 	}
 	var body struct {

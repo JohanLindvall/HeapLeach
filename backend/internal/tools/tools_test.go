@@ -142,6 +142,25 @@ func TestExecutable(t *testing.T) {
 	}
 }
 
+func TestScriptDirIsWhereTheBinaryLives(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skip("no executable path on this platform")
+	}
+	if got, want := ScriptDir(), filepath.Dir(exe); got != want {
+		t.Errorf("ScriptDir = %q, want %q", got, want)
+	}
+}
+
+func TestNotInstalledNamesTheToolAndTheRemedy(t *testing.T) {
+	msg := NotInstalled(YtDlp)
+	for _, want := range []string{YtDlp, "make dependencies", "PATH"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("%q does not mention %q", msg, want)
+		}
+	}
+}
+
 func TestYouTubeScriptStagesTheEmbeddedCopy(t *testing.T) {
 	// Nothing installed anywhere: the embedded script is written out.
 	stubLookPath(t, func(string) (string, error) { return "", errors.New("not found") })

@@ -247,7 +247,7 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 			first = outcome.err
 		}
 		if refused == nil {
-			errors.As(outcome.err, &refused)
+			refused, _ = errors.AsType[*rtveRefused](outcome.err)
 		}
 	}
 	if len(result.Files) == 0 {

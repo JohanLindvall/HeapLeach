@@ -47,6 +47,13 @@ func Find(name string) (string, bool) {
 	return path, path != ""
 }
 
+// NotInstalled explains that a helper is absent and where it is looked for,
+// so every caller that needs one reports the same remedy in the same words.
+func NotInstalled(name string) string {
+	return name + " is not installed — run `make dependencies` to fetch it into the folder " +
+		"holding heapleach, or put it on PATH"
+}
+
 // Reset clears the cache. Only tests need this.
 func Reset() {
 	mu.Lock()

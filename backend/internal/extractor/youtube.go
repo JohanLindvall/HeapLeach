@@ -40,8 +40,7 @@ func (y *YouTube) Name() string { return "youtube" }
 func (y *YouTube) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
-		return nil, fmt.Errorf("youtube: yt-dlp is not installed — run `make dependencies` "+
-			"to fetch it into the folder holding heapleach, or put it on PATH (%s)", u.Redacted())
+		return nil, fmt.Errorf("youtube: %s (%s)", tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 
 	entries, title, err := y.probe(ctx, ytdlp, u.String())
@@ -145,8 +144,7 @@ func ytdlpTitle(ctx context.Context, ytdlp, target string) (string, error) {
 // ytdlpError surfaces what yt-dlp printed, which is far more useful to the
 // user than a bare exit status.
 func ytdlpError(err error) error {
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok && len(exit.Stderr) > 0 {
 		return fmt.Errorf("%s", util.Truncate(string(exit.Stderr), 300))
 	}
 	return err

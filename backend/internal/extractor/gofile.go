@@ -302,12 +302,13 @@ func (g *Gofile) ensureToken(ctx context.Context, force bool) (string, error) {
 // error-notPremium is what gofile returns for a bad signature, which in
 // practice means the shared secret rotated.
 func (g *Gofile) explain(err error) error {
-	var se *httpx.StatusError
-	if errors.As(err, &se) && strings.Contains(se.Body, "error-notPremium") {
-		return g.signatureRejected()
-	}
-	if errors.As(err, &se) && (strings.Contains(se.Body, "error-token") || strings.Contains(se.Body, "error-wrongToken")) {
-		return errGofileStaleToken
+	if se, ok := errors.AsType[*httpx.StatusError](err); ok {
+		switch {
+		case strings.Contains(se.Body, "error-notPremium"):
+			return g.signatureRejected()
+		case strings.Contains(se.Body, "error-token"), strings.Contains(se.Body, "error-wrongToken"):
+			return errGofileStaleToken
+		}
 	}
 	return fmt.Errorf("gofile: %w", err)
 }

@@ -50,9 +50,8 @@ func (y *Yandex) Match(u *url.URL) bool {
 func (y *Yandex) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
-		return nil, fmt.Errorf("yandex: yt-dlp is not installed — a preview only points at "+
-			"the site holding the video, and yt-dlp is what fetches from those; run "+
-			"`make dependencies`, or put it on PATH (%s)", u.Redacted())
+		return nil, fmt.Errorf("yandex: a preview only points at the site holding the video, "+
+			"and yt-dlp is what fetches from those; %s (%s)", tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 
 	doc, err := y.client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))

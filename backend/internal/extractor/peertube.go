@@ -403,8 +403,8 @@ func peerTubeFetchVideo(ctx context.Context, client *httpx.Client, u *url.URL,
 // documented error codes, so that is what is read — and only when it is
 // absent does the wording fall back to listing the possibilities.
 func peerTubeExplain(err error, label, id string) error {
-	var status *httpx.StatusError
-	if !errors.As(err, &status) {
+	status, ok := errors.AsType[*httpx.StatusError](err)
+	if !ok {
 		return fmt.Errorf("%s: %s: %w", label, id, err)
 	}
 	switch {

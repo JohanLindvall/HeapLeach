@@ -199,9 +199,8 @@ func (h *Handoff) Name() string { return h.site.name }
 func (h *Handoff) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
-		return nil, fmt.Errorf("%s: yt-dlp is not installed — %s, and yt-dlp is what fetches "+
-			"from hosts like this; run `make dependencies` to fetch it into the folder holding "+
-			"heapleach, or put it on PATH (%s)", h.site.name, h.site.why, u.Redacted())
+		return nil, fmt.Errorf("%s: %s, and yt-dlp is what fetches from hosts like this; %s (%s)",
+			h.site.name, h.site.why, tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 
 	title, err := h.title(ctx, ytdlp, u)

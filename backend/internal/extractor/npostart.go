@@ -307,9 +307,9 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 			// reason is kept, though: when nothing at all is playable it is
 			// for one reason, and NPO's own words for it once are worth more
 			// than several hundred identical failures.
-			var refusal *npoUnavailable
+			refusal, unavailable := errors.AsType[*npoUnavailable](ep.err)
 			switch {
-			case errors.As(ep.err, &refusal):
+			case unavailable:
 				if refused == "" {
 					refused = refusal.reason
 				}
@@ -551,8 +551,8 @@ func (e *npoUnavailable) Error() string { return "npo: " + e.productID + ": " + 
 // either would be inventing an answer only NPO has, so the sentence is
 // passed through as written and the dates are appended to it.
 func npoReason(err error) string {
-	var status *httpx.StatusError
-	if !errors.As(err, &status) {
+	status, ok := errors.AsType[*httpx.StatusError](err)
+	if !ok {
 		return ""
 	}
 	var refusal npoRefusal

@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -125,24 +124,11 @@ func okruWhyNot(meta *okruMetadata) string {
 // that calls the movie OK and then lists nothing is asked for again. A page
 // that says the video is gone is believed at once.
 func (o *OKru) metadata(ctx context.Context, id string) (*okruMetadata, error) {
-	var last *okruMetadata
-	for attempt := range config.ExtractRetries {
-		if attempt > 0 {
-			wait := util.Backoff(attempt-1, config.RequestRetryBase, config.RequestRetryMax)
-			if err := util.SleepCtx(ctx, wait); err != nil {
-				return nil, err
-			}
-		}
-		meta, err := o.fetchMetadata(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		last = meta
-		if okruPlayable(meta) || !strings.EqualFold(meta.Movie.Status, "OK") {
-			return meta, nil
-		}
-	}
-	return last, nil
+	return withExtractRetries(ctx,
+		func() (*okruMetadata, error) { return o.fetchMetadata(ctx, id) },
+		func(meta *okruMetadata, err error) bool {
+			return err == nil && !okruPlayable(meta) && strings.EqualFold(meta.Movie.Status, "OK")
+		})
 }
 
 // okruPlayable reports whether the metadata carries anything to fetch.

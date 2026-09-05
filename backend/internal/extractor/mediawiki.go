@@ -205,10 +205,8 @@ func (m *MediaWiki) Match(u *url.URL) bool {
 
 // knownHost reports whether a host runs a wiki this build knows about.
 func (m *MediaWiki) knownHost(host string) bool {
-	for _, domain := range mediaWikiWikimedia {
-		if util.HostMatches(host, domain) {
-			return true
-		}
+	if m.wikimedia(host) {
+		return true
 	}
 	for _, domain := range mediaWikiFarms {
 		if util.HostMatches(host, domain) {

@@ -49,8 +49,7 @@ func (v *Vimeo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
-		return nil, fmt.Errorf("vimeo: yt-dlp is not installed — run `make dependencies` "+
-			"to fetch it into the folder holding heapleach, or put it on PATH (%s)", u.Redacted())
+		return nil, fmt.Errorf("vimeo: %s (%s)", tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 
 	player := vimeoPlayerURL(id, hash)

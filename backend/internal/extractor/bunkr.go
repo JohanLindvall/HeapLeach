@@ -285,8 +285,8 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 		decoded = storagePath
 	}
 	var out struct {
-		Token string `json:"token"`
-		Ex    any    `json:"ex"`
+		Token string    `json:"token"`
+		Ex    flexValue `json:"ex"`
 	}
 	endpoint := bunkrSignService + "?path=" + url.QueryEscape(decoded)
 	if err := b.client.GetJSON(ctx, endpoint,
@@ -296,7 +296,7 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 	if out.Token == "" {
 		return "", "", fmt.Errorf("bunkr: signing service returned no token for %s", decoded)
 	}
-	return out.Token, formatNumber(out.Ex), nil
+	return out.Token, out.Ex.String(), nil
 }
 
 // pageInfo scrapes a file page for its numeric id, display name and the
@@ -392,18 +392,4 @@ func linkLabel(a *html.Node) string {
 		return t
 	}
 	return ""
-}
-
-// formatNumber renders a JSON number-or-string as a plain string.
-func formatNumber(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case float64:
-		return fmt.Sprintf("%d", int64(t))
-	case nil:
-		return ""
-	default:
-		return fmt.Sprintf("%v", t)
-	}
 }

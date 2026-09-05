@@ -272,11 +272,9 @@ func gofileCalls(script string) []gofileCall {
 	var calls []gofileCall
 	seen := make(map[gofileCall]bool)
 	for _, m := range gofileCallPattern.FindAllStringSubmatch(script, -1) {
-		index := 0
-		for i := 0; i < len(m[1]); i++ {
-			index = index*16 + int(hexDigit(m[1][i]))
-		}
-		call := gofileCall{index: index, key: m[2]}
+		// The pattern admits hexadecimal digits only, so this cannot fail.
+		index, _ := strconv.ParseInt(m[1], 16, 32)
+		call := gofileCall{index: int(index), key: m[2]}
 		if !seen[call] {
 			seen[call] = true
 			calls = append(calls, call)
