@@ -103,14 +103,18 @@ heapleach [options] <url>... [download-dir]   download and exit
   -dir string           directory to download into
   -password string      password for protected sources (headless downloads)
   -retries int          retries per request and per transfer (default 3)
-  -streams int          connections to split a slow file across (default 8)
-  -slow-speed int       bytes/sec below which extra connections open (default 2000000)
-  -max-speed int        ceiling on total download rate in bytes/sec (0 is unlimited)
+  -streams int          connections to split a slow file across, 1-16 (default 8)
+  -slow-speed size      rate below which extra connections open, per second (default 2MB)
+  -max-speed size       ceiling on the total download rate, per second (0 is unlimited)
+  -min-free size        room to leave at the destination before starting another
+                        transfer (0 turns the check off) (default 10GiB)
   -stall-timeout dur    abandon and retry a transfer stuck this long (default 1m30s)
   -debug                verbose logging
   -open                 open the UI in a browser once it is listening
   -version              print the version and exit
 ```
+
+Sizes take a unit — `5MB`, `1.5GB`, `10GiB` — or a plain byte count.
 
 ### On the command line
 

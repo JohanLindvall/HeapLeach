@@ -680,9 +680,10 @@ them:
 
 Other behaviours that span files:
 
-- Transfers resume from `<name>.<itemID>.part` using a `Range` request. The
-  part file is keyed by item id so two jobs downloading the same filename
-  cannot collide.
+- Transfers resume from the `.part` file with a `Range` request. Its name is
+  derived from the job's source URL — see the part-file naming section above
+  — so an interrupted download is found again on the next run, and
+  `claimPart` keeps two transfers of the same URL off one file.
 - A stall watchdog aborts an attempt whose byte counter stops moving
   (`config.StallTimeout`); body reads have no deadline of their own, so
   without it a silent server would pin a worker forever. The aborted item is
