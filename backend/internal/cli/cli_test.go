@@ -236,6 +236,39 @@ func TestTrackerAnnouncesEachEventOnce(t *testing.T) {
 
 // The live region's height must equal the number of lines painted, or the
 // cursor-up count on the next frame is wrong.
+// Frame is what the screenshot generator renders, and it has to look like a
+// run in progress: the announcements a run would have printed by then, then
+// the live region, every line fitting the width it was asked for.
+func TestFrameShowsTheEventsAboveTheLiveRegion(t *testing.T) {
+	snap := download.Snapshot{
+		Jobs: []download.JobView{{
+			ID: "j1", Title: "an album", Host: "example.test", Status: download.StatusRunning,
+			Items: []download.ItemView{
+				{ID: "a", Name: "first.bin", Status: download.StatusDone, Size: 100, Downloaded: 100},
+				{ID: "b", Name: "second.bin", Status: download.StatusRunning, Size: 100, Downloaded: 50},
+			},
+			Total: 2, Done: 1, Active: 1,
+		}},
+		Active: 1,
+	}
+	const width = 60
+	lines := Frame(snap, width, 5*time.Second)
+	if len(lines) < 3 {
+		t.Fatalf("frame is %d lines, want the job and file announcements plus the live region: %q", len(lines), lines)
+	}
+	for _, line := range lines {
+		if visibleWidth(line) > width {
+			t.Errorf("line wider than the terminal: %q", line)
+		}
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{"an album", "first.bin", "second.bin"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("frame does not mention %q:\n%s", want, joined)
+		}
+	}
+}
+
 func TestFrameRowsAreBounded(t *testing.T) {
 	r := newRenderer(discardWriter{}, 100, true, false)
 	var items []download.ItemView

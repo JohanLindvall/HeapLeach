@@ -205,7 +205,6 @@ func (r *renderer) itemDoneLine(it download.ItemView) string {
 	}
 }
 
-// frame builds the live region: a status line, then a row per moving file.
 // Frame renders one frame of the live display, coloured, as a terminal would
 // show it. It exists for the documentation screenshots: a picture of the
 // terminal output should come from the code that draws it rather than from
@@ -215,10 +214,18 @@ func Frame(snap download.Snapshot, width int, elapsed time.Duration) []string {
 	r := newRenderer(io.Discard, width, false, true)
 	// What a run this far along would already have printed above the live
 	// region, then the live region itself — the two together are what the
-	// screen actually looks like.
+	// screen actually looks like. Each line is fitted to the width the way
+	// paint fits it, since a caller printing these verbatim would otherwise
+	// wrap a row the terminal would have cut.
 	lines := newTracker().events(snap, r)
-	return append(lines, frame(snap, r, time.Now().Add(-elapsed))...)
+	lines = append(lines, frame(snap, r, time.Now().Add(-elapsed))...)
+	for i, line := range lines {
+		lines[i] = r.fit(line)
+	}
+	return lines
 }
+
+// frame builds the live region: a status line, then a row per moving file.
 
 func frame(snap download.Snapshot, r *renderer, started time.Time) []string {
 	head := fmt.Sprintf("%s %s  %s",
