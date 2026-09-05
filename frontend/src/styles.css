@@ -1511,6 +1511,20 @@ button.jobs__dir:hover {
   background: color-mix(in srgb, var(--surface-1) 40%, transparent);
 }
 
+.empty__icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 0.9rem;
+  border-radius: 18px;
+  color: var(--accent-b);
+  background: linear-gradient(140deg,
+    color-mix(in srgb, var(--accent-a) 18%, transparent),
+    color-mix(in srgb, var(--accent-b) 14%, transparent));
+  border: 1px solid var(--edge-flat);
+}
+
 .empty__title {
   margin: 0 0 0.4rem;
   font-weight: 620;
@@ -1617,16 +1631,13 @@ button.jobs__dir:hover {
 }
 
 @media (max-width: 1080px) {
+  .shell { grid-template-columns: 190px minmax(0, 1fr); }
   .jobs__dir { max-width: 26ch; }
   .stat--graph .spark { width: 92px; }
 }
 
 @media (max-width: 940px) {
   .stat--graph .spark { display: none; }
-}
-
-@media (max-width: 1080px) {
-  .shell { grid-template-columns: 190px minmax(0, 1fr); }
 }
 
 @media (max-width: 860px) {
@@ -1785,9 +1796,6 @@ button.jobs__dir:hover {
     min-width: 56px;
   }
 
-  .concurrency__label { display: none; }
-
-  .speedcap__label { display: none; }
   .speedcap { padding: 0.32rem 0.4rem 0.32rem 0.6rem; }
 
   .btn--pause .btn__label { display: none; }
@@ -1867,18 +1875,4 @@ button.jobs__dir:hover {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
-}
-
-.empty__icon {
-  display: grid;
-  place-items: center;
-  width: 54px;
-  height: 54px;
-  margin: 0 auto 0.9rem;
-  border-radius: 18px;
-  color: var(--accent-b);
-  background: linear-gradient(140deg,
-    color-mix(in srgb, var(--accent-a) 18%, transparent),
-    color-mix(in srgb, var(--accent-b) 14%, transparent));
-  border: 1px solid var(--edge-flat);
 }
