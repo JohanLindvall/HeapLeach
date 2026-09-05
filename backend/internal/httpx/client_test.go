@@ -201,6 +201,61 @@ func TestDoOnceNeverRetries(t *testing.T) {
 	}
 }
 
+func TestDoOncePassesADefinitiveAnswerThrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := testClient(t, 5)
+	req, _ := c.NewRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	resp, err := c.DoOnce(req)
+	if err != nil {
+		t.Fatalf("a 404 is the caller's to read, not an error: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestDoOnceReportsCancellationAsSuch(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := testClient(t, 5)
+	req, _ := c.NewRequest(ctx, http.MethodGet, srv.URL, nil)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := c.DoOnce(req); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the context's own cancellation", err)
+	}
+}
+
+func TestDoDoesNotNameTheURLTwice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	c := testClient(t, 0)
+	req, _ := c.NewRequest(context.Background(), http.MethodGet, srv.URL+"/once", nil)
+	_, err := c.Do(req)
+	if err == nil {
+		t.Fatal("a host that only ever answers 502 should fail")
+	}
+	if got := strings.Count(err.Error(), srv.URL+"/once"); got != 1 {
+		t.Errorf("the URL appears %d times in %q, want once", got, err)
+	}
+}
+
 func TestBytesReportsTheBodyOnFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"reason":"quota exceeded"}`, http.StatusForbidden)

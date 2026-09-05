@@ -161,11 +161,8 @@ func (e *StatusError) Error() string {
 // the given codes — the typed alternative to grepping an error's text for a
 // number.
 func HasStatus(err error, codes ...int) bool {
-	var se *StatusError
-	if !errors.As(err, &se) {
-		return false
-	}
-	return slices.Contains(codes, se.Code)
+	se, ok := errors.AsType[*StatusError](err)
+	return ok && slices.Contains(codes, se.Code)
 }
 
 // Do executes req, retrying transient failures with exponential backoff.
@@ -238,7 +235,10 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		}
 
 		if attempt >= c.maxRetries {
-			return nil, fmt.Errorf("%s: %w", req.URL.Redacted(), lastErr)
+			// Not wrapped with the URL: a StatusError already leads with it,
+			// and http.Client reports a transport failure as `Get "<url>":
+			// EOF`, so a prefix here printed every address twice.
+			return nil, lastErr
 		}
 		if err := util.SleepCtx(req.Context(), retryDelay(attempt)); err != nil {
 			return nil, err
