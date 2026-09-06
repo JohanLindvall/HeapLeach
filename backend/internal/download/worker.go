@@ -93,7 +93,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		return m.transferExternal(ctx, it, dir, rel)
 	}
 
-	var busyWaits int
+	var busyWaits, limitWaits int
 	for attempt := 0; ; attempt++ {
 		var (
 			final string
@@ -155,6 +155,47 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 				return err
 			}
 			attempt-- // this was not a failure
+			continue
+		}
+
+		// A host refusing because this caller already has too many downloads
+		// open has not failed either, and unlike a busy host it is not even
+		// describing itself: it is describing a queue this program is
+		// filling, which clears as its own other transfers finish. So this
+		// waits rather than failing, and the wait does not spend the retry
+		// budget, which exists for transfers that are going wrong.
+		//
+		// The cap is what keeps that honest. The identical refusal arrives
+		// when the connections belong to something else on this address, and
+		// then no amount of waiting here will free one.
+		if refusedForConnectionCount(err) {
+			// Extra connections to a host that just refused a needed one are
+			// not worth attempting, by this transfer or any other. Saying so
+			// once spares every sibling a refusal apiece to learn it.
+			m.mu.Lock()
+			host := hostOf(it.URL)
+			m.mu.Unlock()
+			m.hosts.saturated(host)
+
+			if limitWaits >= config.ConnectionLimitRetries {
+				return err
+			}
+			limitWaits++
+			wait := util.Backoff(limitWaits-1, m.timings.busyBase, m.timings.busyMax)
+			m.note(it, fmt.Sprintf("%s allows only so many downloads at once — waiting %s "+
+				"for one to finish (attempt %d of %d)", host, wait.Round(time.Second),
+				limitWaits, config.ConnectionLimitRetries))
+			m.log.Info("host is at its connection limit, waiting", "item", it.ID, "name", name,
+				"host", host, "attempt", limitWaits, "wait", wait)
+			if err := util.SleepCtx(ctx, wait); err != nil {
+				return err
+			}
+			m.note(it, "")
+			// Signed links expire while waiting; mint a fresh one.
+			if err := m.resolveTarget(ctx, it); err != nil {
+				return err
+			}
+			attempt-- // being told to queue is not a failed attempt
 			continue
 		}
 

@@ -183,6 +183,21 @@ const (
 	// would sit in the queue as "host busy" without end.
 	BusyRetryLimit = 5
 
+	// ConnectionLimitRetries is how many times a transfer waits out a host
+	// that refused it for having too many connections open at once.
+	//
+	// It is counted apart from the ordinary retry budget and is generous,
+	// because of what clears the condition: our own other transfers
+	// finishing. Waiting through a sibling download is the whole point, and
+	// that takes as long as that download takes. On the busy-host schedule
+	// this is around six minutes of patience.
+	//
+	// It is capped rather than unlimited because the same refusal arrives
+	// when the connections belong to somebody else on this address — another
+	// program, another browser tab — and then nothing here can make it clear
+	// and a headless run would never terminate.
+	ConnectionLimitRetries = 10
+
 	// RateLimitRetryBase and RateLimitRetryMax bound the wait between
 	// attempts at a host that answered 429.
 	//

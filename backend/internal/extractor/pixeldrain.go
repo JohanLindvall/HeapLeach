@@ -46,6 +46,28 @@ const (
 // items is not what anyone pasting a link meant.
 const pixeldrainMaxFiles = 5000
 
+// pixeldrainPace asks for one connection per file, because this host counts
+// connections rather than files.
+//
+// An anonymous caller is allowed only so many open downloads at once, and
+// the API says so outright — 403 with "max_concurrent_downloads" where the
+// bytes would be. What matters is that the budget is spent per *connection*:
+// the segmented engine's eight-way split turns one modest download into
+// eight of that allowance, so a single file can exhaust it on its own and a
+// queue of four is refused before it starts.
+//
+// One connection each is not the loss it would be elsewhere. Free downloads
+// here are speed-capped per account rather than per connection, so splitting
+// buys nothing anyway, and what it costs is the whole queue: at one
+// connection per file the number of connections is the number of transfers,
+// which is a figure the user set and can see.
+//
+// The number the host actually allows is not published, so nothing here
+// guesses at it. Files is deliberately left alone: the downloader learns the
+// rest by being refused — see refusedForConnectionCount — rather than by a
+// constant here that would be wrong for somebody's paid account.
+var pixeldrainPace = Pace{Streams: 1}
+
 // NewPixeldrain builds the pixeldrain extractor.
 func NewPixeldrain(client *httpx.Client) *Pixeldrain {
 	return &Pixeldrain{hostSet: hostSet{"pixeldrain.com", "nova.storage"}, client: client}
@@ -120,6 +142,7 @@ func (p *Pixeldrain) toFile(origin string, f pixeldrainFile) File {
 		URL:     origin + pixeldrainAPI + "/file/" + url.PathEscape(f.ID) + "?download",
 		Size:    size,
 		Headers: httpx.Referer(origin + "/"),
+		Pace:    &pixeldrainPace,
 	}
 }
 
@@ -236,6 +259,7 @@ func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode,
 		Size:    size,
 		Dir:     dir,
 		Headers: httpx.Referer(origin + "/"),
+		Pace:    &pixeldrainPace,
 	}, true
 }
 

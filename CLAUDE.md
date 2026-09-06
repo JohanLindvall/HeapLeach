@@ -298,6 +298,17 @@ Host-specific notes:
   that not every folder is offered from several storage servers: one that
   names a single server gets no resolver at all, so there is no mirror to
   rotate to and a busy server stops at `config.BusyRetryLimit`.
+- **pixeldrain** counts connections rather than files. An anonymous caller
+  is allowed only so many downloads open at once and the API says so
+  outright, 403 with `max_concurrent_downloads` where the bytes would be —
+  so the eight-way split spends that whole allowance on one file, and a
+  queue of four is refused before it starts. `pixeldrainPace` therefore asks
+  for `Streams: 1`, which costs nothing here because free downloads are
+  speed-capped per account rather than per connection, and which makes the
+  number of connections the number of transfers. `Files` is deliberately
+  left unset: what the host allows is not published, so nothing guesses at
+  it and the downloader learns the rest by being refused. nova.storage runs
+  the same software and gets the same treatment for free.
 - **mega** encrypts everything client-side, so `mega.go` cannot ask the API
   for a filename — it decrypts one. `megacrypt.go` holds the primitives
   (mega's base64, the key split, ECB key unwrapping, CBC attributes) and is
@@ -667,6 +678,21 @@ them:
 - Extra connections are budgeted per host and never retry: a refusal is the
   answer we want, so the range goes back and the host's budget drops.
   Primary connections are never budgeted, so a tight budget cannot deadlock.
+- **A host that limits how many downloads one caller may have open** is a
+  third thing again, and neither a failure nor a rate limit:
+  `refusedForConnectionCount` (`hostlimit.go`) recognises it and
+  `Manager.transfer` waits it out on the busy schedule, up to
+  `config.ConnectionLimitRetries`. What clears it is *our own* other
+  transfers finishing, which is why the patience is measured in minutes and
+  why it is capped — the identical refusal arrives when the connections
+  belong to something else on this address, and then no amount of waiting
+  here frees one. The body has to be read, not the status: these hosts
+  answer 403, which otherwise means forbidden and must stay fatal, so
+  `connectionLimitMarkers` holds each host's own error identifier rather
+  than a phrase from its prose. A refusal of a connection a transfer
+  *needed* is also the strongest evidence there is about the host, so it
+  calls `hostLimiter.saturated` to close the extra-connection budget at
+  once instead of letting every sibling learn it by being refused.
 - A host that answers with a web page instead of bytes (gofile does this for
   busy storage servers) is caught by `rejectWebPage`. Without it, following
   the redirect writes the page shell to disk and — since Content-Length

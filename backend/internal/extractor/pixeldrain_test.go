@@ -110,6 +110,36 @@ func testPixeldrain(t *testing.T) *Pixeldrain {
 	return &Pixeldrain{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
 }
 
+// This host counts connections rather than files: an anonymous caller is
+// allowed only so many open at once, and the eight-way split would spend that
+// whole allowance on one download. Both routes to a file have to say so —
+// a shared directory's items are built by a different function from a list's.
+func TestPixeldrainAsksForOneConnectionPerFile(t *testing.T) {
+	p := testPixeldrain(t)
+
+	listed := p.toFile("https://pixeldrain.com", pixeldrainFile{ID: "AAAA", Name: "clip.mp4", Size: 10})
+	shared, ok := p.toNodeFile("https://pixeldrain.com", []string{"abcd1234", "clip.mp4"},
+		&pixeldrainNode{Type: pixeldrainFileNode, Name: "clip.mp4", FileSize: 10}, "")
+	if !ok {
+		t.Fatal("a plain file node was refused")
+	}
+
+	for name, file := range map[string]File{"list": listed, "shared filesystem": shared} {
+		if file.Pace == nil {
+			t.Errorf("%s: no pace declared, so the engine would split this eight ways", name)
+			continue
+		}
+		if file.Pace.Streams != 1 {
+			t.Errorf("%s: Streams = %d, want 1", name, file.Pace.Streams)
+		}
+		// Files is deliberately left alone: what the host allows is not
+		// published, and the downloader learns it by being refused.
+		if file.Pace.Files != 0 {
+			t.Errorf("%s: Files = %d, want the queue's own concurrency", name, file.Pace.Files)
+		}
+	}
+}
+
 func TestPixeldrainSharedDirectory(t *testing.T) {
 	srv := pixeldrainServer(t, map[string]string{
 		"/api/filesystem/abcd1234":        pixeldrainShareRoot,

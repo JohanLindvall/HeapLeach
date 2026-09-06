@@ -97,6 +97,21 @@ func (l *hostLimiter) penalise(host string) int {
 	return b.limit
 }
 
+// saturated records a host refusing a connection this transfer actually
+// needed, for having too many open already.
+//
+// That is a stronger statement than the refused extra penalise acts on, and
+// it deserves a stronger answer: the refusal was not of a speculative
+// addition but of the one connection the file cannot proceed without, so
+// there is certainly no room for extras. Dropping the allowance to nothing
+// spares every other transfer to that host a refusal apiece to learn the
+// same thing. Like every other move here it only ever lowers the limit.
+func (l *hostLimiter) saturated(host string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.budgetLocked(host).limit = 0
+}
+
 // limit reports a host's current allowance, for logging.
 func (l *hostLimiter) limit(host string) int {
 	l.mu.Lock()
@@ -120,7 +135,51 @@ func refusedExtraConnection(err error) bool {
 	if httpx.HasStatus(err, http.StatusTooManyRequests, http.StatusServiceUnavailable) {
 		return true
 	}
+	if refusedForConnectionCount(err) {
+		return true
+	}
 	// A host at its connection limit commonly just drops or refuses the
 	// TCP connection rather than answering.
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET)
+}
+
+// connectionLimitMarkers are how a host says, in the body of a refusal, that
+// this caller already has as many downloads open as it is allowed.
+//
+// The body is what has to be read, because the status alone cannot carry
+// this. A host that means "come back" has 429 to say it with and these do
+// not use it: pixeldrain answers 403 with a machine-readable value beside
+// the sentence, and 403 otherwise means forbidden and must stay fatal —
+// reading every 403 as a queueing problem would retry a genuinely private
+// file ten times before failing it.
+//
+// So each entry is a host's own error identifier rather than a phrase from
+// its prose, which is what keeps this from matching a page that merely
+// mentions downloads. A host that stops sending its identifier stops being
+// recognised and fails the way it did before, which is the safe direction.
+var connectionLimitMarkers = []string{
+	// pixeldrain, and nova.storage which runs the same software:
+	// {"success":false,"value":"max_concurrent_downloads", ...}
+	"max_concurrent_downloads",
+}
+
+// refusedForConnectionCount reports whether a host turned a request away
+// because this caller has too many downloads open at once.
+//
+// This is not a failure and not a rate limit. It is a statement about a
+// queue we are ourselves filling, and it clears when one of our own
+// transfers finishes — so the answer is to wait, and meanwhile to stop
+// asking this host for more connections than it will grant.
+func refusedForConnectionCount(err error) bool {
+	se, ok := errors.AsType[*httpx.StatusError](err)
+	if !ok || se.Body == "" {
+		return false
+	}
+	body := strings.ToLower(se.Body)
+	for _, marker := range connectionLimitMarkers {
+		if strings.Contains(body, marker) {
+			return true
+		}
+	}
+	return false
 }
