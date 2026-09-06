@@ -512,7 +512,11 @@ Three things here were each got wrong first:
   host has no URL until one is minted — it is a closure, which no file holds.
   So `Restore` marks an unfinished job `restored` and its source is read
   again on resume; `alreadyOnDisk` skips what is complete and the part files
-  carry the rest.
+  carry the rest. That is also why **`RetryItem` re-reads a restored job**
+  rather than re-queueing the one item: a restored item has nothing to fetch
+  from, and enqueueing it alone failed with "no download URL" — a confusing
+  answer to a reasonable click, which left the item failed for a reason that
+  said nothing about the file. Both retries funnel through `rereadLocked`.
 - **Resolution appends to `job.Items`**, so a restored job's items must be
   dropped before it is re-read or every file in it doubles. Both `SetPaused`
   (resuming) and `RetryJob` clear them, and

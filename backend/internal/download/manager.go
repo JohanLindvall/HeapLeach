@@ -557,21 +557,13 @@ func (m *Manager) RetryJob(id string) error {
 		return ErrNotFound
 	}
 	job.canceled = false
-	// A restored job is re-read rather than re-queued, for the same reason
-	// resuming the whole queue re-reads it: its items are last run's record,
-	// not somewhere the files can be fetched from. Dropping them puts it on
-	// the path below that resolves a job with nothing in it.
-	if job.restored {
-		job.restored = false
-		job.Items = nil
-	}
 
-	if len(job.Items) == 0 {
-		// The extractor itself failed; run it again.
-		job.Err = ""
-		job.resolving = true
-		ctx, cancel := context.WithCancel(m.ctx)
-		job.cancel = cancel
+	// Two jobs are re-read rather than re-queued. A restored one, for the
+	// same reason resuming the whole queue re-reads it: its items are last
+	// run's record, not somewhere the files can be fetched from. And one
+	// with no items at all, where the extractor itself is what failed.
+	if job.restored || len(job.Items) == 0 {
+		ctx := m.rereadLocked(job)
 		m.mu.Unlock()
 
 		m.markDirty()
@@ -607,15 +599,47 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 		m.mu.Unlock()
 		return errors.New("item is already in progress")
 	}
-	if job := m.jobs[jobID]; job != nil {
+	job := m.jobs[jobID]
+	if job != nil {
 		job.canceled = false
 	}
+
+	// A restored job's items carry no URL — none is stored, because the
+	// signed links half these hosts hand out would be stale by the next run
+	// — so there is nothing to fetch one of them from and re-queueing it on
+	// its own fails with "no download URL". The job is re-read instead,
+	// which is what the item's own note asks for and what the job-level
+	// retry does. Everything already downloaded is recognised on disk and
+	// skipped, so this costs the listing and nothing more.
+	if job != nil && job.restored {
+		ctx := m.rereadLocked(job)
+		m.mu.Unlock()
+
+		m.markDirty()
+		m.wg.Add(1)
+		go m.resolve(ctx, job)
+		return nil
+	}
+
 	m.enqueueLocked(it)
 	m.mu.Unlock()
 
 	m.markDirty()
 	m.signal()
 	return nil
+}
+
+// rereadLocked puts a job back to being resolved from its source, dropping
+// whatever items it holds, and returns the context its extractor should run
+// under. Caller holds mu, and must release it before starting the goroutine.
+func (m *Manager) rereadLocked(job *Job) context.Context {
+	job.restored = false
+	job.Items = nil
+	job.Err = ""
+	job.resolving = true
+	ctx, cancel := context.WithCancel(m.ctx)
+	job.cancel = cancel
+	return ctx
 }
 
 // recheckTools is tools.Recheck, kept behind a variable so tests can observe

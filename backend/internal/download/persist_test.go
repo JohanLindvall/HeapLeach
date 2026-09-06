@@ -240,6 +240,57 @@ func TestNoItemURLsReachTheFile(t *testing.T) {
 	}
 }
 
+// A restored job's items carry no URL, so retrying one of them on its own
+// has nothing to fetch from and used to fail with "no download URL" — which
+// is a confusing answer to a reasonable click, and leaves the item failed
+// for a reason that says nothing about the file. Retrying an item re-reads
+// the job, exactly as retrying the job does.
+func TestRetryingOneItemOfARestoredJobReReadsTheSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("data"))
+	}))
+	defer server.Close()
+
+	m, _ := newTestManager(t)
+
+	// A job as Restore leaves one whose items all reached a terminal state:
+	// the placeholder records what last run knew, and carries no URL.
+	source := server.URL + "/payload.bin"
+	m.mu.Lock()
+	job := &Job{
+		ID: "restored", Source: source, Title: "payload.bin", Host: "direct",
+		CreatedAt: time.Now(),
+		Items:     []*Item{{ID: "stale", Name: "payload.bin", Status: StatusFailed, Size: 4}},
+		restored:  true,
+	}
+	m.jobs[job.ID] = job
+	m.order = append(m.order, job.ID)
+	m.mu.Unlock()
+
+	if err := m.RetryItem("restored", "stale"); err != nil {
+		t.Fatalf("RetryItem: %v", err)
+	}
+
+	if !waitForCond(20*time.Second, func() bool {
+		return itemStatusesOf(m, "restored", StatusDone) == 1
+	}) {
+		t.Fatalf("the item never downloaded; items now: %d", itemCountOf(m, "restored"))
+	}
+	// Re-read, not re-queued: the placeholder is gone and what finished is
+	// the item the extractor produced.
+	if n := itemCountOf(m, "restored"); n != 1 {
+		t.Errorf("job holds %d items, want 1 — the placeholder was not dropped", n)
+	}
+	m.mu.Lock()
+	stillRestored := m.jobs["restored"].restored
+	m.mu.Unlock()
+	if stillRestored {
+		t.Error("the job is still marked restored after being re-read")
+	}
+}
+
 // Resolution appends to a job's items, so a restored job has to have its
 // placeholders dropped before its source is read again — otherwise every
 // file in it would come back twice. This is the whole reason resuming and
