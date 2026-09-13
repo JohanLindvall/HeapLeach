@@ -2,6 +2,7 @@ package extractor
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"golang.org/x/net/html"
@@ -108,6 +109,79 @@ func TestBunkrAlbumEntries(t *testing.T) {
 		if f.Resolve == nil {
 			t.Errorf("%s has no resolver; bunkr links are signed and expire", f.Name)
 		}
+	}
+}
+
+// A file page whose storage server is out of service. Everything else on it
+// still works — the id is there and the metadata endpoint answers — so the
+// disabled control is the only thing that says the download will not.
+const bunkrMaintenancePage = `<html><body>
+  <div data-file-id="12345"></div>
+  <h1>a-clip.mp4</h1>
+  <div class="actions">
+    <button class="btn ic-download-01" disabled aria-disabled="true"
+            title="Server under maintenance">Download unavailable</button>
+    <a class="btn ic-flag-01" href="https://abuse.example.test">Report</a>
+  </div>
+  <section>
+    <div class="panel">
+      <span class="icon ic-tools"></span>
+      <h2>Server under maintenance</h2>
+      <p>The server hosting this file is temporarily unavailable for maintenance.
+         Please check back again later.</p>
+    </div>
+  </section>
+</body></html>`
+
+// A healthy page offers the download as a link to the download host, which is
+// what pageInfo reads that host out of.
+const bunkrServingPage = `<html><body>
+  <div data-file-id="12345"></div>
+  <h1>a-clip.mp4</h1>
+  <a class="btn ic-download-01" href="https://dl.bunkr.example/file/12345">Download</a>
+  <button class="btn ic-share-01" disabled>Share</button>
+</body></html>`
+
+func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
+	root, err := parseHTML(bunkrMaintenancePage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := bunkrUnavailable(root)
+	if got == "" {
+		t.Fatal("a disabled download control was read as a page offering a download")
+	}
+	// The tooltip says what happened and the panel says what to do about it;
+	// both are bunkr's own sentences, passed through rather than replaced.
+	if !strings.HasPrefix(got, "Server under maintenance") {
+		t.Errorf("reason = %q, want it to open with the control's own tooltip", got)
+	}
+	if !strings.Contains(got, "check back again later") {
+		t.Errorf("reason = %q, want the panel's explanation carried with it", got)
+	}
+}
+
+// A page that will serve the file must not be read as a refusal, and a
+// disabled control that is not the download must not be mistaken for one.
+func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
+	root, err := parseHTML(bunkrServingPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bunkrUnavailable(root); got != "" {
+		t.Errorf("a servable page was refused: %q", got)
+	}
+}
+
+// The fact is worth reporting even when the page says nothing about why.
+func TestBunkrUnavailableWithoutAnExplanation(t *testing.T) {
+	root, err := parseHTML(
+		`<html><body><button class="ic-download-01" disabled></button></body></html>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bunkrUnavailable(root); got == "" {
+		t.Error("a disabled download control with no tooltip reported nothing at all")
 	}
 }
 

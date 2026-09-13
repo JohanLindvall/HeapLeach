@@ -280,6 +280,23 @@ The important subtlety is `File.Resolve`:
   `{"id": <fileID>}` to `<dlHost>/api/_001_v2` and read `mediafiles`: more
   than one server there would be the first sign rotation had become possible.
 
+  A server that is *down* rather than missing is the case worth knowing,
+  because bunkr's three steps disagree about it: the page still carries the
+  file id, `_001_v2` still answers with a real storage path, and the signing
+  service still mints a token — only the storage host knows, and it says so
+  with a bare nginx 403 twenty minutes later, once per file in the album.
+  The file page has already said it in words, so `bunkrUnavailable` reads it
+  there and the item fails at resolve time instead. What is read is the
+  download control being present and **disabled**, not any particular
+  sentence: on a servable page that control is the link to the download host
+  that `pageInfo` already parses, and on a refused one it is a button with
+  `disabled` and a title saying why. The wording is then passed through
+  untouched, since which server is down and for how long is bunkr's to say.
+  The state is per storage server and an album spans several, so it is read
+  per file — which is also the only place bunkr publishes it. Album listing
+  is untouched: it reads names and sizes off the cards and never opens a
+  file page.
+
 `File.Cipher` is the other addition to the contract: a host that serves
 ciphertext sets it, and the downloader decrypts on the way to disk. Only
 mega does today, and see the download-manager section for why the mode

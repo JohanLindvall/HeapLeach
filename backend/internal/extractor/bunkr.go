@@ -311,6 +311,16 @@ func (b *Bunkr) pageInfo(ctx context.Context, u *url.URL) (id, name, dlHost stri
 		return "", "", "", fmt.Errorf("bunkr: %w", err)
 	}
 
+	// Asked before anything is read off the page, because everything else on
+	// it still works: the file id is there, the metadata endpoint answers
+	// with a real storage path, and the signing service mints a token for it.
+	// Only the storage host knows it is out of service, and it says so with a
+	// bare 403 some twenty minutes later — so a page that has already said
+	// why is the one place this can be reported from.
+	if reason := bunkrUnavailable(root); reason != "" {
+		return "", "", "", fmt.Errorf("bunkr: %s: %s", u.Redacted(), reason)
+	}
+
 	if n := findFirst(root, func(n *html.Node) bool {
 		return n.Type == html.ElementNode && attr(n, "data-file-id") != ""
 	}); n != nil {
@@ -353,6 +363,66 @@ func (b *Bunkr) pageName(ctx context.Context, u *url.URL) (string, error) {
 		name = strings.Join(util.PathSegments(u), "-")
 	}
 	return name, nil
+}
+
+// bunkrUnavailable is bunkr declining to serve a file, in its own words, or
+// "" when the page offers a download.
+//
+// The state is per storage server rather than per album — bunkr spreads one
+// album across several, and takes them out of service one at a time — so it
+// is read per file, which is also the only place it is published.
+//
+// What is read is the download control being present and disabled, not any
+// particular sentence. On a page bunkr will serve, that control is a link to
+// the download host, which is what pageInfo reads the host out of; on one it
+// will not, the link is replaced by a button carrying `disabled` and a title
+// saying why. Keying on the disabled state leaves the wording free to change,
+// and the wording is then passed through untouched rather than replaced,
+// because which server is down and for how long is something only bunkr
+// knows. A control disabled with nothing to say still reports the fact,
+// which is the half that matters.
+func bunkrUnavailable(root *html.Node) string {
+	button := findFirst(root, func(n *html.Node) bool {
+		return isElem(n, atom.Button) && hasAttr(n, "disabled") && bunkrIsDownloadControl(n)
+	})
+	if button == nil {
+		return ""
+	}
+
+	reason := strings.TrimSpace(util.FirstNonEmpty(attr(button, "title"), textOf(button)))
+	if reason == "" {
+		return "bunkr is not offering this file for download"
+	}
+	if detail := bunkrRefusalDetail(root, reason); detail != "" {
+		return reason + " — " + detail
+	}
+	return reason
+}
+
+// bunkrIsDownloadControl reports whether a control is the one that would have
+// fetched the file, rather than one of the several other buttons a page
+// carries.
+func bunkrIsDownloadControl(n *html.Node) bool {
+	return strings.Contains(strings.ToLower(attr(n, "class")+" "+textOf(n)), "download")
+}
+
+// bunkrRefusalDetail is the explanation bunkr renders beside a disabled
+// download control, or "" when it renders none.
+//
+// The panel repeats the control's own tooltip as its heading and then
+// explains it underneath, so the tooltip is the anchor: the element whose
+// whole text is that heading sits inside the panel, and what the panel says
+// beyond the heading is the explanation. Following the page's own
+// cross-reference is what saves this from needing to know bunkr's wording.
+func bunkrRefusalDetail(root *html.Node, reason string) string {
+	heading := findFirst(root, func(n *html.Node) bool {
+		return n.Type == html.ElementNode && strings.TrimSpace(textOf(n)) == reason
+	})
+	if heading == nil || heading.Parent == nil {
+		return ""
+	}
+	panel := strings.TrimSpace(textOf(heading.Parent))
+	return strings.TrimSpace(strings.TrimPrefix(panel, reason))
 }
 
 // parseBunkrDownloadHref recognises https://dl.bunkr.<tld>/file/<id>.
