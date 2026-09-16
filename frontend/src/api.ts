@@ -28,11 +28,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const message =
-      body && typeof body === 'object' && 'error' in body
-        ? String((body as { error: unknown }).error)
-        : `request failed (${response.status})`;
+    let message = `request failed (${response.status})`;
+    if (body && typeof body === 'object') {
+      if ('error' in body) {
+        message = String(body.error);
+      } else if ('rejected' in body && Array.isArray(body.rejected)) {
+        const reasons = body.rejected.flatMap((entry: unknown) =>
+          entry && typeof entry === 'object' && 'url' in entry && 'error' in entry
+            ? [`${String(entry.url)}: ${String(entry.error)}`]
+            : [],
+        );
+        if (reasons.length > 0) message = reasons.join('\n');
+      }
+    }
     throw new ApiError(message, response.status);
+  }
+  if (body === null && response.status !== 204 && response.status !== 205) {
+    throw new ApiError('The service returned an invalid response.', response.status);
   }
   return body as T;
 }
@@ -46,8 +58,8 @@ export function addUrls(urls: string, password: string): Promise<AddResponse> {
 }
 
 /** Fetch the current state; used as a fallback when SSE is unavailable. */
-export function fetchState(): Promise<Snapshot> {
-  return request<Snapshot>('/api/state');
+export function fetchState(signal?: AbortSignal): Promise<Snapshot> {
+  return request<Snapshot>('/api/state', { signal });
 }
 
 /**

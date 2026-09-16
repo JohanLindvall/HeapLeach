@@ -39,34 +39,29 @@ export function useProgress(
   onUnlock: (achievement: Achievement) => void,
 ): Progress {
   const [progress, setProgress] = useState<Progress>(load);
+  const progressRef = useRef(progress);
   const unlockRef = useRef(onUnlock);
   unlockRef.current = onUnlock;
 
   useEffect(() => {
     if (!snapshot) return;
 
-    setProgress((current) => {
-      const next = accumulate(current, snapshot);
-      const fresh = newlyUnlocked(next, snapshot.hostCount);
+    // Effects run after commit. Keep the last accumulated value here so a
+    // replayed effect sees the unlocks already recorded, and never schedule
+    // notifications from a state updater React may invoke more than once.
+    const current = progressRef.current;
+    const next = accumulate(current, snapshot);
+    const fresh = newlyUnlocked(next, snapshot.hostCount);
 
-      const updated =
-        fresh.length > 0
-          ? { ...next, unlocked: [...next.unlocked, ...fresh.map((a) => a.id)] }
-          : next;
+    const updated =
+      fresh.length > 0
+        ? { ...next, unlocked: [...next.unlocked, ...fresh.map((a) => a.id)] }
+        : next;
 
-      // Notify outside the reducer so React never sees a side effect during
-      // a state update — which in development it runs twice on purpose.
-      if (fresh.length > 0) {
-        queueMicrotask(() => {
-          for (const achievement of fresh) unlockRef.current(achievement);
-        });
-      }
-
-      // Returning the same object is what tells React nothing changed; a
-      // fresh one on every tick would re-render the panel forty times a
-      // minute for the same numbers.
-      return sameProgress(updated, current) ? current : updated;
-    });
+    if (sameProgress(updated, current)) return;
+    progressRef.current = updated;
+    setProgress(updated);
+    for (const achievement of fresh) unlockRef.current(achievement);
   }, [snapshot]);
 
   // Persisted as a consequence of the state settling rather than from inside

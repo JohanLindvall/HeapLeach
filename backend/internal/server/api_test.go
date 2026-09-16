@@ -289,3 +289,19 @@ func TestPanicsBecomeInternalErrors(t *testing.T) {
 		t.Errorf("panic answered %d, want 500", rec.Code)
 	}
 }
+
+func TestTrailingJSONCannotMutateSettings(t *testing.T) {
+	m, handler := newTestServer(t)
+	for _, suffix := range []string{` {"paused":false}`, ` garbage`, ` null`} {
+		rec := postJSON(t, handler, "/api/settings", `{"paused":true}`+suffix)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("trailing %q: status %d", suffix, rec.Code)
+		}
+		if m.Snapshot().Paused {
+			t.Fatal("malformed request paused the queue")
+		}
+	}
+	if rec := postJSON(t, handler, "/api/settings", "{\"paused\":true}\n\t"); rec.Code != http.StatusOK {
+		t.Errorf("trailing whitespace: status %d", rec.Code)
+	}
+}

@@ -273,7 +273,7 @@ func (c *Client) Bytes(req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("%s: read body: %w", req.URL.Redacted(), err)
 	}
@@ -282,6 +282,9 @@ func (c *Client) Bytes(req *http.Request) ([]byte, error) {
 			Code: resp.StatusCode, Status: resp.Status,
 			URL: req.URL.Redacted(), Body: string(body),
 		}
+	}
+	if len(body) > config.MaxResponseBytes {
+		return nil, fmt.Errorf("%s: response exceeds %d bytes", req.URL.Redacted(), config.MaxResponseBytes)
 	}
 	return body, nil
 }
@@ -373,7 +376,9 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 		return 0, false
 	}
 	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
-		return min(time.Duration(secs)*time.Second, config.MaxRetryAfter), true
+		// Clamp before converting to nanoseconds so a large delay cannot
+		// overflow into a negative duration and cause an immediate retry.
+		return time.Duration(min(secs, int(config.MaxRetryAfter/time.Second))) * time.Second, true
 	}
 	if when, err := http.ParseTime(v); err == nil {
 		if d := time.Until(when); d > 0 {

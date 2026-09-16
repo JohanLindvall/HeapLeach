@@ -66,7 +66,7 @@ func TestParseContentRangeTotal(t *testing.T) {
 }
 
 func TestTotalSize(t *testing.T) {
-	withRange := &http.Response{Header: http.Header{"Content-Range": {"bytes 100-199/500"}}, ContentLength: 100}
+	withRange := &http.Response{StatusCode: http.StatusPartialContent, Header: http.Header{"Content-Range": {"bytes 100-199/500"}}, ContentLength: 100}
 	if got := totalSize(withRange, 100); got != 500 {
 		t.Errorf("Content-Range total = %d, want 500", got)
 	}

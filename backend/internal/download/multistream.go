@@ -461,6 +461,10 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool) 
 	}
 	switch resp.StatusCode {
 	case http.StatusPartialContent:
+		if err := validatePartial(resp, pos, end, t.table.size); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
 		return resp.Body, nil
 	case http.StatusOK:
 		defer resp.Body.Close()

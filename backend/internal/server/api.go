@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -214,6 +215,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body: expected a single JSON value")
 		return false
 	}
 	return true

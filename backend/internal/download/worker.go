@@ -123,6 +123,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(err, errFileChanged) {
+			if err := os.Truncate(part, 0); err != nil {
+				return err
+			}
+			clearTransferState(part)
+			m.setProgress(it, 0)
+		}
 
 		// A busy host has not failed; it has asked us to come back. Those
 		// attempts do not spend the retry budget, which exists for
@@ -310,9 +317,8 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	// Where to resume from. For a segmented part file the sidecar is
 	// authoritative; a part file without one is a plain sequential
 	// remnant, whose length is exactly what it holds.
-	state := loadTransferState(part)
+	state, offset := resumeTransfer(part)
 	var (
-		offset     int64
 		rangeEnd   int64 = -1
 		validator  string
 		primaryIdx int
@@ -333,8 +339,6 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 			return name, nil
 		}
 		validator = state.Validator
-	} else if fi, err := os.Stat(part); err == nil {
-		offset = fi.Size()
 	}
 
 	// A watchdog aborts this attempt alone if every connection goes silent;
@@ -377,13 +381,20 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	case http.StatusOK:
 		// The server ignored the range, or If-Range did not match. Either
 		// way what is on disk is unusable: start over.
-		offset, state = 0, nil
+		offset, state, validator = 0, nil, ""
 	case http.StatusPartialContent:
-		// Resuming as asked.
+		known := int64(-1)
+		if state != nil {
+			known = state.Size
+		}
+		if err := validatePartial(resp, offset, rangeEnd, known); err != nil {
+			return "", err
+		}
 	case http.StatusRequestedRangeNotSatisfiable:
-		// We already hold every byte the server has. Credit the counter, or
-		// the finished item would report 0 of a known size.
-		if offset > 0 {
+		// A refusal is only proof of completion when the server states the
+		// exact length of a contiguous part. A segmented file can have holes.
+		cr, valid := parseContentRange(resp.Header.Get(httpx.HeaderContentRange))
+		if state == nil && offset > 0 && valid && cr.first == -1 && cr.total == offset {
 			m.setProgress(it, offset)
 			return name, nil
 		}
@@ -444,6 +455,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 		return "", fmt.Errorf("open %s: %w", filepath.Base(part), err)
 	}
 	defer f.Close()
+	if flags&os.O_TRUNC != 0 {
+		clearTransferState(part)
+	}
 
 	// A host that serves ciphertext decrypts on the way in, so the part
 	// file holds plaintext and everything downstream — resume, the segment
@@ -459,6 +473,11 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	if total <= 0 {
 		if err := m.streamSequential(attemptCtx, it, dst, resp.Body, offset); err != nil {
 			return "", annotateTransfer(name, err, &stalled, m.stallTimeout())
+		}
+		if resp.StatusCode == http.StatusPartialContent {
+			// An unknown total cannot be inferred from the length of one
+			// partial response. Keep the bytes and ask for the next range.
+			return "", io.ErrUnexpectedEOF
 		}
 		return name, closeFile(f, name)
 	}
@@ -531,17 +550,15 @@ func onDisk(part string, segments int) int64 {
 		}
 		return 0
 	}
-	if st := loadTransferState(part); st != nil {
+	st, offset := resumeTransfer(part)
+	if st != nil {
 		var held int64
 		for _, seg := range st.Segments {
 			held += seg.Pos - seg.Start
 		}
 		return held
 	}
-	if fi, err := os.Stat(part); err == nil {
-		return fi.Size()
-	}
-	return 0
+	return offset
 }
 
 // setProgress resets the byte counter and the rate-sampling baseline.
@@ -739,32 +756,17 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 
 // totalSize works out the full length of the resource from the response.
 func totalSize(resp *http.Response, offset int64) int64 {
-	if cr := resp.Header.Get(httpx.HeaderContentRange); cr != "" {
+	if resp.StatusCode == http.StatusPartialContent {
+		cr := resp.Header.Get(httpx.HeaderContentRange)
 		if total, ok := parseContentRangeTotal(cr); ok {
 			return total
 		}
+		return -1
 	}
 	if resp.ContentLength >= 0 {
 		return offset + resp.ContentLength
 	}
 	return -1
-}
-
-// parseContentRangeTotal reads the total from "bytes 0-1023/4096".
-func parseContentRangeTotal(v string) (int64, bool) {
-	_, rest, ok := strings.Cut(strings.TrimSpace(v), "/")
-	if !ok {
-		return 0, false
-	}
-	rest = strings.TrimSpace(rest)
-	if rest == "*" {
-		return 0, false
-	}
-	total, err := strconv.ParseInt(rest, 10, 64)
-	if err != nil || total < 0 {
-		return 0, false
-	}
-	return total, true
 }
 
 // filenameFromDisposition extracts the filename, preferring the RFC 5987

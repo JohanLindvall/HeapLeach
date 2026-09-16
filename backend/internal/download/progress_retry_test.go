@@ -49,6 +49,7 @@ func (s *droppingServer) handler() http.Handler {
 		if hdr := r.Header.Get("Range"); hdr != "" && !s.ignoreRange {
 			from, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(hdr, "bytes="), "-"))
 			if err != nil || from < 0 || from >= len(s.payload) {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(s.payload)))
 				http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
 				return
 			}
@@ -145,8 +146,8 @@ func TestDroppedConnectionAfterProgressResumesRatherThanFailing(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("downloaded %d bytes, which differ from the %d served", len(got), len(payload))
 	}
-	if hits := origin.hits.Load(); hits != 4 {
-		t.Errorf("server saw %d requests, want 4: one per 30 kB piece", hits)
+	if hits := origin.hits.Load(); hits != 5 {
+		t.Errorf("server saw %d requests, want 5: four pieces and confirmation of the unknown total", hits)
 	}
 	if got := it.downloaded.Load(); got != int64(len(payload)) {
 		t.Errorf("downloaded = %d, want every one of the %d bytes counted", got, len(payload))

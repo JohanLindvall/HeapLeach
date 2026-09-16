@@ -273,6 +273,31 @@ func loadTransferState(part string) *transferState {
 	return &st
 }
 
+// resumeTransfer reconciles the checkpoint with the bytes still on disk.
+// A sidecar can survive a deleted or truncated part, and a damaged sidecar
+// cannot establish which parts of a sparse file actually contain data.
+func resumeTransfer(part string) (*transferState, int64) {
+	fi, err := os.Stat(part)
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil, 0
+	}
+	if st := loadTransferState(part); st != nil {
+		if fi.Size() > st.Size {
+			return nil, 0
+		}
+		for _, seg := range st.Segments {
+			if seg.Pos > seg.Start && seg.Pos > fi.Size() {
+				return nil, 0
+			}
+		}
+		return st, 0
+	}
+	if _, err := os.Lstat(statePath(part)); !os.IsNotExist(err) {
+		return nil, 0 // a present but unusable sidecar is not a sequential part
+	}
+	return nil, fi.Size()
+}
+
 // valid rejects a sidecar whose segments do not tile the file exactly, which
 // would otherwise resume into a file with holes.
 func (st *transferState) valid() bool {

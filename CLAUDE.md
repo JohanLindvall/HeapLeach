@@ -684,6 +684,14 @@ them:
   pool (`buffers.go`, `borrowChunk`). They all want exactly CopyBufferSize,
   so keep new ones on the pool rather than allocating per attempt.
 
+- `ranges.go` validates every partial response before it reaches the file:
+  the offset, span, body length and known total must agree. A 416 only proves
+  completion when it states the exact length of a sequential part. For a
+  partial response with an unknown total, the next range confirms the end.
+  Resume also checks that the part still contains the bytes its checkpoint
+  records; a missing or truncated part or a corrupt checkpoint starts over.
+  These regressions live in `ranges_test.go`.
+
 - Splitting bisects the *remaining* span of the widest segment, with ties
   broken leftmost-first. That is what produces the halves, quarters and
   eighths in their natural order, and it self-balances once some segments

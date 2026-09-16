@@ -694,3 +694,30 @@ func TestPostJSONWithNilBodySendsAnEmptyOne(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBytesRejectsOversizedSuccessfulBodies(t *testing.T) {
+	for _, size := range []int{config.MaxResponseBytes, config.MaxResponseBytes + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, strings.Repeat("x", size))
+			}))
+			defer server.Close()
+			body, err := testClient(t, 0).GetString(context.Background(), server.URL, nil)
+			if size > config.MaxResponseBytes {
+				if err == nil || body != "" {
+					t.Fatalf("oversized body returned %d bytes with error %v", len(body), err)
+				}
+			} else if err != nil || len(body) != size {
+				t.Fatalf("body length = %d, err = %v", len(body), err)
+			}
+		})
+	}
+}
+
+func TestRetryAfterClampsBeforeDurationConversion(t *testing.T) {
+	resp := &http.Response{Header: http.Header{HeaderRetryAfter: {"9223372037"}}}
+	delay, stated := retryAfter(resp)
+	if !stated || delay != config.MaxRetryAfter {
+		t.Fatalf("delay = %s, stated = %v", delay, stated)
+	}
+}

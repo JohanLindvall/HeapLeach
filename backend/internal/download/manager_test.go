@@ -1,6 +1,7 @@
 package download
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,30 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
+
+func BenchmarkDispatchQueue(b *testing.B) {
+	for _, count := range []int{1000, 10000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			items := make([]Item, count)
+			queue := make([]*Item, count)
+			for i := range items {
+				items[i].Status = StatusQueued
+			}
+			b.ResetTimer()
+			for b.Loop() {
+				for i := range items {
+					queue[i] = &items[i]
+				}
+				m := &Manager{limit: 1, queue: queue}
+				for range items {
+					if m.nextLocked() == nil {
+						b.Fatal("lost a queued item")
+					}
+				}
+			}
+		})
+	}
+}
 
 // A manager with a resolved job in each terminal state and one still
 // queued, so the housekeeping calls have something to distinguish.

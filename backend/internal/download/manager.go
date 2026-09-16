@@ -352,6 +352,19 @@ func (m *Manager) nextLocked() *Item {
 	if m.lowOnSpace() {
 		return nil
 	}
+	// The ordinary queue is FIFO. Advancing its head costs nothing; copying
+	// every remaining item on each dispatch makes a large album quadratic.
+	for len(m.queue) > 0 {
+		it := m.queue[0]
+		if it.Status == StatusQueued && !it.inFlight && m.hostFullLocked(it) {
+			break
+		}
+		m.queue[0] = nil
+		m.queue = m.queue[1:]
+		if it.Status == StatusQueued && !it.inFlight {
+			return it
+		}
+	}
 
 	var chosen *Item
 	kept := m.queue[:0]
@@ -367,6 +380,7 @@ func (m *Manager) nextLocked() *Item {
 			chosen = it
 		}
 	}
+	clear(m.queue[len(kept):])
 	m.queue = kept
 	return chosen
 }
