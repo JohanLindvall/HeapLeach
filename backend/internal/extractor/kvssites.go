@@ -51,6 +51,7 @@ var kvsKnownHosts = []string{
 	"pornhits.com",
 	"fapster.xyz",
 	"xxthots.com",
+	"moannest.com",
 }
 
 // kvsMaxAlternates bounds the numbered alternate renditions a page is read
@@ -81,10 +82,14 @@ func (k *KVS) Name() string {
 	return name
 }
 
-// Extract resolves a video page, or a member's whole public catalogue.
+// Extract resolves a video page, a member's whole public catalogue, or
+// everything a search turns up.
 func (k *KVS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	if listing, ok := kvsMemberPath(u); ok {
-		return kvsMember(ctx, k.client, listing, k.Name())
+		return kvsListingResult(ctx, k.client, kvsListingForMember(listing), k.Name())
+	}
+	if query, listing, ok := kvsSearchPath(u); ok {
+		return kvsListingResult(ctx, k.client, kvsListingForSearch(query, listing), k.Name())
 	}
 	return kvsExtract(ctx, k.client, u, k.Name())
 }

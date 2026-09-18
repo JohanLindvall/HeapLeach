@@ -158,3 +158,56 @@ func TestKVSSitesNameAndMatchTheirHosts(t *testing.T) {
 		}
 	}
 }
+
+// The installs that have moved from scrambling the media path to signing the
+// link. The URLs are plain, carry an access token in the query, and end the
+// path with a slash; there is nothing to unscramble and the whole link has to
+// survive intact, since without its token the path is refused.
+const (
+	kvsSignedLow = "https://tube.example.test/get_file/4/0123456789abcdef0123456789abcdef/" +
+		"3000/3182/3182.mp4/?v-acctoken=MTIzfDF8MHxhYmM"
+	kvsSignedHigh = "https://tube.example.test/get_file/4/fedcba9876543210fedcba9876543210/" +
+		"3000/3182/3182_720p.mp4/?v-acctoken=NDU2fDF8MHxkZWY"
+)
+
+// kvsSignedPage builds a player page in that shape, packed onto one line the
+// way those installs print it. postfix is the advertised extension, or empty
+// for an install that states none.
+func kvsSignedPage(postfix string) string {
+	page := `<html><head><title>A Signed Clip - Example Tube</title></head><body>
+<script>var flashvars = { video_id: '3182', video_title: 'A Signed Clip', license_code: '` + kvsLicense + `', ` +
+		`video_url: '` + kvsSignedLow + `', video_url_text: '480p', ` +
+		`video_alt_url: '` + kvsSignedHigh + `', video_alt_url_text: '720p', video_alt_url_hd: '1'`
+	if postfix != "" {
+		page += `, postfix: '` + postfix + `'`
+	}
+	return page + `};</script></body></html>`
+}
+
+// TestKVSResultKeepsASignedLinkWhole covers the installs that sign rather
+// than scramble: the link is used exactly as printed, token and all, and the
+// labels still decide which rendition is the largest.
+func TestKVSResultKeepsASignedLinkWhole(t *testing.T) {
+	u, err := ParseURL("https://tube.example.test/video/a-signed-clip/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, postfix := range []string{".mp4", ""} {
+		res, err := kvsResult(kvsSignedPage(postfix), u, "example")
+		if err != nil {
+			t.Fatalf("postfix %q: kvsResult: %v", postfix, err)
+		}
+		if len(res.Files) != 1 {
+			t.Fatalf("postfix %q: got %d files, want 1", postfix, len(res.Files))
+		}
+		file := res.Files[0]
+		if file.URL != kvsSignedHigh {
+			t.Errorf("postfix %q: chose\n  %s\nwant the 720p rendition, token intact\n  %s", postfix, file.URL, kvsSignedHigh)
+		}
+		// With no advertised extension the path has to supply it, and the
+		// path here ends in a slash with a query behind it.
+		if file.Name != "A Signed Clip.mp4" {
+			t.Errorf("postfix %q: name = %q, want %q", postfix, file.Name, "A Signed Clip.mp4")
+		}
+	}
+}

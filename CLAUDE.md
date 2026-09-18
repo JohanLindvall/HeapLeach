@@ -360,6 +360,29 @@ Host-specific notes:
   directly; note that the `from` parameter this platform also accepts on a
   member listing is *ignored*, handing back page one forever, so the walk
   deduplicates and stops on a page that adds nothing either way.
+
+  A search, `/search/<query>/`, is the same walk (`kvslisting.go`) from a
+  different first page, and it is what the scripted pager was worked out
+  against: every install seen pages a search in script, past its end the
+  block request is a 404 rather than page one again, and the last page
+  announces itself in the pager — the "next" item rendered with a span
+  where the anchor was — which `kvsListingEnds` reads so the walk stops
+  without asking. A search page also lists the albums matching the query,
+  in a block with a pager of its own, so `kvsListingBlock` and `kvsPager`
+  choose by name rather than by position; and `kvsNextPage` treats an
+  anchor at `#` as no page at all, since following it resolves straight
+  back to page one and ended the walk there. The query keeps the escaping
+  it arrived with, because the site writes a plus as `%2B` and re-encoding
+  a decoded segment would hand its routing a literal plus.
+
+  Not every install scrambles. moannest signs its links instead — a plain
+  `get_file` path with a `?v-acctoken=` that the path is refused without —
+  and `kvsRealURL` passes anything without the `function/0/` prefix through
+  untouched, so the link is kept whole, query and all. The token is stable
+  across renders and carries no expiry; the storage host it redirects to
+  mints its own two-hour token per request, which the downloader picks up
+  by following the redirect, so the URL is stored directly like any other
+  install's rather than resolved at download time.
 - **vimeo** goes through the embed player, and that single choice is what
   makes it work: `vimeo.com/<id>` answers a non-browser client with a bot
   check, the player's JSON config endpoint answers 403, and yt-dlp's own
