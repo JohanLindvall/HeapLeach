@@ -362,18 +362,37 @@ Host-specific notes:
   deduplicates and stops on a page that adds nothing either way.
 
   A search, `/search/<query>/`, is the same walk (`kvslisting.go`) from a
-  different first page, and it is what the scripted pager was worked out
-  against: every install seen pages a search in script, past its end the
-  block request is a 404 rather than page one again, and the last page
-  announces itself in the pager — the "next" item rendered with a span
-  where the anchor was — which `kvsListingEnds` reads so the walk stops
-  without asking. A search page also lists the albums matching the query,
-  in a block with a pager of its own, so `kvsListingBlock` and `kvsPager`
-  choose by name rather than by position; and `kvsNextPage` treats an
-  anchor at `#` as no page at all, since following it resolves straight
-  back to page one and ended the walk there. The query keeps the escaping
-  it arrived with, because the site writes a plus as `%2B` and re-encoding
-  a decoded segment would hand its routing a literal plus.
+  different first page, and so is every other listing an install lays out:
+  a category, a model, a tag, a channel, the site's own latest list. Those
+  are not recognised by path — an install may rename its sections, and one
+  keeps its models under `/onlyfans-models/` — but by shape: on a registered
+  host a URL that is neither a profile nor a search is fetched once
+  (`kvsBrowse`), a page with a player is a video, a page with no player but
+  a videos block is walked as the listing it looks like, from the document
+  already in hand, and the front page is refused outright. A trailing page
+  number means the whole listing, the way a member's section means the
+  member; a section whose own name is a number is caught by that, so a
+  canonical listing that lists nothing is retried as pasted.
+
+  The pager is read, never guessed at. Which parameter pages a block is the
+  block's own business — `from` on a category, `from_videos` on a member's
+  videos, `from_videos` and `from_albums` together on a search — and the
+  platform does not refuse a wrong one, it ignores it and serves page one
+  again, which reads as the end of a one-page listing. So `kvsAsyncNext`
+  builds the block request from the "next" control's own `data-block-id`
+  and `data-parameters`, exactly as the site's script does, and the older
+  `from_videos` guess is the last resort for a control that carries none.
+  Every install seen pages a search in script; the last page announces
+  itself in the pager — the "next" item rendered with a span where the
+  anchor was — which `kvsListingEnds` reads so the walk stops without
+  asking for a page that is a 404. A search page also lists the albums
+  matching the query, in a block with a pager of its own, so
+  `kvsListingBlock` and `kvsPager` choose by name rather than by position;
+  and `kvsNextPage` treats an anchor at `#` as no page at all, since
+  following it resolves straight back to page one and ended the walk there.
+  The query keeps the escaping it arrived with, because the site writes a
+  plus as `%2B` and re-encoding a decoded segment would hand its routing a
+  literal plus.
 
   Not every install scrambles. moannest signs its links instead — a plain
   `get_file` path with a `?v-acctoken=` that the path is refused without —

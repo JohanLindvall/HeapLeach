@@ -82,8 +82,9 @@ func (k *KVS) Name() string {
 	return name
 }
 
-// Extract resolves a video page, a member's whole public catalogue, or
-// everything a search turns up.
+// Extract resolves a video page, a member's whole public catalogue,
+// everything a search turns up, or any other listing the install lays out —
+// a category, a model, a tag, a channel, the site's own latest list.
 func (k *KVS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	if listing, ok := kvsMemberPath(u); ok {
 		return kvsListingResult(ctx, k.client, kvsListingForMember(listing), k.Name())
@@ -91,7 +92,7 @@ func (k *KVS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 	if query, listing, ok := kvsSearchPath(u); ok {
 		return kvsListingResult(ctx, k.client, kvsListingForSearch(query, listing), k.Name())
 	}
-	return kvsExtract(ctx, k.client, u, k.Name())
+	return kvsBrowse(ctx, k.client, u, k.Name())
 }
 
 // kvsExtract fetches a video page and resolves it. Everything needed is

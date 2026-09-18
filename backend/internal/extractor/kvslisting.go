@@ -23,24 +23,27 @@ import (
 // one, which is both simpler and the only version that cannot be wrong about
 // where the pages stop: the last page carries no next link at all.
 //
-// Not every listing renders one. Search results, and the member listing on
-// some installs, page entirely in script: the control is there but its
-// anchor points at "#", and the site's own script asks for the block
-// directly — ?mode=async&function=get_block&block_id=<block>&from_videos=<n>
-// — so the walk does the same. Those listings say where they end in the
-// control too. The "next" item is still rendered on the last page, holding
-// a span where the anchor was, the way "Back" is rendered on the first, and
-// that is read as the end rather than asking for a page past it.
+// Not every listing renders one. Search results, categories, and the member
+// listing on some installs, page entirely in script: the control is there
+// but its anchor points at "#", and the site's own script asks for the block
+// directly — ?mode=async&function=get_block&block_id=<block>&<parameters> —
+// so the walk does the same, with the block and the parameters read off
+// that very control. Those listings say where they end in the control too.
+// The "next" item is still rendered on the last page, holding a span where
+// the anchor was, the way "Back" is rendered on the first, and that is read
+// as the end rather than asking for a page past it.
 //
-// One thing about the async form deserves a note, because it looks right and
-// is not. The platform also takes a plain ?from=<n>, and on a member listing
-// ignores it: every page comes back as page one, byte for byte, and a walk
-// built on it stops at the first repeat having quietly collected only the
-// first forty-eight of however many there are. The parameter that actually
-// pages is named for the block it pages. Pages are deduplicated and the walk
-// stops on one that adds nothing, so an install that ignores that one too
-// ends the walk rather than looping; and the stated total — "Showing 49 - 64
-// of 64" — is read as a second stop where the listing states one.
+// The parameters are read rather than guessed because guessing looks right
+// and is not. Which parameter pages a block is the block's own business —
+// "from" on a category, "from_videos" on a member's videos, "from_videos"
+// and "from_albums" together on a search — and the platform does not refuse
+// a wrong one: it ignores it and serves page one again, byte for byte, so a
+// walk built on a guess stops at the first repeat having quietly collected
+// only the first page of however many there are. Pages are deduplicated and
+// the walk stops on one that adds nothing, so a control that carries no
+// parameters at all ends the walk rather than looping; and the stated total
+// — "Showing 49 - 64 of 64" — is read as a second stop where the listing
+// states one.
 
 // kvsListing is one paged list of videos: where it starts, what to name the
 // job after, and how to say it turned out empty.
@@ -51,6 +54,9 @@ type kvsListing struct {
 	title func(root *html.Node) string
 	// empty explains a listing with no videos on it.
 	empty string
+	// first is the first page's document when the caller has already
+	// fetched it, so that it is not fetched twice.
+	first string
 }
 
 // kvsShowingTotal reads the "Showing 49 - 64 of 64 videos" line, which is how
@@ -66,10 +72,15 @@ func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing, l
 	if len(pages) == 0 {
 		return nil, fmt.Errorf("%s: %s", label, l.empty)
 	}
+	return kvsResolvePages(ctx, client, l, pages, title, label)
+}
 
-	// Every video needs its own page read for a media URL, so they are
-	// fetched several at a time and a video that will not load is skipped
-	// rather than failing a listing of hundreds.
+// kvsResolvePages turns the video pages a walk collected into files.
+//
+// Every video needs its own page read for a media URL, so they are fetched
+// several at a time and a video that will not load is skipped rather than
+// failing a listing of hundreds.
+func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pages []string, title, label string) (*Result, error) {
 	files := FanOut(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
 		u, err := ParseURL(page)
 		if err != nil {
@@ -106,12 +117,16 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, la
 		}
 		visited[target] = true
 
-		doc, err := client.GetString(ctx, target, httpx.Referer(l.url))
-		if err != nil {
-			if page == 1 {
-				return nil, "", fmt.Errorf("%s: fetch %s: %w", label, l.url, err)
+		doc := l.first
+		if page > 1 || doc == "" {
+			var err error
+			doc, err = client.GetString(ctx, target, httpx.Referer(l.url))
+			if err != nil {
+				if page == 1 {
+					return nil, "", fmt.Errorf("%s: fetch %s: %w", label, l.url, err)
+				}
+				break // a later page failing still leaves the earlier ones
 			}
-			break // a later page failing still leaves the earlier ones
 		}
 		root, err := parseHTML(doc)
 		if err != nil {
@@ -150,6 +165,9 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, la
 		}
 		target = kvsNextPage(root, l.url)
 		if target == "" {
+			target = kvsAsyncNext(root, l.url)
+		}
+		if target == "" {
 			if page == 1 {
 				block = kvsListingBlock(root)
 			}
@@ -157,6 +175,48 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, la
 		}
 	}
 	return pages, title, nil
+}
+
+// kvsAsyncNext builds the request the site's own script would send for the
+// next page: the block the "next" control names, with the parameters it
+// carries, on top of whatever query the listing already had.
+//
+// The parameters are written "key:value;key:value", and a key written as
+// "a+b" gives each name the value — "from_videos+from_albums:2" is how a
+// search pages its two blocks in step — exactly as the script reads them.
+// A control that names no block or carries no parameters gives nothing,
+// and the walk falls back to its older guess.
+func kvsAsyncNext(root *html.Node, base string) string {
+	a := kvsNextAnchor(kvsNextControl(root))
+	if a == nil {
+		return ""
+	}
+	block, params := attr(a, "data-block-id"), attr(a, "data-parameters")
+	if block == "" || params == "" {
+		return ""
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	q.Set("mode", "async")
+	q.Set("function", "get_block")
+	q.Set("block_id", block)
+	for pair := range strings.SplitSeq(params, ";") {
+		key, value, ok := strings.Cut(pair, ":")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		for name := range strings.SplitSeq(key, "+") {
+			if name = strings.TrimSpace(name); name != "" {
+				q.Set(name, value)
+			}
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // kvsPager finds the pagination control that belongs to the videos, or nil
@@ -256,16 +316,11 @@ func kvsListingBlock(root *html.Node) string {
 	return first
 }
 
-// kvsAsyncPage builds the listing's own async page request, for listings
-// that page entirely in script and leave the "next" control pointing at "#"
-// — there is no anchor to follow on those.
-//
-// Note what this is not. The same platform takes a ?from=<n> on a member
-// listing and ignores it, handing back page one every time; a walk built on
-// that collects the first page over and over and stops thinking it is done.
-// The parameter that actually pages is named for the block it pages. The
-// walk deduplicates and stops on a page that adds nothing either way, so an
-// install that ignores this one as well ends the walk rather than looping.
+// kvsAsyncPage builds a member listing's async page request by guess, for
+// a theme whose "next" control points at "#" but carries no parameters to
+// read. It is the last resort after kvsAsyncNext: the parameter it names is
+// the one a member's videos page by, and on any other block the platform
+// ignores it and serves page one again, which the walk reads as the end.
 func kvsAsyncPage(listing, block string, page int) string {
 	if block == "" {
 		return ""
