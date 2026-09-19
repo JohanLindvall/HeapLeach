@@ -278,6 +278,9 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// once the registry exists. It claims one host, so its position among
 	// the rest does not matter.
 	reg.extractors = append(reg.extractors, NewAlohaTube(client, reg))
+	// The album index hosts nothing either, and resolves each result the
+	// same way, so it is wired once the registry exists for the same reason.
+	reg.extractors = append(reg.extractors, NewBalbums(client, reg))
 	return reg
 }
 

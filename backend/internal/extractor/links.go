@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strings"
 
@@ -75,13 +74,6 @@ const (
 	// read.
 	linksScheme = "links"
 	linksPrefix = linksScheme + ":"
-
-	// linksMaxSources bounds how many of a page's links are followed. Each one
-	// is a full extraction, several requests at some hosts, and a real page
-	// carries more of them than one might guess — a tube's own front page
-	// measured just under two hundred. So this is set where following the lot
-	// stops plausibly being what anybody asked for.
-	linksMaxSources = 500
 )
 
 // NewLinks builds the harvester. It is handed the registry it is part of
@@ -118,7 +110,7 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	}
 
 	candidates := linksCandidates(root, page)
-	sources := l.supported(candidates)
+	sources := supportedSources(l.registry, candidates, l)
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("links: none of the %d links on %s point at a host this build "+
 			"knows (the page may be showing a login rather than its content)",
@@ -126,11 +118,11 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	}
 
 	found := len(sources)
-	if len(sources) > linksMaxSources {
-		sources = sources[:linksMaxSources]
+	if len(sources) > maxExpandedSources {
+		sources = sources[:maxExpandedSources]
 	}
 
-	files := l.expand(ctx, sources, opts)
+	files := expandSources(ctx, l.registry, sources, opts)
 	if len(files) == 0 {
 		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
 			"(they may all have expired)", len(sources), page.Redacted())
@@ -143,7 +135,7 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 
 	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
 	return &Result{
-		Title: linksTitle(title, len(sources), found, len(files), resolved),
+		Title: partialTitle(title, "links", len(sources), found, len(files), resolved),
 		Files: files,
 	}, nil
 }
@@ -285,112 +277,4 @@ func linksCandidates(root *html.Node, base *url.URL) []string {
 		}
 	})
 	return out
-}
-
-// supported keeps the candidates that reach a real extractor.
-//
-// Registry.Find never returns nil, so asking it whether a link is supported
-// answers yes for every link on the page; Known is the question that has an
-// answer worth acting on. The harvester excludes itself on top of that: a
-// harvest that harvested would walk the web from wherever it started.
-func (l *Links) supported(candidates []string) []string {
-	out := make([]string, 0, len(candidates))
-	for _, link := range candidates {
-		u, err := ParseURL(link)
-		if err != nil {
-			continue
-		}
-		ex, known := l.registry.Known(u)
-		if !known {
-			continue
-		}
-		if _, self := ex.(*Links); self {
-			continue
-		}
-		out = append(out, link)
-	}
-	return out
-}
-
-// expand resolves every harvested link, several at a time.
-//
-// The bound is the one a listing expanded page-by-page uses, and for the same
-// reason rather than by coincidence: a thread's two hundred links are usually
-// two hundred links to the same host, so this is a burst at one host however
-// many hosts the page names.
-//
-// Results are collected by index rather than appended as they arrive, so the
-// job lists its files in the order the page did however the requests
-// interleave. A link that will not resolve is skipped rather than failing the
-// job: every thread of any age has dead links in it, and the live ones are
-// still worth having.
-func (l *Links) expand(ctx context.Context, sources []string, opts Options) []File {
-	return FanOut(ctx, sources, func(ctx context.Context, link string) ([]File, error) {
-		res, _, err := l.registry.Extract(ctx, link, opts)
-		if err != nil {
-			return nil, err
-		}
-		return linksFiles(res), nil
-	})
-}
-
-// linksFiles takes one source's result into the harvest.
-//
-// Each File is copied through untouched but for its directory — resolver,
-// cipher, headers and size all as its own extractor left them — because those
-// are what make the file downloadable at all, and a harvest that rewrote them
-// would be a harvest that only worked on hosts serving plain links.
-//
-// Every source gets a folder, even one holding a single file. The manager
-// takes the opposite view for a job, and is right to: one file does not need a
-// directory. A harvest is the case that inverts it, because the job root would
-// otherwise be a heap of hundreds of files from unrelated sources with nothing
-// but their names to say which came from where.
-func linksFiles(res *Result) []File {
-	folder := linksFolder(res.Title)
-	files := make([]File, 0, len(res.Files))
-	for _, f := range res.Files {
-		f.Dir = path.Join(folder, f.Dir)
-		files = append(files, f)
-	}
-	return files
-}
-
-// linksFolder reduces a source's title to one directory component.
-//
-// SafeName, which sanitises these properly, lives in the download package and
-// the dependency runs the other way, so this does only the part that has to
-// happen before the name is handed over: a title carrying a separator would be
-// split by the manager's own SafeRelPath, and "A Creator / An Album" would
-// arrive as two nested folders rather than one. What the name may contain
-// otherwise is the manager's business, not an extractor's.
-func linksFolder(title string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' {
-			return '_'
-		}
-		return r
-	}, strings.TrimSpace(title))
-}
-
-// linksTitle names the job, admitting anything the caps left out.
-//
-// An extractor has no logger and a Result carries nothing but a title and its
-// files, so the title is the only place a partial answer can be declared — and
-// it is a good one, being what names the job in the UI and the folder on disk,
-// which is exactly where somebody comparing a thread against what they got
-// will look. Silently returning the first thousand of three thousand files
-// would be indistinguishable from the thread having a thousand.
-func linksTitle(title string, sources, found, files, resolved int) string {
-	var notes []string
-	if sources < found {
-		notes = append(notes, fmt.Sprintf("%d of %d links", sources, found))
-	}
-	if files < resolved {
-		notes = append(notes, fmt.Sprintf("%d of %d files", files, resolved))
-	}
-	if len(notes) == 0 {
-		return title
-	}
-	return title + " (" + strings.Join(notes, ", ") + ")"
 }

@@ -130,7 +130,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 func TestLinksSweepIgnoresAPagesOwnFurniture(t *testing.T) {
 	harvester := &Links{registry: NewRegistry(&config.Config{}, nil)}
 
-	got := harvester.supported(linksSweep(t, linksThreadPage))
+	got := supportedSources(harvester.registry, linksSweep(t, linksThreadPage), harvester)
 	want := []string{
 		"https://gofile.io/d/AAAA",
 		"https://pixhost.to/gallery/abc123",
@@ -169,14 +169,14 @@ func TestLinksSupportedKeepsOnlyRealExtractors(t *testing.T) {
 	reg := NewRegistry(&config.Config{}, nil)
 	harvester := &Links{registry: reg}
 
-	got := harvester.supported([]string{
+	got := supportedSources(harvester.registry, []string{
 		"https://gofile.io/d/AAAA",
 		"https://board.example.test/threads/another-thread",
 		"https://static.example.test/board.css",
 		"https://mega.nz/file/AAAAAAAA#SECRETKEY",
 		// A harvest inside a harvest, which is where the recursion would be.
 		"links:https://board.example.test/threads/a-thread",
-	})
+	}, harvester)
 
 	want := []string{"https://gofile.io/d/AAAA", "https://mega.nz/file/AAAAAAAA#SECRETKEY"}
 	if len(got) != len(want) {
@@ -452,7 +452,7 @@ func TestLinksExtractReportsAPageWithNothingOnIt(t *testing.T) {
 // TestLinksExtractCapsTheLinksItFollows keeps one paste from queueing without
 // end, and says so in the title rather than quietly returning a prefix.
 func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
-	const posted = linksMaxSources + 100
+	const posted = maxExpandedSources + 100
 
 	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
 	var page strings.Builder
@@ -467,10 +467,10 @@ func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(res.Files) != linksMaxSources {
-		t.Errorf("got %d files, want the first %d links followed", len(res.Files), linksMaxSources)
+	if len(res.Files) != maxExpandedSources {
+		t.Errorf("got %d files, want the first %d links followed", len(res.Files), maxExpandedSources)
 	}
-	want := fmt.Sprintf("%d of %d links", linksMaxSources, posted)
+	want := fmt.Sprintf("%d of %d links", maxExpandedSources, posted)
 	if !strings.Contains(res.Title, want) {
 		t.Errorf("title = %q, want it to admit %q", res.Title, want)
 	}
@@ -527,23 +527,23 @@ func TestLinksFolderStaysOneComponent(t *testing.T) {
 		"../../etc/passwd":     ".._.._etc_passwd",
 	}
 	for in, want := range tests {
-		if got := linksFolder(in); got != want {
-			t.Errorf("linksFolder(%q) = %q, want %q", in, got, want)
+		if got := sourceFolder(in); got != want {
+			t.Errorf("sourceFolder(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestLinksTitleAdmitsOnlyWhatWasDropped(t *testing.T) {
-	if got := linksTitle("Thread", 10, 10, 40, 40); got != "Thread" {
+	if got := partialTitle("Thread", "links", 10, 10, 40, 40); got != "Thread" {
 		t.Errorf("a complete harvest was annotated: %q", got)
 	}
-	if got := linksTitle("Thread", 500, 812, 40, 40); got != "Thread (500 of 812 links)" {
+	if got := partialTitle("Thread", "links", 500, 812, 40, 40); got != "Thread (500 of 812 links)" {
 		t.Errorf("got %q", got)
 	}
-	if got := linksTitle("Thread", 10, 10, 2000, 3120); got != "Thread (2000 of 3120 files)" {
+	if got := partialTitle("Thread", "links", 10, 10, 2000, 3120); got != "Thread (2000 of 3120 files)" {
 		t.Errorf("got %q", got)
 	}
-	if got := linksTitle("Thread", 500, 812, 2000, 3120); got != "Thread (500 of 812 links, 2000 of 3120 files)" {
+	if got := partialTitle("Thread", "links", 500, 812, 2000, 3120); got != "Thread (500 of 812 links, 2000 of 3120 files)" {
 		t.Errorf("got %q", got)
 	}
 }

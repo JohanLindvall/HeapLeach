@@ -427,6 +427,22 @@ Host-specific notes:
   by the dimensions in the filename, not by the `res` and `label`
   attributes: a page's largest file is routinely marked 720p while its name
   says 1920x1080.
+- **balbums** indexes somebody else's albums rather than hosting any, so it
+  resolves each result through the registry the way the `links:` harvester
+  does — and the parts they share now live in `sources.go` rather than in
+  one of them: the supported-link filter, the fan-out, the per-source folder
+  and the "N of M" title that admits a truncated answer. Two things are
+  worth knowing. The walk stops **at** the cap rather than collecting
+  everything and truncating, because a two-word search states twenty
+  thousand pages and walking them to throw all but five away is a lot of
+  requests for the same answer. And `per=100` is the most the site honours:
+  asking for five hundred is not refused, it is served as twenty under a
+  page count for twenty, so the walk trusts the stated page count and a page
+  that adds nothing, never the parameter. Self-exclusion is by extractor
+  *name*, not pointer, since the recursion is in the kind and not the
+  instance — without it the site's own navigation turns one search into a
+  walk of the whole catalogue.
+
 - **coomerfans** is the only extractor that fetches concurrently. A creator's
   page lists posts but keeps the media on each post's own page, and the
   listing cannot be worked from instead: a post holding a video shows no
