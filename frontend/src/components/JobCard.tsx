@@ -40,6 +40,9 @@ export function JobCard({
   const shown = rows ? job.items.slice(rows.start, rows.end) : job.items;
 
   const percent = job.sizeKnown ? percentOf(job.downloaded, job.size) : null;
+  // Null where the job's rate cannot carry a projection, which is where the
+  // "… left" phrase should be absent rather than empty.
+  const jobEta = job.sizeKnown ? formatEta(job.size - job.downloaded, job.speed) : null;
   const busy = isActive(job.status);
   const retryable = isRetryable(job.status);
 
@@ -109,9 +112,7 @@ export function JobCard({
           {formatBytes(job.downloaded)}
           {job.size > 0 && job.sizeKnown && ` / ${formatBytes(job.size)}`}
           {job.speed > 0 && ` · ${formatSpeed(job.speed)}`}
-          {job.speed > 0 && job.sizeKnown && job.size > job.downloaded && (
-            ` · ${formatEta(job.size - job.downloaded, job.speed)} left`
-          )}
+          {jobEta !== null && ` · ${jobEta} left`}
         </span>
       </div>
 

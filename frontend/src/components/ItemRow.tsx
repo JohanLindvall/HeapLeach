@@ -29,6 +29,11 @@ export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowPro
     ? percentOf(segments.done, segments.total)
     : percentOf(item.downloaded, item.size);
 
+  // Null where there is nothing to project from — a transfer between
+  // attempts, most often, whose note says so in words. The phrase goes with
+  // it rather than reading "— left".
+  const eta = running && item.size > 0 ? formatEta(item.size - item.downloaded, item.speed) : null;
+
   return (
     <li className={`item item--${item.status}`} aria-posinset={position} aria-setsize={total}>
       <div className="item__main">
@@ -62,9 +67,7 @@ export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowPro
             ×{item.streams}
           </span>
         )}
-        {running && item.size > 0 && (
-          <span>{formatEta(item.size - item.downloaded, item.speed)} left</span>
-        )}
+        {eta !== null && <span>{eta} left</span>}
         {percent !== null && <span className="item__pct">{percent.toFixed(0)}%</span>}
       </div>
 

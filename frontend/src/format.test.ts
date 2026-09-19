@@ -67,11 +67,37 @@ describe('formatDuration', () => {
 
 describe('formatEta', () => {
   it('refuses to guess without a rate or a remainder', () => {
-    expect(formatEta(1000, 0)).toBe('—');
-    expect(formatEta(0, 1000)).toBe('—');
+    expect(formatEta(1000, 0)).toBeNull();
+    expect(formatEta(0, 1000)).toBeNull();
   });
   it('divides what is left by the rate', () => {
     expect(formatEta(3000, 1000)).toBe('3s');
+  });
+
+  // A rate is a windowed average, so a transfer whose connection drops
+  // decays towards zero rather than reaching it. formatBytes already calls
+  // anything under a byte a second "0 B/s"; dividing a remainder by it put
+  // "11145d 7h left" beside a bar sitting at 87%.
+  it('refuses a rate that has decayed to nothing', () => {
+    for (const rate of [0.9, 0.53, 0.0001]) {
+      expect(formatEta(200_000_000, rate)).toBeNull();
+      expect(formatSpeed(rate)).toBe('0 B/s');
+    }
+    // A whole byte a second is a rate, slow as it is.
+    expect(formatEta(120, 1)).toBe('2m 0s');
+  });
+
+  // The floor is not enough on its own: a few honest-looking bytes a second
+  // divide a large remainder into centuries just as well.
+  it('refuses to project further ahead than a projection means anything', () => {
+    const week = 7 * 24 * 60 * 60;
+    expect(formatEta(week * 4 + 4, 4)).toBeNull();
+    expect(formatEta(week * 4, 4)).toBe('7d 0h');
+  });
+
+  it('says nothing rather than something unusable', () => {
+    expect(formatEta(Number.NaN, 1000)).toBeNull();
+    expect(formatEta(1000, Number.NaN)).toBeNull();
   });
 });
 

@@ -2,8 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // formatBytes renders a byte count in SI units, matching the web UI digit
@@ -57,12 +60,18 @@ func formatDuration(d time.Duration) string {
 }
 
 // formatETA turns remaining bytes and a rate into a time, refusing to guess
-// when either is unknown.
+// when either is unknown — and refusing to project from a rate that has
+// decayed to nothing, or further ahead than a projection means anything.
+// See config.ETAMinRate and config.ETAHorizon for why both refusals exist.
 func formatETA(remaining int64, bps float64) string {
-	if remaining <= 0 || bps <= 0 {
+	if remaining <= 0 || bps < config.ETAMinRate {
 		return ""
 	}
-	return formatDuration(time.Duration(float64(remaining)/bps) * time.Second)
+	seconds := float64(remaining) / bps
+	if math.IsNaN(seconds) || seconds > config.ETAHorizon.Seconds() {
+		return ""
+	}
+	return formatDuration(time.Duration(seconds) * time.Second)
 }
 
 // barParts splits a progress bar into the filled run and the empty track, so

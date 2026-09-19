@@ -27,10 +27,40 @@ export function formatSpeed(bytesPerSecond: number): string {
   return `${formatBytes(bytesPerSecond)}/s`;
 }
 
-/** Remaining time from the current rate, e.g. "2m 30s". */
-export function formatEta(remaining: number, bytesPerSecond: number): string {
-  if (remaining <= 0 || bytesPerSecond <= 0) return '—';
-  return formatDuration(remaining / bytesPerSecond);
+/**
+ * What a remaining time may be projected from. The terminal mirrors both of
+ * these (internal/config/limits.go), the way the byte formatters mirror each
+ * other: the same transfer must not be given a finish time in one display
+ * and none in the other.
+ */
+const ETA_MIN_RATE = 1;
+const ETA_HORIZON_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Remaining time from the current rate, e.g. "2m 30s", or null when there is
+ * nothing to project from — which is a thing the caller must be able to ask,
+ * since the answer is to drop the whole "… left" phrase rather than print a
+ * dash in front of it.
+ *
+ * Two refusals beyond the obvious ones. A rate here is a windowed average,
+ * so a transfer whose connection drops does not report zero: it decays
+ * towards it, and formatBytes truncates what is left to "0 B/s". Dividing a
+ * remainder by that is what put "11145d 7h left" next to a bar sitting at
+ * 87%, on a row whose own note said the connection had dropped. Whatever
+ * else is true, two numbers on one line must not contradict each other.
+ *
+ * And the floor alone is not enough, because a decaying rate passes through
+ * several honest-looking bytes a second on its way down, and four of them
+ * divide a large remainder into centuries just as well. Past a week the
+ * number has stopped being a finish time and become a statement about a rate
+ * that is nearly zero — which the note beside it already makes, in words,
+ * and better.
+ */
+export function formatEta(remaining: number, bytesPerSecond: number): string | null {
+  if (!(remaining > 0) || !(bytesPerSecond >= ETA_MIN_RATE)) return null;
+  const seconds = remaining / bytesPerSecond;
+  if (!Number.isFinite(seconds) || seconds > ETA_HORIZON_SECONDS) return null;
+  return formatDuration(seconds);
 }
 
 /** Duration in seconds as a compact string. */

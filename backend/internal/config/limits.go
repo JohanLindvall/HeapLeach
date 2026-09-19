@@ -393,3 +393,34 @@ const (
 	// which is the case for pipes and dumb terminals.
 	CLIDefaultWidth = 100
 )
+
+// What a remaining time may be projected from. The browser mirrors both of
+// these in frontend/src/format.ts, the way the byte formatters mirror each
+// other: the same transfer must not be given a finish time in one display
+// and none in the other.
+const (
+	// ETAMinRate is the slowest rate a remaining time may be divided out
+	// of, in bytes per second.
+	//
+	// A rate here is a windowed average, so a transfer whose connection
+	// drops does not report zero — it decays towards it, through 12.9, 7.7,
+	// 4.6 and on down. Both displays truncate a rate to whole bytes, so
+	// anything under one already renders as "0 B/s", and dividing by it
+	// produced the finish time this exists to prevent: a stalled file
+	// sitting at 87% and claiming eleven thousand days. Whatever else is
+	// true, the two numbers on one line must not contradict each other.
+	ETAMinRate = 1.0
+
+	// ETAHorizon is the furthest ahead a remaining time is worth stating.
+	//
+	// The floor above is not enough on its own: a decaying rate passes
+	// through several honest-looking bytes per second on its way down, and
+	// four of them divide a large remainder into centuries just as well.
+	// Past a week the number has stopped being a finish time and become a
+	// statement about a rate that is nearly zero — which the note beside it
+	// already makes, in words, and better. The cost is that a genuinely
+	// enormous queue crawling along loses its projection too; that is the
+	// right trade, since the projection was worth nothing to wait on in
+	// either case.
+	ETAHorizon = 7 * 24 * time.Hour
+)

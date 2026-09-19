@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 )
 
@@ -81,6 +82,39 @@ func TestFormatETARefusesToGuess(t *testing.T) {
 	}
 	if got := formatETA(3000, 1000); got != "3s" {
 		t.Errorf("formatETA = %q, want 3s", got)
+	}
+}
+
+// A rate is a windowed average, so a transfer whose connection drops decays
+// towards zero rather than reaching it. Both displays already call anything
+// under a byte a second "0 B/s"; dividing a remainder by it claimed eleven
+// thousand days beside a bar sitting at 87%.
+func TestFormatETARefusesARateThatHasDecayedToNothing(t *testing.T) {
+	for _, bps := range []float64{0.9, 0.53, 0.0001} {
+		if got := formatETA(200_000_000, bps); got != "" {
+			t.Errorf("formatETA(200 MB, %v B/s) = %q, want no ETA: the display "+
+				"calls that rate %q", bps, got, formatSpeed(bps))
+		}
+	}
+	// A whole byte a second is a rate, slow as it is, and a small remainder
+	// still finishes inside the horizon.
+	if got := formatETA(120, 1); got != "2m00s" {
+		t.Errorf("formatETA(120 B, 1 B/s) = %q, want 2m00s", got)
+	}
+}
+
+// The floor is not enough on its own: a few honest-looking bytes a second
+// divide a large remainder into centuries just as well.
+func TestFormatETARefusesToProjectPastTheHorizon(t *testing.T) {
+	beyond := int64(config.ETAHorizon.Seconds()*4) + 1
+	if got := formatETA(beyond, 4); got != "" {
+		t.Errorf("formatETA past the horizon = %q, want no ETA", got)
+	}
+	// And stops exactly there rather than near it, so the boundary is not a
+	// matter of luck.
+	within := int64(config.ETAHorizon.Seconds() * 4)
+	if got := formatETA(within, 4); got == "" {
+		t.Error("formatETA at the horizon gave no ETA, want one")
 	}
 }
 
