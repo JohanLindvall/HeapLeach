@@ -365,11 +365,28 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 //
 // WriteAt is a positional write, so concurrent segments writing to
 // non-overlapping offsets of the same handle is safe and needs no locking.
-func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.ReadCloser) error {
+//
+// The writes go through a buffer of this connection's own, so the file sees
+// one write per megabyte rather than one per socket read; what that changes
+// about resuming is in writebuf.go. Reads stay bounded by the chunk size
+// whatever the buffer holds, because the promise that keeps a split point
+// ahead of the writer is stated in those terms — see config.MinSegmentSize.
+func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.ReadCloser) (err error) {
 	defer body.Close()
 
 	buf, release := borrowChunk()
 	defer release()
+
+	out := newBufferedWriterAt(t.file, seg.markFlushed)
+	defer func() {
+		// The tail is as much a part of the transfer as the rest: losing it
+		// silently would leave a segment short of its end with nothing to
+		// say so.
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("flush: %w", cerr)
+		}
+	}()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -402,7 +419,7 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 
 		n, readErr := body.Read(buf[:limit])
 		if n > 0 {
-			if _, err := t.file.WriteAt(buf[:n], pos); err != nil {
+			if _, err := out.WriteAt(buf[:n], pos); err != nil {
 				return fmt.Errorf("write at %d: %w", pos, err)
 			}
 			seg.pos.Store(pos + int64(n))

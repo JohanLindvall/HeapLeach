@@ -742,6 +742,39 @@ them:
   pool (`buffers.go`, `borrowChunk`). They all want exactly CopyBufferSize,
   so keep new ones on the pool rather than allocating per attempt.
 
+- **Writes are buffered, and that is what separates "received" from "on
+  disk"** (`writebuf.go`). A read returns whatever the socket has, and
+  writing each one straight through meant a write syscall per read —
+  several hundred a second across a busy queue, every one of them an inotify
+  event for whatever is watching the download directory. A connection now
+  accumulates `config.WriteBufferSize` before touching the file. Measured on
+  a 200 MB transfer over loopback, where reads already filled the 256 KiB
+  chunk every time, that is 771 write syscalls down to 191; on a real
+  connection, where a read is socket-sized, the ratio is far larger.
+
+  The buffer belongs to **one connection**, not to the file: eight
+  connections fill eight disjoint ranges at once, so a shared buffer would
+  have nothing to coalesce and would need a lock to say so.
+
+  The consequence is the part that must not be regressed. `segment.pos` is
+  what has been *received* and decides what to read next; `segment.flushed`
+  is what the file actually holds, and it is the only thing `state()` writes
+  to the sidecar. A sidecar that counted buffered bytes would resume past a
+  gap and finish a file with a hole in it — the sidecar may only ever
+  under-report. Reads stay bounded by CopyBufferSize whatever the buffer
+  holds, because the promise that keeps a split point ahead of the writer is
+  stated in those terms; see `MinSegmentSize`. Tests live in
+  `writebuf_test.go`, and the invariant itself in
+  `TestSegmentStateRecordsWhatIsOnDiskNotWhatWasReceived`.
+
+  Two consequences worth knowing. An attempt that dies loses whatever its
+  connections were holding, which is bytes re-fetched rather than bytes
+  lost; and since the retry budget judges an attempt by what it left *on
+  disk*, a buffer much larger than what a flaky host manages between drops
+  would start making productive attempts look unproductive. The playlist
+  path is deliberately left alone: it writes whole parts, which are already
+  megabytes apiece, and an external download is yt-dlp's own file to write.
+
 - `ranges.go` validates every partial response before it reaches the file:
   the offset, span, body length and known total must agree. A 416 only proves
   completion when it states the exact length of a sequential part. For a

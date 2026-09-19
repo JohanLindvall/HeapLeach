@@ -59,6 +59,31 @@ const (
 	// responsive to cancellation.
 	CopyBufferSize = 256 << 10
 
+	// WriteBufferSize is how much a connection accumulates before it
+	// touches the file.
+	//
+	// A read returns whatever the socket has, which is tens of kilobytes on
+	// an ordinary connection, and writing each one straight through meant a
+	// write syscall per read: several hundred a second across a busy queue,
+	// every one of them an inotify event for whatever is watching the
+	// download directory. A media server, a sync client or a backup tool
+	// pointed at that directory sees a storm and rescans through it. The
+	// bytes are the same either way; only the number of writes changes.
+	//
+	// Three things bound this. Memory, first: a buffer is held per
+	// connection, so the worst case is the file concurrency times the
+	// stream ceiling times this — at the defaults 32 MiB, and rather more
+	// on a queue tuned wider. Second, an attempt that dies loses whatever
+	// its connections were still holding, which is bytes re-fetched rather
+	// than bytes lost, since nothing is recorded as on disk until it is
+	// there. Third, the retry budget judges an attempt by what it left on
+	// disk, so a buffer much larger than what a flaky host manages between
+	// drops would make productive attempts look unproductive.
+	//
+	// It deliberately matches MinSegmentSize: a range worth splitting off
+	// is exactly one buffer's worth of work.
+	WriteBufferSize = 1 << 20
+
 	// SpeedSmoothing weights the previous rate against the latest sample.
 	// Higher values give steadier, slower-reacting numbers.
 	SpeedSmoothing = 0.6

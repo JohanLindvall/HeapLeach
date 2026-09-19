@@ -525,13 +525,25 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 
 // streamSequential copies a whole response body onto the end of the file,
 // for servers that never told us how long it is.
-func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterAt, body io.Reader, offset int64) error {
+//
+// Buffered like the segmented path, and for the same reason. There is no
+// sidecar to keep honest here — a sequential transfer resumes from the
+// file's own length — so a dropped connection simply loses whatever the
+// buffer was holding, and the next attempt asks for it again.
+func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterAt, body io.Reader, offset int64) (err error) {
 	m.setProgress(it, offset)
 
-	writer := &offsetWriter{dst: dst, at: offset}
+	out := newBufferedWriterAt(dst, nil)
+	defer func() {
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("flush: %w", cerr)
+		}
+	}()
+
+	writer := &offsetWriter{dst: out, at: offset}
 	buf, release := borrowChunk()
 	defer release()
-	_, err := io.CopyBuffer(&progressWriter{item: it, w: writer}, m.throttled(ctx, body), buf)
+	_, err = io.CopyBuffer(&progressWriter{item: it, w: writer}, m.throttled(ctx, body), buf)
 	return err
 }
 

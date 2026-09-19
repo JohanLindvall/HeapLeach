@@ -141,7 +141,10 @@ func TestTransferStateRoundTrip(t *testing.T) {
 	const size = 64 << 20
 	table := newSegmentTable(size, 0)
 	table.split(config.MinSegmentSize)
+	// As a running transfer does it: bytes received, then flushed to the
+	// file. The sidecar records the second of those.
 	table.snapshot()[0].pos.Store(4096)
+	table.snapshot()[0].markFlushed(4096)
 
 	want := &transferState{Size: size, Validator: `"abc"`, Segments: table.state()}
 	if err := saveTransferState(part, want); err != nil {
@@ -162,6 +165,34 @@ func TestTransferStateRoundTrip(t *testing.T) {
 	clearTransferState(part)
 	if loadTransferState(part) != nil {
 		t.Error("state survived being cleared")
+	}
+}
+
+// The sidecar decides where a resumed transfer starts reading, so it may
+// only ever name bytes the file actually holds. A connection buffers up to
+// a megabyte before writing, so received and on-disk come apart for as long
+// as it holds them — and recording the wrong one of the two would resume
+// past a gap and finish a file with a hole in it.
+func TestSegmentStateRecordsWhatIsOnDiskNotWhatWasReceived(t *testing.T) {
+	const size = 64 << 20
+	table := newSegmentTable(size, 0)
+	seg := table.snapshot()[0]
+
+	seg.pos.Store(900 << 10)
+	if got := table.state()[0].Pos; got != 0 {
+		t.Errorf("sidecar recorded %d bytes with nothing flushed yet, want 0", got)
+	}
+
+	seg.markFlushed(512 << 10)
+	if got := table.state()[0].Pos; got != 512<<10 {
+		t.Errorf("sidecar recorded %d, want the flushed position %d", got, 512<<10)
+	}
+
+	// A retried connection re-fetches from the recorded position, so the
+	// record must never slide backwards underneath it.
+	seg.markFlushed(256 << 10)
+	if got := table.state()[0].Pos; got != 512<<10 {
+		t.Errorf("sidecar went backwards to %d, want it to hold at %d", got, 512<<10)
 	}
 }
 

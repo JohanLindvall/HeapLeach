@@ -25,20 +25,42 @@ import (
 
 // segment is one contiguous range of the file, fetched by one connection.
 //
-// start is fixed. pos advances as bytes land. end is exclusive and shrinks
-// when the segment is split, which is why both are atomic: the supervisor
-// moves end while the segment's own goroutine is reading.
+// start is fixed. pos advances as bytes are received. end is exclusive and
+// shrinks when the segment is split, which is why both are atomic: the
+// supervisor moves end while the segment's own goroutine is reading.
+//
+// flushed trails pos by whatever the connection is still holding in its
+// write buffer, and it is the one the sidecar records. The distinction is
+// the whole reason buffering is safe: pos decides what to read next, and
+// flushed decides where a resumed transfer may start, so a run lost to a
+// dropped connection is re-fetched rather than skipped. See writebuf.go.
 type segment struct {
-	start int64
-	pos   atomic.Int64
-	end   atomic.Int64
+	start   int64
+	pos     atomic.Int64
+	flushed atomic.Int64
+	end     atomic.Int64
 }
 
 func newSegment(start, pos, end int64) *segment {
 	s := &segment{start: start}
 	s.pos.Store(pos)
+	// Nothing is buffered yet, so what has been received is also what is on
+	// disk — which is what makes a restored segment start where it left off.
+	s.flushed.Store(pos)
 	s.end.Store(end)
 	return s
+}
+
+// markFlushed records that the file now holds this segment's bytes up to
+// upTo. It never moves backwards: a write buffer flushes in order, and a
+// retried connection re-fetches from a position already recorded.
+func (s *segment) markFlushed(upTo int64) {
+	for {
+		have := s.flushed.Load()
+		if upTo <= have || s.flushed.CompareAndSwap(have, upTo) {
+			return
+		}
+	}
 }
 
 // remaining is how many bytes this segment still owes.
@@ -220,13 +242,17 @@ func (t *segmentTable) retire(seg *segment) bool {
 // Segments accumulate in the order they were split off, which is not
 // ascending; the sidecar is sorted so it reads as a plain tiling of the
 // file, which is also what loading validates against.
+//
+// What it records is each segment's flushed position, never the received
+// one: a connection holds up to a buffer's worth of bytes that are not in
+// the file yet, and a sidecar that counted those would resume past a gap.
 func (t *segmentTable) state() []segmentState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	out := make([]segmentState, 0, len(t.segs))
 	for _, s := range t.segs {
-		out = append(out, segmentState{Start: s.start, Pos: s.pos.Load(), End: s.end.Load()})
+		out = append(out, segmentState{Start: s.start, Pos: s.flushed.Load(), End: s.end.Load()})
 	}
 	slices.SortFunc(out, func(a, b segmentState) int { return cmp.Compare(a.Start, b.Start) })
 	return out
