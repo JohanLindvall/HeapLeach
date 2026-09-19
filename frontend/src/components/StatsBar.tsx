@@ -1,6 +1,7 @@
 import { formatSpeed } from '../format';
 import type { ConnectionState, Snapshot } from '../types';
 import { BoltIcon, MoonIcon, PauseIcon, PlayIcon, SplitIcon, SunIcon } from './Icons';
+import { SettingSlider } from './SettingSlider';
 import { SpeedLimit } from './SpeedLimit';
 import { Sparkline } from './Sparkline';
 
@@ -56,37 +57,25 @@ export function StatsBar({
       </div>
 
       <div className="stats__controls">
-        <label className="concurrency" htmlFor="concurrency" title="Files downloaded at once">
-          <BoltIcon />
-          <span className="concurrency__label">Files</span>
-          <input
-            id="concurrency"
-            type="range"
-            min={1}
-            max={snapshot.maxConcurrency}
-            value={snapshot.concurrency}
-            onChange={(e) => onConcurrencyChange(Number(e.target.value))}
-          />
-          <output className="concurrency__value">{snapshot.concurrency}</output>
-        </label>
+        <SettingSlider
+          id="concurrency"
+          icon={<BoltIcon />}
+          label="Files"
+          title="Files downloaded at once"
+          value={snapshot.concurrency}
+          max={snapshot.maxConcurrency}
+          onCommit={onConcurrencyChange}
+        />
 
-        <label
-          className="concurrency"
-          htmlFor="streams"
+        <SettingSlider
+          id="streams"
+          icon={<SplitIcon />}
+          label="Streams"
           title="Connections a slow file may be split across"
-        >
-          <SplitIcon />
-          <span className="concurrency__label">Streams</span>
-          <input
-            id="streams"
-            type="range"
-            min={1}
-            max={snapshot.maxStreams}
-            value={snapshot.streams}
-            onChange={(e) => onStreamsChange(Number(e.target.value))}
-          />
-          <output className="concurrency__value">{snapshot.streams}</output>
-        </label>
+          value={snapshot.streams}
+          max={snapshot.maxStreams}
+          onCommit={onStreamsChange}
+        />
 
         <SpeedLimit value={snapshot.speedLimit} onChange={onSpeedLimitChange} />
 

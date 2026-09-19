@@ -523,6 +523,11 @@ code {
   height: 4px;
   accent-color: var(--accent);
   cursor: pointer;
+  /* A sideways drag on a slider is not the page scrolling. Left to decide
+     for itself a touch browser reads the first few pixels as a pan, takes
+     the gesture, and the thumb stops following the finger; naming the one
+     direction the page may still claim leaves the other to the control. */
+  touch-action: pan-y;
 }
 
 .concurrency__value {
@@ -1865,6 +1870,14 @@ button.jobs__dir:hover {
 @media (pointer: coarse) {
   .btn--icon { padding: 0.62rem; }
   .job__toggle { width: 32px; height: 32px; }
+
+  /* A four-pixel track is a four-pixel target, and the two sliders were the
+     smallest things on the page by a wide margin — a finger that lands a
+     few pixels high misses the control entirely and scrolls instead. The
+     box grows to a thumb's worth of height; the browser goes on drawing the
+     same thin track centred inside it, so what changes is only the part you
+     can hit. */
+  .concurrency input[type='range'] { height: 1.5rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
