@@ -805,10 +805,24 @@ them:
   below it — a budget spent in a few seconds is no time at all for a backend
   to recover in.
 
-  **The queue is what does the work, and nothing waits in a worker.** A
-  transfer takes a slot at its host and holds it for the whole transfer,
-  retries and the waiting between them included — so only as many items as
-  the host is taking can be in its retry cycle at all. An item that cannot
+  **A refused transfer gives its slot up there and then.** It does not wait
+  and try again holding it: an item that has been refused has no open
+  connection, only a place in a queue better given to something else. Two
+  versions of this waited in place, and both produced the same picture —
+  four rows on one struggling host all reading "attempt 5 of 10" while the
+  cap said one at a time, because lowering the cap never took back the slots
+  already held. The turn is counted on the *item* (`overloadWaits`), since
+  the waiting happens in the queue and each turn is a separate transfer.
+
+  **One at a time, from the first refusal, and the host is left alone
+  between turns.** Walking the cap down a step per refusal sounds gentler
+  and is not: while it walks, everything admitted before it started is still
+  going. And a cap alone slows nothing when the queue behind it is long —
+  the next item takes the freed slot the instant it is given back — so the
+  gate also holds a host quiet for a growing interval after each refusal,
+  cleared the moment a transfer there gets going.
+
+  **The queue is what does the work, and nothing waits in a worker.** An item that cannot
   have a slot is handed straight back to the queue (`hostQueuedError`,
   `deferHostQueuedLocked`), where `hostFullLocked` passes over it until
   there is room. `tryAdmit` never blocks, and that is the point: a worker

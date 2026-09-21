@@ -490,7 +490,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		}
 		// A host that saw this through is coping with what it is being
 		// given, which is the only evidence that a cap put on it earlier
-		// can safely be relaxed.
+		// can safely be relaxed. The item's own patience starts over with
+		// it: the turns it spent waiting were this host's bad spell, not a
+		// property of the file.
+		it.overloadWaits = 0
 		m.hostGate.eased(m.itemHostLocked(it), m.limit)
 		m.logFinishedLocked(it, "download complete")
 	case ctx.Err() != nil || httpx.IsCanceled(err):
@@ -739,9 +742,18 @@ func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 	if !ok || it.retryPending {
 		return false
 	}
+	turns := it.overloadWaits
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
-	it.Note = fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
-		queued.host, plural(queued.limit, "download"))
+	it.overloadWaits = turns
+	it.Note = overloadNote(queued)
+
+	// A host being left alone frees nothing and finishes nothing, so
+	// without this the dispatcher would have no reason to look at the queue
+	// again until some other transfer happened to end — and if every host
+	// is quiet, none will.
+	if queued.wait > 0 {
+		time.AfterFunc(queued.wait, m.signal)
+	}
 	return true
 }
 

@@ -37,14 +37,18 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// against what that produced — where the worker pool is the only thing
 	// bounding it, which is a far smaller number than the queue behind it.
 	slotHost := m.itemHost(it)
-	release, hostLimit, admitted := m.hostGate.tryAdmit(slotHost)
+	// Named apart from every other release in this function on purpose:
+	// the part-file claim below reuses the obvious name, and a deferred
+	// closure reading the variable at call time gave the part file back
+	// twice and the host slot never.
+	freeSlot, hostLimit, admitted := m.hostGate.tryAdmit(slotHost)
 	if !admitted {
 		return &hostQueuedError{host: slotHost, limit: hostLimit}
 	}
 	// Reads the variable at call time, so a slot swapped below is the one
 	// given back.
 	defer func() {
-		release()
+		freeSlot()
 		// A freed slot is somebody else's turn, and the dispatcher is
 		// asleep until told there is something to look at.
 		m.signal()
@@ -57,13 +61,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// its first run had no host to name, and a resolver may rotate to
 	// another of the site's servers.
 	if host := m.itemHost(it); host != slotHost {
-		release()
+		freeSlot()
 		m.signal()
 
 		var ok bool
-		release, hostLimit, ok = m.hostGate.tryAdmit(host)
+		freeSlot, hostLimit, ok = m.hostGate.tryAdmit(host)
 		if !ok {
-			release = func() {}
+			freeSlot = func() {}
 			return &hostQueuedError{host: host, limit: hostLimit}
 		}
 		slotHost = host
@@ -146,7 +150,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// site's storage servers, and the slot stays charged where it was
 	// taken; the alternative is giving up a place in a queue this item is
 	// already at the front of.
-	var busyWaits, limitWaits, overloadWaits int
+	var busyWaits, limitWaits int
 	for attempt := 0; ; attempt++ {
 		var (
 			final string
@@ -268,12 +272,19 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// and every one of those attempts is more load on the thing that
 		// is already carrying too much.
 		//
-		// So this waits, like the two branches above, and it also takes
-		// something away: the host's cap comes down, so the queue stops
-		// starting new transfers there. That is the half that actually
-		// helps. Waiting alone would have every sibling arrive back at the
-		// same overloaded backend together, which is how it fell over in
-		// the first place.
+		// So this hands the item back rather than waiting here, and takes
+		// two things away from the host: it is left alone for a while, and
+		// until it says otherwise it gets one transfer at a time.
+		//
+		// Waiting here is what the first two versions of this did, and it
+		// is wrong in a way that looks right. The item keeps its slot while
+		// it sleeps, so the transfers admitted before the host started
+		// refusing carry on retrying alongside each other — four rows all
+		// reading "attempt 5 of 10" against a host taking one download at a
+		// time, which is the state this was supposed to prevent. An item
+		// that has been refused holds nothing worth keeping: there is no
+		// open connection, only a place in a queue that is better given to
+		// something else.
 		if se, ok := overloadedHost(err); ok {
 			// The host that actually answered, which is where the link
 			// resolved to and not the site the job was submitted from. On
@@ -284,32 +295,22 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			//
 			// A limit of zero means nothing was throttled: the host has
 			// never got a transfer going, so it is unavailable rather than
-			// overloaded. That still waits — a host can come back — but
-			// there is no rate of ours to find, and the note says which of
-			// the two this is.
+			// overloaded. That is still left alone — a host can come back —
+			// but there is no rate of ours to find, and the note says which
+			// of the two this is.
 			key := hostLabel(m.itemHost(it), se)
-			limit := m.hostGate.overloaded(key)
+			limit, wait := m.hostGate.overloaded(key, m.timings.busyBase, m.timings.busyMax)
 
-			if overloadWaits >= config.OverloadRetries {
+			m.mu.Lock()
+			it.overloadWaits++
+			turns := it.overloadWaits
+			m.mu.Unlock()
+			if turns > config.OverloadRetries {
 				return err
 			}
-			overloadWaits++
-			wait := util.Backoff(overloadWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.note(it, overloadNote(key, limit, wait, overloadWaits))
-			m.log.Info("host unavailable, waiting", "item", it.ID, "name", name,
-				"host", key, "limit", limit, "attempt", overloadWaits, "wait", wait)
-			if err := util.SleepCtx(ctx, wait); err != nil {
-				return err
-			}
-			m.note(it, "")
-			// The link was signed for an attempt that never happened, and
-			// these expire; a fresh one may also be signed for a storage
-			// server that is coping.
-			if err := m.resolveTarget(ctx, it); err != nil {
-				return err
-			}
-			attempt-- // being told to come back later is not a failed attempt
-			continue
+			m.log.Info("host overloaded, item returned to the queue", "item", it.ID,
+				"name", name, "host", key, "limit", limit, "turn", turns, "quiet", wait)
+			return &hostQueuedError{host: key, limit: limit, wait: wait, turn: turns}
 		}
 
 		// Moved means the file is further along than the disk held when the
@@ -1043,24 +1044,37 @@ func overloadedHost(err error) (*httpx.StatusError, bool) {
 type hostQueuedError struct {
 	host  string
 	limit int
+	// wait is how long the host is to be left alone, and turn which of its
+	// allowed turns this item has just spent. Both are zero for an item
+	// that was simply not at the front of the queue.
+	wait time.Duration
+	turn int
 }
 
 func (e *hostQueuedError) Error() string {
-	return fmt.Sprintf("%s is taking %s at a time", e.host, plural(e.limit, "download"))
+	if e.limit > 0 {
+		return fmt.Sprintf("%s is taking %s at a time", e.host, plural(e.limit, "download"))
+	}
+	return fmt.Sprintf("%s is not taking downloads just now", e.host)
 }
 
-// overloadNote says what the item is waiting for, and distinguishes the two
-// things a 503 can mean. A host that has served something is overloaded, and
-// the note reports what it has been cut back to; one that has served nothing
-// is unavailable, and there is nothing to report but the waiting.
-func overloadNote(host string, limit int, wait time.Duration, attempt int) string {
-	if limit > 0 {
-		return fmt.Sprintf("%s is overloaded — waiting %s and running at most %s there "+
-			"(attempt %d of %d)", host, wait.Round(time.Second), plural(limit, "download"),
-			attempt, config.OverloadRetries)
+// overloadNote says what an item is waiting for, and distinguishes the three
+// things it can be waiting on: a host that has refused it and is being left
+// alone, a host that has never served anything and so is unavailable rather
+// than overloaded, and simply not being at the front of the queue.
+func overloadNote(e *hostQueuedError) string {
+	switch {
+	case e.turn > 0 && e.limit > 0:
+		return fmt.Sprintf("%s is overloaded — taking %s at a time, next try in %s "+
+			"(turn %d of %d)", e.host, plural(e.limit, "download"),
+			e.wait.Round(time.Second), e.turn, config.OverloadRetries)
+	case e.turn > 0:
+		return fmt.Sprintf("%s is unavailable — next try in %s (turn %d of %d)",
+			e.host, e.wait.Round(time.Second), e.turn, config.OverloadRetries)
+	default:
+		return fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
+			e.host, plural(e.limit, "download"))
 	}
-	return fmt.Sprintf("%s is unavailable — waiting %s before trying again (attempt %d of %d)",
-		host, wait.Round(time.Second), attempt, config.OverloadRetries)
 }
 
 // hostLabel names the host that refused. The item's own URL is where the

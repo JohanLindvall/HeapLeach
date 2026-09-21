@@ -87,7 +87,13 @@ type Item struct {
 	// resolver may point the item at a different host mid-flight and the
 	// release must match the reservation.
 	hostKey string
-	cancel  context.CancelFunc
+	// overloadWaits counts the turns this item has been sent away from an
+	// overloaded host. It lives on the item rather than in the transfer
+	// because the waiting happens in the queue: the item loses its slot
+	// each time, so a counter local to one transfer would start over on
+	// every turn and the patience would never run out.
+	overloadWaits int
+	cancel        context.CancelFunc
 
 	// inFlight is true from the moment the dispatcher hands this item to a
 	// worker until that worker has fully finished with it. Status alone

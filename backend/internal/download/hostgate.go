@@ -1,6 +1,11 @@
 package download
 
-import "sync"
+import (
+	"sync"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/util"
+)
 
 // A global admission queue for a host that cannot take what it is given.
 //
@@ -39,6 +44,14 @@ type hostAdmission struct {
 	// served records that a transfer to this host has got going, which is
 	// what separates an overloaded host from an absent one.
 	served bool
+	// refusals counts 503s in a row, and sets how long the host is left
+	// alone after each. A transfer that gets going clears it.
+	refusals int
+	// until is when the host may be asked again. A cap on its own does not
+	// slow anything down when the queue behind it is long enough: the next
+	// item takes the freed slot the instant it is given back, so the host
+	// is asked again as fast as the dispatcher can turn round.
+	until time.Time
 	// wake is closed when a slot frees or the limit rises, and replaced.
 	// Waiters select on it alongside their own cancellation.
 	wake chan struct{}
@@ -78,6 +91,9 @@ func (g *hostGate) tryAdmit(host string) (release func(), limit int, ok bool) {
 	if st.limit > 0 && st.active >= st.limit {
 		return nil, st.limit, false
 	}
+	if time.Now().Before(st.until) {
+		return nil, st.limit, false
+	}
 	st.active++
 	return func() { g.release(host) }, st.limit, true
 }
@@ -92,7 +108,10 @@ func (g *hostGate) full(host string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	st, ok := g.hosts[host]
-	return ok && st.limit > 0 && st.active >= st.limit
+	if !ok {
+		return false
+	}
+	return (st.limit > 0 && st.active >= st.limit) || time.Now().Before(st.until)
 }
 
 // waiting reports how many transfers are queued for a host and what it is
@@ -129,7 +148,14 @@ func (g *hostGate) serving(host string) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.stateLocked(host).served = true
+
+	st := g.stateLocked(host)
+	st.served = true
+	// A host that is serving is not in the middle of refusing, so the
+	// escalating wait starts over from here rather than from whatever it
+	// had climbed to the last time this host had a bad minute.
+	st.refusals = 0
+	st.until = time.Time{}
 }
 
 // overloaded records a refusal and returns what the host is now allowed at
@@ -145,26 +171,52 @@ func (g *hostGate) serving(host string) {
 // Transfers already running are left alone, for the same reason the
 // free-space floor leaves them alone: their connection is open and the host
 // has accepted it. The cap governs what starts next.
-func (g *hostGate) overloaded(host string) int {
+func (g *hostGate) overloaded(host string, base, max time.Duration) (limit int, wait time.Duration) {
 	if host == "" {
-		return 0
+		return 0, 0
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	st := g.stateLocked(host)
+
+	// How long the host is left alone, which is the half that a cap cannot
+	// do on its own. With a thousand items behind it, a freed slot is taken
+	// again immediately, so without this the host is asked as fast as the
+	// dispatcher can turn round however small the cap is.
+	st.refusals++
+	wait = util.Backoff(st.refusals-1, base, max)
+	if until := time.Now().Add(wait); until.After(st.until) {
+		st.until = until
+	}
+
 	if !st.served {
+		return 0, wait
+	}
+	// One at a time, from the first refusal. Walking the cap down a step
+	// per refusal sounds gentler and is not: while it walks, the transfers
+	// admitted before it started are all still going, so the host being
+	// asked for less is also the host still being asked by six things at
+	// once. A host that has said it cannot cope gets one attempt until it
+	// says otherwise, and eased puts the slots back one at a time as
+	// transfers actually finish.
+	st.limit = 1
+	return st.limit, wait
+}
+
+// quiet reports how long a host is to be left alone, for a note that would
+// otherwise have nothing to say about when anything will happen.
+func (g *hostGate) quiet(host string) time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	st, ok := g.hosts[host]
+	if !ok {
 		return 0
 	}
-	limit := st.active - 1
-	if st.limit > 0 && st.limit-1 < limit {
-		limit = st.limit - 1
+	if wait := time.Until(st.until); wait > 0 {
+		return wait
 	}
-	if limit < 1 {
-		limit = 1
-	}
-	st.limit = limit
-	return limit
+	return 0
 }
 
 // eased gives a throttled host one slot back, having just served a transfer
