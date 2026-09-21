@@ -1058,23 +1058,25 @@ func (e *hostQueuedError) Error() string {
 	return fmt.Sprintf("%s is not taking downloads just now", e.host)
 }
 
-// overloadNote says what an item is waiting for, and distinguishes the three
-// things it can be waiting on: a host that has refused it and is being left
-// alone, a host that has never served anything and so is unavailable rather
-// than overloaded, and simply not being at the front of the queue.
+// overloadNote says what an item is waiting for, in one wording for every
+// item that is waiting.
+//
+// An item that has just been refused and one that has simply not reached the
+// front of the queue are the same thing to a reader: both are waiting for a
+// turn at a host that is taking fewer downloads than the queue would give
+// it. The refusal count and the countdown behind them are bookkeeping — how
+// much patience is left, and when the host may be asked again — and putting
+// those in the row only invited the question of what they meant. If the
+// patience does run out the item fails and says so, which is the point at
+// which the count is worth anything.
 func overloadNote(e *hostQueuedError) string {
-	switch {
-	case e.turn > 0 && e.limit > 0:
-		return fmt.Sprintf("%s is overloaded — taking %s at a time, next try in %s "+
-			"(turn %d of %d)", e.host, plural(e.limit, "download"),
-			e.wait.Round(time.Second), e.turn, config.OverloadRetries)
-	case e.turn > 0:
-		return fmt.Sprintf("%s is unavailable — next try in %s (turn %d of %d)",
-			e.host, e.wait.Round(time.Second), e.turn, config.OverloadRetries)
-	default:
+	if e.limit > 0 {
 		return fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
 			e.host, plural(e.limit, "download"))
 	}
+	// A host that has served nothing has no cap to name: it is not taking
+	// downloads at all rather than taking few.
+	return fmt.Sprintf("waiting for %s, which is not taking downloads just now", e.host)
 }
 
 // hostLabel names the host that refused. The item's own URL is where the

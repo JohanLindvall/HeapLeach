@@ -805,6 +805,13 @@ them:
   below it — a budget spent in a few seconds is no time at all for a backend
   to recover in.
 
+  One wording covers every item that is waiting, refused or merely not yet
+  at the front: both are waiting for a turn at a host taking fewer downloads
+  than the queue would give it, and the refusal count behind them is
+  bookkeeping. Putting it in the row only invited the question of what it
+  meant; if the patience runs out the item fails and says so, which is where
+  the count is worth something.
+
   **A refused transfer gives its slot up there and then.** It does not wait
   and try again holding it: an item that has been refused has no open
   connection, only a place in a queue better given to something else. Two
