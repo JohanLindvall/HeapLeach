@@ -93,7 +93,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		return m.transferExternal(ctx, it, dir, rel)
 	}
 
-	var busyWaits, limitWaits int
+	var busyWaits, limitWaits, overloadWaits int
 	for attempt := 0; ; attempt++ {
 		var (
 			final string
@@ -203,6 +203,57 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 				return err
 			}
 			attempt-- // being told to queue is not a failed attempt
+			continue
+		}
+
+		// A host answering 503 is neither failing nor refusing: it is
+		// saying it cannot take what it is being given just now. Bunkr's
+		// storage backend does this under load — it serves a few files,
+		// falls over, and answers the rest 503 — and the ordinary retry
+		// budget is the wrong tool for it twice over. It is spent in a few
+		// seconds, which is no time at all for a backend to recover in;
+		// and every one of those attempts is more load on the thing that
+		// is already carrying too much.
+		//
+		// So this waits, like the two branches above, and it also takes
+		// something away: the host's cap comes down, so the queue stops
+		// starting new transfers there. That is the half that actually
+		// helps. Waiting alone would have every sibling arrive back at the
+		// same overloaded backend together, which is how it fell over in
+		// the first place.
+		if se, ok := overloadedHost(err); ok {
+			m.mu.Lock()
+			// The key the dispatcher charged this item against, so the cap
+			// and the count it is compared with name the same thing.
+			//
+			// A limit of zero means nothing was throttled: the host has
+			// never got a transfer going, so it is unavailable rather than
+			// overloaded. That still waits — a host can come back — but
+			// there is no rate of ours to find, and the note says which of
+			// the two this is.
+			key := m.hostChargeLocked(it)
+			limit := m.throttleHostLocked(key)
+			m.mu.Unlock()
+
+			if overloadWaits >= config.OverloadRetries {
+				return err
+			}
+			overloadWaits++
+			wait := util.Backoff(overloadWaits-1, m.timings.busyBase, m.timings.busyMax)
+			m.note(it, overloadNote(hostLabel(key, se), limit, wait, overloadWaits))
+			m.log.Info("host unavailable, waiting", "item", it.ID, "name", name,
+				"host", key, "limit", limit, "attempt", overloadWaits, "wait", wait)
+			if err := util.SleepCtx(ctx, wait); err != nil {
+				return err
+			}
+			m.note(it, "")
+			// The link was signed for an attempt that never happened, and
+			// these expire; a fresh one may also be signed for a storage
+			// server that is coping.
+			if err := m.resolveTarget(ctx, it); err != nil {
+				return err
+			}
+			attempt-- // being told to come back later is not a failed attempt
 			continue
 		}
 
@@ -414,6 +465,10 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	if err := m.rejectByHost(it, resp); err != nil {
 		return "", err
 	}
+
+	// Past every refusal this response could have been: the host is serving
+	// the file. That is what a later 503 from it is measured against.
+	m.markHostServed(it)
 
 	total := totalSize(resp, offset)
 	if state != nil && total <= 0 {
@@ -899,6 +954,61 @@ func (m *Manager) rejectByHost(it *Item, resp *http.Response) error {
 		return fmt.Errorf("%w: %w", errDeadResource, err)
 	}
 	return nil
+}
+
+// overloadedHost reports whether a host answered that it is temporarily
+// unable to serve the request.
+//
+// 503 alone, and deliberately so. It is the one status that *means* this —
+// the server saying it is overloaded or down for maintenance and that the
+// condition is temporary — whereas the other fives are a server that broke
+// while trying (500) or a gateway that could not reach what it fronts (502,
+// 504). Those are worth repeating, which the ordinary retry budget already
+// does; they are not evidence that the host is being asked for too much,
+// and throttling a host on them would slow downloads over a proxy hiccup.
+func overloadedHost(err error) (*httpx.StatusError, bool) {
+	se, ok := errors.AsType[*httpx.StatusError](err)
+	if !ok || se.Code != http.StatusServiceUnavailable {
+		return nil, false
+	}
+	return se, true
+}
+
+// overloadNote says what the item is waiting for, and distinguishes the two
+// things a 503 can mean. A host that has served something is overloaded, and
+// the note reports what it has been cut back to; one that has served nothing
+// is unavailable, and there is nothing to report but the waiting.
+func overloadNote(host string, limit int, wait time.Duration, attempt int) string {
+	if limit > 0 {
+		return fmt.Sprintf("%s is overloaded — waiting %s and running at most %s there "+
+			"(attempt %d of %d)", host, wait.Round(time.Second), plural(limit, "download"),
+			attempt, config.OverloadRetries)
+	}
+	return fmt.Sprintf("%s is unavailable — waiting %s before trying again (attempt %d of %d)",
+		host, wait.Round(time.Second), attempt, config.OverloadRetries)
+}
+
+// hostLabel names the host to blame in a note. The key an item is charged
+// against is the site the job came from, which is the useful name; where
+// there is none — an item whose job carries no source — the URL that was
+// actually refused stands in.
+func hostLabel(key string, se *httpx.StatusError) string {
+	if key != "" {
+		return key
+	}
+	if u, err := url.Parse(se.URL); err == nil && u.Host != "" {
+		return u.Hostname()
+	}
+	return "the host"
+}
+
+// plural renders a count with its noun, so a note reads "1 download" rather
+// than "1 downloads".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // retryableTransfer reports whether a failed pass is worth repeating. A

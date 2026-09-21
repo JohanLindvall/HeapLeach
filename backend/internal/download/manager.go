@@ -45,6 +45,20 @@ type Manager struct {
 	// consult it, but every dispatched item is counted, so a mixed queue
 	// still sees the truth.
 	hostActive map[string]int
+	// hostServed names the hosts that have got at least one transfer
+	// moving this run. It is what separates a host buckling under what it
+	// is being given from one that is simply down: only the first is worth
+	// throttling, since only the first is a rate we are choosing. Guarded
+	// by mu, and keyed as hostActive is.
+	hostServed map[string]bool
+	// hostLimits is how many transfers a host has shown it can take at
+	// once — learned rather than declared, which is the difference between
+	// this and the Pace an extractor states. A host that answers 503 is
+	// overloaded rather than broken, so the cap walks down until it stops
+	// saying so and back up as transfers to it succeed. An absent entry
+	// means no cap. Keyed exactly as hostActive is, since the two are
+	// compared with one another.
+	hostLimits map[string]int
 
 	wake chan struct{}
 	ctx  context.Context
@@ -129,6 +143,8 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		jobs:       make(map[string]*Job),
 		parts:      make(map[string]struct{}),
 		hostActive: make(map[string]int),
+		hostServed: make(map[string]bool),
+		hostLimits: make(map[string]int),
 		dir:        cfg.DownloadDir,
 		stateFile:  cfg.StateFile,
 		minFree:    cfg.MinFreeDisk,
@@ -404,12 +420,99 @@ func (m *Manager) lowOnSpace() bool {
 }
 
 // hostFullLocked reports whether an item's host is already running as many
-// transfers as its pace allows. Caller holds mu.
+// transfers as it is allowed at once — what its extractor asked for, and
+// what the host itself has since demonstrated. Caller holds mu.
 func (m *Manager) hostFullLocked(it *Item) bool {
-	if it.pace == nil || it.pace.Files <= 0 {
-		return false
+	key := m.hostKeyLocked(it)
+	active := m.hostActive[key]
+	if it.pace != nil && it.pace.Files > 0 && active >= it.pace.Files {
+		return true
 	}
-	return m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files
+	if limit, ok := m.hostLimits[key]; ok && active >= limit {
+		return true
+	}
+	return false
+}
+
+// markHostServed records that a transfer to this item's host has got going:
+// a response accepted as the file itself, rather than a refusal or a page.
+//
+// It is the evidence the throttle waits for. A host that has served
+// something and then answers 503 is buckling under what it is being given,
+// which is a rate to find; one that has served nothing at all is down, and
+// giving it less to do neither helps it nor gets the file. Both are still
+// waited out — only the cap turns on this.
+func (m *Manager) markHostServed(it *Item) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if key := m.hostChargeLocked(it); key != "" {
+		m.hostServed[key] = true
+	}
+}
+
+// hostChargeLocked is the key an item is charged against: what the
+// dispatcher assigned, or what it would have assigned for an item that
+// never went through it. Caller holds mu.
+func (m *Manager) hostChargeLocked(it *Item) string {
+	if it.hostKey != "" {
+		return it.hostKey
+	}
+	return m.hostKeyLocked(it)
+}
+
+// throttleHostLocked records that a host is overloaded, and returns what it
+// is now allowed at once.
+//
+// The evidence is a 503, which is the host saying it cannot take what it is
+// being given. So the cap becomes one fewer than was in flight when it said
+// so, and one fewer again on each further refusal: several siblings failing
+// together walk it down to whatever the host can actually sustain within a
+// few refusals, rather than in one guess. It never reaches zero, because a
+// host that can serve nothing at all is a failure to report rather than a
+// rate to find.
+//
+// Transfers already running are left alone, for the same reason the
+// free-space floor leaves them alone: their connection is open and the host
+// has accepted it, and abandoning one to obey a cap that only exists to
+// stop *starting* more would waste what it has already given us. Caller
+// holds mu.
+func (m *Manager) throttleHostLocked(key string) int {
+	// Nothing to throttle, or nothing to learn from: a host that has never
+	// got a transfer going is not overloaded, it is unavailable, and the
+	// cap would slow a queue without helping anything.
+	if key == "" || !m.hostServed[key] {
+		return 0
+	}
+	limit := m.hostActive[key] - 1
+	if current, ok := m.hostLimits[key]; ok && current-1 < limit {
+		limit = current - 1
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	m.hostLimits[key] = limit
+	return limit
+}
+
+// easeHostLocked gives a throttled host one slot back, having just served a
+// transfer to the end.
+//
+// Down on evidence and up on evidence: a completed transfer is the only
+// thing that actually says the host is coping, and stepping up one at a time
+// means the next 503 costs one slot rather than undoing the whole recovery.
+// Once a host is allowed as many as the queue would ever run at once the cap
+// has stopped meaning anything, and it is forgotten rather than kept at a
+// number it can never reach. Caller holds mu.
+func (m *Manager) easeHostLocked(key string) {
+	limit, ok := m.hostLimits[key]
+	if !ok {
+		return
+	}
+	if limit+1 >= m.limit {
+		delete(m.hostLimits, key)
+		return
+	}
+	m.hostLimits[key] = limit + 1
 }
 
 // hostKeyLocked names the remote an item will be charged against.
@@ -458,6 +561,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		if it.Size <= 0 {
 			it.Size = it.downloaded.Load()
 		}
+		// A host that saw this through is coping with what it is being
+		// given, which is the only evidence that a cap put on it earlier
+		// can safely be relaxed.
+		m.easeHostLocked(it.hostKey)
 		m.logFinishedLocked(it, "download complete")
 	case ctx.Err() != nil || httpx.IsCanceled(err):
 		it.Status = StatusCanceled

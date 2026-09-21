@@ -798,6 +798,36 @@ them:
 - Extra connections are budgeted per host and never retry: a refusal is the
   answer we want, so the range goes back and the host's budget drops.
   Primary connections are never budgeted, so a tight budget cannot deadlock.
+- **A host that answers 503 is overloaded, not broken**, and the answer has
+  two halves (`overloadedHost`, `Manager.throttleHostLocked`). It is waited
+  out on the busy schedule up to `config.OverloadRetries`, outside the retry
+  budget like the two cases below it — a budget spent in a few seconds is no
+  time at all for a backend to recover in. And the host's cap comes down, so
+  the queue stops *starting* transfers there: bunkr's storage backend serves
+  a few files, falls over, and answers the rest 503, and waiting alone would
+  have every sibling arrive back at it together, which is how it fell over.
+  Running transfers are left alone, for the reason the free-space floor
+  leaves them alone.
+
+  The cap is learned rather than declared, which is what separates it from
+  the `Pace` an extractor states: one fewer than was in flight at each
+  refusal, floored at 1, and a slot back for each transfer to that host that
+  runs to the end — down on evidence and up on evidence, with
+  `hostFullLocked` consulting both it and the pace. It is keyed exactly as
+  `hostActive` is, which is the site the job came from rather than the
+  storage server that refused, because the gate is applied before an item
+  starts and that is the only host known then.
+
+  **The throttle waits for proof the host serves anything** (`hostServed`,
+  marked where a response survives every rejection check). A 503 from a host
+  that has never got a transfer going is a host that is *down*: cutting it
+  back neither helps it nor gets the file, and would slow a queue on the
+  strength of nothing. That case still waits, and the note says "unavailable"
+  where the other says "overloaded". Only 503 does any of this — 500, 502 and
+  504 are a server that broke or a gateway that could not reach what it
+  fronts, which the ordinary budget already repeats and which say nothing
+  about how much the host is being asked for.
+
 - **A host that limits how many downloads one caller may have open** is a
   third thing again, and neither a failure nor a rate limit:
   `refusedForConnectionCount` (`hostlimit.go`) recognises it and

@@ -208,6 +208,18 @@ const (
 	// would sit in the queue as "host busy" without end.
 	BusyRetryLimit = 5
 
+	// OverloadRetries is how many times a transfer waits out a host that
+	// answered 503.
+	//
+	// Counted apart from the ordinary retry budget, and generous for the
+	// same reason the connection-limit count is: what clears the condition
+	// is partly our own doing. A storage backend that falls over under load
+	// recovers once less is being asked of it, and the cap that comes down
+	// alongside these waits is what stops asking. It is still capped,
+	// because a host can also be down in earnest, and a queue that waited
+	// on that forever would never finish.
+	OverloadRetries = 10
+
 	// ConnectionLimitRetries is how many times a transfer waits out a host
 	// that refused it for having too many connections open at once.
 	//

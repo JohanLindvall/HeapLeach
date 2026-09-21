@@ -162,6 +162,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	// Segments arrive out of order; hold them until their turn comes.
 	pending := make(map[int][]byte, workers*2)
 	next := start
+	served := false
 
 	for outcome := range results {
 		if outcome.err != nil {
@@ -188,6 +189,14 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 			}
 			written += int64(len(data))
 			next++
+			if !served {
+				// The first part to land says this host is serving, which
+				// is what a later 503 from it is measured against. Marked
+				// once: the flag costs the manager's lock, and a playlist
+				// has thousands of these.
+				served = true
+				m.markHostServed(it)
+			}
 			it.downloaded.Store(written)
 			<-slots // a written segment frees its slot, bounding memory
 
