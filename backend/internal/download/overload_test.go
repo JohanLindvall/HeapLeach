@@ -554,3 +554,52 @@ func waitOutQuiet(t *testing.T, m *Manager, host string) {
 		time.Sleep(wait)
 	}
 }
+
+// Every row waiting on one host has to say the same thing about it. The
+// note is written when an item is turned away, and what the host is taking
+// changes while the item waits — so a stored sentence goes on stating
+// whatever was true when it was written, and a queue behind one host ends up
+// showing two different numbers for it at once.
+func TestWaitingRowsAgreeAboutWhatTheHostIsTaking(t *testing.T) {
+	const host = "files.example.test"
+	m := busyManager(t)
+
+	early := &Item{ID: "early", Name: "early.mp4", Status: StatusQueued, Size: -1}
+	late := &Item{ID: "late", Name: "late.mp4", Status: StatusQueued, Size: -1}
+	m.mu.Lock()
+	job := &Job{ID: "j", Source: "https://" + host + "/a/AAAA", Items: []*Item{early, late}}
+	m.jobs[job.ID] = job
+	m.order = append(m.order, job.ID)
+
+	// Turned away when the host was taking two, and again once it was down
+	// to one — which is how a queue collects disagreeing rows.
+	m.deferHostQueuedLocked(early, &hostQueuedError{host: host, limit: 2})
+	m.deferHostQueuedLocked(late, &hostQueuedError{host: host, limit: 1})
+	m.mu.Unlock()
+
+	// What the host is actually taking now.
+	m.hostGate.serving(host)
+	release, _, ok := m.hostGate.tryAdmit(host)
+	if !ok {
+		t.Fatal("the gate refused a transfer")
+	}
+	defer release()
+	if limit, _ := m.hostGate.overloaded(host, 0, 0); limit != 1 {
+		t.Fatalf("cap = %d, want 1", limit)
+	}
+
+	want := "waiting for a slot at " + host + ", which is taking 1 download at a time"
+	snap := m.Snapshot()
+	var seen int
+	for _, j := range snap.Jobs {
+		for _, iv := range j.Items {
+			seen++
+			if iv.Note != want {
+				t.Errorf("%s says %q, want %q", iv.Name, iv.Note, want)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("saw %d rows, want 2", seen)
+	}
+}

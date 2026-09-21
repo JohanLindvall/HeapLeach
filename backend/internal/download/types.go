@@ -82,6 +82,11 @@ type Item struct {
 	// reject, when set, recognises this host's way of answering a dead
 	// resource with a valid-looking body. See extractor.File.Reject.
 	reject func(string, http.Header) error
+	// waitingFor is the host this item is queued behind, when it is. It is
+	// kept rather than baked into the note because what that host is taking
+	// changes while the item waits, and a note written once would go on
+	// stating whatever was true when it was written.
+	waitingFor string
 	// hostKey is the remote this item is charged against while it runs. It
 	// is fixed at dispatch rather than read from URL later, because a
 	// resolver may point the item at a different host mid-flight and the
@@ -220,8 +225,18 @@ type Snapshot struct {
 	HostCount int `json:"hostCount"`
 }
 
+// storedNote is the note an item carries, for callers with nothing better.
+// The manager has something better — see Manager.itemNoteLocked.
+func storedNote(it *Item) string { return it.Note }
+
 // view renders an item for the wire.
-func (it *Item) view() ItemView {
+//
+// The note is supplied rather than read off the item because one kind of
+// note goes stale where it stands: an item waiting for a host records what
+// that host was taking at the moment it was turned away, and the answer
+// changes while it waits. Rows waiting on the same host for the same reason
+// then disagree with each other, which is exactly how it looked.
+func (it *Item) view(note func(*Item) string) ItemView {
 	v := ItemView{
 		ID:            it.ID,
 		Name:          it.Name,
@@ -231,7 +246,7 @@ func (it *Item) view() ItemView {
 		Downloaded:    it.downloaded.Load(),
 		Speed:         it.speed,
 		Error:         it.Err,
-		Note:          it.Note,
+		Note:          note(it),
 		Path:          it.Path,
 		URL:           it.URL,
 		Streams:       int(it.streams.Load()),
@@ -254,7 +269,7 @@ func (it *Item) view() ItemView {
 }
 
 // view renders a job and its aggregates for the wire.
-func (j *Job) view() JobView {
+func (j *Job) view(note func(*Item) string) JobView {
 	v := JobView{
 		ID:        j.ID,
 		Source:    j.Source,
@@ -268,7 +283,7 @@ func (j *Job) view() JobView {
 	}
 	var t itemTally
 	for _, it := range j.Items {
-		iv := it.view()
+		iv := it.view(note)
 		v.Items = append(v.Items, iv)
 
 		v.Downloaded += iv.Downloaded

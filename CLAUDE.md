@@ -805,6 +805,12 @@ them:
   below it — a budget spent in a few seconds is no time at all for a backend
   to recover in.
 
+  The note is rendered per snapshot from the host's current answer
+  (`Manager.itemNoteLocked`), not stored when the item is turned away. What
+  a host is taking changes while an item waits, so a stored sentence goes on
+  stating whatever was true when it was written, and a queue behind one host
+  showed two different numbers for it at once.
+
   One wording covers every item that is waiting, refused or merely not yet
   at the front: both are waiting for a turn at a host taking fewer downloads
   than the queue would give it, and the refusal count behind them is

@@ -1058,7 +1058,7 @@ func (e *hostQueuedError) Error() string {
 	return fmt.Sprintf("%s is not taking downloads just now", e.host)
 }
 
-// overloadNote says what an item is waiting for, in one wording for every
+// waitingNote says what an item is waiting for, in one wording for every
 // item that is waiting.
 //
 // An item that has just been refused and one that has simply not reached the
@@ -1069,14 +1069,14 @@ func (e *hostQueuedError) Error() string {
 // those in the row only invited the question of what they meant. If the
 // patience does run out the item fails and says so, which is the point at
 // which the count is worth anything.
-func overloadNote(e *hostQueuedError) string {
-	if e.limit > 0 {
+func waitingNote(host string, limit int) string {
+	if limit > 0 {
 		return fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
-			e.host, plural(e.limit, "download"))
+			host, plural(limit, "download"))
 	}
 	// A host that has served nothing has no cap to name: it is not taking
 	// downloads at all rather than taking few.
-	return fmt.Sprintf("waiting for %s, which is not taking downloads just now", e.host)
+	return fmt.Sprintf("waiting for %s, which is not taking downloads just now", host)
 }
 
 // hostLabel names the host that refused. The item's own URL is where the

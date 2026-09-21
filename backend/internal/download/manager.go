@@ -324,6 +324,7 @@ func (m *Manager) dispatch() {
 			// A note written while the item waited — a stall deferral's,
 			// say — describes a state that has just ended.
 			it.Note = ""
+			it.waitingFor = ""
 			it.startedAt = time.Now()
 			it.lastSample = it.startedAt
 			it.lastBytes = it.downloaded.Load()
@@ -477,6 +478,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	it.cancel = nil
 	it.speed = 0
 	it.Note = ""
+	it.waitingFor = ""
 	it.inFlight = false
 	if itemHeld != nil {
 		itemHeld(it, false)
@@ -720,6 +722,7 @@ func (m *Manager) enqueueLocked(it *Item) {
 	it.Status = StatusQueued
 	it.Err = ""
 	it.Note = ""
+	it.waitingFor = ""
 	it.speed = 0
 	it.stallDefers = 0
 	it.startedAt = time.Time{}
@@ -727,6 +730,22 @@ func (m *Manager) enqueueLocked(it *Item) {
 	it.downloaded.Store(0)
 	it.lastBytes = 0
 	m.queue = append(m.queue, it)
+}
+
+// itemNoteLocked renders what an item has to say for itself right now.
+//
+// An item waiting for a host is the one case where the stored note cannot
+// be trusted: what the host is taking changes while the item waits, so a
+// note written when it was turned away goes on stating whatever was true
+// then. A queue full of rows waiting on one host then shows two or three
+// different numbers for it at once. This reads the host's current answer
+// instead, so every row waiting on it says the same thing. Caller holds mu.
+func (m *Manager) itemNoteLocked(it *Item) string {
+	if it.waitingFor == "" {
+		return it.Note
+	}
+	limit, _ := m.hostGate.waiting(it.waitingFor)
+	return waitingNote(it.waitingFor, limit)
 }
 
 // deferHostQueuedLocked puts an item back in the queue because its host is
@@ -745,7 +764,11 @@ func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 	turns := it.overloadWaits
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
 	it.overloadWaits = turns
-	it.Note = overloadNote(queued)
+	// The host, not the sentence: what it is taking is read afresh for every
+	// snapshot, so this row and the hundred others behind the same host
+	// never disagree about it.
+	it.waitingFor = queued.host
+	it.Note = waitingNote(queued.host, queued.limit)
 
 	// A host being left alone frees nothing and finishes nothing, so
 	// without this the dispatcher would have no reason to look at the queue
@@ -1063,7 +1086,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		if !ok {
 			continue
 		}
-		v := job.view()
+		v := job.view(m.itemNoteLocked)
 		snap.Speed += v.Speed
 		for _, it := range v.Items {
 			if it.Status == StatusQueued {

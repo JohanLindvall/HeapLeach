@@ -30,7 +30,7 @@ func TestJobViewAgreesWithStatus(t *testing.T) {
 			for i, s := range tc.statuses {
 				job.Items = append(job.Items, &Item{ID: string(rune('a' + i)), Status: s})
 			}
-			view := job.view()
+			view := job.view(storedNote)
 			if view.Status != tc.want {
 				t.Errorf("view status = %s, want %s", view.Status, tc.want)
 			}
