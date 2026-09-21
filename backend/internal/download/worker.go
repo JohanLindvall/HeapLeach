@@ -103,11 +103,26 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// contribution can be told afterwards: an attempt that got the file
 		// further is judged apart from one that got it nowhere, below.
 		before := onDisk(part, len(it.Segments))
+
+		// One queue per host, across every job and every worker. A host
+		// that has asked to be given less gets exactly that, and the
+		// retries of a dozen siblings take their turn in it instead of
+		// arriving together — which is the shape that overloaded the host
+		// to begin with, and which a per-item backoff cannot fix because
+		// each item is only ever patient on its own behalf.
+		release, gateErr := m.admitToHost(ctx, it)
+		if gateErr != nil {
+			return gateErr
+		}
 		if isPlaylist {
 			final, err = m.transferPlaylist(ctx, it, part, name)
 		} else {
 			final, err = m.transferOnce(ctx, it, part, name)
 		}
+		// Given back before any of the waiting below: an item serving out
+		// a backoff must not also hold a place it is not using.
+		release()
+
 		if err == nil {
 			name = final
 			break
@@ -222,25 +237,27 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// same overloaded backend together, which is how it fell over in
 		// the first place.
 		if se, ok := overloadedHost(err); ok {
-			m.mu.Lock()
-			// The key the dispatcher charged this item against, so the cap
-			// and the count it is compared with name the same thing.
+			// The host that actually answered, which is where the link
+			// resolved to and not the site the job was submitted from. On
+			// a queue built from an index site those are different
+			// machines, and throttling the index would hold back a queue
+			// without touching the host that is struggling, under a
+			// message naming the wrong one.
 			//
 			// A limit of zero means nothing was throttled: the host has
 			// never got a transfer going, so it is unavailable rather than
 			// overloaded. That still waits — a host can come back — but
 			// there is no rate of ours to find, and the note says which of
 			// the two this is.
-			key := m.hostChargeLocked(it)
-			limit := m.throttleHostLocked(key)
-			m.mu.Unlock()
+			key := hostLabel(m.itemHost(it), se)
+			limit := m.hostGate.overloaded(key)
 
 			if overloadWaits >= config.OverloadRetries {
 				return err
 			}
 			overloadWaits++
 			wait := util.Backoff(overloadWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.note(it, overloadNote(hostLabel(key, se), limit, wait, overloadWaits))
+			m.note(it, overloadNote(key, limit, wait, overloadWaits))
 			m.log.Info("host unavailable, waiting", "item", it.ID, "name", name,
 				"host", key, "limit", limit, "attempt", overloadWaits, "wait", wait)
 			if err := util.SleepCtx(ctx, wait); err != nil {
@@ -467,8 +484,11 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	}
 
 	// Past every refusal this response could have been: the host is serving
-	// the file. That is what a later 503 from it is measured against.
-	m.markHostServed(it)
+	// the file. That is what a later 503 from it is measured against, and
+	// it is keyed on the URL this attempt was admitted under rather than on
+	// whatever a redirect landed on — the queue, the evidence and the cap
+	// have to name the same machine or the throttle can never fire.
+	m.hostGate.serving(hostOf(rawURL))
 
 	total := totalSize(resp, offset)
 	if state != nil && total <= 0 {
@@ -974,6 +994,22 @@ func overloadedHost(err error) (*httpx.StatusError, bool) {
 	return se, true
 }
 
+// admitToHost waits for this item's turn at the host it is talking to, and
+// returns the function that gives the slot back.
+//
+// The note is what makes the wait legible: an item queued behind a throttled
+// host is not stalled and not failing, and without a word for it the row
+// shows nothing happening for minutes at a time.
+func (m *Manager) admitToHost(ctx context.Context, it *Item) (func(), error) {
+	host := m.itemHost(it)
+	if limit, active := m.hostGate.waiting(host); limit > 0 && active >= limit {
+		m.note(it, fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
+			host, plural(limit, "download")))
+		defer m.note(it, "")
+	}
+	return m.hostGate.admit(ctx, host)
+}
+
 // overloadNote says what the item is waiting for, and distinguishes the two
 // things a 503 can mean. A host that has served something is overloaded, and
 // the note reports what it has been cut back to; one that has served nothing
@@ -988,13 +1024,13 @@ func overloadNote(host string, limit int, wait time.Duration, attempt int) strin
 		host, wait.Round(time.Second), attempt, config.OverloadRetries)
 }
 
-// hostLabel names the host to blame in a note. The key an item is charged
-// against is the site the job came from, which is the useful name; where
-// there is none — an item whose job carries no source — the URL that was
-// actually refused stands in.
-func hostLabel(key string, se *httpx.StatusError) string {
-	if key != "" {
-		return key
+// hostLabel names the host that refused. The item's own URL is where the
+// link resolved to and so is the machine that answered; the URL carried by
+// the refusal itself stands in when there is no item URL to read, which is
+// the case for a host that refused before anything was resolved.
+func hostLabel(itemHost string, se *httpx.StatusError) string {
+	if itemHost != "" {
+		return itemHost
 	}
 	if u, err := url.Parse(se.URL); err == nil && u.Host != "" {
 		return u.Hostname()

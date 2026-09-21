@@ -798,35 +798,46 @@ them:
 - Extra connections are budgeted per host and never retry: a refusal is the
   answer we want, so the range goes back and the host's budget drops.
   Primary connections are never budgeted, so a tight budget cannot deadlock.
-- **A host that answers 503 is overloaded, not broken**, and the answer has
-  two halves (`overloadedHost`, `Manager.throttleHostLocked`). It is waited
-  out on the busy schedule up to `config.OverloadRetries`, outside the retry
-  budget like the two cases below it — a budget spent in a few seconds is no
-  time at all for a backend to recover in. And the host's cap comes down, so
-  the queue stops *starting* transfers there: bunkr's storage backend serves
-  a few files, falls over, and answers the rest 503, and waiting alone would
-  have every sibling arrive back at it together, which is how it fell over.
-  Running transfers are left alone, for the reason the free-space floor
-  leaves them alone.
+- **A host that answers 503 is overloaded, not broken**, and the answer is a
+  global admission queue per host (`hostgate.go`), not a longer retry loop.
+  The refusal is waited out on the busy schedule up to
+  `config.OverloadRetries`, outside the retry budget like the two cases
+  below it — a budget spent in a few seconds is no time at all for a backend
+  to recover in.
 
-  The cap is learned rather than declared, which is what separates it from
-  the `Pace` an extractor states: one fewer than was in flight at each
-  refusal, floored at 1, and a slot back for each transfer to that host that
-  runs to the end — down on evidence and up on evidence, with
-  `hostFullLocked` consulting both it and the pace. It is keyed exactly as
-  `hostActive` is, which is the site the job came from rather than the
-  storage server that refused, because the gate is applied before an item
-  starts and that is the only host known then.
+  **The queue is what does the work.** Every attempt, first try and retry
+  alike, takes a slot at the host before it opens anything and gives it back
+  before it waits, so an item serving out a backoff is not also holding a
+  place it cannot use. Without that, a dozen siblings each back off politely
+  on their own behalf and then arrive together, which is the shape that
+  overloaded the host to begin with; `bucklingServer` in the tests is that
+  shape, and `TestHostGateSerialisesEveryTransferAtAThrottledHost` is the
+  property.
 
-  **The throttle waits for proof the host serves anything** (`hostServed`,
-  marked where a response survives every rejection check). A 503 from a host
-  that has never got a transfer going is a host that is *down*: cutting it
-  back neither helps it nor gets the file, and would slow a queue on the
-  strength of nothing. That case still waits, and the note says "unavailable"
-  where the other says "overloaded". Only 503 does any of this — 500, 502 and
-  504 are a server that broke or a gateway that could not reach what it
-  fronts, which the ordinary budget already repeats and which say nothing
-  about how much the host is being asked for.
+  The number of slots is learned, which is what separates it from the `Pace`
+  an extractor declares: one fewer at each refusal, floored at 1, and one
+  back for each transfer that runs to the end. Down on evidence and up on
+  evidence, forgotten once it reaches what the queue would run anyway.
+  Transfers already running are left alone, for the reason the free-space
+  floor leaves them alone.
+
+  **It is keyed on the host that actually answered**, which is where the
+  link resolved to and not the site the job was submitted from — and it is
+  keyed that way in all three places, the queue, the evidence and the cap,
+  or the throttle can never fire. A search on an index site is the case that
+  proves the point: every file in that queue lives on somebody else's
+  storage, so throttling the index would hold back the queue without
+  touching the host that is struggling, under a message naming the wrong
+  machine. That is why `hostFullLocked` cannot serve here: it runs at
+  dispatch, and nothing has resolved yet.
+
+  **The throttle waits for proof the host serves anything.** A 503 from a
+  host that has never got a transfer going is a host that is *down*: cutting
+  it back neither helps it nor gets the file. That case still waits, and the
+  note says "unavailable" where the other says "overloaded". Only 503 does
+  any of this — 500, 502 and 504 are a server that broke or a gateway that
+  could not reach what it fronts, which the ordinary budget already repeats
+  and which say nothing about how much the host is being asked for.
 
 - **A host that limits how many downloads one caller may have open** is a
   third thing again, and neither a failure nor a rate limit:
