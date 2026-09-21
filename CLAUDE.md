@@ -805,14 +805,28 @@ them:
   below it — a budget spent in a few seconds is no time at all for a backend
   to recover in.
 
-  **The queue is what does the work.** Every attempt, first try and retry
-  alike, takes a slot at the host before it opens anything and gives it back
-  before it waits, so an item serving out a backoff is not also holding a
-  place it cannot use. Without that, a dozen siblings each back off politely
-  on their own behalf and then arrive together, which is the shape that
-  overloaded the host to begin with; `bucklingServer` in the tests is that
-  shape, and `TestHostGateSerialisesEveryTransferAtAThrottledHost` is the
-  property.
+  **The queue is what does the work, and nothing waits in a worker.** A
+  transfer takes a slot at its host and holds it for the whole transfer,
+  retries and the waiting between them included — so only as many items as
+  the host is taking can be in its retry cycle at all. An item that cannot
+  have a slot is handed straight back to the queue (`hostQueuedError`,
+  `deferHostQueuedLocked`), where `hostFullLocked` passes over it until
+  there is room. `tryAdmit` never blocks, and that is the point: a worker
+  parked on a struggling host is a worker not downloading from anywhere
+  else, and three of four workers sitting on one host is what this looked
+  like before. Freeing a slot signals the dispatcher, since it is asleep
+  until told there is something to look at.
+
+  **The turn comes before the signature.** A link is signed for minutes and
+  an item may sit in that queue for hours, so `transfer` takes the slot
+  first — keyed on wherever the item last resolved to — and only then mints
+  a link, swapping the slot if what it resolved to is somewhere else. Minted
+  before the wait it would expire where it stood, and a signature spent on a
+  transfer that is then turned away is a request made of a host that has
+  just asked for fewer of them. An item that has never run knows no host, so
+  it signs once and takes its turn against what that produced; the worker
+  pool bounds that, which is a far smaller number than the queue behind
+  it.
 
   The number of slots is learned, which is what separates it from the `Pace`
   an extractor declares: one fewer at each refusal, floored at 1, and one

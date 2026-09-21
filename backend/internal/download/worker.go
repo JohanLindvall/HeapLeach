@@ -23,8 +23,50 @@ import (
 
 // transfer downloads one item to disk, resuming and retrying as needed.
 func (m *Manager) transfer(ctx context.Context, it *Item) error {
+	// This item's turn at its host comes before anything is minted, and the
+	// order matters both ways round.
+	//
+	// A link is signed for minutes and an item may sit in a queue for hours
+	// or days behind a host that is taking one download at a time, so a
+	// link minted before the wait would expire where it stood. And a
+	// signature spent on a transfer that is then turned away is a request
+	// made of a host that has just asked for fewer of them.
+	//
+	// The host is known from wherever this item last resolved to. An item
+	// that has never run knows none, so it signs once and takes its turn
+	// against what that produced — where the worker pool is the only thing
+	// bounding it, which is a far smaller number than the queue behind it.
+	slotHost := m.itemHost(it)
+	release, hostLimit, admitted := m.hostGate.tryAdmit(slotHost)
+	if !admitted {
+		return &hostQueuedError{host: slotHost, limit: hostLimit}
+	}
+	// Reads the variable at call time, so a slot swapped below is the one
+	// given back.
+	defer func() {
+		release()
+		// A freed slot is somebody else's turn, and the dispatcher is
+		// asleep until told there is something to look at.
+		m.signal()
+	}()
+
 	if err := m.resolveTarget(ctx, it); err != nil {
 		return err
+	}
+	// What it resolved to may not be where the slot was taken: an item on
+	// its first run had no host to name, and a resolver may rotate to
+	// another of the site's servers.
+	if host := m.itemHost(it); host != slotHost {
+		release()
+		m.signal()
+
+		var ok bool
+		release, hostLimit, ok = m.hostGate.tryAdmit(host)
+		if !ok {
+			release = func() {}
+			return &hostQueuedError{host: host, limit: hostLimit}
+		}
+		slotHost = host
 	}
 
 	m.mu.Lock()
@@ -93,6 +135,17 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		return m.transferExternal(ctx, it, dir, rel)
 	}
 
+	// The slot taken above is held for the whole transfer, retries and the
+	// waiting between them included. That is what bounds how many workers a
+	// struggling host can tie up: only as many items as it is taking can be
+	// in its retry cycle at all, and every other item is handed back to the
+	// queue rather than sitting in a worker — which is what lets the hosts
+	// that are coping carry on at full speed while one is not.
+	//
+	// A re-resolve between attempts may mint a link on another of the
+	// site's storage servers, and the slot stays charged where it was
+	// taken; the alternative is giving up a place in a queue this item is
+	// already at the front of.
 	var busyWaits, limitWaits, overloadWaits int
 	for attempt := 0; ; attempt++ {
 		var (
@@ -103,26 +156,11 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// contribution can be told afterwards: an attempt that got the file
 		// further is judged apart from one that got it nowhere, below.
 		before := onDisk(part, len(it.Segments))
-
-		// One queue per host, across every job and every worker. A host
-		// that has asked to be given less gets exactly that, and the
-		// retries of a dozen siblings take their turn in it instead of
-		// arriving together — which is the shape that overloaded the host
-		// to begin with, and which a per-item backoff cannot fix because
-		// each item is only ever patient on its own behalf.
-		release, gateErr := m.admitToHost(ctx, it)
-		if gateErr != nil {
-			return gateErr
-		}
 		if isPlaylist {
 			final, err = m.transferPlaylist(ctx, it, part, name)
 		} else {
 			final, err = m.transferOnce(ctx, it, part, name)
 		}
-		// Given back before any of the waiting below: an item serving out
-		// a backoff must not also hold a place it is not using.
-		release()
-
 		if err == nil {
 			name = final
 			break
@@ -994,20 +1032,21 @@ func overloadedHost(err error) (*httpx.StatusError, bool) {
 	return se, true
 }
 
-// admitToHost waits for this item's turn at the host it is talking to, and
-// returns the function that gives the slot back.
+// hostQueuedError reports that a host is already giving out every slot it
+// has, so this item's turn has not come.
 //
-// The note is what makes the wait legible: an item queued behind a throttled
-// host is not stalled and not failing, and without a word for it the row
-// shows nothing happening for minutes at a time.
-func (m *Manager) admitToHost(ctx context.Context, it *Item) (func(), error) {
-	host := m.itemHost(it)
-	if limit, active := m.hostGate.waiting(host); limit > 0 && active >= limit {
-		m.note(it, fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
-			host, plural(limit, "download")))
-		defer m.note(it, "")
-	}
-	return m.hostGate.admit(ctx, host)
+// It is not a failure and is never reported as one: runItem puts the item
+// back in the queue, where the dispatcher passes over it until the host has
+// room. A type rather than a message because that handling is what makes
+// the difference between a queue held up by one struggling host and a queue
+// that carries on everywhere else.
+type hostQueuedError struct {
+	host  string
+	limit int
+}
+
+func (e *hostQueuedError) Error() string {
+	return fmt.Sprintf("%s is taking %s at a time", e.host, plural(e.limit, "download"))
 }
 
 // overloadNote says what the item is waiting for, and distinguishes the two

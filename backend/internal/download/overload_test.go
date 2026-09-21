@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,12 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -49,16 +49,16 @@ func TestOverloadedHostRecognisesTemporaryUnavailabilityAlone(t *testing.T) {
 func TestHostGateAdmitsEverythingUntilAHostAsksOtherwise(t *testing.T) {
 	g := newHostGate()
 	for range 5 {
-		if _, err := g.admit(context.Background(), "files.example.test"); err != nil {
-			t.Fatalf("admit: %v", err)
+		if _, _, ok := g.tryAdmit("files.example.test"); !ok {
+			t.Fatal("an unthrottled host refused a transfer")
 		}
 	}
 	if limit, active := g.waiting("files.example.test"); limit != 0 || active != 5 {
 		t.Errorf("limit = %d, active = %d; want no limit and five in flight", limit, active)
 	}
 	// A host nobody named admits without bookkeeping at all.
-	if _, err := g.admit(context.Background(), ""); err != nil {
-		t.Errorf("admit of an unnamed host = %v", err)
+	if _, _, ok := g.tryAdmit(""); !ok {
+		t.Error("an unnamed host refused a transfer")
 	}
 }
 
@@ -67,9 +67,9 @@ func TestHostGateAdmitsEverythingUntilAHostAsksOtherwise(t *testing.T) {
 // nor gets the file, and would hold back a queue on the strength of nothing.
 func TestHostGateThrottlesOnlyAHostThatHasServedSomething(t *testing.T) {
 	g := newHostGate()
-	release, err := g.admit(context.Background(), "files.example.test")
-	if err != nil {
-		t.Fatal(err)
+	release, _, ok := g.tryAdmit("files.example.test")
+	if !ok {
+		t.Fatal("an unthrottled host refused a transfer")
 	}
 	defer release()
 
@@ -95,8 +95,8 @@ func TestHostGateWalksTheCapDownAndStopsAtOne(t *testing.T) {
 	g := newHostGate()
 	g.serving("files.example.test")
 	for range 6 {
-		if _, err := g.admit(context.Background(), "files.example.test"); err != nil {
-			t.Fatal(err)
+		if _, _, ok := g.tryAdmit("files.example.test"); !ok {
+			t.Fatal("an unthrottled host refused a transfer")
 		}
 	}
 
@@ -113,51 +113,42 @@ func TestHostGateWalksTheCapDownAndStopsAtOne(t *testing.T) {
 	}
 }
 
-// The point of a global queue: a dozen siblings retrying an overloaded host
-// take their turn instead of arriving together. Without it each item is only
-// ever patient on its own behalf, which is the shape that overloaded the
-// host in the first place.
-func TestHostGateSerialisesEveryTransferAtAThrottledHost(t *testing.T) {
+// The point of a global queue: a host that has asked to be given less gives
+// out that many slots and no more, whichever job or worker asks. What the
+// refused ones do is the next test's business — the rule here is simply that
+// they are refused rather than admitted alongside.
+func TestHostGateGivesOutOnlyAsManySlotsAsTheHostAllows(t *testing.T) {
 	g := newHostGate()
 	g.serving("files.example.test")
-	release, err := g.admit(context.Background(), "files.example.test")
-	if err != nil {
-		t.Fatal(err)
+	release, _, ok := g.tryAdmit("files.example.test")
+	if !ok {
+		t.Fatal("an unthrottled host refused a transfer")
 	}
 	if got := g.overloaded("files.example.test"); got != 1 {
 		t.Fatalf("cap = %d, want 1", got)
 	}
-	release()
 
-	var (
-		inFlight atomic.Int32
-		most     atomic.Int32
-		wg       sync.WaitGroup
-	)
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			done, err := g.admit(context.Background(), "files.example.test")
-			if err != nil {
-				return
-			}
-			n := inFlight.Add(1)
-			for {
-				high := most.Load()
-				if n <= high || most.CompareAndSwap(high, n) {
-					break
-				}
-			}
-			time.Sleep(time.Millisecond)
-			inFlight.Add(-1)
-			done()
-		}()
+	// The slot is taken, so nobody else may have one.
+	if _, limit, ok := g.tryAdmit("files.example.test"); ok {
+		t.Error("a second transfer was admitted to a host taking one at a time")
+	} else if limit != 1 {
+		t.Errorf("refusal reported a cap of %d, want 1", limit)
 	}
-	wg.Wait()
+	if !g.full("files.example.test") {
+		t.Error("a host with every slot taken did not report itself full")
+	}
+	// And a host nobody has throttled is never full.
+	if g.full("other.example.test") {
+		t.Error("an unthrottled host reported itself full")
+	}
 
-	if got := most.Load(); got != 1 {
-		t.Errorf("%d transfers were at the host at once, want 1 — the retries did not queue", got)
+	// Handing the slot back is somebody else's turn.
+	release()
+	if g.full("files.example.test") {
+		t.Error("a host still reported itself full after a slot was freed")
+	}
+	if _, _, ok := g.tryAdmit("files.example.test"); !ok {
+		t.Error("the freed slot was not given to the next transfer")
 	}
 }
 
@@ -167,9 +158,9 @@ func TestHostGateSerialisesEveryTransferAtAThrottledHost(t *testing.T) {
 func TestHostGateEasesBackUpAndForgetsAMeaninglessCap(t *testing.T) {
 	g := newHostGate()
 	g.serving("files.example.test")
-	release, err := g.admit(context.Background(), "files.example.test")
-	if err != nil {
-		t.Fatal(err)
+	release, _, ok := g.tryAdmit("files.example.test")
+	if !ok {
+		t.Fatal("an unthrottled host refused a transfer")
 	}
 	release()
 	g.overloaded("files.example.test")
@@ -193,31 +184,80 @@ func TestHostGateEasesBackUpAndForgetsAMeaninglessCap(t *testing.T) {
 	}
 }
 
-// A cancelled transfer must not sit in a queue it can never reach the front
-// of.
-func TestHostGateAdmitGivesUpWhenCancelled(t *testing.T) {
-	g := newHostGate()
-	g.serving("files.example.test")
-	if _, err := g.admit(context.Background(), "files.example.test"); err != nil {
+// A worker must never be parked waiting for a host. An item whose turn has
+// not come is handed back to the queue, where the dispatcher passes over it
+// until there is room — which is what leaves the workers free for the hosts
+// that are coping. The screenshot this comes from had three of four workers
+// sitting on one struggling host while everything else waited behind them.
+func TestAFullHostHandsTheItemBackInsteadOfHoldingAWorker(t *testing.T) {
+	payload := make([]byte, 16<<10)
+	if _, err := rand.Read(payload); err != nil {
 		t.Fatal(err)
 	}
-	g.overloaded("files.example.test") // cap 1, and it is taken
+	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
+	defer srv.Close()
+	other := httptest.NewServer((&rangeServer{payload: payload}).handler())
+	defer other.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := g.admit(ctx, "files.example.test")
-		done <- err
-	}()
-	cancel()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("a cancelled wait was admitted anyway")
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("a cancelled wait never returned")
+	m := busyManager(t)
+	busy, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	// The struggling host, capped at one and that one taken.
+	m.hostGate.serving(busy.Hostname())
+	release, _, ok := m.hostGate.tryAdmit(busy.Hostname())
+	if !ok {
+		t.Fatal("the gate refused the first transfer")
+	}
+	if got := m.hostGate.overloaded(busy.Hostname()); got != 1 {
+		t.Fatalf("cap = %d, want 1", got)
+	}
+
+	held := &Item{ID: newID(), Name: "held.mp4", URL: srv.URL + "/held.mp4", Size: -1}
+	err = m.transfer(context.Background(), held)
+	queued, isQueued := errors.AsType[*hostQueuedError](err)
+	if !isQueued {
+		t.Fatalf("transfer to a full host returned %v, want it handed back", err)
+	}
+	if queued.host != busy.Hostname() || queued.limit != 1 {
+		t.Errorf("handed back naming %s at %d, want %s at 1", queued.host, queued.limit, busy.Hostname())
+	}
+
+	// The queue is where it waits, and the dispatcher knows to pass over it.
+	m.mu.Lock()
+	deferred := m.deferHostQueuedLocked(held, err)
+	skipped := m.hostFullLocked(held)
+	note := held.Note
+	status := held.Status
+	m.mu.Unlock()
+	if !deferred || status != StatusQueued {
+		t.Errorf("the item was not returned to the queue (deferred=%v status=%s)", deferred, status)
+	}
+	if !skipped {
+		t.Error("the dispatcher would start an item whose host is full")
+	}
+	if !strings.Contains(note, busy.Hostname()) {
+		t.Errorf("note = %q, want it to name the host being waited for", note)
+	}
+
+	// And meanwhile a host that is coping carries on, which is the whole
+	// point of handing the first one back. Named through localhost so it is
+	// a different host from the one above: the gate keys on the name, and
+	// both test servers listen on the same address.
+	freeURL := strings.Replace(other.URL, "127.0.0.1", "localhost", 1)
+	free := &Item{ID: newID(), Name: "free.mp4", URL: freeURL + "/free.mp4", Size: -1}
+	if err := m.transfer(context.Background(), free); err != nil {
+		t.Fatalf("an untroubled host was held up by a throttled one: %v", err)
+	}
+	m.mu.Lock()
+	stillSkipped := m.hostFullLocked(free)
+	m.mu.Unlock()
+	if stillSkipped {
+		t.Error("an untroubled host was reported full")
+	}
+	release()
 }
 
 // bucklingServer serves anything under /ok/ and answers the first refusals
@@ -353,5 +393,73 @@ func TestOverloadPatienceIsBounded(t *testing.T) {
 	attempts := config.OverloadRetries + 1
 	if got, most := int(hits.Load()), attempts*(m.cfg.MaxRetries+1); got > most {
 		t.Errorf("server saw %d requests, want no more than %d", got, most)
+	}
+}
+
+// A signed link is minted for minutes, and an item can sit behind a host
+// taking one download at a time for hours. So the turn comes first and the
+// signature second: a link minted before the wait would expire where it
+// stood, and one spent on a transfer that is then turned away is a request
+// made of a host that has just asked for fewer of them.
+func TestASignedLinkIsMintedAfterTheHostsTurnNotBefore(t *testing.T) {
+	payload := make([]byte, 16<<10)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
+	defer srv.Close()
+
+	host, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := busyManager(t)
+	var signed atomic.Int32
+	it := &Item{
+		ID: newID(), Name: "clip.mp4", Size: -1,
+		// Where it last resolved to, which is how its host is known before
+		// anything is signed.
+		URL: srv.URL + "/stale.mp4",
+		resolve: func(context.Context) (*extractor.Target, error) {
+			signed.Add(1)
+			return &extractor.Target{URL: srv.URL + "/fresh.mp4", Size: -1}, nil
+		},
+	}
+
+	// The host is taking one download, and that one is taken.
+	m.hostGate.serving(host.Hostname())
+	release, _, ok := m.hostGate.tryAdmit(host.Hostname())
+	if !ok {
+		t.Fatal("the gate refused the first transfer")
+	}
+	if got := m.hostGate.overloaded(host.Hostname()); got != 1 {
+		t.Fatalf("cap = %d, want 1", got)
+	}
+
+	if err := m.transfer(context.Background(), it); err == nil {
+		t.Fatal("a transfer ran at a host with no slots left")
+	} else if _, queued := errors.AsType[*hostQueuedError](err); !queued {
+		t.Fatalf("transfer returned %v, want the item handed back", err)
+	}
+	if got := signed.Load(); got != 0 {
+		t.Errorf("%d links were signed for a transfer that never ran", got)
+	}
+
+	// Its turn comes, and only now is a link minted.
+	release()
+	if err := m.transfer(context.Background(), it); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	if got := signed.Load(); got != 1 {
+		t.Errorf("%d links were signed, want exactly the one that was used", got)
+	}
+
+	got, err := os.ReadFile(filepath.Join(m.cfg.DownloadDir, "clip.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Error("the file differs from the source")
 	}
 }

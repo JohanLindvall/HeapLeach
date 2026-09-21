@@ -1,9 +1,6 @@
 package download
 
-import (
-	"context"
-	"sync"
-)
+import "sync"
 
 // A global admission queue for a host that cannot take what it is given.
 //
@@ -61,30 +58,41 @@ func (g *hostGate) stateLocked(host string) *hostAdmission {
 	return st
 }
 
-// admit waits for a slot at host and returns the function that gives it
-// back. An unthrottled host admits everything at once, which is every host
-// until one says otherwise.
-func (g *hostGate) admit(ctx context.Context, host string) (func(), error) {
+// tryAdmit takes a slot at host if there is one, and returns the function
+// that gives it back. It never waits, and that is the whole point: a worker
+// blocked here is a worker not downloading from anywhere else, so an item
+// that cannot have a slot goes back to the queue instead and the worker
+// picks up whatever is next. The queue is where it waits; the dispatcher
+// skips it until this host has room (Manager.hostFullLocked).
+//
+// The limit returned alongside a refusal is what the host is taking, so the
+// item can say what it is waiting for.
+func (g *hostGate) tryAdmit(host string) (release func(), limit int, ok bool) {
 	if host == "" {
-		return func() {}, nil
+		return func() {}, 0, true
 	}
-	for {
-		g.mu.Lock()
-		st := g.stateLocked(host)
-		if st.limit <= 0 || st.active < st.limit {
-			st.active++
-			g.mu.Unlock()
-			return func() { g.release(host) }, nil
-		}
-		wake := st.wake
-		g.mu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-wake:
-		}
+	st := g.stateLocked(host)
+	if st.limit > 0 && st.active >= st.limit {
+		return nil, st.limit, false
 	}
+	st.active++
+	return func() { g.release(host) }, st.limit, true
+}
+
+// full reports whether a host is already giving out every slot it has. The
+// dispatcher asks before starting an item, so an item whose turn has not
+// come waits in the queue rather than in a worker.
+func (g *hostGate) full(host string) bool {
+	if host == "" {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	st, ok := g.hosts[host]
+	return ok && st.limit > 0 && st.active >= st.limit
 }
 
 // waiting reports how many transfers are queued for a host and what it is

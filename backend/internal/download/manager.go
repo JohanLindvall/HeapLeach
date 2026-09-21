@@ -419,10 +419,15 @@ func (m *Manager) lowOnSpace() bool {
 // resolves to, and nothing has resolved yet at dispatch. That one is a
 // queue the transfer itself waits in — see hostGate. Caller holds mu.
 func (m *Manager) hostFullLocked(it *Item) bool {
-	if it.pace == nil || it.pace.Files <= 0 {
-		return false
+	if it.pace != nil && it.pace.Files > 0 &&
+		m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files {
+		return true
 	}
-	return m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files
+	// And the cap a host has asked for itself. An item that has resolved
+	// once knows which host that is even while it sits in the queue, so
+	// its turn is waited for here rather than in a worker — which is what
+	// leaves the workers free for the hosts that are coping.
+	return m.hostGate.full(hostOf(it.URL))
 }
 
 // hostKeyLocked names the remote an item will be charged against.
@@ -492,6 +497,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		it.Status = StatusCanceled
 		it.Err = ""
 		m.logFinishedLocked(it, "download canceled")
+	case m.deferHostQueuedLocked(it, err):
+		// Its host is full and the item has gone back to the queue; the
+		// dispatcher will pick it up when that host has room. Not a
+		// failure, and nothing more to record here.
 	case m.deferStalledLocked(it, err):
 		// The stall watchdog gave up on this attempt, and the item has just
 		// been sent to the back of the queue with its part file intact —
@@ -715,6 +724,25 @@ func (m *Manager) enqueueLocked(it *Item) {
 	it.downloaded.Store(0)
 	it.lastBytes = 0
 	m.queue = append(m.queue, it)
+}
+
+// deferHostQueuedLocked puts an item back in the queue because its host is
+// already giving out every slot it has.
+//
+// Nothing has gone wrong and nothing is counted against the item: it simply
+// has not reached the front of that host's queue, and the dispatcher will
+// pass over it until there is room. Unlike a stall this carries no budget,
+// because there is no attempt to run out of — an item can wait its turn all
+// day without that meaning anything is failing.
+func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
+	queued, ok := errors.AsType[*hostQueuedError](err)
+	if !ok || it.retryPending {
+		return false
+	}
+	m.enqueueLocked(it) // clears the note along with the rest; say why after
+	it.Note = fmt.Sprintf("waiting for a slot at %s, which is taking %s at a time",
+		queued.host, plural(queued.limit, "download"))
+	return true
 }
 
 // deferStalledLocked sends a stalled item to the back of the queue instead
