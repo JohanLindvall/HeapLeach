@@ -1,10 +1,12 @@
 package server
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -19,8 +21,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 // handleState returns the current snapshot, for the initial page load and
 // as a fallback when EventSource is unavailable.
-func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.mgr.Snapshot())
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	// The one response here big enough to be worth compressing, and the
+	// one a browser asks for repeatedly: the polling fallback fetches it
+	// every couple of seconds, and on a long queue it is most of a
+	// megabyte of very repetitive JSON.
+	writeJSONMaybeCompressed(w, r, http.StatusOK, s.mgr.SnapshotFor(openJobs(r)))
 }
 
 // addRequest is the body of POST /api/downloads.
@@ -231,6 +237,41 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// compressibleJSON is the size above which a reply is worth compressing.
+// Below it the header costs more than the saving.
+const compressibleJSON = 1 << 10
+
+// writeJSONMaybeCompressed writes a reply, compressing a large one when the
+// client asked for that. The body is marshalled up front rather than
+// streamed, because whether it is worth compressing is a question about its
+// size.
+func writeJSONMaybeCompressed(w http.ResponseWriter, r *http.Request, status int, body any) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "no-store")
+
+	if len(payload) < compressibleJSON || !acceptsGzip(r) {
+		h.Set("Content-Length", strconv.Itoa(len(payload)))
+		w.WriteHeader(status)
+		_, _ = w.Write(payload)
+		return
+	}
+
+	h.Set("Content-Encoding", "gzip")
+	h.Add("Vary", "Accept-Encoding")
+	w.WriteHeader(status)
+	gz := gzip.NewWriter(w)
+	defer gz.Close()
+	_, _ = gz.Write(payload)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

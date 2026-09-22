@@ -159,14 +159,21 @@ type ItemView struct {
 	Error      string  `json:"error,omitempty"`
 	Note       string  `json:"note,omitempty"`
 	Path       string  `json:"path,omitempty"`
-	URL        string  `json:"url,omitempty"`
-	Streams    int     `json:"streams,omitempty"`
+	// URL is deliberately absent from the wire. It was the single largest
+	// thing in a snapshot — a signed storage link runs to a couple of
+	// hundred characters, and there is one per item — and no part of the
+	// UI has ever read it. See the note on Snapshot about what the payload
+	// is allowed to carry.
+	Streams int `json:"streams,omitempty"`
 	// Skipped is true when the file was already in the destination.
 	Skipped bool `json:"skipped,omitempty"`
 	// Segment counts are the only honest progress for a playlist transfer.
-	SegmentsDone  int     `json:"segmentsDone,omitempty"`
-	SegmentsTotal int     `json:"segmentsTotal,omitempty"`
-	Elapsed       float64 `json:"elapsed"`
+	SegmentsDone  int `json:"segmentsDone,omitempty"`
+	SegmentsTotal int `json:"segmentsTotal,omitempty"`
+	// Elapsed is for the terminal display, which reads a Snapshot in
+	// process. It is kept off the wire for the same reason as URL: the
+	// browser has never read it.
+	Elapsed float64 `json:"-"`
 }
 
 // JobView is the JSON shape of a job, with its aggregates precomputed so the
@@ -248,7 +255,6 @@ func (it *Item) view(note func(*Item) string) ItemView {
 		Error:         it.Err,
 		Note:          note(it),
 		Path:          it.Path,
-		URL:           it.URL,
 		Streams:       int(it.streams.Load()),
 		Skipped:       it.Skipped,
 		SegmentsDone:  it.SegmentsDone,

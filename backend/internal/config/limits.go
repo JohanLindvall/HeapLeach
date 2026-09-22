@@ -39,6 +39,17 @@ const (
 	// Fast enough to feel live, slow enough to stay cheap with many items.
 	ProgressTick = 400 * time.Millisecond
 
+	// IdleFrameInterval is how often a snapshot is pushed to browsers while
+	// transfers are running but no byte counter is moving.
+	//
+	// A queue held behind a host taking one download at a time spends most
+	// of its life in that state, and a full snapshot every ProgressTick to
+	// report that nothing happened is most of what such a queue costs.
+	// Slower than the tick but not silent: the rates decay towards zero
+	// while nothing moves, and a viewer should see that rather than a
+	// frozen number.
+	IdleFrameInterval = 2 * time.Second
+
 	// StateSaveInterval is how often the queue is written out. Slow on
 	// purpose: the file records what each item is and how it ended, never
 	// how many bytes it has moved, so between one status change and the next

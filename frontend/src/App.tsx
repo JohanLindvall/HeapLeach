@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError,
   cancelItem,
@@ -17,6 +17,7 @@ import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
 import { DownloadIcon, TrashIcon } from './components/Icons';
 import { isTerminal, matchesFilter, matchesQuery, type Filter } from './status';
+import type { JobView } from './types';
 import { useLiveState } from './useLiveState';
 import { useProgress } from './useProgress';
 import { useSpeedHistory } from './useSpeedHistory';
@@ -36,7 +37,35 @@ const ERROR_NOTICE_TTL_MS = 10000;
 const IDLE_TITLE = 'HeapLeach — bulk downloader';
 
 export default function App() {
-  const { snapshot, connection } = useLiveState();
+  // Which jobs the user has expanded, and the ids of those they chose
+  // deliberately.
+  //
+  // The server needs that list: it sends the rows of an open job whole and
+  // everything else reduced to what the search and the progress panel read,
+  // which on a queue of thousands of files is most of the payload. Only
+  // explicit choices travel — a job small enough to be expanded on sight is
+  // one the server sends whole anyway, so the default never has to be
+  // described here, and the list stays a plain function of what was
+  // clicked rather than of the snapshot it goes on to shape.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const openKey = useMemo(
+    () =>
+      Object.entries(expanded)
+        .filter(([, open]) => open)
+        .map(([id]) => id)
+        .sort()
+        .join(','),
+    [expanded],
+  );
+  const { snapshot, connection } = useLiveState(openKey);
+
+  // Multi-file jobs stay collapsed to keep a long queue scannable. Derived
+  // until the user chooses, rather than captured at mount: a job is usually
+  // mounted while still resolving, when its count is 0 — deciding then
+  // would leave every album expanded.
+  const isOpen = (job: JobView): boolean => expanded[job.id] ?? job.total <= 1;
+  const toggleJob = (job: JobView): void =>
+    setExpanded((current) => ({ ...current, [job.id]: !isOpen(job) }));
   const [notices, setNotices] = useState<Notice[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
@@ -211,6 +240,8 @@ export default function App() {
                   <JobCard
                     key={job.id}
                     job={job}
+                    open={isOpen(job)}
+                    onToggle={() => toggleJob(job)}
                     onCancel={() => run(() => cancelJob(job.id))}
                     onRetry={() => run(() => retryJob(job.id))}
                     onRemove={() => run(() => removeJob(job.id))}

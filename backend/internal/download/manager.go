@@ -90,8 +90,11 @@ type Manager struct {
 	diskFree    atomic.Int64
 	diskTotal   atomic.Int64
 
-	subsMu    sync.Mutex
-	subs      map[chan []byte]struct{}
+	subsMu sync.Mutex
+	// subs maps each open stream to the jobs that subscriber renders
+	// items for; everything else reaches it slimmed. See
+	// snapshotfilter.go.
+	subs      map[chan []byte]openSet
 	closed    bool // set under subsMu by Close; a late Subscribe is answered closed
 	closeOnce sync.Once
 
@@ -147,7 +150,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		wake:       make(chan struct{}, 1),
 		ctx:        ctx,
 		stop:       stop,
-		subs:       make(map[chan []byte]struct{}),
+		subs:       make(map[chan []byte]openSet),
 	}
 }
 
@@ -1107,7 +1110,16 @@ func (m *Manager) snapshotLocked() Snapshot {
 // without cancelling their contexts, so a browser reloading in the moment
 // between the manager closing and the listener closing would turn a clean
 // exit into a wait for the deadline and an error.
-func (m *Manager) Subscribe() (<-chan []byte, func()) {
+// SnapshotFor renders the state as one subscriber sees it: whole for the
+// jobs it has open, and slimmed elsewhere. See snapshotfilter.go.
+func (m *Manager) SnapshotFor(open []string) Snapshot {
+	return trimSnapshot(m.Snapshot(), newOpenSet(open))
+}
+
+// Subscribe registers for state snapshots. open names the jobs whose items
+// the subscriber actually renders; every other job arrives with its items
+// reduced to what the whole-queue views need. See trimSnapshot.
+func (m *Manager) Subscribe(open []string) (<-chan []byte, func()) {
 	ch := make(chan []byte, 1)
 
 	m.subsMu.Lock()
@@ -1116,7 +1128,7 @@ func (m *Manager) Subscribe() (<-chan []byte, func()) {
 		close(ch)
 		return ch, func() {}
 	}
-	m.subs[ch] = struct{}{}
+	m.subs[ch] = newOpenSet(open)
 	m.subsMu.Unlock()
 
 	return ch, func() {
@@ -1136,6 +1148,10 @@ func (m *Manager) broadcast() {
 	ticker := time.NewTicker(config.ProgressTick)
 	defer ticker.Stop()
 
+	// When the last frame went out, so a queue that is running but not
+	// moving can be refreshed on a slower beat than one that is.
+	var lastFrame time.Time
+
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -1146,8 +1162,9 @@ func (m *Manager) broadcast() {
 
 			m.mu.Lock()
 			active := m.running > 0
+			moved := false
 			if active {
-				m.sampleLocked(now)
+				moved = m.sampleLocked(now)
 			}
 			// With nobody subscribed there is no one to build a snapshot
 			// for: a headless run polls Snapshot itself, and a browser that
@@ -1157,19 +1174,30 @@ func (m *Manager) broadcast() {
 			// What is saved is encoding every item of every job — tens of
 			// thousands of them on a large listing — twice a second for no
 			// reader.
-			if !listening || (!m.dirty.Swap(false) && !active) {
+			if !listening {
 				m.mu.Unlock()
 				continue
 			}
+			dirty := m.dirty.Swap(false)
+			if !dirty && !active {
+				m.mu.Unlock()
+				continue
+			}
+			// Running, but nothing actually moving: a queue held behind a
+			// host taking one download at a time spends most of its life
+			// here. The display still wants refreshing, because the rates
+			// decay towards zero and a viewer should see that happen, but
+			// it does not want a full snapshot two and a half times a
+			// second to say so.
+			if !dirty && !moved && now.Sub(lastFrame) < config.IdleFrameInterval {
+				m.mu.Unlock()
+				continue
+			}
+			lastFrame = now
 			snap := m.snapshotLocked()
 			m.mu.Unlock()
 
-			payload, err := json.Marshal(snap)
-			if err != nil {
-				m.log.Error("marshal snapshot", "err", err)
-				continue
-			}
-			m.publish(payload)
+			m.publish(snap)
 		}
 	}
 }
@@ -1208,7 +1236,16 @@ func (m *Manager) sampleDisk(now time.Time) {
 }
 
 // sampleLocked refreshes the per-item transfer rate. Caller holds mu.
-func (m *Manager) sampleLocked(now time.Time) {
+// sampleLocked refreshes every running item's rate, and reports whether any
+// of them actually moved a byte since the last sample.
+//
+// That answer is what separates a queue that is working from one that is
+// merely open. A thousand items waiting behind a throttled host look exactly
+// like a thousand items downloading, from the broadcaster's side: transfers
+// are running either way. Only the byte counters tell the two apart, and
+// there is nothing worth sending twice a second about the second one.
+func (m *Manager) sampleLocked(now time.Time) bool {
+	moved := false
 	for _, job := range m.jobs {
 		for _, it := range job.Items {
 			if it.Status != StatusRunning {
@@ -1220,6 +1257,9 @@ func (m *Manager) sampleLocked(now time.Time) {
 				continue
 			}
 			current := it.downloaded.Load()
+			if current != it.lastBytes {
+				moved = true
+			}
 			instant := float64(current-it.lastBytes) / elapsed
 			if instant < 0 {
 				instant = 0
@@ -1234,6 +1274,7 @@ func (m *Manager) sampleLocked(now time.Time) {
 			it.lastBytes, it.lastSample = current, now
 		}
 	}
+	return moved
 }
 
 // hasSubscribers reports whether anyone is waiting on the event stream.
@@ -1245,21 +1286,49 @@ func (m *Manager) hasSubscribers() bool {
 
 // publish sends a payload to every subscriber, replacing any snapshot a slow
 // client has not read yet: only the newest state is worth delivering.
-func (m *Manager) publish(payload []byte) {
+func (m *Manager) publish(snap Snapshot) {
 	m.subsMu.Lock()
 	defer m.subsMu.Unlock()
-	for ch := range m.subs {
+
+	// One encoding per distinct set of open jobs rather than per
+	// subscriber: two browsers looking at the same thing are the common
+	// case, and encoding a long queue twice for them would be the whole
+	// saving spent again. Done under the lock, which is otherwise only
+	// taken when a browser connects or leaves, so the cost lands on a
+	// reconnect rather than on a transfer.
+	encoded := make(map[string][]byte, 1)
+	for ch, open := range m.subs {
+		key := open.key()
+		payload, ok := encoded[key]
+		if !ok {
+			var err error
+			if payload, err = json.Marshal(trimSnapshot(snap, open)); err != nil {
+				m.log.Error("marshal snapshot", "err", err)
+				return
+			}
+			encoded[key] = payload
+		}
+		m.deliverLocked(ch, payload)
+	}
+}
+
+// deliverLocked hands a payload to one subscriber, replacing any snapshot it
+// has not read yet: only the newest state is worth delivering. Caller holds
+// subsMu.
+func (m *Manager) deliverLocked(ch chan []byte, payload []byte) {
+	select {
+	case ch <- payload:
+	default:
+		// The buffer holds one frame. A client that has not read the last
+		// one gets it dropped for this one: state is cumulative, so the
+		// newer frame says everything the older one did.
+		select {
+		case <-ch:
+		default:
+		}
 		select {
 		case ch <- payload:
 		default:
-			select {
-			case <-ch:
-			default:
-			}
-			select {
-			case ch <- payload:
-			default:
-			}
 		}
 	}
 }

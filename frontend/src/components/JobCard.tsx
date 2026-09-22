@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf } from '../format';
 import { isActive, isRetryable } from '../status';
 import type { JobView } from '../types';
@@ -9,6 +9,10 @@ import { useVirtualRows } from '../useVirtualRows';
 
 interface JobCardProps {
   readonly job: JobView;
+  /** Whether the file list is showing. Owned by the app, which tells the
+   *  server which jobs need their rows sent in full. */
+  readonly open: boolean;
+  readonly onToggle: () => void;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
   readonly onRemove: () => void;
@@ -19,19 +23,14 @@ interface JobCardProps {
 /** One submitted link, with its files collapsed behind a disclosure. */
 export function JobCard({
   job,
+  open,
+  onToggle,
   onCancel,
   onRetry,
   onRemove,
   onCancelItem,
   onRetryItem,
 }: JobCardProps) {
-  // Multi-file jobs stay collapsed to keep a long queue scannable. Derived
-  // until the user chooses, rather than captured at mount: a job is usually
-  // mounted while still resolving, when its count is 0 — deciding then
-  // would leave every album expanded.
-  const [userOpen, setUserOpen] = useState<boolean | null>(null);
-  const open = userOpen ?? job.total <= 1;
-
   // A job of thousands of files is a list only the browser suffers for
   // holding whole, so a long one is rendered a viewport at a time. Closed,
   // it has no rows at all and nothing to window.
@@ -53,7 +52,7 @@ export function JobCard({
           type="button"
           className={`job__toggle ${open ? 'is-open' : ''}`}
           aria-expanded={open}
-          onClick={() => setUserOpen(!open)}
+          onClick={onToggle}
           disabled={job.items.length === 0}
         >
           <ChevronIcon />

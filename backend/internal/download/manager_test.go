@@ -200,7 +200,7 @@ func TestSubscribeAfterCloseIsAlreadyClosed(t *testing.T) {
 	m, _ := newTestManager(t)
 	m.Close()
 
-	events, unsubscribe := m.Subscribe()
+	events, unsubscribe := m.Subscribe(nil)
 	select {
 	case _, ok := <-events:
 		if ok {
@@ -224,7 +224,7 @@ func TestBroadcastWaitsForASubscriber(t *testing.T) {
 		t.Fatal("the broadcaster spent the dirty flag with nobody listening")
 	}
 
-	events, unsubscribe := m.Subscribe()
+	events, unsubscribe := m.Subscribe(nil)
 	defer unsubscribe()
 	select {
 	case payload := <-events:

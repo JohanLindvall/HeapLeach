@@ -993,6 +993,44 @@ payload is rendered by the UI: it once carried the host names for a list that
 only restated what the build supported, and now carries `hostCount` alone,
 which is all the progress panel reads.
 
+**A snapshot is complete for what the client is showing, which is not the
+same as complete.** A queue of a couple of thousand files was most of a
+megabyte a frame, two and a half times a second, to paint a few dozen rows —
+2.3 MB/s to a browser that was displaying none of it. Four things cut that,
+and they are worth knowing apart because they fail differently:
+
+- **Fields nothing reads are not sent** (`ItemView`). The item URL was the
+  single largest thing in a frame — a signed storage link is a couple of
+  hundred characters and there is one per item, 39% of the payload — and the
+  browser has never looked at it. `Elapsed` is the terminal's, read from a
+  Snapshot in process. Together, 43%. The rule this follows is the one
+  already stated above: a field the UI stops reading comes out of the
+  payload.
+- **Items of jobs the client has not opened arrive slimmed**
+  (`snapshotfilter.go`). A collapsed card draws aggregates the server has
+  already computed; an open one draws a windowed slice of rows. What the
+  whole-queue views still need is a name, for the file search, and an id,
+  status and byte counts, for the progress panel that counts finished files
+  once each. Everything else belongs to a row nobody can see. The browser
+  names the jobs it expanded on the stream's URL and re-subscribes when that
+  changes, which is a deliberate click and costs one frame. A job of
+  `smallJob` items or fewer is sent whole regardless, which is what spares
+  the client from having to describe the jobs it opens by default.
+- **The stream is compressed** when the client asks (`compressed` in
+  `sse.go`). A frame is mostly the same words as the last one, so it packs
+  about six to one. Both layers have to be flushed per event, in order, or
+  the browser sees nothing until the next frame pushes the last one out.
+- **A frame is skipped when nothing moved** (`config.IdleFrameInterval`).
+  `sampleLocked` reports whether any byte counter actually advanced, which
+  is what separates a queue that is working from one that is merely open —
+  a thousand items held behind a throttled host look identical from the
+  broadcaster's side. Those refresh on a slower beat rather than not at all,
+  since the rates decay towards zero and a viewer should see that.
+
+Measured on a real queue of 2044 files, in that order: 902 kB a frame, then
+502, then 238, then 65 compressed. 2.3 MB/s becomes 0.16, and 0.03 while
+nothing is moving.
+
 **Shutdown ordering matters.** `http.Server.Shutdown` waits for in-flight
 requests and does *not* cancel their contexts, so an open SSE stream holds it
 until the deadline. `main.go` calls `manager.Close()` **before**
