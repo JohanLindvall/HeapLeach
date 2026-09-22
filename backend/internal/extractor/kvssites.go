@@ -191,7 +191,7 @@ func kvsRenditions(vars map[string]string) ([]mediaCandidate, error) {
 		}
 		out = append(out, mediaCandidate{
 			URL:     direct,
-			Quality: qualityOf(util.FirstNonEmpty(vars[key+"_text"], direct)),
+			Quality: kvsQuality(vars, key, direct),
 			IsHLS:   strings.Contains(direct, ".m3u8"),
 		})
 	}
@@ -199,6 +199,39 @@ func kvsRenditions(vars map[string]string) ([]mediaCandidate, error) {
 		return nil, firstErr
 	}
 	return out, nil
+}
+
+// kvsHDQuality is what a rendition flagged high-definition without stating a
+// resolution ranks as: above any standard-definition label, which is what
+// the flag distinguishes it from.
+const kvsHDQuality = 720
+
+// kvsQuality ranks one rendition.
+//
+// The label is tried first and the file name second, since installs label
+// some renditions with a resolution and leave others to the name. What
+// neither covers is a label that is a word — "HQ", "HD" — and that is how
+// some installs mark their best file: the main rendition labelled "HQ" and
+// flagged video_url_hd, beside an alternate labelled "240p". Read as a
+// number, the word is nothing, so the 240p won and every download from those
+// installs came down at the lowest quality on offer. The word and the _hd
+// flag both mean high definition, so either ranks the rendition as such.
+func kvsQuality(vars map[string]string, key, direct string) int {
+	label := vars[key+"_text"]
+	if q := qualityOf(label); q > 0 {
+		return q
+	}
+	if q := qualityOf(direct); q > 0 {
+		return q
+	}
+	switch strings.ToUpper(strings.TrimSpace(label)) {
+	case "HQ", "HD", "FHD", "FULL HD":
+		return kvsHDQuality
+	}
+	if vars[key+"_hd"] == "1" {
+		return kvsHDQuality
+	}
+	return 0
 }
 
 // kvsExtension picks the file extension the player advertises, falling back

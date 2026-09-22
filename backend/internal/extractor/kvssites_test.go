@@ -211,3 +211,47 @@ func TestKVSResultKeepsASignedLinkWhole(t *testing.T) {
 		}
 	}
 }
+
+// Some installs label their best rendition with a word rather than a
+// resolution — "HQ", flagged video_url_hd — beside an alternate labelled
+// "240p". Read as a number the word is nothing, and the 240p won.
+func TestKVSResultPrefersARenditionLabelledHQOverANumberedOne(t *testing.T) {
+	page := `<html><head><title>Word Label - Example Tube</title></head><body>
+<script>var flashvars = { video_id: '1', video_title: 'Word Label', license_code: '` + kvsLicense + `', ` +
+		`video_url: '` + kvsHighScrambled + `', video_url_text: 'HQ', video_url_hd: '1', ` +
+		`video_alt_url: '` + kvsLowScrambled + `', video_alt_url_text: '240p', postfix: '.mp4' };</script></body></html>`
+	u, err := ParseURL("https://example.test/videos/1/word-label/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := kvsResult(page, u, "example")
+	if err != nil {
+		t.Fatalf("kvsResult: %v", err)
+	}
+	if got := res.Files[0].URL; got != kvsHighDirect {
+		t.Errorf("chose\n  %s\nwant the HQ rendition\n  %s", got, kvsHighDirect)
+	}
+}
+
+func TestKVSQuality(t *testing.T) {
+	cases := []struct {
+		vars map[string]string
+		want int
+	}{
+		{map[string]string{"video_url_text": "1080p"}, 1080},
+		{map[string]string{"video_url_text": "HQ"}, kvsHDQuality},
+		{map[string]string{"video_url_text": "HD"}, kvsHDQuality},
+		{map[string]string{"video_url_hd": "1"}, kvsHDQuality},
+		{map[string]string{"video_url_text": "LQ"}, 0},
+		{map[string]string{}, 0},
+	}
+	for _, tc := range cases {
+		if got := kvsQuality(tc.vars, "video_url", "https://example.test/get_file/1/x/1/1.mp4/"); got != tc.want {
+			t.Errorf("kvsQuality(%v) = %d, want %d", tc.vars, got, tc.want)
+		}
+	}
+	// The file name is read when the label says nothing.
+	if got := kvsQuality(map[string]string{}, "video_url", "https://example.test/get_file/1/x/1/1_480p.mp4/"); got != 480 {
+		t.Errorf("name quality = %d, want 480", got)
+	}
+}
