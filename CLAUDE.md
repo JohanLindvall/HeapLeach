@@ -1016,15 +1016,35 @@ and they are worth knowing apart because they fail differently:
   cards all still see complete lists and none of them knows the wire is
   thrifty.
 
-  Three things keep that self-healing, and each is a way a merge could
-  otherwise be wrong. A job whose item list changed length is sent whole,
-  because a patch cannot express a removal. A new subscription is answered
-  with the whole state, handed back by `Subscribe` itself so that
-  registering and having something to merge into are one act — taking the
-  snapshot separately afterwards sent the queue twice. And a frame dropped
-  on the way to a slow reader leaves that subscriber owed a whole one, which
-  `deliverLocked` reports, because the changes it carried are not coming
-  again.
+  Four things keep that self-healing, and each is a way a merge could
+  otherwise be wrong, or a way the saving quietly evaporates.
+
+  A job whose list **lost** rows is sent whole, because a merge only adds
+  and replaces and has no way to say a row is gone. A list that merely grew
+  is a patch carrying the new rows, which is the common case while a large
+  album resolves — items arriving a page at a time — and exactly when
+  sending the whole list again costs most. A list where *every* row is new
+  is sent whole too: that is either first sight or a wholesale replacement,
+  and a re-read drops the items and resolves them again, which can land
+  between two frames and leave the count unchanged while nothing else is.
+
+  A new subscription is answered with the whole state, handed back by
+  `Subscribe` itself so that registering and having something to merge into
+  are one act. It records that snapshot as sent, or the next broadcast finds
+  every row unlike the nothing it was compared against and sends the lot a
+  second time; and it marks every other subscriber stale, since what they
+  were last told has just been recorded as delivered.
+
+  A frame dropped on the way to a slow reader leaves that subscriber owed a
+  whole one, which `deliverLocked` reports, because the changes it carried
+  are not coming again.
+
+  And the one-a-second ceiling applies whatever is happening. A job being
+  read for the first time marks the state changed on every tick as its items
+  arrive; letting that bypass the ceiling put out two and a half frames a
+  second on its own. The dirty flag is read rather than taken when a frame
+  is skipped, so a frame that is not sent cannot swallow the change that
+  would have justified the next one.
 - **The stream is compressed** when the client asks (`compressed` in
   `sse.go`). A frame is mostly the same words as the last one, so it packs
   about six to one. Both layers have to be flushed per event, in order, or
@@ -1036,9 +1056,9 @@ and they are worth knowing apart because they fail differently:
   broadcaster's side. Those refresh on a slower beat rather than not at all,
   since the rates decay towards zero and a viewer should see that.
 
-Measured on a real queue of 2044 files: a frame was 902 kB and is now 1.3 kB
-once the first one has gone out, and they go out once a second rather than
-two and a half times. 2.3 MB/s becomes a couple of kilobytes a second. The
+Measured on a real queue of 2044 files: a frame was 902 kB and is now 1,334
+bytes once the first one has gone out, and they go out at most once a second
+rather than two and a half times. 2.3 MB/s becomes a couple of kilobytes a second. The
 whole state is still sent once per connection, which is what a browser
 arriving has to be told.
 

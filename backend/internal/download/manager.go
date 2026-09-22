@@ -1129,19 +1129,36 @@ type subscriber struct{ stale bool }
 func (m *Manager) Subscribe() (<-chan []byte, []byte, func()) {
 	ch := make(chan []byte, 1)
 
+	m.mu.Lock()
+	snap := m.snapshotLocked()
+	// Records that browsers have now been told this, so the next broadcast
+	// is a patch rather than the whole queue over again. Without it the
+	// first frame after a connection found every row unlike the nothing it
+	// had been compared against, and sent the lot a second time.
+	m.patchLocked(snap)
+
 	m.subsMu.Lock()
 	if m.closed {
 		m.subsMu.Unlock()
+		m.mu.Unlock()
 		close(ch)
 		return ch, nil, func() {}
 	}
 	m.subs[ch] = &subscriber{}
+	// Everyone else is owed a whole frame: what they were last told is now
+	// recorded as sent, and the difference between that and this snapshot
+	// would otherwise go to nobody.
+	for other, sub := range m.subs {
+		if other != ch {
+			sub.stale = true
+		}
+	}
 	m.subsMu.Unlock()
+	m.mu.Unlock()
 
-	// Taken after the lock is released: the broadcaster holds mu and then
-	// takes subsMu, so taking them the other way round here would be the
-	// one ordering that can deadlock.
-	initial, err := json.Marshal(m.Snapshot())
+	// Encoded outside the locks. The snapshot is a copy down to the item
+	// values, so nothing it holds can change underneath this.
+	initial, err := json.Marshal(snap)
 	if err != nil {
 		m.log.Error("marshal snapshot", "err", err)
 		initial = nil
@@ -1194,28 +1211,35 @@ func (m *Manager) broadcast() {
 				m.mu.Unlock()
 				continue
 			}
-			dirty := m.dirty.Swap(false)
+			// One frame a second, whatever is happening. The tick above is
+			// a sampling rate — rates are measured often so they read
+			// smoothly — and a number on a screen is not worth redrawing
+			// faster than this. A job being read for the first time marks
+			// the state changed on every tick as its items arrive, and
+			// without a ceiling here that alone put out two and a half
+			// frames a second.
+			since := now.Sub(lastFrame)
+			if since < config.FrameInterval {
+				m.mu.Unlock()
+				continue
+			}
+			// Read rather than taken: a frame that is not sent must not
+			// swallow the change that would have justified the next one.
+			dirty := m.dirty.Load()
 			if !dirty && !active {
 				m.mu.Unlock()
 				continue
 			}
-			// A frame a second while things move. The tick above is a
-			// sampling rate — rates are measured often so they read
-			// smoothly — and a number on a screen is not worth redrawing
-			// faster than this.
-			gap := config.FrameInterval
-			if !moved {
-				// Running, but nothing actually moving: a queue held
-				// behind a host taking one download at a time spends most
-				// of its life here. It still wants refreshing, because the
-				// rates decay towards zero and a viewer should see that,
-				// but far less often.
-				gap = config.IdleFrameInterval
-			}
-			if !dirty && now.Sub(lastFrame) < gap {
+			// Running, but nothing actually moving: a queue held behind a
+			// host taking one download at a time spends most of its life
+			// here. It still wants refreshing, because the rates decay
+			// towards zero and a viewer should see that, but far less
+			// often.
+			if !dirty && !moved && since < config.IdleFrameInterval {
 				m.mu.Unlock()
 				continue
 			}
+			m.dirty.Store(false)
 			lastFrame = now
 			snap := m.snapshotLocked()
 			patch := m.patchLocked(snap)
@@ -1327,7 +1351,7 @@ func (m *Manager) patchLocked(snap Snapshot) Snapshot {
 			continue
 		}
 
-		whole := len(view.Items) != job.lastCount
+		shrank := len(view.Items) < job.lastCount
 		job.lastCount = len(view.Items)
 
 		changed := make([]ItemView, 0, 8)
@@ -1337,7 +1361,18 @@ func (m *Manager) patchLocked(snap Snapshot) Snapshot {
 				changed = append(changed, iv)
 			}
 		}
-		if whole {
+		// Whole when a merge could not say what happened. A list that got
+		// shorter has lost rows, and a merge only ever adds or replaces
+		// them. A list where *every* row is new is either the first sight
+		// of this job or its contents replaced wholesale — a re-read drops
+		// the items and resolves them again, which can land between two
+		// frames and leave the count unchanged while nothing else is.
+		//
+		// A list that merely grew is a patch: the new rows are the changed
+		// ones, and the client appends what it does not recognise. That is
+		// the common case while a large album resolves, which is exactly
+		// when a whole list is most expensive to send.
+		if shrank || len(changed) == len(view.Items) {
 			out.Jobs[i] = view
 			continue
 		}

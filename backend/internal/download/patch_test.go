@@ -62,9 +62,9 @@ func TestPatchCarriesOnlyWhatChanged(t *testing.T) {
 	}
 }
 
-// A list that has changed length cannot be patched into what a browser
-// holds: rows may have gone as well as arrived, and a merge cannot say so.
-func TestPatchSendsTheWholeListWhenItemsComeOrGo(t *testing.T) {
+// A list that lost rows cannot be patched into what a browser holds: a
+// merge only ever adds or replaces, so it has no way to say a row is gone.
+func TestPatchSendsTheWholeListWhenRowsAreLost(t *testing.T) {
 	m, job := patchManager()
 	m.patchLocked(m.snapshotLocked())
 
@@ -76,14 +76,48 @@ func TestPatchSendsTheWholeListWhenItemsComeOrGo(t *testing.T) {
 	if got := len(out.Jobs[0].Items); got != 2 {
 		t.Errorf("carried %d items, want the whole shortened list", got)
 	}
+}
+
+// A list that merely grew is a patch carrying the new rows, which the
+// client appends. This is the common case while a large album resolves —
+// items arriving a page at a time — and it is exactly when sending the
+// whole list again is most expensive.
+func TestPatchCarriesOnlyTheNewRowsWhenAListGrows(t *testing.T) {
+	m, job := patchManager()
+	m.patchLocked(m.snapshotLocked())
 
 	job.Items = append(job.Items, &Item{ID: "d", Name: "d.mp4", Status: StatusQueued})
-	out = m.patchLocked(m.snapshotLocked())
+	out := m.patchLocked(m.snapshotLocked())
+	if !out.Jobs[0].Patch {
+		t.Error("a lengthened list was sent whole")
+	}
+	if got := len(out.Jobs[0].Items); got != 1 {
+		t.Fatalf("carried %d items, want only the new one", got)
+	}
+	if got := out.Jobs[0].Items[0].ID; got != "d" {
+		t.Errorf("carried %q, want the row that arrived", got)
+	}
+}
+
+// Contents replaced wholesale is the case that makes a count comparison
+// insufficient on its own: a job re-read after a restart drops its items and
+// resolves them again, and both halves can land between two frames. Every
+// row being new is what gives that away.
+func TestPatchSendsTheWholeListWhenEveryRowIsNew(t *testing.T) {
+	m, job := patchManager()
+	m.patchLocked(m.snapshotLocked())
+
+	job.Items = []*Item{
+		{ID: "x", Name: "x.mp4", Status: StatusQueued},
+		{ID: "y", Name: "y.mp4", Status: StatusQueued},
+		{ID: "z", Name: "z.mp4", Status: StatusQueued},
+	}
+	out := m.patchLocked(m.snapshotLocked())
 	if out.Jobs[0].Patch {
-		t.Error("a lengthened list was sent as a patch")
+		t.Error("a list replaced wholesale was sent as a patch, leaving the old rows behind")
 	}
 	if got := len(out.Jobs[0].Items); got != 3 {
-		t.Errorf("carried %d items, want the whole lengthened list", got)
+		t.Errorf("carried %d items, want the whole replaced list", got)
 	}
 }
 
