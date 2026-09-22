@@ -10,7 +10,6 @@ const POLL_TIMEOUT_MS = 10_000;
 export function subscribeLiveState(
   onSnapshot: (snapshot: Snapshot) => void,
   onConnection: (connection: ConnectionState) => void,
-  open = '',
 ): () => void {
   let source: EventSource | null = null;
   let reconnectTimer: number | undefined;
@@ -32,7 +31,7 @@ export function subscribeLiveState(
     pollRequest = request;
     const timeout = window.setTimeout(() => request.abort(), POLL_TIMEOUT_MS);
     try {
-      const state = await fetchState(request.signal, open);
+      const state = await fetchState(request.signal);
       // A poll can finish after the stream reconnects or the component
       // unmounts. It must never replace a newer stream's state.
       if (!closed && polling && !request.signal.aborted) onSnapshot(state);
@@ -65,11 +64,7 @@ export function subscribeLiveState(
     if (closed) return;
     let stream: EventSource;
     try {
-      // The jobs whose rows are on screen ride on the URL, so the server
-      // can send everything else slimmed. Expanding a card re-subscribes,
-      // which costs one frame and happens only when somebody clicks.
-      const query = open ? `?open=${encodeURIComponent(open)}` : '';
-      stream = new EventSource(`/api/events${query}`);
+      stream = new EventSource('/api/events');
     } catch {
       // A browser without EventSource still has a working polling UI.
       disconnected();

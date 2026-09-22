@@ -2,7 +2,6 @@ package server
 
 import (
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,23 +44,21 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		s.seen()
 	}()
 
-	// Which jobs this browser has open, so the rest arrive with their
-	// items reduced to what the whole-queue views read. The client
-	// reconnects with a new list when a card is expanded or collapsed,
-	// which is a rare deliberate action and costs one frame.
-	open := openJobs(r)
-
-	events, unsubscribe := s.mgr.Subscribe(open)
+	// The whole of the current state comes back with the subscription, so
+	// the page renders without waiting for the first change — and so that
+	// registering and being given something to merge into are one act.
+	// Every frame after it carries only what moved.
+	events, initial, unsubscribe := s.mgr.Subscribe()
 	defer unsubscribe()
 
-	// Send the current state at once so the page renders without waiting
-	// for the first change.
-	payload, err := json.Marshal(s.mgr.SnapshotFor(open))
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// No first frame means the manager has closed, and this stream has
+	// nothing to carry: end it rather than hold a shutdown to its deadline.
+	// An error page cannot be written here either way — the headers have
+	// gone out and they promise a compressed event stream.
+	if initial == nil {
 		return
 	}
-	if !writeEvent(out, gz, rc, payload) {
+	if !writeEvent(out, gz, rc, initial) {
 		return
 	}
 
@@ -126,17 +123,6 @@ func compressed(w http.ResponseWriter, r *http.Request) (io.Writer, *gzip.Writer
 	h.Add("Vary", "Accept-Encoding")
 	gz := gzip.NewWriter(w)
 	return gz, gz
-}
-
-// openJobs reads the job ids a client renders items for, as a comma-joined
-// "open" parameter. Absent means none are open, which is what a freshly
-// loaded page shows.
-func openJobs(r *http.Request) []string {
-	raw := r.URL.Query().Get("open")
-	if raw == "" {
-		return nil
-	}
-	return strings.Split(raw, ",")
 }
 
 // acceptsGzip reports whether the client will take a compressed reply.

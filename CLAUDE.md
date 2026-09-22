@@ -1006,16 +1006,25 @@ and they are worth knowing apart because they fail differently:
   Snapshot in process. Together, 43%. The rule this follows is the one
   already stated above: a field the UI stops reading comes out of the
   payload.
-- **Items of jobs the client has not opened arrive slimmed**
-  (`snapshotfilter.go`). A collapsed card draws aggregates the server has
-  already computed; an open one draws a windowed slice of rows. What the
-  whole-queue views still need is a name, for the file search, and an id,
-  status and byte counts, for the progress panel that counts finished files
-  once each. Everything else belongs to a row nobody can see. The browser
-  names the jobs it expanded on the stream's URL and re-subscribes when that
-  changes, which is a deliberate click and costs one frame. A job of
-  `smallJob` items or fewer is sent whole regardless, which is what spares
-  the client from having to describe the jobs it opens by default.
+- **Only the rows that changed are sent** (`Manager.patchLocked`,
+  `frontend/src/snapshotMerge.ts`). Almost nothing in a queue changes from
+  one second to the next: a thousand finished files say exactly what they
+  said before. So a frame carries every job whole — its counts, its size,
+  its rate, all of which are small — and inside it only the items whose wire
+  view differs from the one last broadcast, marked `patch`. The browser
+  merges them into what it holds, so the search, the progress panel and the
+  cards all still see complete lists and none of them knows the wire is
+  thrifty.
+
+  Three things keep that self-healing, and each is a way a merge could
+  otherwise be wrong. A job whose item list changed length is sent whole,
+  because a patch cannot express a removal. A new subscription is answered
+  with the whole state, handed back by `Subscribe` itself so that
+  registering and having something to merge into are one act — taking the
+  snapshot separately afterwards sent the queue twice. And a frame dropped
+  on the way to a slow reader leaves that subscriber owed a whole one, which
+  `deliverLocked` reports, because the changes it carried are not coming
+  again.
 - **The stream is compressed** when the client asks (`compressed` in
   `sse.go`). A frame is mostly the same words as the last one, so it packs
   about six to one. Both layers have to be flushed per event, in order, or
@@ -1027,9 +1036,11 @@ and they are worth knowing apart because they fail differently:
   broadcaster's side. Those refresh on a slower beat rather than not at all,
   since the rates decay towards zero and a viewer should see that.
 
-Measured on a real queue of 2044 files, in that order: 902 kB a frame, then
-502, then 238, then 65 compressed. 2.3 MB/s becomes 0.16, and 0.03 while
-nothing is moving.
+Measured on a real queue of 2044 files: a frame was 902 kB and is now 1.3 kB
+once the first one has gone out, and they go out once a second rather than
+two and a half times. 2.3 MB/s becomes a couple of kilobytes a second. The
+whole state is still sent once per connection, which is what a browser
+arriving has to be told.
 
 **Shutdown ordering matters.** `http.Server.Shutdown` waits for in-flight
 requests and does *not* cancel their contexts, so an open SSE stream holds it

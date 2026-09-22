@@ -82,6 +82,12 @@ type Item struct {
 	// reject, when set, recognises this host's way of answering a dead
 	// resource with a valid-looking body. See extractor.File.Reject.
 	reject func(string, http.Header) error
+	// lastView is what was last broadcast for this item, so the next frame
+	// can carry only the rows that actually changed. Guarded by
+	// Manager.mu, and written only on the broadcast path — a snapshot read
+	// by the terminal or by /api/state settles nothing about what a
+	// browser has been sent.
+	lastView ItemView
 	// waitingFor is the host this item is queued behind, when it is. It is
 	// kept rather than baked into the note because what that host is taking
 	// changes while the item waits, and a note written once would go on
@@ -138,6 +144,11 @@ type Job struct {
 	// status derived from the items.
 	canceled bool
 	cancel   context.CancelFunc
+	// lastCount is how many items this job had in the last frame broadcast.
+	// A list that has changed length cannot be patched into what a browser
+	// holds — items may have gone as well as arrived — so it is sent whole
+	// instead. Guarded by Manager.mu.
+	lastCount int
 	// restored marks a job read back from the state file with work left in
 	// it. Its items describe what was found last time, which is enough to
 	// show but not to fetch: the links they were reached by have expired, or
@@ -195,6 +206,11 @@ type JobView struct {
 	Size       int64      `json:"size"`
 	Downloaded int64      `json:"downloaded"`
 	Speed      float64    `json:"speed"`
+	// Patch marks Items as only the rows that changed since this
+	// subscriber's last frame, to be merged into what it already has
+	// rather than replacing it. Absent means the list is complete. See
+	// Manager.patchLocked.
+	Patch bool `json:"patch,omitempty"`
 	// SizeKnown is false while any item's length is still unknown, so the
 	// UI can avoid showing a misleading total.
 	SizeKnown bool `json:"sizeKnown"`

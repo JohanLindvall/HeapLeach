@@ -57,16 +57,9 @@ export function addUrls(urls: string, password: string): Promise<AddResponse> {
   });
 }
 
-/**
- * Fetch the current state; used as a fallback when SSE is unavailable.
- *
- * open is the comma-joined ids of the jobs whose rows are on screen. Every
- * other job arrives with its items reduced to what the search and the
- * progress panel read, which on a queue of thousands is most of the payload.
- */
-export function fetchState(signal?: AbortSignal, open = ''): Promise<Snapshot> {
-  const query = open ? `?open=${encodeURIComponent(open)}` : '';
-  return request<Snapshot>(`/api/state${query}`, { signal });
+/** Fetch the current state; used as a fallback when SSE is unavailable. */
+export function fetchState(signal?: AbortSignal): Promise<Snapshot> {
+  return request<Snapshot>('/api/state', { signal });
 }
 
 /**

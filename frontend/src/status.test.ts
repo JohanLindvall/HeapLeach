@@ -84,7 +84,6 @@ describe('matchesQuery', () => {
         size: 1,
         downloaded: 1,
         speed: 0,
-        elapsed: 1,
       },
     ],
   });

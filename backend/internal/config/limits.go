@@ -39,6 +39,15 @@ const (
 	// Fast enough to feel live, slow enough to stay cheap with many items.
 	ProgressTick = 400 * time.Millisecond
 
+	// FrameInterval is how often a snapshot is pushed to browsers while
+	// something is actually moving.
+	//
+	// Slower than ProgressTick, which is a sampling rate: rates are
+	// measured often so they are smooth, and sent once a second because
+	// that is as often as a number on a screen is worth redrawing. The
+	// difference is most of what a browser was being asked to receive.
+	FrameInterval = time.Second
+
 	// IdleFrameInterval is how often a snapshot is pushed to browsers while
 	// transfers are running but no byte counter is moving.
 	//

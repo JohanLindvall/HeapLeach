@@ -94,7 +94,7 @@ type Manager struct {
 	// subs maps each open stream to the jobs that subscriber renders
 	// items for; everything else reaches it slimmed. See
 	// snapshotfilter.go.
-	subs      map[chan []byte]openSet
+	subs      map[chan []byte]*subscriber
 	closed    bool // set under subsMu by Close; a late Subscribe is answered closed
 	closeOnce sync.Once
 
@@ -150,7 +150,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		wake:       make(chan struct{}, 1),
 		ctx:        ctx,
 		stop:       stop,
-		subs:       make(map[chan []byte]openSet),
+		subs:       make(map[chan []byte]*subscriber),
 	}
 }
 
@@ -1110,28 +1110,44 @@ func (m *Manager) snapshotLocked() Snapshot {
 // without cancelling their contexts, so a browser reloading in the moment
 // between the manager closing and the listener closing would turn a clean
 // exit into a wait for the deadline and an error.
-// SnapshotFor renders the state as one subscriber sees it: whole for the
-// jobs it has open, and slimmed elsewhere. See snapshotfilter.go.
-func (m *Manager) SnapshotFor(open []string) Snapshot {
-	return trimSnapshot(m.Snapshot(), newOpenSet(open))
-}
+// subscriber is one open stream. stale means it is owed a whole snapshot
+// rather than a patch, because it has just arrived or because a frame was
+// dropped on the way to it.
+type subscriber struct{ stale bool }
 
-// Subscribe registers for state snapshots. open names the jobs whose items
-// the subscriber actually renders; every other job arrives with its items
-// reduced to what the whole-queue views need. See trimSnapshot.
-func (m *Manager) Subscribe(open []string) (<-chan []byte, func()) {
+// Subscribe registers for state snapshots and hands back the whole of the
+// current one to send first.
+//
+// The initial frame comes from here rather than from the caller so that it
+// is the same act as registering: a subscriber that took its own snapshot
+// afterwards was sent the whole queue twice, once by itself and once by the
+// first broadcast finding it with nothing to merge into.
+//
+// A patch that arrives before this frame is written is harmless. It carries
+// the rows that changed up to the broadcast before it, and this snapshot is
+// at least that new, so applying it afterwards lands on the same values.
+func (m *Manager) Subscribe() (<-chan []byte, []byte, func()) {
 	ch := make(chan []byte, 1)
 
 	m.subsMu.Lock()
 	if m.closed {
 		m.subsMu.Unlock()
 		close(ch)
-		return ch, func() {}
+		return ch, nil, func() {}
 	}
-	m.subs[ch] = newOpenSet(open)
+	m.subs[ch] = &subscriber{}
 	m.subsMu.Unlock()
 
-	return ch, func() {
+	// Taken after the lock is released: the broadcaster holds mu and then
+	// takes subsMu, so taking them the other way round here would be the
+	// one ordering that can deadlock.
+	initial, err := json.Marshal(m.Snapshot())
+	if err != nil {
+		m.log.Error("marshal snapshot", "err", err)
+		initial = nil
+	}
+
+	return ch, initial, func() {
 		m.subsMu.Lock()
 		if _, ok := m.subs[ch]; ok {
 			delete(m.subs, ch)
@@ -1183,21 +1199,29 @@ func (m *Manager) broadcast() {
 				m.mu.Unlock()
 				continue
 			}
-			// Running, but nothing actually moving: a queue held behind a
-			// host taking one download at a time spends most of its life
-			// here. The display still wants refreshing, because the rates
-			// decay towards zero and a viewer should see that happen, but
-			// it does not want a full snapshot two and a half times a
-			// second to say so.
-			if !dirty && !moved && now.Sub(lastFrame) < config.IdleFrameInterval {
+			// A frame a second while things move. The tick above is a
+			// sampling rate — rates are measured often so they read
+			// smoothly — and a number on a screen is not worth redrawing
+			// faster than this.
+			gap := config.FrameInterval
+			if !moved {
+				// Running, but nothing actually moving: a queue held
+				// behind a host taking one download at a time spends most
+				// of its life here. It still wants refreshing, because the
+				// rates decay towards zero and a viewer should see that,
+				// but far less often.
+				gap = config.IdleFrameInterval
+			}
+			if !dirty && now.Sub(lastFrame) < gap {
 				m.mu.Unlock()
 				continue
 			}
 			lastFrame = now
 			snap := m.snapshotLocked()
+			patch := m.patchLocked(snap)
 			m.mu.Unlock()
 
-			m.publish(snap)
+			m.publish(snap, patch)
 		}
 	}
 }
@@ -1277,6 +1301,53 @@ func (m *Manager) sampleLocked(now time.Time) bool {
 	return moved
 }
 
+// patchLocked reduces a snapshot to the rows that have changed since the
+// last frame went out.
+//
+// Almost nothing in a queue changes from one second to the next. A thousand
+// finished files say exactly what they said before, and a browser that has
+// them already needs to be told about the four that moved — which is the
+// difference between tens of kilobytes a second and a fraction of one.
+// Everything outside the item lists is small and always sent, so a frame
+// still carries the totals, the rates and every job's own state whole.
+//
+// A job whose item list has changed length is sent whole instead: items may
+// have gone as well as arrived — a job re-read after a restart replaces its
+// list outright — and a patch cannot say that. Caller holds mu, and this
+// must be called only on the broadcast path: it records what browsers have
+// been told, and a snapshot read by the terminal or by /api/state tells
+// them nothing.
+func (m *Manager) patchLocked(snap Snapshot) Snapshot {
+	out := snap
+	out.Jobs = make([]JobView, len(snap.Jobs))
+	for i, view := range snap.Jobs {
+		job, ok := m.jobs[view.ID]
+		if !ok || len(job.Items) != len(view.Items) {
+			out.Jobs[i] = view
+			continue
+		}
+
+		whole := len(view.Items) != job.lastCount
+		job.lastCount = len(view.Items)
+
+		changed := make([]ItemView, 0, 8)
+		for k, iv := range view.Items {
+			if it := job.Items[k]; it.lastView != iv {
+				it.lastView = iv
+				changed = append(changed, iv)
+			}
+		}
+		if whole {
+			out.Jobs[i] = view
+			continue
+		}
+		view.Items = changed
+		view.Patch = true
+		out.Jobs[i] = view
+	}
+	return out
+}
+
 // hasSubscribers reports whether anyone is waiting on the event stream.
 func (m *Manager) hasSubscribers() bool {
 	m.subsMu.Lock()
@@ -1286,51 +1357,63 @@ func (m *Manager) hasSubscribers() bool {
 
 // publish sends a payload to every subscriber, replacing any snapshot a slow
 // client has not read yet: only the newest state is worth delivering.
-func (m *Manager) publish(snap Snapshot) {
+func (m *Manager) publish(full, patch Snapshot) {
 	m.subsMu.Lock()
 	defer m.subsMu.Unlock()
 
-	// One encoding per distinct set of open jobs rather than per
-	// subscriber: two browsers looking at the same thing are the common
-	// case, and encoding a long queue twice for them would be the whole
-	// saving spent again. Done under the lock, which is otherwise only
-	// taken when a browser connects or leaves, so the cost lands on a
-	// reconnect rather than on a transfer.
-	encoded := make(map[string][]byte, 1)
-	for ch, open := range m.subs {
-		key := open.key()
-		payload, ok := encoded[key]
-		if !ok {
-			var err error
-			if payload, err = json.Marshal(trimSnapshot(snap, open)); err != nil {
+	// Encoded at most once each, and only if somebody is owed that kind of
+	// frame. The usual case is every browser taking the patch.
+	var fullPayload, patchPayload []byte
+	encode := func(snap Snapshot, into *[]byte) []byte {
+		if *into == nil {
+			payload, err := json.Marshal(snap)
+			if err != nil {
 				m.log.Error("marshal snapshot", "err", err)
-				return
+				payload = []byte{}
 			}
-			encoded[key] = payload
+			*into = payload
 		}
-		m.deliverLocked(ch, payload)
+		return *into
+	}
+
+	for ch, sub := range m.subs {
+		payload := encode(patch, &patchPayload)
+		if sub.stale {
+			payload = encode(full, &fullPayload)
+		}
+		if len(payload) == 0 {
+			continue
+		}
+		// A frame dropped for a slow reader takes its changes with it, so
+		// that subscriber is owed a whole snapshot next time. This is the
+		// one thing a patch stream cannot recover from on its own, and the
+		// only reason any of this stays self-healing.
+		sub.stale = m.deliverLocked(ch, payload)
 	}
 }
 
 // deliverLocked hands a payload to one subscriber, replacing any snapshot it
-// has not read yet: only the newest state is worth delivering. Caller holds
-// subsMu.
-func (m *Manager) deliverLocked(ch chan []byte, payload []byte) {
+// has not read yet: only the newest state is worth delivering. It reports
+// whether it had to replace one, which is the subscriber having missed
+// whatever that frame carried. Caller holds subsMu.
+func (m *Manager) deliverLocked(ch chan []byte, payload []byte) bool {
+	select {
+	case ch <- payload:
+		return false
+	default:
+	}
+	// The buffer holds one frame. A client that has not read the last one
+	// gets it dropped for this one — and is owed a whole snapshot after,
+	// since what it missed is no longer coming.
+	select {
+	case <-ch:
+	default:
+	}
 	select {
 	case ch <- payload:
 	default:
-		// The buffer holds one frame. A client that has not read the last
-		// one gets it dropped for this one: state is cumulative, so the
-		// newer frame says everything the older one did.
-		select {
-		case <-ch:
-		default:
-		}
-		select {
-		case ch <- payload:
-		default:
-		}
 	}
+	return true
 }
 
 // signal nudges the dispatcher without ever blocking the caller.

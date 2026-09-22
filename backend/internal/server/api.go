@@ -26,7 +26,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	// one a browser asks for repeatedly: the polling fallback fetches it
 	// every couple of seconds, and on a long queue it is most of a
 	// megabyte of very repetitive JSON.
-	writeJSONMaybeCompressed(w, r, http.StatusOK, s.mgr.SnapshotFor(openJobs(r)))
+	writeJSONMaybeCompressed(w, r, http.StatusOK, s.mgr.Snapshot())
 }
 
 // addRequest is the body of POST /api/downloads.

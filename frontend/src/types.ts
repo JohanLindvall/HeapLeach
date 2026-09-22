@@ -26,7 +26,6 @@ export interface ItemView {
    */
   note?: string;
   path?: string;
-  url?: string;
   /** Connections currently fetching this file; absent or 1 when unsplit. */
   streams?: number;
   /** True when the file was already in the destination, so nothing moved. */
@@ -38,12 +37,16 @@ export interface ItemView {
    */
   segmentsDone?: number;
   segmentsTotal?: number;
-  /** Seconds since the transfer started. */
-  elapsed: number;
 }
 
 /** One submitted URL and everything behind it. */
 export interface JobView {
+  /**
+   * When set, `items` holds only the rows that changed since the last frame
+   * and is to be merged into what is already held rather than replacing it.
+   * See mergeSnapshot, which is the only thing that should ever read it.
+   */
+  patch?: boolean;
   id: string;
   source: string;
   title: string;

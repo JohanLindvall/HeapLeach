@@ -3,7 +3,7 @@ import { accumulate, EMPTY_PROGRESS, LEVELS, newlyUnlocked, standing, type Progr
 import type { ItemView, JobView, Snapshot } from './types';
 
 function item(over: Partial<ItemView>): ItemView {
-  return { id: 'i1', name: 'f.bin', status: 'done', size: 100, downloaded: 100, speed: 0, elapsed: 1, ...over };
+  return { id: 'i1', name: 'f.bin', status: 'done', size: 100, downloaded: 100, speed: 0, ...over };
 }
 
 function snapshot(items: ItemView[], over: Partial<Snapshot> = {}): Snapshot {
