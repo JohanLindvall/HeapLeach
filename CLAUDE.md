@@ -441,7 +441,13 @@ Host-specific notes:
   that adds nothing, never the parameter. Self-exclusion is by extractor
   *name*, not pointer, since the recursion is in the kind and not the
   instance — without it the site's own navigation turns one search into a
-  walk of the whole catalogue.
+  walk of the whole catalogue. Each source gets a folder named after its title,
+  and titles are not unique — one search turned up 356 albums under 345 —
+  so `expandSources` counts the names first and gives a repeated one the
+  source's own id (`sourceTag`). A title that stands alone keeps its plain
+  name, which is what anything already downloaded under it is filed as.
+  Merged folders were how two different files of one name came to sit side
+  by side as "(2)" and "(3)".
 
 - **coomerfans** fetches concurrently, as several extractors now do (pbs, svt,
   rai, zdf, rtve, rtp, peertube, pornpics). A creator's

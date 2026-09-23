@@ -3,6 +3,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path"
 	"strings"
 )
@@ -69,13 +70,57 @@ func supportedSources(registry *Registry, candidates []string, self Extractor) [
 // job: every thread of any age has dead links in it, and the live ones are
 // still worth having.
 func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) []File {
-	return FanOut(ctx, sources, func(ctx context.Context, link string) ([]File, error) {
+	resolved := FanOut(ctx, sources, func(ctx context.Context, link string) ([]sourceResult, error) {
 		res, _, err := registry.Extract(ctx, link, opts)
 		if err != nil {
 			return nil, err
 		}
-		return sourceFiles(res), nil
+		return []sourceResult{{link: link, res: res}}, nil
 	})
+
+	// Folders are named after titles, and titles are not unique: a search
+	// on an album index turned up 356 albums under 345 titles, and each pair
+	// sharing one was poured into the same folder. Two different files of
+	// the same name then sat side by side as "(2)" and "(3)", and nothing
+	// said which album either came from. So a title that repeats carries the
+	// source's own id; one that does not keeps its plain name, which is what
+	// every existing download under it is filed as. Compared case-blind,
+	// because the destination may be a filesystem that is.
+	uses := make(map[string]int, len(resolved))
+	for _, r := range resolved {
+		uses[strings.ToLower(sourceFolder(r.res.Title))]++
+	}
+	var files []File
+	for _, r := range resolved {
+		folder := sourceFolder(r.res.Title)
+		if uses[strings.ToLower(folder)] > 1 {
+			folder = strings.TrimSpace(folder + " [" + sourceTag(r.link) + "]")
+		}
+		files = append(files, sourceFiles(r.res, folder)...)
+	}
+	return files
+}
+
+// sourceResult is one source resolved, kept whole until every source is in
+// and folder names can be compared.
+type sourceResult struct {
+	link string
+	res  *Result
+}
+
+// sourceTag identifies a source by its own URL, for a folder whose title
+// another source shares: the last path segment, which for an album link is
+// the album's id, or the host where the path says nothing.
+func sourceTag(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return sourceFolder(link)
+	}
+	segs := strings.FieldsFunc(u.Path, func(r rune) bool { return r == '/' })
+	if len(segs) > 0 {
+		return sourceFolder(segs[len(segs)-1])
+	}
+	return u.Hostname()
 }
 
 // sourceFiles takes one source's result into the collection.
@@ -93,8 +138,7 @@ func expandSources(ctx context.Context, registry *Registry, sources []string, op
 // a directory. This is the case that inverts it, because the job root would
 // otherwise be a heap of hundreds of files from unrelated sources with
 // nothing but their names to say which came from where.
-func sourceFiles(res *Result) []File {
-	folder := sourceFolder(res.Title)
+func sourceFiles(res *Result, folder string) []File {
 	files := make([]File, 0, len(res.Files))
 	for _, f := range res.Files {
 		f.Dir = path.Join(folder, f.Dir)

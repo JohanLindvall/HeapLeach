@@ -282,3 +282,41 @@ func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {
 		t.Errorf("fetched %v for a page that names no search", got)
 	}
 }
+
+// sameTitleStub answers every link with the same title, the way two albums
+// on an index can both be called "Clapper 10".
+type sameTitleStub struct{ host, title string }
+
+func (s *sameTitleStub) Name() string          { return "same" }
+func (s *sameTitleStub) Match(u *url.URL) bool { return u.Host == s.host }
+func (s *sameTitleStub) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
+	return &Result{Title: s.title, Files: []File{{Name: "clip.mov", URL: u.String(), Size: -1}}}, nil
+}
+
+// Titles are not unique, and two albums sharing one were poured into one
+// folder, where two different files of the same name ended up as "(2)" and
+// "(3)" with nothing to say which album either came from. A repeated title
+// carries the album's id; a title that stands alone keeps its plain name,
+// which is what everything already downloaded under it is filed as.
+func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
+	reg := &Registry{fallback: NewDirect(nil)}
+	reg.extractors = []Extractor{
+		&sameTitleStub{host: "a.example.test", title: "Clapper 10"},
+		&sameTitleStub{host: "b.example.test", title: "Alone"},
+	}
+	files := expandSources(context.Background(), reg, []string{
+		"https://a.example.test/a/AAAA",
+		"https://a.example.test/a/BBBB",
+		"https://b.example.test/a/CCCC",
+	}, Options{})
+
+	want := []string{"Clapper 10 [AAAA]", "Clapper 10 [BBBB]", "Alone"}
+	if len(files) != len(want) {
+		t.Fatalf("got %d files, want %d", len(files), len(want))
+	}
+	for i, f := range files {
+		if f.Dir != want[i] {
+			t.Errorf("file %d landed in %q, want %q", i, f.Dir, want[i])
+		}
+	}
+}
