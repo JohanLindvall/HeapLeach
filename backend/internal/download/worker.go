@@ -1165,8 +1165,8 @@ func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64) boo
 	if size <= 0 {
 		return false
 	}
-	fi, err := os.Stat(filepath.Join(dir, name))
-	if err != nil || fi.IsDir() || fi.Size() != size {
+	found, ok := onDiskAs(dir, name, size)
+	if !ok {
 		return false
 	}
 	it.downloaded.Store(size)
@@ -1175,6 +1175,47 @@ func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64) boo
 	it.SizeApprox = false
 	it.Skipped = true
 	m.mu.Unlock()
-	m.setPath(it, filepath.Join(rel, name))
+	m.setPath(it, filepath.Join(rel, found))
 	return true
+}
+
+// onDiskAs finds the file of this length saved under name or under one of
+// the numbered names UniquePath hands out beside it — "clip (2).mp4" and on.
+//
+// The numbered names are the whole reason this is more than a Stat. An
+// album can hold several different files that share one name, and the
+// first run saves them as the name, (2) and (3). Checking only the plain
+// name then matches one of them and never the others, so every later read
+// of the job downloaded those again as (4), (5) and onwards — two more
+// copies of the same files per restart, hundreds of them in all, each new
+// enough to read as freshly downloaded.
+func onDiskAs(dir, name string, size int64) (string, bool) {
+	matches := func(entry string) bool {
+		fi, err := os.Stat(filepath.Join(dir, entry))
+		return err == nil && !fi.IsDir() && fi.Size() == size
+	}
+	if matches(name) {
+		return name, true
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
+	ext := filepath.Ext(name)
+	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
+	for _, entry := range entries {
+		n := entry.Name()
+		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
+			continue
+		}
+		number := n[len(prefix) : len(n)-len(suffix)]
+		if _, err := strconv.Atoi(number); err != nil {
+			continue
+		}
+		if matches(n) {
+			return n, true
+		}
+	}
+	return "", false
 }

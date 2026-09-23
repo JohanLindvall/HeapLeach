@@ -95,6 +95,12 @@ args=(
   --progress
   --no-part
   --no-mtime
+  # A file already in the destination is left exactly as it is, mtime
+  # included. yt-dlp already refuses to download it again, but its
+  # post-processors — the metadata pass that labels audio languages — would
+  # otherwise rewrite it in place, and a file that was finished months ago
+  # would read as new.
+  --no-post-overwrites
   --retries 10
   --fragment-retries 10
   --concurrent-fragments 4
