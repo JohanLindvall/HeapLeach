@@ -1039,7 +1039,14 @@ and they are worth knowing apart because they fail differently:
   whole one, which `deliverLocked` reports, because the changes it carried
   are not coming again.
 
-  And the one-a-second ceiling applies whatever is happening. A job being
+  **Except for what the user just did.** Every user action — add, cancel,
+  retry, remove, clear, pause, a setting — calls `Manager.nudge`, which
+  sends a frame at once past the ceiling. A row that sits unchanged for most
+  of a second after a click reads as the click not having taken. It is only
+  for actions: anything that happens by itself goes out on the ordinary
+  beat, which is what keeps the stream cheap.
+
+  And the one-a-second ceiling applies whatever else is happening. A job being
   read for the first time marks the state changed on every tick as its items
   arrive; letting that bypass the ceiling put out two and a half frames a
   second on its own. The dirty flag is read rather than taken when a frame

@@ -53,9 +53,14 @@ type Manager struct {
 	hostGate *hostGate
 
 	wake chan struct{}
-	ctx  context.Context
-	stop context.CancelFunc
-	wg   sync.WaitGroup
+	// urgent asks the broadcaster for a frame now. A user's own action —
+	// adding, stopping, clearing — is the one change that must not wait for
+	// the once-a-second beat: the row a person just clicked on sitting
+	// unchanged for most of a second reads as the click not having taken.
+	urgent chan struct{}
+	ctx    context.Context
+	stop   context.CancelFunc
+	wg     sync.WaitGroup
 
 	// timings are the segment supervisor's intervals, kept here so tests
 	// can shorten them without waiting out the production values.
@@ -148,6 +153,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		timings:    defaultDownloadTimings(),
 		hosts:      newHostLimiter(config.MaxConnectionsPerHost),
 		wake:       make(chan struct{}, 1),
+		urgent:     make(chan struct{}, 1),
 		ctx:        ctx,
 		stop:       stop,
 		subs:       make(map[chan []byte]*subscriber),
@@ -202,6 +208,8 @@ func (m *Manager) Close() {
 // Add registers a URL and starts resolving it in the background, so the UI
 // can show the job immediately rather than blocking on a scrape.
 func (m *Manager) Add(rawURL, password string) (string, error) {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	u, err := extractor.ParseURL(rawURL)
 	if err != nil {
 		return "", err
@@ -554,6 +562,8 @@ func (m *Manager) logFinishedLocked(it *Item, msg string) {
 
 // CancelJob stops a job and everything under it.
 func (m *Manager) CancelJob(id string) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	m.mu.Lock()
 	job, ok := m.jobs[id]
 	if !ok {
@@ -576,6 +586,8 @@ func (m *Manager) CancelJob(id string) error {
 
 // CancelItem stops one file, leaving the rest of its job alone.
 func (m *Manager) CancelItem(jobID, itemID string) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	m.mu.Lock()
 	it, ok := m.findItemLocked(jobID, itemID)
 	if !ok {
@@ -608,6 +620,8 @@ func cancelItemLocked(it *Item) {
 // RetryJob requeues every failed or cancelled item, re-resolving the source
 // first when the job never produced any items.
 func (m *Manager) RetryJob(id string) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	recheckTools()
 
 	m.mu.Lock()
@@ -647,6 +661,8 @@ func (m *Manager) RetryJob(id string) error {
 
 // RetryItem requeues a single file.
 func (m *Manager) RetryItem(jobID, itemID string) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	recheckTools()
 
 	m.mu.Lock()
@@ -835,6 +851,8 @@ func (m *Manager) deferStalledLocked(it *Item, err error) bool {
 
 // RemoveJob cancels a job and forgets it. Files already on disk stay.
 func (m *Manager) RemoveJob(id string) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	m.mu.Lock()
 	job, ok := m.jobs[id]
 	if !ok {
@@ -859,6 +877,8 @@ func (m *Manager) RemoveJob(id string) error {
 
 // ClearFinished forgets every job that has nothing left to do.
 func (m *Manager) ClearFinished() int {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	m.mu.Lock()
 	var removed int
 	for _, id := range append([]string(nil), m.order...) {
@@ -881,6 +901,8 @@ func (m *Manager) ClearFinished() int {
 // SetConcurrency resizes the worker pool. Shrinking it lets running
 // transfers finish; only new starts are held back.
 func (m *Manager) SetConcurrency(n int) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	if n < 1 || n > config.MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 1 and %d", config.MaxConcurrency)
 	}
@@ -896,6 +918,8 @@ func (m *Manager) SetConcurrency(n int) error {
 // SetStreams caps how many connections a single slow file may be split
 // across. Transfers already running keep the ceiling they started with.
 func (m *Manager) SetStreams(n int) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	if n < 1 || n > config.MaxStreams {
 		return fmt.Errorf("streams must be between 1 and %d", config.MaxStreams)
 	}
@@ -927,6 +951,8 @@ func (m *Manager) DownloadDir() string {
 // still queued goes to the new place. That is worth knowing rather than
 // hiding, so the API says it back to the caller.
 func (m *Manager) SetDownloadDir(path string) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	dir, err := config.PrepareDir(path)
 	if err != nil {
 		return err
@@ -951,6 +977,8 @@ func (m *Manager) SetDownloadDir(path string) error {
 // A long pause may still cost a connection to a server that times it out,
 // which the usual retry and resume handle.
 func (m *Manager) SetPaused(paused bool) {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	m.throttle.setPaused(paused)
 	if !paused {
 		// Releasing the queue is the word a restored job was waiting for.
@@ -1033,6 +1061,8 @@ func (m *Manager) Busy() bool {
 // unlimited. The cap is shared: it bounds everything moving at once, not
 // each transfer separately.
 func (m *Manager) SetSpeedLimit(bytesPerSecond int64) error {
+	// Something the user did, so they see it at once. See nudge.
+	defer m.nudge()
 	if bytesPerSecond < 0 {
 		return fmt.Errorf("speed limit cannot be negative, got %d", bytesPerSecond)
 	}
@@ -1241,11 +1271,18 @@ func (m *Manager) broadcast() {
 			}
 			m.dirty.Store(false)
 			lastFrame = now
-			snap := m.snapshotLocked()
-			patch := m.patchLocked(snap)
-			m.mu.Unlock()
-
-			m.publish(snap, patch)
+			m.frameLocked()
+		case <-m.urgent:
+			// Straight past the ceiling: this is a person waiting to see
+			// what they just did. The frame is a patch like any other, so
+			// it costs the rows the action touched and nothing more.
+			if !m.hasSubscribers() {
+				continue
+			}
+			m.mu.Lock()
+			m.dirty.Store(false)
+			lastFrame = time.Now()
+			m.frameLocked()
 		}
 	}
 }
@@ -1381,6 +1418,27 @@ func (m *Manager) patchLocked(snap Snapshot) Snapshot {
 		out.Jobs[i] = view
 	}
 	return out
+}
+
+// frameLocked builds a frame and sends it. Called with mu held; releases
+// it before publishing, since publish takes subsMu and encodes.
+func (m *Manager) frameLocked() {
+	snap := m.snapshotLocked()
+	patch := m.patchLocked(snap)
+	m.mu.Unlock()
+	m.publish(snap, patch)
+}
+
+// nudge marks the state changed and asks for a frame now rather than on the
+// next beat. For the user's own actions only: anything that happens by
+// itself — bytes arriving, a transfer finishing — goes out at the ordinary
+// rate, which is the rate that keeps the stream cheap.
+func (m *Manager) nudge() {
+	m.markDirty()
+	select {
+	case m.urgent <- struct{}{}:
+	default:
+	}
 }
 
 // hasSubscribers reports whether anyone is waiting on the event stream.

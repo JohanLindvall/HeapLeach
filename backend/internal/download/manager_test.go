@@ -260,3 +260,31 @@ func TestSnapshotHostCountIsTheRegistrySize(t *testing.T) {
 		t.Errorf("HostCount without a registry = %d, want 0", got)
 	}
 }
+
+// A user's own action goes out at once rather than on the next beat. A row
+// that sits unchanged for most of a second after a click reads as the click
+// not having taken.
+func TestAUserActionIsPublishedAtOnce(t *testing.T) {
+	m, _ := newTestManager(t)
+	events, _, unsubscribe := m.Subscribe()
+	defer unsubscribe()
+
+	// Drain anything already on its way, then act. The ordinary path waits
+	// for the next sampling tick at the least, so a frame well inside one
+	// tick could only have come from the nudge.
+	select {
+	case <-events:
+	case <-time.After(2 * config.ProgressTick):
+	}
+
+	start := time.Now()
+	m.ClearFinished()
+	select {
+	case <-events:
+		if waited := time.Since(start); waited > config.ProgressTick/4 {
+			t.Errorf("the frame took %s, want it sent at once rather than on a tick", waited)
+		}
+	case <-time.After(3 * config.FrameInterval):
+		t.Fatal("no frame followed the action")
+	}
+}
