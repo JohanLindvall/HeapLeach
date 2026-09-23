@@ -39,10 +39,32 @@ jobs:
       - name: Build the archives
         run: make dist VERSION=${{ github.ref_name }}
 
+      # Created as a draft, filled, checked, and only then published.
+      #
+      # `gh release create` with the assets on the same line creates the
+      # release first and uploads second, and v1.2.42 came out of it public,
+      # "successful", and with nothing attached — a release page for a
+      # download that did not exist. So the upload is its own step, the
+      # count is checked against what was built, and nobody sees the release
+      # until it is whole. Every step is safe to repeat: an existing draft is
+      # reused and uploads overwrite, so re-running a failed run finishes the
+      # job instead of tripping over the half it already did.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "${{ github.ref_name }}" dist/* \
-            --title "HeapLeach ${{ github.ref_name }}" \
-            --generate-notes
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft \
+              --title "HeapLeach $TAG" \
+              --generate-notes
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          want=$(find dist -maxdepth 1 -type f | wc -l)
+          got=$(gh release view "$TAG" --json assets --jq '.assets | length')
+          if [ "$got" -ne "$want" ]; then
+            echo "::error::release $TAG has $got assets, built $want"
+            exit 1
+          fi
+          gh release edit "$TAG" --draft=false
