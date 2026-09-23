@@ -116,8 +116,11 @@ type Manager struct {
 
 	// Where the queue is written so a restart can pick it up again, and the
 	// fingerprint of what was last written — an idle queue is not worth
-	// rewriting every interval. Both belong to the saver goroutine alone.
+	// rewriting every interval. The saver and Close both write it, Close
+	// while the saver may still be mid-write, so persistMu serialises them
+	// and guards statePrint — and makes Close's later picture land last.
 	stateFile  string
+	persistMu  sync.Mutex
 	statePrint uint64
 
 	// dirty records a state change worth pushing to subscribers even though
@@ -777,7 +780,18 @@ func (m *Manager) itemNoteLocked(it *Item) string {
 // day without that meaning anything is failing.
 func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 	queued, ok := errors.AsType[*hostQueuedError](err)
-	if !ok || it.retryPending {
+	if !ok {
+		return false
+	}
+	// A host being left alone frees nothing and finishes nothing, so
+	// without this the dispatcher would have no reason to look at the queue
+	// again until some other transfer happened to end — and if every host
+	// is quiet, none will. That holds for the rest of the queue behind this
+	// host even when this item is taken off by a pending retry.
+	if queued.wait > 0 {
+		time.AfterFunc(queued.wait, m.signal)
+	}
+	if it.retryPending {
 		return false
 	}
 	turns := it.overloadWaits
@@ -788,14 +802,6 @@ func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 	// never disagree about it.
 	it.waitingFor = queued.host
 	it.Note = waitingNote(queued.host, queued.limit)
-
-	// A host being left alone frees nothing and finishes nothing, so
-	// without this the dispatcher would have no reason to look at the queue
-	// again until some other transfer happened to end — and if every host
-	// is quiet, none will.
-	if queued.wait > 0 {
-		time.AfterFunc(queued.wait, m.signal)
-	}
 	return true
 }
 
@@ -1440,12 +1446,19 @@ func (m *Manager) patchLocked(snap Snapshot) Snapshot {
 }
 
 // frameLocked builds a frame and sends it. Called with mu held; releases
-// it before publishing, since publish takes subsMu and encodes.
+// it before publishing, so encoding happens outside mu.
+//
+// subsMu is taken before mu is let go. Otherwise a Subscribe could land in
+// the gap, record a newer snapshot as sent and hand it out, and then receive
+// this older patch after it — rolling rows back, with every later patch a
+// diff against the newer state, so they would stay rolled back.
 func (m *Manager) frameLocked() {
 	snap := m.snapshotLocked()
 	patch := m.patchLocked(snap)
+	m.subsMu.Lock()
 	m.mu.Unlock()
-	m.publish(snap, patch)
+	defer m.subsMu.Unlock()
+	m.publishLocked(snap, patch)
 }
 
 // nudge asks for a frame now rather than on the next beat. For the user's
@@ -1474,12 +1487,10 @@ func (m *Manager) hasSubscribers() bool {
 	return len(m.subs) > 0
 }
 
-// publish sends a payload to every subscriber, replacing any snapshot a slow
-// client has not read yet: only the newest state is worth delivering.
-func (m *Manager) publish(full, patch Snapshot) {
-	m.subsMu.Lock()
-	defer m.subsMu.Unlock()
-
+// publishLocked sends a payload to every subscriber, replacing any snapshot
+// a slow client has not read yet: only the newest state is worth delivering.
+// Caller holds subsMu.
+func (m *Manager) publishLocked(full, patch Snapshot) {
 	// Encoded at most once each, and only if somebody is owed that kind of
 	// frame. The usual case is every browser taking the patch.
 	var fullPayload, patchPayload []byte

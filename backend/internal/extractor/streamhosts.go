@@ -103,7 +103,11 @@ func streamtapeAssemble(doc, page string) (string, error) {
 	// The player asks for the stream itself; without this the host answers
 	// with a redirect back to the page.
 	if !strings.Contains(link, "stream=") {
-		link += "&stream=1"
+		sep := "&"
+		if !strings.Contains(link, "?") {
+			sep = "?"
+		}
+		link += sep + "stream=1"
 	}
 	return link, nil
 }

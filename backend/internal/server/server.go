@@ -78,7 +78,12 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/", s.static)
 
-	return s.recoverPanics(s.logRequests(mux))
+	// A page on another site can still send a simple POST here without a
+	// preflight — enough to move the download directory and queue a file
+	// into it. Refuse cross-origin state changes outright.
+	guarded := http.NewCrossOriginProtection().Handler(mux)
+
+	return s.recoverPanics(s.logRequests(guarded))
 }
 
 // spaHandler serves the built frontend, falling back to index.html so

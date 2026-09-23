@@ -325,10 +325,14 @@ func megaDir(nodes map[string]*megaDecrypted, file *megaDecrypted) string {
 		if parent == nil || parent.node.Type == megaTypeRoot || nodes[parent.node.Parent] == nil {
 			break // the share root, or a parent outside the listing
 		}
-		if parent.name == "" {
-			break
+		// A folder whose name would not decrypt still has a place in the
+		// tree. Dropping it and everything above would fold two deep
+		// branches into one shallower folder, where their files collide.
+		name := parent.name
+		if name == "" {
+			name = handle
 		}
-		parts = append([]string{parent.name}, parts...)
+		parts = append([]string{name}, parts...)
 		handle = parent.node.Parent
 	}
 	return path.Join(parts...)

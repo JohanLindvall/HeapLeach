@@ -348,6 +348,12 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 		if err == nil {
 			return nil
 		}
+		// A failed flush drops whatever the connection was holding, and pos
+		// had already moved past it. Retrying from pos would skip that run
+		// and leave a hole, so go back to what the file actually holds.
+		if flushed := seg.flushed.Load(); seg.pos.Load() > flushed {
+			t.item.downloaded.Add(flushed - seg.pos.Swap(flushed))
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

@@ -127,11 +127,14 @@ func looksChallenged(resp *http.Response) (bool, *http.Response) {
 	}
 	const peek = 64 << 10
 	head, err := io.ReadAll(io.LimitReader(resp.Body, peek))
+	rest := resp.Body
 	if err != nil {
-		resp.Body = io.NopCloser(bytes.NewReader(head))
+		// Keep the original body as the closer so its stream is released,
+		// and replay the failure after the prefix rather than presenting a
+		// truncated body as whole.
+		resp.Body = &joinedBody{Reader: io.MultiReader(bytes.NewReader(head), failedReader{err}), closer: rest}
 		return false, resp
 	}
-	rest := resp.Body
 	resp.Body = &joinedBody{Reader: io.MultiReader(bytes.NewReader(head), rest), closer: rest}
 
 	lowered := strings.ToLower(string(head))
@@ -150,6 +153,11 @@ type joinedBody struct {
 }
 
 func (b *joinedBody) Close() error { return b.closer.Close() }
+
+// failedReader reports err on every read.
+type failedReader struct{ err error }
+
+func (r failedReader) Read([]byte) (int, error) { return 0, r.err }
 
 // dialChrome performs a handshake shaped like Chrome's.
 func dialChrome(ctx context.Context, network, addr string) (net.Conn, error) {

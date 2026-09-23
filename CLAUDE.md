@@ -443,7 +443,8 @@ Host-specific notes:
   instance — without it the site's own navigation turns one search into a
   walk of the whole catalogue.
 
-- **coomerfans** is the only extractor that fetches concurrently. A creator's
+- **coomerfans** fetches concurrently, as several extractors now do (pbs, svt,
+  rai, zdf, rtve, rtp, peertube, pornpics). A creator's
   page lists posts but keeps the media on each post's own page, and the
   listing cannot be worked from instead: a post holding a video shows no
   thumbnail there at all. So every post is opened, bounded by

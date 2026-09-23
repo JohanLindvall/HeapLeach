@@ -306,6 +306,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			turns := it.overloadWaits
 			m.mu.Unlock()
 			if turns > config.OverloadRetries {
+				// This item fails, but the refusal still pushed the host's
+				// quiet period out, and whatever else is queued behind it
+				// is passed over until that ends. Nothing else is due to
+				// wake the dispatcher then, so ask for it here.
+				if wait > 0 {
+					time.AfterFunc(wait, m.signal)
+				}
 				return err
 			}
 			m.log.Info("host overloaded, item returned to the queue", "item", it.ID,

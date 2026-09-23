@@ -157,6 +157,12 @@ func (m *Manager) readExternalProgress(it *Item, stdout io.Reader) string {
 			produced = strings.TrimSpace(strings.TrimPrefix(line, "FILE "))
 		}
 	}
+	// A line too long to scan ends the loop early. The helper still has to
+	// be drained, or it blocks on a full pipe and Wait never returns.
+	if err := scanner.Err(); err != nil {
+		m.log.Debug("external progress unreadable", "item", it.ID, "err", err)
+		_, _ = io.Copy(io.Discard, stdout)
+	}
 	return produced
 }
 

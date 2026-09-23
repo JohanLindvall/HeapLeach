@@ -153,6 +153,8 @@ func (m *Manager) persist() {
 	if m.stateFile == "" {
 		return
 	}
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
 
 	m.mu.Lock()
 	st := m.stateLocked()

@@ -247,16 +247,17 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// software, named and matched per install where a list is worth having
 	// and sniffed by shape where it is not. Registered after the
 	// hand-written hosts, since a named host is always the better answer.
-	extractors = append(extractors,
-		NewFediverse(client),
-		NewMediaWiki(cfg, client),
-	)
+	extractors = append(extractors, NewMediaWiki(cfg, client))
 	extractors = append(extractors, NewHandoffs(client)...)
 	extractors = append(extractors, NewPeerTubeSites(cfg, client)...)
 	extractors = append(extractors, NewCheveretoSites(cfg, client)...)
 	extractors = append(extractors, NewBandzoogleSites(cfg, client)...)
 	extractors = append(extractors, NewFoolFuukaSites(cfg, client)...)
 	extractors = append(extractors, NewKVSSites(cfg, client)...)
+	// The fediverse is matched by path alone, on any host, and its /c/<name>
+	// is also Rumble's and PeerTube's channel shape. So it comes after every
+	// family that claims hosts by name, or it takes their URLs from them.
+	extractors = append(extractors, NewFediverse(client))
 
 	// Last of all, the generic capabilities: a bare HLS manifest is a
 	// manifest whatever host serves it, and these must never take a URL a

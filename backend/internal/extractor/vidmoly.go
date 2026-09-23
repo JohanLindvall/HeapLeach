@@ -103,7 +103,7 @@ func (v *Vidmoly) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		return nil, fmt.Errorf("vidmoly: %s: %w", page, err)
 	}
 
-	title := util.FirstNonEmpty(trimSiteSuffix(firstTitleOf(doc)), code)
+	title := util.FirstNonEmpty(pageTitle(doc), code)
 	headers := httpx.Referer(page)
 
 	// Guard the playlist path on the link actually being a playlist. Handing

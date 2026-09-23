@@ -147,11 +147,11 @@ func (b *BitChute) file(ctx context.Context, name string, media bitchuteMedia) (
 	// each of them "MPEG-4". These few lines exist so a video that is not
 	// still downloads rather than landing a playlist on disk.
 	if bitchuteIsPlaylist(media) {
-		segments, _, err := resolvePlaylist(ctx, b.client, media.URL, headers)
+		segments, variant, err := resolvePlaylist(ctx, b.client, media.URL, headers)
 		if err != nil {
 			return File{}, fmt.Errorf("bitchute: %w", err)
 		}
-		return File{Name: name + ".ts", Size: -1, Headers: headers, Segments: segments}, nil
+		return File{Name: name + segmentsExtension(segments, variant), Size: -1, Headers: headers, Segments: segments}, nil
 	}
 
 	return Mirrored(File{

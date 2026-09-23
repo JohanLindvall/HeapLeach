@@ -179,7 +179,8 @@ func ParseSize(raw string) (int64, error) {
 		return 0, fmt.Errorf("%q has an unknown unit %q", raw, unit)
 	}
 	scaled := value * float64(multiplier)
-	if scaled > math.MaxInt64 {
+	// float64(math.MaxInt64) is 2^63, which itself does not fit.
+	if scaled >= math.MaxInt64 {
 		return 0, fmt.Errorf("%q does not fit in an int64", raw)
 	}
 	return int64(scaled), nil

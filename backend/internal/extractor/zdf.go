@@ -218,7 +218,7 @@ func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach 
 	for _, videoID := range ids {
 		refs = append(refs, zdfRef{id: videoID})
 	}
-	return z.expand(ctx, u, util.FirstNonEmpty(title, trimSiteSuffix(firstTitleOf(page))), refs, reach)
+	return z.expand(ctx, u, util.FirstNonEmpty(title, pageTitle(page)), refs, reach)
 }
 
 // expand resolves a listing's videos into one file each.

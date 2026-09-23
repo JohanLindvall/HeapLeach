@@ -325,8 +325,14 @@ func kvsAsyncPage(listing, block string, page int) string {
 	if block == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s?mode=async&function=get_block&block_id=%s&from_videos=%d",
-		listing, url.QueryEscape(block), page)
+	// A listing pasted with a query of its own (a sort order) already has
+	// its "?"; a second one would fold mode=async into that query's value.
+	sep := "?"
+	if strings.Contains(listing, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf("%s%smode=async&function=get_block&block_id=%s&from_videos=%d",
+		listing, sep, url.QueryEscape(block), page)
 }
 
 // kvsListingVideos reads the video pages a listing links to.

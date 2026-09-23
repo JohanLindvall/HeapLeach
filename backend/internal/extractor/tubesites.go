@@ -64,9 +64,16 @@ func (p *PornHub) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		if def.Remote || def.VideoURL == "" {
 			continue // a pointer to another list, not a stream
 		}
+		// The quality is a bare "1080", which qualityOf's "<n>p" pattern
+		// does not read, so a plain number is taken as it stands.
+		label := strings.Trim(string(def.Quality), `"[]`)
+		quality, err := strconv.Atoi(label)
+		if err != nil {
+			quality = qualityOf(label)
+		}
 		candidates = append(candidates, mediaCandidate{
 			URL:     def.VideoURL,
-			Quality: qualityOf(strings.Trim(string(def.Quality), `"[]`)),
+			Quality: quality,
 			IsHLS:   strings.EqualFold(def.Format, "hls") || strings.Contains(def.VideoURL, ".m3u8"),
 		})
 	}
@@ -331,10 +338,4 @@ func firstHeading(doc string) string {
 }
 
 // pageTitle reads a document title, trimmed of the site's own suffix.
-func pageTitle(doc string) string {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return ""
-	}
-	return trimSiteSuffix(firstText(root, atom.Title))
-}
+func pageTitle(doc string) string { return trimSiteSuffix(firstTitleOf(doc)) }

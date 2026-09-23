@@ -140,7 +140,7 @@ func kvsResult(doc string, u *url.URL, label string) (*Result, error) {
 
 	title := util.FirstNonEmpty(
 		vars["video_title"],
-		trimSiteSuffix(firstTitleOf(doc)),
+		pageTitle(doc),
 		strings.Trim(u.Path, "/"),
 	)
 

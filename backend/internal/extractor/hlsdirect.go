@@ -103,7 +103,11 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 	// and checking it unconditionally would refuse every bare playlist a
 	// user pastes.
 	variant := media.Variant
-	if variant.URL != u.String() && !variant.muxed() {
+	// Only a variant that points its audio at a separate group is refused.
+	// CODECS is optional, and an audio-only master carries no video codec,
+	// so muxed() is false for both of those while the variant's own
+	// segments are the whole of what the stream has.
+	if variant.URL != u.String() && variant.audioElsewhere {
 		return nil, fmt.Errorf("hls: %s offers no rendition that carries its own audio — every one of them "+
 			"keeps it in a separate track — so joining any single variant would save video with no sound. "+
 			"Queue the page the manifest belongs to instead: that goes to the external downloader (yt-dlp), "+
@@ -119,7 +123,7 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 
 	name := hlsName(u)
 	return &Result{Title: name, Files: []File{{
-		Name: name + playlistExtension(variant),
+		Name: name + segmentsExtension(media.Segments, variant),
 		// A playlist has no length until every part has been fetched, and
 		// guessing one from the durations would be a number the skip-what-is-
 		// already-downloaded check could act on.

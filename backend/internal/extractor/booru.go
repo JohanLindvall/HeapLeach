@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -275,7 +276,10 @@ func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string)
 	fileHeaders := httpx.Referer(site.root + "/")
 	apiHeaders := site.apiHeaders()
 
-	for page := 0; len(files) < booruMaxPosts; page++ {
+	// Capped on pages as well as posts: a tag whose posts all withhold their
+	// file from an anonymous caller adds nothing per page and would
+	// otherwise be walked to the board's end.
+	for page := 0; len(files) < booruMaxPosts && page < config.MaxAlbumPages; page++ {
 		posts, err := b.posts(ctx, site, tags, single, page, apiHeaders)
 		if err != nil {
 			if page == 0 {

@@ -363,8 +363,10 @@ func bandzoogleSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Re
 	if path.Ext(u.Path) != "" {
 		return nil, nil
 	}
-	doc, err := client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))
-	if err != nil {
+	// Checked for a page before the body is read: an extensionless URL is
+	// as likely a signed media link, which reading here would spend.
+	doc, ok := mediaPageFetch(ctx, client, u)
+	if !ok {
 		return nil, nil
 	}
 	if !strings.Contains(doc, bandzoogleTrackAttr) {

@@ -95,6 +95,12 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	start, written := 0, int64(0)
 	if saved := loadPlaylistState(part, len(segments)); saved != nil {
 		start, written = saved.Index, saved.Bytes
+		// The checkpoint is only as good as the file it describes. A part
+		// that is gone or shorter than recorded would otherwise be padded
+		// with zeros by the truncate below and finished as if whole.
+		if fi, err := os.Stat(part); err != nil || fi.Size() < written {
+			start, written = 0, 0
+		}
 	}
 
 	flags := os.O_CREATE | os.O_WRONLY

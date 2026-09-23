@@ -94,12 +94,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.DownloadDir != nil {
-		if err := s.mgr.SetDownloadDir(*req.DownloadDir); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
 	if req.Concurrency != nil {
 		if err := s.mgr.SetConcurrency(*req.Concurrency); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -114,6 +108,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SpeedLimit != nil {
 		if err := s.mgr.SetSpeedLimit(*req.SpeedLimit); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	// Last among the refusable ones: it is the only change that touches the
+	// filesystem, so a request with a bad number must not have moved it.
+	if req.DownloadDir != nil {
+		if err := s.mgr.SetDownloadDir(*req.DownloadDir); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}

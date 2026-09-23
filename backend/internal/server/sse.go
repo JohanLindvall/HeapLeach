@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,9 +129,17 @@ func compressed(w http.ResponseWriter, r *http.Request) (io.Writer, *gzip.Writer
 // acceptsGzip reports whether the client will take a compressed reply.
 func acceptsGzip(r *http.Request) bool {
 	for part := range strings.SplitSeq(r.Header.Get("Accept-Encoding"), ",") {
-		if name, _, _ := strings.Cut(part, ";"); strings.EqualFold(strings.TrimSpace(name), "gzip") {
-			return true
+		name, params, _ := strings.Cut(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(name), "gzip") {
+			continue
 		}
+		// "gzip;q=0" names gzip in order to refuse it.
+		if q, ok := strings.CutPrefix(strings.ReplaceAll(params, " ", ""), "q="); ok {
+			if v, err := strconv.ParseFloat(q, 64); err == nil && v == 0 {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

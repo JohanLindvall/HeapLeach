@@ -273,6 +273,9 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 		queue   = []string{title}
 		seen    = map[string]bool{title: true}
 		visited int
+		// Shared across the walk: a file filed in both a category and one
+		// of its subcategories is one file, not two downloads of it.
+		listed = make(map[string]bool)
 	)
 
 	for level := 0; level <= depth && len(queue) > 0 && len(files) < config.MaxListingFiles; level++ {
@@ -281,7 +284,7 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 			if visited++; visited > mediaWikiMaxCategories {
 				break
 			}
-			batch, err := m.list(ctx, site, mediaWikiCategoryQuery(category), config.MaxListingFiles-len(files))
+			batch, err := m.list(ctx, site, mediaWikiCategoryQuery(category), config.MaxListingFiles-len(files), listed)
 			if err != nil {
 				// The category the user named is the job; a subcategory
 				// that will not answer is one branch of many.
@@ -356,7 +359,7 @@ func (m *MediaWiki) article(ctx context.Context, site mediaWikiSite, title strin
 	query.Set("titles", title)
 	query.Set("gimlimit", strconv.Itoa(mediaWikiPageSize))
 
-	files, err := m.list(ctx, site, query, config.MaxListingFiles)
+	files, err := m.list(ctx, site, query, config.MaxListingFiles, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +374,7 @@ func (m *MediaWiki) filePage(ctx context.Context, site mediaWikiSite, title stri
 	query := mediaWikiFileQuery()
 	query.Set("titles", title)
 
-	files, err := m.list(ctx, site, query, 1)
+	files, err := m.list(ctx, site, query, 1, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +412,7 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 		query.Set("gaidir", "older") // newest first
 	}
 
-	files, err := m.list(ctx, site, query, config.MaxListingFiles)
+	files, err := m.list(ctx, site, query, config.MaxListingFiles, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -434,9 +437,14 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 // The cap is a first instalment rather than a refusal: a category of forty
 // thousand is a real thing to point at, and handing back the first several
 // thousand of them downloads, where an error downloads nothing.
-func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Values, budget int) ([]File, error) {
+//
+// seen carries the titles already taken, so a caller walking several
+// listings can share one; nil starts afresh.
+func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Values, budget int, seen map[string]bool) ([]File, error) {
 	query := maps.Clone(params)
-	seen := make(map[string]bool)
+	if seen == nil {
+		seen = make(map[string]bool)
+	}
 	var files []File
 
 	for page := 0; page < config.MaxAlbumPages && len(files) < budget; page++ {
