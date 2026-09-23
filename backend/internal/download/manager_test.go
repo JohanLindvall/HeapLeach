@@ -269,22 +269,80 @@ func TestAUserActionIsPublishedAtOnce(t *testing.T) {
 	events, _, unsubscribe := m.Subscribe()
 	defer unsubscribe()
 
-	// Drain anything already on its way, then act. The ordinary path waits
-	// for the next sampling tick at the least, so a frame well inside one
-	// tick could only have come from the nudge.
+	// Have an ordinary frame go out first. The ceiling then holds the
+	// ordinary path off for a whole FrameInterval, so a frame inside that
+	// could only have come from the nudge — whereas with no recent frame, a
+	// tick falling just after the action would pass for one.
+	m.markDirty()
 	select {
 	case <-events:
-	case <-time.After(2 * config.ProgressTick):
+	case <-time.After(3 * config.FrameInterval):
+		t.Fatal("no ordinary frame to start from")
 	}
 
-	start := time.Now()
-	m.ClearFinished()
+	// An action that changes something: one that changes nothing has
+	// nothing to show and sends nothing.
+	if err := m.SetSpeedLimit(1 << 20); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-events:
-		if waited := time.Since(start); waited > config.ProgressTick/4 {
-			t.Errorf("the frame took %s, want it sent at once rather than on a tick", waited)
-		}
+	case <-time.After(config.FrameInterval / 2):
+		t.Fatal("the action was not published at once")
+	}
+}
+
+// An action that changed nothing — here, an unknown job — costs no frame.
+func TestARefusedActionSendsNothing(t *testing.T) {
+	m, _ := newTestManager(t)
+	events, _, unsubscribe := m.Subscribe()
+	defer unsubscribe()
+
+	m.markDirty()
+	select {
+	case <-events:
 	case <-time.After(3 * config.FrameInterval):
-		t.Fatal("no frame followed the action")
+		t.Fatal("no ordinary frame to start from")
+	}
+
+	if err := m.CancelJob("no-such-job"); err == nil {
+		t.Fatal("cancelling an unknown job succeeded")
+	}
+	select {
+	case <-events:
+		t.Error("a refused action sent a frame")
+	case <-time.After(config.FrameInterval / 2):
+	}
+}
+
+// Pasting a list of links is an Add per link. Those nudges arrive together
+// and must go out as one frame, not one snapshot of the whole queue each.
+func TestNudgesArrivingTogetherAreOneFrame(t *testing.T) {
+	m, _ := newTestManager(t)
+	events, _, unsubscribe := m.Subscribe()
+	defer unsubscribe()
+	select { // let the ordinary beat send, so it is held off for a second
+	case <-events:
+	case <-time.After(5 * config.FrameInterval):
+	}
+
+	for i := range 10 {
+		if err := m.SetSpeedLimit(int64(1_000_000 * (i + 1))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frames := 0
+	deadline := time.After(config.FrameInterval / 2)
+collect:
+	for {
+		select {
+		case <-events:
+			frames++
+		case <-deadline:
+			break collect
+		}
+	}
+	if frames != 1 {
+		t.Errorf("ten actions together sent %d frames, want 1", frames)
 	}
 }

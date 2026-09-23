@@ -48,6 +48,12 @@ const (
 	// difference is most of what a browser was being asked to receive.
 	FrameInterval = time.Second
 
+	// NudgeCoalesce is how long the broadcaster waits after a user action
+	// for others arriving with it, so that pasting a list of links — an add
+	// per link — is one frame rather than one per link. Short enough to read
+	// as immediate.
+	NudgeCoalesce = 50 * time.Millisecond
+
 	// IdleFrameInterval is how often a snapshot is pushed to browsers while
 	// transfers are running but no byte counter is moving.
 	//

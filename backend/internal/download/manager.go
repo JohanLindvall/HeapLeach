@@ -1276,6 +1276,25 @@ func (m *Manager) broadcast() {
 			// Straight past the ceiling: this is a person waiting to see
 			// what they just did. The frame is a patch like any other, so
 			// it costs the rows the action touched and nothing more.
+			//
+			// Nudges that arrive together are one frame. Pasting a list of
+			// links is an Add per link, and each would otherwise build a
+			// snapshot of the whole queue under the lock — a burst of them
+			// back to back is the ceiling not applying at all. Waiting a
+			// moment folds the rest in, which nobody watching can tell
+			// apart from at once.
+			settle := time.NewTimer(config.NudgeCoalesce)
+		drain:
+			for {
+				select {
+				case <-m.urgent:
+				case <-settle.C:
+					break drain
+				case <-m.ctx.Done():
+					settle.Stop()
+					return
+				}
+			}
 			if !m.hasSubscribers() {
 				continue
 			}
@@ -1429,12 +1448,19 @@ func (m *Manager) frameLocked() {
 	m.publish(snap, patch)
 }
 
-// nudge marks the state changed and asks for a frame now rather than on the
-// next beat. For the user's own actions only: anything that happens by
-// itself — bytes arriving, a transfer finishing — goes out at the ordinary
-// rate, which is the rate that keeps the stream cheap.
+// nudge asks for a frame now rather than on the next beat. For the user's
+// own actions only: anything that happens by itself — bytes arriving, a
+// transfer finishing — goes out at the ordinary rate, which is the rate that
+// keeps the stream cheap.
+//
+// It asks only when something is waiting to be told. Every action marks the
+// state changed itself when it changed anything, so an action that was
+// refused or changed nothing — an unknown id, a setting set to what it was —
+// costs no frame at all, now or on the next beat.
 func (m *Manager) nudge() {
-	m.markDirty()
+	if !m.dirty.Load() {
+		return
+	}
 	select {
 	case m.urgent <- struct{}{}:
 	default:
