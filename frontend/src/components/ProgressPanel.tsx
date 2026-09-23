@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { ACHIEVEMENTS, standing, type Progress } from '../gamification';
 import { formatBytes, formatSpeed } from '../format';
 
@@ -11,7 +12,7 @@ interface ProgressPanelProps {
  * totals, and the badges earned so far. Deliberately one row so it informs
  * without competing with the queue below it.
  */
-export function ProgressPanel({ progress, hostCount }: ProgressPanelProps) {
+export const ProgressPanel = memo(function ProgressPanel({ progress, hostCount }: ProgressPanelProps) {
   const rank = standing(progress.bytesDownloaded);
   const earned = new Set(progress.unlocked);
 
@@ -81,4 +82,4 @@ export function ProgressPanel({ progress, hostCount }: ProgressPanelProps) {
       </ul>
     </section>
   );
-}
+});

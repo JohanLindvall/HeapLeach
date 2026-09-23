@@ -45,6 +45,25 @@ describe('sliderReleased', () => {
     expect(send).toBeNull();
     expect(state).toEqual(sliderIdle);
   });
+
+  // A pointer lifting and focus leaving afterwards are two releases of one
+  // drag, and the second must not repeat the request.
+  it('sends nothing again for a value already on its way', () => {
+    const { state } = sliderReleased(sliderDragged(sliderIdle, 13), 4);
+    expect(sliderReleased(state, 4)).toEqual({ state, send: null });
+  });
+
+  it('sends a new value dragged to while an earlier one is outstanding', () => {
+    const { state } = sliderReleased(sliderDragged(sliderIdle, 13), 4);
+    const { send } = sliderReleased(sliderDragged(state, 9), 4);
+    expect(send).toBe(9);
+  });
+
+  it('sends the server value back when a request for another is outstanding', () => {
+    const { state } = sliderReleased(sliderDragged(sliderIdle, 13), 4);
+    const { send } = sliderReleased(sliderDragged(state, 4), 4);
+    expect(send).toBe(4);
+  });
 });
 
 describe('sliderSettled', () => {

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { memo, useState, type FormEvent } from 'react';
 import { addUrls, ApiError } from '../api';
 import { linksIn } from '../links';
 import { ClipboardIcon, DownloadIcon } from './Icons';
@@ -17,8 +17,12 @@ interface AddFormProps {
 const CAN_READ_CLIPBOARD =
   typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function';
 
-/** URL entry: accepts a paste of many links, one per line. */
-export function AddForm({ onNotice }: AddFormProps) {
+/**
+ * URL entry: accepts a paste of many links, one per line. Memoised since it
+ * reads nothing from the snapshot, and a paste of thousands of links is
+ * otherwise split again on every frame.
+ */
+export const AddForm = memo(function AddForm({ onNotice }: AddFormProps) {
   const [urls, setUrls] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -166,4 +170,4 @@ export function AddForm({ onNotice }: AddFormProps) {
       )}
     </form>
   );
-}
+});

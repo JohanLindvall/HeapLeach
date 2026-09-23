@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf } from '../format';
 import { isActive, isRetryable } from '../status';
 import type { JobView } from '../types';
@@ -9,15 +9,38 @@ import { useVirtualRows } from '../useVirtualRows';
 
 interface JobCardProps {
   readonly job: JobView;
-  readonly onCancel: () => void;
-  readonly onRetry: () => void;
-  readonly onRemove: () => void;
-  readonly onCancelItem: (itemId: string) => void;
-  readonly onRetryItem: (itemId: string) => void;
+  // Every handler is told which job, rather than being bound to it by the
+  // caller: that is what lets one stable callback serve every card, and
+  // the memo below skip a card whose job did not move.
+  readonly onCancel: (jobId: string) => void;
+  readonly onRetry: (jobId: string) => void;
+  readonly onRemove: (jobId: string) => void;
+  readonly onCancelItem: (jobId: string, itemId: string) => void;
+  readonly onRetryItem: (jobId: string, itemId: string) => void;
 }
 
-/** One submitted link, with its files collapsed behind a disclosure. */
-export function JobCard({
+/**
+ * One submitted link, with its files collapsed behind a disclosure.
+ *
+ * A frame rebuilds every job object, but a finished job's fields come back
+ * equal and its item list is the very array held before (see
+ * mergeSnapshot), so comparing field by field is what spares a long queue
+ * from rendering every card a second.
+ */
+export const JobCard = memo(JobCardView, (before, after) => {
+  const { job: a, ...restA } = before;
+  const { job: b, ...restB } = after;
+  return shallowEqual(a, b) && shallowEqual(restA, restB);
+});
+
+function shallowEqual(a: object, b: object): boolean {
+  if (a === b) return true;
+  const keysA = Object.keys(a);
+  if (keysA.length !== Object.keys(b).length) return false;
+  return keysA.every((key) => Object.is(a[key as keyof typeof a], b[key as keyof typeof b]));
+}
+
+function JobCardView({
   job,
   onCancel,
   onRetry,
@@ -46,6 +69,11 @@ export function JobCard({
   const busy = isActive(job.status);
   const retryable = isRetryable(job.status);
 
+  // Stable across frames, so an unchanged row's memo holds.
+  const jobId = job.id;
+  const cancelItem = useCallback((itemId: string) => onCancelItem(jobId, itemId), [jobId, onCancelItem]);
+  const retryItem = useCallback((itemId: string) => onRetryItem(jobId, itemId), [jobId, onRetryItem]);
+
   return (
     <article className={`card job job--${job.status}`}>
       <header className="job__head">
@@ -61,7 +89,7 @@ export function JobCard({
         </button>
 
         <div className="job__title">
-          <h2 title={job.title}>{job.title}</h2>
+          <h3 title={job.title}>{job.title}</h3>
           <div className="job__tags">
             <span className="tag tag--host">{hostLabel(job.host)}</span>
             <span className={`tag tag--${job.status}`}>{job.status}</span>
@@ -76,18 +104,18 @@ export function JobCard({
 
         <div className="job__actions">
           {busy && (
-            <button type="button" className="btn btn--icon" onClick={onCancel} title="Cancel job">
+            <button type="button" className="btn btn--icon" onClick={() => onCancel(job.id)} title="Cancel job">
               <CancelIcon />
               <span className="sr-only">Cancel job</span>
             </button>
           )}
           {retryable && (
-            <button type="button" className="btn btn--icon" onClick={onRetry} title="Retry job">
+            <button type="button" className="btn btn--icon" onClick={() => onRetry(job.id)} title="Retry job">
               <RetryIcon />
               <span className="sr-only">Retry job</span>
             </button>
           )}
-          <button type="button" className="btn btn--icon" onClick={onRemove} title="Remove job">
+          <button type="button" className="btn btn--icon" onClick={() => onRemove(job.id)} title="Remove job">
             <TrashIcon />
             <span className="sr-only">Remove job</span>
           </button>
@@ -135,8 +163,8 @@ export function JobCard({
                  has to say where in the whole it sits. */
               position={rows ? rows.start + index + 1 : undefined}
               total={rows ? job.items.length : undefined}
-              onCancel={() => onCancelItem(item.id)}
-              onRetry={() => onRetryItem(item.id)}
+              onCancel={cancelItem}
+              onRetry={retryItem}
             />
           ))}
           {rows && rows.padBottom > 0 && (

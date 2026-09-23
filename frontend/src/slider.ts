@@ -51,9 +51,15 @@ export function sliderReleased(
   state: SliderState,
   server: number,
 ): { readonly state: SliderState; readonly send: number | null } {
-  if (state.held === null || state.held === server) {
-    return { state: sliderIdle, send: null };
-  }
+  if (state.held === null) return { state: sliderIdle, send: null };
+  // Already asked for and not yet answered. Release arrives by several
+  // names — the pointer lifting and then focus leaving, most often — and
+  // each of them must not ask again for what is already on its way.
+  if (state.held === state.sent) return { state, send: null };
+  // Back where the server is, with nothing else outstanding. With another
+  // value outstanding it is a change after all: that request would
+  // otherwise land and move the queue away from where the user left it.
+  if (state.held === server && state.sent === null) return { state: sliderIdle, send: null };
   return { state: { held: state.held, sent: state.held }, send: state.held };
 }
 

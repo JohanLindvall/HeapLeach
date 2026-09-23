@@ -36,17 +36,34 @@ export function DownloadDir({ value, onChange, free, total, minFree }: DownloadD
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const input = useRef<HTMLInputElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  // Whether leaving the field should put focus back on the button. Enter
+  // and Escape end the edit from the keyboard, and dropping focus to the
+  // document there would send a keyboard user back to the top of the page;
+  // a click elsewhere has already put focus where it was wanted.
+  const refocus = useRef(false);
+  // One edit, one answer. The field unmounting can deliver a blur of its
+  // own after Enter or Escape has already settled the edit.
+  const settled = useRef(false);
 
   useEffect(() => {
-    if (editing) input.current?.select();
+    if (editing) {
+      input.current?.select();
+    } else if (refocus.current) {
+      refocus.current = false;
+      button.current?.focus();
+    }
   }, [editing]);
 
   const open = (): void => {
+    settled.current = false;
     setDraft(value);
     setEditing(true);
   };
 
   const commit = (): void => {
+    if (settled.current) return;
+    settled.current = true;
     setEditing(false);
     const next = draft.trim();
     // Nothing to do, and nothing to report: submitting the value that is
@@ -71,6 +88,7 @@ export function DownloadDir({ value, onChange, free, total, minFree }: DownloadD
   if (!editing) {
     return (
       <button
+        ref={button}
         type="button"
         className={measured ? 'jobs__dir jobs__dir--measured' : 'jobs__dir'}
         onClick={open}
@@ -99,6 +117,7 @@ export function DownloadDir({ value, onChange, free, total, minFree }: DownloadD
       className="jobs__dir jobs__dir--editing"
       onSubmit={(e) => {
         e.preventDefault();
+        refocus.current = true;
         commit();
       }}
     >
@@ -118,7 +137,8 @@ export function DownloadDir({ value, onChange, free, total, minFree }: DownloadD
           if (e.key === 'Escape') {
             // Abandon the edit rather than commit it: Escape means "forget
             // this", and blur would otherwise submit what was typed.
-            setDraft(value);
+            settled.current = true;
+            refocus.current = true;
             setEditing(false);
           }
         }}

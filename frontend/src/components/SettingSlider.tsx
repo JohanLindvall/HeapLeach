@@ -49,6 +49,14 @@ export function SettingSlider({
   onCommit,
 }: SettingSliderProps) {
   const [state, setState] = useState<SliderState>(sliderIdle);
+  // The state as last set, for the release handler to decide from. Sending
+  // is a side effect, and a state updater is no place for one: React may
+  // call an updater more than once, and every call would be a request.
+  const current = useRef(state);
+  const update = useCallback((next: SliderState): void => {
+    current.current = next;
+    setState(next);
+  }, []);
   const awaiting = useRef(false);
   const deadline = useRef<number | undefined>(undefined);
 
@@ -56,8 +64,8 @@ export function SettingSlider({
     awaiting.current = false;
     window.clearTimeout(deadline.current);
     deadline.current = undefined;
-    setState(sliderSettled());
-  }, []);
+    update(sliderSettled());
+  }, [update]);
 
   // The server's value changing is the signal that it has answered. The
   // effect is keyed on that value alone, so the snapshots that arrive twice
@@ -69,17 +77,14 @@ export function SettingSlider({
   useEffect(() => () => window.clearTimeout(deadline.current), []);
 
   const release = useCallback((): void => {
-    setState((current) => {
-      const { state: next, send } = sliderReleased(current, value);
-      if (send !== null) {
-        awaiting.current = true;
-        window.clearTimeout(deadline.current);
-        deadline.current = window.setTimeout(settle, SETTLE_TIMEOUT_MS);
-        onCommit(send);
-      }
-      return next;
-    });
-  }, [onCommit, settle, value]);
+    const { state: next, send } = sliderReleased(current.current, value);
+    update(next);
+    if (send === null) return;
+    awaiting.current = true;
+    window.clearTimeout(deadline.current);
+    deadline.current = window.setTimeout(settle, SETTLE_TIMEOUT_MS);
+    onCommit(send);
+  }, [onCommit, settle, update, value]);
 
   const shown = sliderShows(state, value);
 
@@ -93,7 +98,7 @@ export function SettingSlider({
         min={1}
         max={max}
         value={shown}
-        onChange={(e) => setState((current) => sliderDragged(current, Number(e.target.value)))}
+        onChange={(e) => update(sliderDragged(current.current, Number(e.target.value)))}
         // Release is what sends, and it arrives by several names: a finger or
         // a mouse lifting, an arrow key coming back up, and focus leaving as
         // the net under both.

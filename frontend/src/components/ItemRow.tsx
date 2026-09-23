@@ -1,13 +1,15 @@
+import { memo } from 'react';
 import { formatBytes, formatEta, formatSpeed, percentOf } from '../format';
-import { isActive } from '../status';
+import { isActive, isRetryable } from '../status';
 import type { ItemView } from '../types';
 import { CancelIcon, RetryIcon } from './Icons';
 import { ProgressBar } from './ProgressBar';
 
 interface ItemRowProps {
   readonly item: ItemView;
-  readonly onCancel: () => void;
-  readonly onRetry: () => void;
+  /** Both take the row's own id, so one callback can serve every row. */
+  readonly onCancel: (itemId: string) => void;
+  readonly onRetry: (itemId: string) => void;
   /**
    * Where this row sits in the whole list, one-based, and how long that list
    * is. Set only when the list is windowed, where the document holds too
@@ -17,8 +19,20 @@ interface ItemRowProps {
   readonly total?: number;
 }
 
-/** One file: name, live progress, and the action that fits its state. */
-export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowProps) {
+/**
+ * One file: name, live progress, and the action that fits its state.
+ *
+ * Memoised because a frame carries only the rows that moved and the merge
+ * keeps every other row's object as it was: in a job of a hundred files,
+ * one of them is usually all that needs rendering again.
+ */
+export const ItemRow = memo(function ItemRow({
+  item,
+  onCancel,
+  onRetry,
+  position,
+  total,
+}: ItemRowProps) {
   const running = item.status === 'running';
   const active = isActive(item.status);
 
@@ -78,13 +92,18 @@ export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowPro
 
       <div className="item__actions">
         {active ? (
-          <button type="button" className="btn btn--icon" onClick={onCancel} title="Cancel">
+          <button type="button" className="btn btn--icon" onClick={() => onCancel(item.id)} title="Cancel">
             <CancelIcon />
             <span className="sr-only">Cancel {item.name}</span>
           </button>
         ) : (
-          item.status !== 'done' && (
-            <button type="button" className="btn btn--icon" onClick={onRetry} title="Retry">
+          isRetryable(item.status) && (
+            <button
+              type="button"
+              className="btn btn--icon"
+              onClick={() => onRetry(item.id)}
+              title="Retry"
+            >
               <RetryIcon />
               <span className="sr-only">Retry {item.name}</span>
             </button>
@@ -93,7 +112,7 @@ export function ItemRow({ item, onCancel, onRetry, position, total }: ItemRowPro
       </div>
     </li>
   );
-}
+});
 
 /** Part counts, when this file arrives as a playlist rather than one body. */
 function segmentProgress(item: ItemView): { done: number; total: number } | null {

@@ -688,6 +688,14 @@ button.jobs__dir:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* The select inside draws no outline of its own, since a ring around the
+   bare text would sit inside the pill; the pill carries it instead, or a
+   keyboard user tabbing through the header loses track of where they are. */
+.speedcap:has(:focus-visible) {
+  outline: 2px solid var(--accent-b);
+  outline-offset: 2px;
+}
+
 .speedcap__label {
   font-weight: 620;
   letter-spacing: 0.04em;
@@ -1228,7 +1236,7 @@ button.jobs__dir:hover {
 
 .job__title { flex: 1; min-width: 0; }
 
-.job__title h2 {
+.job__title h3 {
   font-size: 0.97rem;
   font-weight: 640;
   overflow: hidden;
@@ -1766,7 +1774,7 @@ button.jobs__dir:hover {
 
   .main { padding-top: 0.8rem; }
 
-  .job__title h2 { font-size: 0.92rem; }
+  .job__title h3 { font-size: 0.92rem; }
 
   .job__source { display: none; }
 

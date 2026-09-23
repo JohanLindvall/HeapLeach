@@ -91,6 +91,20 @@ export default function App() {
     [notify],
   );
 
+  // Stable, so a card whose job did not move is not rendered again just
+  // because its handlers were rebuilt.
+  const onCancelJob = useCallback((jobId: string) => run(() => cancelJob(jobId)), [run]);
+  const onRetryJob = useCallback((jobId: string) => run(() => retryJob(jobId)), [run]);
+  const onRemoveJob = useCallback((jobId: string) => run(() => removeJob(jobId)), [run]);
+  const onCancelItem = useCallback(
+    (jobId: string, itemId: string) => run(() => cancelItem(jobId, itemId)),
+    [run],
+  );
+  const onRetryItem = useCallback(
+    (jobId: string, itemId: string) => run(() => retryItem(jobId, itemId)),
+    [run],
+  );
+
   // Keyed on the count rather than the snapshot, which arrives twice a
   // second: the title only has to change when the number does.
   const active = snapshot?.active ?? 0;
@@ -211,11 +225,11 @@ export default function App() {
                   <JobCard
                     key={job.id}
                     job={job}
-                    onCancel={() => run(() => cancelJob(job.id))}
-                    onRetry={() => run(() => retryJob(job.id))}
-                    onRemove={() => run(() => removeJob(job.id))}
-                    onCancelItem={(itemId) => run(() => cancelItem(job.id, itemId))}
-                    onRetryItem={(itemId) => run(() => retryItem(job.id, itemId))}
+                    onCancel={onCancelJob}
+                    onRetry={onRetryJob}
+                    onRemove={onRemoveJob}
+                    onCancelItem={onCancelItem}
+                    onRetryItem={onRetryItem}
                   />
                 ))}
               </div>
