@@ -515,6 +515,13 @@ Host-specific notes:
   and honours ranges; the site's own download button points at a signed
   `?dl=1` link, which is worth knowing only to say why it is not used — it
   would expire while an item waited its turn and buys nothing.
+- **filester** keeps nothing in the page: its script POSTs the slug to
+  `/v2/api/public/download` and builds the storage link from the answer
+  (`server` + `/v2/` + `file` + `?token=`). The token lasts half an hour and
+  encodes the requesting address, so it is minted through `Resolve`. The
+  `download=true&n=` the page's button adds only sets a disposition name and
+  is left off. Only `/d/<slug>` exists anonymously; folders are behind the
+  authenticated API.
 - **imagepond** reads the player element before the page metadata, which is
   the reverse of the usual order and deliberate. For a video, `og:image` is
   the poster frame and `og:video:type` has been seen claiming MP4 for a

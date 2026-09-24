@@ -224,6 +224,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPixhost(client),
 		NewImagePond(client),
 		NewSuvobox(client),
+		NewFilester(client),
 		NewCyberdrop(client),
 		NewImgur(client),
 		NewCivitai(client),
