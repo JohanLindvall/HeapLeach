@@ -41,6 +41,8 @@ func (m *Manager) Restore() (unfinished int, err error) {
 			Err:       sj.Err,
 			CreatedAt: sj.CreatedAt,
 			canceled:  sj.Canceled,
+			// Nothing restored can be fetched as it stands; see unfetchable.
+			unfetchable: true,
 		}
 		for _, si := range sj.Items {
 			it := &Item{

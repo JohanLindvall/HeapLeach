@@ -156,6 +156,13 @@ type Job struct {
 	// attempt. So the source is read again before anything is transferred,
 	// and the part files on disk supply the bytes already fetched.
 	restored bool
+	// unfetchable marks a job read back from the state file at all, whether
+	// or not it was held: its items carry no URL, for the reason above, so
+	// retrying any of them means reading the source again. restored alone
+	// cannot say so — a job whose files were all done or cancelled comes
+	// back unheld, and re-queueing a cancelled one on its own failed with
+	// "no download URL".
+	unfetchable bool
 }
 
 // ItemView is the JSON shape of an item sent to the browser.
@@ -214,6 +221,10 @@ type JobView struct {
 	// SizeKnown is false while any item's length is still unknown, so the
 	// UI can avoid showing a misleading total.
 	SizeKnown bool `json:"sizeKnown"`
+	// Held marks a job restored from the last run and waiting to be told to
+	// go. Its items read "queued", which alone says something is about to
+	// start; without this the UI had nothing to offer that would start it.
+	Held bool `json:"held,omitempty"`
 }
 
 // Snapshot is the whole application state, broadcast over SSE.
@@ -246,6 +257,10 @@ type Snapshot struct {
 	// were once sent too, for a list in the UI that only ever restated what
 	// the build supported; the count is all anything still reads.
 	HostCount int `json:"hostCount"`
+	// Held counts the jobs waiting on a Resume, and their items are left
+	// out of Queued: a queue that is not going to move by itself should not
+	// read as one about to.
+	Held int `json:"held"`
 }
 
 // storedNote is the note an item carries, for callers with nothing better.
@@ -302,6 +317,7 @@ func (j *Job) view(note func(*Item) string) JobView {
 		Items:     make([]ItemView, 0, len(j.Items)),
 		Total:     len(j.Items),
 		SizeKnown: true,
+		Held:      j.restored,
 	}
 	var t itemTally
 	for _, it := range j.Items {

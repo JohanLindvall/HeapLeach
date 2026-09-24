@@ -513,3 +513,71 @@ func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
 		t.Error("the restored job started on its own; it was meant to wait for a retry")
 	}
 }
+
+// A job whose files were all done or cancelled comes back unheld — there is
+// nothing to resume — but its items still carry no URL. Retrying the
+// cancelled one re-queued it on its own and failed with "no download URL",
+// which is what the held case had already been fixed for.
+func TestRetryingACancelledItemOfAnUnheldRestoredJobReReadsTheSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("data"))
+	}))
+	defer server.Close()
+
+	file := filepath.Join(t.TempDir(), "queue.json")
+	seed := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	seed.jobs["old"] = &Job{
+		ID: "old", Source: server.URL + "/payload.bin", Title: "payload.bin", Host: "direct",
+		Items: []*Item{{ID: "a", Name: "payload.bin", Status: StatusCanceled, Size: 4}},
+	}
+	seed.order = []string{"old"}
+	seed.persist()
+
+	m, _ := newTestManager(t)
+	m.stateFile = file
+	if unfinished, err := m.Restore(); err != nil || unfinished != 0 {
+		t.Fatalf("Restore = %d, %v; want a job with nothing held", unfinished, err)
+	}
+
+	if err := m.RetryItem("old", "a"); err != nil {
+		t.Fatalf("RetryItem: %v", err)
+	}
+	if !waitForCond(20*time.Second, func() bool {
+		return itemStatusesOf(m, "old", StatusDone) == 1
+	}) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		t.Fatalf("the item never downloaded: %+v", m.jobs["old"].Items[0])
+	}
+}
+
+// A restored job waits on a person, so the snapshot has to say so: its items
+// read "queued", and counted as queued they told the UI a queue was about to
+// move that never would, with no button offered that would move it.
+func TestSnapshotMarksHeldJobsAndLeavesThemOutOfQueued(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "queue.json")
+	seed := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	seed.jobs["old"] = &Job{
+		ID: "old", Source: "https://example.test/interrupted", Title: "interrupted",
+		Items: []*Item{{ID: "a", Name: "half.bin", Status: StatusQueued, Size: 500}},
+	}
+	seed.order = []string{"old"}
+	seed.persist()
+
+	m := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	if _, err := m.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+
+	if snap.Held != 1 || !snap.Jobs[0].Held {
+		t.Errorf("held = %d, job held = %v; want the restored job marked", snap.Held, snap.Jobs[0].Held)
+	}
+	if snap.Queued != 0 {
+		t.Errorf("queued = %d; a held item is not waiting on a worker", snap.Queued)
+	}
+}

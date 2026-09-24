@@ -2,7 +2,7 @@ import { memo, useCallback, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf } from '../format';
 import { isActive, isRetryable } from '../status';
 import type { JobView } from '../types';
-import { CancelIcon, ChevronIcon, RetryIcon, TrashIcon } from './Icons';
+import { CancelIcon, ChevronIcon, PlayIcon, RetryIcon, TrashIcon } from './Icons';
 import { ItemRow } from './ItemRow';
 import { ProgressBar } from './ProgressBar';
 import { useVirtualRows } from '../useVirtualRows';
@@ -92,7 +92,11 @@ function JobCardView({
           <h3 title={job.title}>{job.title}</h3>
           <div className="job__tags">
             <span className="tag tag--host">{hostLabel(job.host)}</span>
-            <span className={`tag tag--${job.status}`}>{job.status}</span>
+            {job.held ? (
+              <span className="tag tag--held">held</span>
+            ) : (
+              <span className={`tag tag--${job.status}`}>{job.status}</span>
+            )}
             {job.total > 0 && (
               <span className="tag">
                 {job.done}/{job.total} files
@@ -107,6 +111,12 @@ function JobCardView({
             <button type="button" className="btn btn--icon" onClick={() => onCancel(job.id)} title="Cancel job">
               <CancelIcon />
               <span className="sr-only">Cancel job</span>
+            </button>
+          )}
+          {job.held && (
+            <button type="button" className="btn btn--icon" onClick={() => onRetry(job.id)} title="Resume job">
+              <PlayIcon />
+              <span className="sr-only">Resume job</span>
             </button>
           )}
           {retryable && (

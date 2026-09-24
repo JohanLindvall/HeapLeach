@@ -148,7 +148,7 @@ export default function App() {
           onToggleTheme={toggleTheme}
           onConcurrencyChange={(concurrency) => run(() => updateSettings({ concurrency }))}
           onStreamsChange={(streams) => run(() => updateSettings({ streams }))}
-          onTogglePause={() => run(() => updateSettings({ paused: !snapshot.paused }))}
+          onTogglePause={() => run(() => updateSettings({ paused: !(snapshot.paused || snapshot.held > 0) }))}
           onSpeedLimitChange={(speedLimit) => run(() => updateSettings({ speedLimit }))}
         />
       </header>

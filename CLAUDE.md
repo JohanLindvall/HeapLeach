@@ -606,6 +606,10 @@ Three things here were each got wrong first:
   from, and enqueueing it alone failed with "no download URL" — a confusing
   answer to a reasonable click, which left the item failed for a reason that
   said nothing about the file. Both retries funnel through `rereadLocked`.
+  Which jobs that applies to is `unfetchable`, not `restored`: `restored`
+  means *held*, and a job whose files were all done or cancelled comes back
+  unheld while its items are just as URL-less — retrying a cancelled one of
+  those hit the same "no download URL" until the two were told apart.
 - **Resolution appends to `job.Items`**, so a restored job's items must be
   dropped before it is re-read or every file in it doubles. Both `SetPaused`
   (resuming) and `RetryJob` clear them, and

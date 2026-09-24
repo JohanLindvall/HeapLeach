@@ -639,7 +639,7 @@ func (m *Manager) RetryJob(id string) error {
 	// same reason resuming the whole queue re-reads it: its items are last
 	// run's record, not somewhere the files can be fetched from. And one
 	// with no items at all, where the extractor itself is what failed.
-	if job.restored || len(job.Items) == 0 {
+	if job.restored || job.unfetchable || len(job.Items) == 0 {
 		ctx := m.rereadLocked(job)
 		m.mu.Unlock()
 
@@ -690,7 +690,7 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	// which is what the item's own note asks for and what the job-level
 	// retry does. Everything already downloaded is recognised on disk and
 	// skipped, so this costs the listing and nothing more.
-	if job != nil && job.restored {
+	if job != nil && (job.restored || job.unfetchable) {
 		ctx := m.rereadLocked(job)
 		m.mu.Unlock()
 
@@ -713,6 +713,8 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 // under. Caller holds mu, and must release it before starting the goroutine.
 func (m *Manager) rereadLocked(job *Job) context.Context {
 	job.restored = false
+	job.unfetchable = false
+	job.canceled = false
 	job.Items = nil
 	job.Err = ""
 	job.resolving = true
@@ -1017,15 +1019,7 @@ func (m *Manager) resumeRestored() {
 		if !ok || !job.restored {
 			continue
 		}
-		job.restored = false
-		job.Err = ""
-		job.canceled = false
-		job.Items = nil
-		job.resolving = true
-
-		ctx, cancel := context.WithCancel(m.ctx)
-		job.cancel = cancel
-		starting = append(starting, pending{job: job, ctx: ctx})
+		starting = append(starting, pending{job: job, ctx: m.rereadLocked(job)})
 	}
 	m.mu.Unlock()
 
@@ -1127,6 +1121,11 @@ func (m *Manager) snapshotLocked() Snapshot {
 		}
 		v := job.view(m.itemNoteLocked)
 		snap.Speed += v.Speed
+		if v.Held {
+			snap.Held++
+			snap.Jobs = append(snap.Jobs, v)
+			continue
+		}
 		for _, it := range v.Items {
 			if it.Status == StatusQueued {
 				snap.Queued++

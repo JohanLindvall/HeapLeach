@@ -65,6 +65,8 @@ export interface JobView {
   speed: number;
   /** False while any item's length is still unknown. */
   sizeKnown: boolean;
+  /** Restored from the last run and waiting for a Resume or a retry. */
+  held?: boolean;
 }
 
 /** Whole-application state, pushed over server-sent events. */
@@ -97,6 +99,8 @@ export interface Snapshot {
    */
   diskMinFree: number;
   hostCount: number;
+  /** Jobs restored from the last run and waiting for a Resume. */
+  held: number;
 }
 
 /** Result of submitting URLs. */

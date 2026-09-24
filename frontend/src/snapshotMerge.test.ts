@@ -23,6 +23,7 @@ function snapshot(jobs: JobView[]): Snapshot {
     diskTotal: 0,
     diskMinFree: 0,
     hostCount: 1,
+    held: 0,
   } as Snapshot;
 }
 

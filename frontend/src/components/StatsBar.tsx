@@ -39,11 +39,17 @@ export function StatsBar({
     { done: 0, failed: 0, total: 0 },
   );
 
+  // Restored jobs wait for the same word a paused queue does, so the one
+  // button offers it for either — otherwise a queue brought back from the
+  // last run had nothing to click that would start it.
+  const resumable = snapshot.paused || snapshot.held > 0;
+
   return (
     <div className="stats">
       <div className="stats__group">
         <Stat label="Downloading" value={String(snapshot.active)} accent={snapshot.active > 0} />
         <Stat label="Queued" value={String(snapshot.queued)} />
+        {snapshot.held > 0 && <Stat label="Held" value={String(snapshot.held)} />}
         <Stat label="Completed" value={`${totals.done}/${totals.total}`} />
         {totals.failed > 0 && <Stat label="Failed" value={String(totals.failed)} danger />}
         <div className="stat stat--graph">
@@ -81,13 +87,19 @@ export function StatsBar({
 
         <button
           type="button"
-          className={`btn btn--pause${snapshot.paused ? ' is-paused' : ''}`}
+          className={`btn btn--pause${resumable ? ' is-paused' : ''}`}
           onClick={onTogglePause}
-          title={snapshot.paused ? 'Resume the queue' : 'Pause every transfer'}
+          title={
+            snapshot.paused
+              ? 'Resume the queue'
+              : resumable
+                ? 'Resume the jobs restored from the last run'
+                : 'Pause every transfer'
+          }
           aria-pressed={snapshot.paused}
         >
-          {snapshot.paused ? <PlayIcon /> : <PauseIcon />}
-          <span className="btn__label">{snapshot.paused ? 'Resume' : 'Pause'}</span>
+          {resumable ? <PlayIcon /> : <PauseIcon />}
+          <span className="btn__label">{resumable ? 'Resume' : 'Pause'}</span>
         </button>
 
         <button

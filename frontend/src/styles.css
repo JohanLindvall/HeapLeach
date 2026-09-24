@@ -1276,6 +1276,7 @@ button.jobs__dir:hover {
 .tag--failed   { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 30%, transparent); }
 .tag--canceled { color: var(--canceled); }
 .tag--queued   { color: var(--queued); border-color: color-mix(in srgb, var(--queued) 30%, transparent); }
+.tag--held     { color: var(--queued); border-style: dashed; }
 .tag--resolving{ color: var(--resolving); border-color: color-mix(in srgb, var(--resolving) 30%, transparent); }
 
 .job__actions {
