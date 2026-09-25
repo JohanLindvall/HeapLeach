@@ -18,7 +18,12 @@ export function Sidebar({ jobs, filter, onFilter }: SidebarProps) {
   const counts = countByFilter(jobs);
   return (
     <aside className="sidebar">
-      <nav className="sidebar__nav" aria-label="Filter downloads">
+      {/* The header counts files and these count jobs; unlabelled, "4
+          downloading" beside "2 active" read as figures that disagree. */}
+      <h2 className="sidebar__title" id="sidebar-title">
+        Jobs
+      </h2>
+      <nav className="sidebar__nav" aria-labelledby="sidebar-title">
         {GROUPS.map((group) => (
           <button
             key={group.key}

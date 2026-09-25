@@ -318,6 +318,16 @@ code {
   min-width: 0;
 }
 
+.sidebar__title {
+  margin: 0 0 -1rem;
+  padding: 0 0.6rem;
+  font-size: 0.63rem;
+  font-weight: 560;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+
 .sidebar__nav {
   display: flex;
   flex-direction: column;

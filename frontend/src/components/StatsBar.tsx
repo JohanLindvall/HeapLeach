@@ -47,11 +47,11 @@ export function StatsBar({
   return (
     <div className="stats">
       <div className="stats__group">
-        <Stat label="Downloading" value={String(snapshot.active)} accent={snapshot.active > 0} />
-        <Stat label="Queued" value={String(snapshot.queued)} />
-        {snapshot.held > 0 && <Stat label="Held" value={String(snapshot.held)} />}
-        <Stat label="Completed" value={`${totals.done}/${totals.total}`} />
-        {totals.failed > 0 && <Stat label="Failed" value={String(totals.failed)} danger />}
+        <Stat label="Files downloading" value={String(snapshot.active)} accent={snapshot.active > 0} />
+        <Stat label="Files queued" value={String(snapshot.queued)} />
+        {snapshot.held > 0 && <Stat label="Jobs held" value={String(snapshot.held)} />}
+        <Stat label="Files done" value={`${totals.done}/${totals.total}`} />
+        {totals.failed > 0 && <Stat label="Files failed" value={String(totals.failed)} danger />}
         <div className="stat stat--graph">
           <span
             className={`stat__value ${snapshot.paused ? 'stat__value--held' : 'stat__value--accent'}`}
