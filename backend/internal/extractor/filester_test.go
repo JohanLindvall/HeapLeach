@@ -65,7 +65,7 @@ func TestFilesterSignsAtDownloadTime(t *testing.T) {
 
 func TestFilesterMatch(t *testing.T) {
 	f := NewFilester(nil)
-	for _, raw := range []string{"https://filester.si/d/AbC123x", "https://filester.me/d/AbC123x"} {
+	for _, raw := range []string{"https://filester.si/d/AbC123x", "https://filester.me/d/AbC123x", "https://filester.gg/d/AbC123x"} {
 		u, _ := url.Parse(raw)
 		if !f.Match(u) {
 			t.Errorf("%s not matched", raw)

@@ -32,7 +32,7 @@ const filesterTokenPath = "/v2/api/public/download"
 
 // NewFilester builds the filester extractor.
 func NewFilester(client *httpx.Client) *Filester {
-	return &Filester{hostSet: hostSet{"filester.si", "filester.me"}, client: client}
+	return &Filester{hostSet: hostSet{"filester.si", "filester.me", "filester.gg"}, client: client}
 }
 
 func (f *Filester) Name() string { return "filester" }
