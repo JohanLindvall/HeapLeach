@@ -113,6 +113,7 @@ func (f *Feeds) Sites() []string { return nil }
 // instead, and needs no line here: see hosts.go.
 func (b *Bunkr) Sites() []string    { return []string{"bunkr.*"} }
 func (f *Filester) Sites() []string { return []string{"filester.*"} }
+func (b *Bandcamp) Sites() []string { return []string{"bandcamp.com"} }
 func (g *GoogleDrive) Sites() []string {
 	return []string{"drive.google.com", "drive.usercontent.google.com", "docs.google.com"}
 }

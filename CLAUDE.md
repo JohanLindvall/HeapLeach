@@ -525,6 +525,18 @@ Host-specific notes:
   The site hops top-level domains (.si, .me, .gg, .sh so far, all one API),
   so `Match` takes `filester.<any TLD>` with the `/d/` shape rather than a
   `hostSet` that trails every move.
+- **bandcamp** was a yt-dlp handoff because every endpoint answered with a
+  client challenge — but the challenge is aimed at browsers: a request
+  claiming to be one (Chrome and Firefox alike) gets a three-kilobyte
+  challenge page, while one naming itself (`bandcampAgent`) gets the real
+  page. So every request there overrides the client's browser User-Agent.
+  The page's `data-tralbum` carries the band, the release and per track its
+  number, title and a `mp3-128` link signed for a day, minted through
+  `Resolve`. Tracks are filed `<band>/<album>/NN - title.mp3`; a track
+  page's album is only in `data-embed`. A band's front page answers 403
+  whatever the agent, so a discography is read from `/music` — which also
+  carries a `data-tralbum`, empty and of no `item_type`, so the kind is what
+  separates it from a band whose `/music` is its one release.
 - **imagepond** reads the player element before the page metadata, which is
   the reverse of the usual order and deliberate. For a video, `og:image` is
   the poster frame and `og:video:type` has been seen claiming MP4 for a

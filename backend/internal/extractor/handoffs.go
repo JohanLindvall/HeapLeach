@@ -42,8 +42,6 @@ import (
 //     correctly refuse every variant and leave nothing self-contained to
 //     fetch. Taking a variant anyway is the trap muxed() exists to prevent —
 //     a silent file that looks like a finished download.
-//   - bandcamp: every endpoint, its own CDN included, answers with an
-//     F5-style client challenge rather than with data.
 //   - soundcloud: api-v2 wants a client_id scraped out of a JS bundle that
 //     rotates, and a browser TLS fingerprint alongside it.
 //   - mixcloud: its stream URLs are XOR-obfuscated, and the obfuscation is
@@ -109,11 +107,6 @@ var handoffSites = []handoffSite{
 		name:    "niconico",
 		domains: []string{"nicovideo.jp", "nico.ms"},
 		why:     "its stream carries video and audio separately, so they have to be muxed",
-	},
-	{
-		name:    "bandcamp",
-		domains: []string{"bandcamp.com"},
-		why:     "it answers every endpoint, its own CDN included, with a client challenge",
 	},
 	{
 		name:    "soundcloud",

@@ -35,24 +35,21 @@ func TestHandoffMatch(t *testing.T) {
 	}
 
 	for raw, want := range map[string]string{
-		"https://odysee.com/@channel:1/a-clip:2":      "odysee",
-		"https://lbry.tv/@channel:1/a-clip:2":         "odysee",
-		"https://www.dailymotion.com/video/x000000":   "dailymotion",
-		"https://dai.ly/x000000":                      "dailymotion",
-		"https://www.bilibili.com/video/BV00000000":   "bilibili",
-		"https://b23.tv/aaaaaa":                       "bilibili",
-		"https://www.nicovideo.jp/watch/sm0000000":    "niconico",
-		"https://nico.ms/sm0000000":                   "niconico",
-		"https://an-artist.bandcamp.com/track/a-song": "bandcamp",
-		"https://bandcamp.com/a-listener":             "bandcamp",
-		"https://soundcloud.com/an-artist/a-track":    "soundcloud",
-		"https://m.soundcloud.com/an-artist/a-track":  "soundcloud",
-		"https://www.mixcloud.com/a-user/a-show/":     "mixcloud",
-		"https://rumble.com/v000000-a-clip.html":      "rumble",
+		"https://odysee.com/@channel:1/a-clip:2":     "odysee",
+		"https://lbry.tv/@channel:1/a-clip:2":        "odysee",
+		"https://www.dailymotion.com/video/x000000":  "dailymotion",
+		"https://dai.ly/x000000":                     "dailymotion",
+		"https://www.bilibili.com/video/BV00000000":  "bilibili",
+		"https://b23.tv/aaaaaa":                      "bilibili",
+		"https://www.nicovideo.jp/watch/sm0000000":   "niconico",
+		"https://nico.ms/sm0000000":                  "niconico",
+		"https://soundcloud.com/an-artist/a-track":   "soundcloud",
+		"https://m.soundcloud.com/an-artist/a-track": "soundcloud",
+		"https://www.mixcloud.com/a-user/a-show/":    "mixcloud",
+		"https://rumble.com/v000000-a-clip.html":     "rumble",
 		// Lookalikes: a suffix match on the bare string would take these.
-		"https://notbandcamp.com/track/a-song":   "",
-		"https://bandcamp.com.example.test/x":    "",
 		"https://rumble.example.test/v000000-x/": "",
+		"https://notsoundcloud.com/a/b":          "",
 	} {
 		if got := match(raw); got != want {
 			t.Errorf("%s went to %q, want %q", raw, got, want)
@@ -80,7 +77,7 @@ func TestHandoffName(t *testing.T) {
 	for raw, want := range map[string]string{
 		// A page suffix belongs to the page, not to the media.
 		"https://rumble.com/v000000-a-clip.html":      "v000000-a-clip",
-		"https://an-artist.bandcamp.com/track/a-song": "a-song",
+		"https://an-artist.example.test/track/a-song": "a-song",
 		"https://www.nicovideo.jp/watch/sm0000000":    "sm0000000",
 		"https://www.mixcloud.com/a-user/a-show/":     "a-show",
 		// Nothing in the path to name it after.
