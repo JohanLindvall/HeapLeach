@@ -522,6 +522,9 @@ Host-specific notes:
   `download=true&n=` the page's button adds only sets a disposition name and
   is left off. Only `/d/<slug>` exists anonymously; folders are behind the
   authenticated API.
+  The site hops top-level domains (.si, .me, .gg, .sh so far, all one API),
+  so `Match` takes `filester.<any TLD>` with the `/d/` shape rather than a
+  `hostSet` that trails every move.
 - **imagepond** reads the player element before the page metadata, which is
   the reverse of the usual order and deliberate. For a video, `og:image` is
   the poster frame and `og:video:type` has been seen claiming MP4 for a

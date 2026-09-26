@@ -65,10 +65,21 @@ func TestFilesterSignsAtDownloadTime(t *testing.T) {
 
 func TestFilesterMatch(t *testing.T) {
 	f := NewFilester(nil)
-	for _, raw := range []string{"https://filester.si/d/AbC123x", "https://filester.me/d/AbC123x", "https://filester.gg/d/AbC123x"} {
+	for raw, want := range map[string]bool{
+		"https://filester.si/d/AbC123x":     true,
+		"https://filester.me/d/AbC123x":     true,
+		"https://filester.gg/d/AbC123x":     true,
+		"https://www.filester.sh/d/AbC123x": true,
+		// The domain has moved before and will again.
+		"https://filester.example/d/AbC123x": true,
+		"https://filester.si/":               false,
+		"https://filester.si/api-docs":       false,
+		"https://notfilester.si/d/AbC123x":   false,
+		"https://filester.si.example/x":      false,
+	} {
 		u, _ := url.Parse(raw)
-		if !f.Match(u) {
-			t.Errorf("%s not matched", raw)
+		if got := f.Match(u); got != want {
+			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
 		}
 	}
 }

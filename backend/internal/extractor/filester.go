@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -21,8 +22,13 @@ import (
 //
 // The authenticated API documents folders; nothing anonymous links to one,
 // so only files are handled.
+//
+// The site moves between top-level domains — .si, .me, .gg and .sh have all
+// turned up, each answering the same API — so Match takes filester under any
+// of them rather than a list that trails the next move. The /d/ shape is
+// required as well, since a bare name under an unknown TLD is a weaker claim
+// than a name and the site's own link shape together.
 type Filester struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -32,7 +38,18 @@ const filesterTokenPath = "/v2/api/public/download"
 
 // NewFilester builds the filester extractor.
 func NewFilester(client *httpx.Client) *Filester {
-	return &Filester{hostSet: hostSet{"filester.si", "filester.me", "filester.gg"}, client: client}
+	return &Filester{client: client}
+}
+
+// Match accepts a /d/ link on filester under any top-level domain.
+func (f *Filester) Match(u *url.URL) bool {
+	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
+	name, _, ok := strings.Cut(host, ".")
+	if !ok || name != "filester" {
+		return false
+	}
+	segs := util.PathSegments(u)
+	return len(segs) >= 2 && segs[0] == "d"
 }
 
 func (f *Filester) Name() string { return "filester" }
