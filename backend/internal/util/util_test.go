@@ -213,3 +213,19 @@ func TestSleepCtxHonoursCancellation(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestUnescape(t *testing.T) {
+	for in, want := range map[string]string{
+		"A Band&#39;s Beach":        "A Band's Beach",
+		"this &amp; that":           "this & that",
+		"escaped twice &amp;#39;s":  "escaped twice 's",
+		"&quot;quoted&quot;":        `"quoted"`,
+		"plain & simple":            "plain & simple",
+		"no entities at all":        "no entities at all",
+		"&amp;amp;amp;amp;amp;amp;": "&amp;amp;amp;",
+	} {
+		if got := Unescape(in); got != want {
+			t.Errorf("Unescape(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

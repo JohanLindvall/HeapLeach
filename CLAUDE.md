@@ -989,6 +989,11 @@ Other behaviours that span files:
   on the external downloader.
 - `SafeName`/`SafeRelPath` reduce untrusted remote names to one portable path
   component. Nothing may be written outside the download root.
+  `SafeName` first decodes HTML entities (`util.Unescape`, repeated until
+  stable): some pages escape a title twice, so one parse left `&#39;` and
+  `&amp;` in folder and file names on disk. Decoding comes before the
+  separator rules, so an encoded slash is treated like a plain one.
+  `Registry.Extract` decodes titles and names too, for the UI's sake.
 
 ### Headless mode
 

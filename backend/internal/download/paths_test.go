@@ -29,6 +29,11 @@ func TestSafeName(t *testing.T) {
 		{"windows device with ext", "nul.txt", "download"},
 		{"com port", "COM1", "download"},
 		{"unicode kept", "ドラマ 第1話.mkv", "ドラマ 第1話.mkv"},
+		// A title escaped twice by its page reaches us with entities left in.
+		{"entity apostrophe", "A Band&#39;s Beach.mp4", "A Band's Beach.mp4"},
+		{"entity ampersand", "this &amp; that", "this & that"},
+		{"double escaped", "a &amp;quot;b&amp;quot;", "a _b_"},
+		{"encoded separator cannot climb", "..&#47;..&#47;etc&#47;passwd", "passwd"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

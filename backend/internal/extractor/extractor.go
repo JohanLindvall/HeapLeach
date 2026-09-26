@@ -13,6 +13,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // File is a single downloadable resource.
@@ -332,6 +333,13 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	}
 	if res == nil || len(res.Files) == 0 {
 		return nil, ex, fmt.Errorf("%s: no downloadable files found at %s", ex.Name(), u.Redacted())
+	}
+	// The title names the job and, for a source expanded into folders, the
+	// folder too; see util.Unescape for why it may still carry entities.
+	res.Title = util.Unescape(res.Title)
+	for i := range res.Files {
+		res.Files[i].Name = util.Unescape(res.Files[i].Name)
+		res.Files[i].Dir = util.Unescape(res.Files[i].Dir)
 	}
 	if res.Title == "" {
 		res.Title = strings.Trim(u.Path, "/")

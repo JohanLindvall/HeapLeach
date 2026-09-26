@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // maxNameBytes keeps a component inside the 255-byte limit every common
@@ -20,7 +22,9 @@ const maxNameBytes = 200
 // component. Separators, control characters and the shell-hostile set are
 // replaced rather than dropped so distinct names stay distinct.
 func SafeName(name string) string {
-	name = strings.TrimSpace(name)
+	// Before anything else, so a decoded character meets the same rules as
+	// one that arrived plain.
+	name = strings.TrimSpace(util.Unescape(name))
 
 	// A remote name is never allowed to climb out of the download root.
 	if i := strings.LastIndexAny(name, `/\`); i >= 0 {

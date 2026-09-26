@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"html"
 	"math/rand/v2"
 	"net/url"
 	"path"
@@ -168,4 +169,21 @@ func DecodeBase64(s string) ([]byte, error) {
 		return nil, errors.New("empty base64 value")
 	}
 	return base64.RawURLEncoding.DecodeString(base64Alphabet.Replace(s))
+}
+
+// Unescape decodes HTML character references left in text that should
+// already be plain. Some sites escape a title twice, so one parse leaves
+// "Rafian&#39;s" or "this &amp; that" behind, and names written from it put
+// the entity on disk. Repeated until the text stops changing, because
+// "&amp;#39;" needs two passes; bounded, so a pathological string cannot
+// spin. Text without an ampersand is returned as it is.
+func Unescape(s string) string {
+	for range 3 {
+		next := html.UnescapeString(s)
+		if next == s {
+			break
+		}
+		s = next
+	}
+	return s
 }
