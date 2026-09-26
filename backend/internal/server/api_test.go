@@ -305,3 +305,22 @@ func TestTrailingJSONCannotMutateSettings(t *testing.T) {
 		t.Errorf("trailing whitespace: status %d", rec.Code)
 	}
 }
+
+func TestInvalidSettingsLeaveEverySettingUnchanged(t *testing.T) {
+	manager, handler := newTestServer(t)
+	before := manager.Snapshot()
+	for _, body := range []string{
+		`{"concurrency":8,"streams":0}`,
+		`{"concurrency":8,"streams":2,"speedLimit":-1}`,
+		`{"concurrency":8,"streams":2,"downloadDir":""}`,
+	} {
+		rec := postJSON(t, handler, "/api/settings", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
+		}
+		after := manager.Snapshot()
+		if after.Concurrency != before.Concurrency || after.Streams != before.Streams || after.SpeedLimit != before.SpeedLimit || after.DownloadDir != before.DownloadDir {
+			t.Fatalf("invalid settings partially applied: %s", body)
+		}
+	}
+}

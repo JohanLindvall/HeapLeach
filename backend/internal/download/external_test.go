@@ -155,3 +155,14 @@ func TestReadExternalProgressCatchesARestartWithoutAFormatID(t *testing.T) {
 		t.Errorf("downloaded = %d, want %d", got, wantBytes)
 	}
 }
+
+func TestParseByteCountRejectsOverflow(t *testing.T) {
+	for _, value := range []string{"9223372036854775808", "9.223372036854776e18", "1e100"} {
+		if n, ok := parseByteCount(value); ok {
+			t.Errorf("accepted overflowing count %q as %d", value, n)
+		}
+	}
+	if n, ok := parseByteCount("9223372036854775807"); !ok || n != 9223372036854775807 {
+		t.Errorf("rejected exact maximum: %d %v", n, ok)
+	}
+}

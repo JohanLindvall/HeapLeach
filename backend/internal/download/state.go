@@ -6,7 +6,6 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 )
 
@@ -128,21 +127,14 @@ func saveState(path string, st *savedState) error {
 }
 
 // fingerprint summarises what a save would record, so an idle queue is not
-// rewritten every interval. Statuses and identities only — a transfer's byte
+// rewritten every interval. Persisted fields only — a transfer's byte
 // counter moves constantly and is never written down, since the part file on
 // disk is the authority on how far it got.
 func (st *savedState) fingerprint() uint64 {
 	h := fnv.New64a()
-	for _, job := range st.Jobs {
-		h.Write([]byte(job.ID))
-		h.Write([]byte(job.Err))
-		h.Write([]byte(strconv.FormatBool(job.Canceled)))
-		for _, it := range job.Items {
-			h.Write([]byte(it.ID))
-			h.Write([]byte(it.Status))
-			h.Write([]byte(it.Err))
-			h.Write([]byte(strconv.FormatInt(it.Size, 10)))
-		}
-	}
+	// Hash every persisted field, with JSON's unambiguous boundaries. Paths,
+	// titles and skip outcomes can change without a status or size changing.
+	// Saved is deliberately excluded: time alone is not a queue change.
+	_ = json.NewEncoder(h).Encode(st.Jobs)
 	return h.Sum64()
 }

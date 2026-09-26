@@ -552,13 +552,18 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 |---|---|---|
 | `GET` | `/api/health` | Liveness. |
 | `GET` | `/api/state` | Current snapshot. |
-| `GET` | `/api/events` | SSE stream of snapshots. |
+| `GET` | `/api/events` | Complete initial snapshot, then item patches; missed updates are replaced with a complete snapshot. |
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
 | `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…"}` — each optional, so a request carries only what changed. |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `DELETE` | `/api/jobs/{id}` | Cancel and forget. |
 | `POST` | `/api/jobs/{id}/items/{itemId}/cancel` · `/retry` | One file. |
+
+Settings updates are validated together: an invalid field leaves the
+current settings unchanged. In an SSE job marked `patch`, merge items by
+ID and retain unmentioned items; otherwise replace its item list. Every
+frame contains the complete job list and current aggregates.
 
 ```bash
 curl -X POST localhost:8080/api/downloads \
@@ -674,12 +679,13 @@ which of the two is watching.
 ## Development
 
 ```bash
+make run          # build the standalone binary, serve locally and open the browser
 make run-image    # build and run the container image
 make dev          # Go API on :8080 + Vite dev server on :5173 (hot reload)
 make dev-backend  # API only
 make test         # Go unit tests, with the race detector
-make check        # everything CI checks: gofmt, vet, the host list, both test suites
-make test-live    # extractors against the real sites (needs network)
+make check        # gofmt, vet, host inventory, Go race tests, UI types and tests
+make test-live    # include local, gitignored live extractor tests (when present)
 make frontend     # build the UI into the Go embed directory
 make lock         # regenerate frontend/package-lock.json
 make dist         # cross-compile the release archives into ./dist
@@ -687,7 +693,17 @@ make tag V=v0.1.0 # tag a release; CI builds and publishes the binaries
 make help         # every target
 ```
 
-`make dev` needs Go and Node locally. Everything else falls back to Docker.
+`make build`, `make run` and `make image` build through Docker. Frontend
+builds and tests use local npm when available and Docker otherwise, with
+locked dependencies installed through `npm ci`. Go tests, vet, host-list
+generation and release cross-compilation need local Go; Go downloads the
+toolchain pinned in `backend/go.mod` automatically. `make dev` needs both
+Go and Node locally.
+
+The checked-in tests use synthetic fixtures and local HTTP servers.
+Live extractor tests belong in gitignored `*live_test.go` files behind the
+`live` build tag and take their source URLs and passwords from environment
+variables. A fresh clone has no live-site fixtures.
 
 ### Layout
 

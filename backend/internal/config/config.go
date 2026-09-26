@@ -116,6 +116,12 @@ func FromEnv() (*Config, error) {
 		MinFreeDisk:    DefaultMinFreeDisk,
 	}
 
+	// An explicitly empty state path disables persistence; env's usual
+	// empty-means-default rule cannot represent that choice.
+	if value, set := os.LookupEnv(envPrefix + "STATE"); set {
+		c.StateFile = strings.TrimSpace(value)
+	}
+
 	var err error
 	if c.Concurrency, err = envInt("CONCURRENCY", c.Concurrency); err != nil {
 		return nil, err

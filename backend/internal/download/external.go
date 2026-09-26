@@ -179,7 +179,7 @@ func newExternalStream(id, previous string, done, streamed int64) bool {
 	if id != "" || previous != "" {
 		return id != previous
 	}
-	return streamed > 0 && done*2 < streamed
+	return streamed > 0 && done < streamed-done
 }
 
 // parseProgress reads a "<downloaded> <total> [<format-id>]" line, tolerating
@@ -229,7 +229,7 @@ func parseByteCount(s string) (int64, bool) {
 		return n, true
 	}
 	f, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f >= 0x1p63 {
 		return 0, false
 	}
 	return int64(f), true

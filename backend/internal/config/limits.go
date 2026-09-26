@@ -309,6 +309,9 @@ const (
 	// would otherwise time them out.
 	SSEHeartbeat = 25 * time.Second
 
+	// SSEWriteTimeout releases a stream whose browser stopped reading.
+	SSEWriteTimeout = 10 * time.Second
+
 	// ReadHeaderTimeout bounds how long a client may take to send headers.
 	ReadHeaderTimeout = 10 * time.Second
 

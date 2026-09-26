@@ -1,7 +1,6 @@
 package download
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,10 +92,10 @@ func TestSafeRelPath(t *testing.T) {
 	}
 }
 
-func TestUniquePath(t *testing.T) {
+func TestReservePath(t *testing.T) {
 	dir := t.TempDir()
 
-	first, err := UniquePath(dir, "a.txt")
+	first, err := (transferFiles{}).reserve(dir, "a.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,8 +103,7 @@ func TestUniquePath(t *testing.T) {
 		t.Fatalf("first = %q, want a.txt", filepath.Base(first))
 	}
 
-	mustWrite(t, first)
-	second, err := UniquePath(dir, "a.txt")
+	second, err := (transferFiles{}).reserve(dir, "a.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,8 +111,7 @@ func TestUniquePath(t *testing.T) {
 		t.Errorf("second = %q, want %q", filepath.Base(second), "a (2).txt")
 	}
 
-	mustWrite(t, second)
-	third, err := UniquePath(dir, "a.txt")
+	third, err := (transferFiles{}).reserve(dir, "a.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,21 +132,6 @@ func TestNewIDIsUnique(t *testing.T) {
 		}
 		seen[id] = true
 	}
-}
-
-func mustWrite(t *testing.T, path string) {
-	t.Helper()
-	if err := writeFile(path); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeFile(path string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	return f.Close()
 }
 
 // The part-file name has to be a pure function of the source, or an

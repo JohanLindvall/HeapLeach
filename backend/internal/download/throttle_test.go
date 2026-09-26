@@ -260,3 +260,44 @@ func TestShouldAddStreamRespectsTheCeiling(t *testing.T) {
 		t.Error("a paused transfer should not open another connection")
 	}
 }
+
+func TestShortReadsOnlySpendBytesReceived(t *testing.T) {
+	th := newThrottle(1000)
+	th.tokens, th.last = 1000, time.Now()
+	reader := &throttledReader{r: strings.NewReader("data"), t: th, ctx: context.Background()}
+	if n, err := reader.Read(make([]byte, 1000)); err != nil || n != 4 {
+		t.Fatalf("Read = %d, %v", n, err)
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.tokens < 996 || th.granted != 4 {
+		t.Fatalf("short read spent the whole buffer: tokens=%v granted=%v", th.tokens, th.granted)
+	}
+}
+
+func TestRefundCannotCreditANewLimit(t *testing.T) {
+	th := newThrottle(1000)
+	th.tokens, th.last = 1000, time.Now()
+	n, gate, err := th.takeReservation(context.Background(), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th.setLimit(10)
+	th.finishReservation(n, 0, gate)
+	if th.tokens != 0 {
+		t.Fatal("old reservation credited the new rate limit")
+	}
+}
+
+func TestShortReadCannotInflateRolledRate(t *testing.T) {
+	th := newThrottle(1000)
+	th.tokens, th.last = 1000, time.Now()
+	th.windowStart = time.Now().Add(-config.ThrottleWindow)
+	reader := &throttledReader{r: strings.NewReader("data"), t: th, ctx: context.Background()}
+	if _, err := reader.Read(make([]byte, 1000)); err != nil {
+		t.Fatal(err)
+	}
+	if th.lastRate <= 0 || th.lastRate > 4/config.ThrottleWindow.Seconds() {
+		t.Fatalf("short read inflated the rolled rate: %v", th.lastRate)
+	}
+}

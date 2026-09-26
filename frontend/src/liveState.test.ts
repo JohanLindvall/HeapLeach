@@ -113,3 +113,17 @@ describe('live state', () => {
     expect(fetchState).toHaveBeenCalledTimes(2);
   });
 });
+
+it('reconnects for a complete base after a malformed frame', async () => {
+  vi.mocked(fetchState).mockResolvedValue(snapshot);
+  const onSnapshot = vi.fn();
+  cleanup = subscribeLiveState(onSnapshot, vi.fn());
+  const stream = Stream.instances[0]!;
+  stream.onopen!();
+  stream.onmessage!({ data: '{broken' });
+  expect(stream.close).toHaveBeenCalledOnce();
+  stream.onmessage!({ data: JSON.stringify({ ...snapshot, speed: 999 }) });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(Stream.instances).toHaveLength(2);
+  expect(onSnapshot.mock.calls).toEqual([[snapshot]]);
+});

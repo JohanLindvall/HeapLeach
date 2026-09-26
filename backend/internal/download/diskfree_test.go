@@ -75,3 +75,21 @@ func TestSampleDiskReportsNothingForAnUnreadableDir(t *testing.T) {
 		t.Errorf("free=%d total=%d, want both zero", m.diskFree.Load(), m.diskTotal.Load())
 	}
 }
+
+func TestSpaceRecoveryWakesTheQueue(t *testing.T) {
+	m := &Manager{dir: t.TempDir(), minFree: 1, wake: make(chan struct{}, 1)}
+	m.diskTotal.Store(100)
+	m.diskFree.Store(0)
+	if !m.lowOnSpace() {
+		t.Fatal("fixture is not held for space")
+	}
+	m.sampleDisk(time.Now())
+	if m.lowOnSpace() {
+		t.Fatal("temporary directory has no free space")
+	}
+	select {
+	case <-m.wake:
+	default:
+		t.Fatal("space recovered without waking the dispatcher")
+	}
+}

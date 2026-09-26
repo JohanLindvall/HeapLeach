@@ -4,12 +4,15 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -137,6 +140,7 @@ func bestVariant(variants []hlsVariant) (hlsVariant, bool) {
 	ranked := append([]hlsVariant(nil), variants...)
 	slices.SortStableFunc(ranked, func(a, b hlsVariant) int {
 		return cmp.Or(
+			cmpBool(a.audioElsewhere, b.audioElsewhere),
 			cmpBool(b.muxed(), a.muxed()), // self-contained first
 			cmp.Compare(b.height(), a.height()),
 			cmp.Compare(b.Bandwidth, a.Bandwidth),
@@ -256,11 +260,7 @@ type hlsMedia struct {
 
 // resolveMediaPlaylist follows a master playlist down to its media playlist.
 func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL string, headers httpx.Header) (*hlsMedia, error) {
-	base, err := ParseURL(manifestURL)
-	if err != nil {
-		return nil, err
-	}
-	doc, err := client.GetString(ctx, manifestURL, headers)
+	doc, base, err := fetchPlaylist(ctx, client, manifestURL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("fetch playlist: %w", err)
 	}
@@ -272,12 +272,15 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 			return nil, fmt.Errorf("no usable variant in playlist")
 		}
 		variant = best
-		if base, err = ParseURL(best.URL); err != nil {
-			return nil, err
+		if best.audioElsewhere {
+			return nil, fmt.Errorf("no rendition that carries its own audio: each keeps its audio in a playlist of its own, so joining video alone would have no sound; use the external downloader (yt-dlp)")
 		}
-		if doc, err = client.GetString(ctx, best.URL, headers); err != nil {
+		if doc, base, err = fetchPlaylist(ctx, client, best.URL, headers); err != nil {
 			return nil, fmt.Errorf("fetch variant playlist: %w", err)
 		}
+	}
+	if err := validateMediaPlaylist(doc); err != nil {
+		return nil, err
 	}
 
 	segments := parseMediaPlaylist(doc, base)
@@ -285,6 +288,59 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 		return nil, fmt.Errorf("playlist lists no segments")
 	}
 	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc}, nil
+}
+
+// Relative playlist references belong to the response URL after redirects.
+func fetchPlaylist(ctx context.Context, client *httpx.Client, rawURL string, headers httpx.Header) (string, *url.URL, error) {
+	req, err := client.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(body) > config.MaxResponseBytes {
+		return "", nil, fmt.Errorf("playlist exceeds %d bytes", config.MaxResponseBytes)
+	}
+	doc := string(body)
+	if !hlsManifestBody(doc) {
+		return "", nil, fmt.Errorf("response is not an HLS playlist")
+	}
+	return doc, resp.Request.URL, nil
+}
+
+// The native assembler joins whole, clear resources. Refuse features it
+// cannot honor before their bytes can be reported as a completed download.
+func validateMediaPlaylist(doc string) error {
+	for line := range strings.SplitSeq(doc, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "#EXT-X-KEY:"):
+			attrs := parseAttributes(strings.TrimPrefix(line, "#EXT-X-KEY:"))
+			if attrs["METHOD"] != "NONE" {
+				return fmt.Errorf("encrypted HLS playlists require the external downloader (yt-dlp)")
+			}
+		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:"):
+			return fmt.Errorf("HLS byte ranges require the external downloader (yt-dlp)")
+		case strings.HasPrefix(line, "#EXT-X-MAP:"):
+			if _, ok := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MAP:"))["BYTERANGE"]; ok {
+				return fmt.Errorf("HLS initialization byte ranges require the external downloader (yt-dlp)")
+			}
+		}
+	}
+	return nil
 }
 
 // resolvePlaylist follows a master playlist down to its segment list, which

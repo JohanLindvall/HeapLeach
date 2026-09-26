@@ -37,8 +37,8 @@ type playlistState struct {
 
 func playlistStatePath(part string) string { return part + ".playlist" }
 
-func loadPlaylistState(part string, total int) *playlistState {
-	raw, err := os.ReadFile(playlistStatePath(part))
+func loadPlaylistState(part string, total int, scopes ...transferFiles) *playlistState {
+	raw, err := fileScope(scopes).read(playlistStatePath(part))
 	if err != nil {
 		return nil
 	}
@@ -53,21 +53,23 @@ func loadPlaylistState(part string, total int) *playlistState {
 	return &st
 }
 
-func savePlaylistState(part string, st playlistState) error {
+func savePlaylistState(part string, st playlistState, scopes ...transferFiles) error {
+	files := fileScope(scopes)
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
 	tmp := playlistStatePath(part) + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	if err := files.write(tmp, raw); err != nil {
 		return err
 	}
-	return os.Rename(tmp, playlistStatePath(part))
+	return files.rename(tmp, playlistStatePath(part))
 }
 
-func clearPlaylistState(part string) {
-	_ = os.Remove(playlistStatePath(part))
-	_ = os.Remove(playlistStatePath(part) + ".tmp")
+func clearPlaylistState(part string, scopes ...transferFiles) {
+	files := fileScope(scopes)
+	_ = files.remove(playlistStatePath(part))
+	_ = files.remove(playlistStatePath(part) + ".tmp")
 }
 
 // fetchedSegment is one part on its way to the assembler.
@@ -78,7 +80,8 @@ type fetchedSegment struct {
 }
 
 // transferPlaylist fetches every segment and appends them in order.
-func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name string) (string, error) {
+func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name string, scopes ...transferFiles) (string, error) {
+	files := fileScope(scopes)
 	m.mu.Lock()
 	segments := append([]string(nil), it.Segments...)
 	headers := maps.Clone(it.Headers)
@@ -93,12 +96,12 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	}
 
 	start, written := 0, int64(0)
-	if saved := loadPlaylistState(part, len(segments)); saved != nil {
+	if saved := loadPlaylistState(part, len(segments), files); saved != nil {
 		start, written = saved.Index, saved.Bytes
 		// The checkpoint is only as good as the file it describes. A part
 		// that is gone or shorter than recorded would otherwise be padded
 		// with zeros by the truncate below and finished as if whole.
-		if fi, err := os.Stat(part); err != nil || fi.Size() < written {
+		if fi, err := files.stat(part); err != nil || fi.Size() < written {
 			start, written = 0, 0
 		}
 	}
@@ -107,7 +110,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	if start == 0 {
 		flags |= os.O_TRUNC
 	}
-	file, err := os.OpenFile(part, flags, 0o644)
+	file, err := files.open(part, flags, 0o644)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", name, err)
 	}
@@ -206,7 +209,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 			<-slots // a written segment frees its slot, bounding memory
 
 			if next%config.PlaylistStateEvery == 0 || next == len(segments) {
-				_ = savePlaylistState(part, playlistState{Index: next, Bytes: written, Total: len(segments)})
+				_ = savePlaylistState(part, playlistState{Index: next, Bytes: written, Total: len(segments)}, files)
 			}
 			m.setSegmentProgress(it, next, len(segments))
 		}
@@ -224,7 +227,6 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	m.mu.Lock()
 	it.Size = written
 	m.mu.Unlock()
-	clearPlaylistState(part)
 	return name, nil
 }
 
@@ -273,6 +275,9 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, rawURL string, headers h
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, statusError(req.URL, resp)
+	}
+	if err := rejectWebPage(resp, "segment.ts"); err != nil {
+		return nil, err
 	}
 
 	var buf bytes.Buffer

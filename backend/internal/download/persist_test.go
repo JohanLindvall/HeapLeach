@@ -65,6 +65,9 @@ func TestQueueSurvivesARoundTrip(t *testing.T) {
 	if len(got.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(got.Items))
 	}
+	if got.Items[0].JobID != job.ID || got.Items[1].JobID != job.ID {
+		t.Fatal("restored items lost their owning job")
+	}
 	if got.Items[0].Status != StatusDone || got.Items[0].downloaded.Load() != 400 {
 		t.Errorf("a finished file should come back finished: %+v", got.Items[0])
 	}
@@ -579,5 +582,42 @@ func TestSnapshotMarksHeldJobsAndLeavesThemOutOfQueued(t *testing.T) {
 	}
 	if snap.Queued != 0 {
 		t.Errorf("queued = %d; a held item is not waiting on a worker", snap.Queued)
+	}
+}
+
+func TestPersistRecordsMetadataChanges(t *testing.T) {
+	m, file := newSavedManager(t)
+	item := &Item{ID: "item", Status: StatusDone, Name: "before.bin", Size: 10}
+	job := &Job{ID: "job", Title: "Before", Items: []*Item{item}}
+	m.jobs[job.ID], m.order = job, []string{job.ID}
+	m.persist()
+	job.Title = "After"
+	item.Name, item.Path, item.Skipped = "after.bin", "after.bin", true
+	m.persist()
+	state, err := loadState(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := state.Jobs[0]
+	if got.Title != "After" || got.Items[0].Path != "after.bin" || !got.Items[0].Skipped {
+		t.Fatalf("metadata was not saved: %+v", got)
+	}
+}
+
+func TestSaveAfterCloseCannotReplaceResumableState(t *testing.T) {
+	m, file := newSavedManager(t)
+	item := &Item{ID: "item", Status: StatusRunning}
+	m.jobs["job"] = &Job{ID: "job", Items: []*Item{item}}
+	m.order = []string{"job"}
+	m.stop = func() { item.Status = StatusCanceled }
+	m.Close()
+	// A ticker can have selected its save just before Close canceled it.
+	m.persist()
+	state, err := loadState(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Jobs[0].Items[0].Status; got != StatusQueued {
+		t.Fatalf("shutdown overwrote resumable state with %s", got)
 	}
 }

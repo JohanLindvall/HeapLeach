@@ -34,22 +34,30 @@ func FanOut[In, Out any](ctx context.Context, items []In, fetch func(context.Con
 	groups := make([][]Out, len(items))
 
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, config.PageFetchConcurrency)
-	for i, item := range items {
+	indices := make(chan int)
+	for range min(len(items), config.PageFetchConcurrency) {
 		wg.Add(1)
-		go func(i int, item In) {
+		go func() {
 			defer wg.Done()
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				return
+			for i := range indices {
+				if ctx.Err() != nil {
+					return
+				}
+				if out, err := fetch(ctx, items[i]); err == nil {
+					groups[i] = out
+				}
 			}
-			if out, err := fetch(ctx, item); err == nil {
-				groups[i] = out
-			}
-		}(i, item)
+		}()
 	}
+dispatch:
+	for i := range items {
+		select {
+		case indices <- i:
+		case <-ctx.Done():
+			break dispatch
+		}
+	}
+	close(indices)
 	wg.Wait()
 
 	var out []Out

@@ -28,6 +28,28 @@ export const EMPTY_PROGRESS: Progress = {
   countedItems: [],
 };
 
+/** Storage is user-controlled and may outlive changes to the saved shape. */
+export function readProgress(value: unknown): Progress {
+  const saved = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const number = (key: string): number => {
+    const n = saved[key];
+    return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+  const strings = (key: string): string[] => {
+    const list = saved[key];
+    return Array.isArray(list) ? [...new Set(list.filter((entry): entry is string => typeof entry === 'string'))] : [];
+  };
+  return {
+    filesCompleted: Math.floor(number('filesCompleted')),
+    bytesDownloaded: number('bytesDownloaded'),
+    peakSpeed: number('peakSpeed'),
+    maxParallel: Math.floor(number('maxParallel')),
+    hostsUsed: strings('hostsUsed'),
+    unlocked: strings('unlocked'),
+    countedItems: strings('countedItems'),
+  };
+}
+
 /** A rank, reached at a cumulative byte total. */
 export interface Level {
   readonly index: number;
@@ -166,7 +188,7 @@ export function accumulate(previous: Progress, snapshot: Snapshot): Progress {
   for (const job of snapshot.jobs) {
     for (const item of job.items) {
       liveIds.add(item.id);
-      if (item.status !== 'done' || counted.has(item.id)) continue;
+      if (item.status !== 'done' || item.skipped || counted.has(item.id)) continue;
       counted.add(item.id);
       files += 1;
       bytes += bytesOf(item);
@@ -178,14 +200,7 @@ export function accumulate(previous: Progress, snapshot: Snapshot): Progress {
   // Re-adding a cleared job legitimately counts as a fresh download.
   // Membership goes through a Set: this runs on every snapshot tick, and a
   // linear scan per id turns a multi-thousand-file job quadratic.
-  const retained = previous.countedItems.filter((id) => liveIds.has(id));
-  const retainedSet = new Set(retained);
-  for (const id of counted) {
-    if (liveIds.has(id) && !retainedSet.has(id)) {
-      retainedSet.add(id);
-      retained.push(id);
-    }
-  }
+  const retained = [...counted].filter((id) => liveIds.has(id));
 
   return {
     filesCompleted: files,

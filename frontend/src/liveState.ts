@@ -82,7 +82,11 @@ export function subscribeLiveState(
       try {
         onSnapshot(JSON.parse(event.data) as Snapshot);
       } catch {
-        // Wait for the next complete frame if this one is malformed.
+        // Later frames may contain only changes since this one. Reconnect
+        // for a complete snapshot instead of keeping an incomplete base.
+        stream.close();
+        source = null;
+        disconnected();
       }
     };
     stream.onerror = (): void => {

@@ -376,3 +376,16 @@ func TestMinFreeDiskFromEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestEmptyStateEnvironmentDisablesPersistence(t *testing.T) {
+	for _, value := range []string{"", "  ", filepath.Join(t.TempDir(), "queue.json")} {
+		t.Setenv(envPrefix+"STATE", value)
+		cfg, err := FromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.StateFile != strings.TrimSpace(value) {
+			t.Errorf("STATE=%q became %q", value, cfg.StateFile)
+		}
+	}
+}

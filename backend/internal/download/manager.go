@@ -5,7 +5,6 @@ package download
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,9 +23,9 @@ import (
 
 // Manager owns all jobs and the worker pool.
 //
-// Locking rule: every Job and Item field except Item.downloaded is guarded
-// by mu. Workers take mu only to publish state transitions, never while
-// blocked on I/O.
+// Locking rule: every Job and Item field except the atomic downloaded and
+// streams counters is guarded by mu. Workers take mu to publish transitions,
+// never while blocked on I/O.
 type Manager struct {
 	cfg    *config.Config
 	reg    *extractor.Registry
@@ -40,6 +39,8 @@ type Manager struct {
 	running int
 	limit   int
 	streams int
+	started bool
+	closing bool // guarded by mu; no goroutines may be added once set
 	// hostActive counts transfers in flight per host, for the few hosts
 	// that ask to be approached gently (extractor.Pace). Only paced items
 	// consult it, but every dispatched item is counted, so a mixed queue
@@ -92,13 +93,12 @@ type Manager struct {
 	// plain field; the figures are atomic because /api/state reads them from
 	// whatever goroutine is serving the request.
 	diskSampled time.Time
+	diskDir     string // directory represented by diskSampled
 	diskFree    atomic.Int64
 	diskTotal   atomic.Int64
 
 	subsMu sync.Mutex
-	// subs maps each open stream to the jobs that subscriber renders
-	// items for; everything else reaches it slimmed. See
-	// snapshotfilter.go.
+	// subs records whether each stream needs a complete snapshot.
 	subs      map[chan []byte]*subscriber
 	closed    bool // set under subsMu by Close; a late Subscribe is answered closed
 	closeOnce sync.Once
@@ -123,10 +123,8 @@ type Manager struct {
 	persistMu  sync.Mutex
 	statePrint uint64
 
-	// dirty records a state change worth pushing to subscribers even though
-	// nothing is transferring. It is taken rather than peeked at and cleared
-	// separately, so a change landing while a snapshot is being built sets
-	// the flag again and is published on the next tick instead of being lost.
+	// dirty records a state change worth publishing even while idle. The
+	// broadcaster clears it only when it actually builds a frame.
 	dirty atomic.Bool
 }
 
@@ -165,12 +163,19 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 
 // Start launches the dispatcher and the progress broadcaster.
 func (m *Manager) Start() {
+	m.mu.Lock()
+	if m.started || m.closing {
+		m.mu.Unlock()
+		return
+	}
+	m.started = true
+	m.wg.Add(3)
+	m.mu.Unlock()
 	// Measure once up front: the first snapshot a browser is sent is built
 	// before the broadcaster has ticked, and a zero there would draw as a
 	// full disk until the first sample landed.
 	m.sampleDisk(time.Now())
 
-	m.wg.Add(3)
 	go m.dispatch()
 	go m.broadcast()
 	go m.saver()
@@ -193,9 +198,17 @@ func (m *Manager) Close() {
 		// recorded as queued instead of done. That resolves itself — the
 		// next run finds it whole on disk and skips it — where the other way
 		// round silently abandons an unfinished download.
-		m.persist()
-
+		// Serialize the final snapshot with the saver and stop accepting new
+		// work before taking it. A saver already waiting for this lock must
+		// not overwrite it with workers' shutdown cancellations afterwards.
+		m.persistMu.Lock()
+		m.mu.Lock()
+		m.closing = true
+		st := m.stateLocked()
+		m.mu.Unlock()
+		m.persistState(st)
 		m.stop()
+		m.persistMu.Unlock()
 		m.wg.Wait()
 
 		m.subsMu.Lock()
@@ -218,7 +231,6 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 		return "", err
 	}
 
-	ctx, cancel := context.WithCancel(m.ctx)
 	job := &Job{
 		ID:        newID(),
 		Source:    u.String(),
@@ -226,29 +238,34 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 		Host:      m.reg.Find(u).Name(),
 		Password:  password,
 		CreatedAt: time.Now(),
-		resolving: true,
-		cancel:    cancel,
 	}
 
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return "", ErrClosed
+	}
 	m.jobs[job.ID] = job
 	m.order = append(m.order, job.ID)
+	m.rereadLocked(job)
 	m.mu.Unlock()
 	m.markDirty()
-
-	m.wg.Add(1)
-	go m.resolve(ctx, job)
 	return job.ID, nil
 }
 
 // resolve scrapes the source page and enqueues the files it found.
-func (m *Manager) resolve(ctx context.Context, job *Job) {
+func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	defer m.wg.Done()
 
 	res, ex, err := m.reg.Extract(ctx, job.Source, extractor.Options{Password: job.Password})
 
 	m.mu.Lock()
+	if m.jobs[job.ID] != job || job.resolveID != generation {
+		m.mu.Unlock()
+		return
+	}
 	job.resolving = false
+	job.cancel = nil
 	switch {
 	case job.canceled || (err != nil && ctx.Err() != nil):
 		job.canceled = true
@@ -365,7 +382,7 @@ func (m *Manager) dispatch() {
 func (m *Manager) nextLocked() *Item {
 	// A paused queue starts nothing new. Transfers already running park
 	// inside their reads instead, so they keep their place in the file.
-	if m.throttle.isPaused() || m.running >= m.limit {
+	if m.closing || m.throttle.isPaused() || m.running >= m.limit {
 		return nil
 	}
 	// Nor does one with no room to write into. Transfers already running are
@@ -512,7 +529,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		it.overloadWaits = 0
 		m.hostGate.eased(m.itemHostLocked(it), m.limit)
 		m.logFinishedLocked(it, "download complete")
-	case ctx.Err() != nil || httpx.IsCanceled(err):
+	case ctx.Err() != nil:
 		it.Status = StatusCanceled
 		it.Err = ""
 		m.logFinishedLocked(it, "download canceled")
@@ -574,12 +591,14 @@ func (m *Manager) CancelJob(id string) error {
 		return ErrNotFound
 	}
 	job.canceled = true
+	job.restored = false
 	if job.cancel != nil {
 		job.cancel()
 	}
 	for _, it := range job.Items {
 		cancelItemLocked(it)
 	}
+	m.pruneQueueLocked()
 	m.mu.Unlock()
 
 	m.markDirty()
@@ -598,6 +617,10 @@ func (m *Manager) CancelItem(jobID, itemID string) error {
 		return ErrNotFound
 	}
 	cancelItemLocked(it)
+	if job := m.jobs[jobID]; job != nil && !jobHasWorkLeft(job) {
+		job.restored = false
+	}
+	m.pruneQueueLocked()
 	m.mu.Unlock()
 
 	m.markDirty()
@@ -620,6 +643,13 @@ func cancelItemLocked(it *Item) {
 	}
 }
 
+// Canceled items must be released even when pause or the disk floor keeps
+// the dispatcher asleep. Otherwise a cleared queue retains its items and
+// Busy keeps reporting work that will never run.
+func (m *Manager) pruneQueueLocked() {
+	m.queue = slices.DeleteFunc(m.queue, func(it *Item) bool { return it.Status != StatusQueued })
+}
+
 // RetryJob requeues every failed or cancelled item, re-resolving the source
 // first when the job never produced any items.
 func (m *Manager) RetryJob(id string) error {
@@ -628,10 +658,18 @@ func (m *Manager) RetryJob(id string) error {
 	recheckTools()
 
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return ErrClosed
+	}
 	job, ok := m.jobs[id]
 	if !ok {
 		m.mu.Unlock()
 		return ErrNotFound
+	}
+	if job.resolving && !job.canceled {
+		m.mu.Unlock()
+		return errors.New("job is already resolving")
 	}
 	job.canceled = false
 
@@ -640,12 +678,10 @@ func (m *Manager) RetryJob(id string) error {
 	// run's record, not somewhere the files can be fetched from. And one
 	// with no items at all, where the extractor itself is what failed.
 	if job.restored || job.unfetchable || len(job.Items) == 0 {
-		ctx := m.rereadLocked(job)
+		m.rereadLocked(job)
 		m.mu.Unlock()
 
 		m.markDirty()
-		m.wg.Add(1)
-		go m.resolve(ctx, job)
 		return nil
 	}
 
@@ -669,6 +705,10 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	recheckTools()
 
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return ErrClosed
+	}
 	it, ok := m.findItemLocked(jobID, itemID)
 	if !ok {
 		m.mu.Unlock()
@@ -691,12 +731,10 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	// retry does. Everything already downloaded is recognised on disk and
 	// skipped, so this costs the listing and nothing more.
 	if job != nil && (job.restored || job.unfetchable) {
-		ctx := m.rereadLocked(job)
+		m.rereadLocked(job)
 		m.mu.Unlock()
 
 		m.markDirty()
-		m.wg.Add(1)
-		go m.resolve(ctx, job)
 		return nil
 	}
 
@@ -709,9 +747,13 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 }
 
 // rereadLocked puts a job back to being resolved from its source, dropping
-// whatever items it holds, and returns the context its extractor should run
-// under. Caller holds mu, and must release it before starting the goroutine.
-func (m *Manager) rereadLocked(job *Job) context.Context {
+// whatever items it holds. Registering the goroutine under mu prevents it
+// from racing Close's Wait. A generation keeps a canceled extractor's late
+// result from replacing the result of a subsequent retry. Caller holds mu.
+func (m *Manager) rereadLocked(job *Job) {
+	if job.cancel != nil {
+		job.cancel()
+	}
 	job.restored = false
 	job.unfetchable = false
 	job.canceled = false
@@ -720,7 +762,13 @@ func (m *Manager) rereadLocked(job *Job) context.Context {
 	job.resolving = true
 	ctx, cancel := context.WithCancel(m.ctx)
 	job.cancel = cancel
-	return ctx
+	job.resolveID++
+	generation := job.resolveID
+	m.wg.Add(1)
+	go func() {
+		defer cancel()
+		m.resolve(ctx, job, generation)
+	}()
 }
 
 // recheckTools is tools.Recheck, kept behind a variable so tests can observe
@@ -876,6 +924,7 @@ func (m *Manager) RemoveJob(id string) error {
 	}
 	delete(m.jobs, id)
 	m.order = util.Remove(m.order, id)
+	m.pruneQueueLocked()
 	m.mu.Unlock()
 
 	m.markDirty()
@@ -889,15 +938,26 @@ func (m *Manager) ClearFinished() int {
 	defer m.nudge()
 	m.mu.Lock()
 	var removed int
-	for _, id := range append([]string(nil), m.order...) {
+	kept := m.order[:0]
+	for _, id := range m.order {
 		job := m.jobs[id]
 		if job == nil || !job.status().Terminal() {
+			kept = append(kept, id)
 			continue
 		}
+		job.canceled = true
+		if job.cancel != nil {
+			job.cancel()
+		}
+		for _, it := range job.Items {
+			cancelItemLocked(it)
+		}
 		delete(m.jobs, id)
-		m.order = util.Remove(m.order, id)
 		removed++
 	}
+	clear(m.order[len(kept):])
+	m.order = kept
+	m.pruneQueueLocked()
 	m.mu.Unlock()
 
 	if removed > 0 {
@@ -906,41 +966,21 @@ func (m *Manager) ClearFinished() int {
 	return removed
 }
 
-// SetConcurrency resizes the worker pool. Shrinking it lets running
-// transfers finish; only new starts are held back.
+// SetConcurrency resizes the pool without interrupting running transfers.
 func (m *Manager) SetConcurrency(n int) error {
-	// Something the user did, so they see it at once. See nudge.
-	defer m.nudge()
-	if n < 1 || n > config.MaxConcurrency {
-		return fmt.Errorf("concurrency must be between 1 and %d", config.MaxConcurrency)
-	}
-	m.mu.Lock()
-	m.limit = n
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
-	return nil
+	return m.ApplySettings(Settings{Concurrency: &n})
 }
 
-// SetStreams caps how many connections a single slow file may be split
-// across. Transfers already running keep the ceiling they started with.
+// SetStreams changes the connection ceiling for new transfers.
 func (m *Manager) SetStreams(n int) error {
-	// Something the user did, so they see it at once. See nudge.
-	defer m.nudge()
-	if n < 1 || n > config.MaxStreams {
-		return fmt.Errorf("streams must be between 1 and %d", config.MaxStreams)
-	}
-	m.mu.Lock()
-	m.streams = n
-	m.mu.Unlock()
-
-	m.markDirty()
-	return nil
+	return m.ApplySettings(Settings{Streams: &n})
 }
 
 // ErrNotFound is returned for an unknown job or item id.
 var ErrNotFound = errors.New("not found")
+
+// ErrClosed is returned when work is submitted during or after shutdown.
+var ErrClosed = errors.New("download manager is closed")
 
 // DownloadDir is where finished files are being written.
 func (m *Manager) DownloadDir() string {
@@ -959,23 +999,7 @@ func (m *Manager) DownloadDir() string {
 // still queued goes to the new place. That is worth knowing rather than
 // hiding, so the API says it back to the caller.
 func (m *Manager) SetDownloadDir(path string) error {
-	// Something the user did, so they see it at once. See nudge.
-	defer m.nudge()
-	dir, err := config.PrepareDir(path)
-	if err != nil {
-		return err
-	}
-
-	m.dirMu.Lock()
-	changed := dir != m.dir
-	m.dir = dir
-	m.dirMu.Unlock()
-
-	if changed {
-		m.log.Info("download directory changed", "dir", dir)
-		m.markDirty()
-	}
-	return nil
+	return m.ApplySettings(Settings{DownloadDir: &path})
 }
 
 // SetPaused stops or resumes the whole queue.
@@ -985,16 +1009,7 @@ func (m *Manager) SetDownloadDir(path string) error {
 // A long pause may still cost a connection to a server that times it out,
 // which the usual retry and resume handle.
 func (m *Manager) SetPaused(paused bool) {
-	// Something the user did, so they see it at once. See nudge.
-	defer m.nudge()
-	m.throttle.setPaused(paused)
-	if !paused {
-		// Releasing the queue is the word a restored job was waiting for.
-		m.resumeRestored()
-		// Workers freed while paused left the queue untouched.
-		m.signal()
-	}
-	m.markDirty()
+	_ = m.ApplySettings(Settings{Paused: &paused})
 }
 
 // resumeRestored sets going every job that came back from the state file
@@ -1007,30 +1022,26 @@ func (m *Manager) SetPaused(paused bool) {
 // job picks up where it left off without this having to work out where that
 // was.
 func (m *Manager) resumeRestored() {
-	type pending struct {
-		job *Job
-		ctx context.Context
-	}
-
 	m.mu.Lock()
-	var starting []pending
+	if m.closing {
+		m.mu.Unlock()
+		return
+	}
+	starting := 0
 	for _, id := range m.order {
 		job, ok := m.jobs[id]
 		if !ok || !job.restored {
 			continue
 		}
-		starting = append(starting, pending{job: job, ctx: m.rereadLocked(job)})
+		m.rereadLocked(job)
+		starting++
 	}
 	m.mu.Unlock()
 
-	if len(starting) == 0 {
+	if starting == 0 {
 		return
 	}
-	for _, p := range starting {
-		m.wg.Add(1)
-		go m.resolve(p.ctx, p.job)
-	}
-	m.log.Info("resuming restored jobs", "jobs", len(starting))
+	m.log.Info("resuming restored jobs", "jobs", starting)
 	m.markDirty()
 }
 
@@ -1061,14 +1072,7 @@ func (m *Manager) Busy() bool {
 // unlimited. The cap is shared: it bounds everything moving at once, not
 // each transfer separately.
 func (m *Manager) SetSpeedLimit(bytesPerSecond int64) error {
-	// Something the user did, so they see it at once. See nudge.
-	defer m.nudge()
-	if bytesPerSecond < 0 {
-		return fmt.Errorf("speed limit cannot be negative, got %d", bytesPerSecond)
-	}
-	m.throttle.setLimit(bytesPerSecond)
-	m.markDirty()
-	return nil
+	return m.ApplySettings(Settings{SpeedLimit: &bytesPerSecond})
 }
 
 // SpeedLimit reports the current cap in bytes per second; 0 is unlimited.
@@ -1086,463 +1090,6 @@ func (m *Manager) findItemLocked(jobID, itemID string) (*Item, bool) {
 		}
 	}
 	return nil, false
-}
-
-// Snapshot renders the current state.
-func (m *Manager) Snapshot() Snapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.snapshotLocked()
-}
-
-// snapshotLocked builds the wire state. Caller holds mu.
-func (m *Manager) snapshotLocked() Snapshot {
-	snap := Snapshot{
-		Jobs:        make([]JobView, 0, len(m.order)),
-		Concurrency: m.limit,
-		MaxConcur:   config.MaxConcurrency,
-		Streams:     m.streams,
-		MaxStreams:  config.MaxStreams,
-		Active:      m.running,
-		Queued:      0,
-		Paused:      m.throttle.isPaused(),
-		SpeedLimit:  m.throttle.currentLimit(),
-		DownloadDir: m.DownloadDir(),
-		DiskFree:    m.diskFree.Load(),
-		DiskTotal:   m.diskTotal.Load(),
-		DiskMinFree: m.minFree,
-		HostCount:   m.hostCount,
-	}
-	// Newest first: the job someone just added belongs at the top.
-	for _, v := range slices.Backward(m.order) {
-		job, ok := m.jobs[v]
-		if !ok {
-			continue
-		}
-		v := job.view(m.itemNoteLocked)
-		snap.Speed += v.Speed
-		if v.Held {
-			snap.Held++
-			snap.Jobs = append(snap.Jobs, v)
-			continue
-		}
-		for _, it := range v.Items {
-			if it.Status == StatusQueued {
-				snap.Queued++
-			}
-		}
-		snap.Jobs = append(snap.Jobs, v)
-	}
-	return snap
-}
-
-// Subscribe returns a channel of serialised snapshots and an unsubscribe
-// function. The channel is closed when the manager shuts down.
-//
-// A subscriber arriving after Close gets a channel that is closed already.
-// The alternative — one nobody will ever close — would hold an event stream
-// open through shutdown: http.Server.Shutdown waits for in-flight requests
-// without cancelling their contexts, so a browser reloading in the moment
-// between the manager closing and the listener closing would turn a clean
-// exit into a wait for the deadline and an error.
-// subscriber is one open stream. stale means it is owed a whole snapshot
-// rather than a patch, because it has just arrived or because a frame was
-// dropped on the way to it.
-type subscriber struct{ stale bool }
-
-// Subscribe registers for state snapshots and hands back the whole of the
-// current one to send first.
-//
-// The initial frame comes from here rather than from the caller so that it
-// is the same act as registering: a subscriber that took its own snapshot
-// afterwards was sent the whole queue twice, once by itself and once by the
-// first broadcast finding it with nothing to merge into.
-//
-// A patch that arrives before this frame is written is harmless. It carries
-// the rows that changed up to the broadcast before it, and this snapshot is
-// at least that new, so applying it afterwards lands on the same values.
-func (m *Manager) Subscribe() (<-chan []byte, []byte, func()) {
-	ch := make(chan []byte, 1)
-
-	m.mu.Lock()
-	snap := m.snapshotLocked()
-	// Records that browsers have now been told this, so the next broadcast
-	// is a patch rather than the whole queue over again. Without it the
-	// first frame after a connection found every row unlike the nothing it
-	// had been compared against, and sent the lot a second time.
-	m.patchLocked(snap)
-
-	m.subsMu.Lock()
-	if m.closed {
-		m.subsMu.Unlock()
-		m.mu.Unlock()
-		close(ch)
-		return ch, nil, func() {}
-	}
-	m.subs[ch] = &subscriber{}
-	// Everyone else is owed a whole frame: what they were last told is now
-	// recorded as sent, and the difference between that and this snapshot
-	// would otherwise go to nobody.
-	for other, sub := range m.subs {
-		if other != ch {
-			sub.stale = true
-		}
-	}
-	m.subsMu.Unlock()
-	m.mu.Unlock()
-
-	// Encoded outside the locks. The snapshot is a copy down to the item
-	// values, so nothing it holds can change underneath this.
-	initial, err := json.Marshal(snap)
-	if err != nil {
-		m.log.Error("marshal snapshot", "err", err)
-		initial = nil
-	}
-
-	return ch, initial, func() {
-		m.subsMu.Lock()
-		if _, ok := m.subs[ch]; ok {
-			delete(m.subs, ch)
-			close(ch)
-		}
-		m.subsMu.Unlock()
-	}
-}
-
-// broadcast samples progress and pushes state to subscribers.
-func (m *Manager) broadcast() {
-	defer m.wg.Done()
-
-	ticker := time.NewTicker(config.ProgressTick)
-	defer ticker.Stop()
-
-	// When the last frame went out, so a queue that is running but not
-	// moving can be refreshed on a slower beat than one that is.
-	var lastFrame time.Time
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case now := <-ticker.C:
-			m.sampleDisk(now)
-			listening := m.hasSubscribers()
-
-			m.mu.Lock()
-			active := m.running > 0
-			moved := false
-			if active {
-				moved = m.sampleLocked(now)
-			}
-			// With nobody subscribed there is no one to build a snapshot
-			// for: a headless run polls Snapshot itself, and a browser that
-			// connects later is sent the state as its first frame. The
-			// rates above are still sampled, since the terminal reads
-			// them, and dirty is left standing for whoever arrives next.
-			// What is saved is encoding every item of every job — tens of
-			// thousands of them on a large listing — twice a second for no
-			// reader.
-			if !listening {
-				m.mu.Unlock()
-				continue
-			}
-			// One frame a second, whatever is happening. The tick above is
-			// a sampling rate — rates are measured often so they read
-			// smoothly — and a number on a screen is not worth redrawing
-			// faster than this. A job being read for the first time marks
-			// the state changed on every tick as its items arrive, and
-			// without a ceiling here that alone put out two and a half
-			// frames a second.
-			since := now.Sub(lastFrame)
-			if since < config.FrameInterval {
-				m.mu.Unlock()
-				continue
-			}
-			// Read rather than taken: a frame that is not sent must not
-			// swallow the change that would have justified the next one.
-			dirty := m.dirty.Load()
-			if !dirty && !active {
-				m.mu.Unlock()
-				continue
-			}
-			// Running, but nothing actually moving: a queue held behind a
-			// host taking one download at a time spends most of its life
-			// here. It still wants refreshing, because the rates decay
-			// towards zero and a viewer should see that, but far less
-			// often.
-			if !dirty && !moved && since < config.IdleFrameInterval {
-				m.mu.Unlock()
-				continue
-			}
-			m.dirty.Store(false)
-			lastFrame = now
-			m.frameLocked()
-		case <-m.urgent:
-			// Straight past the ceiling: this is a person waiting to see
-			// what they just did. The frame is a patch like any other, so
-			// it costs the rows the action touched and nothing more.
-			//
-			// Nudges that arrive together are one frame. Pasting a list of
-			// links is an Add per link, and each would otherwise build a
-			// snapshot of the whole queue under the lock — a burst of them
-			// back to back is the ceiling not applying at all. Waiting a
-			// moment folds the rest in, which nobody watching can tell
-			// apart from at once.
-			settle := time.NewTimer(config.NudgeCoalesce)
-		drain:
-			for {
-				select {
-				case <-m.urgent:
-				case <-settle.C:
-					break drain
-				case <-m.ctx.Done():
-					settle.Stop()
-					return
-				}
-			}
-			if !m.hasSubscribers() {
-				continue
-			}
-			m.mu.Lock()
-			m.dirty.Store(false)
-			lastFrame = time.Now()
-			m.frameLocked()
-		}
-	}
-}
-
-// sampleDisk refreshes the destination's free space, at its own cadence.
-//
-// Deliberately outside mu: Statfs is a syscall, the destination may be a
-// network mount, and the locking rule here is that mu is never held across
-// anything that can block. Only the broadcaster calls this, so the timestamp
-// needs no guarding of its own; the figures do, since /api/state reads them
-// from whichever goroutine asked.
-//
-// A change is published in its own right. A disk filling up from somewhere
-// else is exactly what this number exists to show, and an idle queue would
-// otherwise never mention it — while a disk that is not moving marks nothing
-// dirty, so an idle queue stays quiet.
-func (m *Manager) sampleDisk(now time.Time) {
-	if !m.diskSampled.IsZero() && now.Sub(m.diskSampled) < config.DiskSampleInterval {
-		return
-	}
-	m.diskSampled = now
-
-	free, total, err := diskSpace(m.DownloadDir())
-	if err != nil {
-		// A destination that cannot be measured reports nothing rather than
-		// a zero, which reads as a disk with no room left.
-		free, total = 0, 0
-	}
-	// Both swaps, every time: || would short-circuit past the second and
-	// leave the total behind whenever the free figure had moved.
-	freeMoved := m.diskFree.Swap(free) != free
-	totalMoved := m.diskTotal.Swap(total) != total
-	if freeMoved || totalMoved {
-		m.markDirty()
-	}
-}
-
-// sampleLocked refreshes the per-item transfer rate. Caller holds mu.
-// sampleLocked refreshes every running item's rate, and reports whether any
-// of them actually moved a byte since the last sample.
-//
-// That answer is what separates a queue that is working from one that is
-// merely open. A thousand items waiting behind a throttled host look exactly
-// like a thousand items downloading, from the broadcaster's side: transfers
-// are running either way. Only the byte counters tell the two apart, and
-// there is nothing worth sending twice a second about the second one.
-func (m *Manager) sampleLocked(now time.Time) bool {
-	moved := false
-	for _, job := range m.jobs {
-		for _, it := range job.Items {
-			if it.Status != StatusRunning {
-				it.speed = 0
-				continue
-			}
-			elapsed := now.Sub(it.lastSample).Seconds()
-			if elapsed <= 0 {
-				continue
-			}
-			current := it.downloaded.Load()
-			if current != it.lastBytes {
-				moved = true
-			}
-			instant := float64(current-it.lastBytes) / elapsed
-			if instant < 0 {
-				instant = 0
-			}
-			// Exponential smoothing: readable numbers without lagging a
-			// genuine change in rate.
-			if it.speed == 0 {
-				it.speed = instant
-			} else {
-				it.speed = config.SpeedSmoothing*it.speed + (1-config.SpeedSmoothing)*instant
-			}
-			it.lastBytes, it.lastSample = current, now
-		}
-	}
-	return moved
-}
-
-// patchLocked reduces a snapshot to the rows that have changed since the
-// last frame went out.
-//
-// Almost nothing in a queue changes from one second to the next. A thousand
-// finished files say exactly what they said before, and a browser that has
-// them already needs to be told about the four that moved — which is the
-// difference between tens of kilobytes a second and a fraction of one.
-// Everything outside the item lists is small and always sent, so a frame
-// still carries the totals, the rates and every job's own state whole.
-//
-// A job whose item list has changed length is sent whole instead: items may
-// have gone as well as arrived — a job re-read after a restart replaces its
-// list outright — and a patch cannot say that. Caller holds mu, and this
-// must be called only on the broadcast path: it records what browsers have
-// been told, and a snapshot read by the terminal or by /api/state tells
-// them nothing.
-func (m *Manager) patchLocked(snap Snapshot) Snapshot {
-	out := snap
-	out.Jobs = make([]JobView, len(snap.Jobs))
-	for i, view := range snap.Jobs {
-		job, ok := m.jobs[view.ID]
-		if !ok || len(job.Items) != len(view.Items) {
-			out.Jobs[i] = view
-			continue
-		}
-
-		shrank := len(view.Items) < job.lastCount
-		job.lastCount = len(view.Items)
-
-		changed := make([]ItemView, 0, 8)
-		for k, iv := range view.Items {
-			if it := job.Items[k]; it.lastView != iv {
-				it.lastView = iv
-				changed = append(changed, iv)
-			}
-		}
-		// Whole when a merge could not say what happened. A list that got
-		// shorter has lost rows, and a merge only ever adds or replaces
-		// them. A list where *every* row is new is either the first sight
-		// of this job or its contents replaced wholesale — a re-read drops
-		// the items and resolves them again, which can land between two
-		// frames and leave the count unchanged while nothing else is.
-		//
-		// A list that merely grew is a patch: the new rows are the changed
-		// ones, and the client appends what it does not recognise. That is
-		// the common case while a large album resolves, which is exactly
-		// when a whole list is most expensive to send.
-		if shrank || len(changed) == len(view.Items) {
-			out.Jobs[i] = view
-			continue
-		}
-		view.Items = changed
-		view.Patch = true
-		out.Jobs[i] = view
-	}
-	return out
-}
-
-// frameLocked builds a frame and sends it. Called with mu held; releases
-// it before publishing, so encoding happens outside mu.
-//
-// subsMu is taken before mu is let go. Otherwise a Subscribe could land in
-// the gap, record a newer snapshot as sent and hand it out, and then receive
-// this older patch after it — rolling rows back, with every later patch a
-// diff against the newer state, so they would stay rolled back.
-func (m *Manager) frameLocked() {
-	snap := m.snapshotLocked()
-	patch := m.patchLocked(snap)
-	m.subsMu.Lock()
-	m.mu.Unlock()
-	defer m.subsMu.Unlock()
-	m.publishLocked(snap, patch)
-}
-
-// nudge asks for a frame now rather than on the next beat. For the user's
-// own actions only: anything that happens by itself — bytes arriving, a
-// transfer finishing — goes out at the ordinary rate, which is the rate that
-// keeps the stream cheap.
-//
-// It asks only when something is waiting to be told. Every action marks the
-// state changed itself when it changed anything, so an action that was
-// refused or changed nothing — an unknown id, a setting set to what it was —
-// costs no frame at all, now or on the next beat.
-func (m *Manager) nudge() {
-	if !m.dirty.Load() {
-		return
-	}
-	select {
-	case m.urgent <- struct{}{}:
-	default:
-	}
-}
-
-// hasSubscribers reports whether anyone is waiting on the event stream.
-func (m *Manager) hasSubscribers() bool {
-	m.subsMu.Lock()
-	defer m.subsMu.Unlock()
-	return len(m.subs) > 0
-}
-
-// publishLocked sends a payload to every subscriber, replacing any snapshot
-// a slow client has not read yet: only the newest state is worth delivering.
-// Caller holds subsMu.
-func (m *Manager) publishLocked(full, patch Snapshot) {
-	// Encoded at most once each, and only if somebody is owed that kind of
-	// frame. The usual case is every browser taking the patch.
-	var fullPayload, patchPayload []byte
-	encode := func(snap Snapshot, into *[]byte) []byte {
-		if *into == nil {
-			payload, err := json.Marshal(snap)
-			if err != nil {
-				m.log.Error("marshal snapshot", "err", err)
-				payload = []byte{}
-			}
-			*into = payload
-		}
-		return *into
-	}
-
-	for ch, sub := range m.subs {
-		payload := encode(patch, &patchPayload)
-		if sub.stale {
-			payload = encode(full, &fullPayload)
-		}
-		if len(payload) == 0 {
-			continue
-		}
-		// A frame dropped for a slow reader takes its changes with it, so
-		// that subscriber is owed a whole snapshot next time. This is the
-		// one thing a patch stream cannot recover from on its own, and the
-		// only reason any of this stays self-healing.
-		sub.stale = m.deliverLocked(ch, payload)
-	}
-}
-
-// deliverLocked hands a payload to one subscriber, replacing any snapshot it
-// has not read yet: only the newest state is worth delivering. It reports
-// whether it had to replace one, which is the subscriber having missed
-// whatever that frame carried. Caller holds subsMu.
-func (m *Manager) deliverLocked(ch chan []byte, payload []byte) bool {
-	select {
-	case ch <- payload:
-		return false
-	default:
-	}
-	// The buffer holds one frame. A client that has not read the last one
-	// gets it dropped for this one — and is owed a whole snapshot after,
-	// since what it missed is no longer coming.
-	select {
-	case <-ch:
-	default:
-	}
-	select {
-	case ch <- payload:
-	default:
-	}
-	return true
 }
 
 // signal nudges the dispatcher without ever blocking the caller.

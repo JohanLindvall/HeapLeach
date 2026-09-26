@@ -280,5 +280,6 @@ func hlsManifestType(value string) bool {
 // is not legal but is common enough from origins that re-encode.
 func hlsManifestBody(prefix string) bool {
 	prefix = strings.TrimPrefix(prefix, "\ufeff")
-	return strings.HasPrefix(strings.TrimLeft(prefix, " \t\r\n"), hlsPlaylistTag)
+	first, _, _ := strings.Cut(strings.TrimLeft(prefix, " \t\r\n"), "\n")
+	return strings.TrimSpace(first) == hlsPlaylistTag
 }

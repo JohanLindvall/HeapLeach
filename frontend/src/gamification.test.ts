@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accumulate, EMPTY_PROGRESS, LEVELS, newlyUnlocked, standing, type Progress } from './gamification';
+import { accumulate, EMPTY_PROGRESS, LEVELS, newlyUnlocked, readProgress, standing, type Progress } from './gamification';
 import type { ItemView, JobView, Snapshot } from './types';
 
 function item(over: Partial<ItemView>): ItemView {
@@ -103,5 +103,30 @@ describe('newlyUnlocked', () => {
     // hostCount 0 would otherwise satisfy "used >= supported" immediately.
     const p: Progress = { ...EMPTY_PROGRESS, hostsUsed: [] };
     expect(newlyUnlocked(p, 0).map((a) => a.id)).not.toContain('globetrotter');
+  });
+});
+
+it('does not award download progress for files already on disk', () => {
+  const progress = accumulate(EMPTY_PROGRESS, snapshot([item({ skipped: true })]));
+  expect(progress.filesCompleted).toBe(0);
+  expect(progress.bytesDownloaded).toBe(0);
+  expect(progress.hostsUsed).toEqual([]);
+});
+
+describe('saved progress', () => {
+  it.each([null, false, 5, 'broken', [], { countedItems: 5, hostsUsed: null, unlocked: {} }])(
+    'ignores unusable storage: %j', (value) => {
+      expect(readProgress(value)).toEqual(EMPTY_PROGRESS);
+    },
+  );
+  it('keeps valid fields and normalizes corrupt ones', () => {
+    expect(readProgress({
+      filesCompleted: 4, bytesDownloaded: '100', peakSpeed: Infinity, maxParallel: -1,
+      hostsUsed: ['example.test', null, 'example.test'], unlocked: ['first-blood'],
+      countedItems: ['one', 4],
+    })).toEqual({
+      ...EMPTY_PROGRESS, filesCompleted: 4, hostsUsed: ['example.test'],
+      unlocked: ['first-blood'], countedItems: ['one'],
+    });
   });
 });

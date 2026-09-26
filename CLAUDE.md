@@ -46,9 +46,10 @@ go test ./internal/download/ -run TestSafeName -v          # single test
 go test ./internal/download/ -run 'Enqueue|DoubleRuns' -v   # subset
 ```
 
-Frontend tests are vitest over the pure logic (`format.ts`,
-`gamification.ts`) — `make test-frontend` runs them, in Docker when npm is
-absent, and CI runs them after the build. The formatBytes cases mirror
+Frontend tests are vitest over formatting, progress, filtering, snapshot
+merging, API errors and connection recovery. `make test-frontend` type-checks
+and runs them, in Docker when npm is absent; CI runs them after the build.
+The formatBytes cases mirror
 `internal/cli/cli_test.go` digit for digit on purpose: the two sides render
 the same numbers, and the paired tables are what hold them together.
 
@@ -556,9 +557,10 @@ Host-specific notes:
 
 `download.Manager` owns all jobs and the worker pool.
 
-**Locking rule:** every `Job` and `Item` field except `Item.downloaded` is
-guarded by `Manager.mu`. `downloaded` is atomic so the progress ticker can
-sample a running transfer without contending with workers. Workers take `mu`
+**Locking rule:** every `Job` and `Item` field except the atomic progress
+counters (`downloaded` and `streams`) is guarded by `Manager.mu`. `downloaded`
+is atomic so the progress ticker can sample a running transfer without
+contending with workers. Workers take `mu`
 only to publish state transitions, never while blocked on I/O.
 
 **Item ownership — do not regress this.** `Item.inFlight` marks an item from
@@ -606,9 +608,14 @@ Three consequences worth keeping in mind:
 
 **The queue outlives the process** (`persist.go`, `state.go`). Written every
 `config.StateSaveInterval`, atomically and 0600, and skipped entirely when
-nothing but byte counters has moved — the fingerprint covers identities and
-statuses, never progress, because the part file on disk is the authority on
+nothing but byte counters has moved — the fingerprint covers all persisted
+fields, never progress, because the part file on disk is the authority on
 how far a transfer got.
+
+Shutdown closes admission before capturing the queue, and serializes that
+snapshot with the periodic saver. A late saver cannot overwrite it with
+workers' shutdown cancellations. Extractor retries carry a generation number
+so a superseded result cannot publish into the new attempt.
 
 Three things here were each got wrong first:
 
@@ -946,7 +953,8 @@ Other behaviours that span files:
   — so an interrupted download is found again on the next run, and
   `claimPart` keeps two transfers of the same URL off one file.
 - A stall watchdog aborts an attempt whose byte counter stops moving
-  (`config.StallTimeout`); body reads have no deadline of their own, so
+  (`config.StallTimeout`); streaming requests retain a header deadline, while
+  body reads have no deadline of their own, so
   without it a silent server would pin a worker forever. The aborted item is
   **not retried in place**: `deferStalledLocked` sends it to the back of the
   queue with its part file intact, so a host that has stopped serving does
@@ -987,8 +995,10 @@ Other behaviours that span files:
   `CODECS`; without that a demuxed host yields a silent file that looks like
   a finished download. A host with no self-contained variant at all belongs
   on the external downloader.
-- `SafeName`/`SafeRelPath` reduce untrusted remote names to one portable path
-  component. Nothing may be written outside the download root.
+- `SafeName`/`SafeRelPath` sanitize remote path components. Native transfers
+  and checkpoints use `os.Root` (`files.go`) to confine actual filesystem
+  operations too, including symlinks. Finished names are reserved with
+  exclusive creation so simultaneous completions cannot overwrite each other.
   `SafeName` first decodes HTML entities (`util.Unescape`, repeated until
   stable): some pages escape a title twice, so one parse left `&#39;` and
   `&amp;` in folder and file names on disk. Decoding comes before the
@@ -1025,10 +1035,11 @@ Four things are easy to break:
 ### Server and shutdown
 
 The API is `net/http` with Go 1.22 method+pattern routing. `/api/events` is a
-server-sent-events stream carrying a **complete state snapshot** each tick —
-a client that misses a frame self-heals on the next one. Everything in that
-payload is rendered by the UI: it once carried the host names for a list that
-only restated what the build supported, and now carries `hostCount` alone,
+server-sent-events stream starting with a **complete state snapshot** and
+then carrying changed item rows. Dropped patches are replaced with a complete
+snapshot immediately, including when the queue has just become idle.
+Everything in that payload is rendered by the UI: it once carried the host
+names for a list that only restated what the build supported, and now carries `hostCount` alone,
 which is all the progress panel reads.
 
 **A snapshot is complete for what the client is showing, which is not the
@@ -1073,9 +1084,9 @@ and they are worth knowing apart because they fail differently:
   second time; and it marks every other subscriber stale, since what they
   were last told has just been recorded as delivered.
 
-  A frame dropped on the way to a slow reader leaves that subscriber owed a
-  whole one, which `deliverLocked` reports, because the changes it carried
-  are not coming again.
+  A frame dropped on the way to a slow reader is replaced by the current
+  whole snapshot in `publishLocked`. Recovery cannot wait for another
+  broadcast: the dropped patch may have completed the last active job.
 
   **Except for what the user just did.** Every user action — add, cancel,
   retry, remove, clear, pause, a setting — calls `Manager.nudge`, which

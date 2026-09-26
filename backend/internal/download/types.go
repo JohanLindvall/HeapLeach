@@ -140,6 +140,7 @@ type Job struct {
 
 	// resolving is true between submission and the extractor returning.
 	resolving bool
+	resolveID uint64 // identifies the only extractor result allowed to publish
 	// canceled records an explicit user cancellation, which outranks the
 	// status derived from the items.
 	canceled bool
@@ -375,10 +376,10 @@ func (j *Job) status() Status { return j.statusFrom(j.tally()) }
 // tally of its items.
 func (j *Job) statusFrom(t itemTally) Status {
 	switch {
-	case j.resolving:
-		return StatusResolving
 	case j.canceled:
 		return StatusCanceled
+	case j.resolving:
+		return StatusResolving
 	case j.Err != "" && len(j.Items) == 0:
 		return StatusFailed
 	case len(j.Items) == 0:

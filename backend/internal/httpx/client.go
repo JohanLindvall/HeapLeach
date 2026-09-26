@@ -29,6 +29,8 @@ type Client struct {
 	ua         string
 	acceptLang string
 	maxRetries int
+	// Streaming requests still need a deadline for receiving headers.
+	headerTimeout time.Duration
 
 	// The intervals a rate limit is waited out with, kept as fields so a
 	// test need not sit through the production values.
@@ -80,10 +82,53 @@ func New(userAgent, acceptLanguage string, maxRetries int, timeout time.Duration
 // bodies that are read over minutes. Cancellation comes from the context.
 func (c *Client) Streaming() *Client {
 	hc := *c.hc
+	headerTimeout := hc.Timeout
 	hc.Timeout = 0
 	cp := *c
 	cp.hc = &hc
+	if headerTimeout > 0 {
+		cp.headerTimeout = headerTimeout
+	}
 	return &cp
+}
+
+var errHeaderTimeout = errors.New("timed out waiting for response headers")
+
+// do bounds connection setup and response headers without timing out a
+// streaming body. The body owns cancellation after the timer is stopped.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	if c.headerTimeout <= 0 {
+		return c.hc.Do(req)
+	}
+	ctx, cancel := context.WithCancelCause(req.Context())
+	timedOut := make(chan struct{})
+	timer := time.AfterFunc(c.headerTimeout, func() { cancel(errHeaderTimeout); close(timedOut) })
+	resp, err := c.hc.Do(req.Clone(ctx))
+	if !timer.Stop() {
+		<-timedOut
+	}
+	if errors.Is(context.Cause(ctx), errHeaderTimeout) {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		err = errHeaderTimeout
+	}
+	if err != nil {
+		cancel(nil)
+		return nil, err
+	}
+	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: func() { cancel(nil) }}
+	return resp, nil
+}
+
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelBody) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
 }
 
 // UserAgent is the UA sent on every request. Gofile mixes it into its request
@@ -186,7 +231,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			attemptReq.Body = body
 		}
 
-		resp, err := c.hc.Do(attemptReq)
+		resp, err := c.do(attemptReq)
 		switch {
 		case err != nil:
 			// A cancelled context is the user's decision, never a retry.
@@ -251,7 +296,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 // host turns away should be recognised at once, not after backing off
 // through the retry budget first.
 func (c *Client) DoOnce(req *http.Request) (*http.Response, error) {
-	resp, err := c.hc.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		if ctxErr := req.Context().Err(); ctxErr != nil {
 			return nil, ctxErr

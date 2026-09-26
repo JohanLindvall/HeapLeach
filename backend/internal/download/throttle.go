@@ -102,7 +102,7 @@ func (t *throttle) currentLimit() int64 {
 	return t.limit
 }
 
-// recordLocked folds granted bytes into the rolling rate. Caller holds mu.
+// recordLocked folds received bytes into the rolling rate. Caller holds mu.
 func (t *throttle) recordLocked(now time.Time, n int) {
 	if t.windowStart.IsZero() {
 		t.windowStart = now
@@ -149,19 +149,30 @@ func (t *throttle) wakeLocked() {
 // many. The answer is never larger than want and never zero without an
 // error, so callers can read straight into buf[:n].
 func (t *throttle) take(ctx context.Context, want int) (int, error) {
+	n, gate, err := t.takeReservation(ctx, want)
+	t.finishReservation(n, n, gate)
+	return n, err
+}
+
+// The gate identifies the settings under which the budget was reserved.
+// A short read may return unused tokens only while those settings still hold.
+func (t *throttle) takeReservation(ctx context.Context, want int) (int, chan struct{}, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, nil, err
+	}
 	if want <= 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	if t == nil {
-		return want, nil
+		return want, nil, nil
 	}
 	if !t.active.Load() {
-		return want, nil
+		return want, nil, nil
 	}
 	for {
 		n, wait, gate := t.reserve(want)
 		if n > 0 {
-			return n, nil
+			return n, gate, nil
 		}
 		if wait <= 0 {
 			// Paused: nothing accrues, so wait only on the gate.
@@ -171,7 +182,7 @@ func (t *throttle) take(ctx context.Context, want int) (int, error) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return 0, ctx.Err()
+			return 0, nil, ctx.Err()
 		case <-gate:
 			timer.Stop()
 		case <-timer.C:
@@ -212,12 +223,26 @@ func (t *throttle) reserve(want int) (n int, wait time.Duration, gate chan struc
 			n = int(t.tokens)
 		}
 		t.tokens -= float64(n)
-		t.recordLocked(now, n)
-		return n, 0, nil
+		return n, 0, t.gate
 	}
 
 	wait = max(time.Duration((1-t.tokens)/float64(t.limit)*float64(time.Second)), config.ThrottleMinWait)
 	return 0, wait, t.gate
+}
+
+// finishReservation settles a read: both the bucket and the rolling
+// rate must count bytes actually received, even across a rate-window roll.
+func (t *throttle) finishReservation(reserved, read int, gate chan struct{}) {
+	if t == nil || gate == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if gate != t.gate {
+		return
+	}
+	t.tokens = min(float64(t.limit), t.tokens+float64(reserved-read))
+	t.recordLocked(time.Now(), read)
 }
 
 // throttledReader is a reader that asks the throttle for permission before
@@ -230,11 +255,13 @@ type throttledReader struct {
 }
 
 func (tr *throttledReader) Read(p []byte) (int, error) {
-	n, err := tr.t.take(tr.ctx, len(p))
+	n, gate, err := tr.t.takeReservation(tr.ctx, len(p))
 	if err != nil {
 		return 0, err
 	}
-	return tr.r.Read(p[:n])
+	read, err := tr.r.Read(p[:n])
+	tr.t.finishReservation(n, read, gate)
+	return read, err
 }
 
 // throttled wraps r unless there is nothing to enforce.

@@ -47,6 +47,7 @@ func (m *Manager) Restore() (unfinished int, err error) {
 		for _, si := range sj.Items {
 			it := &Item{
 				ID:      si.ID,
+				JobID:   job.ID,
 				Name:    si.Name,
 				Dir:     si.Dir,
 				Path:    si.Path,
@@ -159,8 +160,21 @@ func (m *Manager) persist() {
 	defer m.persistMu.Unlock()
 
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return
+	}
 	st := m.stateLocked()
 	m.mu.Unlock()
+	m.persistState(st)
+}
+
+// persistState writes a captured queue. Caller holds persistMu; Close uses
+// this directly so no periodic save can follow its final snapshot.
+func (m *Manager) persistState(st *savedState) {
+	if m.stateFile == "" {
+		return
+	}
 
 	// The byte counters move constantly and are never written down, so a
 	// queue that is merely transferring fingerprints the same as it did a
@@ -180,8 +194,8 @@ func (m *Manager) persist() {
 	}
 }
 
-// saver writes the queue on its own slow schedule, and once more on the way
-// out so a clean shutdown never loses the last minute of it.
+// saver writes the queue on its own slow schedule. Close writes the final
+// snapshot before canceling workers.
 func (m *Manager) saver() {
 	defer m.wg.Done()
 
@@ -191,9 +205,6 @@ func (m *Manager) saver() {
 	for {
 		select {
 		case <-m.ctx.Done():
-			// Not written here: Close does it once every worker has stopped,
-			// which is a later and truer picture than this goroutine racing
-			// the others to describe one.
 			return
 		case <-ticker.C:
 			m.persist()

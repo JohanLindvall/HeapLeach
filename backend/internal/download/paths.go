@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -118,23 +117,12 @@ func isReservedName(name string) bool {
 	return false
 }
 
-// UniquePath returns a path inside dir that does not collide with an
-// existing file, appending " (2)", " (3)" and so on.
-func UniquePath(dir, name string) (string, error) {
-	candidate := filepath.Join(dir, name)
-	if _, err := os.Lstat(candidate); os.IsNotExist(err) {
-		return candidate, nil
+func numberedName(name string, number int) string {
+	if number <= 1 {
+		return name
 	}
-
 	ext := filepath.Ext(name)
-	stem := strings.TrimSuffix(name, ext)
-	for i := 2; i < 10000; i++ {
-		candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
-		if _, err := os.Lstat(candidate); os.IsNotExist(err) {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("could not find a free filename for %q in %s", name, dir)
+	return fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(name, ext), number, ext)
 }
 
 // newID returns a short random identifier for a job or item.

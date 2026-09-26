@@ -14,10 +14,9 @@ FROM node:24-alpine AS frontend
 WORKDIR /app/frontend
 
 # Dependencies first, so edits to the source do not re-resolve the tree.
-COPY frontend/package.json frontend/package-lock.json* ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; \
-    else npm install --no-audit --no-fund; fi
+    npm ci --no-audit --no-fund
 
 COPY frontend/ ./
 # tsc type-checks in strict mode, then vite emits to ../backend/.../dist.

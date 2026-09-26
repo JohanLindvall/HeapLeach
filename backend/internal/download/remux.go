@@ -33,7 +33,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 	}
 
 	target := strings.TrimSuffix(path, filepath.Ext(path)) + ".mp4"
-	unique, err := UniquePath(filepath.Dir(target), filepath.Base(target))
+	unique, err := (transferFiles{}).reserve(filepath.Dir(target), filepath.Base(target))
 	if err != nil {
 		return path
 	}
@@ -94,12 +94,13 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 		if runErr == nil {
 			break
 		}
-		_ = os.Remove(unique)
 		if ctx.Err() != nil {
+			_ = os.Remove(unique)
 			return path
 		}
 	}
 	if runErr != nil {
+		_ = os.Remove(unique)
 		m.log.Debug("not losslessly convertible; keeping the transport stream",
 			"path", filepath.Base(path), "err", runErr,
 			"ffmpeg", util.Truncate(string(output), 300))

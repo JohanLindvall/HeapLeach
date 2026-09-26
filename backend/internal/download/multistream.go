@@ -22,6 +22,7 @@ type segmentedTransfer struct {
 	manager *Manager
 	item    *Item
 	file    io.WriterAt
+	files   transferFiles
 	table   *segmentTable
 	part    string
 	name    string
@@ -393,6 +394,7 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 		}
 	}()
 
+	reader := t.manager.throttled(ctx, body)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -414,16 +416,7 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 			limit = remaining
 		}
 
-		// Every connection draws from the one shared bucket, so the cap is
-		// a total across the queue rather than a per-stream allowance.
-		// This is also where a paused transfer parks.
-		allowed, err := t.manager.throttle.take(ctx, int(limit))
-		if err != nil {
-			return err
-		}
-		limit = int64(allowed)
-
-		n, readErr := body.Read(buf[:limit])
+		n, readErr := reader.Read(buf[:limit])
 		if n > 0 {
 			if _, err := out.WriteAt(buf[:n], pos); err != nil {
 				return fmt.Errorf("write at %d: %w", pos, err)
@@ -515,13 +508,14 @@ func (t *segmentedTransfer) host() string {
 
 // saveState records segment progress so an interrupted transfer resumes
 // rather than starting over.
-func (t *segmentedTransfer) saveState() {
+func (t *segmentedTransfer) saveState() error {
 	err := saveTransferState(t.part, &transferState{
 		Size:      t.table.size,
 		Validator: t.validator,
 		Segments:  t.table.state(),
-	})
+	}, t.files)
 	if err != nil {
 		t.manager.log.Debug("could not save resume state", "item", t.item.ID, "err", err)
 	}
+	return err
 }

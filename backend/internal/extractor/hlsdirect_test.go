@@ -452,3 +452,56 @@ func hlsSniffFrom(t *testing.T, raw string) (*Result, error) {
 	}
 	return hlsSniff(context.Background(), hlsTestClient(), u)
 }
+
+func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {
+	for _, tag := range []string{
+		`#EXT-X-KEY:METHOD=AES-128,URI="key.bin"`,
+		`#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"`,
+		`#EXT-X-BYTERANGE:10@0`,
+		`#EXT-X-MAP:URI="init.mp4",BYTERANGE="10@0"`,
+	} {
+		t.Run(tag, func(t *testing.T) {
+			server, _ := hlsServer(t, "application/vnd.apple.mpegurl", map[string]string{
+				"/media.m3u8": "#EXTM3U\n" + tag + "\n#EXTINF:6,\npart.ts\n#EXT-X-ENDLIST\n",
+			})
+			_, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
+			if err == nil || !strings.Contains(err.Error(), "yt-dlp") {
+				t.Fatalf("unsupported playlist: %v", err)
+			}
+		})
+	}
+}
+
+func TestHLSResolvesReferencesAgainstRedirectDestination(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/start.m3u8":
+			http.Redirect(w, r, "/nested/master.m3u8", http.StatusFound)
+		case "/nested/master.m3u8":
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nmedia.m3u8\n")
+		case "/nested/media.m3u8":
+			http.Redirect(w, r, "/final/media.m3u8", http.StatusFound)
+		case "/final/media.m3u8":
+			_, _ = io.WriteString(w, hlsCompleteMedia)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	media, err := resolveMediaPlaylist(context.Background(), hlsTestClient(), server.URL+"/start.m3u8", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := media.Segments[0]; got != server.URL+"/final/seg-1.ts" {
+		t.Fatalf("wrong segment base: %s", got)
+	}
+}
+
+func TestHLSRejectsHTMLAndInvalidHeaders(t *testing.T) {
+	for _, body := range []string{"<html>not a playlist</html>", "#EXTM3UX\npart.ts\n#EXT-X-ENDLIST"} {
+		server, _ := hlsServer(t, "text/plain", map[string]string{"/media.m3u8": body})
+		if _, err := resolveMediaPlaylist(context.Background(), hlsTestClient(), server.URL+"/media.m3u8", nil); err == nil {
+			t.Errorf("accepted non-playlist %q", body)
+		}
+	}
+}

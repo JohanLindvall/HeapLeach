@@ -80,8 +80,14 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	approx := it.SizeApprox
 	m.mu.Unlock()
 
-	dir := filepath.Join(m.DownloadDir(), rel)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	root, err := os.OpenRoot(m.DownloadDir())
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	files := transferFiles{root: root}
+	dir := filepath.Join(root.Name(), rel)
+	if err := root.MkdirAll(filepath.Join(".", rel), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
@@ -89,7 +95,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// listing page rounded for display cannot settle that question, so
 	// those wait for the length the server itself reports.
 	if expected > 0 && !approx {
-		if m.alreadyOnDisk(it, dir, rel, name, expected) {
+		if m.alreadyOnDisk(it, dir, rel, name, expected, files) {
 			return nil
 		}
 	}
@@ -159,11 +165,11 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// How far the part file had got before this attempt, so its own
 		// contribution can be told afterwards: an attempt that got the file
 		// further is judged apart from one that got it nowhere, below.
-		before := onDisk(part, len(it.Segments))
+		before := onDisk(part, len(it.Segments), files)
 		if isPlaylist {
-			final, err = m.transferPlaylist(ctx, it, part, name)
+			final, err = m.transferPlaylist(ctx, it, part, name, files)
 		} else {
-			final, err = m.transferOnce(ctx, it, part, name)
+			final, err = m.transferOnce(ctx, it, part, name, files)
 		}
 		if err == nil {
 			name = final
@@ -173,18 +179,18 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// alreadyOnDisk has recorded it; there is nothing left to rename,
 		// and whatever partial state an earlier run left is dead weight.
 		if errors.Is(err, errAlreadyComplete) {
-			_ = os.Remove(part)
-			clearTransferState(part)
+			_ = files.remove(part)
+			clearTransferState(part, files)
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if errors.Is(err, errFileChanged) {
-			if err := os.Truncate(part, 0); err != nil {
+			if err := files.truncate(part); err != nil {
 				return err
 			}
-			clearTransferState(part)
+			clearTransferState(part, files)
 			m.setProgress(it, 0)
 		}
 
@@ -323,10 +329,10 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// Moved means the file is further along than the disk held when the
 		// attempt began — not that bytes arrived, which is a different thing:
 		// a server that ignores Range and starts over on every request
-		// delivers plenty and gets nowhere. The counter is the position the
-		// attempt reached, since every path sets it from what it resumed at
-		// and advances it as bytes land.
-		moved := it.downloaded.Load() > before
+		// delivers plenty and gets nowhere. Received bytes may also be in a
+		// buffer whose flush failed, so re-read the resumable disk state.
+		after := onDisk(part, len(it.Segments), files)
+		moved := after > before
 
 		// A stall is handed straight back rather than retried in place.
 		// Retrying here would pin this worker for another StallTimeout
@@ -361,7 +367,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			wait := m.timings.progressRetry
 			m.note(it, fmt.Sprintf("connection dropped — resuming in %s", wait.Round(time.Second)))
 			m.log.Info("connection dropped after progress; resuming", "item", it.ID, "name", name,
-				"gained", it.downloaded.Load()-before, "wait", wait, "err", err)
+				"gained", after-before, "wait", wait, "err", err)
 			if err := util.SleepCtx(ctx, wait); err != nil {
 				return err
 			}
@@ -387,17 +393,19 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		}
 	}
 
-	dest, err := UniquePath(dir, name)
+	dest, err := files.reserve(dir, name)
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(part, dest); err != nil {
+	if err := files.rename(part, dest); err != nil {
+		_ = files.remove(dest)
 		return fmt.Errorf("finalise %s: %w", name, err)
 	}
 	// Cleared here rather than inside each transfer path, so the resume
 	// sidecar is also removed when an attempt ends early — a 416 for a part
 	// file that is already whole, or a restored table with nothing left.
-	clearTransferState(part)
+	clearTransferState(part, files)
+	clearPlaylistState(part, files)
 	// Any transport stream is worth rewrapping, however it arrived.
 	dest = m.remuxToMP4(ctx, dest)
 	m.setPath(it, filepath.Join(rel, filepath.Base(dest)))
@@ -410,7 +418,8 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 //
 // It returns the filename to save under, which the server may refine via
 // Content-Disposition.
-func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string) (string, error) {
+func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string, scopes ...transferFiles) (string, error) {
+	files := fileScope(scopes)
 	m.mu.Lock()
 	rawURL := it.URL
 	rel := it.Dir
@@ -431,7 +440,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	// Where to resume from. For a segmented part file the sidecar is
 	// authoritative; a part file without one is a plain sequential
 	// remnant, whose length is exactly what it holds.
-	state, offset := resumeTransfer(part)
+	state, offset := resumeTransfer(part, files)
 	var (
 		rangeEnd   int64 = -1
 		validator  string
@@ -561,7 +570,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 		// that works for hosts whose listings carry no size at all, or
 		// only a rounded one. Checked before the part file is opened, so
 		// skipping leaves nothing behind.
-		if offset == 0 && m.alreadyOnDisk(it, filepath.Dir(part), rel, name, total) {
+		if offset == 0 && m.alreadyOnDisk(it, filepath.Dir(part), rel, name, total, files) {
 			return name, errAlreadyComplete
 		}
 	}
@@ -571,13 +580,13 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 	if offset == 0 && state == nil {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(part, flags, 0o644)
+	f, err := files.open(part, flags, 0o644)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", filepath.Base(part), err)
 	}
 	defer f.Close()
 	if flags&os.O_TRUNC != 0 {
-		clearTransferState(part)
+		clearTransferState(part, files)
 	}
 
 	// A host that serves ciphertext decrypts on the way in, so the part
@@ -620,6 +629,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 		manager:    m,
 		item:       it,
 		file:       dst,
+		files:      files,
 		table:      table,
 		part:       part,
 		name:       name,
@@ -633,7 +643,12 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string)
 		saveInterval:  m.timings.save,
 	}
 	transfer.withDefaults()
-	transfer.saveState()
+	// Establish the sparse-file checkpoint before any range can write. A
+	// sparse file without a sidecar looks like a contiguous sequential part
+	// on the next run, which could falsely finish with unwritten holes.
+	if err := transfer.saveState(); err != nil {
+		return "", fmt.Errorf("prepare resume state: %w", err)
+	}
 
 	if err := transfer.run(attemptCtx, segs[primaryIdx], resp.Body); err != nil {
 		return "", annotateTransfer(name, err, &stalled, m.stallTimeout())
@@ -676,14 +691,14 @@ func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterA
 // merely received bytes — a server that restarts from zero on every request
 // does the second without the first, and a retry judged by bytes alone
 // would chase it forever.
-func onDisk(part string, segments int) int64 {
+func onDisk(part string, segments int, scopes ...transferFiles) int64 {
 	if segments > 0 {
-		if st := loadPlaylistState(part, segments); st != nil {
+		if st := loadPlaylistState(part, segments, scopes...); st != nil {
 			return st.Bytes
 		}
 		return 0
 	}
-	st, offset := resumeTransfer(part)
+	st, offset := resumeTransfer(part, scopes...)
 	if st != nil {
 		var held int64
 		for _, seg := range st.Segments {
@@ -792,7 +807,7 @@ func closeFile(f *os.File, name string) error {
 // item counter only advances when a whole part lands in order.
 func watchForStall(ctx context.Context, progress func() int64, abort context.CancelFunc, stalled *atomic.Bool,
 	timeout time.Duration, paused func() bool) {
-	interval := timeout / 3
+	interval := max(time.Nanosecond, timeout/3)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -1112,7 +1127,7 @@ func plural(n int, noun string) string {
 // retryableTransfer reports whether a failed pass is worth repeating. A
 // definitive client error (404, 403, ...) is not.
 func retryableTransfer(err error) bool {
-	if httpx.IsCanceled(err) {
+	if errors.Is(err, context.Canceled) {
 		return false
 	}
 	// The host said the resource is gone. Asking again gets the same answer.
@@ -1161,11 +1176,11 @@ var errAlreadyComplete = errors.New("already downloaded")
 // Length is the whole test. Comparing contents would mean reading the file
 // the transfer is trying to avoid reading, and every host worth skipping
 // for serves the same bytes under the same name at the same length.
-func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64) bool {
+func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64, scopes ...transferFiles) bool {
 	if size <= 0 {
 		return false
 	}
-	found, ok := onDiskAs(dir, name, size)
+	found, ok := onDiskAs(dir, name, size, scopes...)
 	if !ok {
 		return false
 	}
@@ -1180,7 +1195,7 @@ func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64) boo
 }
 
 // onDiskAs finds the file of this length saved under name or under one of
-// the numbered names UniquePath hands out beside it — "clip (2).mp4" and on.
+// the numbered names reserved beside it — "clip (2).mp4" and on.
 //
 // The numbered names are the whole reason this is more than a Stat. An
 // album can hold several different files that share one name, and the
@@ -1189,16 +1204,22 @@ func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64) boo
 // of the job downloaded those again as (4), (5) and onwards — two more
 // copies of the same files per restart, hundreds of them in all, each new
 // enough to read as freshly downloaded.
-func onDiskAs(dir, name string, size int64) (string, bool) {
+func onDiskAs(dir, name string, size int64, scopes ...transferFiles) (string, bool) {
+	files := fileScope(scopes)
 	matches := func(entry string) bool {
-		fi, err := os.Stat(filepath.Join(dir, entry))
-		return err == nil && !fi.IsDir() && fi.Size() == size
+		fi, err := files.stat(filepath.Join(dir, entry))
+		return err == nil && fi.Mode().IsRegular() && fi.Size() == size
 	}
 	if matches(name) {
 		return name, true
 	}
 
-	entries, err := os.ReadDir(dir)
+	directory, err := files.open(dir, os.O_RDONLY, 0)
+	if err != nil {
+		return "", false
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
 	if err != nil {
 		return "", false
 	}

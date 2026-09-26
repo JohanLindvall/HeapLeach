@@ -281,8 +281,8 @@ func statePath(part string) string { return part + ".state" }
 
 // loadTransferState reads the sidecar, returning nil when it is absent or
 // unusable. A missing or broken sidecar simply means starting over.
-func loadTransferState(part string) *transferState {
-	raw, err := os.ReadFile(statePath(part))
+func loadTransferState(part string, scopes ...transferFiles) *transferState {
+	raw, err := fileScope(scopes).read(statePath(part))
 	if err != nil {
 		return nil
 	}
@@ -302,12 +302,13 @@ func loadTransferState(part string) *transferState {
 // resumeTransfer reconciles the checkpoint with the bytes still on disk.
 // A sidecar can survive a deleted or truncated part, and a damaged sidecar
 // cannot establish which parts of a sparse file actually contain data.
-func resumeTransfer(part string) (*transferState, int64) {
-	fi, err := os.Stat(part)
+func resumeTransfer(part string, scopes ...transferFiles) (*transferState, int64) {
+	files := fileScope(scopes)
+	fi, err := files.stat(part)
 	if err != nil || !fi.Mode().IsRegular() {
 		return nil, 0
 	}
-	if st := loadTransferState(part); st != nil {
+	if st := loadTransferState(part, files); st != nil {
 		if fi.Size() > st.Size {
 			return nil, 0
 		}
@@ -318,7 +319,7 @@ func resumeTransfer(part string) (*transferState, int64) {
 		}
 		return st, 0
 	}
-	if _, err := os.Lstat(statePath(part)); !os.IsNotExist(err) {
+	if _, err := files.lstat(statePath(part)); !os.IsNotExist(err) {
 		return nil, 0 // a present but unusable sidecar is not a sequential part
 	}
 	return nil, fi.Size()
@@ -339,22 +340,24 @@ func (st *transferState) valid() bool {
 
 // saveTransferState writes the sidecar atomically, so an interrupted write
 // cannot leave a half-parsed file behind.
-func saveTransferState(part string, st *transferState) error {
+func saveTransferState(part string, st *transferState, scopes ...transferFiles) error {
+	files := fileScope(scopes)
 	raw, err := json.Marshal(st)
 	if err != nil {
 		return err
 	}
 	tmp := statePath(part) + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	if err := files.write(tmp, raw); err != nil {
 		return err
 	}
-	return os.Rename(tmp, statePath(part))
+	return files.rename(tmp, statePath(part))
 }
 
 // clearTransferState removes the sidecar once the file is complete.
-func clearTransferState(part string) {
-	_ = os.Remove(statePath(part))
-	_ = os.Remove(statePath(part) + ".tmp")
+func clearTransferState(part string, scopes ...transferFiles) {
+	files := fileScope(scopes)
+	_ = files.remove(statePath(part))
+	_ = files.remove(statePath(part) + ".tmp")
 }
 
 // errFileChanged means the server answered a ranged request with the whole

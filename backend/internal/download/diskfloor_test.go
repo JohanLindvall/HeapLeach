@@ -55,7 +55,9 @@ func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
 	// A floor the destination cannot satisfy, as if the disk were nearly
 	// full. The sampler would overwrite these on its own schedule, so the
 	// floor is set above the real free space rather than the figures faked.
+	m.mu.Lock()
 	m.minFree = 1 << 62
+	m.mu.Unlock()
 
 	jobID, err := m.Add(server.URL+"/held.bin", "")
 	if err != nil {
@@ -75,7 +77,9 @@ func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
 	}
 
 	// Room is made: nothing else should be needed.
+	m.mu.Lock()
 	m.minFree = 0
+	m.mu.Unlock()
 	m.signal()
 
 	if !waitForCond(20*time.Second, func() bool {
@@ -90,7 +94,9 @@ func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
 // indistinguishable from one that is merely slow.
 func TestSnapshotCarriesTheFloor(t *testing.T) {
 	m, _ := newTestManager(t)
+	m.mu.Lock()
 	m.minFree = 7 << 30
+	m.mu.Unlock()
 	if got := m.Snapshot().DiskMinFree; got != 7<<30 {
 		t.Errorf("DiskMinFree = %d, want %d", got, int64(7<<30))
 	}

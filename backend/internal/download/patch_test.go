@@ -1,6 +1,7 @@
 package download
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -121,19 +122,31 @@ func TestPatchSendsTheWholeListWhenEveryRowIsNew(t *testing.T) {
 	}
 }
 
-// A frame dropped on the way to a slow reader takes its changes with it, so
-// that subscriber is owed a whole snapshot rather than the next patch.
-func TestADroppedFrameLeavesTheSubscriberOwedAWholeSnapshot(t *testing.T) {
+// The last update may be the last broadcast: recovery cannot depend on a
+// future tick after a queue has become idle.
+func TestDroppedPatchIsReplacedWithCompleteStateImmediately(t *testing.T) {
+	m, job := patchManager()
 	ch := make(chan []byte, 1)
-	m := &Manager{}
+	m.subs = map[chan []byte]*subscriber{ch: {}}
+	m.patchLocked(m.snapshotLocked())
 
-	if dropped := m.deliverLocked(ch, []byte("first")); dropped {
-		t.Error("the first frame into an empty buffer was reported dropped")
+	job.Items[1].Status = StatusDone
+	full := m.snapshotLocked()
+	m.publishLocked(full, m.patchLocked(full))
+	job.Items[2].Status = StatusDone
+	full = m.snapshotLocked()
+	m.publishLocked(full, m.patchLocked(full))
+
+	var received Snapshot
+	if err := json.Unmarshal(<-ch, &received); err != nil {
+		t.Fatal(err)
 	}
-	if dropped := m.deliverLocked(ch, []byte("second")); !dropped {
-		t.Error("replacing an unread frame was not reported")
+	if received.Jobs[0].Patch || len(received.Jobs[0].Items) != 3 {
+		t.Fatalf("lost updates require a complete frame: %+v", received.Jobs[0])
 	}
-	if got := string(<-ch); got != "second" {
-		t.Errorf("the reader got %q, want the newest frame", got)
+	for _, item := range received.Jobs[0].Items {
+		if item.Status != StatusDone {
+			t.Errorf("stale item: %+v", item)
+		}
 	}
 }

@@ -83,13 +83,22 @@ export function useVirtualRows(
 
     const h = heights.current;
     let learned = h.length !== count;
+    // Forget removed measurements as well as their array slots. Otherwise
+    // shrinking and regrowing a list biases every unmeasured row's height.
+    for (let i = count; i < h.length; i++) {
+      const height = h[i];
+      if (height !== undefined) {
+        measured.current.total -= height;
+        measured.current.rows -= 1;
+      }
+    }
     h.length = count;
 
     // Measure every row on screen. They sit between the two spacers, so
     // which row each element is needs no asking.
     const { start, end, padTop } = showing.current;
     const lead = padTop > 0 ? 1 : 0;
-    for (let i = start; i < end; i++) {
+    for (let i = start; i < Math.min(end, count); i++) {
       const row = el.children[lead + i - start] as HTMLElement | undefined;
       if (!row) break;
       const height = row.offsetHeight;

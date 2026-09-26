@@ -12,8 +12,8 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
-// handleEvents streams state snapshots as server-sent events. Each message
-// is the whole state, so a client that misses one simply gets the next.
+// handleEvents starts with a complete snapshot, then streams changed rows.
+// The manager replaces dropped patches with complete snapshots.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
@@ -26,7 +26,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	// The stream is long-lived; the per-write deadlines still apply.
 	_ = rc.SetWriteDeadline(time.Time{})
 
-	// Every frame is a whole state snapshot, which is mostly the same
+	// Frames contain state snapshots and patches, mostly the same
 	// words as the last one — item names, statuses, the same keys a
 	// thousand times over. That is exactly what a compressor is for, and
 	// on a long queue it is the difference between kilobytes and hundreds
@@ -78,13 +78,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-ticker.C:
-			if _, err := fmt.Fprint(out, ": keep-alive\n\n"); err != nil {
-				return
-			}
-			if gz != nil && gz.Flush() != nil {
-				return
-			}
-			if rc.Flush() != nil {
+			if !writeSSE(out, gz, rc, ": ", []byte("keep-alive")) {
 				return
 			}
 		}
@@ -95,7 +89,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // there. The payload is compact JSON, which never contains a newline, so it
 // fits a single data: line.
 func writeEvent(out io.Writer, gz *gzip.Writer, rc *http.ResponseController, payload []byte) bool {
-	if _, err := fmt.Fprintf(out, "data: %s\n\n", payload); err != nil {
+	return writeSSE(out, gz, rc, "data: ", payload)
+}
+
+func writeSSE(out io.Writer, gz *gzip.Writer, rc *http.ResponseController, prefix string, payload []byte) bool {
+	_ = rc.SetWriteDeadline(time.Now().Add(config.SSEWriteTimeout))
+	if _, err := fmt.Fprintf(out, "%s%s\n\n", prefix, payload); err != nil {
 		return false
 	}
 	// A compressor holds bytes back until it has a block worth emitting,

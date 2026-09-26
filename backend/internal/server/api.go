@@ -84,44 +84,13 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 // handleSettings updates runtime settings. Every field is optional, so a
 // request carries only what changed.
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Concurrency *int    `json:"concurrency"`
-		Streams     *int    `json:"streams"`
-		Paused      *bool   `json:"paused"`
-		SpeedLimit  *int64  `json:"speedLimit"`
-		DownloadDir *string `json:"downloadDir"`
-	}
+	var req download.Settings
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Concurrency != nil {
-		if err := s.mgr.SetConcurrency(*req.Concurrency); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	if req.Streams != nil {
-		if err := s.mgr.SetStreams(*req.Streams); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	if req.SpeedLimit != nil {
-		if err := s.mgr.SetSpeedLimit(*req.SpeedLimit); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	// Last among the refusable ones: it is the only change that touches the
-	// filesystem, so a request with a bad number must not have moved it.
-	if req.DownloadDir != nil {
-		if err := s.mgr.SetDownloadDir(*req.DownloadDir); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	if req.Paused != nil {
-		s.mgr.SetPaused(*req.Paused)
+	if err := s.mgr.ApplySettings(req); err != nil {
+		writeManagerError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, s.mgr.Snapshot())
 }
@@ -171,6 +140,8 @@ func (s *Server) itemAction(w http.ResponseWriter, r *http.Request, fn func(stri
 
 func writeManagerError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, download.ErrClosed):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, download.ErrNotFound):
 		writeError(w, http.StatusNotFound, "no such job or item")
 	case errors.Is(err, extractor.ErrPasswordRequired):

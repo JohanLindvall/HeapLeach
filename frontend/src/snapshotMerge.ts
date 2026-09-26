@@ -11,8 +11,8 @@ import type { ItemView, JobView, Snapshot } from './types';
  * the wire is thrifty: the search, the progress panel and the cards all see
  * complete lists.
  *
- * A job whose rows have come or gone arrives whole instead, because a merge
- * cannot express a removal. So can the first frame of a connection, and any
+ * A job whose rows were removed arrives whole, because a merge cannot
+ * express a removal. So does the first frame of a connection, and any
  * frame after one was dropped on the way here. That is what keeps this
  * self-healing: a client can always be handed the truth outright, and is
  * whenever a patch would not reach it.
@@ -32,13 +32,11 @@ export function mergeSnapshot(previous: Snapshot | null, incoming: Snapshot): Sn
 }
 
 /**
- * Folds changed rows into the ones already held, in place.
+ * Folds changed rows into a copy of the ones already held.
  *
  * Order is the job's own and a patch does not restate it, so a row that is
  * already known is replaced where it stands rather than moved to the end. A
- * row that is not known is new and goes after the rest — which only happens
- * where the whole list would otherwise have been sent, so it is a belt to
- * the braces rather than the usual path.
+ * row that is not known is new and goes after the rest.
  */
 function mergeItems(held: readonly ItemView[], changed: readonly ItemView[]): ItemView[] {
   if (changed.length === 0) return held as ItemView[];

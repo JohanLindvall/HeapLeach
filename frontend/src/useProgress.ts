@@ -3,6 +3,7 @@ import {
   accumulate,
   EMPTY_PROGRESS,
   newlyUnlocked,
+  readProgress,
   type Achievement,
   type Progress,
 } from './gamification';
@@ -14,8 +15,7 @@ function load(): Progress {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return EMPTY_PROGRESS;
-    const parsed = JSON.parse(raw) as Partial<Progress>;
-    return { ...EMPTY_PROGRESS, ...parsed };
+    return readProgress(JSON.parse(raw) as unknown);
   } catch {
     // Corrupt or unavailable storage is not worth failing the page over.
     return EMPTY_PROGRESS;

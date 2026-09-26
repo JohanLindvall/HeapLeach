@@ -721,3 +721,42 @@ func TestRetryAfterClampsBeforeDurationConversion(t *testing.T) {
 		t.Fatalf("delay = %s, stated = %v", delay, stated)
 	}
 }
+
+func TestStreamingTimeoutCoversHeadersButNotBody(t *testing.T) {
+	for _, delayHeaders := range []bool{true, false} {
+		t.Run(fmt.Sprint(delayHeaders), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !delayHeaders {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				select {
+				case <-time.After(150 * time.Millisecond):
+					_, _ = w.Write([]byte("data"))
+				case <-r.Context().Done():
+				}
+			}))
+			defer server.Close()
+			client := New("test", "en", 0, 50*time.Millisecond).Streaming()
+			req, err := client.NewRequest(context.Background(), http.MethodGet, server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if delayHeaders {
+				if !errors.Is(err, errHeaderTimeout) {
+					t.Fatalf("header timeout: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != "data" {
+				t.Fatalf("streaming body: %q, %v", body, err)
+			}
+		})
+	}
+}
