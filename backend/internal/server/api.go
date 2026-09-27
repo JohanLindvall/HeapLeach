@@ -16,7 +16,9 @@ import (
 
 // handleHealth is a liveness probe for container orchestration.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// The version lets a deploy tool confirm that the process answering is
+	// the build it just started, not the one it replaced.
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.cfg.Version})
 }
 
 // handleState returns the current snapshot, for the initial page load and

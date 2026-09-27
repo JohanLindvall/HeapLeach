@@ -78,6 +78,13 @@ type Config struct {
 	Timeout      time.Duration
 	Debug        bool
 	OpenBrowser  bool
+	// ResumeRestored sets going, at startup, the jobs a previous run left
+	// unfinished, instead of holding them for a person to resume. For a
+	// service that is replaced without anyone watching — a deploy tool
+	// rolling a new image — where held would mean stopped until noticed.
+	ResumeRestored bool
+	// Version is the build's version, for the health endpoint to report.
+	Version string
 	// ExitWhenIdle ends the process once there is nothing left to download
 	// and no browser is watching. Set only for a bare invocation, which is
 	// a desktop session rather than a service: see applyBareDefaults.
@@ -152,6 +159,7 @@ func FromEnv() (*Config, error) {
 
 	c.Debug = env("DEBUG", "") != ""
 	c.OpenBrowser, _ = EnvBool("OPEN")
+	c.ResumeRestored, _ = EnvBool("RESUME")
 	return c, nil
 }
 

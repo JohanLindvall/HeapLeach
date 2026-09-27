@@ -55,6 +55,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	cfg.Version = version
 	headless := len(cfg.URLs) > 0
 	log := newLogger(cfg.Debug, headless)
 
@@ -76,11 +77,17 @@ func run() error {
 	// bytes resumable; this is what makes the list of them survive.
 	if unfinished, err := manager.Restore(); err != nil {
 		log.Warn("could not read the saved queue", "err", err)
-	} else if unfinished > 0 {
+	} else if unfinished > 0 && !cfg.ResumeRestored {
 		log.Info("restored an unfinished queue, held until retried",
 			"jobs", unfinished, "file", cfg.StateFile)
 	}
 	manager.Start()
+	// Releasing the queue is the word a held job waits for, so a service
+	// told to resume says it for itself. After Start, so there are workers
+	// to take what the jobs resolve to.
+	if cfg.ResumeRestored {
+		manager.SetPaused(false)
+	}
 	// Close is idempotent; this covers the error paths below.
 	defer manager.Close()
 
@@ -314,6 +321,8 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 		"abandon and retry a transfer that makes no progress for this long")
 	flags.BoolVar(&cfg.Debug, "debug", cfg.Debug, "verbose logging")
 	flags.BoolVar(&cfg.OpenBrowser, "open", cfg.OpenBrowser, "open the UI in a browser once it is listening")
+	flags.BoolVar(&cfg.ResumeRestored, "resume", cfg.ResumeRestored,
+		"resume the jobs a previous run left unfinished instead of holding them")
 	flags.BoolVar(&showVersion, "version", false, "print the version and exit")
 	var password string
 	flags.StringVar(&password, "password", "", "password for protected sources (headless downloads)")
@@ -455,7 +464,7 @@ Environment:
   HEAPLEACH_MAX_SPEED, HEAPLEACH_MIN_FREE, HEAPLEACH_STALL_TIMEOUT,
   HEAPLEACH_DEBUG, HEAPLEACH_OPEN, HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE,
   HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
-  HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS
+  HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME
 
 Sizes take a unit: 5MB, 1.5GB, 10GiB, or a plain byte count.
 

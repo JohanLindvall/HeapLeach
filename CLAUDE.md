@@ -652,6 +652,13 @@ Three things here were each got wrong first:
   wind-down is recorded queued and re-checked next run, which is the
   harmless direction.
 
+Held is the default because resuming is the user's word to give — but a
+service replaced by a deploy tool has nobody to give it, and every new image
+would stop the queue until noticed. `HEAPLEACH_RESUME` / `-resume` says it at
+startup instead (`manager.SetPaused(false)` after `Start`), and
+`/api/health` reports the build's `version` so the tool can tell the new
+process from the one it replaced.
+
 **The free-space floor** (`config.MinFreeDisk`, 10 GiB) gates `nextLocked`,
 which is to say it gates *starting* a transfer. Three choices in that:
 running transfers are left alone, because their bytes are on disk either way

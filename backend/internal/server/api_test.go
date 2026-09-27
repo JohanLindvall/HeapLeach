@@ -34,8 +34,13 @@ func get(t *testing.T, handler http.Handler, path string) *httptest.ResponseReco
 func TestHealthAndState(t *testing.T) {
 	_, handler := newTestServer(t)
 
-	if rec := get(t, handler, "/api/health"); rec.Code != http.StatusOK {
-		t.Errorf("health = %d", rec.Code)
+	health := get(t, handler, "/api/health")
+	if health.Code != http.StatusOK {
+		t.Errorf("health = %d", health.Code)
+	}
+	// A deploy tool reads the version to tell the new build from the old.
+	if !strings.Contains(health.Body.String(), `"version":"v0.0.0-test"`) {
+		t.Errorf("health = %s, want the build's version", health.Body.String())
 	}
 
 	rec := get(t, handler, "/api/state")

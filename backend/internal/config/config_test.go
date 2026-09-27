@@ -53,13 +53,14 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_STALL_TIMEOUT", "45s")
 	t.Setenv("HEAPLEACH_KVS_HOSTS", "one.example, two.example  three.example")
 	t.Setenv("HEAPLEACH_DEBUG", "1")
+	t.Setenv("HEAPLEACH_RESUME", "true")
 
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Addr != ":9999" || cfg.Concurrency != 7 || cfg.SpeedLimit != 1000000 ||
-		cfg.StallTimeout != 45*time.Second || !cfg.Debug {
+		cfg.StallTimeout != 45*time.Second || !cfg.Debug || !cfg.ResumeRestored {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	kvs := cfg.ExtraHostsFor(FamilyKVS)

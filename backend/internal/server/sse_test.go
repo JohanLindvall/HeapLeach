@@ -134,6 +134,7 @@ func newTestParts(t *testing.T) (*download.Manager, *Server) {
 		GofileSecret: config.FallbackGofileSecret,
 		MaxRetries:   0,
 		Timeout:      10 * time.Second,
+		Version:      "v0.0.0-test",
 	}
 	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
