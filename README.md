@@ -91,6 +91,13 @@ only the container knows about is one nothing outside it can reach. It saves
 to `~/Downloads`; override with `make run-image DOWNLOADS=/mnt/media`, and
 change the mapped port with `PORT=9000`.
 
+The image carries yt-dlp, ffmpeg, ffprobe and deno beside the binary — the
+same builds `make dependencies` fetches — so the hosts that need them work
+in the container without further setup. It is based on Debian slim rather
+than Alpine because those builds are linked against glibc. They are fetched
+as "latest" and cached with the image, so rebuild with `--no-cache` (or after
+`docker builder prune`) to pick up new releases.
+
 ## Usage
 
 ```

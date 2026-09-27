@@ -56,7 +56,9 @@ the same numbers, and the paired tables are what hold them together.
 Node is **not** installed on this machine — the frontend builds via Docker.
 `make build` and `make frontend` both handle that automatically.
 
-Toolchain versions live in the Dockerfile (Go 1.27, Node 24 LTS, Alpine 3.24)
+Toolchain versions live in the Dockerfile (Go 1.27, Node 24 LTS, Alpine 3.24
+for the build stages, Debian trixie-slim for the runtime image, which carries
+the glibc-linked yt-dlp/ffmpeg/deno helpers beside the binary)
 and in `backend/go.mod`. The local Go is older than the `go.mod` directive, so
 `go` commands auto-download the pinned toolchain on first use.
 
