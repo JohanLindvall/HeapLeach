@@ -80,10 +80,14 @@ make build                  # builds in Docker, writes ./bin/heapleach
 No local Go or Node needed — the toolchain lives in the build image, and only
 the finished binary lands on your machine.
 
-Prefer to run it as a container:
+Prefer to run it as a container — every release is published to the GitHub
+container registry for amd64 and arm64, tagged with its version and as
+`latest`:
 
 ```bash
-make run-image                 # builds the image and runs it
+docker run -d -p 8080:8080 -v ~/Downloads:/downloads --user "$(id -u):$(id -g)" \
+  ghcr.io/johanlindvall/heapleach:latest
+make run-image                 # or build the image from this checkout and run it
 ```
 
 The container maps a fixed port rather than taking a free one, since a port

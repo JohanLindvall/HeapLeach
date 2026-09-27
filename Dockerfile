@@ -14,7 +14,10 @@
 # place tools.Find looks.
 
 # --------------------------------------------------------------- frontend
-FROM node:24-alpine AS frontend
+# The build stages run on the builder's own platform and cross-compile, so a
+# multi-arch build emulates only the runtime stage's package install rather
+# than npm and the Go compiler.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
 WORKDIR /app/frontend
 
 # Dependencies first, so edits to the source do not re-resolve the tree.
@@ -27,7 +30,7 @@ COPY frontend/ ./
 RUN npm run build && ls -la /app/backend/internal/webui/dist
 
 # ---------------------------------------------------------------- backend
-FROM golang:1.27-alpine AS backend
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS backend
 WORKDIR /src
 
 COPY backend/go.mod backend/go.sum ./
@@ -62,7 +65,7 @@ COPY --from=backend /out/heapleach /heapleach
 # under it. These are "latest" downloads, so the layer is only as fresh as
 # the build cache lets it be: `make image` after `docker builder prune`, or
 # with --no-cache, picks up new releases.
-FROM debian:trixie-slim AS helpers
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS helpers
 ARG TARGETARCH
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl xz-utils unzip \

@@ -72,7 +72,12 @@ settled workflow, not an oversight.
 
 `make tag V=v1.2.3` writes an annotated tag and pushes it;
 `.github/workflows/release.yml` fires on `v*`, cross-compiles the five
-archives and publishes them alongside a `SHA256SUMS`. The target refuses a
+archives and publishes them alongside a `SHA256SUMS`. Its second job, which
+waits for the first, pushes the runtime image for amd64 and arm64 to
+`ghcr.io/johanlindvall/heapleach` as `vX.Y.Z`, `vX.Y` and `latest`. The build
+stages run on the builder's platform and cross-compile (`--platform=$BUILDPLATFORM`),
+so QEMU only emulates the runtime stage's package install — which is also
+why an arm64 build fails locally without binfmt installed, and passes in CI. The target refuses a
 dirty tree, which is what makes step 3 below necessary rather than tidy.
 
 Worth doing before every tag, because each step has caught something:
