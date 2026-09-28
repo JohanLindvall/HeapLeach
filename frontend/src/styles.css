@@ -318,8 +318,14 @@ code {
   min-width: 0;
 }
 
+.sidebar__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .sidebar__title {
-  margin: 0 0 -1rem;
+  margin: 0;
   padding: 0 0.6rem;
   font-size: 0.63rem;
   font-weight: 560;
@@ -375,6 +381,39 @@ code {
 .filter__dot--failed  { background: var(--failed); }
 .filter__dot--all {
   background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+}
+.filter__dot--queued { background: var(--queued); }
+
+/* Something is moving: the dot breathes, the way a transfer light does. */
+.filter__dot.is-live {
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--running) 60%, transparent);
+  animation: live-dot 1.8s var(--ease) infinite;
+}
+
+@keyframes live-dot {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--running) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* A file phase's count takes its phase's colour when there is something in
+   it, so a failure shows from across the room without opening anything. */
+.filter--phase { --phase: var(--text-faint); }
+.filter--running { --phase: var(--running); }
+.filter--queued  { --phase: var(--queued); }
+.filter--failed  { --phase: var(--failed); }
+.filter--done    { --phase: var(--done); }
+
+.filter--phase .filter__count.has-some {
+  color: var(--phase);
+  background: color-mix(in srgb, var(--phase) 14%, transparent);
+}
+
+.filter--phase.is-active { box-shadow: inset 2px 0 0 var(--phase); }
+
+.filter--phase.is-active .filter__count {
+  background: color-mix(in srgb, var(--phase) 24%, transparent);
+  color: var(--text);
 }
 
 .filter__label { flex: 1; }
@@ -1183,6 +1222,73 @@ button.jobs__dir:hover {
   gap: 0.45rem;
 }
 
+/* ========================================================== file phases == */
+
+/* Every file in one phase, across jobs. The phase colour runs through the
+   rail, the icon tile and the summary, so which list this is never needs
+   reading. */
+.files {
+  --phase: var(--accent-b);
+  padding: 0.85rem clamp(0.8rem, 2vw, 1.1rem) 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  box-shadow: var(--shadow-md), inset 3px 0 0 -1px var(--phase);
+  animation: enter 0.3s var(--ease);
+}
+
+.files--running { --phase: var(--running); }
+.files--queued  { --phase: var(--queued); }
+.files--failed  { --phase: var(--failed); }
+.files--done    { --phase: var(--done); }
+
+.files__head {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.files__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  color: var(--phase);
+  background: color-mix(in srgb, var(--phase) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--phase) 30%, transparent);
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--phase) 60%, transparent);
+}
+
+.files__title {
+  flex: 1;
+  min-width: 0;
+}
+
+.files__title h3 {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+
+.files__summary {
+  margin: 0.1rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files__empty {
+  padding: clamp(1.6rem, 5vw, 2.4rem) 1rem;
+  text-align: center;
+  border-top: 1px solid var(--edge-flat);
+}
+
 .job {
   padding: 0.7rem clamp(0.8rem, 2vw, 1rem);
   display: flex;
@@ -1402,6 +1508,22 @@ button.jobs__dir:hover {
 }
 
 .item__dir { color: var(--text-faint); }
+
+/* The job a file came from, where rows from many jobs share one list. */
+.item__job {
+  flex: 0 1 auto;
+  max-width: 38%;
+  margin-left: auto;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--edge-flat);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .item__status {
   font-size: 0.63rem;
@@ -1680,6 +1802,8 @@ button.jobs__dir:hover {
 
   .filter { padding: 0.32rem 0.6rem; }
   .filter.is-active { box-shadow: none; border: 1px solid var(--edge-flat); }
+  .filter--phase.is-active { border-color: color-mix(in srgb, var(--phase) 45%, transparent); }
+  .sidebar { gap: 0.75rem; }
 }
 
 @media (max-width: 900px) {

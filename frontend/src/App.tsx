@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError,
   cancelItem,
@@ -11,12 +11,21 @@ import {
 } from './api';
 import { AddForm } from './components/AddForm';
 import { DownloadDir } from './components/DownloadDir';
+import { FileList } from './components/FileList';
 import { JobCard } from './components/JobCard';
 import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
 import { DownloadIcon, TrashIcon } from './components/Icons';
-import { isTerminal, matchesFilter, matchesQuery, type Filter } from './status';
+import {
+  filesByPhase,
+  isTerminal,
+  matchesFileQuery,
+  matchesFilter,
+  matchesQuery,
+  type Filter,
+  type Phase,
+} from './status';
 import { useLiveState } from './useLiveState';
 import { useProgress } from './useProgress';
 import { useSpeedHistory } from './useSpeedHistory';
@@ -39,6 +48,13 @@ export default function App() {
   const { snapshot, connection } = useLiveState();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
+  // A file phase, when one is chosen, replaces the job cards with one list
+  // of files; choosing a job filter goes back to the cards.
+  const [phase, setPhase] = useState<Phase | null>(null);
+  const chooseFilter = useCallback((next: Filter) => {
+    setFilter(next);
+    setPhase(null);
+  }, []);
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const nextNoticeId = useRef(0);
@@ -104,6 +120,29 @@ export default function App() {
     (jobId: string, itemId: string) => run(() => retryItem(jobId, itemId)),
     [run],
   );
+  // A job's retry takes every failed and cancelled file in it, so retrying
+  // each job once covers every file in the failed list.
+  const onRetryAll = useCallback(
+    (jobIds: string[]) => run(() => Promise.all(jobIds.map((id) => retryJob(id)))),
+    [run],
+  );
+
+  // Recomputed only when the job list itself changes: the merge keeps it the
+  // same array while nothing moved.
+  const phases = useMemo(() => filesByPhase(snapshot?.jobs ?? []), [snapshot?.jobs]);
+  const phaseCounts = useMemo(
+    () => ({
+      running: phases.running.length,
+      queued: phases.queued.length,
+      failed: phases.failed.length,
+      done: phases.done.length,
+    }),
+    [phases],
+  );
+  const phaseEntries = useMemo(
+    () => (phase ? phases[phase].filter((entry) => matchesFileQuery(entry, query)) : []),
+    [phases, phase, query],
+  );
 
   // Keyed on the count rather than the snapshot, which arrives twice a
   // second: the title only has to change when the number does.
@@ -154,7 +193,14 @@ export default function App() {
       </header>
 
       <div className="shell">
-        <Sidebar jobs={snapshot.jobs} filter={filter} onFilter={setFilter} />
+        <Sidebar
+          jobs={snapshot.jobs}
+          filter={filter}
+          onFilter={chooseFilter}
+          phase={phase}
+          phaseCounts={phaseCounts}
+          onPhase={setPhase}
+        />
 
         <main className="main">
           <AddForm onNotice={notify} />
@@ -164,8 +210,8 @@ export default function App() {
           <section className="jobs" aria-label="Downloads">
             <div className="jobs__head">
               <h2>
-                Downloads
-                {visible.length > 0 && <span className="jobs__count">{visible.length}</span>}
+                {phase ? 'Files' : 'Downloads'}
+                {!phase && visible.length > 0 && <span className="jobs__count">{visible.length}</span>}
               </h2>
               <div className="jobs__tools">
                 {(snapshot.jobs.length > 0 || query) && (
@@ -205,7 +251,17 @@ export default function App() {
               </div>
             </div>
 
-            {visible.length === 0 ? (
+            {phase ? (
+              <FileList
+                key={phase}
+                phase={phase}
+                entries={phaseEntries}
+                searching={query.trim() !== ''}
+                onCancelItem={onCancelItem}
+                onRetryItem={onRetryItem}
+                onRetryAll={onRetryAll}
+              />
+            ) : visible.length === 0 ? (
               <div className="empty">
                 <span className="empty__icon" aria-hidden="true">
                   <DownloadIcon size={26} />

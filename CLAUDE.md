@@ -1187,7 +1187,12 @@ the UI does no derivation. The one vocabulary the UI does own is in
 `status.ts`: which statuses count as active, terminal or retryable, and the
 sidebar's filters and the search built on them. The sidebar, the cards and
 the "Clear finished" count all ask it rather than keeping lists of literals
-of their own, and it is where the pure-logic tests for that live. Everything the snapshot carries is rendered
+of their own, and it is where the pure-logic tests for that live. The sidebar's second section, **Files**, is built on the same module:
+`phaseOf` sorts every file across all jobs into Downloading, Queued, Failed
+(cancelled included — both are what a retry is for) or Done, and choosing
+one replaces the job cards with `FileList`, a windowed list of the job
+cards' own rows, each naming its job. Its per-row actions carry only the
+item id, looked up to a job there, so one stable callback serves every row. Everything the snapshot carries is rendered
 somewhere: `note` explains a deliberate wait, and `segmentsDone`/`Total` are
 the only progress a playlist has, since it has no byte total until its last
 part lands. A field the UI stops reading should come out of the payload

@@ -144,3 +144,31 @@ export function GaugeIcon({ size = 16 }: IconProps) {
     </svg>
   );
 }
+
+export function ClockIcon({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15 14" />
+    </svg>
+  );
+}
+
+export function CheckIcon({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="8 12.5 11 15.5 16 9.5" />
+    </svg>
+  );
+}
+
+export function AlertIcon({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <circle cx="12" cy="12" r="9" />
+      <line x1="12" y1="7.5" x2="12" y2="13" />
+      <line x1="12" y1="16.5" x2="12" y2="16.5" />
+    </svg>
+  );
+}

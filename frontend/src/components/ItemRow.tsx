@@ -17,6 +17,11 @@ interface ItemRowProps {
    */
   readonly position?: number;
   readonly total?: number;
+  /**
+   * The job this file belongs to, named beside it where rows from many jobs
+   * share one list. Left out inside a job's own card, which already says.
+   */
+  readonly context?: string;
 }
 
 /**
@@ -32,6 +37,7 @@ export const ItemRow = memo(function ItemRow({
   onRetry,
   position,
   total,
+  context,
 }: ItemRowProps) {
   const running = item.status === 'running';
   const active = isActive(item.status);
@@ -55,6 +61,11 @@ export const ItemRow = memo(function ItemRow({
           {item.dir && <span className="item__dir">{item.dir}/</span>}
           {item.name}
         </span>
+        {context && (
+          <span className="item__job" title={context}>
+            {context}
+          </span>
+        )}
         <span className="item__status">{statusLabel(item)}</span>
       </div>
 

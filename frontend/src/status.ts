@@ -1,4 +1,4 @@
-import type { JobView, Status } from './types';
+import type { ItemView, JobView, Status } from './types';
 
 /**
  * The status vocabulary, in one place.
@@ -64,5 +64,70 @@ export function matchesQuery(job: JobView, query: string): boolean {
     job.source.toLowerCase().includes(q) ||
     job.host.toLowerCase().includes(q) ||
     job.items.some((item) => item.name.toLowerCase().includes(q))
+  );
+}
+
+/**
+ * The phases a file can be in, which the sidebar's second section filters
+ * by. They cut across jobs: "everything that failed" is one list however
+ * many albums it came from.
+ */
+export type Phase = 'running' | 'queued' | 'failed' | 'done';
+
+export const PHASES: readonly { key: Phase; label: string }[] = [
+  { key: 'running', label: 'Downloading' },
+  { key: 'queued', label: 'Queued' },
+  { key: 'failed', label: 'Failed' },
+  { key: 'done', label: 'Done' },
+];
+
+/**
+ * Which phase a file is in. A cancelled file sits with the failed ones —
+ * both stopped short and both are what a retry is for — and a file has no
+ * phase while its job is still being read.
+ */
+export function phaseOf(status: Status): Phase | null {
+  switch (status) {
+    case 'running':
+    case 'queued':
+    case 'done':
+      return status;
+    case 'failed':
+    case 'canceled':
+      return 'failed';
+    default:
+      return null;
+  }
+}
+
+/** A file, with the job it belongs to. */
+export interface FileEntry {
+  readonly item: ItemView;
+  readonly job: JobView;
+}
+
+/**
+ * Every file sorted into its phase, in one pass, in queue order: jobs as the
+ * snapshot lists them, files as each job does.
+ */
+export function filesByPhase(jobs: readonly JobView[]): Record<Phase, FileEntry[]> {
+  const out: Record<Phase, FileEntry[]> = { running: [], queued: [], failed: [], done: [] };
+  for (const job of jobs) {
+    for (const item of job.items) {
+      const phase = phaseOf(item.status);
+      if (phase) out[phase].push({ item, job });
+    }
+  }
+  return out;
+}
+
+/** Case-insensitive match against a file's name, folder and job. */
+export function matchesFileQuery(entry: FileEntry, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    entry.item.name.toLowerCase().includes(q) ||
+    (entry.item.dir ?? '').toLowerCase().includes(q) ||
+    entry.job.title.toLowerCase().includes(q)
   );
 }
