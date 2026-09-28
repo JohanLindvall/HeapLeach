@@ -307,7 +307,12 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			key := hostLabel(m.itemHost(it), se)
 			limit, wait := m.hostGate.overloaded(key, m.timings.busyBase, m.timings.busyMax)
 
+			served := m.hostGate.lastServed(key)
 			m.mu.Lock()
+			if !it.refusedAt.IsZero() && served.After(it.refusedAt) {
+				it.overloadWaits = 0
+			}
+			it.refusedAt = time.Now()
 			it.overloadWaits++
 			turns := it.overloadWaits
 			m.mu.Unlock()

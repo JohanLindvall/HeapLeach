@@ -603,3 +603,54 @@ func TestWaitingRowsAgreeAboutWhatTheHostIsTaking(t *testing.T) {
 		t.Fatalf("saw %d rows, want 2", seen)
 	}
 }
+
+// Only refusals in a row count. A host that gets some other transfer going
+// between this item's turns is working through its queue, and failing the
+// file for having waited behind it would give up on a host that is serving.
+func TestOverloadPatienceStartsOverWhenTheHostServesSomethingElse(t *testing.T) {
+	payload := make([]byte, 16<<10)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := bucklingServer(payload, 1<<30)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	m := busyManager(t)
+	host, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/busy/clip.mp4", Size: -1}
+
+	// Twice the patience, with the host serving another file after every
+	// few refusals: each run of refusals stays short of the limit.
+	for turn := 1; turn <= 2*config.OverloadRetries; turn++ {
+		if turn%3 == 0 {
+			waitOutQuiet(t, m, host.Hostname())
+			other := &Item{ID: newID(), Name: "other.mp4", URL: srv.URL + "/ok/other.mp4", Size: -1}
+			if err := m.transfer(context.Background(), other); err != nil {
+				t.Fatalf("the host's other file did not go through: %v", err)
+			}
+		}
+		waitOutQuiet(t, m, host.Hostname())
+		err := m.transfer(context.Background(), it)
+		if _, queued := errors.AsType[*hostQueuedError](err); !queued {
+			t.Fatalf("turn %d returned %v; a host that keeps serving should keep the item waiting", turn, err)
+		}
+	}
+}
+
+// A retry starts the patience over. Carried across, a file that had run out
+// of it failed on the first refusal after being retried, without waiting.
+func TestRetryingAnItemStartsItsOverloadPatienceOver(t *testing.T) {
+	m, _ := newTestManager(t)
+	it := &Item{ID: newID(), Name: "clip.mp4", Status: StatusFailed, overloadWaits: config.OverloadRetries + 1, refusedAt: time.Now()}
+	m.mu.Lock()
+	m.enqueueLocked(it)
+	turns, refused := it.overloadWaits, it.refusedAt
+	m.mu.Unlock()
+	if turns != 0 || !refused.IsZero() {
+		t.Errorf("after a retry: %d turns, refused at %v; want the count started over", turns, refused)
+	}
+}

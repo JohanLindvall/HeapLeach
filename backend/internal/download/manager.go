@@ -797,6 +797,12 @@ func (m *Manager) enqueueLocked(it *Item) {
 	it.waitingFor = ""
 	it.speed = 0
 	it.stallDefers = 0
+	// A retry starts the host's patience over. Carried across, a file that
+	// had run out of it failed on the first refusal after being retried,
+	// without waiting at all. deferHostQueuedLocked puts both back for the
+	// one caller that is continuing a wait rather than starting one.
+	it.overloadWaits = 0
+	it.refusedAt = time.Time{}
 	it.startedAt = time.Time{}
 	it.finishedAt = time.Time{}
 	it.downloaded.Store(0)
@@ -844,9 +850,9 @@ func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 	if it.retryPending {
 		return false
 	}
-	turns := it.overloadWaits
+	turns, refused := it.overloadWaits, it.refusedAt
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
-	it.overloadWaits = turns
+	it.overloadWaits, it.refusedAt = turns, refused
 	// The host, not the sentence: what it is taking is read afresh for every
 	// snapshot, so this row and the hundred others behind the same host
 	// never disagree about it.

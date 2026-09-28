@@ -103,7 +103,14 @@ type Item struct {
 	// because the waiting happens in the queue: the item loses its slot
 	// each time, so a counter local to one transfer would start over on
 	// every turn and the patience would never run out.
+	//
+	// Only refusals in a row count: a turn after which the host got some
+	// other transfer going starts the count over (refusedAt, against the
+	// host's lastServed). An overloaded host that is still working through
+	// its queue will reach this file; one that has stopped serving
+	// altogether is what the patience is for.
 	overloadWaits int
+	refusedAt     time.Time
 	cancel        context.CancelFunc
 
 	// inFlight is true from the moment the dispatcher hands this item to a

@@ -881,6 +881,16 @@ them:
   already held. The turn is counted on the *item* (`overloadWaits`), since
   the waiting happens in the queue and each turn is a separate transfer.
 
+  Only refusals **in a row** count, the way the retry budget counts only
+  unproductive attempts: a turn after which the host got some other
+  transfer going (`hostGate.lastServed` against the item's `refusedAt`)
+  starts the count over, so an overloaded host still working through its
+  queue is never given up on — only one that has stopped serving is. And
+  `enqueueLocked` clears both, so a retry starts the patience over;
+  carried across, a file that had run out of it failed on the first refusal
+  after being retried, without waiting at all. `deferHostQueuedLocked`
+  restores them, being the one caller continuing a wait.
+
   **One at a time, from the first refusal, and the host is left alone
   between turns.** Walking the cap down a step per refusal sounds gentler
   and is not: while it walks, everything admitted before it started is still

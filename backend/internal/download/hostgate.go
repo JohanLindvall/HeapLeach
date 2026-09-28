@@ -44,6 +44,11 @@ type hostAdmission struct {
 	// served records that a transfer to this host has got going, which is
 	// what separates an overloaded host from an absent one.
 	served bool
+	// servedAt is when a transfer to this host last got going. An item's
+	// patience with the host counts only refusals with nothing served in
+	// between, so this is what tells a host still working through its queue
+	// from one that has stopped.
+	servedAt time.Time
 	// refusals counts 503s in a row, and sets how long the host is left
 	// alone after each. A transfer that gets going clears it.
 	refusals int
@@ -151,6 +156,7 @@ func (g *hostGate) serving(host string) {
 
 	st := g.stateLocked(host)
 	st.served = true
+	st.servedAt = time.Now()
 	// A host that is serving is not in the middle of refusing, so the
 	// escalating wait starts over from here rather than from whatever it
 	// had climbed to the last time this host had a bad minute.
@@ -202,6 +208,17 @@ func (g *hostGate) overloaded(host string, base, max time.Duration) (limit int, 
 	// transfers actually finish.
 	st.limit = 1
 	return st.limit, wait
+}
+
+// lastServed reports when a transfer to this host last got going, or the
+// zero time if none ever has.
+func (g *hostGate) lastServed(host string) time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if st, ok := g.hosts[host]; ok {
+		return st.servedAt
+	}
+	return time.Time{}
 }
 
 // quiet reports how long a host is to be left alone, for a note that would
