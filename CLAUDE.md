@@ -624,11 +624,19 @@ Three consequences worth keeping in mind:
 **The queue outlives the process** (`persist.go`, `state.go`). Written every
 `config.StateSaveInterval` (ten minutes — it carries a line per file, and at
 every ten seconds a queue of twenty thousand files rewrote five megabytes
-several times a minute) and on shutdown, atomically and 0600, and skipped
+several times a minute) and on shutdown, atomically and 0600, as
+**zstd-compressed JSON** (klauspost, about 9:1 on a real queue), and skipped
 entirely when
 nothing but byte counters has moved — the fingerprint covers all persisted
 fields, never progress, because the part file on disk is the authority on
 how far a transfer got.
+
+Reading goes by content, not by name: a file without zstd's magic number is
+the plain JSON every earlier build wrote, and loads as such. The default path
+became `queue.json.zst`; when it does not exist, `loadState` reads the
+`queue.json` beside it and the first successful save removes that file — a
+queue deleted later to start afresh would otherwise come back from it. A path
+named explicitly (`HEAPLEACH_STATE`) is read and written as named.
 
 Shutdown closes admission before capturing the queue, and serializes that
 snapshot with the periodic saver. A late saver cannot overwrite it with

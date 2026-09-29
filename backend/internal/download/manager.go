@@ -122,6 +122,10 @@ type Manager struct {
 	stateFile  string
 	persistMu  sync.Mutex
 	statePrint uint64
+	// legacyState is the uncompressed file the queue was restored from,
+	// removed once the compressed one has been written. Guarded by
+	// persistMu, and set by Restore before anything else can save.
+	legacyState string
 
 	// dirty records a state change worth publishing even while idle. The
 	// broadcaster clears it only when it actually builds a frame.

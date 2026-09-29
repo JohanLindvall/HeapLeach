@@ -81,6 +81,11 @@ const (
 	// saves on the way out.
 	StateSaveInterval = 10 * time.Minute
 
+	// MaxStateBytes bounds what a queue file may decompress to: far above
+	// any real queue (a quarter of a million files is under a hundred
+	// megabytes of JSON), and low enough that a corrupt file fails cheaply.
+	MaxStateBytes = 1 << 30
+
 	// DiskSampleInterval is how often the destination's free space is
 	// measured. Far slower than the progress tick on purpose: it is a
 	// syscall against a filesystem that may well be a network mount, and

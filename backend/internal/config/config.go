@@ -446,7 +446,9 @@ func defaultStateFile() string {
 	if base == "" || runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		base = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(base, "heapleach", "queue.json")
+	// Compressed; a queue.json beside it is from before that, and is read
+	// once and retired (see download.loadState).
+	return filepath.Join(base, "heapleach", "queue.json.zst")
 }
 
 // userDownloadDir resolves the platform's download folder.

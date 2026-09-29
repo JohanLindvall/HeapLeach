@@ -1,7 +1,9 @@
 package download
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -224,10 +226,9 @@ func TestNoItemURLsReachTheFile(t *testing.T) {
 	m.order = []string{"j"}
 	m.persist()
 
-	body, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Decompressed first: a token looked for in the compressed bytes would
+	// never be found, whether it was there or not.
+	body := readStateJSON(t, file)
 	if strings.Contains(string(body), "SECRETTOKEN") {
 		t.Error("a signed item URL was written to the queue file")
 	}
@@ -425,7 +426,7 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 
 	m.Close() // idempotent; the harness closes it again on cleanup
 
-	st, err := loadState(file)
+	st, _, err := loadState(file)
 	if err != nil {
 		t.Fatalf("reading back the queue: %v", err)
 	}
@@ -594,7 +595,7 @@ func TestPersistRecordsMetadataChanges(t *testing.T) {
 	job.Title = "After"
 	item.Name, item.Path, item.Skipped = "after.bin", "after.bin", true
 	m.persist()
-	state, err := loadState(file)
+	state, _, err := loadState(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,11 +614,100 @@ func TestSaveAfterCloseCannotReplaceResumableState(t *testing.T) {
 	m.Close()
 	// A ticker can have selected its save just before Close canceled it.
 	m.persist()
-	state, err := loadState(file)
+	state, _, err := loadState(file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := state.Jobs[0].Items[0].Status; got != StatusQueued {
 		t.Fatalf("shutdown overwrote resumable state with %s", got)
+	}
+}
+
+// readStateJSON returns the JSON a queue file holds.
+func readStateJSON(t *testing.T, file string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := decodeState(raw)
+	if err != nil {
+		t.Fatalf("decode %s: %v", file, err)
+	}
+	return body
+}
+
+// The queue is written compressed, owner-only, and reads back as written.
+func TestTheQueueFileIsCompressed(t *testing.T) {
+	m, file := newSavedManager(t)
+	items := make([]*Item, 0, 500)
+	for i := range 500 {
+		items = append(items, &Item{ID: fmt.Sprintf("i%03d", i), Name: fmt.Sprintf("clip-%03d.mp4", i),
+			Dir: "A Band/First Album", Status: StatusDone, Size: 1 << 20})
+	}
+	m.jobs["j"] = &Job{ID: "j", Source: "https://example.test/album", Title: "First Album", Items: items}
+	m.order = []string{"j"}
+	m.persist()
+
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(raw, zstdMagic) {
+		t.Fatalf("the queue file is not zstd: starts %q", raw[:min(len(raw), 8)])
+	}
+	plain := readStateJSON(t, file)
+	if len(raw)*5 > len(plain) {
+		t.Errorf("compressed to %d of %d bytes, want far smaller", len(raw), len(plain))
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+
+	next := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	if _, err := next.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(next.jobs["j"].Items); got != 500 {
+		t.Errorf("restored %d items, want 500", got)
+	}
+}
+
+// A queue written before compression is read as it is, from where it was
+// kept, and retired by the first compressed save — or a queue deleted later
+// to start afresh would come back from it.
+func TestAnUncompressedQueueIsReadAndRetired(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "queue.json")
+	plain := `{"version":1,"jobs":[{"id":"old","source":"https://example.test/a","title":"An Album",` +
+		`"host":"direct","createdAt":"2026-01-01T00:00:00Z","items":[{"id":"x","name":"one.mp4","status":"done","size":4}]}]}`
+	if err := os.WriteFile(legacy, []byte(plain), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	file := legacy + ".zst"
+	m := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	if _, err := m.Restore(); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if _, ok := m.jobs["old"]; !ok {
+		t.Fatal("the uncompressed queue was not read")
+	}
+
+	m.persist()
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Errorf("the uncompressed file survived the first compressed save: %v", err)
+	}
+	if raw, err := os.ReadFile(file); err != nil || !bytes.HasPrefix(raw, zstdMagic) {
+		t.Errorf("no compressed queue at %s: %v", file, err)
+	}
+
+	// And a file named plainly but holding plain JSON is read by content.
+	named := filepath.Join(dir, "named.json")
+	if err := os.WriteFile(named, []byte(plain), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, from, err := loadState(named); err != nil || from != named || len(st.Jobs) != 1 {
+		t.Errorf("plain file: %d jobs from %q, err %v", len(st.Jobs), from, err)
 	}
 }

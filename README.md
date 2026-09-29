@@ -167,7 +167,7 @@ if the directory cannot be written to — so a permission problem surfaces
 once, up front, instead of as a wall of failed transfers.
 
 The queue itself is remembered between runs, in
-`~/.local/state/heapleach/queue.json` (`XDG_STATE_HOME` is honoured, and
+`~/.local/state/heapleach/queue.json.zst` (`XDG_STATE_HOME` is honoured, and
 `HEAPLEACH_STATE` overrides both). Restarting brings back the list, and
 anything unfinished comes back **held** rather than running: press resume, or
 retry the one job you want, and it picks up from the part files already on
@@ -546,7 +546,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_MAX_SPEED` | `0` | Ceiling on the total download rate per second; `0` is unlimited. Flag: `-max-speed`. Also settable live in the UI. |
 | `HEAPLEACH_STALL_TIMEOUT` | `90s` | How long a transfer may make no progress before the attempt is retried. Flag: `-stall-timeout`. |
 | `HEAPLEACH_MIN_FREE` | `10GiB` | Room that must be left at the destination before another transfer starts. Below it the queue waits rather than filling the disk; `0` turns the check off. Flag: `-min-free`. |
-| `HEAPLEACH_STATE` | `~/.local/state/heapleach/queue.json` (`$XDG_STATE_HOME` when set) | Where the queue is written so a restart can pick it up. Unfinished jobs come back held, and are re-read when retried or when the queue is resumed; nothing is fetched until then. Empty disables it. A run given URLs on the command line never writes one. |
+| `HEAPLEACH_STATE` | `~/.local/state/heapleach/queue.json.zst` (`$XDG_STATE_HOME` when set) | Where the queue is written so a restart can pick it up, as zstd-compressed JSON (`zstdcat` reads it). A plain-JSON file from an earlier version is still read, and a `queue.json` beside the default path is picked up once and retired. Unfinished jobs come back held, and are re-read when retried or when the queue is resumed; nothing is fetched until then. Empty disables it. A run given URLs on the command line never writes one. |
 | `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
 | `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
 | `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |

@@ -1,6 +1,7 @@
 package download
 
 import (
+	"os"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -23,9 +24,15 @@ func (m *Manager) Restore() (unfinished int, err error) {
 		return 0, nil
 	}
 
-	st, err := loadState(m.stateFile)
+	st, from, err := loadState(m.stateFile)
 	if err != nil {
 		return 0, err
+	}
+	// Read from where the queue was kept before it was compressed: the
+	// first successful save retires that file, or a queue deleted later to
+	// start afresh would come back from it.
+	if from != "" && from != m.stateFile {
+		m.legacyState = from
 	}
 
 	m.mu.Lock()
@@ -191,6 +198,13 @@ func (m *Manager) persistState(st *savedState) {
 		// Forget the fingerprint so the next interval tries again rather
 		// than concluding the file is already current.
 		m.statePrint = 0
+		return
+	}
+	if m.legacyState != "" {
+		if err := os.Remove(m.legacyState); err == nil || os.IsNotExist(err) {
+			m.log.Info("the queue is now kept compressed", "file", m.stateFile, "retired", m.legacyState)
+			m.legacyState = ""
+		}
 	}
 }
 
