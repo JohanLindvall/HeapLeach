@@ -85,6 +85,10 @@ type Config struct {
 	ResumeRestored bool
 	// Version is the build's version, for the health endpoint to report.
 	Version string
+	// ProfileAddr, when set, is where Go's runtime profiles are served, on a
+	// listener of their own; empty is off. They describe the process from
+	// the inside, so a loopback address is the one to name.
+	ProfileAddr string
 	// MaxSources and MaxFiles bound what one submitted URL may expand to:
 	// how many of a page's links are followed (an index search's albums, a
 	// thread's links) and how many files a job may hold. The defaults are
@@ -177,6 +181,7 @@ func FromEnv() (*Config, error) {
 	c.Debug = env("DEBUG", "") != ""
 	c.OpenBrowser, _ = EnvBool("OPEN")
 	c.ResumeRestored, _ = EnvBool("RESUME")
+	c.ProfileAddr = env("PPROF", "")
 	return c, nil
 }
 

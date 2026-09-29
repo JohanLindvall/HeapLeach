@@ -59,6 +59,16 @@ func run() error {
 	headless := len(cfg.URLs) > 0
 	log := newLogger(cfg.Debug, headless)
 
+	// First, so everything after it — a headless run included — can be
+	// profiled. See startProfiler for why it has a listener of its own.
+	if cfg.ProfileAddr != "" {
+		stopProfiler, err := startProfiler(cfg.ProfileAddr, log)
+		if err != nil {
+			return err
+		}
+		defer stopProfiler()
+	}
+
 	// Signals are handled the same either way: the manager is closed, and
 	// partial files stay on disk for the next run to resume.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -324,6 +334,8 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 		"abandon and retry a transfer that makes no progress for this long")
 	flags.BoolVar(&cfg.Debug, "debug", cfg.Debug, "verbose logging")
 	flags.BoolVar(&cfg.OpenBrowser, "open", cfg.OpenBrowser, "open the UI in a browser once it is listening")
+	flags.StringVar(&cfg.ProfileAddr, "pprof", cfg.ProfileAddr,
+		"serve Go's runtime profiles on this address (127.0.0.1:6060, say); off when empty")
 	flags.BoolVar(&cfg.ResumeRestored, "resume", cfg.ResumeRestored,
 		"resume the jobs a previous run left unfinished instead of holding them")
 	flags.BoolVar(&showVersion, "version", false, "print the version and exit")
@@ -468,7 +480,7 @@ Environment:
   HEAPLEACH_DEBUG, HEAPLEACH_OPEN, HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE,
   HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
   HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME,
-  HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES
+  HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES, HEAPLEACH_PPROF
 
 Sizes take a unit: 5MB, 1.5GB, 10GiB, or a plain byte count.
 

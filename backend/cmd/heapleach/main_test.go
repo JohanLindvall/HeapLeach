@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,7 +122,7 @@ func TestSizeFlagsTakeUnits(t *testing.T) {
 	if _, err := loadConfig([]string{"-h"}, &help); err == nil {
 		t.Fatal("-h should exit")
 	}
-	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE", "HEAPLEACH_RESUME", "-resume", "HEAPLEACH_MAX_FILES", "-max-files", "-max-sources"} {
+	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE", "HEAPLEACH_RESUME", "-resume", "HEAPLEACH_MAX_FILES", "-max-files", "-max-sources", "HEAPLEACH_PPROF", "-pprof"} {
 		if !strings.Contains(help.String(), want) {
 			t.Errorf("help does not mention %q", want)
 		}
@@ -300,5 +302,55 @@ func TestTwoDirectoriesIsAnError(t *testing.T) {
 	one, two := t.TempDir(), t.TempDir()
 	if _, err := loadConfig([]string{one, two}, io.Discard); err == nil {
 		t.Fatal("expected an error for two download directories")
+	}
+}
+
+// The profiler serves Go's profiles on the address it was given, and only
+// there: the API's own mux has none of them.
+func TestProfilerServesOnItsOwnListener(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+
+	stop, err := startProfiler(addr, log)
+	if err != nil {
+		t.Fatalf("startProfiler: %v", err)
+	}
+	defer stop()
+
+	resp, err := http.Get("http://" + addr + "/debug/pprof/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "goroutine") {
+		t.Errorf("index = %d, want the list of profiles", resp.StatusCode)
+	}
+
+	// A second profiler on the same address is refused, not silently shared.
+	if _, err := startProfiler(addr, log); err == nil {
+		t.Error("a taken address was accepted")
+	}
+}
+
+func TestLoopbackRecognisesOnlyLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:6060": true,
+		"[::1]:6060":     true,
+		"0.0.0.0:6060":   false,
+		"[::]:6060":      false,
+	} {
+		tcp, err := net.ResolveTCPAddr("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := loopback(tcp); got != want {
+			t.Errorf("loopback(%s) = %v, want %v", addr, got, want)
+		}
 	}
 }

@@ -56,6 +56,7 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_RESUME", "true")
 	t.Setenv("HEAPLEACH_MAX_SOURCES", "5000")
 	t.Setenv("HEAPLEACH_MAX_FILES", "400000")
+	t.Setenv("HEAPLEACH_PPROF", "127.0.0.1:6060")
 
 	cfg, err := FromEnv()
 	if err != nil {
@@ -63,7 +64,7 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	}
 	if cfg.Addr != ":9999" || cfg.Concurrency != 7 || cfg.SpeedLimit != 1000000 ||
 		cfg.StallTimeout != 45*time.Second || !cfg.Debug || !cfg.ResumeRestored ||
-		cfg.MaxSources != 5000 || cfg.MaxFiles != 400000 {
+		cfg.MaxSources != 5000 || cfg.MaxFiles != 400000 || cfg.ProfileAddr != "127.0.0.1:6060" {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	kvs := cfg.ExtraHostsFor(FamilyKVS)
