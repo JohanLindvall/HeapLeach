@@ -124,7 +124,7 @@ func (a *ArchiveOrg) Match(u *url.URL) bool {
 }
 
 // Extract resolves an item, or one named file within it.
-func (a *ArchiveOrg) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (a *ArchiveOrg) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	id, selector, ok := archiveParse(u)
 	if !ok {
 		return nil, fmt.Errorf("archive.org: %s names no item "+
@@ -136,7 +136,7 @@ func (a *ArchiveOrg) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	if err := a.client.GetJSON(ctx, link, nil, &doc); err != nil {
 		return nil, fmt.Errorf("archive.org: fetch %s: %w", link, err)
 	}
-	return archiveResult(&doc, id, selector, a.formats)
+	return archiveResult(&doc, id, selector, a.formats, opts.maxFiles())
 }
 
 // archiveParse reads the identifier, and any file selector, out of a URL.
@@ -159,7 +159,7 @@ func archiveParse(u *url.URL) (id, selector string, ok bool) {
 // archiveResult turns a fetched metadata document into a job. Kept apart from
 // the fetch so the whole rendition policy can be tested against documents
 // rather than against the site.
-func archiveResult(doc *archiveDoc, id, selector string, formats []string) (*Result, error) {
+func archiveResult(doc *archiveDoc, id, selector string, formats []string, limit int) (*Result, error) {
 	// A darkened item is checked first, because it answers in very nearly the
 	// shape a missing one does: no files, and no metadata to speak of. The
 	// flag is the only thing that separates "withdrawn from view" from "never
@@ -217,8 +217,8 @@ func archiveResult(doc *archiveDoc, id, selector string, formats []string) (*Res
 	// A television archive files a recording a minute and a scanned item a
 	// page at a time. Past this the queue has stopped being something a
 	// person is reading.
-	if len(chosen) > config.MaxListingFiles {
-		chosen = chosen[:config.MaxListingFiles]
+	if len(chosen) > limit {
+		chosen = chosen[:limit]
 	}
 
 	files := make([]File, 0, len(chosen))

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   countByFilter,
-  filesByPhase,
+  countPhases,
+  filesInPhase,
   isActive,
   isRetryable,
   isTerminal,
@@ -117,12 +118,13 @@ describe('file phases', () => {
     const item = (id: string, status: Status) => ({ id, name: id + '.bin', status, size: 1, downloaded: 0, speed: 0 });
     const a = job('running', { id: 'a', items: [item('a1', 'done'), item('a2', 'running'), item('a3', 'canceled')] });
     const b = job('failed', { id: 'b', items: [item('b1', 'failed'), item('b2', 'done')] });
-    const phases = filesByPhase([a, b]);
-    expect(phases.done.map((e) => e.item.id)).toEqual(['a1', 'b2']);
-    expect(phases.running.map((e) => e.item.id)).toEqual(['a2']);
-    expect(phases.failed.map((e) => e.item.id)).toEqual(['a3', 'b1']);
-    expect(phases.queued).toEqual([]);
-    expect(phases.failed[1]!.job.id).toBe('b');
+    expect(filesInPhase([a, b], 'done').map((e) => e.item.id)).toEqual(['a1', 'b2']);
+    expect(filesInPhase([a, b], 'running').map((e) => e.item.id)).toEqual(['a2']);
+    const failed = filesInPhase([a, b], 'failed');
+    expect(failed.map((e) => e.item.id)).toEqual(['a3', 'b1']);
+    expect(failed[1]!.job.id).toBe('b');
+    expect(filesInPhase([a, b], 'queued')).toEqual([]);
+    expect(countPhases([a, b])).toEqual({ running: 1, queued: 0, failed: 2, done: 2 });
   });
 
   it('matches a file by its name, its folder or its job', () => {

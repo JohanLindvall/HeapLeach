@@ -351,7 +351,11 @@ func (e *Eporner) profile(ctx context.Context, u *url.URL, user, tab string) (*R
 	for _, v := range videos {
 		files = append(files, e.deferredFile(v))
 	}
-	return &Result{Title: epornerProfileTitle(user, tab, len(videos), declared), Files: files}, nil
+	return &Result{
+		Title: epornerProfileTitle(user, tab),
+		Note:  epornerProfileNote(len(videos), declared),
+		Files: files,
+	}, nil
 }
 
 // deferredFile queues a listed video without resolving it. The listing gives
@@ -507,13 +511,18 @@ func epornerDeclaredCount(root *html.Node, tab string) int {
 	return best
 }
 
-// epornerProfileTitle names the job, and says so when the walk came back
-// short of what the tab claims to hold. A listing that stops early
-// otherwise looks exactly like a complete one.
-func epornerProfileTitle(user, tab string, got, declared int) string {
-	title := user + " (" + strings.ReplaceAll(tab, "-", " ") + ")"
+// epornerProfileTitle names the job after the profile and its tab.
+func epornerProfileTitle(user, tab string) string {
+	return user + " (" + strings.ReplaceAll(tab, "-", " ") + ")"
+}
+
+// epornerProfileNote says so when the walk came back short of what the tab
+// claims to hold, for the job's Note: a listing that stops early otherwise
+// looks exactly like a complete one. A note rather than part of the title,
+// which names the folder, so a later complete run files into the same one.
+func epornerProfileNote(got, declared int) string {
 	if declared > 0 && got < declared {
-		title += fmt.Sprintf(" (partial — %d of %d)", got, declared)
+		return fmt.Sprintf("partial — %d of %d", got, declared)
 	}
-	return title
+	return ""
 }

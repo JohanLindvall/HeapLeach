@@ -122,7 +122,7 @@ func (f *Feeds) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return NewDirect(f.client).Extract(ctx, u, opts)
 	}
 
-	return feedResult(body, u)
+	return feedResult(body, u, opts.maxFiles())
 }
 
 // fetch reads the document and reports the type it was served as.
@@ -210,11 +210,11 @@ func feedMediaType(value string) string {
 }
 
 // feedResult parses a feed document into a job.
-func feedResult(body []byte, u *url.URL) (*Result, error) {
+func feedResult(body []byte, u *url.URL, limit int) (*Result, error) {
 	var doc feedDocument
 	err := feedDecoder(body).Decode(&doc)
 
-	files := feedFiles(&doc, u)
+	files := feedFiles(&doc, u, limit)
 	// A document cut short in transit still lists everything that arrived:
 	// the decoder fills the struct as it goes, and an enclosure is a single
 	// self-closed element, so what was recovered is whole entries rather
@@ -233,7 +233,7 @@ func feedResult(body []byte, u *url.URL) (*Result, error) {
 }
 
 // feedFiles turns the parsed document into the download list.
-func feedFiles(doc *feedDocument, u *url.URL) []File {
+func feedFiles(doc *feedDocument, u *url.URL, limit int) []File {
 	var kept []feedEnclosure
 	seen := make(map[string]bool)
 	for _, enc := range doc.enclosures() {
@@ -253,7 +253,7 @@ func feedFiles(doc *feedDocument, u *url.URL) []File {
 		// feed is newest-first and the cut is made before reversing:
 		// dropping the newest instead would mean a second run months later
 		// fetched the same oldest N again and never reached anything new.
-		if len(kept) == config.MaxListingFiles {
+		if len(kept) == limit {
 			break
 		}
 	}

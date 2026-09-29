@@ -386,7 +386,21 @@ const (
 	// carried out efficiently rather than a download. An extractor that
 	// reaches this should say what it dropped, the way a truncated listing
 	// is worse than a refused one.
+	//
+	// It is the default, not a ceiling: HEAPLEACH_MAX_FILES (-max-files)
+	// sets it per process, for somebody who did mean the whole index. See
+	// Config.MaxFiles, and extractor.Options, which carries it to every
+	// extractor that walks a listing.
 	MaxListingFiles = 20000
+
+	// MaxExpandedSources is how many of a page's links are followed, by the
+	// harvester and by an index search. Each one is a full extraction,
+	// several requests at some hosts, and a page carries more of them than
+	// one might guess — a tube's own front page measured just under two
+	// hundred, and a search over an index of six hundred thousand albums is
+	// unbounded in principle. Like MaxListingFiles it is the default, and
+	// HEAPLEACH_MAX_SOURCES (-max-sources) sets it.
+	MaxExpandedSources = 500
 
 	// MaxDirectoryDepth bounds recursion into a directory listing that
 	// links to itself, directly or through a symlink. A visited set catches
@@ -397,13 +411,9 @@ const (
 	// directory listing. Depth is the same guard as MaxDirectoryDepth; the
 	// directory count is the one that matters in practice, since a shallow
 	// tree can still be very wide.
+	// What a walk may return is the listing cap, whatever it is set to.
 	MaxAutoindexDepth = MaxDirectoryDepth
 	MaxAutoindexDirs  = 500
-
-	// MaxAutoindexFiles is what a directory walk may return, and is the
-	// listing cap under another name so a change to one is a change to
-	// both.
-	MaxAutoindexFiles = MaxListingFiles
 
 	// MaxListingPosts bounds how many entries a paginated account or
 	// gallery listing is followed for. Hosts that publish everything a

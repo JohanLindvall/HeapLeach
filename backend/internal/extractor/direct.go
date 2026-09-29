@@ -80,8 +80,8 @@ var directSniffs = []directSniff{
 		return bandzoogleSniff(ctx, c, u)
 	},
 	// An autoindex announces itself in its title.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
-		res, _ := autoindexSniff(ctx, c, u)
+	func(ctx context.Context, c *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+		res, _ := autoindexSniff(ctx, c, u, opts)
 		return res, nil
 	},
 	// Last, and least certain: an ordinary page that happens to carry a

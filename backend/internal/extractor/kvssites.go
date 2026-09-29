@@ -85,14 +85,18 @@ func (k *KVS) Name() string {
 // Extract resolves a video page, a member's whole public catalogue,
 // everything a search turns up, or any other listing the install lays out —
 // a category, a model, a tag, a channel, the site's own latest list.
-func (k *KVS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	if listing, ok := kvsMemberPath(u); ok {
-		return kvsListingResult(ctx, k.client, kvsListingForMember(listing), k.Name())
+		l := kvsListingForMember(listing)
+		l.limit = opts.maxFiles()
+		return kvsListingResult(ctx, k.client, l, k.Name())
 	}
 	if query, listing, ok := kvsSearchPath(u); ok {
-		return kvsListingResult(ctx, k.client, kvsListingForSearch(query, listing), k.Name())
+		l := kvsListingForSearch(query, listing)
+		l.limit = opts.maxFiles()
+		return kvsListingResult(ctx, k.client, l, k.Name())
 	}
-	return kvsBrowse(ctx, k.client, u, k.Name())
+	return kvsBrowse(ctx, k.client, u, k.Name(), opts.maxFiles())
 }
 
 // kvsExtract fetches a video page and resolves it. Everything needed is

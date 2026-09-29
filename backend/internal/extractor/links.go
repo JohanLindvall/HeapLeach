@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -118,25 +117,21 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	}
 
 	found := len(sources)
-	if len(sources) > maxExpandedSources {
-		sources = sources[:maxExpandedSources]
+	if limit := opts.maxSources(); len(sources) > limit {
+		sources = sources[:limit]
 	}
 
-	files := expandSources(ctx, l.registry, sources, opts)
-	if len(files) == 0 {
+	e := expandSources(ctx, l.registry, sources, opts)
+	if len(e.files) == 0 {
 		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
 			"(they may all have expired)", len(sources), page.Redacted())
 	}
 
-	resolved := len(files)
-	if len(files) > config.MaxListingFiles {
-		files = files[:config.MaxListingFiles]
-	}
-
 	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
 	return &Result{
-		Title: partialTitle(title, "links", len(sources), found, len(files), resolved),
-		Files: files,
+		Title: title,
+		Note:  partialNote("links", e, found, len(sources) < found),
+		Files: e.files,
 	}, nil
 }
 

@@ -18,7 +18,8 @@ import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
 import { DownloadIcon, TrashIcon } from './components/Icons';
 import {
-  filesByPhase,
+  countPhases,
+  filesInPhase,
   isTerminal,
   matchesFileQuery,
   matchesFilter,
@@ -128,20 +129,13 @@ export default function App() {
   );
 
   // Recomputed only when the job list itself changes: the merge keeps it the
-  // same array while nothing moved.
-  const phases = useMemo(() => filesByPhase(snapshot?.jobs ?? []), [snapshot?.jobs]);
-  const phaseCounts = useMemo(
-    () => ({
-      running: phases.running.length,
-      queued: phases.queued.length,
-      failed: phases.failed.length,
-      done: phases.done.length,
-    }),
-    [phases],
-  );
+  // same array while nothing moved. The counts cost a pass and no
+  // allocation; a list is built only for the phase on screen.
+  const jobs = snapshot?.jobs;
+  const phaseCounts = useMemo(() => countPhases(jobs ?? []), [jobs]);
   const phaseEntries = useMemo(
-    () => (phase ? phases[phase].filter((entry) => matchesFileQuery(entry, query)) : []),
-    [phases, phase, query],
+    () => (phase && jobs ? filesInPhase(jobs, phase).filter((entry) => matchesFileQuery(entry, query)) : []),
+    [jobs, phase, query],
   );
 
   // Keyed on the count rather than the snapshot, which arrives twice a

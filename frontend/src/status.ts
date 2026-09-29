@@ -107,15 +107,30 @@ export interface FileEntry {
 }
 
 /**
- * Every file sorted into its phase, in one pass, in queue order: jobs as the
- * snapshot lists them, files as each job does.
+ * How many files are in each phase, in one pass and without building a list:
+ * the sidebar wants only the numbers, every second, and a queue can hold a
+ * few hundred thousand files.
  */
-export function filesByPhase(jobs: readonly JobView[]): Record<Phase, FileEntry[]> {
-  const out: Record<Phase, FileEntry[]> = { running: [], queued: [], failed: [], done: [] };
+export function countPhases(jobs: readonly JobView[]): Record<Phase, number> {
+  const counts: Record<Phase, number> = { running: 0, queued: 0, failed: 0, done: 0 };
   for (const job of jobs) {
     for (const item of job.items) {
       const phase = phaseOf(item.status);
-      if (phase) out[phase].push({ item, job });
+      if (phase) counts[phase] += 1;
+    }
+  }
+  return counts;
+}
+
+/**
+ * The files in one phase, in queue order: jobs as the snapshot lists them,
+ * files as each job does. Built only for the phase on screen.
+ */
+export function filesInPhase(jobs: readonly JobView[], phase: Phase): FileEntry[] {
+  const out: FileEntry[] = [];
+  for (const job of jobs) {
+    for (const item of job.items) {
+      if (phaseOf(item.status) === phase) out.push({ item, job });
     }
   }
   return out;

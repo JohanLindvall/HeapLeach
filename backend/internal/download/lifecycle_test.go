@@ -3,6 +3,10 @@ package download
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,5 +128,35 @@ func TestClearFinishedCancelsPendingRetry(t *testing.T) {
 	}
 	if item.retryPending {
 		t.Fatal("removed item can be requeued by its exiting worker")
+	}
+}
+
+// A job is shown with its extractor's note but filed under its title alone.
+// The note changes when a cap is raised or a rate limit lifts; a folder that
+// changed with it filed the next run somewhere new and downloaded every file
+// again.
+func TestAJobIsFiledUnderItsTitleNotItsNote(t *testing.T) {
+	m := &Manager{jobs: map[string]*Job{}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	job := &Job{ID: "job", Source: "https://example.test/?search=a+band"}
+	res := &extractor.Result{
+		Title: "a band",
+		Note:  "224 of 2700 albums",
+		Files: []extractor.File{
+			{Name: "one.mp4", Dir: "First Album", URL: "https://example.test/1"},
+			{Name: "two.mp4", Dir: "Second Album", URL: "https://example.test/2"},
+		},
+	}
+
+	m.mu.Lock()
+	m.applyResultLocked(job, "stub", res)
+	m.mu.Unlock()
+
+	if job.Title != "a band (224 of 2700 albums)" {
+		t.Errorf("title = %q, want the note shown beside the name", job.Title)
+	}
+	for _, it := range job.Items {
+		if !strings.HasPrefix(it.Dir, "a band"+string(filepath.Separator)) {
+			t.Errorf("%s filed under %q, want the plain title's folder", it.Name, it.Dir)
+		}
 	}
 }

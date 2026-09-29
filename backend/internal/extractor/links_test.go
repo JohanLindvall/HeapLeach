@@ -452,7 +452,7 @@ func TestLinksExtractReportsAPageWithNothingOnIt(t *testing.T) {
 // TestLinksExtractCapsTheLinksItFollows keeps one paste from queueing without
 // end, and says so in the title rather than quietly returning a prefix.
 func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
-	const posted = maxExpandedSources + 100
+	const posted = config.MaxExpandedSources + 100
 
 	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
 	var page strings.Builder
@@ -467,18 +467,22 @@ func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(res.Files) != maxExpandedSources {
-		t.Errorf("got %d files, want the first %d links followed", len(res.Files), maxExpandedSources)
+	if len(res.Files) != config.MaxExpandedSources {
+		t.Errorf("got %d files, want the first %d links followed", len(res.Files), config.MaxExpandedSources)
 	}
-	want := fmt.Sprintf("%d of %d links", maxExpandedSources, posted)
-	if !strings.Contains(res.Title, want) {
-		t.Errorf("title = %q, want it to admit %q", res.Title, want)
+	if want := fmt.Sprintf("%d of %d links", config.MaxExpandedSources, posted); res.Note != want {
+		t.Errorf("note = %q, want %q", res.Note, want)
+	}
+	if res.Title != "Big thread" {
+		t.Errorf("title = %q, want it free of the note", res.Title)
 	}
 }
 
-// TestLinksExtractCapsTheFilesItReturns is the other end of the same promise:
-// a handful of links can still resolve to more files than a queue should hold.
-func TestLinksExtractCapsTheFilesItReturns(t *testing.T) {
+// TestLinksExtractStopsAtASourceBoundary is the other end of the same
+// promise: a handful of links can still resolve to more files than a queue
+// should hold. The cap is applied a source at a time, so the job ends on a
+// whole album rather than halfway through one.
+func TestLinksExtractStopsAtASourceBoundary(t *testing.T) {
 	const each = config.MaxListingFiles/2 + 100
 
 	stub := &linksStub{host: "files.example.test", files: each, title: "Album"}
@@ -492,12 +496,61 @@ func TestLinksExtractCapsTheFilesItReturns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(res.Files) != config.MaxListingFiles {
-		t.Errorf("got %d files, want %d", len(res.Files), config.MaxListingFiles)
+	if len(res.Files) != each {
+		t.Errorf("got %d files, want the first album whole (%d) and none of the second", len(res.Files), each)
 	}
-	want := fmt.Sprintf("%d of %d files", config.MaxListingFiles, each*2)
-	if !strings.Contains(res.Title, want) {
-		t.Errorf("title = %q, want it to admit %q", res.Title, want)
+	for _, f := range res.Files {
+		if strings.HasPrefix(f.Name, "two-") {
+			t.Fatalf("%s is from the album that did not fit", f.Name)
+		}
+	}
+	if res.Note != "1 of 2 links" {
+		t.Errorf("note = %q, want it to say one of the two albums is here", res.Note)
+	}
+}
+
+// A first source larger than the cap on its own is the one case cut inside:
+// leaving the job empty would help nobody.
+func TestLinksExtractCutsALoneSourceLargerThanTheCap(t *testing.T) {
+	stub := &linksStub{host: "files.example.test", files: 130, title: "Album"}
+	page := `<html><head><title>One huge album</title></head><body>
+	<a href="https://files.example.test/one">one</a>
+	</body></html>`
+
+	harvester, raw := linksHarvester(t, page, stub)
+	res, err := linksExtract(t, harvester, raw, Options{limits: Limits{Files: 100}})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(res.Files) != 100 || res.Note != "100 of 130 files" {
+		t.Errorf("got %d files, note %q; want the cap and a note saying so", len(res.Files), res.Note)
+	}
+}
+
+// Resolving stops once the cap is reached, rather than resolving every
+// source and throwing most of the files away.
+func TestLinksExtractStopsResolvingAtTheCap(t *testing.T) {
+	stub := &linksStub{host: "files.example.test", files: 10, title: "Album"}
+	var page strings.Builder
+	page.WriteString(`<html><head><title>Long thread</title></head><body>`)
+	for i := range 100 {
+		fmt.Fprintf(&page, `<a href="https://files.example.test/f%d">f%d</a>`, i, i)
+	}
+	page.WriteString(`</body></html>`)
+
+	harvester, raw := linksHarvester(t, page.String(), stub)
+	res, err := linksExtract(t, harvester, raw, Options{limits: Limits{Files: 100}})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(res.Files) != 100 || res.Note != "10 of 100 links" {
+		t.Errorf("got %d files, note %q; want ten whole sources", len(res.Files), res.Note)
+	}
+	stub.mu.Lock()
+	resolved := len(stub.passwords) // one entry per extraction
+	stub.mu.Unlock()
+	if resolved > 4*config.PageFetchConcurrency {
+		t.Errorf("resolved %d of the 100 sources to use 10", resolved)
 	}
 }
 
@@ -533,17 +586,26 @@ func TestLinksFolderStaysOneComponent(t *testing.T) {
 	}
 }
 
-func TestLinksTitleAdmitsOnlyWhatWasDropped(t *testing.T) {
-	if got := partialTitle("Thread", "links", 10, 10, 40, 40); got != "Thread" {
-		t.Errorf("a complete harvest was annotated: %q", got)
+func TestPartialNoteAdmitsOnlyWhatACapDropped(t *testing.T) {
+	cases := []struct {
+		name   string
+		e      expansion
+		found  int
+		capped bool
+		want   string
+	}{
+		{"complete", expansion{used: 10}, 10, false, ""},
+		// Dead links are the page's own business, not a cap's.
+		{"dead links", expansion{used: 8}, 10, false, ""},
+		{"too many links", expansion{used: 500}, 812, true, "500 of 812 links"},
+		{"too many files", expansion{used: 224, full: true}, 500, false, "224 of 500 links"},
+		{"both caps", expansion{used: 224, full: true}, 2700, true, "224 of 2700 links"},
+		{"one huge source", expansion{used: 1, full: true, cut: 2000, of: 3120}, 1, false, "2000 of 3120 files"},
+		{"huge first of several", expansion{used: 1, full: true, cut: 2000, of: 3120}, 3, false, "1 of 3 links, 2000 of 3120 files"},
 	}
-	if got := partialTitle("Thread", "links", 500, 812, 40, 40); got != "Thread (500 of 812 links)" {
-		t.Errorf("got %q", got)
-	}
-	if got := partialTitle("Thread", "links", 10, 10, 2000, 3120); got != "Thread (2000 of 3120 files)" {
-		t.Errorf("got %q", got)
-	}
-	if got := partialTitle("Thread", "links", 500, 812, 2000, 3120); got != "Thread (500 of 812 links, 2000 of 3120 files)" {
-		t.Errorf("got %q", got)
+	for _, c := range cases {
+		if got := partialNote("links", c.e, c.found, c.capped); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
 	}
 }

@@ -149,8 +149,24 @@ type Target struct {
 type Result struct {
 	// Title names the job and the destination folder.
 	Title string
+	// Note is what the job's name adds for whoever is looking at it — that
+	// a listing was cut short by a cap or a rate limit, and how far. It is
+	// shown beside the title and never becomes part of the folder: the
+	// folder is the title's alone, so a job read again with a higher cap,
+	// or once the rate limit has lifted, finds everything it already
+	// downloaded where it left it. A note in the title itself moved the
+	// whole job to a new folder the moment the note changed.
+	Note string
 	// Files are the resources to download, in display order.
 	Files []File
+}
+
+// Label is the title with its note, for display.
+func (r *Result) Label() string {
+	if r.Note == "" {
+		return r.Title
+	}
+	return r.Title + " (" + r.Note + ")"
 }
 
 // Extractor resolves one family of URLs.
@@ -167,6 +183,39 @@ type Extractor interface {
 type Options struct {
 	// Password unlocks protected folders (currently gofile only).
 	Password string
+
+	// limits is stamped by Registry.Extract from the configuration, so it
+	// reaches every extractor — including one reached through another, an
+	// album found by a search. Unexported, so only this package can set it:
+	// a caller outside gets what the configuration says. Read through
+	// maxSources and maxFiles.
+	limits Limits
+}
+
+// Limits bound what one submitted URL may expand to. Zero in either means
+// the built-in default.
+type Limits struct {
+	// Sources is how many of a page's links are followed: the albums of an
+	// index search, the links of a harvested thread.
+	Sources int
+	// Files is how many files one submitted URL may resolve to.
+	Files int
+}
+
+// maxSources is how many of a page's links may be followed.
+func (o Options) maxSources() int {
+	if o.limits.Sources > 0 {
+		return o.limits.Sources
+	}
+	return config.MaxExpandedSources
+}
+
+// maxFiles is how many files one submitted URL may resolve to.
+func (o Options) maxFiles() int {
+	if o.limits.Files > 0 {
+		return o.limits.Files
+	}
+	return config.MaxListingFiles
 }
 
 // ErrPasswordRequired signals that the content is gated behind a password.
@@ -176,6 +225,8 @@ var ErrPasswordRequired = errors.New("this link is password protected: supply th
 type Registry struct {
 	extractors []Extractor
 	fallback   Extractor
+	// limits is what every extraction through this registry is bounded by.
+	limits Limits
 }
 
 // NewRegistry wires up every supported host.
@@ -267,7 +318,10 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// named host would have claimed.
 	extractors = append(extractors, NewHLSDirect(client))
 
-	reg := &Registry{fallback: NewDirect(client)}
+	reg := &Registry{
+		fallback: NewDirect(client),
+		limits:   Limits{Sources: cfg.MaxSources, Files: cfg.MaxFiles},
+	}
 	// The link harvester resolves what it finds through the registry it is
 	// part of, so it is handed that registry rather than building one. It
 	// claims no host: only an explicit "links:" prefix reaches it.
@@ -327,6 +381,9 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 		return nil, nil, err
 	}
 	ex := r.Find(u)
+	if opts.limits == (Limits{}) {
+		opts.limits = r.limits
+	}
 	res, err := ex.Extract(ctx, u, opts)
 	if err != nil {
 		return nil, ex, err
@@ -337,6 +394,7 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	// The title names the job and, for a source expanded into folders, the
 	// folder too; see util.Unescape for why it may still carry entities.
 	res.Title = util.Unescape(res.Title)
+	res.Note = util.Unescape(res.Note)
 	for i := range res.Files {
 		res.Files[i].Name = util.Unescape(res.Files[i].Name)
 		res.Files[i].Dir = util.Unescape(res.Files[i].Dir)

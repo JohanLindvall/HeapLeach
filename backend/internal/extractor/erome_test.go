@@ -225,17 +225,14 @@ func TestEromeFoldersLeaveUniqueTitlesAlone(t *testing.T) {
 // A listing the host cut short must not pass for a complete one. Asking past
 // the last page is how the walk finds its end, so a page that will not load
 // is ordinarily just that — but a rate limit means the opposite, and the
-// title is the only place a Result can say so.
-func TestEromeProfileTitleAdmitsARateLimit(t *testing.T) {
-	if got := eromeProfileTitle("creator", false); got != "creator" {
-		t.Errorf("title = %q, want the profile's own name untouched", got)
+// job's note says so.
+func TestEromeProfileNoteAdmitsARateLimit(t *testing.T) {
+	if got := eromeProfileNote(false); got != "" {
+		t.Errorf("note = %q, want nothing for a whole profile", got)
 	}
-	got := eromeProfileTitle("creator", true)
-	if got == "creator" {
+	got := eromeProfileNote(true)
+	if got == "" {
 		t.Fatal("a listing cut short by the host was reported as a whole profile")
-	}
-	if !strings.Contains(got, "creator") {
-		t.Errorf("title = %q, want it to still name the profile", got)
 	}
 	if !strings.Contains(got, "rate limited") {
 		t.Errorf("title = %q, want it to say why it is partial", got)

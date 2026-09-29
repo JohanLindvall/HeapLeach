@@ -317,6 +317,9 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 		"ceiling on the total download rate, per second (5MB, 1GB, or bytes; 0 is unlimited)")
 	flags.Var(sizeFlag{&cfg.MinFreeDisk}, "min-free",
 		"room to leave at the destination before starting another transfer (10GiB, 250GB, or bytes; 0 turns the check off)")
+	flags.IntVar(&cfg.MaxSources, "max-sources", cfg.MaxSources,
+		"links followed per page of links: an index search's albums, a thread's links")
+	flags.IntVar(&cfg.MaxFiles, "max-files", cfg.MaxFiles, "files one submitted URL may resolve to")
 	flags.DurationVar(&cfg.StallTimeout, "stall-timeout", cfg.StallTimeout,
 		"abandon and retry a transfer that makes no progress for this long")
 	flags.BoolVar(&cfg.Debug, "debug", cfg.Debug, "verbose logging")
@@ -464,7 +467,8 @@ Environment:
   HEAPLEACH_MAX_SPEED, HEAPLEACH_MIN_FREE, HEAPLEACH_STALL_TIMEOUT,
   HEAPLEACH_DEBUG, HEAPLEACH_OPEN, HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE,
   HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
-  HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME
+  HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME,
+  HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES
 
 Sizes take a unit: 5MB, 1.5GB, 10GiB, or a plain byte count.
 

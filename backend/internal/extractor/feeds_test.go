@@ -100,7 +100,7 @@ func feedTestURL(t *testing.T) *url.URL {
 }
 
 func TestFeedRSS(t *testing.T) {
-	res, err := feedResult([]byte(feedRSSFixture), feedTestURL(t))
+	res, err := feedResult([]byte(feedRSSFixture), feedTestURL(t), config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestFeedRSS(t *testing.T) {
 }
 
 func TestFeedAtom(t *testing.T) {
-	res, err := feedResult([]byte(feedAtomFixture), feedTestURL(t))
+	res, err := feedResult([]byte(feedAtomFixture), feedTestURL(t), config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestFeedReversesAndCaps(t *testing.T) {
 	}
 	b.WriteString(`</channel></rss>`)
 
-	res, err := feedResult([]byte(b.String()), feedTestURL(t))
+	res, err := feedResult([]byte(b.String()), feedTestURL(t), config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestFeedDeclaredCharset(t *testing.T) {
 		`<enclosure url="https://media.example.test/e/1.mp3" length="9" type="audio/mpeg"/>` +
 		"</item></channel></rss>"
 
-	res, err := feedResult([]byte(doc), feedTestURL(t))
+	res, err := feedResult([]byte(doc), feedTestURL(t), config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestFeedTolerantParsing(t *testing.T) {
 		`<enclosure url="https://media.example.test/e/1.mp3" length="9" type="audio/mpeg"/>` +
 		`</item></channel></rss>`
 
-	res, err := feedResult([]byte(doc), feedTestURL(t))
+	res, err := feedResult([]byte(doc), feedTestURL(t), config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestFeedTruncatedDocument(t *testing.T) {
 	if !ok {
 		t.Fatal("fixture no longer contains the item the cut is made at")
 	}
-	res, err := feedResult([]byte(before), feedTestURL(t))
+	res, err := feedResult([]byte(before), feedTestURL(t), config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("feedResult: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestFeedTruncatedDocument(t *testing.T) {
 }
 
 func TestFeedUnreadableDocumentIsAnError(t *testing.T) {
-	if _, err := feedResult([]byte(`<?xml version="1.0"?><rss><chan`), feedTestURL(t)); err == nil {
+	if _, err := feedResult([]byte(`<?xml version="1.0"?><rss><chan`), feedTestURL(t), config.MaxListingFiles); err == nil {
 		t.Fatal("a document that yielded nothing resolved to something")
 	}
 }
@@ -294,7 +294,7 @@ func TestFeedWithoutEnclosuresIsAnError(t *testing.T) {
 	doc := `<?xml version="1.0"?><rss version="2.0"><channel><title>Blog</title>` +
 		`<item><title>A post</title><link>https://blog.example.test/1</link></item>` +
 		`</channel></rss>`
-	if _, err := feedResult([]byte(doc), feedTestURL(t)); err == nil {
+	if _, err := feedResult([]byte(doc), feedTestURL(t), config.MaxListingFiles); err == nil {
 		t.Fatal("an article feed resolved to something downloadable")
 	}
 }

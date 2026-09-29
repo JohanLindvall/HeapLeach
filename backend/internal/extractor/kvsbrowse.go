@@ -41,7 +41,7 @@ import (
 
 // kvsBrowse resolves a page on a registered install that is neither a member
 // profile nor a search: a video, or a listing of them.
-func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label string) (*Result, error) {
+func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label string, limit int) (*Result, error) {
 	if len(util.PathSegments(u)) == 0 {
 		return nil, fmt.Errorf("%s: %s is the front page; paste a video, a category, "+
 			"a model, a tag or a search instead", label, u.Redacted())
@@ -68,6 +68,7 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label stri
 
 	if listing, ok := kvsPagedListing(u); ok {
 		l := kvsListingForPage(listing)
+		l.limit = limit
 		pages, title, err := kvsListingPages(ctx, client, l, label)
 		switch {
 		case err == nil && len(pages) > 0:
@@ -81,6 +82,7 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label stri
 	}
 	l := kvsListingForPage(u.String())
 	l.first = doc
+	l.limit = limit
 	return kvsListingResult(ctx, client, l, label)
 }
 

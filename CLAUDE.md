@@ -439,7 +439,7 @@ Host-specific notes:
   resolves each result through the registry the way the `links:` harvester
   does — and the parts they share now live in `sources.go` rather than in
   one of them: the supported-link filter, the fan-out, the per-source folder
-  and the "N of M" title that admits a truncated answer. Two things are
+  and the "N of M" note that admits a truncated answer. Two things are
   worth knowing. The walk stops **at** the cap rather than collecting
   everything and truncating, because a two-word search states twenty
   thousand pages and walking them to throw all but five away is a lot of
@@ -456,6 +456,14 @@ Host-specific notes:
   name, which is what anything already downloaded under it is filed as.
   Merged folders were how two different files of one name came to sit side
   by side as "(2)" and "(3)".
+
+  `expandSources` applies the file cap **a source at a time**: an album is
+  taken whole or not at all, resolving stops once the cap is reached, and
+  only a first album larger than the cap on its own is cut. It used to
+  resolve every album and truncate the files afterwards, which ended the job
+  halfway through one album and resolved hundreds more to throw their files
+  away — "500 of 2700 albums, 20000 of 54403 files" was a job holding 224
+  albums. The note now counts the albums actually in the job.
 
 - **coomerfans** fetches concurrently, as several extractors now do (pbs, svt,
   rai, zdf, rtve, rtp, peertube, pornpics). A creator's
@@ -1157,6 +1165,23 @@ before anything is created — otherwise loading config would create whichever
 directory the environment named, even when an argument overrides it.
 
 Download directory precedence: positional argument → `-dir` → `HEAPLEACH_DIR`.
+
+**The listing caps are settings** (`HEAPLEACH_MAX_SOURCES`,
+`HEAPLEACH_MAX_FILES`, and `-max-sources`/`-max-files`), defaulting to
+`config.MaxExpandedSources` and `config.MaxListingFiles`. They reach the
+extractors through `extractor.Options`, whose unexported `limits` the
+registry fills from the config in `Registry.Extract` — so a nested
+extraction, an album found by a search, is bounded the same way, and every
+extractor that walks a listing reads `opts.maxFiles()` rather than the
+constant. Zero means the default, and there is no "unlimited": every file of
+a job is also a row in the UI and a line in the saved queue.
+
+**What names a job's folder is `Result.Title` alone.** An extractor that has
+something to admit — a listing cut short by a cap or a rate limit — puts it
+in `Result.Note`, which the job's shown title carries (`Result.Label`) and
+the folder never does. When the note was part of the title, raising a cap or
+waiting out a rate limit changed the folder, and the next run filed
+everything somewhere new and downloaded it all again.
 
 `HEAPLEACH_EXTRA_HOSTS` is the one setting that names hosts rather than
 tuning behaviour, for the reason above: these platform host lists rot faster

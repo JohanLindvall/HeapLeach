@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // Expanding a page of links into the files behind them.
@@ -19,14 +21,6 @@ import (
 // The parts they share are here, because each was arrived at for a reason
 // and reproducing them slightly differently is how the second copy gets one
 // of them wrong.
-
-// maxExpandedSources bounds how many of a page's links are followed. Each
-// one is a full extraction, several requests at some hosts, and a page
-// carries more of them than one might guess — a tube's own front page
-// measured just under two hundred, and a search over an index of six hundred
-// thousand albums is unbounded in principle. So this is set where following
-// the lot stops plausibly being what anybody asked for.
-const maxExpandedSources = 500
 
 // supportedSources keeps the candidates that reach a real extractor.
 //
@@ -57,26 +51,78 @@ func supportedSources(registry *Registry, candidates []string, self Extractor) [
 	return out
 }
 
-// expandSources resolves every source, several at a time.
+// expansion is what expandSources made of a list of sources.
+type expansion struct {
+	files []File
+	// used is how many sources the files came from.
+	used int
+	// full reports that the file cap ended the expansion: sources after the
+	// last one used were never resolved.
+	full bool
+	// cut and of are the files kept and held by the one source trimmed to
+	// fit, when a single source alone held more than the cap. Zero
+	// otherwise: every other source is taken whole or not at all.
+	cut, of int
+}
+
+// expandSources resolves the sources in order, several at a time, until
+// the file cap is reached.
 //
-// The bound is the one a listing expanded page-by-page uses, and for the
-// same reason rather than by coincidence: a thread's two hundred links are
-// usually two hundred links to the same host, so this is a burst at one host
-// however many hosts the page names.
+// The concurrency is the one a listing expanded page-by-page uses, and for
+// the same reason rather than by coincidence: a thread's two hundred links
+// are usually two hundred links to the same host, so this is a burst at one
+// host however many hosts the page names.
+//
+// The cap is applied a source at a time. A source is taken whole or not at
+// all, so the job never ends halfway through an album with nothing to say
+// which one; and resolving stops once the cap is reached, rather than
+// resolving five hundred albums and throwing more than half their files
+// away. The one exception is a first source that alone holds more than the
+// cap, which is cut rather than leaving the job empty.
 //
 // Results are collected by index rather than appended as they arrive, so the
 // job lists its files in the order the page did however the requests
 // interleave. A link that will not resolve is skipped rather than failing the
 // job: every thread of any age has dead links in it, and the live ones are
 // still worth having.
-func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) []File {
-	resolved := FanOut(ctx, sources, func(ctx context.Context, link string) ([]sourceResult, error) {
+func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) expansion {
+	limit := opts.maxFiles()
+	fetch := func(ctx context.Context, link string) ([]sourceResult, error) {
 		res, _, err := registry.Extract(ctx, link, opts)
 		if err != nil {
 			return nil, err
 		}
 		return []sourceResult{{link: link, res: res}}, nil
-	})
+	}
+
+	// A few rounds of slots at a time: enough that a slow source holds up
+	// little, few enough that the cap overshoots by a handful of requests.
+	batch := 4 * config.PageFetchConcurrency
+	var (
+		resolved []sourceResult
+		e        expansion
+		total    int
+	)
+walk:
+	for start := 0; start < len(sources); start += batch {
+		for _, r := range FanOut(ctx, sources[start:min(start+batch, len(sources))], fetch) {
+			n := len(r.res.Files)
+			if total+n > limit {
+				e.full = true
+				if len(resolved) == 0 {
+					e.cut, e.of = limit, n
+					r.res.Files = r.res.Files[:limit]
+					resolved = append(resolved, r)
+				}
+				break walk
+			}
+			resolved = append(resolved, r)
+			total += n
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
 
 	// Folders are named after titles, and titles are not unique: a search
 	// on an album index turned up 356 albums under 345 titles, and each pair
@@ -90,15 +136,15 @@ func expandSources(ctx context.Context, registry *Registry, sources []string, op
 	for _, r := range resolved {
 		uses[strings.ToLower(sourceFolder(r.res.Title))]++
 	}
-	var files []File
 	for _, r := range resolved {
 		folder := sourceFolder(r.res.Title)
 		if uses[strings.ToLower(folder)] > 1 {
 			folder = strings.TrimSpace(folder + " [" + sourceTag(r.link) + "]")
 		}
-		files = append(files, sourceFiles(r.res, folder)...)
+		e.files = append(e.files, sourceFiles(r.res, folder)...)
 	}
-	return files
+	e.used = len(resolved)
+	return e
 }
 
 // sourceResult is one source resolved, kept whole until every source is in
@@ -164,26 +210,26 @@ func sourceFolder(title string) string {
 	}, strings.TrimSpace(title))
 }
 
-// partialTitle names the job, admitting anything the caps left out.
+// partialNote admits what the caps left out of an expansion, for the job's
+// Note.
 //
-// An extractor has no logger and a Result carries nothing but a title and its
-// files, so the title is the only place a partial answer can be declared — and
-// it is a good one, being what names the job in the UI and the folder on disk,
-// which is exactly where somebody comparing a page against what they got
-// will look. Silently returning the first thousand of three thousand files
-// would be indistinguishable from the page having a thousand. The noun is the
-// caller's because what was truncated is its own vocabulary: a thread has
-// links on it, a search has albums.
-func partialTitle(title, noun string, sources, found, files, resolved int) string {
+// Silently returning the first thousand of three thousand files would be
+// indistinguishable from the page having a thousand, so a capped job says
+// so where its name is read. It says nothing otherwise — a dead link or two
+// is a page's own business, not a cap's. found is how many sources the page
+// or search had; capped reports that the sources walked stopped short of
+// it. The noun is the caller's because what was truncated is its own
+// vocabulary: a thread has links on it, a search has albums.
+func partialNote(noun string, e expansion, found int, capped bool) string {
+	if !capped && !e.full {
+		return ""
+	}
 	var notes []string
-	if sources < found {
-		notes = append(notes, fmt.Sprintf("%d of %d %s", sources, found, noun))
+	if e.used < found {
+		notes = append(notes, fmt.Sprintf("%d of %d %s", e.used, found, noun))
 	}
-	if files < resolved {
-		notes = append(notes, fmt.Sprintf("%d of %d files", files, resolved))
+	if e.cut > 0 {
+		notes = append(notes, fmt.Sprintf("%d of %d files", e.cut, e.of))
 	}
-	if len(notes) == 0 {
-		return title
-	}
-	return title + " (" + strings.Join(notes, ", ") + ")"
+	return strings.Join(notes, ", ")
 }

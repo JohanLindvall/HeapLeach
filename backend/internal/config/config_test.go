@@ -54,13 +54,16 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_KVS_HOSTS", "one.example, two.example  three.example")
 	t.Setenv("HEAPLEACH_DEBUG", "1")
 	t.Setenv("HEAPLEACH_RESUME", "true")
+	t.Setenv("HEAPLEACH_MAX_SOURCES", "5000")
+	t.Setenv("HEAPLEACH_MAX_FILES", "400000")
 
 	cfg, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Addr != ":9999" || cfg.Concurrency != 7 || cfg.SpeedLimit != 1000000 ||
-		cfg.StallTimeout != 45*time.Second || !cfg.Debug || !cfg.ResumeRestored {
+		cfg.StallTimeout != 45*time.Second || !cfg.Debug || !cfg.ResumeRestored ||
+		cfg.MaxSources != 5000 || cfg.MaxFiles != 400000 {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	kvs := cfg.ExtraHostsFor(FamilyKVS)
@@ -387,6 +390,37 @@ func TestEmptyStateEnvironmentDisablesPersistence(t *testing.T) {
 		}
 		if cfg.StateFile != strings.TrimSpace(value) {
 			t.Errorf("STATE=%q became %q", value, cfg.StateFile)
+		}
+	}
+}
+
+// The listing caps default to the built-in ones, zero included, and refuse
+// a negative count: there is no "unlimited", only a larger number.
+func TestListingCapsDefaultAndRefuseNegatives(t *testing.T) {
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxSources != MaxExpandedSources || cfg.MaxFiles != MaxListingFiles {
+		t.Errorf("defaults = %d sources, %d files", cfg.MaxSources, cfg.MaxFiles)
+	}
+
+	c := *cfg
+	c.DownloadDir = t.TempDir()
+	c.MaxSources, c.MaxFiles = 0, 0
+	if err := c.Prepare(); err != nil {
+		t.Fatalf("zero caps: %v", err)
+	}
+	if c.MaxSources != MaxExpandedSources || c.MaxFiles != MaxListingFiles {
+		t.Errorf("zero became %d sources, %d files; want the defaults", c.MaxSources, c.MaxFiles)
+	}
+
+	for _, bad := range []struct{ sources, files int }{{-1, 10}, {10, -1}} {
+		c := *cfg
+		c.DownloadDir = t.TempDir()
+		c.MaxSources, c.MaxFiles = bad.sources, bad.files
+		if err := c.Prepare(); err == nil {
+			t.Errorf("%d sources, %d files was accepted", bad.sources, bad.files)
 		}
 	}
 }

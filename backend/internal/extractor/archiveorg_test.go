@@ -181,7 +181,7 @@ func archiveDocOf(t *testing.T, body string) *archiveDoc {
 // behavioural test here is really asserting about.
 func archiveResolve(t *testing.T, body, id string) *Result {
 	t.Helper()
-	res, err := archiveResult(archiveDocOf(t, body), id, "", nil)
+	res, err := archiveResult(archiveDocOf(t, body), id, "", nil, config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("archiveResult(%s): %v", id, err)
 	}
@@ -231,7 +231,7 @@ func TestArchivePaceIsAlwaysOneOfEverything(t *testing.T) {
 	}
 
 	// The selector path builds its file separately and has to agree.
-	res, err := archiveResult(archiveDocOf(t, archiveMoviesItem), "a-film", "A Film.ogv", nil)
+	res, err := archiveResult(archiveDocOf(t, archiveMoviesItem), "a-film", "A Film.ogv", nil, config.MaxListingFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestArchiveOriginalsOnlyDropsBookkeepingFiledAsOriginal(t *testing.T) {
 // like success: a collection identifier is a valid item, so without this
 // /details/<collection> resolves happily and downloads five logos.
 func TestArchiveRejectsACollection(t *testing.T) {
-	if _, err := archiveResult(archiveDocOf(t, archiveCollectionItem), "a-collection", "", nil); err == nil {
+	if _, err := archiveResult(archiveDocOf(t, archiveCollectionItem), "a-collection", "", nil, config.MaxListingFiles); err == nil {
 		t.Fatal("a collection resolved to its own landing-page artwork")
 	}
 
@@ -325,12 +325,12 @@ func TestArchiveRejectsACollection(t *testing.T) {
 	// allowed to carry one without the other.
 	byMediatype := `{"metadata": {"identifier": "c", "mediatype": "collection"},
 	                 "files": [{"name": "icon.gif", "source": "original", "format": "GIF", "size": "1"}]}`
-	if _, err := archiveResult(archiveDocOf(t, byMediatype), "c", "", nil); err == nil {
+	if _, err := archiveResult(archiveDocOf(t, byMediatype), "c", "", nil, config.MaxListingFiles); err == nil {
 		t.Error("mediatype alone did not identify a collection")
 	}
 	byFlag := `{"is_collection": true, "metadata": {"identifier": "c"},
 	            "files": [{"name": "icon.gif", "source": "original", "format": "GIF", "size": "1"}]}`
-	if _, err := archiveResult(archiveDocOf(t, byFlag), "c", "", nil); err == nil {
+	if _, err := archiveResult(archiveDocOf(t, byFlag), "c", "", nil, config.MaxListingFiles); err == nil {
 		t.Error("the top-level flag alone did not identify a collection")
 	}
 }
@@ -338,7 +338,7 @@ func TestArchiveRejectsACollection(t *testing.T) {
 // TestArchiveRejectsAnIdentifierThatDoesNotExist covers the fact that nothing
 // on this host 404s: an unknown identifier answers 200 with "{}".
 func TestArchiveRejectsAnIdentifierThatDoesNotExist(t *testing.T) {
-	_, err := archiveResult(archiveDocOf(t, `{}`), "not-an-item", "", nil)
+	_, err := archiveResult(archiveDocOf(t, `{}`), "not-an-item", "", nil, config.MaxListingFiles)
 	if err == nil {
 		t.Fatal("an empty document resolved to something")
 	}
@@ -352,7 +352,7 @@ func TestArchiveRejectsAnIdentifierThatDoesNotExist(t *testing.T) {
 // files, so it is otherwise indistinguishable.
 func TestArchiveRejectsADarkenedItem(t *testing.T) {
 	dark := `{"is_dark": true, "server": "a-node.example.test", "dir": "/24/items/a-dark-item"}`
-	_, err := archiveResult(archiveDocOf(t, dark), "a-dark-item", "", nil)
+	_, err := archiveResult(archiveDocOf(t, dark), "a-dark-item", "", nil, config.MaxListingFiles)
 	if err == nil || !strings.Contains(err.Error(), "darkened") {
 		t.Fatalf("err = %v, want a darkened item to say so", err)
 	}
@@ -362,7 +362,7 @@ func TestArchiveRejectsADarkenedItem(t *testing.T) {
 // lending item: the readable copies are flagged and would 401, and the copies
 // that are not flagged would transfer perfectly into something unopenable.
 func TestArchiveDropsRestrictedAndEncrypted(t *testing.T) {
-	_, err := archiveResult(archiveDocOf(t, archiveLendingItem), "a-loan", "", nil)
+	_, err := archiveResult(archiveDocOf(t, archiveLendingItem), "a-loan", "", nil, config.MaxListingFiles)
 	if err == nil {
 		t.Fatal("a lending item resolved to something, which can only be DRM or a 401")
 	}
@@ -373,7 +373,7 @@ func TestArchiveDropsRestrictedAndEncrypted(t *testing.T) {
 	// Naming the encrypted format explicitly must not get it either: it is
 	// not a rendition of anything, so the escape hatch does not reach it.
 	for _, format := range []string{"LCP Encrypted PDF", "ACS Encrypted EPUB", "Text PDF"} {
-		if _, err := archiveResult(archiveDocOf(t, archiveLendingItem), "a-loan", "", []string{format}); err == nil {
+		if _, err := archiveResult(archiveDocOf(t, archiveLendingItem), "a-loan", "", []string{format}, config.MaxListingFiles); err == nil {
 			t.Errorf("HEAPLEACH_ARCHIVE_FORMATS=%q yielded a file that cannot be downloaded or opened", format)
 		}
 	}
@@ -383,14 +383,14 @@ func TestArchiveDropsRestrictedAndEncrypted(t *testing.T) {
 // compiled-in policy has no rule for.
 func TestArchiveFormatsOverrideThePolicy(t *testing.T) {
 	doc := archiveDocOf(t, archiveMoviesItem)
-	res, err := archiveResult(doc, "a-film", "", []string{"ogg video", "  512Kb MPEG4  "})
+	res, err := archiveResult(doc, "a-film", "", []string{"ogg video", "  512Kb MPEG4  "}, config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("archiveResult: %v", err)
 	}
 	// Matched case-insensitively and with the spacing the environment gave.
 	archiveWantNames(t, res.Files, "A Film.ogv", "A Film_512kb.mp4")
 
-	if _, err := archiveResult(doc, "a-film", "", []string{"No Such Format"}); err == nil {
+	if _, err := archiveResult(doc, "a-film", "", []string{"No Such Format"}, config.MaxListingFiles); err == nil {
 		t.Error("a format nothing matched resolved to something")
 	}
 }
@@ -400,18 +400,18 @@ func TestArchiveFormatsOverrideThePolicy(t *testing.T) {
 // only place the wanted file is named.
 func TestArchiveSelectorTakesOneNamedFile(t *testing.T) {
 	// The policy is skipped: somebody who named the Ogg copy has chosen.
-	res, err := archiveResult(archiveDocOf(t, archiveMoviesItem), "a-film", "A Film.ogv", nil)
+	res, err := archiveResult(archiveDocOf(t, archiveMoviesItem), "a-film", "A Film.ogv", nil, config.MaxListingFiles)
 	if err != nil {
 		t.Fatalf("archiveResult: %v", err)
 	}
 	archiveWantNames(t, res.Files, "A Film.ogv")
 
-	if _, err := archiveResult(archiveDocOf(t, archiveMoviesItem), "a-film", "nope.mp4", nil); err == nil {
+	if _, err := archiveResult(archiveDocOf(t, archiveMoviesItem), "a-film", "nope.mp4", nil, config.MaxListingFiles); err == nil {
 		t.Error("a file the item does not hold resolved to something")
 	}
 
 	// A restricted file is refused now rather than after a 401.
-	_, err = archiveResult(archiveDocOf(t, archiveLendingItem), "a-loan", "a-loan.pdf", nil)
+	_, err = archiveResult(archiveDocOf(t, archiveLendingItem), "a-loan", "a-loan.pdf", nil, config.MaxListingFiles)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("err = %v, want the restriction explained before the transfer", err)
 	}
@@ -519,7 +519,7 @@ func TestArchiveCapsTheFileCount(t *testing.T) {
 			Size:   "4096",
 		})
 	}
-	res, err := archiveResult(doc, "a-big-item", "", nil)
+	res, err := archiveResult(doc, "a-big-item", "", nil, config.MaxListingFiles)
 	if err != nil {
 		t.Fatal(err)
 	}

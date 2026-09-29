@@ -72,7 +72,7 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 			"list the whole catalogue; paste a /?search=<query> URL", u.Redacted())
 	}
 
-	albums, found, err := b.walk(ctx, first, query)
+	albums, found, err := b.walk(ctx, first, query, opts.maxSources())
 	if err != nil {
 		return nil, err
 	}
@@ -80,19 +80,15 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 		return nil, fmt.Errorf("balbums: nothing matches %q", query)
 	}
 
-	files := expandSources(ctx, b.registry, albums, opts)
-	if len(files) == 0 {
+	e := expandSources(ctx, b.registry, albums, opts)
+	if len(e.files) == 0 {
 		return nil, fmt.Errorf("balbums: none of the %d albums matching %q could be resolved "+
 			"(they may all have been taken down)", len(albums), query)
 	}
-
-	resolved := len(files)
-	if len(files) > config.MaxListingFiles {
-		files = files[:config.MaxListingFiles]
-	}
 	return &Result{
-		Title: partialTitle(query, "albums", len(albums), found, len(files), resolved),
-		Files: files,
+		Title: query,
+		Note:  partialNote("albums", e, found, len(albums) < found),
+		Files: e.files,
 	}, nil
 }
 
@@ -103,7 +99,7 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 // afterwards, because a two-word search over six hundred thousand albums
 // states twenty thousand pages and walking them to throw all but five away
 // would be a lot of requests to reach the same answer.
-func (b *Balbums) walk(ctx context.Context, first *url.URL, query string) (albums []string, found int, err error) {
+func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit int) (albums []string, found int, err error) {
 	seen := make(map[string]bool)
 	total := 0
 
@@ -137,7 +133,7 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string) (album
 		if added == 0 {
 			break // a page with nothing new on it is the end of the results
 		}
-		if len(albums) >= maxExpandedSources {
+		if len(albums) >= limit {
 			// More than anybody meant by one search. What was left is
 			// declared in the job's title rather than passed over quietly,
 			// which needs the total the search stated.
@@ -145,7 +141,7 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string) (album
 			if total > 0 {
 				found = total * len(albums) / page
 			}
-			return albums[:maxExpandedSources], found, nil
+			return albums[:limit], found, nil
 		}
 		if total > 0 && page >= total {
 			break

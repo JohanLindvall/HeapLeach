@@ -99,7 +99,7 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 		}}, nil
 	})
 
-	result := &Result{Title: eromeProfileTitle(title, limited)}
+	result := &Result{Title: title, Note: eromeProfileNote(limited)}
 	folders := eromeFolders(resolved)
 	for i, album := range resolved {
 		for _, file := range album.files {
@@ -163,20 +163,19 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string,
 	return albums, title, limited, nil
 }
 
-// eromeProfileTitle names the job, admitting a listing the host cut short.
+// eromeProfileNote admits a listing the host cut short, for the job's
+// Note.
 //
-// An extractor has no logger, and a Result carries nothing but a title and
-// its files, so the title is the only place a partial answer can be
-// declared — and it is a good one, being what names the job in the UI and
-// the folder on disk, which is exactly where somebody comparing the two
-// against the profile will look. Handing back the first two pages of a
-// profile without a word would be indistinguishable from that profile
-// having two pages.
-func eromeProfileTitle(title string, limited bool) string {
+// Handing back the first two pages of a profile without a word would be
+// indistinguishable from that profile having two pages. It is a note rather
+// than part of the title because the title names the folder: a partial run
+// filed under "(partial — rate limited)" and the complete run after it
+// under the plain name was every file downloaded twice.
+func eromeProfileNote(limited bool) string {
 	if !limited {
-		return title
+		return ""
 	}
-	return title + " (partial — rate limited)"
+	return "partial — rate limited"
 }
 
 // eromeAlbum is one of a profile's albums, once its page has been read.

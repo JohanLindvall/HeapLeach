@@ -253,18 +253,20 @@ func TestEpornerDeclaredCount(t *testing.T) {
 	}
 }
 
-func TestEpornerProfileTitle(t *testing.T) {
-	if got, want := epornerProfileTitle("Someone", "uploaded-videos", 5, 5), "Someone (uploaded videos)"; got != want {
-		t.Errorf("complete = %q, want %q", got, want)
+func TestEpornerProfileTitleAndNote(t *testing.T) {
+	if got, want := epornerProfileTitle("Someone", "uploaded-videos"), "Someone (uploaded videos)"; got != want {
+		t.Errorf("title = %q, want %q", got, want)
 	}
-	if got, want := epornerProfileTitle("Someone", "uploaded-videos", 3, 5),
-		"Someone (uploaded videos) (partial — 3 of 5)"; got != want {
+	if got := epornerProfileNote(5, 5); got != "" {
+		t.Errorf("complete walk noted %q", got)
+	}
+	if got, want := epornerProfileNote(3, 5), "partial — 3 of 5"; got != want {
 		t.Errorf("short = %q, want %q", got, want)
 	}
 	// With no declared total there is nothing to compare against, so the
 	// job must not be accused of being short.
-	if got, want := epornerProfileTitle("Someone", "videos", 3, 0), "Someone (videos)"; got != want {
-		t.Errorf("no declared total = %q, want %q", got, want)
+	if got := epornerProfileNote(3, 0); got != "" {
+		t.Errorf("no declared total noted %q", got)
 	}
 }
 
@@ -440,7 +442,12 @@ func TestEpornerProfileSaysWhenItCameBackShort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if want := "Someone (uploaded videos) (partial — 4 of 9)"; res.Title != want {
+	// The shortfall is the job's note, and the title — which names the
+	// folder — stays the profile's, so a later complete run files alongside.
+	if want := "Someone (uploaded videos) (partial — 4 of 9)"; res.Label() != want {
+		t.Errorf("label = %q, want %q", res.Label(), want)
+	}
+	if want := "Someone (uploaded videos)"; res.Title != want {
 		t.Errorf("title = %q, want %q", res.Title, want)
 	}
 }

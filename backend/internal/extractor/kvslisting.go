@@ -57,6 +57,16 @@ type kvsListing struct {
 	// first is the first page's document when the caller has already
 	// fetched it, so that it is not fetched twice.
 	first string
+	// limit is the listing cap in force; zero means the default.
+	limit int
+}
+
+// fileCap is how many videos the walk may collect.
+func (l kvsListing) fileCap() int {
+	if l.limit > 0 {
+		return l.limit
+	}
+	return config.MaxListingFiles
 }
 
 // kvsShowingTotal reads the "Showing 49 - 64 of 64 videos" line, which is how
@@ -154,7 +164,8 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, la
 		if total > 0 && len(pages) >= total {
 			break
 		}
-		if len(pages) >= config.MaxListingFiles {
+		if len(pages) >= l.fileCap() {
+			pages = pages[:l.fileCap()]
 			break
 		}
 		// The listing says where the next page is, and on the last one says

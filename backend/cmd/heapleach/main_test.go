@@ -120,7 +120,7 @@ func TestSizeFlagsTakeUnits(t *testing.T) {
 	if _, err := loadConfig([]string{"-h"}, &help); err == nil {
 		t.Fatal("-h should exit")
 	}
-	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE", "HEAPLEACH_RESUME", "-resume"} {
+	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE", "HEAPLEACH_RESUME", "-resume", "HEAPLEACH_MAX_FILES", "-max-files", "-max-sources"} {
 		if !strings.Contains(help.String(), want) {
 			t.Errorf("help does not mention %q", want)
 		}

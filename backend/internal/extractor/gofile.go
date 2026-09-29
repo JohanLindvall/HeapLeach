@@ -125,17 +125,17 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 	}
 
 	res := &Result{Title: root.Name}
-	if err := g.collect(ctx, root, token, opts.Password, "", 0, res); err != nil {
+	if err := g.collect(ctx, root, token, opts.Password, "", 0, opts.maxFiles(), res); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
 // collect appends c's files to res, recursing into subfolders.
-func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password, dir string, depth int, res *Result) error {
+func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password, dir string, depth, limit int, res *Result) error {
 	// The shared listing ceiling, for a share that is really somebody's whole
 	// drive: past it the queue has stopped being something anyone meant.
-	if len(res.Files) >= config.MaxListingFiles {
+	if len(res.Files) >= limit {
 		return nil
 	}
 	if c.Type == "file" {
@@ -172,7 +172,7 @@ func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password,
 	for _, child := range c.orderedChildren() {
 		switch child.Type {
 		case "file":
-			if err := g.collect(ctx, child, token, password, dir, depth+1, res); err != nil {
+			if err := g.collect(ctx, child, token, password, dir, depth+1, limit, res); err != nil {
 				return err
 			}
 		case "folder":
@@ -182,7 +182,7 @@ func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password,
 				continue
 			}
 			next := path.Join(dir, util.FirstNonEmpty(child.Name, child.ID))
-			if err := g.collect(ctx, sub, token, password, next, depth+1, res); err != nil {
+			if err := g.collect(ctx, sub, token, password, next, depth+1, limit, res); err != nil {
 				return err
 			}
 		}

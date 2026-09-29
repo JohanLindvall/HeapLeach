@@ -85,6 +85,15 @@ type Config struct {
 	ResumeRestored bool
 	// Version is the build's version, for the health endpoint to report.
 	Version string
+	// MaxSources and MaxFiles bound what one submitted URL may expand to:
+	// how many of a page's links are followed (an index search's albums, a
+	// thread's links) and how many files a job may hold. The defaults are
+	// MaxExpandedSources and MaxListingFiles; these are for somebody who
+	// really did mean the whole index. There is no "unlimited" — name a
+	// number, since every file of a job is also a row in the UI and a line
+	// in the saved queue. Zero means the default.
+	MaxSources int
+	MaxFiles   int
 	// ExitWhenIdle ends the process once there is nothing left to download
 	// and no browser is watching. Set only for a bare invocation, which is
 	// a desktop session rather than a service: see applyBareDefaults.
@@ -121,6 +130,8 @@ func FromEnv() (*Config, error) {
 		StallTimeout:   StallTimeout,
 		Timeout:        DefaultTimeout,
 		MinFreeDisk:    DefaultMinFreeDisk,
+		MaxSources:     MaxExpandedSources,
+		MaxFiles:       MaxListingFiles,
 	}
 
 	// An explicitly empty state path disables persistence; env's usual
@@ -137,6 +148,12 @@ func FromEnv() (*Config, error) {
 		return nil, err
 	}
 	if c.Streams, err = envInt("STREAMS", c.Streams); err != nil {
+		return nil, err
+	}
+	if c.MaxSources, err = envInt("MAX_SOURCES", c.MaxSources); err != nil {
+		return nil, err
+	}
+	if c.MaxFiles, err = envInt("MAX_FILES", c.MaxFiles); err != nil {
 		return nil, err
 	}
 	if c.SlowSpeed, err = envSize("SLOW_SPEED", c.SlowSpeed); err != nil {
@@ -327,6 +344,20 @@ func (c *Config) Prepare() error {
 	}
 	if c.MinFreeDisk < 0 {
 		return fmt.Errorf("min-free cannot be negative, got %d", c.MinFreeDisk)
+	}
+	// Zero is the default rather than nothing at all, as it is wherever the
+	// caps are read; a config written as a literal leaves them unset.
+	if c.MaxSources < 0 {
+		return fmt.Errorf("max-sources cannot be negative, got %d", c.MaxSources)
+	}
+	if c.MaxSources == 0 {
+		c.MaxSources = MaxExpandedSources
+	}
+	if c.MaxFiles < 0 {
+		return fmt.Errorf("max-files cannot be negative, got %d", c.MaxFiles)
+	}
+	if c.MaxFiles == 0 {
+		c.MaxFiles = MaxListingFiles
 	}
 	dir, err := PrepareDir(c.DownloadDir)
 	if err != nil {

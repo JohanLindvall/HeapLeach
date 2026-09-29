@@ -273,27 +273,39 @@ func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 		job.Err = err.Error()
 		m.log.Warn("resolve failed", "job", job.ID, "url", job.Source, "err", err)
 	default:
-		job.Host = ex.Name()
-		if res.Title != "" {
-			job.Title = res.Title
-		}
-		// Only fan a job out into its own folder when it holds more than
-		// one file; a lone file would otherwise get a pointless directory.
-		folder := ""
-		if len(res.Files) > 1 {
-			folder = SafeName(job.Title)
-		}
-		for i, f := range res.Files {
-			it := m.newItem(job, f, folder, i)
-			job.Items = append(job.Items, it)
-			m.queue = append(m.queue, it)
-		}
-		m.log.Info("resolved", "job", job.ID, "host", ex.Name(), "title", job.Title, "files", len(res.Files))
+		m.applyResultLocked(job, ex.Name(), res)
 	}
 	m.mu.Unlock()
 
 	m.markDirty()
 	m.signal()
+}
+
+// applyResultLocked turns a resolved source into the job's items. Caller
+// holds mu.
+func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result) {
+	job.Host = host
+	if res.Title != "" {
+		// What the job is shown as carries the extractor's note — a listing
+		// cut short, and how far — beside its name.
+		job.Title = res.Label()
+	}
+	// Only fan a job out into its own folder when it holds more than one
+	// file; a lone file would otherwise get a pointless directory.
+	//
+	// Named after the title alone, never the note: a note changes when a cap
+	// is raised or a rate limit lifts, and a folder that changed with it
+	// filed the next run somewhere new and downloaded every file again.
+	folder := ""
+	if len(res.Files) > 1 {
+		folder = SafeName(util.FirstNonEmpty(res.Title, job.Title))
+	}
+	for i, f := range res.Files {
+		it := m.newItem(job, f, folder, i)
+		job.Items = append(job.Items, it)
+		m.queue = append(m.queue, it)
+	}
+	m.log.Info("resolved", "job", job.ID, "host", host, "title", job.Title, "files", len(res.Files))
 }
 
 // newItem converts an extractor result into a queued item.

@@ -81,8 +81,8 @@ func (a *Autoindex) Name() string { return "autoindex" }
 func (a *Autoindex) Match(u *url.URL) bool { return autoindexArchiveOrg(u) }
 
 // Extract crawls the directory the URL names.
-func (a *Autoindex) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	return a.crawl(ctx, u)
+func (a *Autoindex) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	return a.crawl(ctx, u, opts.maxFiles())
 }
 
 // autoindexArchiveOrg reports whether a URL is an archive.org item listing.
@@ -117,11 +117,11 @@ func autoindexArchiveOrg(u *url.URL) bool {
 // without one may well be a signed link that is only good once — spending a
 // speculative GET on it to ask a question the URL already answered would be a
 // poor trade.
-func autoindexSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, bool) {
+func autoindexSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, bool) {
 	if !strings.HasSuffix(u.Path, "/") && u.Path != "" {
 		return nil, false
 	}
-	res, err := (&Autoindex{client: client}).crawl(ctx, u)
+	res, err := (&Autoindex{client: client}).crawl(ctx, u, opts.maxFiles())
 	if err != nil || res == nil || len(res.Files) == 0 {
 		return nil, false
 	}
@@ -162,7 +162,7 @@ type autoindexEntry struct {
 // several at a time; and the budget is then applied between levels, where
 // the counts are settled, so which files a truncated crawl returns does not
 // depend on how the requests happened to interleave.
-func (a *Autoindex) crawl(ctx context.Context, u *url.URL) (*Result, error) {
+func (a *Autoindex) crawl(ctx context.Context, u *url.URL, maxFiles int) (*Result, error) {
 	root := &autoindexNode{base: autoindexBase(u)}
 	if err := a.read(ctx, root); err != nil {
 		return nil, err
@@ -173,7 +173,7 @@ func (a *Autoindex) crawl(ctx context.Context, u *url.URL) (*Result, error) {
 	// see is a symlinked loop, whose every traversal has a longer URL than
 	// the last; the depth cap is what ends that one.
 	visited := map[string]bool{root.base.String(): true}
-	budget := autoindexBudget{dirs: 1, files: len(root.files)}
+	budget := autoindexBudget{dirs: 1, files: len(root.files), maxFiles: maxFiles}
 
 	level := []*autoindexNode{root}
 	for depth := 1; depth <= config.MaxAutoindexDepth; depth++ {
@@ -189,8 +189,8 @@ func (a *Autoindex) crawl(ctx context.Context, u *url.URL) (*Result, error) {
 	}
 
 	files := autoindexFlatten(root, nil)
-	if len(files) > config.MaxAutoindexFiles {
-		files = files[:config.MaxAutoindexFiles]
+	if limit := budget.fileCap(); len(files) > limit {
+		files = files[:limit]
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("autoindex: %s lists no files", root.base.Redacted())
@@ -202,11 +202,21 @@ func (a *Autoindex) crawl(ctx context.Context, u *url.URL) (*Result, error) {
 type autoindexBudget struct {
 	dirs  int
 	files int
+	// maxFiles is the listing cap in force; zero means the default.
+	maxFiles int
+}
+
+// fileCap is how many files the crawl may return.
+func (b *autoindexBudget) fileCap() int {
+	if b.maxFiles > 0 {
+		return b.maxFiles
+	}
+	return config.MaxListingFiles
 }
 
 // spent reports whether the crawl has read as much as it is allowed to.
 func (b *autoindexBudget) spent() bool {
-	return b.dirs >= config.MaxAutoindexDirs || b.files >= config.MaxAutoindexFiles
+	return b.dirs >= config.MaxAutoindexDirs || b.files >= b.fileCap()
 }
 
 // autoindexDescend turns the subdirectories a level named into the next

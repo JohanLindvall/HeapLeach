@@ -112,11 +112,11 @@ func (p *PornPics) Match(u *url.URL) bool {
 }
 
 // Extract resolves one gallery, or a listing of them.
-func (p *PornPics) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (p *PornPics) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	if pornpicsIsGallery(u) {
 		return p.gallery(ctx, u)
 	}
-	return p.listing(ctx, u)
+	return p.listing(ctx, u, opts.maxFiles())
 }
 
 // ---------------------------------------------------------------- gallery
@@ -173,7 +173,7 @@ func pornpicsGallery(doc string, u *url.URL) (*Result, error) {
 
 // listing expands a category, tag, pornstar or channel page into every
 // gallery it lists, and every gallery into its images.
-func (p *PornPics) listing(ctx context.Context, u *url.URL) (*Result, error) {
+func (p *PornPics) listing(ctx context.Context, u *url.URL, limit int) (*Result, error) {
 	doc, err := p.client.GetString(ctx, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: fetch %s: %w", u.Redacted(), err)
@@ -215,8 +215,8 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL) (*Result, error) {
 		// Checked before asking for the next block rather than after: a block
 		// is five hundred galleries, and there is no sense in opening them to
 		// throw the files away.
-		if len(files) >= config.MaxListingFiles {
-			files = pornpicsTrim(files, config.MaxListingFiles)
+		if len(files) >= limit {
+			files = pornpicsTrim(files, limit)
 			break
 		}
 		next, blockErr := p.block(ctx, pager(pornpicsFirstOffset+page*pornpicsPageSize), u)

@@ -222,7 +222,7 @@ func (m *MediaWiki) knownHost(host string) bool {
 }
 
 // Extract resolves a category, an article, a file page or a wiki's uploads.
-func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	title, _ := mediaWikiTitle(u)
 	if title == "" {
 		return nil, fmt.Errorf("mediawiki: %s does not name a wiki page — "+
@@ -246,13 +246,13 @@ func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 
 	switch kind {
 	case mediaWikiCategory:
-		return m.category(ctx, site, u, title)
+		return m.category(ctx, site, u, title, opts.maxFiles())
 	case mediaWikiFilePage:
 		return m.filePage(ctx, site, title)
 	case mediaWikiSpecial:
-		return m.uploads(ctx, site, u, title)
+		return m.uploads(ctx, site, u, title, opts.maxFiles())
 	default:
-		return m.article(ctx, site, title)
+		return m.article(ctx, site, title, opts.maxFiles())
 	}
 }
 
@@ -266,7 +266,7 @@ func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 // and the edges loop back — so descending by accident turns a category of
 // forty pictures into a job of forty thousand. Adding ?depth=<n> to the URL
 // is how that is asked for, which the wiki itself ignores and this reads.
-func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL, title string) (*Result, error) {
+func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL, title string, limit int) (*Result, error) {
 	var (
 		depth   = mediaWikiDepth(u)
 		files   []File
@@ -278,13 +278,13 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 		listed = make(map[string]bool)
 	)
 
-	for level := 0; level <= depth && len(queue) > 0 && len(files) < config.MaxListingFiles; level++ {
+	for level := 0; level <= depth && len(queue) > 0 && len(files) < limit; level++ {
 		var next []string
 		for _, category := range queue {
 			if visited++; visited > mediaWikiMaxCategories {
 				break
 			}
-			batch, err := m.list(ctx, site, mediaWikiCategoryQuery(category), config.MaxListingFiles-len(files), listed)
+			batch, err := m.list(ctx, site, mediaWikiCategoryQuery(category), limit-len(files), listed)
 			if err != nil {
 				// The category the user named is the job; a subcategory
 				// that will not answer is one branch of many.
@@ -294,7 +294,7 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 				continue
 			}
 			files = append(files, batch...)
-			if len(files) >= config.MaxListingFiles {
+			if len(files) >= limit {
 				break
 			}
 			if level < depth {
@@ -353,13 +353,13 @@ func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title
 // That includes the logos and icons its templates draw, because the API
 // reports what the page embeds and cannot tell decoration from content. It
 // is what was asked for rather than a guess about which pictures were meant.
-func (m *MediaWiki) article(ctx context.Context, site mediaWikiSite, title string) (*Result, error) {
+func (m *MediaWiki) article(ctx context.Context, site mediaWikiSite, title string, limit int) (*Result, error) {
 	query := mediaWikiFileQuery()
 	query.Set("generator", "images")
 	query.Set("titles", title)
 	query.Set("gimlimit", strconv.Itoa(mediaWikiPageSize))
 
-	files, err := m.list(ctx, site, query, config.MaxListingFiles, nil)
+	files, err := m.list(ctx, site, query, limit, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +392,7 @@ func (m *MediaWiki) filePage(ctx context.Context, site mediaWikiSite, title stri
 // of a download. The newest uploads are a bounded thing to ask for, so
 // Special:NewFiles is answered on any wiki while Special:ListFiles is
 // refused on the ones known to be too large for it to mean anything.
-func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL, title string) (*Result, error) {
+func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL, title string, limit int) (*Result, error) {
 	page := mediaWikiSpecialPage(title)
 	if !mediaWikiUploadPages[page] {
 		return nil, fmt.Errorf("mediawiki: %s is not a page that lists files — "+
@@ -412,7 +412,7 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 		query.Set("gaidir", "older") // newest first
 	}
 
-	files, err := m.list(ctx, site, query, config.MaxListingFiles, nil)
+	files, err := m.list(ctx, site, query, limit, nil)
 	if err != nil {
 		return nil, err
 	}

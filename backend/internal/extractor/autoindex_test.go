@@ -417,7 +417,7 @@ func autoindexCrawl(t *testing.T, base string) (*Result, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return autoindexTestExtractor().crawl(context.Background(), u)
+	return autoindexTestExtractor().crawl(context.Background(), u, 0)
 }
 
 // TestAutoindexCrawlsSubdirectoriesInOrder pins both the recursion and the
@@ -507,8 +507,8 @@ func TestAutoindexStopsAtTheDepthCap(t *testing.T) {
 // TestAutoindexStopsAtTheFileCap keeps one very large directory from
 // becoming a job nobody meant to queue.
 func TestAutoindexStopsAtTheFileCap(t *testing.T) {
-	rows := make([]string, 0, config.MaxAutoindexFiles+1)
-	for i := 0; i <= config.MaxAutoindexFiles; i++ {
+	rows := make([]string, 0, config.MaxListingFiles+1)
+	for i := 0; i <= config.MaxListingFiles; i++ {
 		rows = append(rows, autoindexEntryRow(fmt.Sprintf("file-%05d.bin", i), "1024"))
 	}
 	srv, _ := autoindexServer(t, map[string]string{"/pub/": autoindexListing("/pub/", rows...)})
@@ -517,13 +517,22 @@ func TestAutoindexStopsAtTheFileCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("crawl: %v", err)
 	}
-	if len(res.Files) != config.MaxAutoindexFiles {
-		t.Errorf("found %d files, want the cap of %d", len(res.Files), config.MaxAutoindexFiles)
+	if len(res.Files) != config.MaxListingFiles {
+		t.Errorf("found %d files, want the cap of %d", len(res.Files), config.MaxListingFiles)
 	}
 	// Truncation takes the tail, never the head: the listing's own order is
 	// what the user sees, so the first file must still be the first.
 	if res.Files[0].Name != "file-00000.bin" {
 		t.Errorf("first file = %q, want the listing's first entry", res.Files[0].Name)
+	}
+	// And the cap is the one configured, not a constant: a lower one is
+	// what the crawl stops at.
+	res, err = autoindexTestExtractor().crawl(context.Background(), mustParse(t, srv.URL+"/pub/"), 50)
+	if err != nil {
+		t.Fatalf("crawl with a cap of 50: %v", err)
+	}
+	if len(res.Files) != 50 {
+		t.Errorf("found %d files under a cap of 50", len(res.Files))
 	}
 }
 
@@ -591,7 +600,7 @@ func TestAutoindexRefusesAPageThatIsNotAListing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u); ok {
+	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{}); ok {
 		t.Error("the sniff claimed a page that is not a listing")
 	}
 }
@@ -606,7 +615,7 @@ func TestAutoindexSniffLeavesFileURLsAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u); ok {
+	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{}); ok {
 		t.Error("the sniff claimed a URL that is not a directory")
 	}
 	if n := hits.Load(); n != 0 {
@@ -625,7 +634,7 @@ func TestAutoindexSniffResolvesAnOpenDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u)
+	res, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{})
 	if !ok {
 		t.Fatal("an open directory was not recognised")
 	}
