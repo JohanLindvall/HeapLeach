@@ -557,6 +557,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_DEBUG` | unset | Debug logging. Flag: `-debug`. |
 | `HEAPLEACH_MAX_SOURCES` | `500` | How many of a page's links are followed: the albums of an index search, the links of a harvested thread. Flag: `-max-sources`. |
 | `HEAPLEACH_MAX_FILES` | `20000` | How many files one submitted URL may resolve to. A listing past it stops at a whole album and says so beside the job's name — never in its folder, so raising the cap and adding the URL again files the rest beside what is already downloaded. Flag: `-max-files`. |
+| `HEAPLEACH_PPROF` | unset | Serve Go's runtime profiles at this address, on a listener of their own — `go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30` then shows where the CPU goes. Flag: `-pprof`. Off unless set. Name a loopback address: the profiles describe the process from the inside, and a non-loopback one is logged as a warning. In a container, the container's own 127.0.0.1 is reached with `docker exec`. |
 | `HEAPLEACH_RESUME` | unset | Resume the jobs a previous run left unfinished at startup, instead of holding them for Resume or a retry. Flag: `-resume`. For a service that is redeployed without anyone watching — held would mean stopped until noticed. |
 | `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. A bare run does this anyway, so this is mostly how to say **no**: `HEAPLEACH_OPEN=0` (also `false`, `no`, `off`) suppresses it, for a machine with no desktop or a session over SSH. |
 
@@ -769,9 +770,11 @@ way to check a release before tagging one.
 
 ## Notes
 
-- The queue is written to `HEAPLEACH_STATE` every few seconds, so a restart
-  finds its unfinished jobs held and re-reads them on retry; finished files
-  stay put. A `.part` file carries a `.part.state` sidecar recording
+- The queue is written to `HEAPLEACH_STATE` every ten minutes when it has
+  changed, and on every clean shutdown, so a restart finds its unfinished
+  jobs held and re-reads them on retry; finished files stay put. A crash
+  loses at most a job added in the last ten minutes: the part files, not
+  the queue file, are what resume a transfer. A `.part` file carries a `.part.state` sidecar recording
   per-connection progress, so an interrupted multi-connection transfer
   resumes rather than starting over. Both can be deleted safely.
 - These sites change their plumbing without warning. `make test-live` is the

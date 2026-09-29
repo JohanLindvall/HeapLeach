@@ -622,7 +622,10 @@ Three consequences worth keeping in mind:
   build `&Manager{}` by hand, and that has to keep working.
 
 **The queue outlives the process** (`persist.go`, `state.go`). Written every
-`config.StateSaveInterval`, atomically and 0600, and skipped entirely when
+`config.StateSaveInterval` (ten minutes — it carries a line per file, and at
+every ten seconds a queue of twenty thousand files rewrote five megabytes
+several times a minute) and on shutdown, atomically and 0600, and skipped
+entirely when
 nothing but byte counters has moved — the fingerprint covers all persisted
 fields, never progress, because the part file on disk is the authority on
 how far a transfer got.
@@ -1149,6 +1152,16 @@ bytes once the first one has gone out, and they go out at most once a second
 rather than two and a half times. 2.3 MB/s becomes a couple of kilobytes a second. The
 whole state is still sent once per connection, which is what a browser
 arriving has to be told.
+
+**Profiling is opt-in and never on the API's port** (`HEAPLEACH_PPROF`,
+`-pprof`, `cmd/heapleach/pprof.go`). The handlers get a mux and a listener
+of their own, started before anything else so a headless run can be
+profiled too; the API listens on every interface, and profiles describe the
+process from the inside. Importing `net/http/pprof` also registers on
+`http.DefaultServeMux`, which is harmless only because nothing serves it —
+keep it that way. The service under contdep sets it to the container's own
+`127.0.0.1:6060`, reached with `docker exec heapleach wget -qO-
+'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'`.
 
 **Shutdown ordering matters.** `http.Server.Shutdown` waits for in-flight
 requests and does *not* cancel their contexts, so an open SSE stream holds it

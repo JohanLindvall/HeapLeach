@@ -65,14 +65,21 @@ const (
 	// frozen number.
 	IdleFrameInterval = 2 * time.Second
 
-	// StateSaveInterval is how often the queue is written out. Slow on
-	// purpose: the file records what each item is and how it ended, never
-	// how many bytes it has moved, so between one status change and the next
-	// there is nothing new to write. A crash loses at most the statuses that
-	// changed inside one interval, and the part files on disk — which are
-	// what actually make a transfer resumable — are not written by this at
-	// all.
-	StateSaveInterval = 10 * time.Second
+	// StateSaveInterval is how often the queue is written out, and it is
+	// written on shutdown besides (Manager.Close). Slow on purpose, and
+	// slower than it once was: the file carries a line for every file of
+	// every job, so a queue of twenty thousand files was five megabytes
+	// rewritten every ten seconds whenever any one of them changed status —
+	// tens of gigabytes a day onto the disk for a record nobody reads until
+	// the next start.
+	//
+	// What a crash costs is bounded and small. The file records what each
+	// item is and how it ended, never how many bytes it has moved; the part
+	// files on disk are what make a transfer resumable, and they are not
+	// written by this at all. A job added and not yet saved is the one thing
+	// a crash can lose outright, and a clean stop — a deploy, a restart —
+	// saves on the way out.
+	StateSaveInterval = 10 * time.Minute
 
 	// DiskSampleInterval is how often the destination's free space is
 	// measured. Far slower than the progress tick on purpose: it is a
