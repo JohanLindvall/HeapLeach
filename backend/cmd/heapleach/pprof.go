@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
+	"runtime"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -35,6 +37,14 @@ func startProfiler(addr string, log *slog.Logger) (stop func(), err error) {
 			"addr", listener.Addr().String())
 	}
 
+	// The questions worth asking of a downloader are as often "what is it
+	// waiting on" as "what is it computing", and Go records neither lock
+	// contention nor blocking unless asked: without these the mutex and
+	// block profiles are served empty. Sampled, so the cost is small, and
+	// only while profiling is on.
+	runtime.SetMutexProfileFraction(profileMutexFraction)
+	runtime.SetBlockProfileRate(int(profileBlockRate))
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -53,6 +63,14 @@ func startProfiler(addr string, log *slog.Logger) (stop func(), err error) {
 	log.Info("profiling", "url", "http://"+listener.Addr().String()+"/debug/pprof/")
 	return func() { _ = srv.Close() }, nil
 }
+
+// One contention event in profileMutexFraction is recorded, and blocking is
+// sampled at one event per profileBlockRate spent blocked: enough to show
+// where a queue waits, at a cost that does not change what is measured.
+const (
+	profileMutexFraction = 5
+	profileBlockRate     = time.Millisecond
+)
 
 // loopback reports whether a listening address can only be reached from
 // this machine.

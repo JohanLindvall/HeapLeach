@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -330,6 +331,12 @@ func TestProfilerServesOnItsOwnListener(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "goroutine") {
 		t.Errorf("index = %d, want the list of profiles", resp.StatusCode)
+	}
+
+	// Lock contention and blocking are recorded while profiling is on, or
+	// the profiles that answer "what is it waiting on" come back empty.
+	if runtime.SetMutexProfileFraction(-1) == 0 {
+		t.Error("mutex profiling was left off")
 	}
 
 	// A second profiler on the same address is refused, not silently shared.
