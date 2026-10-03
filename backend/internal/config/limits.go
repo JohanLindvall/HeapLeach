@@ -24,6 +24,14 @@ const (
 	// DefaultConcurrency is the starting number of parallel transfers.
 	DefaultConcurrency = 4
 
+	// ResolveConcurrency bounds source listings across jobs. Per-listing
+	// fan-out alone would let a large paste launch thousands of requests.
+	ResolveConcurrency = 4
+
+	// MaxExtractionDepth bounds chains of index sites resolving through
+	// one another, including loops whose URLs change on every hop.
+	MaxExtractionDepth = 16
+
 	// DefaultMaxRetries is how many times a failed request or transfer is
 	// repeated before it is reported as failed.
 	DefaultMaxRetries = 3
@@ -310,6 +318,10 @@ const (
 	// Copying streams is fast even for a long programme, so a stuck ffmpeg
 	// should not hold a worker indefinitely.
 	RemuxTimeout = 30 * time.Minute
+
+	// Metadata probes must finish even if a helper stops responding.
+	ProbeTimeout    = 2 * time.Minute
+	HelperWaitDelay = 5 * time.Second
 )
 
 // Server tuning.
@@ -326,6 +338,10 @@ const (
 
 	// ReadHeaderTimeout bounds how long a client may take to send headers.
 	ReadHeaderTimeout = 10 * time.Second
+
+	// RequestTimeout bounds API request bodies and ordinary replies. The
+	// event stream replaces the write deadline with a per-frame deadline.
+	RequestTimeout = 30 * time.Second
 
 	// IdleTimeout bounds a kept-alive connection between requests.
 	IdleTimeout = 120 * time.Second

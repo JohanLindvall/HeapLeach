@@ -430,6 +430,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	rel := it.Dir
 	headers := maps.Clone(it.Headers)
 	payload := it.cipher
+	fixedName := it.fixedName
 	maxStreams := m.streams
 	// A host that asks to be approached gently only ever lowers the
 	// ceiling; it can never raise it above what the user configured.
@@ -528,9 +529,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 		}
 		return "", statusError(req.URL, resp)
 	default:
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return "", statusError(req.URL, resp)
-		}
+		return "", statusError(req.URL, resp)
 	}
 
 	if err := rejectWebPage(resp, name); err != nil {
@@ -554,7 +553,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	if state != nil && total <= 0 {
 		total = state.Size
 	}
-	if disp := resp.Header.Get(httpx.HeaderContentDisposition); disp != "" {
+	if disp := resp.Header.Get(httpx.HeaderContentDisposition); disp != "" && !fixedName {
 		if fromServer := filenameFromDisposition(disp); fromServer != "" {
 			name = chooseName(name, SafeName(fromServer))
 		}
@@ -867,7 +866,7 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	if len(target.Headers) > 0 {
 		it.Headers = target.Headers
 	}
-	if target.Name != "" {
+	if target.Name != "" && !it.fixedName {
 		it.Name = target.Name
 	}
 	if target.Size > 0 {

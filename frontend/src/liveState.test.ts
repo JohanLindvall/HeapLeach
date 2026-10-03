@@ -51,7 +51,7 @@ describe('live state', () => {
     const signal = vi.mocked(fetchState).mock.calls[0]![0]!;
     await vi.advanceTimersByTimeAsync(500);
     const stream = Stream.instances[1]!;
-    stream.onopen!();
+    stream.onopen?.();
     stream.onmessage!({ data: JSON.stringify(snapshot) });
     expect(signal.aborted).toBe(true);
     pending.resolve({ ...snapshot, speed: 0 });
@@ -119,11 +119,42 @@ it('reconnects for a complete base after a malformed frame', async () => {
   const onSnapshot = vi.fn();
   cleanup = subscribeLiveState(onSnapshot, vi.fn());
   const stream = Stream.instances[0]!;
-  stream.onopen!();
+  stream.onopen?.();
   stream.onmessage!({ data: '{broken' });
   expect(stream.close).toHaveBeenCalledOnce();
   stream.onmessage!({ data: JSON.stringify({ ...snapshot, speed: 999 }) });
   await vi.advanceTimersByTimeAsync(500);
   expect(Stream.instances).toHaveLength(2);
   expect(onSnapshot.mock.calls).toEqual([[snapshot]]);
+});
+
+it('falls back when a stream opens but never sends its first frame', async () => {
+  vi.mocked(fetchState).mockResolvedValue(snapshot);
+  const onSnapshot = vi.fn();
+  const onConnection = vi.fn();
+  cleanup = subscribeLiveState(onSnapshot, onConnection);
+  const stream = Stream.instances[0]!;
+  stream.onopen?.();
+  expect(onConnection).not.toHaveBeenCalledWith('live');
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(stream.close).toHaveBeenCalledOnce();
+  expect(onSnapshot).toHaveBeenCalledWith(snapshot);
+  expect(onConnection).toHaveBeenCalledWith('offline');
+});
+
+it('keeps polling until a reconnect delivers a snapshot', async () => {
+  vi.mocked(fetchState).mockResolvedValue(snapshot);
+  const onConnection = vi.fn();
+  cleanup = subscribeLiveState(vi.fn(), onConnection);
+  Stream.instances[0]!.onerror!();
+  await vi.advanceTimersByTimeAsync(500);
+  const stream = Stream.instances[1]!;
+  stream.onopen?.();
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(fetchState).toHaveBeenCalledTimes(2);
+  expect(onConnection).not.toHaveBeenCalledWith('live');
+  stream.onmessage!({ data: JSON.stringify(snapshot) });
+  expect(onConnection).toHaveBeenLastCalledWith('live');
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(fetchState).toHaveBeenCalledTimes(2);
 });

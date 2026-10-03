@@ -383,7 +383,7 @@ func TestMinFreeDiskFromEnv(t *testing.T) {
 }
 
 func TestEmptyStateEnvironmentDisablesPersistence(t *testing.T) {
-	for _, value := range []string{"", "  ", filepath.Join(t.TempDir(), "queue.json")} {
+	for _, value := range []string{"", "  ", filepath.Join(t.TempDir(), "queue.json.zst")} {
 		t.Setenv(envPrefix+"STATE", value)
 		cfg, err := FromEnv()
 		if err != nil {
@@ -392,6 +392,23 @@ func TestEmptyStateEnvironmentDisablesPersistence(t *testing.T) {
 		if cfg.StateFile != strings.TrimSpace(value) {
 			t.Errorf("STATE=%q became %q", value, cfg.StateFile)
 		}
+		if cfg.LegacyStateFile != "" {
+			t.Errorf("explicit STATE enabled migration from %q", cfg.LegacyStateFile)
+		}
+	}
+}
+
+func TestDefaultStatePathEnablesLegacyMigration(t *testing.T) {
+	t.Setenv(envPrefix+"STATE", "")
+	if err := os.Unsetenv(envPrefix + "STATE"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LegacyStateFile == "" || cfg.StateFile != cfg.LegacyStateFile+".zst" {
+		t.Fatalf("default paths = %q, %q", cfg.StateFile, cfg.LegacyStateFile)
 	}
 }
 

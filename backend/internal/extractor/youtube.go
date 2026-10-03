@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os/exec"
+	"strconv"
 
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -25,9 +27,6 @@ type YouTube struct{ hostSet }
 // package that locates it.
 const ytdlpBinary = tools.YtDlp
 
-// ytdlpMaxEntries bounds how many videos one playlist expands to.
-const ytdlpMaxEntries = 500
-
 // NewYouTube builds the YouTube extractor.
 func NewYouTube() *YouTube {
 	return &YouTube{hostSet: hostSet{"youtube.com", "youtu.be", "youtube-nocookie.com"}}
@@ -37,43 +36,30 @@ func (y *YouTube) Name() string { return "youtube" }
 
 // Extract names the video, or every video of a playlist, leaving the actual
 // download to the helper script.
-func (y *YouTube) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (y *YouTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
 		return nil, fmt.Errorf("youtube: %s (%s)", tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 
-	entries, title, err := y.probe(ctx, ytdlp, u.String())
-	if err != nil {
-		return nil, err
-	}
-
-	files := make([]File, 0, len(entries))
-	for _, entry := range entries {
-		files = append(files, File{
-			Name:     entry.name,
-			Size:     -1,
-			External: entry.url,
-		})
-	}
-	return &Result{Title: title, Files: files}, nil
-}
-
-// ytEntry is one video to download.
-type ytEntry struct {
-	url  string
-	name string
+	return y.probe(ctx, ytdlp, u.String(), opts.maxFiles())
 }
 
 // probe asks yt-dlp what the URL contains, without downloading anything.
-func (y *YouTube) probe(ctx context.Context, ytdlp, target string) ([]ytEntry, string, error) {
+func (y *YouTube) probe(ctx context.Context, ytdlp, target string, limit int) (*Result, error) {
 	// --flat-playlist keeps a playlist probe to one request per page rather
-	// than resolving every video up front.
-	cmd := exec.CommandContext(ctx, ytdlp,
-		"-J", "--no-warnings", "--flat-playlist", "--ignore-no-formats-error", target)
-	output, err := cmd.Output()
+	// than resolving every video up front. Ask for one extra entry to detect
+	// truncation, and bound the listing at its source instead of reading an
+	// entire channel only to discard everything past the cap.
+	end := limit
+	if end < math.MaxInt {
+		end++
+	}
+	output, err := tools.Probe(ctx, ytdlp,
+		"-J", "--no-warnings", "--flat-playlist", "--ignore-no-formats-error",
+		"--playlist-end", strconv.Itoa(end), "--", target)
 	if err != nil {
-		return nil, "", fmt.Errorf("youtube: yt-dlp could not read %s: %w", target, ytdlpError(err))
+		return nil, fmt.Errorf("youtube: yt-dlp could not read %s: %w", target, err)
 	}
 
 	var probe struct {
@@ -90,16 +76,16 @@ func (y *YouTube) probe(ctx context.Context, ytdlp, target string) ([]ytEntry, s
 		} `json:"entries"`
 	}
 	if err := json.Unmarshal(output, &probe); err != nil {
-		return nil, "", fmt.Errorf("youtube: could not read yt-dlp output: %w", err)
+		return nil, fmt.Errorf("youtube: could not read yt-dlp output: %w", err)
 	}
 
 	if probe.Type != "playlist" {
 		name := util.FirstNonEmpty(probe.Title, probe.ID, "video")
 		link := util.FirstNonEmpty(probe.WebURL, target)
-		return []ytEntry{{url: link, name: name}}, name, nil
+		return &Result{Title: name, Files: []File{{External: link, Name: name, Size: -1}}}, nil
 	}
 
-	entries := make([]ytEntry, 0, len(probe.Entries))
+	res := &Result{Title: util.FirstNonEmpty(probe.Title, probe.ID, "playlist")}
 	for _, entry := range probe.Entries {
 		link := util.FirstNonEmpty(entry.WebURL, entry.URL)
 		if link == "" && entry.ID != "" {
@@ -108,28 +94,32 @@ func (y *YouTube) probe(ctx context.Context, ytdlp, target string) ([]ytEntry, s
 		if link == "" {
 			continue
 		}
-		entries = append(entries, ytEntry{
-			url:  link,
-			name: util.FirstNonEmpty(entry.Title, entry.ID),
+		res.Files = append(res.Files, File{
+			External: link,
+			Name:     util.FirstNonEmpty(entry.Title, entry.ID, "video"),
+			Size:     -1,
 		})
-		if len(entries) >= ytdlpMaxEntries {
+		if len(res.Files) >= limit {
 			break
 		}
 	}
-	if len(entries) == 0 {
-		return nil, "", fmt.Errorf("youtube: %s lists no videos", target)
+	if len(res.Files) == 0 {
+		return nil, fmt.Errorf("youtube: %s lists no videos", target)
 	}
-	return entries, util.FirstNonEmpty(probe.Title, probe.ID, "playlist"), nil
+	if len(probe.Entries) > limit {
+		res.Note = "partial — playlist limit reached"
+	}
+	return res, nil
 }
 
 // ytdlpTitle asks yt-dlp what a single video is called, without downloading
 // anything. A host that leaves the transfer to yt-dlp still wants a name to
 // show while the item waits its turn in the queue.
 func ytdlpTitle(ctx context.Context, ytdlp, target string) (string, error) {
-	cmd := exec.CommandContext(ctx, ytdlp, "-J", "--no-warnings", "--ignore-no-formats-error", target)
-	output, err := cmd.Output()
+	output, err := tools.Probe(ctx, ytdlp,
+		"-J", "--no-warnings", "--no-playlist", "--ignore-no-formats-error", "--", target)
 	if err != nil {
-		return "", ytdlpError(err)
+		return "", err
 	}
 	var probe struct {
 		ID    string `json:"id"`

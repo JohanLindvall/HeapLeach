@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -190,6 +191,9 @@ type Options struct {
 	// a caller outside gets what the configuration says. Read through
 	// maxSources and maxFiles.
 	limits Limits
+	// ancestors is local to one expansion path, so independent sources can
+	// resolve concurrently without sharing a mutable visited set.
+	ancestors []string
 }
 
 // Limits bound what one submitted URL may expand to. Zero in either means
@@ -376,11 +380,21 @@ func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 
 // Extract parses rawURL and resolves it.
 func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*Result, Extractor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	u, err := ParseURL(rawURL)
 	if err != nil {
 		return nil, nil, err
 	}
 	ex := r.Find(u)
+	if slices.Contains(opts.ancestors, u.String()) {
+		return nil, ex, fmt.Errorf("%s: recursive source link", ex.Name())
+	}
+	if len(opts.ancestors) >= config.MaxExtractionDepth {
+		return nil, ex, fmt.Errorf("%s: source nesting exceeds %d levels", ex.Name(), config.MaxExtractionDepth)
+	}
+	opts.ancestors = append(slices.Clone(opts.ancestors), u.String())
 	if opts.limits == (Limits{}) {
 		opts.limits = r.limits
 	}

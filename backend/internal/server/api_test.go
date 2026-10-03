@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 )
@@ -279,6 +280,43 @@ func TestSPAFallsBackToIndex(t *testing.T) {
 	}
 	if got := deep.Header().Get("Cache-Control"); !strings.Contains(got, "no-cache") {
 		t.Errorf("the entry document must not be cached, got %q", got)
+	}
+}
+
+func TestAPIErrorsAndMissingAssetsDoNotServeTheSPA(t *testing.T) {
+	_, handler := newTestServer(t)
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{http.MethodGet, "/api/missing", http.StatusNotFound},
+		{http.MethodPost, "/api/state", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/api/downloads", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/assets/missing.js", http.StatusNotFound},
+		{http.MethodPost, "/some/client/route", http.StatusMethodNotAllowed},
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.status || strings.Contains(rec.Body.String(), "<html") {
+			t.Errorf("%s %s = %d %q", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	index := get(t, handler, "/")
+	if index.Header().Get("X-Frame-Options") != "DENY" || index.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatalf("UI security headers missing: %v", index.Header())
+	}
+}
+
+func TestOversizedBodiesReturn413WithoutChangingSettings(t *testing.T) {
+	m, handler := newTestServer(t)
+	for _, body := range []string{
+		`{"downloadDir":"` + strings.Repeat("a", config.MaxRequestBytes) + `"}`,
+		`{"paused":true}` + strings.Repeat(" ", config.MaxRequestBytes),
+	} {
+		rec := postJSON(t, handler, "/api/settings", body)
+		if rec.Code != http.StatusRequestEntityTooLarge || m.Paused() {
+			t.Fatalf("oversized update: status %d, paused %v", rec.Code, m.Paused())
+		}
 	}
 }
 

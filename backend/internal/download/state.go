@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -54,16 +54,6 @@ func decodeState(body []byte) ([]byte, error) {
 	}
 	_, dec := stateCodec()
 	return dec.DecodeAll(body, nil)
-}
-
-// legacyStatePath is where the queue was kept before it was compressed:
-// the same name without ".zst". Only a default-style path has one; a path
-// named explicitly is read and written as named, whatever it holds.
-func legacyStatePath(path string) (string, bool) {
-	if !strings.HasSuffix(path, ".zst") {
-		return "", false
-	}
-	return strings.TrimSuffix(path, ".zst"), true
 }
 
 // stateVersion marks the on-disk shape. A file written by a newer build is
@@ -118,17 +108,14 @@ type savedItem struct {
 // Every failure here returns an empty queue and an error to log rather than
 // stopping the program: a state file is a convenience, and refusing to start
 // because one is corrupt would turn a lost queue into a lost service.
-func loadState(path string) (st *savedState, from string, err error) {
+func loadState(path, legacy string) (st *savedState, from string, err error) {
 	empty := &savedState{Version: stateVersion}
 
 	from = path
-	body, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		if legacy, ok := legacyStatePath(path); ok {
-			if old, lerr := os.ReadFile(legacy); lerr == nil || !os.IsNotExist(lerr) {
-				body, err, from = old, lerr, legacy
-			}
-		}
+	body, err := readStateFile(path)
+	if os.IsNotExist(err) && legacy != "" {
+		from = legacy
+		body, err = readStateFile(legacy)
 	}
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -152,6 +139,31 @@ func loadState(path string) (st *savedState, from string, err error) {
 	return &saved, from, nil
 }
 
+// Bound the file as well as the decompressed data. os.ReadFile would
+// allocate the entire input before the decoder's limit could protect it.
+func readStateFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular queue file", path)
+	}
+	if info.Size() > config.MaxStateBytes {
+		return nil, fmt.Errorf("%s exceeds the queue limit of %d bytes", path, config.MaxStateBytes)
+	}
+	body, err := io.ReadAll(io.LimitReader(f, config.MaxStateBytes+1))
+	if err == nil && len(body) > config.MaxStateBytes {
+		err = fmt.Errorf("%s exceeds the queue limit of %d bytes", path, config.MaxStateBytes)
+	}
+	return body, err
+}
+
 // saveState writes the queue, atomically and to the owner alone.
 //
 // Atomically because a half-written file is worse than none: the next start
@@ -164,6 +176,9 @@ func saveState(path string, st *savedState) error {
 	plain, err := json.Marshal(st)
 	if err != nil {
 		return err
+	}
+	if len(plain) > config.MaxStateBytes {
+		return fmt.Errorf("queue exceeds the limit of %d bytes", config.MaxStateBytes)
 	}
 	enc, _ := stateCodec()
 	body := enc.EncodeAll(plain, make([]byte, 0, len(plain)/8))

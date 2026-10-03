@@ -1,5 +1,5 @@
 import { memo, useCallback, useRef, useState } from 'react';
-import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf } from '../format';
+import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf, sourceURL } from '../format';
 import { isActive, isRetryable } from '../status';
 import type { JobView } from '../types';
 import { CancelIcon, ChevronIcon, PlayIcon, RetryIcon, TrashIcon } from './Icons';
@@ -139,7 +139,7 @@ function JobCardView({
             half the point of keeping the source around. */}
         <a
           className="job__source"
-          href={job.source}
+          href={sourceURL(job.source)}
           target="_blank"
           rel="noreferrer noopener"
           title={`Open ${job.source}`}

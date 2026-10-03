@@ -5,7 +5,7 @@
 # The service shells out to this rather than driving yt-dlp inline, so the
 # whole recipe — format selection, merging, retries — is in one readable
 # place and can be adjusted without rebuilding. A copy placed next to the
-# downd binary overrides the one built in.
+# heapleach binary overrides the one built in.
 #
 # Usage: yt-download.sh <url> <output-dir> [format-selector]
 #
@@ -48,7 +48,7 @@ fi
 # download that works with one language beats no download at all.
 best_audio_per_language() {
   local langs selector lang
-  langs=$("$ytdlp" "${probe_args[@]}" --print '%(formats.:.language)s' "$url" 2>/dev/null |
+  langs=$("$ytdlp" "${probe_args[@]}" --print '%(formats.:.language)s' -- "$url" 2>/dev/null |
     tr -d "[]'\"" | tr ',' '\n' |
     sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
     grep -E '^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$' |
@@ -137,4 +137,4 @@ if [ -n "${DENO:-}" ]; then
   args+=(--js-runtimes "deno:$DENO")
 fi
 
-exec "$ytdlp" "${args[@]}" "$url"
+exec "$ytdlp" "${args[@]}" -- "$url"

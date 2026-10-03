@@ -1,6 +1,7 @@
-import { memo, useState, type FormEvent } from 'react';
+import { memo, useRef, useState, type FormEvent } from 'react';
 import { addUrls, ApiError } from '../api';
 import { linksIn } from '../links';
+import type { AddResponse } from '../types';
 import { ClipboardIcon, DownloadIcon } from './Icons';
 
 interface AddFormProps {
@@ -27,12 +28,23 @@ export const AddForm = memo(function AddForm({ onNotice }: AddFormProps) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
 
-  // Returns whether anything was queued, so the caller can decide what to
-  // clear: text the user typed is theirs to lose only once it is safely in
-  // the queue, and a clipboard grab must not empty a box it never filled.
-  const send = async (text: string): Promise<boolean> => {
+  // A ref closes the gap before React paints the disabled button. It also
+  // covers the clipboard permission prompt, which may stay open for a while.
+  const whileBusy = async (action: () => Promise<void>): Promise<void> => {
+    if (pending.current) return;
+    pending.current = true;
     setBusy(true);
+    try {
+      await action();
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  };
+
+  const send = async (text: string): Promise<AddResponse | null> => {
     try {
       const result = await addUrls(text, password);
       if (result.accepted.length > 0) {
@@ -41,28 +53,34 @@ export const AddForm = memo(function AddForm({ onNotice }: AddFormProps) {
           'info',
         );
       }
-      for (const bad of result.rejected) {
-        onNotice(`${bad.url}: ${bad.error}`, 'error');
+      if (result.rejected.length > 0) {
+        const details = result.rejected.slice(0, 3).map((bad) => `${bad.url}: ${bad.error}`).join('\n');
+        onNotice(`${result.rejected.length} link(s) could not be queued.\n${details}`, 'error');
       }
-      return result.accepted.length > 0;
+      return result;
     } catch (error) {
       onNotice(error instanceof ApiError ? error.message : 'Could not reach the server.', 'error');
-      return false;
-    } finally {
-      setBusy(false);
+      return null;
     }
   };
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
-    if (busy) return;
 
     const trimmed = urls.trim();
     if (!trimmed) {
       onNotice('Paste at least one URL first.', 'error');
       return;
     }
-    if (await send(trimmed)) setUrls('');
+    await whileBusy(async () => {
+      const result = await send(trimmed);
+      if (!result || result.accepted.length === 0) return;
+      // Keep rejected links available for correction, and never erase text
+      // typed while this request was in flight.
+      setUrls((current) => current.trim() === trimmed
+        ? result.rejected.map((bad) => bad.url).join('\n')
+        : current);
+    });
   };
 
   // The whole point is to skip the paste, so this queues what it finds
@@ -70,20 +88,24 @@ export const AddForm = memo(function AddForm({ onNotice }: AddFormProps) {
   // called first thing in the handler because some browsers only allow the
   // read while the click that asked for it is still being handled.
   const queueClipboard = async (): Promise<void> => {
-    if (busy) return;
-    let text: string;
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      onNotice('The browser would not hand over the clipboard.', 'error');
-      return;
-    }
-    const links = linksIn(text);
-    if (links.length === 0) {
-      onNotice('No link in the clipboard.', 'error');
-      return;
-    }
-    await send(links.join('\n'));
+    await whileBusy(async () => {
+      let text: string;
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        onNotice('The browser would not hand over the clipboard.', 'error');
+        return;
+      }
+      const links = linksIn(text);
+      if (links.length === 0) {
+        onNotice('No link in the clipboard.', 'error');
+        return;
+      }
+      const result = await send(links.join('\n'));
+      if (result && result.rejected.length > 0) {
+        setUrls((current) => [current.trim(), ...result.rejected.map((bad) => bad.url)].filter(Boolean).join('\n'));
+      }
+    });
   };
 
   // Split on any whitespace, exactly as the server does; only the empty

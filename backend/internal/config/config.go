@@ -43,11 +43,15 @@ type Config struct {
 	// Deliberately not under DownloadDir: that moves while the service runs,
 	// and state that followed it would be split across every destination
 	// ever used.
-	StateFile    string
-	Concurrency  int
-	UserAgent    string
-	Language     string
-	GofileSecret string
+	StateFile string
+	// LegacyStateFile is the old default queue path, migrated only when
+	// STATE was not explicitly configured. A custom .zst path must never
+	// adopt or delete the unrelated file with that suffix removed.
+	LegacyStateFile string
+	Concurrency     int
+	UserAgent       string
+	Language        string
+	GofileSecret    string
 	// ExtraHosts extends the built-in install list of each platform family,
 	// keyed by family name ("kvs", "peertube", "chevereto", ...).
 	//
@@ -142,6 +146,8 @@ func FromEnv() (*Config, error) {
 	// empty-means-default rule cannot represent that choice.
 	if value, set := os.LookupEnv(envPrefix + "STATE"); set {
 		c.StateFile = strings.TrimSpace(value)
+	} else if c.StateFile != "" {
+		c.LegacyStateFile = strings.TrimSuffix(c.StateFile, ".zst")
 	}
 
 	var err error
@@ -328,6 +334,7 @@ func (c *Config) Prepare() error {
 	// started later picking up a list the user thought was long finished.
 	if len(c.URLs) > 0 {
 		c.StateFile = ""
+		c.LegacyStateFile = ""
 	}
 	if c.Concurrency < 1 || c.Concurrency > MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 1 and %d, got %d", MaxConcurrency, c.Concurrency)

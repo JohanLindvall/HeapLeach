@@ -121,8 +121,45 @@ func numberedName(name string, number int) string {
 	if number <= 1 {
 		return name
 	}
+	suffix := fmt.Sprintf(" (%d)", number)
+	name = truncateName(name, maxNameBytes-len(suffix))
 	ext := filepath.Ext(name)
-	return fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(name, ext), number, ext)
+	return strings.TrimSuffix(name, ext) + suffix + ext
+}
+
+// separateNames assigns stable destinations within a listing before any
+// worker can mistake another entry of equal size for an existing download.
+// Reserve all original names first, so "clip (2).bin" keeps its own name
+// when two other entries both arrive as "clip.bin". Compare sanitized paths
+// without case, including on case-sensitive hosts, for portable queues.
+func separateNames(items []*Item) {
+	key := func(it *Item, name string) string {
+		return strings.ToLower(filepath.Join(it.Dir, SafeName(name)))
+	}
+	reserved := make(map[string]int, len(items))
+	for _, it := range items {
+		reserved[key(it, it.Name)]++
+	}
+	seen := make(map[string]int, len(items))
+	for _, it := range items {
+		original := key(it, it.Name)
+		if reserved[original] < 2 {
+			continue
+		}
+		it.fixedName = true
+		name := SafeName(it.Name)
+		n := seen[original] + 1
+		if n > 1 {
+			for reserved[key(it, numberedName(name, n))] > 0 {
+				n++
+			}
+		}
+		seen[original] = n
+		it.Name = numberedName(name, n)
+		if n > 1 {
+			reserved[key(it, it.Name)] = 1
+		}
+	}
 }
 
 // newID returns a short random identifier for a job or item.

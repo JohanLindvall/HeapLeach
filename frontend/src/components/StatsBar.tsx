@@ -94,7 +94,7 @@ export function StatsBar({
               ? 'Resume the queue'
               : resumable
                 ? 'Resume the jobs restored from the last run'
-                : 'Pause every transfer'
+                : 'Pause new downloads and built-in transfers; running external downloaders continue'
           }
           aria-pressed={snapshot.paused}
         >

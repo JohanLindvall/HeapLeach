@@ -108,6 +108,9 @@ type Manager struct {
 	// list its names on each progress tick allocated a slice to count and
 	// drop.
 	hostCount int
+	// Source listings have their own bound: each may fan out into many
+	// page requests, independently of the transfer pool.
+	resolveSlots chan struct{}
 
 	// minFree is how much room must be left at the destination before
 	// another transfer is started; zero disables the check. Fixed at
@@ -119,9 +122,11 @@ type Manager struct {
 	// rewriting every interval. The saver and Close both write it, Close
 	// while the saver may still be mid-write, so persistMu serialises them
 	// and guards statePrint — and makes Close's later picture land last.
-	stateFile  string
-	persistMu  sync.Mutex
-	statePrint uint64
+	stateFile       string
+	persistMu       sync.Mutex
+	statePrint      uint64
+	legacyStateFile string
+	stateReadOnly   bool // a failed restore must not overwrite the original queue
 	// legacyState is the uncompressed file the queue was restored from,
 	// removed once the compressed one has been written. Guarded by
 	// persistMu, and set by Restore before anything else can save.
@@ -140,28 +145,30 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		hostCount = len(reg.Hosts())
 	}
 	return &Manager{
-		cfg:        cfg,
-		reg:        reg,
-		hostCount:  hostCount,
-		client:     client.Streaming(),
-		log:        log,
-		jobs:       make(map[string]*Job),
-		parts:      make(map[string]struct{}),
-		hostActive: make(map[string]int),
-		hostGate:   newHostGate(),
-		dir:        cfg.DownloadDir,
-		stateFile:  cfg.StateFile,
-		minFree:    cfg.MinFreeDisk,
-		throttle:   newThrottle(cfg.SpeedLimit),
-		limit:      cfg.Concurrency,
-		streams:    cfg.Streams,
-		timings:    defaultDownloadTimings(),
-		hosts:      newHostLimiter(config.MaxConnectionsPerHost),
-		wake:       make(chan struct{}, 1),
-		urgent:     make(chan struct{}, 1),
-		ctx:        ctx,
-		stop:       stop,
-		subs:       make(map[chan []byte]*subscriber),
+		cfg:             cfg,
+		reg:             reg,
+		hostCount:       hostCount,
+		resolveSlots:    make(chan struct{}, config.ResolveConcurrency),
+		client:          client.Streaming(),
+		log:             log,
+		jobs:            make(map[string]*Job),
+		parts:           make(map[string]struct{}),
+		hostActive:      make(map[string]int),
+		hostGate:        newHostGate(),
+		dir:             cfg.DownloadDir,
+		stateFile:       cfg.StateFile,
+		legacyStateFile: cfg.LegacyStateFile,
+		minFree:         cfg.MinFreeDisk,
+		throttle:        newThrottle(cfg.SpeedLimit),
+		limit:           cfg.Concurrency,
+		streams:         cfg.Streams,
+		timings:         defaultDownloadTimings(),
+		hosts:           newHostLimiter(config.MaxConnectionsPerHost),
+		wake:            make(chan struct{}, 1),
+		urgent:          make(chan struct{}, 1),
+		ctx:             ctx,
+		stop:            stop,
+		subs:            make(map[chan []byte]*subscriber),
 	}
 }
 
@@ -261,7 +268,7 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	defer m.wg.Done()
 
-	res, ex, err := m.reg.Extract(ctx, job.Source, extractor.Options{Password: job.Password})
+	res, ex, err := m.extractSource(ctx, job)
 
 	m.mu.Lock()
 	if m.jobs[job.ID] != job || job.resolveID != generation {
@@ -285,6 +292,21 @@ func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	m.signal()
 }
 
+func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Result, extractor.Extractor, error) {
+	if m.resolveSlots != nil {
+		select {
+		case m.resolveSlots <- struct{}{}:
+			defer func() { <-m.resolveSlots }()
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	return m.reg.Extract(ctx, job.Source, extractor.Options{Password: job.Password})
+}
+
 // applyResultLocked turns a resolved source into the job's items. Caller
 // holds mu.
 func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result) {
@@ -304,11 +326,13 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 	if len(res.Files) > 1 {
 		folder = SafeName(util.FirstNonEmpty(res.Title, job.Title))
 	}
+	items := make([]*Item, 0, len(res.Files))
 	for i, f := range res.Files {
-		it := m.newItem(job, f, folder, i)
-		job.Items = append(job.Items, it)
-		m.queue = append(m.queue, it)
+		items = append(items, m.newItem(job, f, folder, i))
 	}
+	separateNames(items)
+	job.Items = append(job.Items, items...)
+	m.queue = append(m.queue, items...)
 	m.log.Info("resolved", "job", job.ID, "host", host, "title", job.Title, "files", len(res.Files))
 }
 
@@ -730,11 +754,12 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-	if it.Status == StatusRunning || it.Status == StatusQueued {
+	job := m.jobs[jobID]
+	unfetchable := job != nil && (job.restored || job.unfetchable)
+	if !unfetchable && (it.Status == StatusRunning || it.Status == StatusQueued) {
 		m.mu.Unlock()
 		return errors.New("item is already in progress")
 	}
-	job := m.jobs[jobID]
 	if job != nil {
 		job.canceled = false
 	}
@@ -746,7 +771,7 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	// which is what the item's own note asks for and what the job-level
 	// retry does. Everything already downloaded is recognised on disk and
 	// skipped, so this costs the listing and nothing more.
-	if job != nil && (job.restored || job.unfetchable) {
+	if unfetchable {
 		m.rereadLocked(job)
 		m.mu.Unlock()
 

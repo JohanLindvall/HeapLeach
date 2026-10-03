@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"slices"
 	"strconv"
+
+	"github.com/JohanLindvall/HeapLeach/internal/tools"
 )
 
 // Choosing what to carry into an MP4 needs to know what is in the source, so
@@ -27,8 +28,8 @@ type mediaStream struct {
 
 // probeMedia lists the streams of a file.
 func probeMedia(ctx context.Context, ffprobe, path string) ([]mediaStream, error) {
-	output, err := exec.CommandContext(ctx, ffprobe,
-		"-v", "error", "-show_streams", "-print_format", "json", path).Output()
+	output, err := tools.Probe(ctx, ffprobe,
+		"-v", "error", "-show_streams", "-print_format", "json", path)
 	if err != nil {
 		return nil, fmt.Errorf("probe %s: %w", path, err)
 	}

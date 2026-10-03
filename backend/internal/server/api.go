@@ -195,10 +195,18 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return false
 	}
 	if err := dec.Decode(new(any)); err != io.EOF {
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
+			return false
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body: expected a single JSON value")
 		return false
 	}
@@ -233,6 +241,7 @@ func writeJSONMaybeCompressed(w http.ResponseWriter, r *http.Request, status int
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Cache-Control", "no-store")
+	h.Add("Vary", "Accept-Encoding")
 
 	if len(payload) < compressibleJSON || !acceptsGzip(r) {
 		h.Set("Content-Length", strconv.Itoa(len(payload)))
@@ -242,7 +251,6 @@ func writeJSONMaybeCompressed(w http.ResponseWriter, r *http.Request, status int
 	}
 
 	h.Set("Content-Encoding", "gzip")
-	h.Add("Vary", "Accept-Encoding")
 	w.WriteHeader(status)
 	gz := gzip.NewWriter(w)
 	defer gz.Close()

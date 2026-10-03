@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatDuration, formatEta, formatSpeed, hostLabel, percentOf } from './format';
+import { formatBytes, formatDuration, formatEta, formatSpeed, hostLabel, percentOf, sourceURL } from './format';
+
+describe('sourceURL', () => {
+  it.each([
+    ['https://example.test/album', 'https://example.test/album'],
+    ['links://example.test/list?q=a%2Bb', 'https://example.test/list?q=a%2Bb'],
+    ['links:http://example.test/thread', 'http://example.test/thread'],
+    ['links:https://example.test/thread', 'https://example.test/thread'],
+    ['javascript:alert(1)', undefined],
+    ['file:///tmp/example', undefined],
+    ['invalid', undefined],
+  ])('turns %s into a safe browser target', (source, expected) => {
+    expect(sourceURL(source)).toBe(expected);
+  });
+});
 
 // The terminal renders the same numbers (internal/cli/format.go), and the
 // contract there is digit-for-digit agreement: the same transfer must not

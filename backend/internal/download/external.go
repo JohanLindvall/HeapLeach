@@ -8,11 +8,11 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -44,7 +44,7 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 		return errors.New(tools.NotInstalled(tools.YtDlp))
 	}
 
-	cmd := exec.CommandContext(ctx, script, source, dir)
+	cmd := tools.CommandContext(ctx, script, source, dir)
 	cmd.Env = append(os.Environ(), "YTDLP="+ytdlp)
 	// ffmpeg is optional: without it the script asks for a single already
 	// muxed stream instead of a pair it could not join.
@@ -59,16 +59,14 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	if deno, ok := tools.Find(tools.Deno); ok {
 		cmd.Env = append(cmd.Env, "DENO="+deno)
 	}
-	// The helper spawns yt-dlp, which spawns ffmpeg; cancelling has to take
-	// the whole group down, not just the script.
-	setProcessGroup(cmd)
-	cmd.Cancel = func() error { return killGroup(cmd) }
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	var stderr strings.Builder
+	// Let os/exec own its stdout copy, so WaitDelay can close a pipe a
+	// helper's child inherited after the parent exits. Draining StdoutPipe
+	// before calling Wait would never start that deadline.
+	stdout, output := io.Pipe()
+	defer stdout.Close()
+	defer output.Close()
+	cmd.Stdout = output
+	stderr := util.BoundedBuffer{Limit: config.ErrorBodySample}
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
@@ -78,10 +76,13 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	it.streams.Store(1)
 	defer it.streams.Store(0)
 
-	// Drained before Wait, which closes the pipe out from under a reader.
-	produced := m.readExternalProgress(it, stdout)
+	progress := make(chan string, 1)
+	go func() { progress <- m.readExternalProgress(it, stdout) }()
+	err = cmd.Wait()
+	output.Close()
+	produced := <-progress
 
-	if err := cmd.Wait(); err != nil {
+	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

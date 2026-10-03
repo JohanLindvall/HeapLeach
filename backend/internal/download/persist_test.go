@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // A logger that goes nowhere: these tests are about the file, and a warning
@@ -198,6 +200,11 @@ func TestRestoreSurvivesAnUnusableFile(t *testing.T) {
 			if unfinished != 0 || len(m.jobs) != 0 {
 				t.Errorf("started with %d jobs from an unusable file", len(m.jobs))
 			}
+			m.persist()
+			m.persistState(&savedState{}) // shutdown uses this path
+			if body, err := os.ReadFile(file); err != nil || string(body) != tc.body {
+				t.Fatalf("an unreadable queue was overwritten: %q, %v", body, err)
+			}
 		})
 	}
 }
@@ -250,6 +257,13 @@ func TestNoItemURLsReachTheFile(t *testing.T) {
 // for a reason that says nothing about the file. Retrying an item re-reads
 // the job, exactly as retrying the job does.
 func TestRetryingOneItemOfARestoredJobReReadsTheSource(t *testing.T) {
+	for _, status := range []Status{StatusFailed, StatusQueued, StatusCanceled} {
+		t.Run(string(status), func(t *testing.T) { retryRestoredItem(t, status) })
+	}
+}
+
+func retryRestoredItem(t *testing.T, status Status) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
@@ -266,7 +280,7 @@ func TestRetryingOneItemOfARestoredJobReReadsTheSource(t *testing.T) {
 	job := &Job{
 		ID: "restored", Source: source, Title: "payload.bin", Host: "direct",
 		CreatedAt: time.Now(),
-		Items:     []*Item{{ID: "stale", Name: "payload.bin", Status: StatusFailed, Size: 4}},
+		Items:     []*Item{{ID: "stale", Name: "payload.bin", Status: status, Size: 4}},
 		restored:  true,
 	}
 	m.jobs[job.ID] = job
@@ -426,7 +440,7 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 
 	m.Close() // idempotent; the harness closes it again on cleanup
 
-	st, _, err := loadState(file)
+	st, _, err := loadState(file, "")
 	if err != nil {
 		t.Fatalf("reading back the queue: %v", err)
 	}
@@ -595,7 +609,7 @@ func TestPersistRecordsMetadataChanges(t *testing.T) {
 	job.Title = "After"
 	item.Name, item.Path, item.Skipped = "after.bin", "after.bin", true
 	m.persist()
-	state, _, err := loadState(file)
+	state, _, err := loadState(file, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,7 +628,7 @@ func TestSaveAfterCloseCannotReplaceResumableState(t *testing.T) {
 	m.Close()
 	// A ticker can have selected its save just before Close canceled it.
 	m.persist()
-	state, _, err := loadState(file)
+	state, _, err := loadState(file, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +700,7 @@ func TestAnUncompressedQueueIsReadAndRetired(t *testing.T) {
 	}
 
 	file := legacy + ".zst"
-	m := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}
+	m := &Manager{stateFile: file, legacyStateFile: legacy, jobs: map[string]*Job{}, log: testLogger()}
 	if _, err := m.Restore(); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -707,7 +721,44 @@ func TestAnUncompressedQueueIsReadAndRetired(t *testing.T) {
 	if err := os.WriteFile(named, []byte(plain), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if st, from, err := loadState(named); err != nil || from != named || len(st.Jobs) != 1 {
+	if st, from, err := loadState(named, ""); err != nil || from != named || len(st.Jobs) != 1 {
 		t.Errorf("plain file: %d jobs from %q, err %v", len(st.Jobs), from, err)
+	}
+}
+
+func TestExplicitStatePathDoesNotAdoptOrDeleteAnotherFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom.json.zst")
+	unrelated := strings.TrimSuffix(path, ".zst")
+	body := []byte(`{"version":1,"jobs":[{"id":"unrelated"}]}`)
+	if err := os.WriteFile(unrelated, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{stateFile: path, jobs: map[string]*Job{}, log: testLogger()}
+	if _, err := m.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.jobs) != 0 {
+		t.Fatal("explicit path adopted an unrelated queue")
+	}
+	m.persist()
+	if got, err := os.ReadFile(unrelated); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("unrelated file was changed: %q, %v", got, err)
+	}
+}
+
+func TestOversizedQueueIsRejectedBeforeReading(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "queue.json")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A sparse file exercises the limit without allocating a gigabyte.
+	err = f.Truncate(config.MaxStateBytes + 1)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadState(path, ""); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized queue: %v", err)
 	}
 }

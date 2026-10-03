@@ -114,13 +114,13 @@ func writeSSE(out io.Writer, gz *gzip.Writer, rc *http.ResponseController, prefi
 // returning what to write to and the compressor to flush, or a nil
 // compressor when the client would rather have it plain.
 func compressed(w http.ResponseWriter, r *http.Request) (io.Writer, *gzip.Writer) {
+	// Negotiation affects both variants, including the uncompressed one.
+	w.Header().Add("Vary", "Accept-Encoding")
 	if !acceptsGzip(r) {
 		return w, nil
 	}
 	h := w.Header()
 	h.Set("Content-Encoding", "gzip")
-	// The same URL answers both ways, so a cache must key on which.
-	h.Add("Vary", "Accept-Encoding")
 	gz := gzip.NewWriter(w)
 	return gz, gz
 }

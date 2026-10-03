@@ -5,9 +5,26 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
+
+// terminalText keeps remote titles, filenames and diagnostics on one row and
+// prevents them from issuing terminal commands. Apply it before adding our own
+// colour codes, which are the only controls a rendered field may contain.
+func terminalText(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsSpace(r):
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		default:
+			return r
+		}
+	}, s)
+}
 
 // formatBytes renders a byte count in SI units, matching the web UI digit
 // for digit — the same transfer must not read "1.5 GB" in the terminal and

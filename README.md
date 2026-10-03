@@ -142,8 +142,9 @@ URLs and the download directory can come in either order — a URL is anything
 with an `http(s)` scheme, so the two can never be confused. Lists read from
 stdin ignore blank lines and `#` comments.
 
-It exits `0` when every file arrived, `1` when any failed — and each failure
-is named — so it drops straight into a script or a cron job. `Ctrl-C` exits
+It exits `0` when every source was accepted, resolved and downloaded, and `1`
+when an input was rejected, a source could not be read, or a file failed.
+Failures are named, so it drops straight into a script or a cron job. `Ctrl-C` exits
 `130` and leaves the partial files in place; running the same command again
 continues them rather than starting over.
 
@@ -185,6 +186,13 @@ downloading and carries the password for any source that needed one. Given
 URLs on the command line the whole mechanism is off: that mode downloads and
 exits, and has no queue worth outliving it.
 
+If an existing queue cannot be read, the service logs the reason and disables
+queue saving for that run, preserving the original file. Downloads can still
+run, but their queue changes will not survive a restart. Stop the service,
+back up and repair or move the unreadable file, then restart to enable saving
+again. Automatic migration from `queue.json` is limited to the default state
+location; an explicit `HEAPLEACH_STATE` never adopts a neighbouring file.
+
 A transfer only starts when at least `HEAPLEACH_MIN_FREE` — 10 GiB by
 default — is still free there. Below that the queue **waits** rather than
 failing: nothing new begins, transfers already running finish normally, and
@@ -197,6 +205,25 @@ red once a tenth or less remains: a queue can be larger than the room for it,
 and the useful moment to notice is before the last block goes rather than
 after. A destination that cannot be measured shows nothing at all rather than
 zero, which would read as a disk with no room left.
+
+### Network access and trust
+
+HeapLeach is a single-user service with no login or API authentication.
+Anyone who can reach its API can inspect the queue, submit downloads and
+change the destination to a directory writable by the service account.
+Submitted sources can reach local network addresses as well as public sites.
+Use a trusted network or bind to loopback, for example
+`heapleach -addr 127.0.0.1:8080`. The bare desktop launch uses loopback, while
+the normal `-addr` default and the container port listen on all interfaces.
+For remote access, put an authenticated HTTPS reverse proxy in front and
+restrict direct access to the backend port. Browser cross-origin protection
+and framing restrictions do not authenticate API callers.
+
+Outbound native HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY`. A proxied request uses Go's standard TLS transport rather than
+the browser-shaped handshake. Helper programs use their own proxy support.
+The destination directory, optional helper executables and script overrides
+must be writable only by people you trust to run code as this account.
 
 ## Supported links
 
@@ -431,11 +458,12 @@ ffmpeg the `.ts` is kept and plays fine.
   finishes a large file instead of failing it three drops in — and since
   every such attempt leaves more on disk than it found, a finite file
   cannot cycle forever.
-- **Pause and resume** the whole queue. Transfers park inside their reads
+- **Pause and resume** the queue. Native transfers park inside their reads
   rather than being torn down, so a short pause costs nothing and a long one
-  falls back on the same resume every other interruption uses.
-- **A ceiling on total throughput**, set from the header or with `-max-speed`.
-  It is one shared budget across every connection, not a per-file allowance —
+  falls back on the same resume every other interruption uses. Already-running
+  external helpers continue; pausing prevents new ones from starting.
+- **A ceiling on native download throughput**, set from the header or with `-max-speed`.
+  It is one shared budget across native connections, not a per-file allowance —
   and the code that opens extra connections knows about it, so a transfer
   held at the ceiling is not mistaken for a slow one and split eight ways for
   nothing.
@@ -443,6 +471,8 @@ ffmpeg the `.ts` is kept and plays fine.
   the destination is not downloaded again — checked against the length the
   server reports, so it works even for hosts that publish no sizes. Sizes
   read off listing pages are rounded, and are never used to make that call.
+  Entries in one listing that share a sanitized destination get distinct,
+  stable numbered names, including when their lengths match.
 - **Notices a stalled transfer — and steps around it.** A connection that
   stops delivering without closing is invisible to a read timeout; if the
   byte counter has not moved for `-stall-timeout`, the attempt is abandoned
@@ -460,6 +490,9 @@ ffmpeg the `.ts` is kept and plays fine.
   parts joined for a file that arrives as a playlist and so has no byte total
   until its last part lands. A transfer waiting on purpose says so, rather
   than looking like one that has died.
+- **Connection recovery.** If an event stream opens without delivering its
+  first snapshot, the UI retries and polls state in the meantime. A partially
+  accepted submission keeps rejected URLs in the form for correction.
 - **A searchable queue.** Type `/` and filter hundreds of jobs by title,
   source, host or filename; `Esc` clears. Scrolling is not a retrieval
   strategy.
@@ -529,6 +562,15 @@ Go, so the recipe is in one readable place. A copy of that script placed
 beside the binary overrides the built-in one, so it can be adjusted without
 rebuilding.
 
+Metadata probes have a two-minute deadline and an 8 MiB output limit; helper
+diagnostics are bounded too. YouTube playlist enumeration uses
+`HEAPLEACH_MAX_FILES` at the helper, and a truncated result is labelled partial.
+On Unix, cancellation kills the helper's process group, including children.
+The bundled download script needs a POSIX shell; it is not a native Windows
+helper launcher. External transfers use yt-dlp's own retries and transfer
+controls, so the native speed ceiling, mid-transfer pause and stall watchdog
+do not apply to them.
+
 ## Configuration
 
 Every setting has an environment variable; the common ones also have a flag,
@@ -540,10 +582,10 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. |
-| `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. A busy host is exempt and retries forever. |
+| `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI. |
 | `HEAPLEACH_SLOW_SPEED` | `2MB` | Rate per second below which extra connections are opened. Flag: `-slow-speed`. |
-| `HEAPLEACH_MAX_SPEED` | `0` | Ceiling on the total download rate per second; `0` is unlimited. Flag: `-max-speed`. Also settable live in the UI. |
+| `HEAPLEACH_MAX_SPEED` | `0` | Shared ceiling on the native download rate per second; `0` is unlimited. Does not throttle external helpers. Flag: `-max-speed`. Also settable live in the UI. |
 | `HEAPLEACH_STALL_TIMEOUT` | `90s` | How long a transfer may make no progress before the attempt is retried. Flag: `-stall-timeout`. |
 | `HEAPLEACH_MIN_FREE` | `10GiB` | Room that must be left at the destination before another transfer starts. Below it the queue waits rather than filling the disk; `0` turns the check off. Flag: `-min-free`. |
 | `HEAPLEACH_STATE` | `~/.local/state/heapleach/queue.json.zst` (`$XDG_STATE_HOME` when set) | Where the queue is written so a restart can pick it up, as zstd-compressed JSON (`zstdcat` reads it). A plain-JSON file from an earlier version is still read, and a `queue.json` beside the default path is picked up once and retired. Unfinished jobs come back held, and are re-read when retried or when the queue is resumed; nothing is fetched until then. Empty disables it. A run given URLs on the command line never writes one. |
@@ -579,6 +621,11 @@ Settings updates are validated together: an invalid field leaves the
 current settings unchanged. In an SSE job marked `patch`, merge items by
 ID and retain unmentioned items; otherwise replace its item list. Every
 frame contains the complete job list and current aggregates.
+
+Oversized JSON requests return `413`; malformed JSON returns `400`. Unknown
+API routes return `404`, and a known route with an unsupported method returns
+`405`. Ordinary HTTP requests have 30-second read/write deadlines. Event
+streams use their own per-write deadline and remain open while idle.
 
 ```bash
 curl -X POST localhost:8080/api/downloads \
@@ -693,6 +740,9 @@ which of the two is watching.
 
 ## Development
 
+The [2026-10-03 service audit](docs/audit-2026-10-03.md) records the hardening
+changes, validation results and remaining operating limits.
+
 ```bash
 make run          # build the standalone binary, serve locally and open the browser
 make run-image    # build and run the container image
@@ -773,11 +823,13 @@ way to check a release before tagging one.
 - The queue is written to `HEAPLEACH_STATE` every ten minutes when it has
   changed, and on every clean shutdown, so a restart finds its unfinished
   jobs held and re-reads them on retry; finished files stay put. A crash
-  loses at most a job added in the last ten minutes: the part files, not
+  can lose queue changes from the last ten minutes: the part files, not
   the queue file, are what resume a transfer. A `.part` file carries a `.part.state` sidecar recording
   per-connection progress, so an interrupted multi-connection transfer
   resumes rather than starting over. Both can be deleted safely.
 - These sites change their plumbing without warning. `make test-live` is the
-  fastest way to find out which extractor broke.
+  fastest way to find out which extractor broke when the ignored live test
+  file and its environment-provided sources are present. A fresh clone has
+  fixture tests only; a green suite alone does not verify live host support.
 - Be a good citizen: the defaults are deliberately modest, and the client
   honours `Retry-After` and backs off on 429s.

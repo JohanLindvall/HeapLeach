@@ -73,7 +73,7 @@ export interface Settings {
   streams: number;
   /** Hold or release the whole queue. */
   paused: boolean;
-  /** Ceiling on total throughput in bytes per second; 0 lifts the cap. */
+  /** Ceiling on native throughput in bytes per second; 0 lifts the cap. */
   speedLimit: number;
   /**
    * Where finished files are written. Transfers already running keep the

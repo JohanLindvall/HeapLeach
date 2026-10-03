@@ -55,7 +55,7 @@ func Run(ctx context.Context, mgr *download.Manager, opts Options) error {
 	accepted := 0
 	for _, raw := range opts.URLs {
 		if _, err := mgr.Add(raw, opts.Password); err != nil {
-			r.note(r.paintColour(red, "✗ ") + raw + r.paintColour(dim, "  "+err.Error()))
+			r.note(r.paintColour(red, "✗ ") + terminalText(raw) + r.paintColour(dim, "  "+terminalText(err.Error())))
 			continue
 		}
 		accepted++
@@ -105,7 +105,11 @@ func Run(ctx context.Context, mgr *download.Manager, opts Options) error {
 
 		if finished(snap) {
 			r.stop()
-			return summary(snap, opts.Out, r, started)
+			err := summary(snap, opts.Out, r, started)
+			if err == nil && accepted != len(opts.URLs) {
+				return ErrIncomplete
+			}
+			return err
 		}
 	}
 }
@@ -164,9 +168,10 @@ func (r *renderer) jobLine(job download.JobView) string {
 	if title == "" {
 		title = job.Source
 	}
+	title = terminalText(title)
 	switch {
 	case job.Status == download.StatusFailed && job.Total == 0:
-		return r.paintColour(red, "✗ ") + title + r.paintColour(dim, "  "+job.Error)
+		return r.paintColour(red, "✗ ") + title + r.paintColour(dim, "  "+terminalText(job.Error))
 	case job.Total == 0:
 		return r.paintColour(yellow, "· ") + title + r.paintColour(dim, "  no files found")
 	}
@@ -179,11 +184,12 @@ func (r *renderer) jobLine(job download.JobView) string {
 		detail += ", " + formatBytes(job.Size)
 	}
 	return r.paintColour(cyan, "▸ ") + r.paintColour(bold, title) +
-		r.paintColour(dim, "  "+job.Host+" · "+detail)
+		r.paintColour(dim, "  "+terminalText(job.Host)+" · "+detail)
 }
 
 // itemDoneLine records one file's outcome.
 func (r *renderer) itemDoneLine(it download.ItemView) string {
+	name := terminalText(it.Name)
 	switch it.Status {
 	case download.StatusDone:
 		detail := formatBytes(it.Downloaded)
@@ -197,11 +203,11 @@ func (r *renderer) itemDoneLine(it download.ItemView) string {
 			detail += " in " + formatDuration(time.Duration(it.Elapsed*float64(time.Second))) +
 				" · " + formatSpeed(rate)
 		}
-		return r.paintColour(green, "  ✓ ") + it.Name + r.paintColour(dim, "  "+detail)
+		return r.paintColour(green, "  ✓ ") + name + r.paintColour(dim, "  "+detail)
 	case download.StatusFailed:
-		return r.paintColour(red, "  ✗ ") + it.Name + r.paintColour(dim, "  "+firstLine(it.Error))
+		return r.paintColour(red, "  ✗ ") + name + r.paintColour(dim, "  "+firstLine(it.Error))
 	default:
-		return r.paintColour(dim, "  – "+it.Name+"  canceled")
+		return r.paintColour(dim, "  – "+name+"  canceled")
 	}
 }
 
@@ -250,7 +256,7 @@ func frame(snap download.Snapshot, r *renderer, started time.Time) []string {
 			// transfer being patient with a busy host is indistinguishable
 			// from one that has died.
 			if it.Note != "" {
-				lines = append(lines, r.paintColour(yellow, "      "+it.Note))
+				lines = append(lines, r.paintColour(yellow, "      "+terminalText(it.Note)))
 			}
 			shown++
 		}
@@ -299,7 +305,7 @@ func (r *renderer) itemRow(it download.ItemView) string {
 	nameWidth := max(r.width-config.CLIBarWidth-statsWidth-5, 12)
 
 	fill, track := barParts(fraction, config.CLIBarWidth)
-	return "  " + pad(it.Name, nameWidth) + " " +
+	return "  " + pad(terminalText(it.Name), nameWidth) + " " +
 		r.paintColour(magenta, fill) + r.paintColour(dim, track) + " " + right
 }
 
@@ -356,7 +362,20 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 	var done, failed, canceled int
 	var bytes int64
 	names := map[download.Status][]string{}
+	var failedSources []string
 	for _, job := range snap.Jobs {
+		if len(job.Items) == 0 {
+			switch job.Status {
+			case download.StatusFailed:
+				title := job.Title
+				if title == "" {
+					title = job.Source
+				}
+				failedSources = append(failedSources, terminalText(title))
+			case download.StatusCanceled:
+				canceled++
+			}
+		}
 		for _, it := range job.Items {
 			switch it.Status {
 			case download.StatusDone:
@@ -364,7 +383,7 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 				bytes += it.Downloaded
 			case download.StatusFailed:
 				failed++
-				names[download.StatusFailed] = append(names[download.StatusFailed], it.Name)
+				names[download.StatusFailed] = append(names[download.StatusFailed], terminalText(it.Name))
 			case download.StatusCanceled:
 				canceled++
 			}
@@ -378,7 +397,7 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 	}
 
 	mark, tint := "✓", green
-	if failed > 0 {
+	if failed > 0 || len(failedSources) > 0 {
 		mark, tint = "✗", red
 	}
 	files := fmt.Sprintf("%d file", done)
@@ -395,9 +414,12 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 		fmt.Fprintf(out, "%s\n", r.paintColour(red,
 			fmt.Sprintf("  %d failed: %s", failed,
 				truncate(strings.Join(names[download.StatusFailed], ", "), 200))))
-		return ErrIncomplete
 	}
-	if canceled > 0 {
+	if len(failedSources) > 0 {
+		fmt.Fprintln(out, r.paintColour(red, fmt.Sprintf("  %d sources failed to resolve: %s",
+			len(failedSources), truncate(strings.Join(failedSources, ", "), 200))))
+	}
+	if failed > 0 || len(failedSources) > 0 || canceled > 0 {
 		return ErrIncomplete
 	}
 	return nil
@@ -421,7 +443,7 @@ func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	return truncate(s, 120)
+	return truncate(terminalText(s), 120)
 }
 
 // IsURL reports whether an argument is a download source rather than a

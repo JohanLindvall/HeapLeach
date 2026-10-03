@@ -82,6 +82,10 @@ type Item struct {
 	// reject, when set, recognises this host's way of answering a dead
 	// resource with a valid-looking body. See extractor.File.Reject.
 	reject func(string, http.Header) error
+	// fixedName protects a filename allocated to separate same-named entries
+	// in one listing. A later resolver or disposition header must not merge
+	// those entries back into the same destination.
+	fixedName bool
 	// lastView is what was last broadcast for this item, so the next frame
 	// can carry only the rows that actually changed. Guarded by
 	// Manager.mu, and written only on the broadcast path — a snapshot read

@@ -10,7 +10,7 @@ interface SpeedLimitProps {
 }
 
 /**
- * The total-throughput ceiling.
+ * The shared throughput ceiling for native transfers.
  *
  * A menu rather than a slider: the useful values span three orders of
  * magnitude, which no linear track can offer precisely. A limit set on the
@@ -21,7 +21,7 @@ export function SpeedLimit({ value, onChange }: SpeedLimitProps) {
   const options = PRESETS.includes(value) ? PRESETS : [...PRESETS, value].sort((a, b) => a - b);
 
   return (
-    <label className="speedcap" htmlFor="speed-limit" title="Ceiling on total download rate">
+    <label className="speedcap" htmlFor="speed-limit" title="Shared speed limit for built-in downloads; external downloaders use their own limits">
       <GaugeIcon />
       <span className="speedcap__label">Limit</span>
       <select

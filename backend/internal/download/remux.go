@@ -3,7 +3,6 @@ package download
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -90,7 +89,11 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 		args = append(args, step...)
 		args = append(args, "-movflags", "+faststart", unique)
 
-		output, runErr = exec.CommandContext(ctx, ffmpeg, args...).CombinedOutput()
+		cmd := tools.CommandContext(ctx, ffmpeg, args...)
+		diagnostic := &util.BoundedBuffer{Limit: config.ErrorBodySample}
+		cmd.Stdout, cmd.Stderr = diagnostic, diagnostic
+		runErr = cmd.Run()
+		output = diagnostic.Bytes()
 		if runErr == nil {
 			break
 		}

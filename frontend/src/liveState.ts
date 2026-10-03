@@ -13,6 +13,7 @@ export function subscribeLiveState(
 ): () => void {
   let source: EventSource | null = null;
   let reconnectTimer: number | undefined;
+  let connectTimer: number | undefined;
   let pollTimer: number | undefined;
   let pollRequest: AbortController | null = null;
   let retry = RECONNECT_MIN_MS;
@@ -71,20 +72,27 @@ export function subscribeLiveState(
       return;
     }
     source = stream;
-    stream.onopen = (): void => {
+    // A socket can stay CONNECTING, or open without delivering its first
+    // frame. Start the polling fallback even when no error event arrives.
+    connectTimer = window.setTimeout(() => {
       if (closed || source !== stream) return;
-      retry = RECONNECT_MIN_MS;
-      stopPolling();
-      onConnection('live');
-    };
+      stream.close();
+      source = null;
+      disconnected();
+    }, POLL_TIMEOUT_MS);
     stream.onmessage = (event: MessageEvent<string>): void => {
       if (closed || source !== stream) return;
       try {
         onSnapshot(JSON.parse(event.data) as Snapshot);
+        window.clearTimeout(connectTimer);
+        retry = RECONNECT_MIN_MS;
+        stopPolling();
+        onConnection('live');
       } catch {
         // Later frames may contain only changes since this one. Reconnect
         // for a complete snapshot instead of keeping an incomplete base.
         stream.close();
+        window.clearTimeout(connectTimer);
         source = null;
         disconnected();
       }
@@ -92,6 +100,7 @@ export function subscribeLiveState(
     stream.onerror = (): void => {
       if (closed || source !== stream) return;
       stream.close();
+      window.clearTimeout(connectTimer);
       source = null;
       disconnected();
     };
@@ -103,6 +112,7 @@ export function subscribeLiveState(
     source?.close();
     source = null;
     window.clearTimeout(reconnectTimer);
+    window.clearTimeout(connectTimer);
     stopPolling();
   };
 }

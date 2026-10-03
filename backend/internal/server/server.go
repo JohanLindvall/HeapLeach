@@ -76,14 +76,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/cancel", s.handleItemCancel)
 	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/retry", s.handleItemRetry)
 
-	mux.Handle("/", s.static)
+	// Keep the SPA fallback outside the API mux. Otherwise an unknown API
+	// path, or the wrong method on a real endpoint, returns HTML with 200.
+	root := http.NewServeMux()
+	root.Handle("/api/", mux)
+	root.Handle("/", s.static)
 
 	// A page on another site can still send a simple POST here without a
 	// preflight — enough to move the download directory and queue a file
 	// into it. Refuse cross-origin state changes outright.
-	guarded := http.NewCrossOriginProtection().Handler(mux)
+	guarded := http.NewCrossOriginProtection().Handler(root)
 
-	return s.recoverPanics(s.logRequests(guarded))
+	return s.recoverPanics(s.logRequests(securityHeaders(guarded)))
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // spaHandler serves the built frontend, falling back to index.html so
@@ -92,12 +106,21 @@ func spaHandler(assets fs.FS) http.Handler {
 	files := http.FileServerFS(assets)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if name == "" || name == "." {
 			name = "index.html"
 		}
 
 		if _, err := fs.Stat(assets, name); err != nil {
+			if strings.HasPrefix(name, "assets/") {
+				http.NotFound(w, r)
+				return
+			}
 			// Unknown path: hand the SPA its entry point.
 			serveIndex(w, r, assets)
 			return

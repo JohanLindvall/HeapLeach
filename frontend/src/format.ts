@@ -93,3 +93,18 @@ export function percentOf(done: number, total: number): number | null {
 export function hostLabel(host: string): string {
   return host || 'direct';
 }
+
+/** Open the web page behind a source, including the registry's links: form. */
+export function sourceURL(source: string): string | undefined {
+  let raw = source.trim();
+  if (/^links:/i.test(raw)) {
+    raw = raw.slice(6).trim().replace(/^\/\//, '');
+    if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+  }
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}

@@ -68,8 +68,9 @@ func (a *AlohaTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 		if err != nil {
 			continue
 		}
-		if ex, ok := a.registry.Known(parsed); ok {
-			return ex.Extract(ctx, parsed, opts)
+		if _, ok := a.registry.Known(parsed); ok {
+			res, _, err := a.registry.Extract(ctx, frame, opts)
+			return res, err
 		}
 	}
 

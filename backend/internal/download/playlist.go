@@ -273,7 +273,7 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, rawURL string, headers h
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, statusError(req.URL, resp)
 	}
 	if err := rejectWebPage(resp, "segment.ts"); err != nil {

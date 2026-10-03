@@ -7,8 +7,32 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"testing"
 )
+
+func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
+	for _, status := range []int{http.StatusAccepted, http.StatusNoContent, http.StatusResetContent} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+			m, it := testTransferDeps(t, srv.URL)
+			part := filepath.Join(t.TempDir(), "file.part")
+			if _, err := m.transferOnce(t.Context(), it, part, "file.bin"); err == nil {
+				t.Fatal("non-file response completed a transfer")
+			}
+			if _, err := os.Stat(part); !os.IsNotExist(err) {
+				t.Fatalf("refused response created a part file: %v", err)
+			}
+			if _, err := m.fetchSegmentOnce(t.Context(), srv.URL, nil, &atomic.Int64{}); err == nil {
+				t.Fatal("non-file response completed a playlist segment")
+			}
+		})
+	}
+}
 
 func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 	payload := []byte("new123")

@@ -129,9 +129,10 @@ func run() error {
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: config.ReadHeaderTimeout,
-		// No WriteTimeout: /api/events is a long-lived stream.
-		IdleTimeout: config.IdleTimeout,
-		ErrorLog:    slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		ReadTimeout:       config.RequestTimeout,
+		WriteTimeout:      config.RequestTimeout,
+		IdleTimeout:       config.IdleTimeout,
+		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 
 	// Bind before serving so a port of 0 — "any free port" — can be

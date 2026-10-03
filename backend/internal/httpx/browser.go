@@ -63,6 +63,21 @@ func newBrowserTransport(standard *http.Transport) http.RoundTripper {
 // RoundTrip prefers the browser-shaped path, remembering hosts where it did
 // not work so they are not retried through it on every request.
 func (t *browserTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// The impersonated dialer connects directly. Proxy selection belongs
+	// to the standard transport, including HTTPS CONNECT and NO_PROXY;
+	// trying a direct connection first would bypass the user's proxy.
+	if t.standard.Proxy != nil {
+		proxy, err := t.standard.Proxy(req)
+		if err != nil {
+			if req.Body != nil {
+				req.Body.Close()
+			}
+			return nil, err
+		}
+		if proxy != nil {
+			return t.standard.RoundTrip(req)
+		}
+	}
 	host := req.URL.Host
 
 	t.mu.Lock()

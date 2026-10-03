@@ -1,6 +1,7 @@
 package download
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -24,9 +25,10 @@ func (m *Manager) Restore() (unfinished int, err error) {
 		return 0, nil
 	}
 
-	st, from, err := loadState(m.stateFile)
+	st, from, err := loadState(m.stateFile, m.legacyStateFile)
 	if err != nil {
-		return 0, err
+		m.stateReadOnly = true
+		return 0, fmt.Errorf("%w; queue persistence disabled to preserve the unreadable file", err)
 	}
 	// Read from where the queue was kept before it was compressed: the
 	// first successful save retires that file, or a queue deleted later to
@@ -160,7 +162,7 @@ func (m *Manager) stateLocked() *savedState {
 // and this ends in an fsync. So the record is built under the lock, and the
 // file is written after it has been let go.
 func (m *Manager) persist() {
-	if m.stateFile == "" {
+	if m.stateFile == "" || m.stateReadOnly {
 		return
 	}
 	m.persistMu.Lock()
@@ -179,7 +181,7 @@ func (m *Manager) persist() {
 // persistState writes a captured queue. Caller holds persistMu; Close uses
 // this directly so no periodic save can follow its final snapshot.
 func (m *Manager) persistState(st *savedState) {
-	if m.stateFile == "" {
+	if m.stateFile == "" || m.stateReadOnly {
 		return
 	}
 

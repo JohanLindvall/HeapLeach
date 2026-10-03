@@ -20,6 +20,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/publicsuffix"
 )
 
 // Client is a retrying HTTP client shared by every extractor and downloader.
@@ -41,7 +42,7 @@ type Client struct {
 // New builds a Client. timeout bounds a single non-streaming request; the
 // downloader clears it for the body transfer and relies on the context.
 func New(userAgent, acceptLanguage string, maxRetries int, timeout time.Duration) *Client {
-	jar, _ := cookiejar.New(nil)
+	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	standard := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -117,7 +118,20 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		cancel(nil)
 		return nil, err
 	}
-	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: func() { cancel(nil) }}
+	// Only successful media bodies are allowed to stream indefinitely.
+	// Error bodies are read before the transfer watchdog starts, both here
+	// (draining a retryable response) and by the downloader for its message.
+	// Headers followed by a silent 403/503 must not pin a worker forever.
+	var bodyTimer *time.Timer
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		bodyTimer = time.AfterFunc(c.headerTimeout, func() { cancel(context.DeadlineExceeded) })
+	}
+	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: func() {
+		if bodyTimer != nil {
+			bodyTimer.Stop()
+		}
+		cancel(nil)
+	}}
 	return resp, nil
 }
 
@@ -143,7 +157,13 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 		return fmt.Errorf("stopped after %d redirects", config.MaxRedirects)
 	}
 	prev := via[len(via)-1]
-	for _, h := range []string{HeaderUserAgent, HeaderAccept, HeaderAcceptLanguage, HeaderReferer} {
+	// net/http suppresses its generated referrer on a TLS downgrade, but
+	// copies an explicitly supplied one. Apply that protection to the
+	// extractor's referrer too, and never restore it from an earlier hop.
+	if prev.URL.Scheme == "https" && req.URL.Scheme == "http" {
+		req.Header.Del(HeaderReferer)
+	}
+	for _, h := range []string{HeaderUserAgent, HeaderAccept, HeaderAcceptLanguage} {
 		if req.Header.Get(h) == "" {
 			if v := prev.Header.Get(h); v != "" {
 				req.Header.Set(h, v)

@@ -47,7 +47,8 @@ go test ./internal/download/ -run 'Enqueue|DoubleRuns' -v   # subset
 ```
 
 Frontend tests are vitest over formatting, progress, filtering, snapshot
-merging, API errors and connection recovery. `make test-frontend` type-checks
+merging, API errors and connection recovery, plus jsdom submission tests.
+`make test-frontend` type-checks
 and runs them, in Docker when npm is absent; CI runs them after the build.
 The formatBytes cases mirror
 `internal/cli/cli_test.go` digit for digit on purpose: the two sides render
@@ -637,11 +638,22 @@ became `queue.json.zst`; when it does not exist, `loadState` reads the
 `queue.json` beside it and the first successful save removes that file — a
 queue deleted later to start afresh would otherwise come back from it. A path
 named explicitly (`HEAPLEACH_STATE`) is read and written as named.
+`Config.LegacyStateFile` enables that default-only migration; a custom `.zst`
+path must never infer ownership of a neighbouring file. A failed restore
+disables persistence for that process, including shutdown saving, to preserve
+an unreadable or newer-version queue. Reads check the file and decoded size
+against `config.MaxStateBytes`.
 
 Shutdown closes admission before capturing the queue, and serializes that
 snapshot with the periodic saver. A late saver cannot overwrite it with
 workers' shutdown cancellations. Extractor retries carry a generation number
 so a superseded result cannot publish into the new attempt.
+
+`resolveSlots` bounds active source listings across jobs independently of
+download concurrency. Waiting resolvers observe cancellation before calling
+the registry. Nested registry expansion carries a path-local ancestry list;
+cycles and chains beyond `config.MaxExtractionDepth` fail without sharing
+mutable traversal state between parallel sources.
 
 Three things here were each got wrong first:
 
@@ -693,8 +705,8 @@ queue and a slow one look identical without it.
 **Free space** is sampled on its own cadence (`config.DiskSampleInterval`,
 seconds rather than the progress tick's milliseconds) and never under `mu`:
 `Statfs` is a syscall and the destination may be a network mount, so it obeys
-the same rule workers do. `diskSpace` is split per platform beside
-`process_unix.go`; the unix half reads `Bavail`, not `Bfree`, since the
+the same rule workers do. `diskSpace` is split per platform in this package;
+the unix half reads `Bavail`, not `Bfree`, since the
 blocks reserved for root are not room a download can use. A reading that
 moved marks the state dirty in its own right — a disk filling from elsewhere
 is exactly what the figure is for, and an idle queue would otherwise never
@@ -710,6 +722,11 @@ that publish no size. `File.SizeApprox` marks a length read off a listing
 page — rounded for display, and never sufficient to conclude that a file on
 disk is this one. `Item.Skipped` records the outcome and, unlike `Note`,
 survives completion, because `runItem` clears notes when an item finishes.
+`separateNames` reserves destinations across each resolved listing before
+any worker starts. Sanitized names can collide, and equal lengths are common;
+without this a second entry was skipped as though the first were its bytes.
+All original names are reserved before numbering duplicates, and `fixedName`
+prevents a late resolver or disposition header undoing that allocation.
 
 **External transfers** (`external.go`, `internal/tools`) cover pages where
 reaching the media needs more than HTTP. `tools.Find` resolves a helper
@@ -720,7 +737,12 @@ first: being told a helper is missing is what sends someone off to install
 it, and a service that went on insisting it was absent turned a working
 install into a puzzle. Hits are kept — a path that resolved once does not
 stop existing. Note that a *newly added* job still meets the cached miss;
-only retrying looks again. The download
+only retrying looks again. `tools.CommandContext` shares Unix process-group
+cancellation and a bounded inherited-pipe wait across metadata, download and
+remux helpers. `tools.Probe` additionally bounds metadata time and stdout;
+`util.BoundedBuffer` keeps diagnostic readers draining without unbounded
+allocation. Download progress must be read concurrently with `Wait`, so that
+its inherited-pipe deadline actually starts. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal
 item state. Its **format selector keeps every audio language**, not just the best one.
@@ -1062,14 +1084,19 @@ Four things are easy to break:
   frame. `-debug` turns the animation off entirely for the same reason.
 - **One painted line must be one screen row.** The live region is repainted
   by counting rows and moving the cursor up that many times. Every line is
-  truncated to the terminal width first — counting printable cells, not
-  bytes, so colour escapes do not eat the budget. The moment a line wraps,
+  truncated to the terminal width first — counting printable runes, not
+  bytes, so colour escapes do not eat the budget. This approximates cell
+  width; wide characters and grapheme clusters still need better handling.
+  Remote fields pass through `terminalText` before our own colour escapes
+  are added, so they cannot inject controls or new rows. The moment a line wraps,
   the arithmetic is wrong and the display starts eating itself. The width is
   re-read every frame (`Options.TermWidth`), because a terminal that shrank
   mid-run would otherwise wrap every line from then on.
 - **A job that resolves to nothing still has to end the run.** It reports
   `queued` forever because it has no items to finish; `finished()` treats a
-  non-resolving job with zero items as done.
+  non-resolving job with zero items as done. A failed source with no items
+  still makes the summary fail, as does any rejected command-line input:
+  zero failed files is not proof that every requested source succeeded.
 - **Byte counts are SI and must match the web UI digit for digit** — the
   same transfer must not read "1.5 GB" in the terminal and "1.6 GB" in the
   browser. `cli.formatBytes` mirrors `frontend/src/format.ts` deliberately;
