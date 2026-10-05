@@ -101,6 +101,8 @@ export interface Snapshot {
   hostCount: number;
   /** Jobs restored from the last run and waiting for a Resume. */
   held: number;
+  /** The server's build, e.g. "v1.2.62". */
+  version?: string;
 }
 
 /** Result of submitting URLs. */

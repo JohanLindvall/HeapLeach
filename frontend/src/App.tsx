@@ -16,6 +16,7 @@ import { JobCard } from './components/JobCard';
 import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
+import { VersionBadge } from './components/VersionBadge';
 import { DownloadIcon, TrashIcon } from './components/Icons';
 import {
   countPhases,
@@ -47,6 +48,13 @@ const IDLE_TITLE = 'HeapLeach — bulk downloader';
 
 export default function App() {
   const { snapshot, connection } = useLiveState();
+  // The version this page was loaded with: the first one a snapshot
+  // reports. See VersionBadge for what a later, different one means.
+  const [pageVersion, setPageVersion] = useState<string>();
+  const serverVersion = snapshot?.version;
+  useEffect(() => {
+    if (serverVersion && pageVersion === undefined) setPageVersion(serverVersion);
+  }, [serverVersion, pageVersion]);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   // A file phase, when one is chosen, replaces the job cards with one list
@@ -169,7 +177,10 @@ export default function App() {
             ↓
           </span>
           <div>
-            <h1>HeapLeach</h1>
+            <div className="header__title">
+              <h1>HeapLeach</h1>
+              <VersionBadge version={snapshot.version} pageVersion={pageVersion} />
+            </div>
             <p>Parallel bulk downloader</p>
           </div>
         </div>

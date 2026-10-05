@@ -32,6 +32,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		DiskTotal:   m.diskTotal.Load(),
 		DiskMinFree: m.minFree,
 		HostCount:   m.hostCount,
+		Version:     m.version,
 	}
 	// Newest first: the job someone just added belongs at the top.
 	for _, v := range slices.Backward(m.order) {

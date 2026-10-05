@@ -117,6 +117,9 @@ type Manager struct {
 	// construction, so it needs no lock.
 	minFree int64
 
+	// version is the build, for the snapshot to report.
+	version string
+
 	// Where the queue is written so a restart can pick it up again, and the
 	// fingerprint of what was last written — an idle queue is not worth
 	// rewriting every interval. The saver and Close both write it, Close
@@ -148,6 +151,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		cfg:             cfg,
 		reg:             reg,
 		hostCount:       hostCount,
+		version:         cfg.Version,
 		resolveSlots:    make(chan struct{}, config.ResolveConcurrency),
 		client:          client.Streaming(),
 		log:             log,

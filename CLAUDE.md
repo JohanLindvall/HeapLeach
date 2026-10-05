@@ -1301,6 +1301,13 @@ part lands. A field the UI stops reading should come out of the payload
 rather than being left to accumulate. `gamification.ts`/`useProgress.ts` add a progress
 layer persisted in `localStorage`; it is derived from bytes actually written.
 
+The header's version badge (`VersionBadge`, `version.ts`) shows the
+server's build from the snapshot (`Snapshot.Version`) rather than asking
+once: contdep redeploys under open tabs, the stream reconnects to the new
+server, and the page goes on running the interface it was loaded with. The
+first version a snapshot reports is taken as the page's own, and a later,
+different one turns the badge into a reload button.
+
 `styles.css` is a single design system: one accent gradient, one surface
 ramp, one shadow scale, dark and light via `prefers-color-scheme`. Prefer
 composing from the tokens at the top over adding new colours.

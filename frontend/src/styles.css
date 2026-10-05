@@ -296,6 +296,37 @@ code {
   letter-spacing: 0.01em;
 }
 
+.header__title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* The server's version beside the name: quiet unless a deploy has replaced
+   the server under this page, when it becomes the way to reload. */
+.version {
+  padding: 0.05rem 0.42rem;
+  border: 1px solid var(--edge-flat);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.version--stale {
+  color: var(--queued);
+  border-color: color-mix(in srgb, var(--queued) 45%, transparent);
+  cursor: pointer;
+}
+
+.version--stale:hover {
+  background: color-mix(in srgb, var(--queued) 12%, transparent);
+}
+
 /* Sidebar + content, the shape a torrent client wants: filters always in
    view on the left, the queue filling everything else. */
 .shell {

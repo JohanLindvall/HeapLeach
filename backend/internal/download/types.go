@@ -276,6 +276,10 @@ type Snapshot struct {
 	// out of Queued: a queue that is not going to move by itself should not
 	// read as one about to.
 	Held int `json:"held"`
+	// Version is the server's build. The browser shows it, and a version
+	// that changes under an open tab is a server replaced by a deploy while
+	// the page goes on running the interface it was loaded with.
+	Version string `json:"version,omitempty"`
 }
 
 // storedNote is the note an item carries, for callers with nothing better.

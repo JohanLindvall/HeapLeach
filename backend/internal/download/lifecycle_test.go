@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestRetryDoesNotStartASecondActiveExtraction(t *testing.T) {
@@ -158,5 +160,18 @@ func TestAJobIsFiledUnderItsTitleNotItsNote(t *testing.T) {
 		if !strings.HasPrefix(it.Dir, "a band"+string(filepath.Separator)) {
 			t.Errorf("%s filed under %q, want the plain title's folder", it.Name, it.Dir)
 		}
+	}
+}
+
+// The browser shows the server's version, and notices when a deploy has
+// replaced the server under an open tab, so every snapshot carries it.
+func TestSnapshotCarriesTheVersion(t *testing.T) {
+	cfg := &config.Config{DownloadDir: t.TempDir(), Concurrency: 1, Version: "v9.9.9"}
+	m := New(cfg, nil, httpx.New("test-agent", "en-US", 0, time.Second), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m.mu.Lock()
+	snap := m.snapshotLocked()
+	m.mu.Unlock()
+	if snap.Version != "v9.9.9" {
+		t.Errorf("snapshot version = %q", snap.Version)
 	}
 }
