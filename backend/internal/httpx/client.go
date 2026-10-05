@@ -6,6 +6,7 @@ package httpx
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,15 @@ func New(userAgent, acceptLanguage string, maxRetries int, timeout time.Duration
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		// Verified by chains rather than by crypto/tls alone, so a server
+		// that leaves its intermediate out is completed the way a browser
+		// completes it. The checks are the same ones; see aia.go.
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // verified in VerifyConnection
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				return chains.verify(cs.ServerName, cs.PeerCertificates)
+			},
+		},
 	}
 
 	// A browser-shaped handshake by default; HEAPLEACH_UTLS=0 turns it off if

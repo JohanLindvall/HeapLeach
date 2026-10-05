@@ -188,6 +188,12 @@ func dialChrome(ctx context.Context, network, addr string) (net.Conn, error) {
 	conn := utls.UClient(raw, &utls.Config{
 		ServerName: host,
 		NextProtos: []string{"h2"},
+		// The same verification as the standard path, chain completion
+		// included: see aia.go.
+		InsecureSkipVerify: true, //nolint:gosec // verified in VerifyConnection
+		VerifyConnection: func(cs utls.ConnectionState) error {
+			return chains.verify(cs.ServerName, cs.PeerCertificates)
+		},
 	}, utls.HelloChrome_Auto)
 
 	if err := conn.HandshakeContext(ctx); err != nil {
