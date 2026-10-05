@@ -216,6 +216,20 @@ attempt counter so waiting never spends the retry budget. It gives up after
 where reading a 429 as the end of the results silently truncates a job
 instead of failing it.
 
+**A short certificate chain is completed, not refused** (`aia.go`). Some
+servers send only their own certificate and leave out the intermediate that
+links it to a trusted root — vids.st does — which browsers complete by
+fetching the issuer from the certificate's own AIA address, and Go and curl
+do not. Both TLS paths (the standard transport and the uTLS dial) therefore
+set `InsecureSkipVerify` and verify in `VerifyConnection` through
+`chains.verify`: crypto/x509's own check against the system roots, hostname
+and validity, run on every connection, and only on an unknown-authority
+failure the issuer fetched (http/https only, three hops, 64 KiB, cached per
+address) and the check run again. A fetched intermediate completes a chain
+only if it really signed the certificate and leads to a trusted root.
+`TestBothTLSPathsVerifyOnTheirOwn` holds each path to refusing a chain that
+leads nowhere — keep it, since a regression there would accept anything.
+
 Two traps that cost time here:
 
 - `retryAfter` returns `(time.Duration, bool)`. It has to separate "the
@@ -516,6 +530,12 @@ Host-specific notes:
   player's own metadata endpoint answers the same way; the embed page, which
   exists to be framed by other sites, carries the identical structure filled
   in. No session, token or player JavaScript is involved.
+- **vids.st** states everything in one `playerConfig` object on `/v/<id>`:
+  the file's address, usually the uploaded MP4 or MKV itself, tokenless
+  and rangeable, and its original name. An `.m3u8` address is followed
+  natively, as the player does. A removed video answers 404 with "Video not
+  found", which is reported as such. The site's certificate chain is short;
+  see the HTTP client section.
 - **lulustream** (`lulustream.com`, `luluvdo.com`, `luluvido.com`) packs its
   JW Player setup with p,a,c,k,e,d, and `unpackJS` reads the HLS master out
   of it: signed for eight hours, one muxed rendition, AES-128 segments under

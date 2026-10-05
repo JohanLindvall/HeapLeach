@@ -324,6 +324,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewDoodStream(client),
 		NewMixDrop(client),
 		NewLuluStream(client),
+		NewVidsSt(client),
 	}
 	// Platform families: one extractor covering every install of a piece of
 	// software, named and matched per install where a list is worth having
