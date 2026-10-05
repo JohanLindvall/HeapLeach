@@ -6,6 +6,8 @@
 #   export   -> scratch stage holding only the binary, for `--output`
 #   helpers  -> yt-dlp, ffmpeg/ffprobe and deno, the same builds
 #               `make dependencies` fetches for the host
+#   captcha  -> freezes the local OCR model and its Python runtime
+#   captcha-export -> optional OCR helper for `make captcha-helper`
 #   runtime  -> the image that actually runs (default target)
 #
 # The app itself is one self-contained binary: the UI is inside it, so there
@@ -14,9 +16,9 @@
 # place tools.Find looks.
 
 # --------------------------------------------------------------- frontend
-# The build stages run on the builder's own platform and cross-compile, so a
-# multi-arch build emulates only the runtime stage's package install rather
-# than npm and the Go compiler.
+# The UI and Go stages run on the builder's own platform and cross-compile.
+# The OCR helper freezes native libraries, so that stage runs on the target
+# platform (under QEMU when cross-building the runtime image).
 FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
 WORKDIR /app/frontend
 
@@ -84,6 +86,28 @@ RUN set -eu; \
     unzip -q deno.zip deno && rm deno.zip; \
     chmod 0755 yt-dlp ffmpeg ffprobe deno
 
+# ---------------------------------------------------------------- captcha
+# A separate optional helper keeps the application itself pure Go. Bookworm
+# sets the helper's glibc baseline to 2.36; the runtime below is newer. Only
+# the beta recognition model is needed, not the detector or older model.
+FROM python:3.12-slim-bookworm AS captcha
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends binutils \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY helpers/captcha/requirements.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
+COPY helpers/captcha/recognize.py ./
+RUN model_dir=$(python -c 'import pathlib, ddddocr; print(pathlib.Path(ddddocr.__file__).parent)') \
+ && pyinstaller --noconfirm --onefile --name heapleach-ocr \
+      --add-data "$model_dir/common.onnx:ddddocr" \
+      --add-data "/usr/local/lib/python3.12/LICENSE.txt:python" \
+      --collect-binaries onnxruntime --recursive-copy-metadata ddddocr \
+      recognize.py
+
+FROM scratch AS captcha-export
+COPY --from=captcha /build/dist/heapleach-ocr /heapleach-ocr
+
 # ---------------------------------------------------------------- runtime
 FROM debian:trixie-slim AS runtime
 
@@ -97,6 +121,7 @@ RUN apt-get update \
  && chown -R heapleach:heapleach /downloads
 
 COPY --from=helpers /out/ /usr/local/bin/
+COPY --from=captcha /build/dist/heapleach-ocr /usr/local/bin/heapleach-ocr
 COPY --from=backend /out/heapleach /usr/local/bin/heapleach
 
 ENV HEAPLEACH_ADDR=:8080 \

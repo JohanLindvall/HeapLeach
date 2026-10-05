@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -853,7 +854,9 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 		return nil
 	}
 
+	ctx = extractor.WithResolveNote(ctx, func(text string) { m.note(it, text) })
 	target, err := resolve(ctx)
+	m.note(it, "")
 	if err != nil {
 		return err
 	}

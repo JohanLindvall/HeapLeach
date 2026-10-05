@@ -28,7 +28,8 @@ make dev            # Go API on :8080 + Vite dev server on :5173 (needs Go and N
 make frontend       # compile the UI into the Go embed dir (Docker if npm is absent)
 make hosts          # regenerate README's supported-site inventory from the registry
 make check          # what CI runs: gofmt, vet, hosts-check, the Go and UI test suites
-make dependencies   # fetch static yt-dlp and ffmpeg into ./bin (see tools.Find)
+make dependencies   # install yt-dlp, ffmpeg, deno and local OCR into ./bin
+make captcha-helper # build only the optional OCR helper (Linux, Docker)
 make dist           # cross-compile the release archives into ./dist
 make tag            # cut a release: make tag V=v1.2.3 — CI builds and publishes
 make help           # every target
@@ -75,11 +76,12 @@ settled workflow, not an oversight.
 `.github/workflows/release.yml` fires on `v*`, cross-compiles the five
 archives and publishes them alongside a `SHA256SUMS`. Its second job, which
 waits for the first, pushes the runtime image for amd64 and arm64 to
-`ghcr.io/johanlindvall/heapleach` as `vX.Y.Z`, `vX.Y` and `latest`. The build
-stages run on the builder's platform and cross-compile (`--platform=$BUILDPLATFORM`),
-so QEMU only emulates the runtime stage's package install — which is also
-why an arm64 build fails locally without binfmt installed, and passes in CI. The target refuses a
-dirty tree, which is what makes step 3 below necessary rather than tidy.
+`ghcr.io/johanlindvall/heapleach` as `vX.Y.Z`, `vX.Y` and `latest`. The UI and
+Go stages run on the builder's platform (`--platform=$BUILDPLATFORM`) and Go
+cross-compiles. QEMU emulates the native OCR helper build and runtime package
+install — which is why an arm64 image needs binfmt locally, supplied by the
+QEMU setup step in CI. The tag target refuses a dirty tree, which is what
+makes step 3 below necessary rather than tidy.
 
 Worth doing before every tag, because each step has caught something:
 
@@ -327,6 +329,18 @@ matters.
 
 Host-specific notes:
 
+- **keep2share** uses the public `/api/v2` free-download flow, on both
+  `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
+  resolver requests one, reads it with the optional local `heapleach-ocr`
+  helper, and waits for the API's timer before redeeming the accepted key.
+  The key survives cancellation within the process, and an unexpired
+  storage URL is reused on retries: a new free transfer spends the host's
+  hourly allowance even when only a range was fetched. `Pace.Group` keeps
+  the one-file limit shared across aliases and storage hosts, and
+  `WithResolveNote` carries the CAPTCHA/wait status to the existing item
+  note. The helper is built with `make captcha-helper` (also part of
+  `make dependencies`) and included in the runtime image. Its model and
+  Python runtime stay separate from the static Go executable.
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be

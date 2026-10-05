@@ -116,6 +116,10 @@ type Pace struct {
 	// is not enough: several files at one connection each is still several
 	// connections to the same host.
 	Files int
+	// Group shares the file limit across aliases and storage servers. Empty
+	// uses the item's host. Set it when the limit belongs to the service,
+	// independently of which domain serves a file or whether it resolved yet.
+	Group string
 }
 
 // StreamCipher describes payload that arrives encrypted.
@@ -264,6 +268,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewBunkr(client),
 		NewErome(client),
 		NewPixeldrain(client),
+		NewKeep2Share(client),
 		NewTurbo(client),
 		NewDropbox(client),
 		NewMediafire(client),

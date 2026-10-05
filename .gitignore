@@ -17,5 +17,12 @@ backend/internal/webui/dist/*
 # Release archives from `make dist`.
 /dist/
 
+# Native builds of the optional CAPTCHA helper.
+helpers/captcha/.venv/
+helpers/captcha/build/
+helpers/captcha/dist/
+helpers/captcha/*.spec
+helpers/captcha/__pycache__/
+
 # Agent worktrees and scratch state, transient by nature.
 .claude/

@@ -12,3 +12,7 @@ backend/internal/webui/dist/
 README.md
 docker-compose.yml
 Makefile
+helpers/captcha/.venv/
+helpers/captcha/build/
+helpers/captcha/dist/
+helpers/captcha/__pycache__/

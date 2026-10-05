@@ -41,7 +41,8 @@ BUILD_SOURCES := $(GO_SOURCES) $(UI_SOURCES) Dockerfile Makefile .dockerignore
 # Optional helpers the service uses when present: yt-dlp resolves YouTube,
 # ffmpeg rewraps and muxes, and deno runs the player JavaScript YouTube signs
 # its media URLs with — yt-dlp has deprecated extracting without a runtime.
-# `make dependencies` puts static builds in ./bin, where the service looks
+# The local CAPTCHA reader is frozen with its own runtime using Docker.
+# `make dependencies` puts these helpers in ./bin, where the service looks
 # before falling back to PATH.
 UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_M),aarch64)
@@ -65,7 +66,7 @@ HAVE_GO   := $(shell command -v go 2>/dev/null)
 
 .PHONY: help build binary run image run-image stop logs shell dev dev-backend dev-frontend \
         frontend frontend-clean screenshots dist tag native test test-frontend test-live check fmt fmt-check vet tidy lock dependencies \
-        hosts hosts-check \
+        hosts hosts-check captcha-helper \
         clean distclean
 
 ## help: show this help
@@ -203,8 +204,17 @@ else
 endif
 	@echo ">> UI built into $(DIST)"
 
-## dependencies: fetch static yt-dlp, ffmpeg and deno into ./bin for the service
-dependencies: $(BIN_DIR)
+## captcha-helper: build the optional local CAPTCHA reader into ./bin (Linux, Docker)
+captcha-helper: $(BIN_DIR)/heapleach-ocr
+
+$(BIN_DIR)/heapleach-ocr: helpers/captcha/recognize.py helpers/captcha/requirements.txt Dockerfile .dockerignore | $(BIN_DIR)
+	DOCKER_BUILDKIT=1 docker build --target captcha-export \
+	  --output type=local,dest=$(BIN_DIR) -f Dockerfile .
+	@chmod +x $@
+	@touch $@
+
+## dependencies: install yt-dlp, ffmpeg, deno and the local CAPTCHA reader into ./bin
+dependencies: captcha-helper $(BIN_DIR)
 	@echo ">> yt-dlp  ($(YTDLP_ASSET))"
 	@curl -fsSL --retry 3 -o "$(BIN_DIR)/yt-dlp.tmp" "$(YTDLP_URL)"
 	@chmod +x "$(BIN_DIR)/yt-dlp.tmp" && mv "$(BIN_DIR)/yt-dlp.tmp" "$(BIN_DIR)/yt-dlp"

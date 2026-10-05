@@ -509,11 +509,15 @@ func (m *Manager) hostFullLocked(it *Item) bool {
 
 // hostKeyLocked names the remote an item will be charged against.
 //
-// An item with a resolver has no URL yet, so the job's own source stands in.
+// An explicit pacing group covers aliases and resolved storage URLs alike.
+// Otherwise, an item with a resolver has no URL yet, so the job's source stands in.
 // That is the right answer rather than a fallback: a paced host's items come
 // from that host's own listing, and the storage server a resolver eventually
 // picks belongs to it either way. Caller holds mu.
 func (m *Manager) hostKeyLocked(it *Item) string {
+	if it.pace != nil && it.pace.Group != "" {
+		return "group:" + it.pace.Group
+	}
 	if it.URL != "" {
 		return hostOf(it.URL)
 	}

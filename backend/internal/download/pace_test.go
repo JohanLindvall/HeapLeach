@@ -177,6 +177,45 @@ func TestPacedItemsDoNotBlockTheQueue(t *testing.T) {
 	}
 }
 
+// A service's free-download limit can cover several public aliases and
+// storage servers. Already-resolved retries must share that same queue.
+func TestPaceGroupCoversAliasesUnresolvedFilesAndRetries(t *testing.T) {
+	m := busyManager(t)
+	m.limit = 4
+	pace := &extractor.Pace{Files: 1, Group: "test-service"}
+	var items []*Item
+	for i, source := range []string{"https://first.example.test/file/a", "https://alias.example.test/file/b", "https://first.example.test/file/c"} {
+		job := &Job{ID: newID(), Source: source}
+		m.jobs[job.ID] = job
+		it := m.newItem(job, extractor.File{Name: fmt.Sprintf("file-%d.bin", i), Pace: pace}, "", i)
+		items = append(items, it)
+	}
+	items[2].URL = "https://storage.example.test/signed-file"
+	free := m.newItem(&Job{}, extractor.File{Name: "other.bin", URL: "https://other.example.test/file"}, "", 0)
+	m.queue = append(append([]*Item{}, items...), free)
+	first := m.nextLocked()
+	if first != items[0] {
+		t.Fatal("the first item was not dispatched")
+	}
+	key := m.hostKeyLocked(first)
+	m.hostActive[key]++
+	first.inFlight = true
+	first.URL = "https://storage2.example.test/signed-file"
+	if m.hostKeyLocked(first) != key {
+		t.Fatal("resolving a storage URL changed the service's pacing group")
+	}
+	if next := m.nextLocked(); next != free {
+		t.Fatalf("next = %v; want unrelated work while both aliases wait", next)
+	}
+	if len(m.queue) != 2 {
+		t.Fatalf("queue = %v; want both the unresolved file and the retry held", m.queue)
+	}
+	delete(m.hostActive, key)
+	if next := m.nextLocked(); next != items[1] {
+		t.Fatal("the service's next file did not resume after its slot was released")
+	}
+}
+
 // A rejection from the extractor's own guard is final: the resource is gone,
 // so repeating the request only gets the same answer.
 func TestRejectByHostIsNotRetried(t *testing.T) {

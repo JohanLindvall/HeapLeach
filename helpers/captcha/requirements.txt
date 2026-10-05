@@ -1,0 +1,15 @@
+# CPU inference and the bundled model. Keep transitive versions pinned too.
+ddddocr==1.5.6
+flatbuffers==25.12.19
+numpy==2.5.3
+onnxruntime==1.30.0
+opencv-python-headless==5.0.0.93
+packaging==26.3
+pillow==12.3.0
+protobuf==7.36.2
+
+# Freeze Python and the model into an optional executable, like yt-dlp.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+altgraph==0.17.5
+setuptools==84.0.0

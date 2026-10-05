@@ -363,6 +363,17 @@ const (
 
 // Extraction tuning.
 const (
+	// Keep2Share's free tier requires a locally read image CAPTCHA and a
+	// wait. Bound both independently of transport retries; an unreadable
+	// challenge must not turn into a stream of new challenges.
+	Keep2ShareCaptchaAttempts = 3
+	Keep2ShareWaits           = 5
+	Keep2ShareMaxWait         = 2 * time.Hour
+	Keep2ShareExpiryMargin    = 5 * time.Second
+	Keep2ShareOCRTimeout      = 20 * time.Second
+	Keep2ShareCaptchaBytes    = 1 << 20
+	Keep2ShareCaptchaPixels   = 128 << 10
+
 	// MaxFolderDepth bounds recursion into nested remote folders.
 	MaxFolderDepth = 8
 
