@@ -516,6 +516,15 @@ Host-specific notes:
   player's own metadata endpoint answers the same way; the embed page, which
   exists to be framed by other sites, carries the identical structure filled
   in. No session, token or player JavaScript is involved.
+- **lulustream** (`lulustream.com`, `luluvdo.com`, `luluvido.com`) packs its
+  JW Player setup with p,a,c,k,e,d, and `unpackJS` reads the HLS master out
+  of it: signed for eight hours, one muxed rendition, AES-128 segments under
+  one key. The page is re-read at transfer time, segments and key with it,
+  through `Target.Segments`. Its key server refuses Go's default HTTP client
+  outright — a live test that fetched the key with `http.Get` got 403 where
+  the downloader's own client is served — so anything checking it must go
+  through `httpx.Client`. The title is the page's `<h1>`; the document title
+  carries the site's name. yt-dlp has no extractor for it.
 - **streamtape, doodstream and mixdrop** are the most fragile extractors
   here, because each depends on the shape of a script the host can change.
   Each therefore reads the numbers it needs off the page — the substring
@@ -804,6 +813,26 @@ Two things here are easy to get wrong, and both were:
   arriving slowly looks identical to a dead connection to anything watching
   it. `watchForStall` therefore takes a progress function rather than an
   item.
+
+**AES-128 playlists are decrypted natively** (`hlscrypt.go`). HLS's
+`METHOD=AES-128` encrypts each segment on its own (AES-CBC, PKCS#7), so each
+segment — already fetched whole into a buffer — is decrypted in place before
+it joins the file, and the part file and its checkpoint hold plain bytes,
+which keeps resume honest. The key is fetched once per attempt; the IV is
+the playlist's own or the segment's media sequence number. A wrong key shows
+only in the padding, so a padding error fails the attempt rather than
+writing noise. `mediaPlaylistKey` (`hls.go`) accepts one key over every
+segment — the same key line repeated before each segment counts as one —
+and refuses the rest before a byte is fetched: SAMPLE-AES, a key that
+changes or starts partway, a non-`identity` KEYFORMAT (DRM), and encryption
+over fragmented MP4. The key reaches the transfer as `File.SegmentKey`, and
+a resolver can replace it with the segments (`Target.Segments`,
+`Target.SegmentKey`) for a playlist signed for less than the queue may wait.
+`resolvePlaylist`, which hands back segments alone, still refuses an
+encrypted playlist — its ~18 callers have nowhere to put a key, and joining
+the segments as they are makes a file of ciphertext that looks finished.
+`hlsdirect` and lulustream use `resolveMediaPlaylist` and carry it.
+
 `remux.go` is a convenience on top, never a dependency — the extractor picks
 a rendition that already carries audio and video together. It converts any
 finished `.ts`, always by stream copy, and keeps the `.ts` when a lossless
