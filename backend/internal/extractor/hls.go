@@ -1,8 +1,11 @@
 package extractor
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -256,6 +259,11 @@ type hlsMedia struct {
 	// Doc is the media playlist's own text, for the caller that needs to
 	// read more off it than the segment list — whether it has ended, say.
 	Doc string
+	// Key is the AES-128 key the segments are encrypted under, or nil for a
+	// playlist in the clear. A caller that cannot carry it onto its File
+	// must refuse the playlist: joined as they are, the segments make a
+	// file of ciphertext that looks like a finished download.
+	Key *SegmentKey
 }
 
 // resolveMediaPlaylist follows a master playlist down to its media playlist.
@@ -279,7 +287,8 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 			return nil, fmt.Errorf("fetch variant playlist: %w", err)
 		}
 	}
-	if err := validateMediaPlaylist(doc); err != nil {
+	key, err := mediaPlaylistKey(doc, base)
+	if err != nil {
 		return nil, err
 	}
 
@@ -287,7 +296,7 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 	if len(segments) == 0 {
 		return nil, fmt.Errorf("playlist lists no segments")
 	}
-	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc}, nil
+	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc, Key: key}, nil
 }
 
 // Relative playlist references belong to the response URL after redirects.
@@ -321,26 +330,101 @@ func fetchPlaylist(ctx context.Context, client *httpx.Client, rawURL string, hea
 	return doc, resp.Request.URL, nil
 }
 
-// The native assembler joins whole, clear resources. Refuse features it
-// cannot honor before their bytes can be reported as a completed download.
-func validateMediaPlaylist(doc string) error {
+// errEncryptedPlaylist refuses an encrypted playlist to a caller that has
+// nowhere to carry its key.
+var errEncryptedPlaylist = errors.New("encrypted HLS playlists require the external downloader (yt-dlp)")
+
+// mediaPlaylistKey reads how a media playlist's segments are encrypted, and
+// refuses what the native assembler cannot honour before a byte of it can
+// be reported as a completed download.
+//
+// One AES-128 key over every segment is the common case and is supported:
+// the downloader fetches the key once and decrypts each segment as it
+// lands. A playlist that repeats that same key line before every segment —
+// some packagers do — is the same key. Anything else is refused: SAMPLE-AES
+// and its relatives encrypt inside the stream rather than around each
+// segment; a key that changes partway, or segments in the clear before it,
+// would need a key per segment; a key format other than the plain one is
+// DRM; and encryption over fragmented MP4 puts the initialisation segment
+// ahead of the numbering an absent IV is counted from.
+func mediaPlaylistKey(doc string, base *url.URL) (*SegmentKey, error) {
+	var (
+		key      *SegmentKey
+		sequence int64
+		segments int
+		mapped   bool
+	)
 	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
+		case line == "":
+		case strings.HasPrefix(line, "#EXT-X-MEDIA-SEQUENCE:"):
+			if n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "#EXT-X-MEDIA-SEQUENCE:")), 10, 64); err == nil {
+				sequence = n
+			}
 		case strings.HasPrefix(line, "#EXT-X-KEY:"):
 			attrs := parseAttributes(strings.TrimPrefix(line, "#EXT-X-KEY:"))
-			if attrs["METHOD"] != "NONE" {
-				return fmt.Errorf("encrypted HLS playlists require the external downloader (yt-dlp)")
+			switch method := attrs["METHOD"]; method {
+			case "NONE":
+				if key != nil {
+					return nil, fmt.Errorf("HLS playlists that stop encrypting partway are not supported")
+				}
+			case "AES-128":
+				if format := attrs["KEYFORMAT"]; format != "" && format != "identity" {
+					return nil, fmt.Errorf("HLS segments under the %q key format are DRM-protected", format)
+				}
+				if attrs["URI"] == "" {
+					return nil, fmt.Errorf("HLS key names no URI")
+				}
+				iv, err := parseKeyIV(attrs["IV"])
+				if err != nil {
+					return nil, err
+				}
+				next := &SegmentKey{URI: resolveRef(base, attrs["URI"]), IV: iv}
+				switch {
+				case key != nil && (key.URI != next.URI || !bytes.Equal(key.IV, next.IV)):
+					return nil, fmt.Errorf("HLS playlists whose key changes partway are not supported")
+				case key == nil && segments > 0:
+					return nil, fmt.Errorf("HLS playlists that start encrypting partway are not supported")
+				}
+				key = next
+			default:
+				return nil, fmt.Errorf("HLS segments encrypted with %s cannot be decrypted here", method)
 			}
 		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:"):
-			return fmt.Errorf("HLS byte ranges require the external downloader (yt-dlp)")
+			return nil, fmt.Errorf("HLS byte ranges require the external downloader (yt-dlp)")
 		case strings.HasPrefix(line, "#EXT-X-MAP:"):
 			if _, ok := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MAP:"))["BYTERANGE"]; ok {
-				return fmt.Errorf("HLS initialization byte ranges require the external downloader (yt-dlp)")
+				return nil, fmt.Errorf("HLS initialization byte ranges require the external downloader (yt-dlp)")
 			}
+			mapped = true
+		case strings.HasPrefix(line, "#"):
+		default:
+			segments++
 		}
 	}
-	return nil
+	if key != nil {
+		if mapped {
+			return nil, fmt.Errorf("encrypted fragmented-MP4 HLS is not supported")
+		}
+		key.Sequence = sequence
+	}
+	return key, nil
+}
+
+// parseKeyIV reads an EXT-X-KEY IV: sixteen bytes written as 0x and
+// thirty-two hexadecimal digits. Absent is fine — the segments' sequence
+// numbers stand in.
+func parseKeyIV(raw string) ([]byte, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	digits := strings.TrimPrefix(strings.TrimPrefix(raw, "0x"), "0X")
+	iv, err := hex.DecodeString(digits)
+	if err != nil || len(iv) != 16 {
+		return nil, fmt.Errorf("HLS key has an unreadable IV %q", raw)
+	}
+	return iv, nil
 }
 
 // resolvePlaylist follows a master playlist down to its segment list, which
@@ -349,6 +433,10 @@ func resolvePlaylist(ctx context.Context, client *httpx.Client, manifestURL stri
 	media, err := resolveMediaPlaylist(ctx, client, manifestURL, headers)
 	if err != nil {
 		return nil, hlsVariant{}, err
+	}
+	// These callers hand back segments alone, with nowhere to carry a key.
+	if media.Key != nil {
+		return nil, hlsVariant{}, errEncryptedPlaylist
 	}
 	return media.Segments, media.Variant, nil
 }

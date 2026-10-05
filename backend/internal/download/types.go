@@ -55,6 +55,9 @@ type Item struct {
 	Skipped bool
 	// Segments, when set, are the ordered parts this file is joined from.
 	Segments []string
+	// SegmentKey is the AES-128 key the segments are encrypted under, or
+	// nil for a playlist in the clear. See playlist.go.
+	SegmentKey *extractor.SegmentKey
 	// External, when set, is a page handed to the helper script instead of
 	// being fetched over HTTP.
 	External string

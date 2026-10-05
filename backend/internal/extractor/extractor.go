@@ -52,6 +52,10 @@ type File struct {
 	// into one file. Adaptive streams (HLS) have no single file to range
 	// over, so they arrive this way instead of as a URL.
 	Segments []string
+	// SegmentKey, when set, is the AES-128 key the Segments are encrypted
+	// under. The downloader fetches it and decrypts each part as it lands,
+	// so the file on disk is the plain stream.
+	SegmentKey *SegmentKey
 	// External, when set, names a page that an external downloader handles
 	// end to end, because reaching the media at all needs machinery well
 	// beyond fetching a URL.
@@ -144,6 +148,25 @@ type Target struct {
 	Size int64
 	// Name overrides the File's name when non-empty.
 	Name string
+	// Segments and SegmentKey replace the File's when set: a playlist whose
+	// links are signed is read again at transfer time, key and all, or a
+	// queue longer than the signature would fail partway down.
+	Segments   []string
+	SegmentKey *SegmentKey
+}
+
+// SegmentKey is how a playlist's segments are encrypted: HLS's
+// METHOD=AES-128, which is AES-128 in CBC mode applied to each segment on
+// its own, PKCS#7-padded, under one key fetched from a URL.
+type SegmentKey struct {
+	// URI is where the sixteen-byte key is fetched from. Often signed like
+	// the segments, so it is read at transfer time, never stored.
+	URI string
+	// IV is the initialisation vector the playlist names, or nil when it
+	// names none, in which case each segment's IV is its media sequence
+	// number — Sequence for the first, counting up.
+	IV       []byte
+	Sequence int64
 }
 
 // Result is everything an extractor found behind one input URL.
@@ -300,6 +323,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewStreamtape(client),
 		NewDoodStream(client),
 		NewMixDrop(client),
+		NewLuluStream(client),
 	}
 	// Platform families: one extractor covering every install of a piece of
 	// software, named and matched per install where a list is worth having

@@ -130,6 +130,8 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 		Size:     -1,
 		Headers:  headers,
 		Segments: media.Segments,
+		// An AES-128 playlist is decrypted as its segments land.
+		SegmentKey: media.Key,
 	}}}, nil
 }
 

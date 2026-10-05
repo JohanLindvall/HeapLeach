@@ -354,6 +354,7 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		URL:        f.URL,
 		Headers:    f.Headers,
 		Segments:   f.Segments,
+		SegmentKey: f.SegmentKey,
 		External:   f.External,
 		Size:       size,
 		SizeApprox: f.SizeApprox,

@@ -86,10 +86,21 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	segments := append([]string(nil), it.Segments...)
 	headers := maps.Clone(it.Headers)
 	workers := m.streams
+	segmentKey := it.SegmentKey
 	m.mu.Unlock()
 
 	if len(segments) == 0 {
 		return "", errors.New("playlist has no segments")
+	}
+
+	// An encrypted playlist's key, fetched once per attempt — it is signed
+	// like the segments, and a resolver may just have minted it afresh.
+	var key []byte
+	if segmentKey != nil {
+		var err error
+		if key, err = m.fetchSegment(ctx, segmentKey.URI, headers, new(atomic.Int64)); err != nil {
+			return "", fmt.Errorf("fetch the key for %s: %w", name, err)
+		}
 	}
 	if workers < 1 {
 		workers = 1
@@ -157,6 +168,9 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 			go func(index int) {
 				defer wg.Done()
 				data, err := m.fetchSegment(ctx, segments[index], headers, &fetched)
+				if err == nil && key != nil {
+					data, err = decryptSegment(data, key, segmentIV(segmentKey, index))
+				}
 				select {
 				case results <- fetchedSegment{index: index, data: data, err: err}:
 				case <-ctx.Done():

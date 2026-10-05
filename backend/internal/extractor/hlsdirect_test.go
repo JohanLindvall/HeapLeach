@@ -455,7 +455,6 @@ func hlsSniffFrom(t *testing.T, raw string) (*Result, error) {
 
 func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {
 	for _, tag := range []string{
-		`#EXT-X-KEY:METHOD=AES-128,URI="key.bin"`,
 		`#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"`,
 		`#EXT-X-BYTERANGE:10@0`,
 		`#EXT-X-MAP:URI="init.mp4",BYTERANGE="10@0"`,
@@ -465,10 +464,27 @@ func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {
 				"/media.m3u8": "#EXTM3U\n" + tag + "\n#EXTINF:6,\npart.ts\n#EXT-X-ENDLIST\n",
 			})
 			_, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
-			if err == nil || !strings.Contains(err.Error(), "yt-dlp") {
-				t.Fatalf("unsupported playlist: %v", err)
+			if err == nil {
+				t.Fatal("unsupported playlist was accepted")
 			}
 		})
+	}
+}
+
+// AES-128 is decrypted rather than refused: the key travels with the file,
+// and the downloader decrypts each segment as it lands.
+func TestHLSCarriesAnAES128KeyToTheDownloader(t *testing.T) {
+	server, _ := hlsServer(t, "application/vnd.apple.mpegurl", map[string]string{
+		"/media.m3u8": "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:3\n" + `#EXT-X-KEY:METHOD=AES-128,URI="key.bin"` +
+			"\n#EXTINF:6,\npart.ts\n#EXT-X-ENDLIST\n",
+	})
+	res, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	key := res.Files[0].SegmentKey
+	if key == nil || key.URI != server.URL+"/key.bin" || key.Sequence != 3 {
+		t.Errorf("key = %+v, want the playlist's own, resolved against it", key)
 	}
 }
 

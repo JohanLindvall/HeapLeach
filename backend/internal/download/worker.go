@@ -872,6 +872,12 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	if target.Size > 0 {
 		it.Size = target.Size
 	}
+	// A playlist read again: its segments and key were signed with the
+	// rest, and the stale ones would fail where these will not.
+	if len(target.Segments) > 0 {
+		it.Segments = target.Segments
+		it.SegmentKey = target.SegmentKey
+	}
 	m.mu.Unlock()
 	return nil
 }
