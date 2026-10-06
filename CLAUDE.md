@@ -76,7 +76,8 @@ settled workflow, not an oversight.
 `.github/workflows/release.yml` fires on `v*`, cross-compiles the five
 archives and publishes them alongside a `SHA256SUMS`. Its second job, which
 waits for the first, pushes the runtime image for amd64 and arm64 to
-`ghcr.io/johanlindvall/heapleach` as `vX.Y.Z`, `vX.Y` and `latest`. The UI and
+`ghcr.io/johanlindvall/heapleach` as `vX.Y.Z` and `X.Y.Z` (the git tag's
+spelling and Docker's), `vX.Y` and `X.Y`, and `latest`. The UI and
 Go stages run on the builder's platform (`--platform=$BUILDPLATFORM`) and Go
 cross-compiles. QEMU emulates the native OCR helper build and runtime package
 install — which is why an arm64 image needs binfmt locally, supplied by the

@@ -90,8 +90,9 @@ No local Go or Node needed — the toolchain lives in the build image, and only
 the finished binary lands on your machine.
 
 Prefer to run it as a container — every release is published to the GitHub
-container registry for amd64 and arm64, tagged with its version and as
-`latest`:
+container registry for amd64 and arm64, tagged with its version (`v1.2.3`
+and `1.2.3` alike), its minor version (`v1.2`, `1.2`) and `latest`. Pin a
+version to stay on it; `latest` follows each release:
 
 ```bash
 docker run -d -p 8080:8080 -v ~/Downloads:/downloads --user "$(id -u):$(id -g)" \

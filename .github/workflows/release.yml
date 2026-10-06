@@ -93,13 +93,19 @@ jobs:
           password: ${{ github.token }}
 
       # Registry names must be lower case; the owner may not be.
+      #
+      # Every image carries its own version as well as latest, in both
+      # spellings: v1.2.3 matches the git tag and the release, 1.2.3 is the
+      # Docker convention. The minor tags (v1.2, 1.2) follow the newest patch.
       - id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/heapleach
           tags: |
             type=semver,pattern=v{{version}}
+            type=semver,pattern={{version}}
             type=semver,pattern=v{{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
       - uses: docker/build-push-action@v7
