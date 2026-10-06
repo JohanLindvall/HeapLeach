@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Local image CAPTCHA reader: image bytes on stdin, recognized text on stdout.
 
 The caller bounds image size, runtime and retries. No network service is used.
