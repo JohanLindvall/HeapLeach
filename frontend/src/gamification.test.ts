@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from 'vitest';
 import { accumulate, EMPTY_PROGRESS, LEVELS, newlyUnlocked, readProgress, standing, type Progress } from './gamification';
 import type { ItemView, JobView, Snapshot } from './types';

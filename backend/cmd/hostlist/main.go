@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command hostlist renders the supported-site inventory as Markdown, so
 // README.md can state what the program supports without anyone maintaining
 // that list by hand.

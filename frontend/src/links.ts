@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Pulling links out of arbitrary text.
  *

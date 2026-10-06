@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package extractor
 
 // Shared reasoning for the hosts that expand a listing into files grouped by

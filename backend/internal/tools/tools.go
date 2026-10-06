@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package tools locates the optional external programs the downloader uses
 // when they are available.
 //

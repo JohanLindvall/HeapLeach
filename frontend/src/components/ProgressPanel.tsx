@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { memo } from 'react';
 import { ACHIEVEMENTS, standing, type Progress } from '../gamification';
 import { formatBytes, formatSpeed } from '../format';

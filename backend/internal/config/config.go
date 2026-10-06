@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package config holds the process-wide settings, resolved from the
 // environment and then from command-line flags, with sensible defaults for
 // both container and local runs.

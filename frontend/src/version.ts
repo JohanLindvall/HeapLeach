@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * What the header's version badge says.
  *

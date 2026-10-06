@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { memo, useRef, useState, type FormEvent } from 'react';
 import { addUrls, ApiError } from '../api';
 import { linksIn } from '../links';

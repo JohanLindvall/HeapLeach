@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { ItemView, JobView, Status } from './types';
 
 /**

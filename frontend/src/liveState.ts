@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { fetchState } from './api';
 import type { ConnectionState, Snapshot } from './types';
 

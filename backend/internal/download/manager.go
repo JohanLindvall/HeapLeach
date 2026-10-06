@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package download runs the worker pool: it turns submitted URLs into jobs,
 // schedules their files across a configurable number of parallel transfers,
 // and publishes live progress to subscribers.

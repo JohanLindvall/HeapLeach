@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

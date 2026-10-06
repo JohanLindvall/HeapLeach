@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package cli runs the downloader without a browser: it queues the URLs it
 // is given, animates their progress on the terminal, and exits when the last
 // one is finished.

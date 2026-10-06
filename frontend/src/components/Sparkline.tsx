@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 interface SparklineProps {
   readonly series: number[];
   readonly width?: number;

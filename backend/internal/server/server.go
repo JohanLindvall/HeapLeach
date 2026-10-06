@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package server exposes the download manager over HTTP: a small JSON API,
 // a server-sent-events stream for live progress, and the embedded frontend.
 package server

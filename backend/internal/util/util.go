@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package util holds small, dependency-free helpers shared by the other
 // packages. Anything here must be generic enough that no single package owns
 // it; host- or protocol-specific logic belongs with its own package.

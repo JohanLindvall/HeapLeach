@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package httpx provides the shared outbound HTTP client: browser-like
 // default headers, redirect following that keeps those headers across hops,
 // and retry with backoff that honours Retry-After.

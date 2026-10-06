@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Renders a captured terminal frame as an HTML page, for screenshotting.
 
 The frame arrives on stdin exactly as the display writes it, so this only has

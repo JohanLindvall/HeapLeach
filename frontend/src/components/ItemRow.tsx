@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { memo } from 'react';
 import { formatBytes, formatEta, formatSpeed, percentOf } from '../format';
 import { isActive, isRetryable } from '../status';

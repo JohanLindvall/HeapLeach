@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { AddResponse, Snapshot } from './types';
 
 /** Error carrying the server's message for a failed API call. */

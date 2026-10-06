@@ -71,6 +71,11 @@ jobs:
       - name: Host list is current
         run: make hosts-check
 
+      # Every source file names its license (SPDX), so a dependency review
+      # can scan rather than read; a file added without one fails here.
+      - name: Every source file names its license
+        run: make spdx-check
+
       # Race detection is worth the time here: the download engine writes one
       # file from several connections at once.
       - name: Test

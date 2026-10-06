@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { formatBytes, formatSpeed } from '../format';
 import { PHASES, type FileEntry, type Phase } from '../status';

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { versionBadge } from '../version';
 
 interface VersionBadgeProps {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from 'vitest';
 import { mergeSnapshot } from './snapshotMerge';
 import type { ItemView, JobView, Snapshot } from './types';

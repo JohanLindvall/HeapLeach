@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /** Human-readable byte count, e.g. "1.4 GB". */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—';

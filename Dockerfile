@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: MIT
 #
 # Build layout:
 #   frontend -> compiles the TypeScript UI to static js/css/html

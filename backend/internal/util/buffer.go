@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package util
 
 // BoundedBuffer retains the first Limit bytes while accepting and discarding

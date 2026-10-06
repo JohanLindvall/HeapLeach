@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /** Lifecycle state of a job or a single file. Mirrors download.Status in Go. */
 export type Status =
   | 'resolving'

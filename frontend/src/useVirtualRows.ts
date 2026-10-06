@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
 /**

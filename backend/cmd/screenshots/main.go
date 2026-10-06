@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command screenshots serves the real web UI over a made-up queue, so the
 // pictures in docs/ can be regenerated without downloading anything.
 //

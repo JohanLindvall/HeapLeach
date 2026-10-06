@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 # HeapLeach — parallel bulk downloader
 #
 # The default build runs entirely inside Docker (no local Go or Node needed)
@@ -66,7 +67,7 @@ HAVE_GO   := $(shell command -v go 2>/dev/null)
 
 .PHONY: help build binary run image run-image stop logs shell dev dev-backend dev-frontend \
         frontend frontend-clean screenshots dist tag native test test-frontend test-live check fmt fmt-check vet tidy lock dependencies \
-        hosts hosts-check captcha-helper \
+        hosts hosts-check captcha-helper spdx-check \
         clean distclean
 
 ## help: show this help
@@ -301,7 +302,16 @@ test:
 	cd backend && go test ./... -race
 
 ## check: what CI checks, before pushing — formatting, vet, the host list, the tests
-check: fmt-check vet hosts-check test test-frontend
+check: fmt-check vet hosts-check spdx-check test test-frontend
+
+## spdx-check: fail if a source file does not name its license
+# Every source file carries an SPDX identifier, so a legal team can approve
+# the dependency by scanning rather than reading. Test fixtures are data.
+spdx-check:
+	@set -e; missing=$$(git ls-files '*.go' '*.ts' '*.tsx' '*.css' '*.sh' '*.py' Makefile Dockerfile \
+	  | grep -v '/testdata/' | xargs grep -L 'SPDX-License-Identifier: MIT' || true); \
+	if [ -n "$$missing" ]; then echo "no SPDX-License-Identifier in:"; echo "$$missing"; exit 1; fi
+	@echo ">> every source file names its license"
 
 ## fmt-check: fail if gofmt would change anything
 fmt-check:

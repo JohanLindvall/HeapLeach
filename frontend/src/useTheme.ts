@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useState } from 'react';
 
 /** What the user picked, as opposed to what is showing. */

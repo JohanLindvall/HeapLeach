@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { formatSpeed } from '../format';
 import type { ConnectionState, Snapshot } from '../types';
 import { BoltIcon, MoonIcon, PauseIcon, PlayIcon, SplitIcon, SunIcon } from './Icons';

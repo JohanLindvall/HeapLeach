@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from 'vitest';
 import { formatBytes, formatDuration, formatEta, formatSpeed, hostLabel, percentOf, sourceURL } from './format';
 

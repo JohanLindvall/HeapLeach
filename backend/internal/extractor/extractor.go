@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package extractor turns a page URL into the concrete list of files behind
 // it. Each supported host gets one Extractor; unknown hosts fall through to
 // a direct-link extractor.

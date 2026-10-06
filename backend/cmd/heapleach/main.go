@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command heapleach serves the bulk downloader: a JSON API and the embedded
 // TypeScript frontend, backed by a parallel download manager.
 package main

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // What a slider shows while the server catches up.
 //
 // Every control in this UI renders straight from the SSE snapshot, which is

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import type { Status } from '../types';
 
 interface ProgressBarProps {

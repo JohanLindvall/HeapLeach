@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { countByFilter, PHASES, type Filter, type Phase } from '../status';
 import type { JobView, Status } from '../types';
 

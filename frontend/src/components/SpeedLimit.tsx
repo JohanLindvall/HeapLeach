@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { formatSpeed } from '../format';
 import { GaugeIcon } from './Icons';
 

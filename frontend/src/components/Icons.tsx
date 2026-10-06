@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /**
  * Inline icons. Keeping them local avoids an icon-font dependency and keeps
  * the bundle small; each inherits the current text colour.

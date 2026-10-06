@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package webui carries the compiled TypeScript frontend, embedded into the
 // binary so the server ships as a single artefact.
 package webui

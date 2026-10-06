@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 import { useEffect, useState } from 'react';
 
 /** How many samples the graph keeps; at ~400 ms a tick this is ~40 seconds. */
