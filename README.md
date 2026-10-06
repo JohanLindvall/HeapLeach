@@ -1,15 +1,28 @@
 # HeapLeach
 
-A bulk downloader: paste a pile of links, watch them download in parallel,
-cancel or retry any of them mid-flight.
+[![CI](https://github.com/JohanLindvall/HeapLeach/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JohanLindvall/HeapLeach/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/JohanLindvall/HeapLeach)](https://github.com/JohanLindvall/HeapLeach/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/JohanLindvall/HeapLeach)](LICENSE)
 
-> **About the name.** Heap leaching is a mining method: crushed ore is piled
-> into a heap and irrigated from above, and the solution percolates down
-> through it, dissolving out the metal as it goes and draining to a pad at
-> the bottom. This does the same to a heap of links. The extractors percolate
-> through whatever the pages are made of — players, listings, signed
-> redirects, encrypted payloads — and what is worth keeping drains out into a
-> folder.
+**HeapLeach is a bulk downloader in one static binary.** Paste links from
+180+ sites — file hosts such as gofile, bunkr, MEGA and pixeldrain, image
+galleries, video and broadcaster pages — and it resolves every album, folder
+and playlist behind them, then downloads the files in parallel: resumable
+multi-connection transfers, a per-host throttle for overloaded servers, and
+native decryption of MEGA files and AES-128 HLS streams. The web UI is
+compiled into the binary, the same binary downloads headless in a terminal,
+and every release ships builds for Linux, macOS and Windows and a Docker
+image for amd64 and arm64.
+
+```bash
+./heapleach                                          # the web UI on a free local port, in your browser
+./heapleach https://gofile.io/d/<code> ~/Downloads   # or headless, with progress in the terminal
+docker run -p 8080:8080 -v ~/Downloads:/downloads --user "$(id -u):$(id -g)" ghcr.io/johanlindvall/heapleach
+```
+
+<p align="center">
+  <img src="docs/screenshot-dark.png" alt="The queue in dark mode: header totals with a throughput graph, sidebar filters, and per-file progress with stream counts and ETAs." width="900">
+</p>
 
 - **Backend** — Go. Worker pool, per-host extractors, resumable transfers.
 - **Frontend** — TypeScript + React, compiled and **embedded into the Go
@@ -19,10 +32,6 @@ cancel or retry any of them mid-flight.
   watch them download in the terminal.
 
 ## Screenshots
-
-<p align="center">
-  <img src="docs/screenshot-dark.png" alt="The queue in dark mode: header totals with a throughput graph, sidebar filters, and per-file progress with stream counts and ETAs." width="900">
-</p>
 
 Light and dark follow the system by default; the header toggle overrides it,
 and the choice is remembered. The layout collapses to a single column on a
@@ -839,6 +848,16 @@ Each carries the binary, the README and the licence, and `SHA256SUMS` covers
 the set. `make dist` builds exactly the same archives locally, which is the
 way to check a release before tagging one.
 
+## About the name
+
+Heap leaching is a mining method: crushed ore is piled
+into a heap and irrigated from above, and the solution percolates down
+through it, dissolving out the metal as it goes and draining to a pad at
+the bottom. This does the same to a heap of links. The extractors percolate
+through whatever the pages are made of — players, listings, signed
+redirects, encrypted payloads — and what is worth keeping drains out into a
+folder.
+
 ## Notes
 
 - The queue is written to `HEAPLEACH_STATE` every ten minutes when it has
@@ -854,3 +873,12 @@ way to check a release before tagging one.
   fixture tests only; a green suite alone does not verify live host support.
 - Be a good citizen: the defaults are deliberately modest, and the client
   honours `Retry-After` and backs off on 429s.
+
+## Star history
+
+<a href="https://www.star-history.com/#johanlindvall/heapleach&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=johanlindvall/heapleach&type=Date&theme=dark">
+    <img alt="HeapLeach's GitHub stars over time" src="https://api.star-history.com/svg?repos=johanlindvall/heapleach&type=Date">
+  </picture>
+</a>

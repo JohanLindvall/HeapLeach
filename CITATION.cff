@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use HeapLeach in your work, please cite it as below."
+type: software
+title: HeapLeach
+abstract: >-
+  HeapLeach is a bulk downloader in one static binary. It resolves the
+  albums, folders and playlists behind links from 180+ sites — file hosts,
+  image galleries, video and broadcaster pages — and downloads the files in
+  parallel, with resumable multi-connection transfers, a per-host throttle
+  for overloaded servers, and native decryption of MEGA files and AES-128
+  HLS streams. A React web UI is compiled into the Go binary, which also
+  downloads headless in a terminal.
+authors:
+  - given-names: Johan
+    family-names: Lindvall
+repository-code: "https://github.com/JohanLindvall/HeapLeach"
+license: MIT
+keywords:
+  - bulk downloader
+  - download manager
+  - file hosts
+  - resumable downloads
+  - HLS
+  - Go
+  - React
