@@ -780,12 +780,12 @@ make run-image    # build and run the container image
 make dev          # Go API on :8080 + Vite dev server on :5173 (hot reload)
 make dev-backend  # API only
 make test         # Go unit tests, with the race detector
-make check        # gofmt, vet, host inventory, Go race tests, UI types and tests
+make check        # formatting, vet, host inventory, Go, UI, OCR and release tests
 make test-live    # include local, gitignored live extractor tests (when present)
 make frontend     # build the UI into the Go embed directory
 make lock         # regenerate frontend/package-lock.json
 make dist         # cross-compile the release archives into ./dist
-make tag V=v0.1.0 # tag a release; CI builds and publishes the binaries
+make tag V=v0.1.0 # manually choose a release version (main pushes bump the patch)
 make help         # every target
 ```
 
@@ -829,13 +829,19 @@ the host issues links that expire.
 
 ### Releases
 
-Every push and pull request runs the tests, `go vet` and a `gofmt` check, with
+Every push to `main` and pull request runs the tests, `go vet` and a `gofmt` check, with
 the UI compiled first so the binary is built against the real embedded
 frontend rather than the placeholder.
 
-Pushing a `v*` tag builds the release. One Linux runner produces every
-archive, because the program is pure Go with cgo off and the targets differ
-only by `GOOS` and `GOARCH`:
+After a push to `main` passes CI, it automatically tags the tested commit
+with the next patch version and publishes the archives and container images.
+Versions follow the highest stable `vX.Y.Z` tag. Publishing is queued, and a
+rerun reuses its tag or skips a commit already included in a newer release.
+`make tag V=vX.Y.Z` remains available for choosing a version explicitly;
+pushing that tag uses the same publisher.
+
+One Linux runner produces every archive, because the program is pure Go
+with cgo off and the targets differ only by `GOOS` and `GOARCH`:
 
 | Archive | For |
 |---|---|

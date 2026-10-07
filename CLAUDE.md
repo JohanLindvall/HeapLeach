@@ -27,11 +27,11 @@ make native         # build on the host (needs Go; uses Docker for the UI if Nod
 make dev            # Go API on :8080 + Vite dev server on :5173 (needs Go and Node)
 make frontend       # compile the UI into the Go embed dir (Docker if npm is absent)
 make hosts          # regenerate README's supported-site inventory from the registry
-make check          # what CI runs: gofmt, vet, hosts-check, the Go and UI test suites
+make check          # CI checks: formatting, vet, hosts, Go, UI, OCR and release tests
 make dependencies   # install yt-dlp, ffmpeg, deno and local OCR into ./bin
 make captcha-helper # build only the optional OCR helper (Linux, Docker)
 make dist           # cross-compile the release archives into ./dist
-make tag            # cut a release: make tag V=v1.2.3 — CI builds and publishes
+make tag            # choose a version manually: make tag V=v1.2.3 (main pushes bump the patch)
 make help           # every target
 ```
 
@@ -72,8 +72,17 @@ settled workflow, not an oversight.
 
 ### Releases
 
-`make tag V=v1.2.3` writes an annotated tag and pushes it;
-`.github/workflows/release.yml` fires on `v*`, cross-compiles the five
+Every push to `main` that passes CI calls `.github/workflows/release.yml`,
+which creates an annotated tag for that exact commit by incrementing the
+highest stable tag's patch version. Publication is serialized, retries reuse
+the current tag, and late CI runs for commits already in a newer release
+skip publishing. PR runs perform checks only. The caller invokes the
+publisher directly: tags pushed with `GITHUB_TOKEN` do not trigger another
+workflow. `.github/scripts/release-tag.sh` handles version selection, tested
+against a temporary Git remote by `make test-release`.
+
+`make tag V=v1.2.3` still writes and pushes an explicit annotated tag;
+the release workflow also fires on `v*`. It cross-compiles the five
 archives and publishes them alongside a `SHA256SUMS`. Its second job, which
 waits for the first, pushes the runtime image for amd64 and arm64 to
 `ghcr.io/johanlindvall/heapleach` as `vX.Y.Z` and `X.Y.Z` (the git tag's
@@ -84,14 +93,16 @@ install — which is why an arm64 image needs binfmt locally, supplied by the
 QEMU setup step in CI. The tag target refuses a dirty tree, which is what
 makes step 3 below necessary rather than tidy.
 
-Worth doing before every tag, because each step has caught something:
+Worth doing for release-related changes and manual tags, because each step
+has caught something:
 
 1. `gh run list` — CI green on the **exact commit** being tagged, not merely
    somewhere on the branch. Check who authored anything unfamiliar in
    `git log <last tag>..main` rather than assuming it is yours. Read the
    plain list rather than filtering: `gh run list --commit <sha>` prints
    nothing when it matches nothing, which looks exactly like a commit CI
-   never ran. An empty result is not evidence of a green build.
+   never ran. An empty result is not evidence of a green build. Automatic
+   releases enforce this through the CI job dependency.
 2. `make dist`, then extract the linux/amd64 archive, run `-version` and
    `sha256sum -c`. This is a rehearsal on the host, so its binaries are
    stamped `<last tag>-N-g<sha>-dirty` — that is `git describe` before the
