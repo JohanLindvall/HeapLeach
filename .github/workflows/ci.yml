@@ -35,6 +35,9 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: Test the local CAPTCHA reader
+        run: make test-captcha
+
       - uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod

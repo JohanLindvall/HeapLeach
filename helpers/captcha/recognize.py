@@ -13,14 +13,40 @@ import ddddocr
 from PIL import Image, ImageOps
 
 
+def complete(answer):
+    return len(answer) == 6 and answer.isascii() and answer.isalnum()
+
+
+def recognize(reader, image):
+    image = image.convert("RGB")
+    bounds = ImageOps.invert(image.convert("L")).getbbox()
+    if bounds is None:
+        return ""
+    crop = image.crop(bounds)
+    for variant in (crop, image):
+        answer = reader.classification(variant)
+        if complete(answer):
+            return answer
+
+    # Pale outlines can disappear when the model rescales to 64 pixels
+    # high. Contrast recovers them; a white border keeps edge characters
+    # away from the boundary. Wider views separate overlapping characters.
+    # Retry the same challenge locally before spending another host attempt.
+    contrast = ImageOps.autocontrast(crop.convert("L"))
+    border = max(1, round(contrast.height / 10))
+    for variant in (
+        contrast,
+        ImageOps.expand(contrast, border=border, fill=255),
+        contrast.resize((round(contrast.width * 1.25), contrast.height), Image.Resampling.LANCZOS),
+        contrast.resize((round(contrast.width * 1.5), contrast.height), Image.Resampling.LANCZOS),
+    ):
+        answer = reader.classification(variant)
+        if complete(answer):
+            return answer
+    return ""
+
+
 if __name__ == "__main__":
     reader = ddddocr.DdddOcr(show_ad=False, beta=True)
-    image = Image.open(io.BytesIO(sys.stdin.buffer.read())).convert("RGB")
-    # The model rescales the whole image to a fixed height. Removing white
-    # margins gives thin outlines more pixels at that height. Keep the
-    # original as a fallback when cropping produces an incomplete answer.
-    bounds = ImageOps.invert(image.convert("L")).getbbox()
-    answer = reader.classification(image.crop(bounds)) if bounds else ""
-    if len(answer) != 6 or not answer.isascii() or not answer.isalnum():
-        answer = reader.classification(image)
-    print(answer)
+    image = Image.open(io.BytesIO(sys.stdin.buffer.read()))
+    print(recognize(reader, image))
