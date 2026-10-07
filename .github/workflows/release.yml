@@ -3,17 +3,50 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_call:
+
+# Tag allocation and publication share a queue. Another successful main
+# push must neither take the same version nor cancel a half-published one.
+concurrency:
+  group: heapleach-release
+  cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
+      - id: tag
+        name: Select the release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag=$GITHUB_REF_NAME
+          else
+            tag=$(bash .github/scripts/release-tag.sh "$GITHUB_SHA")
+          fi
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: prepare
+    if: needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
           # The build stamps the version from the tag, but a shallow clone
           # leaves `git describe` blind, which is what every other build here
           # uses.
@@ -38,7 +71,7 @@ jobs:
       # One Linux runner builds all of them: the program is pure Go with cgo
       # off, so the targets differ only by GOOS and GOARCH.
       - name: Build the archives
-        run: make dist VERSION=${{ github.ref_name }}
+        run: make dist VERSION="$TAG"
 
       # Created as a draft, filled, checked, and only then published.
       #
@@ -53,7 +86,6 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" >/dev/null 2>&1; then
@@ -75,13 +107,17 @@ jobs:
   # waits for the release job so a tag that fails its tests publishes no
   # image either.
   image:
-    needs: release
+    needs: [prepare, release]
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
@@ -102,10 +138,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/heapleach
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern={{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern=v{{version}},value=${{ env.TAG }}
+            type=semver,pattern={{version}},value=${{ env.TAG }}
+            type=semver,pattern=v{{major}}.{{minor}},value=${{ env.TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
             type=raw,value=latest
 
       - uses: docker/build-push-action@v7
@@ -113,7 +149,7 @@ jobs:
           context: .
           target: runtime
           platforms: linux/amd64,linux/arm64
-          build-args: VERSION=${{ github.ref_name }}
+          build-args: VERSION=${{ env.TAG }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

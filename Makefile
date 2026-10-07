@@ -68,7 +68,7 @@ HAVE_GO   := $(shell command -v go 2>/dev/null)
 
 .PHONY: help build binary run image run-image stop logs shell dev dev-backend dev-frontend \
         frontend frontend-clean screenshots dist tag native test test-frontend test-live check fmt fmt-check vet tidy lock dependencies \
-        hosts hosts-check captcha-helper test-captcha spdx-check \
+        hosts hosts-check captcha-helper test-captcha test-release spdx-check \
         clean distclean
 
 ## help: show this help
@@ -303,7 +303,7 @@ test:
 	cd backend && go test ./... -race
 
 ## check: what CI checks, before pushing — formatting, vet, the host list, the tests
-check: fmt-check vet hosts-check spdx-check test test-frontend test-captcha
+check: fmt-check vet hosts-check spdx-check test test-frontend test-captcha test-release
 
 ## spdx-check: fail if a source file does not name its license
 # Every source file carries an SPDX identifier, so a legal team can approve
@@ -336,6 +336,10 @@ endif
 ## test-captcha: test the local CAPTCHA reader and model on synthetic images (Docker)
 test-captcha:
 	DOCKER_BUILDKIT=1 docker build --target captcha-test -f Dockerfile .
+
+## test-release: check automatic version tags against a temporary Git remote
+test-release:
+	bash .github/scripts/test-release-tag.sh
 
 ## test-live: run the extractor tests against the real sites (needs network)
 test-live:
