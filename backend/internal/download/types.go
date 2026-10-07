@@ -102,6 +102,10 @@ type Item struct {
 	// changes while the item waits, and a note written once would go on
 	// stating whatever was true when it was written.
 	waitingFor string
+	// notBefore holds a queued item back until a time its host named. See
+	// extractor.WaitError. The note gives the time left from it, for the
+	// same reason waitingFor is kept apart from the note.
+	notBefore time.Time
 	// hostKey is the remote this item is charged against while it runs. It
 	// is fixed at dispatch rather than read from URL later, because a
 	// resolver may point the item at a different host mid-flight and the

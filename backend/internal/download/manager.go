@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -403,6 +404,7 @@ func (m *Manager) dispatch() {
 			// say — describes a state that has just ended.
 			it.Note = ""
 			it.waitingFor = ""
+			it.notBefore = time.Time{}
 			it.startedAt = time.Now()
 			it.lastSample = it.startedAt
 			it.lastBytes = it.downloaded.Load()
@@ -419,13 +421,14 @@ func (m *Manager) dispatch() {
 
 // nextLocked takes the next runnable item out of the queue. Caller holds mu.
 //
-// Three things can disqualify the item at the front. It may have been
+// Four things can disqualify the item at the front. It may have been
 // cancelled while it sat there, in which case it is dropped. A worker may
 // still own it, which inFlight reports and which must never be handed out
 // twice. Or its host may already be running as many transfers as it will
-// tolerate — and that one is a *skip*, not a drop: the item keeps its place
-// and a later one is started instead, so one gentle host cannot idle the
-// whole pool behind it.
+// tolerate, or have named a time before which it will not serve this file —
+// and those are a *skip*, not a drop: the item keeps its place and a later
+// one is started instead, so one gentle host cannot idle the whole pool
+// behind it.
 func (m *Manager) nextLocked() *Item {
 	// A paused queue starts nothing new. Transfers already running park
 	// inside their reads instead, so they keep their place in the file.
@@ -440,9 +443,10 @@ func (m *Manager) nextLocked() *Item {
 	}
 	// The ordinary queue is FIFO. Advancing its head costs nothing; copying
 	// every remaining item on each dispatch makes a large album quadratic.
+	now := time.Now()
 	for len(m.queue) > 0 {
 		it := m.queue[0]
-		if it.Status == StatusQueued && !it.inFlight && m.hostFullLocked(it) {
+		if it.Status == StatusQueued && !it.inFlight && (m.hostFullLocked(it) || it.notBefore.After(now)) {
 			break
 		}
 		m.queue[0] = nil
@@ -460,7 +464,7 @@ func (m *Manager) nextLocked() *Item {
 			kept = append(kept, it)
 		case it.Status != StatusQueued || it.inFlight:
 			// Cancelled where it stood, or still owned: forget it.
-		case m.hostFullLocked(it):
+		case m.hostFullLocked(it), it.notBefore.After(now):
 			kept = append(kept, it)
 		default:
 			chosen = it
@@ -588,6 +592,9 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		// Its host is full and the item has gone back to the queue; the
 		// dispatcher will pick it up when that host has room. Not a
 		// failure, and nothing more to record here.
+	case m.deferWaitLocked(it, err):
+		// Its host named a time to come back, and the item is back in the
+		// queue until then — see deferWaitLocked.
 	case m.deferStalledLocked(it, err):
 		// The stall watchdog gave up on this attempt, and the item has just
 		// been sent to the back of the queue with its part file intact —
@@ -847,6 +854,7 @@ func (m *Manager) enqueueLocked(it *Item) {
 	it.Err = ""
 	it.Note = ""
 	it.waitingFor = ""
+	it.notBefore = time.Time{}
 	it.speed = 0
 	it.stallDefers = 0
 	// A retry starts the host's patience over. Carried across, a file that
@@ -870,12 +878,30 @@ func (m *Manager) enqueueLocked(it *Item) {
 // then. A queue full of rows waiting on one host then shows two or three
 // different numbers for it at once. This reads the host's current answer
 // instead, so every row waiting on it says the same thing. Caller holds mu.
+//
+// An item held back until a time is the same in a different way: the time
+// left is worked out here, rounded up to the minute so the row changes once
+// a minute rather than in every frame, and the note goes once the time has
+// come — the item is then only waiting for a worker like any other.
 func (m *Manager) itemNoteLocked(it *Item) string {
+	if !it.notBefore.IsZero() {
+		left := time.Until(it.notBefore)
+		if left <= 0 {
+			return ""
+		}
+		return fmt.Sprintf("%s — %s left", it.Note, minutesLeft(left))
+	}
 	if it.waitingFor == "" {
 		return it.Note
 	}
 	limit, _ := m.hostGate.waiting(it.waitingFor)
 	return waitingNote(it.waitingFor, limit)
+}
+
+// minutesLeft reads a wait as whole minutes, rounded up: "1h4m", "12m".
+func minutesLeft(d time.Duration) string {
+	d = (d + time.Minute - 1).Truncate(time.Minute)
+	return strings.TrimSuffix(d.String(), "0s")
 }
 
 // deferHostQueuedLocked puts an item back in the queue because its host is
@@ -910,6 +936,30 @@ func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 	// never disagree about it.
 	it.waitingFor = queued.host
 	it.Note = waitingNote(queued.host, queued.limit)
+	return true
+}
+
+// deferWaitLocked puts an item back in the queue until a time its host
+// named, and reports whether it did. Caller holds mu.
+//
+// Keep2Share makes an address wait the best part of an hour between free
+// downloads. Sat out in the worker, that read as "Downloading" for an hour
+// in which nothing moved, and kept a slot from everything else in the queue.
+// Back in the queue it reads as waiting, the dispatcher passes over it until
+// the time comes, and a timer wakes the dispatcher then, since nothing else
+// might. Like a full host, this is not an attempt that failed, so it costs
+// the item nothing.
+func (m *Manager) deferWaitLocked(it *Item, err error) bool {
+	wait, ok := errors.AsType[*extractor.WaitError](err)
+	if !ok || it.retryPending {
+		return false
+	}
+	m.enqueueLocked(it) // clears the note along with the rest; say why after
+	it.notBefore = wait.Until
+	it.Note = wait.Reason
+	time.AfterFunc(time.Until(wait.Until), m.signal)
+	m.log.Info("host asked for a wait; deferred until then",
+		"item", it.ID, "name", it.Name, "until", wait.Until.Format(time.DateTime))
 	return true
 }
 

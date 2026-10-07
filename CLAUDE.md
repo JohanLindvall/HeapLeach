@@ -339,12 +339,27 @@ ciphertext sets it, and the downloader decrypts on the way to disk. Only
 mega does today, and see the download-manager section for why the mode
 matters.
 
+A resolver that is told "later" rather than "no" returns
+`extractor.WaitError` with the time to come back, and does not sleep it out.
+`deferWaitLocked` puts the item back in the queue as `queued`, which the UI
+shows as Waiting, `nextLocked` passes over it until then (`Item.notBefore`),
+and a timer wakes the dispatcher when the time comes. The note's time left
+is rendered per snapshot (`itemNoteLocked`), rounded up to the minute so the
+row changes once a minute, not every frame. Sleeping in the resolver was
+how a Keep2Share file read "Downloading" for an hour in which nothing moved,
+while holding a worker the rest of the queue could have used.
+
 Host-specific notes:
 
 - **keep2share** uses the public `/api/v2` free-download flow, on both
   `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
   resolver requests one, reads it with the optional local `heapleach-ocr`
   helper, and waits for the API's timer before redeeming the accepted key.
+  That timer is short and is sat out in place, holding the key. The host's
+  wait *between* free downloads, given when there is no key, is the best
+  part of an hour and covers every file from the address. So it goes back to
+  the queue as a `WaitError`, and is kept on the `Keep2Share` value so other
+  files return the same wait without solving a CAPTCHA to be told it.
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's
   hourly allowance even when only a range was fetched. `Pace.Group` keeps
