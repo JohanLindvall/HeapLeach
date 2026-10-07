@@ -38,6 +38,7 @@ UI_SOURCES := $(shell find frontend -type f \
                 \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \
                 -not -path 'frontend/node_modules/*' -not -path 'frontend/dist/*' 2>/dev/null)
 BUILD_SOURCES := $(GO_SOURCES) $(UI_SOURCES) Dockerfile Makefile .dockerignore
+CAPTCHA_SOURCES := $(wildcard helpers/captcha/*.py helpers/captcha/testdata/*.png) helpers/captcha/requirements.txt
 
 # Optional helpers the service uses when present: yt-dlp resolves YouTube,
 # ffmpeg rewraps and muxes, and deno runs the player JavaScript YouTube signs
@@ -67,7 +68,7 @@ HAVE_GO   := $(shell command -v go 2>/dev/null)
 
 .PHONY: help build binary run image run-image stop logs shell dev dev-backend dev-frontend \
         frontend frontend-clean screenshots dist tag native test test-frontend test-live check fmt fmt-check vet tidy lock dependencies \
-        hosts hosts-check captcha-helper spdx-check \
+        hosts hosts-check captcha-helper test-captcha spdx-check \
         clean distclean
 
 ## help: show this help
@@ -208,7 +209,7 @@ endif
 ## captcha-helper: build the optional local CAPTCHA reader into ./bin (Linux, Docker)
 captcha-helper: $(BIN_DIR)/heapleach-ocr
 
-$(BIN_DIR)/heapleach-ocr: helpers/captcha/recognize.py helpers/captcha/requirements.txt Dockerfile .dockerignore | $(BIN_DIR)
+$(BIN_DIR)/heapleach-ocr: $(CAPTCHA_SOURCES) Dockerfile .dockerignore | $(BIN_DIR)
 	DOCKER_BUILDKIT=1 docker build --target captcha-export \
 	  --output type=local,dest=$(BIN_DIR) -f Dockerfile .
 	@chmod +x $@
@@ -302,7 +303,7 @@ test:
 	cd backend && go test ./... -race
 
 ## check: what CI checks, before pushing — formatting, vet, the host list, the tests
-check: fmt-check vet hosts-check spdx-check test test-frontend
+check: fmt-check vet hosts-check spdx-check test test-frontend test-captcha
 
 ## spdx-check: fail if a source file does not name its license
 # Every source file carries an SPDX identifier, so a legal team can approve
@@ -331,6 +332,10 @@ else
 	  $(NODE_IMAGE) \
 	  sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run typecheck && npm test'
 endif
+
+## test-captcha: test the local CAPTCHA reader and model on synthetic images (Docker)
+test-captcha:
+	DOCKER_BUILDKIT=1 docker build --target captcha-test -f Dockerfile .
 
 ## test-live: run the extractor tests against the real sites (needs network)
 test-live:

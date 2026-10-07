@@ -4,6 +4,13 @@
 to standard output. HeapLeach validates the answer and retries rejected
 CAPTCHAs. It also bounds image size and runtime and terminates the helper on
 cancellation. The helper uses CPU inference and makes no network calls.
+If cropping and the original image lose characters, it retries the same
+challenge with stronger contrast, a white border and wider spacing before
+requesting another one from the host. Complete answers keep their case.
+
+`make test-captcha` runs the reader against synthetic outlined challenges
+using the actual model, plus checks for blank images and invalid answers.
+It runs in Docker and is also part of `make check`, CI and helper builds.
 
 From the repository root, `make captcha-helper` uses Docker to put a frozen
 Linux executable in `bin/`, beside HeapLeach. It includes Python and the
