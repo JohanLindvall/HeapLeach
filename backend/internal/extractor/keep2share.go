@@ -29,7 +29,8 @@ type Keep2Share struct {
 	api    string
 	// The production solver uses local OCR. Keeping the image reader apart
 	// lets protocol tests exercise refusals and waits without an OCR binary.
-	solver func(context.Context, []byte) (string, error)
+	// It returns at least one reading, most likely first, or an error.
+	solver func(context.Context, []byte) ([]string, error)
 }
 
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
@@ -182,6 +183,10 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 
 	var last error
 	var waited time.Duration
+	// The current image's readings not yet submitted. A wrong answer leaves
+	// the challenge open, so the next reading goes to the same image.
+	var challenge string
+	var readings []string
 	for attempts, waits := 0, 0; ; {
 		if delay := time.Until(d.ready); delay > 0 {
 			if delay > config.Keep2ShareMaxWait-waited {
@@ -197,41 +202,29 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 		if d.key != "" {
 			in["free_download_key"] = d.key
 		} else {
-			if attempts >= config.Keep2ShareCaptchaAttempts {
-				return nil, fmt.Errorf("keep2share: could not obtain a free download after %d CAPTCHA attempts: %w", attempts, last)
-			}
-			solver := d.host.solver
-			if solver == nil {
+			if len(readings) == 0 {
+				if attempts >= config.Keep2ShareCaptchaAttempts {
+					return nil, fmt.Errorf("keep2share: could not obtain a free download after %d CAPTCHA attempts: %w", attempts, last)
+				}
+				attempts++
 				var err error
-				solver, err = keep2ShareOCR()
+				challenge, readings, err = d.nextChallenge(ctx, attempts)
 				if err != nil {
-					return nil, err
+					if !errors.Is(err, errKeep2ShareOCR) {
+						return nil, err
+					}
+					last = err
+					continue
 				}
 			}
-			attempts++
-			resolveNote(ctx, fmt.Sprintf("Keep2Share: reading CAPTCHA (%d/%d)", attempts, config.Keep2ShareCaptchaAttempts))
-			captcha, err := d.host.call(ctx, "requestCaptcha", map[string]string{})
-			if err != nil {
-				return nil, err
-			}
-			if captcha.Challenge == "" || captcha.ImageURL == "" {
-				return nil, errors.New("keep2share: CAPTCHA response contains no image or challenge")
-			}
-			img, err := d.host.captchaImage(ctx, captcha.ImageURL)
-			if err != nil {
-				return nil, err
-			}
-			answer, err := solver(ctx, img)
-			if err != nil {
-				if !errors.Is(err, errKeep2ShareOCR) {
-					return nil, err
-				}
-				last = err
-				continue
-			}
-			in["captcha_challenge"], in["captcha_response"] = captcha.Challenge, answer
+			in["captcha_challenge"], in["captcha_response"] = challenge, readings[0]
+			readings = readings[1:]
 		}
 		out, err := d.host.call(ctx, "getUrl", in)
+		if out == nil || out.ErrorCode != 31 {
+			// Anything but a wrong answer spends or outlives the challenge.
+			readings = nil
+		}
 		if err != nil {
 			if out == nil {
 				return nil, err
@@ -275,6 +268,39 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			return nil, errors.New("keep2share: free-download wait did not finish")
 		}
 	}
+}
+
+// nextChallenge requests a CAPTCHA image and reads it, returning the challenge
+// and up to Keep2ShareCaptchaGuesses readings, most likely first.
+func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (string, []string, error) {
+	solver := d.host.solver
+	if solver == nil {
+		var err error
+		solver, err = keep2ShareOCR()
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	resolveNote(ctx, fmt.Sprintf("Keep2Share: reading CAPTCHA (%d/%d)", attempt, config.Keep2ShareCaptchaAttempts))
+	captcha, err := d.host.call(ctx, "requestCaptcha", map[string]string{})
+	if err != nil {
+		return "", nil, err
+	}
+	if captcha.Challenge == "" || captcha.ImageURL == "" {
+		return "", nil, errors.New("keep2share: CAPTCHA response contains no image or challenge")
+	}
+	img, err := d.host.captchaImage(ctx, captcha.ImageURL)
+	if err != nil {
+		return "", nil, err
+	}
+	readings, err := solver(ctx, img)
+	if err == nil && len(readings) == 0 {
+		err = errKeep2ShareOCR
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return captcha.Challenge, readings[:min(len(readings), config.Keep2ShareCaptchaGuesses)], nil
 }
 
 func (k *Keep2Share) captchaImage(ctx context.Context, raw string) ([]byte, error) {

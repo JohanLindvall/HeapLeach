@@ -21,23 +21,26 @@ var errKeep2ShareOCR = errors.New("keep2share: could not read the CAPTCHA")
 
 // Check the helper before requesting a challenge: an installation without
 // OCR must not leave a succession of unanswered CAPTCHAs on the host.
-func keep2ShareOCR() (func(context.Context, []byte) (string, error), error) {
+func keep2ShareOCR() (func(context.Context, []byte) ([]string, error), error) {
 	program, ok := tools.Find(tools.CaptchaOCR)
 	if !ok {
 		return nil, errors.New("keep2share: free downloads need local CAPTCHA recognition; " + tools.NotInstalled(tools.CaptchaOCR))
 	}
-	return func(ctx context.Context, raw []byte) (string, error) {
+	return func(ctx context.Context, raw []byte) ([]string, error) {
 		return keep2ShareReadCaptcha(ctx, program, raw)
 	}, nil
 }
 
-func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) (string, error) {
+// The helper prints its readings one per line, most likely first. Each line
+// is judged on its own, so a malformed one costs that reading rather than
+// the image; an image with no well-formed reading at all is unreadable.
+func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]string, error) {
 	info, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
-		return "", fmt.Errorf("keep2share: expected an image CAPTCHA: %w", err)
+		return nil, fmt.Errorf("keep2share: expected an image CAPTCHA: %w", err)
 	}
 	if info.Width <= 0 || info.Height <= 0 || info.Width > config.Keep2ShareCaptchaPixels/info.Height {
-		return "", errors.New("keep2share: CAPTCHA dimensions are too large")
+		return nil, errors.New("keep2share: CAPTCHA dimensions are too large")
 	}
 	ctx, cancel := context.WithTimeout(ctx, config.Keep2ShareOCRTimeout)
 	defer cancel()
@@ -48,19 +51,34 @@ func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) (str
 	cmd.Stdout, cmd.Stderr = output, stderr
 	err = cmd.Run()
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	}
 	if err != nil {
-		return "", fmt.Errorf("keep2share: CAPTCHA reader: %w: %s", err, util.Truncate(strings.TrimSpace(stderr.String()), 200))
+		return nil, fmt.Errorf("keep2share: CAPTCHA reader: %w: %s", err, util.Truncate(strings.TrimSpace(stderr.String()), 200))
 	}
-	answer := strings.Join(strings.Fields(output.String()), "")
-	if output.Truncated || len(answer) != 6 {
-		return "", errKeep2ShareOCR
+	if output.Truncated {
+		return nil, errKeep2ShareOCR
+	}
+	var readings []string
+	for _, line := range strings.Split(output.String(), "\n") {
+		if answer := strings.Join(strings.Fields(line), ""); keep2ShareAnswer(answer) {
+			readings = append(readings, answer)
+		}
+	}
+	if len(readings) == 0 {
+		return nil, errKeep2ShareOCR
+	}
+	return readings, nil
+}
+
+func keep2ShareAnswer(answer string) bool {
+	if len(answer) != 6 {
+		return false
 	}
 	for _, c := range answer {
 		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
-			return "", errKeep2ShareOCR
+			return false
 		}
 	}
-	return answer, nil
+	return true
 }

@@ -1,15 +1,29 @@
 # Local CAPTCHA reader
 
-`heapleach-ocr` reads an image from standard input and writes recognized text
-to standard output. HeapLeach validates the answer and retries rejected
-CAPTCHAs. It also bounds image size and runtime and terminates the helper on
-cancellation. The helper uses CPU inference and makes no network calls.
-If cropping and the original image lose characters, it retries the same
-challenge with stronger contrast, a white border and wider spacing before
-requesting another one from the host. Complete answers keep their case.
+`heapleach-ocr` reads an image from standard input and writes its readings
+to standard output, one per line, most likely first. HeapLeach validates
+each reading and tries up to three on the same challenge, since a wrong
+answer does not spend it, before requesting another image. It also bounds
+image size and runtime and terminates the helper on cancellation. The
+helper uses CPU inference and makes no network calls.
+
+Keep2Share's challenges are six letters and digits, and the site compares
+answers without regard to case. The model's own best string regularly
+drops a pale or hairline character and comes back five long, so the
+reader decodes the model's per-step probabilities under those two rules
+instead: exactly six symbols, with each letter's upper and lower case
+pooled. It reads two views, the image cropped to its text with its
+contrast stretched and the image whole, and ranks the readings by their
+likelihood under both. On 66 live challenges, labelled by hand, the
+model's own string was right for 41; retrying the unreadable ones with
+more contrast, a border or wider spacing raised that to 42. The first
+ranked reading is right for 44 to 50 of them, depending on which of I and
+l each bar really is, and one of the first three for 60 either way. The
+font draws a capital I and a lowercase l alike, so those readings rank
+side by side and trying the next one settles it.
 
 `make test-captcha` runs the reader against synthetic outlined challenges
-using the actual model, plus checks for blank images and invalid answers.
+using the actual model, and the decoding against hand-made model output.
 It runs in Docker and is also part of `make check`, CI and helper builds.
 
 From the repository root, `make captcha-helper` uses Docker to put a frozen

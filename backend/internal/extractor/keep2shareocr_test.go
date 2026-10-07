@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 )
@@ -25,7 +26,7 @@ func TestKeep2ShareOCRRequiresAnImageBeforeStartingAHelper(t *testing.T) {
 	}
 }
 
-func TestKeep2ShareOCRPreservesCaseAndRejectsPartialAnswers(t *testing.T) {
+func TestKeep2ShareOCRKeepsWellFormedReadingsInOrder(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture helper is a shell script")
 	}
@@ -35,12 +36,15 @@ func TestKeep2ShareOCRPreservesCaseAndRejectsPartialAnswers(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, output string
-		ok           bool
+		want         []string // nil: unreadable
 	}{
-		{"complete", "aB3dE7\\n", true},
-		{"whitespace", "a B3dE7\\n", true},
-		{"short", "aB3dE\\n", false},
-		{"punctuation", "aB3dE!\\n", false},
+		{"complete", "aB3dE7\\n", []string{"aB3dE7"}},
+		{"whitespace", "a B3dE7\\n", []string{"aB3dE7"}},
+		{"ranked", "aB3dE7\\nxY4zW9\\n", []string{"aB3dE7", "xY4zW9"}},
+		{"skips malformed", "aB3dE\\naB3dE!\\nxY4zW9\\n", []string{"xY4zW9"}},
+		{"short", "aB3dE\\n", nil},
+		{"punctuation", "aB3dE!\\n", nil},
+		{"silent", "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			program := filepath.Join(t.TempDir(), "ocr")
@@ -48,12 +52,12 @@ func TestKeep2ShareOCRPreservesCaseAndRejectsPartialAnswers(t *testing.T) {
 			if err := os.WriteFile(program, []byte(body), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			answer, err := keep2ShareReadCaptcha(context.Background(), program, raw.Bytes())
-			if tc.ok && (err != nil || answer != "aB3dE7") {
-				t.Fatalf("answer=%q error=%v; want the case-sensitive answer", answer, err)
+			readings, err := keep2ShareReadCaptcha(context.Background(), program, raw.Bytes())
+			if tc.want != nil && (err != nil || !slices.Equal(readings, tc.want)) {
+				t.Fatalf("readings=%q error=%v; want %q, case and order kept", readings, err, tc.want)
 			}
-			if !tc.ok && !errors.Is(err, errKeep2ShareOCR) {
-				t.Fatalf("error=%v; want an unreadable CAPTCHA", err)
+			if tc.want == nil && !errors.Is(err, errKeep2ShareOCR) {
+				t.Fatalf("readings=%q error=%v; want an unreadable CAPTCHA", readings, err)
 			}
 		})
 	}

@@ -367,8 +367,11 @@ const (
 const (
 	// Keep2Share's free tier requires a locally read image CAPTCHA and a
 	// wait. Bound both independently of transport retries; an unreadable
-	// challenge must not turn into a stream of new challenges.
+	// challenge must not turn into a stream of new challenges. A wrong
+	// answer leaves the challenge open, so each image is tried with up to
+	// Keep2ShareCaptchaGuesses of the reader's readings, most likely first.
 	Keep2ShareCaptchaAttempts = 3
+	Keep2ShareCaptchaGuesses  = 3
 	Keep2ShareWaits           = 5
 	Keep2ShareMaxWait         = 2 * time.Hour
 	Keep2ShareExpiryMargin    = 5 * time.Second
