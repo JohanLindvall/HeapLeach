@@ -581,7 +581,8 @@ solver. `make captcha-helper` builds just this helper with Docker on Linux
 image already carries it. Native builds on other platforms are described in
 [helpers/captcha/README.md](helpers/captcha/README.md).
 
-The free flow tries at most three CAPTCHA images, shows the host's waiting
+The free flow tries at most three CAPTCHA images, and at most three readings
+of each, ranked by the reader's confidence. It shows the host's waiting
 time, and allows one file and one connection at a time across both domain
 names. Unreadable challenges fail with a retryable error; OCR is not always
 correct. Keep2Share's speed limits and cooldowns still apply. Waiting is

@@ -1,6 +1,7 @@
 These CAPTCHA images are synthetic. Neither came from a host. They exercise
-the real bundled model: both the old cropped view and the original image
-lose characters, while contrast and spacing recover the complete answer.
+the real bundled model: read plainly, both the cropped view and the whole
+image lose characters, and the contrast-stretched crop recovers the complete
+answer as the first reading.
 
 They were generated with Pillow 12.3.0 and Liberation Serif Regular:
 

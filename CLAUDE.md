@@ -342,6 +342,20 @@ Host-specific notes:
   note. The helper is built with `make captcha-helper` (also part of
   `make dependencies`) and included in the runtime image. Its model and
   Python runtime stay separate from the static Go executable.
+
+  The helper prints ranked readings, not one answer. The challenge is six
+  letters and digits compared without regard to case, and a wrong answer
+  leaves it open, so `resolve` tries up to `Keep2ShareCaptchaGuesses`
+  readings on one image before asking for another — and drops the rest
+  the moment anything but a wrong answer comes back, since an accepted or
+  expired challenge must not be answered again. Decoding the model's
+  probabilities under those rules is what made the reader usable: its own
+  best string dropped pale and hairline characters and came back short,
+  which is how three images in a row could all be "unreadable". Two traps
+  when checking answers against the live API: the file is checked before
+  the CAPTCHA, so a made-up id is no oracle; and once a free download is
+  pending for a file, `getUrl` hands out the link whatever the answer, so
+  every guess against that file "succeeds".
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be

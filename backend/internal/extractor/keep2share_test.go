@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -76,7 +77,7 @@ func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[strin
 	t.Cleanup(srv.Close)
 	k := NewKeep2Share(httpx.New("test-agent", "en-US", 0, time.Second))
 	k.api = srv.URL + "/api/v2"
-	k.solver = func(ctx context.Context, raw []byte) (string, error) { return "aB3dE7", nil }
+	k.solver = func(ctx context.Context, raw []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
 	return k
 }
 
@@ -158,15 +159,86 @@ func TestKeep2ShareAcceptsTheLastCaptchaAttempt(t *testing.T) {
 }
 
 func TestKeep2ShareBoundsWrongCaptchaAnswers(t *testing.T) {
-	var calls atomic.Int32
+	var calls, solves atomic.Int32
 	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusNotAcceptable)
 		_, _ = fmt.Fprint(w, `{"status":"error","code":406,"errorCode":31,"message":"Invalid captcha code"}`)
 	})
+	// More readings than may be tried, so both bounds are what stops it.
+	k.solver = func(context.Context, []byte) ([]string, error) {
+		solves.Add(1)
+		return []string{"aB3dE1", "aB3dE2", "aB3dE3", "aB3dE4", "aB3dE5"}, nil
+	}
 	_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "CAPTCHA attempts") || calls.Load() != config.Keep2ShareCaptchaAttempts {
-		t.Fatalf("calls=%d error=%v; want a bounded failure", calls.Load(), err)
+	want := config.Keep2ShareCaptchaAttempts * config.Keep2ShareCaptchaGuesses
+	if err == nil || !strings.Contains(err.Error(), "CAPTCHA attempts") || calls.Load() != int32(want) ||
+		solves.Load() != config.Keep2ShareCaptchaAttempts {
+		t.Fatalf("answers=%d images=%d error=%v; want %d answers to %d images, then a bounded failure",
+			calls.Load(), solves.Load(), err, want, config.Keep2ShareCaptchaAttempts)
+	}
+}
+
+func TestKeep2ShareTriesTheNextReadingOnTheSameImage(t *testing.T) {
+	var answers []string
+	var solves atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		if in["free_download_key"] != "" {
+			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/first-clip"}`)
+			return
+		}
+		answers = append(answers, in["captcha_response"])
+		if in["captcha_response"] != "aB3dEl" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = fmt.Fprint(w, `{"status":"error","code":406,"errorCode":31,"message":"Invalid captcha code"}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":0}`)
+	})
+	k.solver = func(context.Context, []byte) ([]string, error) {
+		solves.Add(1)
+		return []string{"aB3dEI", "aB3dEl", "aB3dE1"}, nil
+	}
+	if _, err := keep2ShareTestExtract(t, k).Resolve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if solves.Load() != 1 || !slices.Equal(answers, []string{"aB3dEI", "aB3dEl"}) {
+		t.Fatalf("images=%d answers=%q; want the second reading of the same image", solves.Load(), answers)
+	}
+}
+
+func TestKeep2ShareNeverAnswersASpentChallengeAgain(t *testing.T) {
+	var answers []string
+	var solves atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		switch {
+		case in["free_download_key"] != "":
+			// The accepted ticket has lapsed; only a new image can replace it.
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = fmt.Fprint(w, `{"status":"error","code":406,"errorCode":40,"message":"Invalid free download key"}`)
+		case in["captcha_response"] == "first1":
+			answers = append(answers, in["captcha_response"])
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = fmt.Fprint(w, `{"status":"error","code":406,"errorCode":31,"message":"Invalid captcha code"}`)
+		case in["captcha_response"] == "first2":
+			answers = append(answers, in["captcha_response"])
+			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":0}`)
+		default:
+			answers = append(answers, in["captcha_response"])
+			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/first-clip"}`)
+		}
+	})
+	k.solver = func(context.Context, []byte) ([]string, error) {
+		if solves.Add(1) == 1 {
+			return []string{"first1", "first2", "first3"}, nil
+		}
+		return []string{"secnd1", "secnd2", "secnd3"}, nil
+	}
+	if _, err := keep2ShareTestExtract(t, k).Resolve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if solves.Load() != 2 || !slices.Equal(answers, []string{"first1", "first2", "secnd1"}) {
+		t.Fatalf("images=%d answers=%q; an accepted challenge's leftover reading was submitted", solves.Load(), answers)
 	}
 }
 
