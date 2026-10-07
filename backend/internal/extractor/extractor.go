@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -159,6 +160,22 @@ type Target struct {
 	// queue longer than the signature would fail partway down.
 	Segments   []string
 	SegmentKey *SegmentKey
+}
+
+// WaitError is a resolver's way of saying a file cannot be fetched yet,
+// rather than that it failed: Keep2Share, say, makes an address wait the
+// best part of an hour between free downloads. The downloader puts the item
+// back in the queue until Until, as waiting rather than downloading, and the
+// worker it held goes on to something else meanwhile. Resolve is called
+// again once the time has come.
+type WaitError struct {
+	Until time.Time
+	// Reason is shown while the item waits, followed by the time left.
+	Reason string
+}
+
+func (e *WaitError) Error() string {
+	return fmt.Sprintf("%s until %s", e.Reason, e.Until.Format(time.TimeOnly))
 }
 
 // SegmentKey is how a playlist's segments are encrypted: HLS's

@@ -31,6 +31,36 @@ type Keep2Share struct {
 	// lets protocol tests exercise refusals and waits without an OCR binary.
 	// It returns at least one reading, most likely first, or an error.
 	solver func(context.Context, []byte) ([]string, error)
+
+	// cooldown is when the host's wait between free downloads runs out. It
+	// holds back every file from this address, not only the one that was
+	// told, so the rest learn it here rather than each solving a CAPTCHA to
+	// be told again.
+	mu       sync.Mutex
+	cooldown time.Time
+}
+
+const keep2ShareCooldown = "Keep2Share: waiting between free downloads"
+
+// wait records the host's wait between free downloads and returns the error
+// that puts a file back in the queue until it is over.
+func (k *Keep2Share) wait(delay time.Duration) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if until := time.Now().Add(delay); until.After(k.cooldown) {
+		k.cooldown = until
+	}
+	return &WaitError{Until: k.cooldown, Reason: keep2ShareCooldown}
+}
+
+// waiting returns that error while the wait is still on, and nil after.
+func (k *Keep2Share) waiting() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if time.Now().Before(k.cooldown) {
+		return &WaitError{Until: k.cooldown, Reason: keep2ShareCooldown}
+	}
+	return nil
 }
 
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
@@ -203,6 +233,9 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			in["free_download_key"] = d.key
 		} else {
 			if len(readings) == 0 {
+				if err := d.host.waiting(); err != nil {
+					return nil, err
+				}
 				if attempts >= config.Keep2ShareCaptchaAttempts {
 					return nil, fmt.Errorf("keep2share: could not obtain a free download after %d CAPTCHA attempts: %w", attempts, last)
 				}
@@ -231,6 +264,14 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			}
 			last = err
 			if delay := out.retryDelay(); delay > 0 {
+				// A ticket's own timer is short and the transfer follows
+				// it, so it is sat out here. Without one, this is the
+				// host's wait between free downloads: the best part of an
+				// hour, which the file spends back in the queue rather
+				// than holding a worker.
+				if d.key == "" {
+					return nil, d.host.wait(delay)
+				}
 				waits++
 				if waits > config.Keep2ShareWaits {
 					return nil, err

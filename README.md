@@ -585,9 +585,12 @@ The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting
 time, and allows one file and one connection at a time across both domain
 names. Unreadable challenges fail with a retryable error; OCR is not always
-correct. Keep2Share's speed limits and cooldowns still apply. Waiting is
-cancelable and bounded to two hours per attempt; retrying within the same
-process preserves an accepted ticket and reuses unexpired download links.
+correct. Keep2Share's speed limits and cooldowns still apply. A file held
+back by the wait between free downloads goes back to the queue as waiting,
+with the time left, and its download slot goes to other files meanwhile.
+Waiting is cancelable and bounded to two hours per attempt; retrying within
+the same process preserves an accepted ticket and reuses unexpired download
+links.
 
 The YouTube download itself runs through `yt-download.sh` rather than inline
 Go, so the recipe is in one readable place. A copy of that script placed

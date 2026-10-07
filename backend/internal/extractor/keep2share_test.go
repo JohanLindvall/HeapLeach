@@ -333,3 +333,63 @@ func TestKeep2ShareBoundsRepeatedDownloadTimers(t *testing.T) {
 		t.Fatalf("calls=%d error=%v; want a bounded wait when the host keeps returning timers", calls.Load(), err)
 	}
 }
+
+// The host's wait between free downloads is the best part of an hour. It
+// goes back to the queue rather than being sat out in a worker, and it holds
+// back every file from this address: the rest learn it without each solving
+// a CAPTCHA to be told.
+func TestKeep2ShareSendsTheWaitBetweenFreeDownloadsBackToTheQueue(t *testing.T) {
+	var answers, solves atomic.Int32
+	var cooling atomic.Bool
+	cooling.Store(true)
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		answers.Add(1)
+		if cooling.Load() {
+			w.WriteHeader(http.StatusNotAcceptable)
+			_, _ = fmt.Fprint(w, `{"status":"error","code":406,"errorCode":42,"message":"Download not available","errors":[{"code":5,"timeRemaining":"3600.000000"}]}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/first-clip"}`)
+	})
+	k.solver = func(context.Context, []byte) ([]string, error) {
+		solves.Add(1)
+		return []string{"aB3dE7"}, nil
+	}
+
+	start := time.Now()
+	_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+	wait, ok := errors.AsType[*WaitError](err)
+	if !ok {
+		t.Fatalf("resolve = %v; want the wait handed back to the queue", err)
+	}
+	if spent := time.Since(start); spent > 5*time.Second {
+		t.Errorf("resolve sat out %s of the wait instead of handing it back", spent)
+	}
+	if left := time.Until(wait.Until); left < 59*time.Minute || left > time.Hour {
+		t.Errorf("the wait ends in %s, want the host's hour", left)
+	}
+
+	next := keep2ShareTestExtract(t, k)
+	if _, err := next.Resolve(context.Background()); !isWait(err) {
+		t.Fatalf("another file resolved to %v during the wait; want it held back too", err)
+	}
+	if solves.Load() != 1 || answers.Load() != 1 {
+		t.Errorf("images=%d answers=%d; another file solved a CAPTCHA only to be told to wait",
+			solves.Load(), answers.Load())
+	}
+
+	// Once it is over, the next turn goes ahead.
+	k.mu.Lock()
+	k.cooldown = time.Now().Add(-time.Second)
+	k.mu.Unlock()
+	cooling.Store(false)
+	target, err := next.Resolve(context.Background())
+	if err != nil || target.URL != "https://cdn.example.test/first-clip" {
+		t.Fatalf("after the wait: target=%+v error=%v", target, err)
+	}
+}
+
+func isWait(err error) bool {
+	_, ok := errors.AsType[*WaitError](err)
+	return ok
+}
