@@ -14,6 +14,9 @@
 #   YTDLP   path to yt-dlp                 (default: yt-dlp from PATH)
 #   FFMPEG  path to ffmpeg                 (optional; enables merging)
 #   DENO    path to a deno binary          (optional; runs the player JS)
+#   PARTS   where the pieces of a download in progress are kept — each
+#           stream, the merge — until the finished file is moved into the
+#           output directory (optional; default: the output directory)
 #
 # Lines the service reads back from stdout:
 #   PROGRESS <downloaded-bytes> <total-bytes> [<format-id>]
@@ -120,6 +123,13 @@ args=(
 )
 if [ -n "${FFMPEG:-}" ]; then
   args+=(--ffmpeg-location "$FFMPEG")
+fi
+# Every piece carries a media extension (.f401.mp4, .f251-3.webm, the
+# .temp.mkv of the merge), so anything watching the output directory would
+# take each one for a video. yt-dlp's temp path keeps them all elsewhere and
+# moves only the finished file into place.
+if [ -n "${PARTS:-}" ]; then
+  args+=(--paths "temp:$PARTS")
 fi
 # Merging several languages together loses what each one was: ffmpeg labels
 # every track with the first one's tag, so a file with Arabic, English,
