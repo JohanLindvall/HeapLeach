@@ -544,6 +544,17 @@ Host-specific notes:
   lists files in the creator's own order however the requests interleave. A
   post that will not load is skipped rather than failing a job of hundreds.
 
+- **celeb.st** image galleries carry their first page in Inertia's
+  `data-page` attribute and the rest at `/api/v1/creator/<slug>/media`, with
+  `mediaType=media` and the selected sort on every request. The `src` field
+  is the full-size image; thumbnails, avatars and single-image pages'
+  `moreMedia` recommendations are separate. URLs are base64 plus repeating
+  XOR, as decoded by the site's player, and the resulting image endpoint
+  is stable rather than signed. File names use the image id and extension,
+  since the URL's basename is an opaque token. A pasted later gallery page
+  starts from page one; file/page caps and repeated pages are reported in
+  `Result.Note`, leaving the creator's folder name stable.
+
 - **erome** paginates a profile, and two details decide whether it comes back
   complete. The tab lives in the query string (`?t=posts`, `?t=reposts`) and
   selects a different listing, so `eromeProfilePage` carries it onto every

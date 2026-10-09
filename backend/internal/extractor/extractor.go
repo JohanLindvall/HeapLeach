@@ -343,6 +343,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewAutoindex(client),
 		NewFapello(client),
 		NewCoomerFans(client),
+		NewCeleb(client),
 		NewOKru(client),
 		NewStreamtape(client),
 		NewDoodStream(client),
