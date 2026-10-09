@@ -61,6 +61,15 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	if deno, ok := tools.Find(tools.Deno); ok {
 		cmd.Env = append(cmd.Env, "DENO="+deno)
 	}
+	// yt-dlp fetches each stream to a file of its own and joins them at the
+	// end, and every one of those files carries a media extension: a library
+	// watching the destination saw a dubbed video's twenty streams and its
+	// half-written merge as twenty-one videos. So they are kept in a hidden
+	// directory beside the destination, on the same filesystem so that the
+	// finished file arrives by rename, and only that file comes out of it.
+	// Named for the page, so an interrupted download finds its pieces again.
+	parts := filepath.Join(externalParts, partSuffix(source))
+	cmd.Env = append(cmd.Env, "PARTS="+filepath.Join(dir, parts))
 	// Let os/exec own its stdout copy, so WaitDelay can close a pipe a
 	// helper's child inherited after the parent exits. Draining StdoutPipe
 	// before calling Wait would never start that deadline.
@@ -114,7 +123,28 @@ func (m *Manager) transferExternal(ctx context.Context, it *Item, dir, rel strin
 	m.mu.Unlock()
 	it.downloaded.Store(info.Size())
 	m.setPath(it, filepath.Join(rel, filepath.Base(produced)))
+	clearExternalParts(dir, parts)
 	return nil
+}
+
+// externalParts is the hidden directory, beside the destination, that an
+// external download keeps its pieces in while it runs.
+const externalParts = ".heapleach"
+
+// clearExternalParts removes a finished download's pieces, and the hidden
+// directory itself once nothing else is in it: another download into the
+// same folder may be using it. A failed one keeps its pieces for the next
+// attempt to carry on from. The removal goes through a root opened on the
+// destination, so a symlink in place of the directory cannot aim it
+// anywhere else.
+func clearExternalParts(dir, parts string) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	_ = root.RemoveAll(parts)
+	_ = root.Remove(externalParts)
 }
 
 // readExternalProgress folds the helper's output into the item's state and

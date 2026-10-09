@@ -848,7 +848,14 @@ Download progress must be read concurrently with `Wait`, so that
 its inherited-pipe deadline actually starts. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal
-item state. Its **format selector keeps every audio language**, not just the best one.
+item state. yt-dlp's pieces go to `PARTS`, a hidden
+`.heapleach/<hash of the page>` beside the destination, which the script
+passes on as `--paths temp:`. Each stream and the half-written merge carry a
+media extension, and a library watching the download folder took a dubbed
+video's twenty streams for twenty videos. The directory is on the same
+filesystem, so the finished file arrives by rename. `clearExternalParts`
+removes it after a success (the shared parent only once empty) and leaves it
+after a failure: `--no-part` resumes from it, which was checked live. Its **format selector keeps every audio language**, not just the best one.
 A dubbed release ranks its original track first, so `ba` alone hands back
 Spanish and silently drops the English beside it. Each language is therefore
 named — `bv*+ba[language=en-US]+ba[language=ar]+…` — which costs one

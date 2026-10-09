@@ -596,7 +596,11 @@ links.
 The YouTube download itself runs through `yt-download.sh` rather than inline
 Go, so the recipe is in one readable place. A copy of that script placed
 beside the binary overrides the built-in one, so it can be adjusted without
-rebuilding.
+rebuilding. yt-dlp's pieces (each stream, the merge in progress) are kept in a
+hidden `.heapleach` directory beside the destination, so a media library
+watching that folder sees only the finished file. The directory is removed
+once the download completes, and kept after a failure so the next attempt can
+resume.
 
 Metadata probes have a two-minute deadline and an 8 MiB output limit; helper
 diagnostics are bounded too. YouTube playlist enumeration uses
