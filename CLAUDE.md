@@ -836,7 +836,15 @@ only retrying looks again. `tools.CommandContext` shares Unix process-group
 cancellation and a bounded inherited-pipe wait across metadata, download and
 remux helpers. `tools.Probe` additionally bounds metadata time and stdout;
 `util.BoundedBuffer` keeps diagnostic readers draining without unbounded
-allocation. Download progress must be read concurrently with `Wait`, so that
+allocation. That bound is why the yt-dlp probes (`youtube.go`) print only the
+fields they read with `--print`, one JSON object per line, rather than
+dumping with `-J`. A full dump of one ordinary YouTube video came to ten
+megabytes, almost all of it machine-translated automatic captions, and the
+job failed before downloading anything. The probes also pass `--simulate`
+outright: `--print` implies it only while every print is at the default
+stage, and the `playlist:` print turns it off. A probe without it downloaded
+the 3.4 GB video into its working directory.
+Download progress must be read concurrently with `Wait`, so that
 its inherited-pipe deadline actually starts. The download
 runs through an embedded shell script, overridable by a copy next to the
 binary; it reports `PROGRESS`/`FILE` lines that are folded back into normal

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,51 @@ func (y *YouTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	return y.probe(ctx, ytdlp, u.String(), opts.maxFiles())
 }
 
+// What the probes ask yt-dlp for, one JSON object per line: each video, or
+// each entry of a flat playlist, as yt-dlp reaches it, and then the playlist
+// itself once its entries are done.
+//
+// Only the fields read are printed. -J dumps everything yt-dlp extracted,
+// and for a single video that is mostly YouTube's automatic captions: a
+// machine translation into each of some 180 languages, in several formats,
+// each behind a long signed URL. That came to ten megabytes for one
+// ordinary video, past the cap on helper output, so the probe failed
+// before any download began.
+//
+// --simulate has to be spelled out alongside them. --print implies it only
+// while every print is at the default stage, and the playlist: one is a
+// later stage, which turns it off: the probe then downloads, in its
+// working directory, the video it was only asked to name.
+const (
+	ytdlpVideoFields    = "%(.{_type,id,title,url,webpage_url})j"
+	ytdlpPlaylistFields = "playlist:%(.{_type,id,title})j"
+)
+
+// ytdlpEntry is one line of that output.
+type ytdlpEntry struct {
+	Type   string `json:"_type"`
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+	WebURL string `json:"webpage_url"`
+}
+
+// ytdlpEntries reads a probe's lines, in the order yt-dlp printed them.
+func ytdlpEntries(output []byte) ([]ytdlpEntry, error) {
+	var entries []ytdlpEntry
+	for line := range bytes.Lines(output) {
+		if line = bytes.TrimSpace(line); len(line) == 0 {
+			continue
+		}
+		var entry ytdlpEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return nil, fmt.Errorf("could not read yt-dlp output: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 // probe asks yt-dlp what the URL contains, without downloading anything.
 func (y *YouTube) probe(ctx context.Context, ytdlp, target string, limit int) (*Result, error) {
 	// --flat-playlist keeps a playlist probe to one request per page rather
@@ -58,37 +104,38 @@ func (y *YouTube) probe(ctx context.Context, ytdlp, target string, limit int) (*
 		end++
 	}
 	output, err := tools.Probe(ctx, ytdlp,
-		"-J", "--no-warnings", "--flat-playlist", "--ignore-no-formats-error",
+		"--simulate", "--no-warnings", "--flat-playlist", "--ignore-no-formats-error",
+		"--print", ytdlpVideoFields, "--print", ytdlpPlaylistFields,
 		"--playlist-end", strconv.Itoa(end), "--", target)
 	if err != nil {
 		return nil, fmt.Errorf("youtube: yt-dlp could not read %s: %w", target, err)
 	}
-
-	var probe struct {
-		Type    string `json:"_type"`
-		ID      string `json:"id"`
-		Title   string `json:"title"`
-		URL     string `json:"url"`
-		WebURL  string `json:"webpage_url"`
-		Entries []struct {
-			ID     string `json:"id"`
-			Title  string `json:"title"`
-			URL    string `json:"url"`
-			WebURL string `json:"webpage_url"`
-		} `json:"entries"`
-	}
-	if err := json.Unmarshal(output, &probe); err != nil {
-		return nil, fmt.Errorf("youtube: could not read yt-dlp output: %w", err)
+	lines, err := ytdlpEntries(output)
+	if err != nil {
+		return nil, fmt.Errorf("youtube: %w", err)
 	}
 
-	if probe.Type != "playlist" {
-		name := util.FirstNonEmpty(probe.Title, probe.ID, "video")
-		link := util.FirstNonEmpty(probe.WebURL, target)
+	var playlist *ytdlpEntry
+	var entries []ytdlpEntry
+	for _, line := range lines {
+		if line.Type == "playlist" {
+			playlist = &line
+		} else {
+			entries = append(entries, line)
+		}
+	}
+	if playlist == nil {
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("youtube: yt-dlp said nothing about %s", target)
+		}
+		video := entries[0]
+		name := util.FirstNonEmpty(video.Title, video.ID, "video")
+		link := util.FirstNonEmpty(video.WebURL, target)
 		return &Result{Title: name, Files: []File{{External: link, Name: name, Size: -1}}}, nil
 	}
 
-	res := &Result{Title: util.FirstNonEmpty(probe.Title, probe.ID, "playlist")}
-	for _, entry := range probe.Entries {
+	res := &Result{Title: util.FirstNonEmpty(playlist.Title, playlist.ID, "playlist")}
+	for _, entry := range entries {
 		link := util.FirstNonEmpty(entry.WebURL, entry.URL)
 		if link == "" && entry.ID != "" {
 			link = "https://www.youtube.com/watch?v=" + entry.ID
@@ -108,7 +155,7 @@ func (y *YouTube) probe(ctx context.Context, ytdlp, target string, limit int) (*
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("youtube: %s lists no videos", target)
 	}
-	if len(probe.Entries) > limit {
+	if len(entries) > limit {
 		res.Note = "partial — playlist limit reached"
 	}
 	return res, nil
@@ -119,18 +166,19 @@ func (y *YouTube) probe(ctx context.Context, ytdlp, target string, limit int) (*
 // show while the item waits its turn in the queue.
 func ytdlpTitle(ctx context.Context, ytdlp, target string) (string, error) {
 	output, err := tools.Probe(ctx, ytdlp,
-		"-J", "--no-warnings", "--no-playlist", "--ignore-no-formats-error", "--", target)
+		"--simulate", "--no-warnings", "--no-playlist", "--ignore-no-formats-error",
+		"--print", ytdlpVideoFields, "--", target)
 	if err != nil {
 		return "", err
 	}
-	var probe struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
+	entries, err := ytdlpEntries(output)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(output, &probe); err != nil {
-		return "", fmt.Errorf("could not read yt-dlp output: %w", err)
+	if len(entries) == 0 {
+		return "", nil
 	}
-	return util.FirstNonEmpty(probe.Title, probe.ID), nil
+	return util.FirstNonEmpty(entries[0].Title, entries[0].ID), nil
 }
 
 // ytdlpError surfaces what yt-dlp printed, which is far more useful to the
