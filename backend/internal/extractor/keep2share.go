@@ -329,6 +329,11 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			in["captcha_challenge"], in["captcha_response"] = challenge, readings[0]
 			readings = readings[1:]
 		}
+		if d.key != "" {
+			resolveNote(ctx, d.host.label+": requesting download link")
+		} else {
+			resolveNote(ctx, fmt.Sprintf("%s: submitting CAPTCHA answer (%d/%d)", d.host.label, attempts, config.Keep2ShareCaptchaAttempts))
+		}
 		out, err := d.host.call(ctx, "getUrl", in)
 		if out == nil || out.ErrorCode != 31 {
 			// Anything but a wrong answer spends or outlives the challenge.
@@ -393,6 +398,9 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 // nextChallenge requests a CAPTCHA image and reads it, returning the challenge
 // and up to Keep2ShareCaptchaGuesses readings, most likely first.
 func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (string, []string, error) {
+	note := func(stage string) {
+		resolveNote(ctx, fmt.Sprintf("%s: %s (%d/%d)", d.host.label, stage, attempt, config.Keep2ShareCaptchaAttempts))
+	}
 	solver := d.host.solver
 	if solver == nil {
 		var err error
@@ -401,7 +409,7 @@ func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (st
 			return "", nil, err
 		}
 	}
-	resolveNote(ctx, fmt.Sprintf("%s: reading CAPTCHA (%d/%d)", d.host.label, attempt, config.Keep2ShareCaptchaAttempts))
+	note("requesting CAPTCHA")
 	captcha, err := d.host.call(ctx, "requestCaptcha", map[string]string{})
 	if err != nil {
 		return "", nil, err
@@ -409,11 +417,17 @@ func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (st
 	if captcha.Challenge == "" || captcha.ImageURL == "" {
 		return "", nil, d.host.errorf("CAPTCHA response contains no image or challenge")
 	}
+	note("downloading CAPTCHA image")
 	img, err := d.host.captchaImage(ctx, captcha.ImageURL)
 	if err != nil {
 		return "", nil, err
 	}
-	readings, err := solver(ctx, img)
+	// The local reader reports waiting for a slot separately from its
+	// bounded run. A supplied solver has no local admission queue.
+	if d.host.solver != nil {
+		note("reading CAPTCHA")
+	}
+	readings, err := solver(WithResolveNote(ctx, note), img)
 	if err == nil && len(readings) == 0 {
 		err = errKeep2ShareOCR
 	}

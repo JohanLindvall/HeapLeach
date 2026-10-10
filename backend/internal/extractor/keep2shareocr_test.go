@@ -87,6 +87,35 @@ func TestKeep2ShareOCRCanBeCancelled(t *testing.T) {
 	}
 }
 
+func TestKeep2ShareOCRWaitingForASlotCanBeCancelled(t *testing.T) {
+	for range cap(keep2ShareOCRSlots) {
+		keep2ShareOCRSlots <- struct{}{}
+	}
+	defer func() {
+		for range cap(keep2ShareOCRSlots) {
+			<-keep2ShareOCRSlots
+		}
+	}()
+	var raw bytes.Buffer
+	if err := png.Encode(&raw, keep2ShareSyntheticCaptcha()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	var notes []string
+	ctx = WithResolveNote(ctx, func(note string) { notes = append(notes, note) })
+	_, err := keep2ShareReadCaptcha(ctx, "must-not-start", raw.Bytes())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting for a reader: %v", err)
+	}
+	if !slices.Equal(notes, []string{"waiting for a local CAPTCHA reader"}) {
+		t.Fatalf("notes=%v; a queued reader must not report that OCR is running", notes)
+	}
+	if len(keep2ShareOCRSlots) != cap(keep2ShareOCRSlots) {
+		t.Fatal("a cancelled waiter released another reader's slot")
+	}
+}
+
 // Many free downloads reach a CAPTCHA at once through proxy routes, and the
 // readers run only a few at a time: side by side they overloaded the host.
 func TestKeep2ShareOCRRunsOnlyAFewAtATime(t *testing.T) {
@@ -162,7 +191,11 @@ func TestKeep2ShareOCRTimeoutIsAnImageNotReadAndLeavesNothing(t *testing.T) {
 	if err := png.Encode(&raw, keep2ShareSyntheticCaptcha()); err != nil {
 		t.Fatal(err)
 	}
+	start := time.Now()
 	_, err := keep2ShareReadCaptcha(context.Background(), program, raw.Bytes())
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("OCR took %s despite its %s budget", elapsed, keep2ShareOCRTimeout)
+	}
 	if !errors.Is(err, errKeep2ShareOCR) {
 		t.Fatalf("error = %v; want an image not read, so another can be tried", err)
 	}

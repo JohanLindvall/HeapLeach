@@ -504,7 +504,13 @@ Host-specific notes:
   it. Running out of time is `errKeep2ShareOCR`, an image not read, so the
   resolver tries another. Each run gets a `TMPDIR` of its own, removed
   afterwards, which PyInstaller's bootloader unpacks into. A normal exit
-  leaves files there too.
+  leaves files there too. Waiting for a local reader has its own progress
+  note, since a busy queue can wait much longer than one reader's 20-second
+  budget. "Reading CAPTCHA" starts only when the helper runs; requesting
+  the challenge, fetching its image, submitting the answer and redeeming
+  the ticket each name their own network step. Those requests retain their
+  HTTP deadlines and proxy scoring; waiting for local OCR is cancelable
+  and is not evidence against the proxy.
 
   Through a proxy route, a failure that the next attempt may well not meet
   is retried on the best route free rather than failing the file:
