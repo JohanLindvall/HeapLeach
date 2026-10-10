@@ -4,7 +4,10 @@
 to standard output, one per line, most likely first. HeapLeach validates
 each reading and tries up to three on the same challenge, since a wrong
 answer does not spend it, before requesting another image. It also bounds
-image size and runtime and terminates the helper on cancellation. The
+image size and runtime and terminates the helper on cancellation. It runs
+at most two helpers at a time, since each loads the model and uses every core
+it can. Each gets a `TMPDIR` of its own, which the frozen executable unpacks
+its runtime into and which is removed after it exits, however it exits. The
 helper uses CPU inference and makes no network calls.
 
 Keep2Share's challenges are six letters and digits, and the site compares

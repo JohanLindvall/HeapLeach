@@ -425,6 +425,10 @@ const (
 	Keep2ShareCaptchaBytes    = 1 << 20
 	Keep2ShareCaptchaPixels   = 128 << 10
 
+	// Keep2ShareOCRConcurrency is how many CAPTCHA readers run at once. Each
+	// is a Python runtime and an ONNX model that uses every core it can.
+	Keep2ShareOCRConcurrency = 2
+
 	// Keep2ShareInPlaceWait is the longest ticket timer sat out in the
 	// worker. The usual one is half a minute; past this it is the wait
 	// between free downloads, which the file spends back in the queue.

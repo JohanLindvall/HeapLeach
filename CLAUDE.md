@@ -464,6 +464,18 @@ Host-specific notes:
   ordinary refusal backoff and retries the file through another route. The
   API's answer is an HTTP 406 the route layer counts as a success, so
   nothing else would. On the direct route it is a failure saying so.
+
+  With proxy routes, a dozen free downloads can reach a CAPTCHA at once, and
+  each reading starts a frozen Python runtime and an ONNX model. Run side by
+  side, they took the load past fifty on sixteen cores, each ran past its
+  timeout and failed its file with a bare `context deadline exceeded`, and
+  each one killed left its unpacked runtime in the container's `/tmp`, a
+  tmpfs: 2 GB in thirty-two `_MEI*` directories within minutes. So readings
+  take a turn (`Keep2ShareOCRConcurrency`, two) and the timeout starts with
+  it. Running out of time is `errKeep2ShareOCR`, an image not read, so the
+  resolver tries another. Each run gets a `TMPDIR` of its own, removed
+  afterwards, which PyInstaller's bootloader unpacks into. A normal exit
+  leaves files there too.
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's
   hourly allowance even when only a range was fetched. `Pace.Group` keeps
