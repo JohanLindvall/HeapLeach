@@ -18,10 +18,6 @@ import (
 // cannot recurse through this fallback. A page without supported links keeps
 // the existing media fallback.
 func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	if d.registry == nil {
-		res, _ := mediaPageSniff(ctx, d.client, u)
-		return res, nil
-	}
 	ext := strings.ToLower(path.Ext(u.Path))
 	switch ext {
 	case "", ".html", ".htm", ".php", ".asp", ".aspx", ".jsp":
@@ -38,11 +34,16 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	if err != nil {
 		return nil, nil
 	}
-	if wordPressCategory(root, page) {
-		return wordPressExtract(ctx, d.client, d.registry, page, root, opts)
+	if d.registry != nil {
+		if wordPressCategory(root, page) {
+			return wordPressExtract(ctx, d.client, d.registry, page, root, opts)
+		}
+		if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
+			return expandPageLinks(ctx, d.registry, u, root, sources, opts)
+		}
 	}
-	if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
-		return expandPageLinks(ctx, d.registry, u, root, sources, opts)
+	if res, err := darkGramResult(d.client, page, root, opts); res != nil || err != nil {
+		return res, err
 	}
 	if ext == "" {
 		res, _ := mediaPageResult(ctx, d.client, u, root, doc)

@@ -360,6 +360,14 @@ headers before reading a bounded body, and supports extensionless pages and
 common HTML/script extensions. Supported links that all fail are reported as
 an error rather than saved as an HTML shell. Partial results report counts.
 
+**DarkGram albums** are recognised in that same fetched HTML, by the player's
+`darkgram-album` class and JSON `data-album` attribute. The first player supplies
+its own videos (`hls_url`) and full-size photos (`photo_url`); thumbnails and
+other players are not album items. Discovery makes no media requests. Each
+video resolves its playlist through `File.Resolve`, refreshing segments and
+keys per attempt and preserving the final page URL as referer. File names keep
+the original item positions when missing entries or file caps shorten an album.
+
 **WordPress categories** are recognised in that same fetched document, before
 the ordinary link scan, rather than claimed by domain. `wordpress.go` reads
 classic post permalinks or block-theme query loops, follows the category's
