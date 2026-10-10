@@ -30,6 +30,8 @@ type Row struct {
 	CurrentSpeed  float64   `json:"currentSpeed"`
 	SuccessRate   float64   `json:"successRate"`
 	Requests      int       `json:"requests"`
+	WAFRequests   int       `json:"wafRequests,omitempty"`
+	WAFSuccess    float64   `json:"wafSuccess,omitempty"`
 	Active        int       `json:"active"`
 	CooldownUntil time.Time `json:"cooldownUntil,omitzero"`
 	LastSuccess   time.Time `json:"lastSuccess,omitzero"`
@@ -86,9 +88,12 @@ func (p *Pool) Page(site string, q Query) Page {
 		if s.Until.After(cooling[key]) {
 			cooling[key] = s.Until
 		}
+		if site == "cloudflare" && e.WAF.Until.After(cooling[key]) {
+			cooling[key] = e.WAF.Until
+		}
 	}
 	for _, e := range p.entries {
-		s := e.readStat(site)
+		s := e.scoreStat(site)
 		enabled := p.enabled(e)
 		if !enabled && s.active == 0 {
 			continue
@@ -101,7 +106,11 @@ func (p *Pool) Page(site string, q Query) Page {
 		} else if slices.Contains(p.static, e.URL) {
 			row.Source = "manual"
 		}
-		row.Score = prior.meanRate(s)
+		row.Score = prior.entryRate(e, site, site == "cloudflare", 0)
+		if site == "cloudflare" && e.WAF.Tries > 0 {
+			row.WAFRequests = e.WAF.Tries
+			row.WAFSuccess = e.WAF.OK / (e.WAF.OK + e.WAF.Bad)
+		}
 		if s.OK+s.Bad > 0 {
 			row.SuccessRate = s.OK / (s.OK + s.Bad)
 		}

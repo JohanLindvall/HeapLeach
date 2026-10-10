@@ -18,6 +18,7 @@ const (
 	HeaderAcceptLanguage     = "Accept-Language"
 	HeaderAcceptRanges       = "Accept-Ranges"
 	HeaderAuthorization      = "Authorization"
+	HeaderCFMitigated        = "Cf-Mitigated"
 	HeaderContentDisposition = "Content-Disposition"
 	HeaderContentRange       = "Content-Range"
 	HeaderContentType        = "Content-Type"

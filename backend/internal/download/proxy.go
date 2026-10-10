@@ -65,6 +65,9 @@ func (m *Manager) proxyDemandLocked() map[string]int {
 			capacity--
 		}
 	}
+	// Source extraction runs before there are files to dispatch. It still
+	// needs usable routes, even when this is the first job in an empty queue.
+	wanted["cloudflare"] = max(wanted["cloudflare"], min(m.proxyResolving, m.limit))
 	return wanted
 }
 
@@ -98,6 +101,7 @@ func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
 type routeGroup struct {
 	name  string
 	files int
+	waf   bool
 }
 
 // leaseRouteLocked is nonblocking: a busy/cooling route keeps the item in the
@@ -109,11 +113,11 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 	if it.route != nil {
 		return true
 	}
-	group := routeGroup{it.pace.Group, it.pace.Files}
+	group := routeGroup{it.pace.Group, it.pace.Files, it.pace.WAF}
 	if unavailable[group] {
 		return false
 	}
-	it.route = m.proxies.AcquireFor(it.pace.Group, it.preferredRoute, it.pace.Files, it.Size-it.downloaded.Load())
+	it.route = m.proxies.AcquireFor(it.pace.Group, it.preferredRoute, it.pace.Files, it.Size-it.downloaded.Load(), it.pace.WAF)
 	if it.route == nil {
 		// A large queue must not rescan the whole inventory for every file
 		// while every route in the same service is already busy/cooling.
@@ -130,7 +134,26 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	lease := it.route
 	m.mu.Unlock()
 	if lease == nil {
-		return m.transfer(ctx, it)
+		start := time.Now()
+		err := m.transfer(ctx, it)
+		if _, challenged := errors.AsType[*httpx.ChallengeError](err); !challenged || ctx.Err() != nil {
+			return err
+		}
+		m.mu.Lock()
+		pool := m.proxies
+		fallback := m.proxyEnabled && pool != nil
+		if fallback {
+			it.pace, it.preferredRoute = challengePace(it.pace), ""
+			if it.refresh != nil {
+				it.resolve = it.refresh
+			}
+		}
+		m.mu.Unlock()
+		if fallback {
+			pool.RefusedDirect(it.pace.Group, err, time.Since(start))
+			return &extractor.WaitError{Until: time.Now(), Reason: "Cloudflare challenge; retrying through a proxy"}
+		}
+		return err
 	}
 	start := time.Now()
 	var err error
@@ -174,6 +197,14 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		lease, start = upgrade, time.Now()
 	}
 	if ctx.Err() == nil {
+		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+			m.mu.Lock()
+			it.pace = challengePace(it.pace)
+			if it.refresh != nil {
+				it.resolve = it.refresh
+			}
+			m.mu.Unlock()
+		}
 		if stall, ok := errors.AsType[*stalledError](err); ok {
 			lease.Failed(err, time.Since(start), true)
 			err = &routeTransferError{err: &httpx.RouteError{Err: err}, moved: stall.moved}

@@ -78,8 +78,9 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
       </div>
       <div className="settings-panel__proxy-head">
         <div>
-          <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom</span></h3>
+          <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom · WAF recovery</span></h3>
           <p>Use “Files at once” across proxy addresses, with one transfer per address for each service.</p>
+          <p>Other hosts use proxies after a Cloudflare challenge.</p>
         </div>
         <label className="proxy-switch">
           <input type="checkbox" role="switch" checked={proxies} disabled={switching}

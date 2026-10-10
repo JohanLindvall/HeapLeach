@@ -169,7 +169,7 @@ func TestProxyScopeAndSettingsErrorsAreAtomic(t *testing.T) {
 func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 	m := busyManager(t)
 	p := attachPool(t, m, []string{proxy.Direct})
-	job := addProxyFiles(m, 2, nil)
+	job := addProxyFiles(m, len(proxy.Services()), nil)
 	for i, service := range proxy.Services() {
 		lease := p.Acquire(service, "", 1)
 		if lease == nil {

@@ -37,11 +37,12 @@ type Manager struct {
 	log    *slog.Logger
 	// settingsMu serializes preparation/publication with shutdown. The pool
 	// is opened lazily and owned until Close, even when routing is disabled.
-	settingsMu   sync.Mutex
-	proxies      *proxy.Pool // guarded by mu
-	proxyConfig  proxy.Configuration
-	proxyEnabled bool
-	proxyRunning map[string]int // leased workers per service, including the direct route
+	settingsMu     sync.Mutex
+	proxies        *proxy.Pool // guarded by mu
+	proxyConfig    proxy.Configuration
+	proxyEnabled   bool
+	proxyRunning   map[string]int // leased workers per service, including the direct route
+	proxyResolving int            // source extractions waiting for or using WAF recovery
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -328,6 +329,7 @@ func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Resul
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	ctx = extractor.WithChallengeRecovery(ctx, m.recoverExtraction)
 	return m.reg.Extract(ctx, job.Source, extractor.Options{Password: job.Password})
 }
 
@@ -384,6 +386,7 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		SizeApprox: f.SizeApprox,
 		Status:     StatusQueued,
 		resolve:    f.Resolve,
+		refresh:    f.Refresh,
 		cipher:     f.Cipher,
 		pace:       f.Pace,
 		reject:     f.Reject,

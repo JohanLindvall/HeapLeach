@@ -128,7 +128,13 @@ func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, 
 		if req.Context().Err() != nil {
 			return nil, req.Context().Err()
 		}
-		report(0, 0, err, time.Time{})
+		status := 0
+		if _, challenged := errors.AsType[*ChallengeError](err); challenged {
+			// Even a challenge served with 200 is an address refusal.
+			// Record it separately from ordinary proxy health.
+			status = http.StatusForbidden
+		}
+		report(status, 0, err, time.Time{})
 		return nil, &RouteError{err}
 	}
 	code := resp.StatusCode

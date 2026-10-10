@@ -78,7 +78,7 @@ export interface Snapshot {
   /** Ceiling on connections one slow file may be split across. */
   streams: number;
   maxStreams: number;
-  /** Public proxy routing for Keep2Share and FileBoom. */
+  /** Proxy routing for free hosts and WAF challenge recovery on any host. */
   proxies: boolean;
   active: number;
   queued: number;
@@ -128,6 +128,8 @@ export interface ProxyRow {
   currentSpeed: number;
   successRate: number;
   requests: number;
+  wafRequests?: number;
+  wafSuccess?: number;
   active: number;
   cooldownUntil?: string;
   lastSuccess?: string;

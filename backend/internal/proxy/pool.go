@@ -43,7 +43,15 @@ type entry struct {
 	Fails                                        int
 	Until                                        time.Time
 	Sites                                        map[string]*siteStat
+	WAF                                          wafStat
 	client                                       *httpx.Client
+}
+
+// WAF refusals do not change transport health or ordinary service scores.
+type wafStat struct {
+	OK, Bad      float64
+	Tries, Fails int
+	Until        time.Time
 }
 
 func (e *entry) stat(site string) *siteStat {
@@ -200,6 +208,7 @@ type Lease struct {
 	pool  *Pool
 	entry *entry
 	site  string
+	waf   bool
 	once  sync.Once
 	// Measurement and upgrade state is guarded by pool.mu. Progress
 	// samples are in memory; the background refresh flushes dirty rows.
@@ -253,21 +262,34 @@ func (l *Lease) Failed(err error, elapsed time.Duration, transport bool) {
 	l.observe(httpx.RouteObservation{Err: err, Status: status, Duration: elapsed})
 }
 
+// RefusedDirect records a challenge encountered before a file opted into
+// routing. The pool must not immediately select the same refused address.
+// No lease was held, so this observation does not alter active counts.
+func (p *Pool) RefusedDirect(site string, err error, elapsed time.Duration) {
+	p.mu.Lock()
+	e := p.entries[Direct]
+	p.mu.Unlock()
+	if e != nil {
+		l := &Lease{pool: p, entry: e, site: site}
+		l.Failed(err, elapsed, false)
+	}
+}
+
 // Acquire never waits or writes to disk. A preferred route lets a paused or
 // interrupted file reuse its unexpired, IP-bound ticket when it is healthy.
 func (p *Pool) Acquire(site, preferred string, files int) *Lease {
-	return p.AcquireFor(site, preferred, files, 0)
+	return p.AcquireFor(site, preferred, files, 0, site == "cloudflare")
 }
 
 // AcquireFor ranks routes for the bytes this file still needs. A short
 // remaining tail values setup latency more than a long transfer does.
-func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64) *Lease {
+func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, waf bool) *Lease {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return nil
 	}
-	candidates := p.available(site, files, time.Now())
+	candidates := p.available(site, files, time.Now(), waf)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -283,18 +305,22 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64) *L
 		}
 	}
 	if chosen == nil {
-		chosen = p.selectEntry(site, candidates, remaining)
+		chosen = p.selectFor(site, candidates, remaining, waf)
 	}
-	return p.lease(chosen, site)
+	l := p.lease(chosen, site)
+	if l != nil {
+		l.waf = waf
+	}
+	return l
 }
 
-func (p *Pool) available(site string, files int, now time.Time) []*entry {
+func (p *Pool) available(site string, files int, now time.Time, waf bool) []*entry {
 	var candidates []*entry
 	active := make(map[string]int)
 	cooling := make(map[string]bool)
 	for _, e := range p.entries {
 		active[identity(e.URL)] += e.stat(site).active
-		if e.stat(site).Until.After(now) {
+		if e.stat(site).Until.After(now) || (waf && e.WAF.Until.After(now)) {
 			cooling[identity(e.URL)] = true
 		}
 	}
@@ -368,6 +394,21 @@ func (l *Lease) observe(o httpx.RouteObservation) {
 		return
 	}
 	e, now := l.entry, time.Now()
+	if _, challenged := errors.AsType[*httpx.ChallengeError](o.Err); challenged {
+		e.WAF.Tries++
+		e.WAF.OK *= config.ProxyOutcomeDecay
+		e.WAF.Bad = e.WAF.Bad*config.ProxyOutcomeDecay + 1
+		e.WAF.Fails++
+		e.WAF.Until = now.Add(util.Backoff(min(e.WAF.Fails-1, 30), config.ProxyRefusalBase, config.ProxyRefusalMax))
+		p.persist(e, l.site)
+		return
+	}
+	if l.waf && o.Err == nil {
+		e.WAF.Tries++
+		e.WAF.Bad *= config.ProxyOutcomeDecay
+		e.WAF.OK = e.WAF.OK*config.ProxyOutcomeDecay + 1
+		e.WAF.Fails = 0
+	}
 	s := e.stat(l.site)
 	ok := o.Err == nil
 	seconds := o.Duration.Seconds()

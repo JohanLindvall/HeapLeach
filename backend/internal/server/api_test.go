@@ -400,8 +400,10 @@ func TestProxySettingsAndInventoryAPI(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || len(page.Rows) != 1 || page.Total != 2 || page.Offset != 1 {
 		t.Fatalf("bounded inventory: %v %+v", err, page)
 	}
-	if rec := get(t, handler, "/api/proxies?site=fileboom"); rec.Code != http.StatusOK {
-		t.Fatalf("FileBoom inventory: %d %s", rec.Code, rec.Body)
+	for _, service := range []string{"fileboom", "cloudflare"} {
+		if rec := get(t, handler, "/api/proxies?site="+service); rec.Code != http.StatusOK {
+			t.Fatalf("%s inventory: %d %s", service, rec.Code, rec.Body)
+		}
 	}
 	for _, query := range []string{"limit=0", "limit=999999", "offset=-1", "limit=no", "sort=wrong", "status=wrong", "site=other"} {
 		if rec := get(t, handler, "/api/proxies?"+query); rec.Code != http.StatusBadRequest {

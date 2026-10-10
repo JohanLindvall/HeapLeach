@@ -71,6 +71,10 @@ type File struct {
 	// (bunkr, turbo) use this: a link signed while the item sat in the
 	// queue would already have expired by the time its turn came.
 	Resolve func(ctx context.Context) (*Target, error)
+	// Refresh re-reads this file's source on a new route before resolving
+	// its media. The registry supplies it for challenge recovery; ordinary
+	// attempts keep the host's cheaper Resolve path.
+	Refresh func(ctx context.Context) (*Target, error)
 	// Pace, when set, holds the downloader back from this host. Nil is the
 	// normal case: go as fast as the queue's own settings allow.
 	Pace *Pace
@@ -127,6 +131,9 @@ type Pace struct {
 	// address instead of the whole service. Group must name that service;
 	// a route is leased before Resolve and held through the file transfer.
 	PerRoute bool
+	// WAF applies separate challenge history when choosing a route, while
+	// preserving the service's own per-address file limit.
+	WAF bool
 }
 
 // StreamCipher describes payload that arrives encrypted.
@@ -479,7 +486,22 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	if opts.limits == (Limits{}) {
 		opts.limits = r.limits
 	}
-	res, err := ex.Extract(ctx, u, opts)
+	read := func(ctx context.Context) (*Result, error) {
+		ctx, challenge := httpx.CaptureChallenges(ctx)
+		res, err := ex.Extract(ctx, u, opts)
+		if ctx.Err() == nil && challenge() != nil {
+			return nil, challenge()
+		}
+		return res, err
+	}
+	res, err := read(ctx)
+	recovered := false
+	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged && httpx.RouteID(ctx) == "" {
+		if recover, ok := ctx.Value(challengeRecoveryKey{}).(ChallengeRecovery); ok {
+			res, err = recover(ctx, read, err)
+			recovered = err == nil
+		}
+	}
 	if err != nil {
 		return nil, ex, err
 	}
@@ -493,6 +515,12 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	for i := range res.Files {
 		res.Files[i].Name = util.Unescape(res.Files[i].Name)
 		res.Files[i].Dir = util.Unescape(res.Files[i].Dir)
+		if res.Files[i].Refresh == nil {
+			res.Files[i].Refresh = refreshFile(read, res.Files[i], len(res.Files) == 1)
+		}
+		if recovered {
+			res.Files[i].Resolve = res.Files[i].Refresh
+		}
 	}
 	if res.Title == "" {
 		res.Title = strings.Trim(u.Path, "/")

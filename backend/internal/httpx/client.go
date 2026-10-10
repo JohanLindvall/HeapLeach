@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -109,7 +110,19 @@ var errHeaderTimeout = errors.New("timed out waiting for response headers")
 
 // do bounds connection setup and response headers without timing out a
 // streaming body. The body owns cancellation after the timer is stopped.
-func (c *Client) do(req *http.Request) (*http.Response, error) {
+func (c *Client) do(req *http.Request) (resp *http.Response, err error) {
+	if first, ok := req.Context().Value(challengeCaptureKey{}).(*atomic.Pointer[capturedChallenge]); ok {
+		if got := first.Load(); got != nil {
+			return nil, got.err
+		}
+	}
+	defer func() {
+		if _, challenged := errors.AsType[*ChallengeError](err); challenged {
+			if first, ok := req.Context().Value(challengeCaptureKey{}).(*atomic.Pointer[capturedChallenge]); ok {
+				first.CompareAndSwap(nil, &capturedChallenge{err: err})
+			}
+		}
+	}()
 	if route, ok := req.Context().Value(routeContextKey{}).(*requestRoute); ok {
 		return route.do(c, req)
 	}
@@ -118,7 +131,7 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 
 func (c *Client) doDirect(req *http.Request) (*http.Response, error) {
 	if c.headerTimeout <= 0 {
-		return c.hc.Do(req)
+		return challengeResponse(c.hc.Do(req))
 	}
 	ctx, cancel := context.WithCancelCause(req.Context())
 	timedOut := make(chan struct{})
@@ -151,7 +164,7 @@ func (c *Client) doDirect(req *http.Request) (*http.Response, error) {
 		}
 		cancel(nil)
 	}}
-	return resp, nil
+	return challengeResponse(resp, nil)
 }
 
 type cancelBody struct {
@@ -280,6 +293,9 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			// A leased route gets one attempt. Its owner returns the file to
 			// the queue to try another route, without changing IP mid-ticket.
 			if _, routed := errors.AsType[*RouteError](err); routed {
+				return nil, err
+			}
+			if _, challenged := errors.AsType[*ChallengeError](err); challenged {
 				return nil, err
 			}
 			lastErr = err

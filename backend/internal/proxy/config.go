@@ -15,7 +15,7 @@ import (
 )
 
 // Services are the download protocols currently opted into per-address routing.
-func Services() []string { return []string{"keep2share", "fileboom"} }
+func Services() []string { return []string{"keep2share", "fileboom", "cloudflare"} }
 
 // Configuration is immutable once published. ParseConfiguration owns its slices.
 type Configuration struct {

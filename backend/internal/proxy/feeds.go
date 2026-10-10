@@ -225,17 +225,17 @@ func (p *Pool) shortOfRoutes(now time.Time) bool {
 		threshold := prior.meanRate(siteStat{})
 		cooling, ready := make(map[string]bool), make(map[string]bool)
 		for _, e := range p.entries {
-			if e.readStat(site).Until.After(now) {
+			if e.readStat(site).Until.After(now) || (site == "cloudflare" && e.WAF.Until.After(now)) {
 				cooling[identity(e.URL)] = true
 			}
 		}
 		for _, e := range p.entries {
-			key, s := identity(e.URL), e.readStat(site)
+			key, s := identity(e.URL), e.scoreStat(site)
 			if e.Until.After(now) || cooling[key] {
 				continue
 			}
 			starting := s.active > 0 && s.BytesPerSecond == 0
-			scored := s.OK > 0 && prior.meanRate(s) >= threshold
+			scored := s.OK > 0 && prior.entryRate(e, site, site == "cloudflare", 0) >= threshold
 			if starting || ((p.enabled(e) || s.active > 0) && scored) {
 				ready[key] = true
 				if len(ready) >= wanted {

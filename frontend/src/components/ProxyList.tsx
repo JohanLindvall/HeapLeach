@@ -51,7 +51,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
 
   return (
     <div className="proxy-list" aria-label="Download proxy inventory">
-      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above to discover and use routes for K2S and FileBoom.</p>}
+      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above for K2S, FileBoom and Cloudflare challenge recovery on any host.</p>}
       {page && (
         <div className="proxy-list__summary">
           <span><strong>{page.summary.total.toLocaleString()}</strong> routes</span>
@@ -66,6 +66,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
           onChange={(e) => setQuery({ ...query, site: e.target.value, offset: 0 })}>
           <option value="keep2share">Keep2Share</option>
           <option value="fileboom">FileBoom</option>
+          <option value="cloudflare">WAF recovery · all hosts</option>
         </select>
         <input type="search" value={search} placeholder="Find proxy address" aria-label="Find proxy address"
           onChange={(e) => setSearch(e.target.value)} />
@@ -125,6 +126,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
         </details>
       )}
       <p className="proxy-list__help">Measurements and cooldowns are separate for each service and refresh every 5 seconds while this panel is open.</p>
+      {query.site === 'cloudflare' && <p className="proxy-list__help">WAF failures affect only challenge recovery. Scores also use ordinary reliability and unthrottled transfer speeds.</p>}
     </div>
   );
 }
@@ -141,7 +143,8 @@ function ProxyTableRow({ row }: { readonly row: ProxyRow }) {
         {row.cooldownUntil && <small title={date(row.cooldownUntil)}>{formatDuration(Math.max(0, (Date.parse(row.cooldownUntil) - Date.now()) / 1000))} left</small>}</td>
       <td>{formatSpeed(row.score)}</td>
       <td>{formatSpeed(row.throughput)}<small>{row.currentSpeed > 0 ? `${formatSpeed(row.currentSpeed)} now` : row.throughput > 0 ? 'Measured average' : 'No transfer sample'}</small></td>
-      <td>{row.requests > 0 ? `${Math.round(row.successRate * 100)}%` : '—'}</td>
+      <td>{row.requests > 0 ? `${Math.round(row.successRate * 100)}%` : '—'}
+        {(row.wafRequests ?? 0) > 0 && <small>{Math.round((row.wafSuccess ?? 0) * 100)}% WAF · {row.wafRequests} requests</small>}</td>
       <td>{row.requests.toLocaleString()}</td>
       <td>{row.lastSuccess ? <time dateTime={row.lastSuccess} title={new Date(row.lastSuccess).toLocaleString()}>{date(row.lastSuccess)}</time> : '—'}</td>
     </tr>

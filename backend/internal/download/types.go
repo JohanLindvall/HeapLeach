@@ -77,6 +77,7 @@ type Item struct {
 	// streams is how many connections are currently fetching this item.
 	streams atomic.Int32
 	resolve func(context.Context) (*extractor.Target, error)
+	refresh func(context.Context) (*extractor.Target, error)
 	// cipher, when set, means this host serves the file encrypted and the
 	// bytes are decrypted on their way into the part file. It belongs to
 	// the item rather than to a resolved target: the URL is re-minted per

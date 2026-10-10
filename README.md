@@ -643,8 +643,9 @@ ones use the new mode, preserving the per-address limit and download tickets.
 
 The proxy list shows the selection score, measured average and current
 throughput, recent success rate, request count, active transfers, cooldowns,
-and last successful request. Choose Keep2Share or FileBoom to view that
-service's measurements. Search, status filters and sorting work across
+and last successful request. Choose Keep2Share, FileBoom or **WAF recovery**
+to view the corresponding scores. The WAF view also shows challenge success
+separately from ordinary request success. Search, status filters and sorting work across
 the entire inventory, with 50 rows per page. Scores are estimated useful
 bytes per second using the selector's mean success probability; actual
 selection also explores untried routes. The list refreshes every five seconds
@@ -666,8 +667,29 @@ Each transfer attempt keeps its route through the CAPTCHA, ticket, redirects
 and file requests.
 A refused or broken route returns the file to the queue to try another;
 other hosts continue downloading while routes are busy or cooling down.
-Proxy use currently applies to Keep2Share and FileBoom. The local OCR helper
-is still required, and premium-only files remain restricted.
+Keep2Share and FileBoom still require the local OCR helper, and premium-only
+files remain restricted.
+
+Every host using HeapLeach's HTTP client can recover through proxies after
+a Cloudflare WAF challenge, including unregistered pages, direct files and
+Doodstream/Playmogo. Ordinary requests use the normal connection first.
+Challenges during extraction retry the source operation; challenges during
+downloads return the file to the queue. A route change re-reads the source
+to obtain fresh signed links and keeps the resolver, cookies and media on
+the chosen route. Attempts use the configured proxy retry budget, and
+waiting for an extraction route is bounded by the request timeout.
+
+WAF refusals affect only the WAF success score and cooldown. They do not
+reduce ordinary service scores, erase speed measurements or mark a proxy
+broken. WAF selection still uses ordinary reliability and measured transfer
+speed, excluding user-throttled samples and free-host caps when estimating
+unrestricted capacity. Keep2Share and FileBoom retain their per-service
+address limits even when WAF recovery is needed.
+
+This tries other addresses; it does not solve interactive challenges.
+With proxies disabled, a challenge remains an error. External downloaders
+such as yt-dlp manage their own HTTP requests and are outside this recovery
+path.
 
 The pool adapts [amzscrape's proxy logic](https://github.com/JohanLindvall/amzscrape)
 and stores inventory, source memberships, request outcomes, measured **bytes
@@ -714,7 +736,7 @@ small, noisy speed changes from spending time on repeated route switches.
 
 Saved inventory is available immediately after restart. Feed requests,
 including GitHub, are normally 24 hours apart. An earlier top-up requires
-runnable K2S or FileBoom work and too few distinct usable addresses for its current concurrency, with
+runnable K2S, FileBoom or WAF recovery work and too few distinct usable addresses for its current concurrency, with
 at least five minutes between attempts. New active transfers count while
 their first speed sample is pending; measured and standby routes must have
 succeeded and score at least as well as an untried route's learned prior.
@@ -757,7 +779,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. Also settable live in Settings. |
-| `HEAPLEACH_PROXIES` | on | Enable extra free proxy routes for Keep2Share and FileBoom. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
+| `HEAPLEACH_PROXIES` | on | Enable proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode. Flag: `-proxy-db`. |
 | `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
@@ -793,7 +815,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
 | `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
 | `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |
-| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, or `fileboom`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
+| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `fileboom`, or `cloudflare`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `DELETE` | `/api/jobs/{id}` | Cancel and forget. |

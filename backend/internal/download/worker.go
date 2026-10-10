@@ -192,6 +192,9 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if _, routed := errors.AsType[*httpx.RouteError](err); routed {
 			return &routeTransferError{err: err, moved: onDisk(part, len(it.Segments), files) > before}
 		}
+		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+			return err
+		}
 		if _, busy := errors.AsType[*busyHostError](err); busy && httpx.RouteID(ctx) != "" {
 			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: onDisk(part, len(it.Segments), files) > before}
 		}

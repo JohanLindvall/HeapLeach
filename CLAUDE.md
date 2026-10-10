@@ -266,6 +266,27 @@ Two traps that cost time here:
   A suite that suddenly takes a minute instead of three seconds is this, not
   a hang.
 
+### WAF recovery
+
+Cloudflare's `cf-mitigated: challenge` header becomes `httpx.ChallengeError`,
+including HTTP 200 challenge pages. `CaptureChallenges` keeps platform probes
+from swallowing it and stops further requests in that extraction attempt.
+The manager installs `extractor.WithChallengeRecovery` for source extraction;
+the registry reaches nested sources with the same hook. A recovery reruns the
+whole extraction on one lease. `File.Refresh` re-reads the smallest known
+source on the worker's route, matching a file by name and directory rather
+than by its position in a listing, before minting fresh media URLs. External
+downloaders own their network requests and cannot use this native recovery.
+
+Any native host can enter the `cloudflare` proxy group after a challenge.
+Existing per-route services retain their group and address limits, adding
+`Pace.WAF` to route selection. `entry.WAF` stores challenge outcomes separately:
+a WAF failure changes no ordinary service counters, speed, transport health
+or cooldown. Recovery combines that penalty with ordinary reliability and
+unthrottled speed measurements; known free-host caps are not shared as an
+estimate of unrestricted capacity. Retries use the existing proxy budget;
+source lease acquisition is cancelable and bounded by the request timeout.
+
 ### Extractors
 
 `extractor.Extractor` is `Name/Match/Extract`. `Registry.Find` walks the
@@ -432,7 +453,8 @@ Host-specific notes:
   ordinary page embedding one is reached by the generic link scanner; its
   player goes through the existing native token resolver and range engine.
   This is how linked players work without a dedicated extractor for every
-  blog embedding them.
+  blog embedding them. Cloudflare challenges use the shared WAF recovery
+  path; Doodstream has no special proxy registration.
 - **voyeurking** is an index of K2S and FileBoom files. Category and collection
   pages expose their video links and `rel="next"` pager in HTML. Pagination stays within the
   same listing type and slug. A video's file link lives in the
@@ -531,7 +553,7 @@ Host-specific notes:
   The persistent egress pool is enabled by default (`internal/proxy`, bbolt),
   with `-proxies=false` or `HEAPLEACH_PROXIES=0` to disable it. It is
   adapted from amzscrape. `Pace.PerRoute` marks the service's addressing rule;
-  the manager allows the `keep2share` and `fileboom` groups to use proxies. The
+  the manager allows the `keep2share`, `fileboom` and `cloudflare` groups to use proxies. The
   dispatcher leases a route before resolving and holds it through the
   transfer, one file per address per service across aliases and proxy protocols.
   The HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
@@ -1602,7 +1624,7 @@ first version a snapshot reports is taken as the page's own, and a later,
 different one turns the badge into a reload button.
 
 The header's Settings button opens live concurrency, streams, speed and
-download proxy controls. `ProxyList` selects Keep2Share or FileBoom with the
+download proxy controls. `ProxyList` selects Keep2Share, FileBoom or WAF recovery with the
 `site` query and polls `/api/proxies` only while mounted and the
 tab is visible; the inventory can contain tens of thousands of routes and
 must not be added to SSE snapshots. Filtering, sorting and pagination happen
