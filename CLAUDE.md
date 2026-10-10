@@ -81,15 +81,26 @@ publisher directly: tags pushed with `GITHUB_TOKEN` do not trigger another
 workflow. `.github/scripts/release-tag.sh` handles version selection, tested
 against a temporary Git remote by `make test-release`.
 
+The OCR job runs alongside the main checks; both gate publication. The caller
+passes its tested SHA, and the publisher verifies the checkout against it before
+reusing those results. Standalone tag pushes still run the Go suite. Release
+compilation has a separate cache keyed by toolchain/dependencies and commit,
+restoring the previous commit's output and saving the new one. Sharing CI's
+immutable `go.sum` cache left every cross-platform build cold on every push.
+
 `make tag V=v1.2.3` still writes and pushes an explicit annotated tag;
 the release workflow also fires on `v*`. It cross-compiles the five
 archives and publishes them alongside a `SHA256SUMS`. Its second job, which
 waits for the first, pushes the runtime image for amd64 and arm64 to
 `ghcr.io/johanlindvall/heapleach` as `vX.Y.Z` and `X.Y.Z` (the git tag's
-spelling and Docker's), `vX.Y` and `X.Y`, and `latest`. The UI and
-Go stages run on the builder's platform (`--platform=$BUILDPLATFORM`) and Go
-cross-compiles. QEMU emulates the native OCR helper build and runtime package
-install — which is why an arm64 image needs binfmt locally, supplied by the
+spelling and Docker's), `vX.Y` and `X.Y`, and `latest`. The image job downloads
+the published Linux archives, verifies their checksums and amd64 version, and
+selects Docker's `released-binary` stage with `BINARY_STAGE`. Thus both release
+formats carry the same executable and UI. Local image builds default to the
+`backend` stage: the UI and Go stages run on the builder's platform
+(`--platform=$BUILDPLATFORM`) and Go cross-compiles. QEMU emulates the native
+OCR helper build and runtime package install — which is why an arm64 image
+needs binfmt locally, supplied by the
 QEMU setup step in CI. The tag target refuses a dirty tree, which is what
 makes step 3 below necessary rather than tidy.
 

@@ -10,12 +10,16 @@
 #   captcha-test -> tests the local OCR reader against synthetic challenges
 #   captcha  -> freezes the local OCR model and its Python runtime
 #   captcha-export -> optional OCR helper for `make captcha-helper`
+#   released-binary -> verified release archive, used by the publishing job
 #   runtime  -> the image that actually runs (default target)
 #
 # The app itself is one self-contained binary: the UI is inside it, so there
 # is nothing to serve from disk. The helpers are what some hosts need beyond
 # HTTP (see internal/tools); they sit beside the binary, which is the first
 # place tools.Find looks.
+
+# Local builds compile from source; release images reuse the published binary.
+ARG BINARY_STAGE=backend
 
 # --------------------------------------------------------------- frontend
 # The UI and Go stages run on the builder's own platform and cross-compile.
@@ -114,6 +118,15 @@ RUN model_dir=$(python -c 'import pathlib, ddddocr; print(pathlib.Path(ddddocr._
 FROM scratch AS captcha-export
 COPY --from=captcha /build/dist/heapleach-ocr /heapleach-ocr
 
+# --------------------------------------------------------- release binary
+# Only reached with BINARY_STAGE=released-binary. The release workflow checks
+# the archives' checksums before placing the two Linux binaries here.
+FROM scratch AS released-binary
+ARG TARGETARCH
+COPY dist/runtime/${TARGETARCH}/heapleach /out/heapleach
+
+FROM ${BINARY_STAGE} AS app
+
 # ---------------------------------------------------------------- runtime
 FROM debian:trixie-slim AS runtime
 
@@ -128,7 +141,7 @@ RUN apt-get update \
 
 COPY --from=helpers /out/ /usr/local/bin/
 COPY --from=captcha /build/dist/heapleach-ocr /usr/local/bin/heapleach-ocr
-COPY --from=backend /out/heapleach /usr/local/bin/heapleach
+COPY --from=app /out/heapleach /usr/local/bin/heapleach
 
 ENV HEAPLEACH_ADDR=:8080 \
     HEAPLEACH_DIR=/downloads \

@@ -988,7 +988,8 @@ the host issues links that expire.
 
 Every push to `main` and pull request runs the tests, `go vet` and a `gofmt` check, with
 the UI compiled first so the binary is built against the real embedded
-frontend rather than the placeholder.
+frontend rather than the placeholder. The independent OCR checks run alongside
+the main checks, and both must pass before a release starts.
 
 After a push to `main` passes CI, it automatically tags the tested commit
 with the next patch version and publishes the archives and container images.
@@ -996,6 +997,12 @@ Versions follow the highest stable `vX.Y.Z` tag. Publishing is queued, and a
 rerun reuses its tag or skips a commit already included in a newer release.
 `make tag V=vX.Y.Z` remains available for choosing a version explicitly;
 pushing that tag uses the same publisher.
+
+Automatic releases reuse the caller's tests after verifying the checked-out
+commit; standalone tags run the Go suite themselves. A separate release cache
+retains compilation output for all five targets between commits. Container
+images use the published Linux binaries after checking their checksums and
+version, so the archives and images carry the same executable and embedded UI.
 
 One Linux runner produces every archive, because the program is pure Go
 with cgo off and the targets differ only by `GOOS` and `GOARCH`:

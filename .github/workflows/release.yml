@@ -4,6 +4,11 @@ on:
   push:
     tags: ['v*']
   workflow_call:
+    inputs:
+      tested-sha:
+        description: Commit that passed the caller's checks; empty for standalone tags
+        type: string
+        default: ''
 
 # Tag allocation and publication share a queue. Another successful main
 # push must neither take the same version nor cancel a half-published one.
@@ -61,10 +66,30 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
+          cache: false
 
-      # A tag that cannot pass its own tests should not become a download.
+      # setup-go's immutable go.sum cache was shared with CI, so the release
+      # never saved its cross-platform build output. Keep a separate cache
+      # that advances with each commit and restores the previous build.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-${{ runner.arch }}-release-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-release-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-
+
+      # Main has already passed the race/coverage suite in this very run.
+      # Only that exact checkout may reuse the result; manual tags still test.
+      - name: Verify the tested commit
+        if: inputs.tested-sha != ''
+        env:
+          TESTED_SHA: ${{ inputs.tested-sha }}
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+
       - name: Test
+        if: inputs.tested-sha == ''
         working-directory: backend
         run: go test ./... -count=1
 
@@ -119,6 +144,27 @@ jobs:
         with:
           ref: ${{ env.TAG }}
 
+      # Embed the exact binaries that were published, including their UI and
+      # version stamp. Recompiling here discarded the archive job's work and
+      # started two cold Go builds because BuildKit cache mounts are local.
+      - name: Download and verify the released Linux binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archives=$(mktemp -d)
+          trap 'rm -rf "$archives"' EXIT
+          gh release download "$TAG" --dir "$archives" \
+            --pattern '*_linux_*.tar.gz' --pattern SHA256SUMS
+          (cd "$archives" && sha256sum --check --ignore-missing SHA256SUMS)
+          for arch in amd64 arm64; do
+            mkdir -p "dist/runtime/$arch"
+            tar -xzf "$archives/heapleach_${TAG}_linux_${arch}.tar.gz" \
+              -C "dist/runtime/$arch" ./heapleach
+          done
+          reported_version=$(dist/runtime/amd64/heapleach -version 2>&1)
+          test "$reported_version" = "heapleach $TAG"
+
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
@@ -149,7 +195,7 @@ jobs:
           context: .
           target: runtime
           platforms: linux/amd64,linux/arm64
-          build-args: VERSION=${{ env.TAG }}
+          build-args: BINARY_STAGE=released-binary
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -36,9 +36,6 @@ jobs:
         working-directory: frontend
         run: npm test
 
-      - name: Test the local CAPTCHA reader
-        run: make test-captcha
-
       - name: Test release tagging
         run: make test-release
 
@@ -99,8 +96,17 @@ jobs:
         working-directory: backend
         run: CGO_ENABLED=0 go build -trimpath ./cmd/...
 
+  # OCR has no dependency on the UI or Go build. Its model tests should not
+  # hold up those checks, but both jobs must pass before publishing.
+  captcha:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test the local CAPTCHA reader
+        run: make test-captcha
+
   release:
-    needs: build
+    needs: [build, captcha]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
@@ -108,3 +114,5 @@ jobs:
     # GITHUB_TOKEN pushes do not trigger tag workflows. Call the publisher
     # directly so no personal token is needed to finish the release.
     uses: ./.github/workflows/release.yml
+    with:
+      tested-sha: ${{ github.sha }}

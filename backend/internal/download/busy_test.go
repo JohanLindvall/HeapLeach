@@ -32,7 +32,10 @@ func busyManager(t *testing.T) *Manager {
 		GofileSecret: config.FallbackGofileSecret,
 		MaxRetries:   1, Timeout: 30 * time.Second,
 	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
+	// These tests count the manager's transfer/queue attempts. HTTP retries
+	// have their own tests; repeating each synthetic refusal here only adds
+	// the real HTTP backoff to a deliberately accelerated queue cooldown.
+	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, cfg.Timeout)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
 	m.timings.busyBase = time.Millisecond

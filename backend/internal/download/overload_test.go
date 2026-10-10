@@ -341,7 +341,7 @@ func TestARefusedTransferGivesUpItsSlotInsteadOfRetryingInPlace(t *testing.T) {
 		t.Fatalf("a refused transfer returned %v, want the item handed back", err)
 	}
 	// One request, not a retry loop: the item left instead of trying again.
-	if got := hits.Load() - before; got > int32(m.cfg.MaxRetries+1) {
+	if got := hits.Load() - before; got != 1 {
 		t.Errorf("the refused transfer made %d requests, want it to leave after the refusal", got)
 	}
 	if limit, active := m.hostGate.waiting(host.Hostname()); limit != 1 || active != 0 {
@@ -364,11 +364,9 @@ func TestOverloadThrottlesTheHostThatAnsweredNotTheJobsSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Exactly one transfer's worth of refusals. The HTTP client treats 503
-	// as transient in its own right and retries within an attempt, so it
-	// takes more than one refusal to reach the branch under test — and no
-	// more than that, or the recovery below would be refused as well.
-	handler, _ := bucklingServer(payload, 2)
+	// The fixture disables HTTP retries, so one refusal reaches the queue
+	// branch and the next transfer can recover.
+	handler, _ := bucklingServer(payload, 1)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
