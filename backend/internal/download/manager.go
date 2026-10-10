@@ -20,6 +20,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -34,6 +35,13 @@ type Manager struct {
 	reg    *extractor.Registry
 	client *httpx.Client
 	log    *slog.Logger
+	// settingsMu serializes preparation/publication with shutdown. The pool
+	// is opened lazily and owned until Close, even when routing is disabled.
+	settingsMu   sync.Mutex
+	proxies      *proxy.Pool // guarded by mu
+	proxyConfig  proxy.Configuration
+	proxyEnabled bool
+	proxyRunning int
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -152,6 +160,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 	}
 	return &Manager{
 		cfg:             cfg,
+		proxyConfig:     proxy.Configuration{Endpoints: slices.Clone(cfg.ProxyEndpoints), Feeds: slices.Clone(cfg.ProxyFeeds)},
 		reg:             reg,
 		hostCount:       hostCount,
 		version:         cfg.Version,
@@ -204,6 +213,7 @@ func (m *Manager) Start() {
 // can both defer it and call it explicitly at the right moment.
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
+		m.settingsMu.Lock()
 		// Before the cancellation, not after it. Stopping cancels every
 		// transfer in flight, and a worker winding down marks its item
 		// canceled — which is indistinguishable, once written, from an item
@@ -227,7 +237,13 @@ func (m *Manager) Close() {
 		m.persistState(st)
 		m.stop()
 		m.persistMu.Unlock()
+		m.settingsMu.Unlock()
 		m.wg.Wait()
+		if m.proxies != nil {
+			if err := m.proxies.Close(); err != nil {
+				m.log.Warn("close proxy database", "err", err)
+			}
+		}
 
 		m.subsMu.Lock()
 		m.closed = true
@@ -376,13 +392,28 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 // dispatch starts queued items whenever a worker slot frees up.
 func (m *Manager) dispatch() {
 	defer m.wg.Done()
+	// Timers in the persistent pool and refreshed feeds can make a route
+	// available without a worker completing. Settings can enable a pool at
+	// any point after this dispatcher starts.
+	ticker := time.NewTicker(config.ProxyDispatchTick)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-m.wake:
+		case <-ticker.C:
+			m.mu.Lock()
+			enabled := m.proxyEnabled
+			m.mu.Unlock()
+			if !enabled {
+				continue
+			}
 		}
 
+		m.mu.Lock()
+		m.updateProxyDemandLocked()
+		m.mu.Unlock()
 		for {
 			m.mu.Lock()
 			it := m.nextLocked()
@@ -396,6 +427,9 @@ func (m *Manager) dispatch() {
 			// spans exactly the worker's ownership of the item.
 			it.hostKey = m.hostKeyLocked(it)
 			m.hostActive[it.hostKey]++
+			if it.route != nil {
+				m.proxyRunning++
+			}
 			if itemHeld != nil {
 				itemHeld(it, true)
 			}
@@ -444,9 +478,10 @@ func (m *Manager) nextLocked() *Item {
 	// The ordinary queue is FIFO. Advancing its head costs nothing; copying
 	// every remaining item on each dispatch makes a large album quadratic.
 	now := time.Now()
+	unavailableRoutes := make(map[routeGroup]bool)
 	for len(m.queue) > 0 {
 		it := m.queue[0]
-		if it.Status == StatusQueued && !it.inFlight && (m.hostFullLocked(it) || it.notBefore.After(now)) {
+		if it.Status == StatusQueued && !it.inFlight && (it.notBefore.After(now) || m.hostFullLocked(it) || !m.leaseRouteLocked(it, unavailableRoutes)) {
 			break
 		}
 		m.queue[0] = nil
@@ -464,7 +499,7 @@ func (m *Manager) nextLocked() *Item {
 			kept = append(kept, it)
 		case it.Status != StatusQueued || it.inFlight:
 			// Cancelled where it stood, or still owned: forget it.
-		case m.hostFullLocked(it), it.notBefore.After(now):
+		case it.notBefore.After(now), m.hostFullLocked(it), !m.leaseRouteLocked(it, unavailableRoutes):
 			kept = append(kept, it)
 		default:
 			chosen = it
@@ -502,6 +537,13 @@ func (m *Manager) lowOnSpace() bool {
 // resolves to, and nothing has resolved yet at dispatch. That one is a
 // queue the transfer itself waits in — see hostGate. Caller holds mu.
 func (m *Manager) hostFullLocked(it *Item) bool {
+	if m.usesProxies(it) {
+		// A transfer started before enabling proxies has no lease. Let it
+		// finish before the pool can lease the same direct address. When
+		// disabling, the normal group cap below drains all leased transfers
+		// before returning to the ordinary connection.
+		return m.hostActive[m.hostKeyLocked(it)] > m.proxyRunning
+	}
 	if it.pace != nil && it.pace.Files > 0 &&
 		m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files {
 		return true
@@ -557,7 +599,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	defer m.wg.Done()
 	defer cancel()
 
-	err := m.transfer(ctx, it)
+	err := m.transferRouted(ctx, it)
 
 	m.mu.Lock()
 	it.finishedAt = time.Now()
@@ -612,6 +654,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		m.enqueueLocked(it)
 	}
 	m.running--
+	if it.route != nil {
+		m.proxyRunning--
+		it.route = nil
+	}
 	if m.hostActive[it.hostKey]--; m.hostActive[it.hostKey] <= 0 {
 		delete(m.hostActive, it.hostKey)
 	}
@@ -843,6 +889,9 @@ var recheckTools = tools.Recheck
 // the same file is never downloaded by two goroutines at once.
 // Caller holds mu.
 func (m *Manager) enqueueLocked(it *Item) {
+	if it.Status.Terminal() {
+		it.proxyRetries = 0
+	}
 	// Whatever was true of the destination last time is re-established by
 	// the worker, not carried over.
 	it.Skipped = false
@@ -953,6 +1002,11 @@ func (m *Manager) deferWaitLocked(it *Item, err error) bool {
 	wait, ok := errors.AsType[*extractor.WaitError](err)
 	if !ok || it.retryPending {
 		return false
+	}
+	if it.route == nil && m.usesProxies(it) {
+		// Proxies may have been enabled while this ordinary direct attempt
+		// was still resolving. Its timer belongs to that address alone.
+		wait = &extractor.WaitError{Until: time.Now(), Reason: "Waiting for an available download route"}
 	}
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
 	it.notBefore = wait.Until

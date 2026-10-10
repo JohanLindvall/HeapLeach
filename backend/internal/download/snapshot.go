@@ -25,6 +25,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		MaxConcur:   config.MaxConcurrency,
 		Streams:     m.streams,
 		MaxStreams:  config.MaxStreams,
+		Proxies:     m.proxyEnabled,
 		Active:      m.running,
 		Queued:      0,
 		Paused:      m.throttle.isPaused(),
@@ -274,6 +275,7 @@ func (m *Manager) sampleDisk(now time.Time) {
 // there is nothing worth sending twice a second about the second one.
 func (m *Manager) sampleLocked(now time.Time) bool {
 	moved := false
+	limited := m.throttle.isPaused() || m.throttle.currentLimit() > 0
 	for _, job := range m.jobs {
 		for _, it := range job.Items {
 			if it.Status != StatusRunning {
@@ -299,6 +301,7 @@ func (m *Manager) sampleLocked(now time.Time) bool {
 			} else {
 				it.speed = config.SpeedSmoothing*it.speed + (1-config.SpeedSmoothing)*instant
 			}
+			m.sampleProxyLocked(it, now, current-it.lastBytes, now.Sub(it.lastSample), limited)
 			it.lastBytes, it.lastSample = current, now
 		}
 	}

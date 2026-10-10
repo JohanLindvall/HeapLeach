@@ -189,6 +189,12 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if _, routed := errors.AsType[*httpx.RouteError](err); routed {
+			return &routeTransferError{err: err, moved: onDisk(part, len(it.Segments), files) > before}
+		}
+		if _, busy := errors.AsType[*busyHostError](err); busy && httpx.RouteID(ctx) != "" {
+			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: onDisk(part, len(it.Segments), files) > before}
+		}
 		if errors.Is(err, errFileChanged) {
 			if err := files.truncate(part); err != nil {
 				return err
@@ -551,6 +557,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	// whatever a redirect landed on — the queue, the evidence and the cap
 	// have to name the same machine or the throttle can never fire.
 	m.hostGate.serving(hostOf(rawURL))
+	m.mu.Lock()
+	it.routeResumable = resp.StatusCode == http.StatusPartialContent
+	m.mu.Unlock()
 
 	total := totalSize(resp, offset)
 	if state != nil && total <= 0 {

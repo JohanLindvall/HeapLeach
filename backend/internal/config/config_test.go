@@ -48,6 +48,41 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 }
 
+func TestProxyConfigurationDoesNotCreateStateUntilStartup(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HEAPLEACH_PROXIES", "1")
+	t.Setenv("HEAPLEACH_PROXY_DB", filepath.Join(dir, "state", "routes.db"))
+	t.Setenv("HEAPLEACH_PROXY_FEEDS", "")
+	t.Setenv("HEAPLEACH_PROXY_ENDPOINTS", "http://one.example.test:8000,socks5://two.example.test:1080")
+	t.Setenv("HEAPLEACH_PROXY_RETRIES", "12")
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Proxies || len(cfg.ProxyFeeds) != 0 || len(cfg.ProxyEndpoints) != 2 || cfg.ProxyRetries != 12 {
+		t.Fatalf("proxy config=%+v", cfg)
+	}
+	if _, err := os.Stat(filepath.Dir(cfg.ProxyDB)); !os.IsNotExist(err) {
+		t.Fatal("FromEnv created the state directory")
+	}
+	cfg.URLs = []string{"https://example.test/file"}
+	cfg.DownloadDir = dir
+	if err := cfg.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StateFile != "" || cfg.ProxyDB == "" {
+		t.Fatal("CLI mode must keep the proxy database independently of the queue")
+	}
+	t.Setenv("HEAPLEACH_PROXY_RETRIES", "-1")
+	cfg, err = FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Prepare() == nil {
+		t.Fatal("negative proxy retry budget accepted")
+	}
+}
+
 func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_ADDR", ":9999")
 	t.Setenv("HEAPLEACH_CONCURRENCY", "7")

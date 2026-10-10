@@ -1,34 +1,30 @@
 // SPDX-License-Identifier: MIT
 import { formatSpeed } from '../format';
 import type { ConnectionState, Snapshot } from '../types';
-import { BoltIcon, MoonIcon, PauseIcon, PlayIcon, SplitIcon, SunIcon } from './Icons';
-import { SettingSlider } from './SettingSlider';
-import { SpeedLimit } from './SpeedLimit';
+import { MoonIcon, PauseIcon, PlayIcon, SettingsIcon, SunIcon } from './Icons';
 import { Sparkline } from './Sparkline';
 
 interface StatsBarProps {
   readonly snapshot: Snapshot;
   readonly connection: ConnectionState;
-  readonly onConcurrencyChange: (value: number) => void;
-  readonly onStreamsChange: (value: number) => void;
   readonly speedSeries: number[];
   readonly theme: 'dark' | 'light';
   readonly onToggleTheme: () => void;
   readonly onTogglePause: () => void;
-  readonly onSpeedLimitChange: (bytesPerSecond: number) => void;
+  readonly settingsOpen: boolean;
+  readonly onToggleSettings: () => void;
 }
 
-/** Header: live totals, the worker-count control and connection status. */
+/** Header: live totals, access to settings and connection status. */
 export function StatsBar({
   snapshot,
   connection,
-  onConcurrencyChange,
-  onStreamsChange,
   speedSeries,
   theme,
   onToggleTheme,
   onTogglePause,
-  onSpeedLimitChange,
+  settingsOpen,
+  onToggleSettings,
 }: StatsBarProps) {
   const totals = snapshot.jobs.reduce(
     (acc, job) => {
@@ -64,27 +60,18 @@ export function StatsBar({
       </div>
 
       <div className="stats__controls">
-        <SettingSlider
-          id="concurrency"
-          icon={<BoltIcon />}
-          label="Files"
-          title="Files downloaded at once"
-          value={snapshot.concurrency}
-          max={snapshot.maxConcurrency}
-          onCommit={onConcurrencyChange}
-        />
-
-        <SettingSlider
-          id="streams"
-          icon={<SplitIcon />}
-          label="Streams"
-          title="Connections a slow file may be split across"
-          value={snapshot.streams}
-          max={snapshot.maxStreams}
-          onCommit={onStreamsChange}
-        />
-
-        <SpeedLimit value={snapshot.speedLimit} onChange={onSpeedLimitChange} />
+        <button
+          type="button"
+          className={`btn${settingsOpen ? ' is-selected' : ''}`}
+          aria-expanded={settingsOpen}
+          aria-controls="live-settings"
+          onClick={onToggleSettings}
+          title="Live settings and K2S proxy pool"
+        >
+          <SettingsIcon />
+          Settings
+          <span className="settings-count">{snapshot.concurrency} files{snapshot.proxies ? ' · proxies on' : ''}</span>
+        </button>
 
         <button
           type="button"

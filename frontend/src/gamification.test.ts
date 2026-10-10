@@ -15,7 +15,7 @@ function snapshot(items: ItemView[], over: Partial<Snapshot> = {}): Snapshot {
     size: 0, downloaded: 0, speed: 0, sizeKnown: true,
   };
   return {
-    jobs: [job], concurrency: 1, maxConcurrency: 4, streams: 1, maxStreams: 8,
+    jobs: [job], concurrency: 1, maxConcurrency: 4, streams: 1, maxStreams: 8, proxies: false,
     active: 0, queued: 0, speed: 0, paused: false, speedLimit: 0,
     downloadDir: '/tmp', diskFree: 0, diskTotal: 0, diskMinFree: 0, hostCount: 10, held: 0, ...over,
   };

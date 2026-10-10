@@ -115,6 +115,14 @@ type Config struct {
 	URLs []string
 	// Password unlocks protected sources in that mode.
 	Password string
+
+	// Proxies enables extra egress routes for K2S. The inventory and its
+	// learned health live independently of the queue.
+	Proxies        bool
+	ProxyDB        string
+	ProxyEndpoints []string
+	ProxyFeeds     []string
+	ProxyRetries   int
 }
 
 // FromEnv reads HEAPLEACH_*-prefixed environment variables over the defaults.
@@ -142,6 +150,17 @@ func FromEnv() (*Config, error) {
 		MinFreeDisk:    DefaultMinFreeDisk,
 		MaxSources:     MaxExpandedSources,
 		MaxFiles:       MaxListingFiles,
+		ProxyDB:        env("PROXY_DB", defaultProxyDB()),
+		ProxyEndpoints: envList("PROXY_ENDPOINTS"),
+		ProxyFeeds:     []string{DefaultProxyFeed},
+		ProxyRetries:   DefaultProxyRetries,
+	}
+	c.Proxies, _ = EnvBool("PROXIES")
+	if _, set := os.LookupEnv(envPrefix + "PROXY_ENDPOINTS"); !set {
+		c.ProxyEndpoints = []string{"direct"}
+	}
+	if _, set := os.LookupEnv(envPrefix + "PROXY_FEEDS"); set {
+		c.ProxyFeeds = envList("PROXY_FEEDS")
 	}
 
 	// An explicitly empty state path disables persistence; env's usual
@@ -153,6 +172,9 @@ func FromEnv() (*Config, error) {
 	}
 
 	var err error
+	if c.ProxyRetries, err = envInt("PROXY_RETRIES", c.ProxyRetries); err != nil {
+		return nil, err
+	}
 	if c.Concurrency, err = envInt("CONCURRENCY", c.Concurrency); err != nil {
 		return nil, err
 	}
@@ -331,6 +353,22 @@ func PrepareDir(path string) (string, error) {
 // directory usable, failing fast rather than letting every transfer discover
 // the same problem separately.
 func (c *Config) Prepare() error {
+	if c.ProxyRetries < 0 {
+		return errors.New("proxy retries cannot be negative")
+	}
+	if c.Proxies {
+		if strings.TrimSpace(c.ProxyDB) == "" {
+			return errors.New("proxy-db must name a Bolt database")
+		}
+	}
+	if c.ProxyDB != "" {
+		// A disabled pool can be enabled through the live settings later.
+		var err error
+		c.ProxyDB, err = expandHome(c.ProxyDB)
+		if err != nil {
+			return err
+		}
+	}
 	// URLs on the command line mean download these and quit. There is no
 	// queue to outlive the process, and writing one would leave a service
 	// started later picking up a list the user thought was long finished.
@@ -458,6 +496,13 @@ func defaultStateFile() string {
 	// Compressed; a queue.json beside it is from before that, and is read
 	// once and retired (see download.loadState).
 	return filepath.Join(base, "heapleach", "queue.json.zst")
+}
+
+func defaultProxyDB() string {
+	if state := defaultStateFile(); state != "" {
+		return filepath.Join(filepath.Dir(state), "proxies.db")
+	}
+	return "proxies.db"
 }
 
 // userDownloadDir resolves the platform's download folder.

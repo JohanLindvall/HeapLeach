@@ -4,17 +4,38 @@ package download
 
 import (
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
 // Settings is a partial runtime update. Nil fields keep their current value.
 type Settings struct {
-	Concurrency *int    `json:"concurrency"`
-	Streams     *int    `json:"streams"`
-	Paused      *bool   `json:"paused"`
-	SpeedLimit  *int64  `json:"speedLimit"`
-	DownloadDir *string `json:"downloadDir"`
+	Concurrency    *int      `json:"concurrency"`
+	Streams        *int      `json:"streams"`
+	Paused         *bool     `json:"paused"`
+	SpeedLimit     *int64    `json:"speedLimit"`
+	DownloadDir    *string   `json:"downloadDir"`
+	Proxies        *bool     `json:"proxies"`
+	ProxyEndpoints *[]string `json:"proxyEndpoints"`
+	ProxyFeeds     *[]string `json:"proxyFeeds"`
+}
+
+// CurrentSettings is fetched explicitly by the editor. Endpoint credentials
+// never appear in the inventory or the frequent SSE queue snapshots.
+func (m *Manager) CurrentSettings() Settings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	concurrency, streams := m.limit, m.streams
+	paused, limit, dir := m.throttle.isPaused(), m.throttle.currentLimit(), m.DownloadDir()
+	enabled := m.proxyEnabled
+	endpoints := append([]string{}, m.proxyConfig.Endpoints...)
+	feeds := append([]string{}, m.proxyConfig.Feeds...)
+	return Settings{Concurrency: &concurrency, Streams: &streams, Paused: &paused,
+		SpeedLimit: &limit, DownloadDir: &dir, Proxies: &enabled,
+		ProxyEndpoints: &endpoints, ProxyFeeds: &feeds}
 }
 
 // ApplySettings validates the whole update before changing any setting.
@@ -40,12 +61,62 @@ func (m *Manager) ApplySettings(s Settings) error {
 		}
 	}
 
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
 	m.mu.Lock()
 	if m.closing {
 		m.mu.Unlock()
 		return ErrClosed
 	}
+	pool, enabled, proxyConfig := m.proxies, m.proxyEnabled, m.proxyConfig
+	m.mu.Unlock()
+	proxyUpdate := s.Proxies != nil || s.ProxyEndpoints != nil || s.ProxyFeeds != nil
+	if proxyUpdate {
+		if s.Proxies != nil {
+			enabled = *s.Proxies
+		}
+		if s.ProxyEndpoints != nil {
+			proxyConfig.Endpoints = *s.ProxyEndpoints
+		}
+		if s.ProxyFeeds != nil {
+			proxyConfig.Feeds = *s.ProxyFeeds
+		}
+		var err error
+		proxyConfig, err = proxy.ParseConfiguration(proxyConfig.Endpoints, proxyConfig.Feeds)
+		if err != nil {
+			return err
+		}
+		if enabled && len(proxyConfig.Endpoints)+len(proxyConfig.Feeds) == 0 {
+			return fmt.Errorf("proxy pool needs endpoints or discovery feeds")
+		}
+		if enabled && pool == nil {
+			pool, err = proxy.Open(m.cfg.ProxyDB, proxyConfig.Endpoints, proxyConfig.Feeds, m.client, m.log)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	m.mu.Lock()
 	changed := false
+	if proxyUpdate {
+		changed = enabled != m.proxyEnabled || !slices.Equal(proxyConfig.Endpoints, m.proxyConfig.Endpoints) ||
+			!slices.Equal(proxyConfig.Feeds, m.proxyConfig.Feeds)
+		m.proxies, m.proxyEnabled, m.proxyConfig = pool, enabled, proxyConfig
+		if pool != nil {
+			pool.Configure(proxyConfig, enabled)
+		}
+		if changed && enabled {
+			// A queued direct-address cooldown must not conceal the newly
+			// available proxies. The K2S resolver still remembers that timer
+			// if the pool tries the direct address again.
+			for _, it := range m.queue {
+				if proxyEligible(it) && !it.inFlight {
+					it.notBefore, it.Note = time.Time{}, ""
+				}
+			}
+		}
+	}
 	if s.Concurrency != nil && m.limit != *s.Concurrency {
 		m.limit, changed = *s.Concurrency, true
 	}
@@ -67,7 +138,12 @@ func (m *Manager) ApplySettings(s Settings) error {
 		}
 		m.dirMu.Unlock()
 	}
+	m.updateProxyDemandLocked()
+	m.constrainProxyMeasurementsLocked()
 	m.mu.Unlock()
+	if proxyUpdate && enabled && pool != nil {
+		pool.Start(m.ctx)
+	}
 	if s.Paused != nil && !*s.Paused {
 		m.resumeRestored()
 	}

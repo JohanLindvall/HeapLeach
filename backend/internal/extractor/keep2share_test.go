@@ -22,6 +22,76 @@ import (
 
 const keep2ShareTestInfo = `{"status":"success","code":200,"name":"First Clip.mp4","is_available":true,"is_folder":false,"size":1234,"isAvailableForFree":true}`
 
+func TestKeep2ShareDirectTicketsAndCooldownSurviveProxyToggle(t *testing.T) {
+	var calls atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, _ map[string]string) {
+		calls.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"status": "success", "url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d", time.Now().Add(time.Hour).Unix())})
+	})
+	f := keep2ShareTestExtract(t, k)
+	plain := context.Background()
+	routed := httpx.WithRoute(plain, httpx.DirectRoute, k.client, nil)
+	for _, ctx := range []context.Context{plain, routed, plain} {
+		if _, err := f.Resolve(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatal("toggling proxies spent another direct-address ticket")
+	}
+	k.wait(routed, time.Hour)
+	if err := k.waiting(plain); !isWait(err) {
+		t.Fatal("disabled pool lost its direct-address cooldown")
+	}
+}
+
+func TestKeep2ShareCooldownIsPerRoute(t *testing.T) {
+	var calls atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusNotAcceptable)
+			fmt.Fprint(w, `{"status":"error","errorCode":41,"time_wait":3600}`)
+			return
+		}
+		fmt.Fprint(w, `{"status":"success","url":"https://cdn.example.test/first-clip"}`)
+	})
+	first := httpx.WithRoute(context.Background(), "first", k.client, nil)
+	second := httpx.WithRoute(context.Background(), "second", k.client, nil)
+	f := keep2ShareTestExtract(t, k)
+	if _, err := f.Resolve(first); err == nil {
+		t.Fatal("first route was not cooled")
+	}
+	f = keep2ShareTestExtract(t, k)
+	if _, err := f.Resolve(first); err == nil || calls.Load() != 1 {
+		t.Fatal("another file spent a CAPTCHA on the same cooling route")
+	}
+	if _, err := f.Resolve(second); err != nil {
+		t.Fatalf("independent route was blocked: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("getUrl calls=%d", calls.Load())
+	}
+}
+
+func TestKeep2ShareSignedLinkIsNeverReusedOnAnotherRoute(t *testing.T) {
+	var calls atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		calls.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"status": "success", "url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d", time.Now().Add(time.Hour).Unix())})
+	})
+	f := keep2ShareTestExtract(t, k)
+	first := httpx.WithRoute(context.Background(), "first", k.client, nil)
+	second := httpx.WithRoute(context.Background(), "second", k.client, nil)
+	for _, ctx := range []context.Context{first, first, second, second} {
+		if _, err := f.Resolve(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls=%d; want one redemption per route", calls.Load())
+	}
+}
+
 func TestKeep2ShareRejectsRestrictedOrMissingFilesBeforeRequestingCaptcha(t *testing.T) {
 	for _, tc := range []struct{ name, info, want string }{
 		{"removed", `{"status":"success","is_available":false}`, "unavailable"},
@@ -304,7 +374,7 @@ func TestKeep2ShareRefreshesExpiredLinksWithTheAcceptedTicket(t *testing.T) {
 		}
 		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/fresh"}`)
 	})
-	d := &keep2ShareDownload{host: k, id: "test-file", key: "ticket",
+	d := &keep2ShareDownload{host: k, id: "test-file", key: "ticket", route: httpx.DirectRoute,
 		target: &Target{URL: "https://cdn.example.test/expired"}, expires: time.Now().Add(-time.Second)}
 	target, err := d.resolve(context.Background())
 	if err != nil || target.URL != "https://cdn.example.test/fresh" || calls.Load() != 1 {
@@ -380,7 +450,7 @@ func TestKeep2ShareSendsTheWaitBetweenFreeDownloadsBackToTheQueue(t *testing.T) 
 
 	// Once it is over, the next turn goes ahead.
 	k.mu.Lock()
-	k.cooldown = time.Now().Add(-time.Second)
+	k.cooldowns[httpx.DirectRoute] = time.Now().Add(-time.Second)
 	k.mu.Unlock()
 	cooling.Store(false)
 	target, err := next.Resolve(context.Background())

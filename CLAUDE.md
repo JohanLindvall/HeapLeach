@@ -196,7 +196,7 @@ Packages depend one way only, enforced by convention:
 
 ```
 config, util  (no internal deps)
-  └─ httpx  └─ extractor  └─ download  └─ server, cli
+  └─ httpx  └─ extractor, proxy  └─ download  └─ server, cli
 ```
 
 `webui` stands alone and only carries the embedded assets.
@@ -351,6 +351,14 @@ while holding a worker the rest of the queue could have used.
 
 Host-specific notes:
 
+- **voyeurking** is an index of K2S files. Category pages expose their video
+  links and `rel="next"` pager in HTML, but a video's file link lives in the
+  flattened React Router data table. Read only the primary route's
+  `video.file`: the same table also contains related videos and player
+  assets. Expansion goes through the registry so Keep2Share's deferred
+  resolver and per-route pacing reach the downloader intact. The category
+  page itself stays on the ordinary HTTP client; only K2S transfers use
+  the configured proxy pool.
 - **keep2share** uses the public `/api/v2` free-download flow, on both
   `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
   resolver requests one, reads it with the optional local `heapleach-ocr`
@@ -382,6 +390,46 @@ Host-specific notes:
   the CAPTCHA, so a made-up id is no oracle; and once a free download is
   pending for a file, `getUrl` hands out the link whatever the answer, so
   every guess against that file "succeeds".
+
+  `-proxies` enables a persistent egress pool (`internal/proxy`, bbolt),
+  adapted from amzscrape. `Pace.PerRoute` marks the service's addressing rule;
+  the manager currently allows only the `keep2share` group to use proxies. The
+  dispatcher leases a route before resolving and holds it through the
+  transfer, one file per address across aliases and proxy protocols. The
+  HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
+  isolated client. Changing routes invalidates an IP-bound ticket and cached
+  target; a retry on the same healthy route may reuse them. Cooldowns belong
+  to the service and route, never all K2S files. Transport failures return
+  the item to the queue to try another route, with their own bounded retry
+  budget. The score estimates useful bytes per second for the remaining
+  file size, including reliability and observed setup delay. Five-second
+  progress windows train throughput before a long file finishes, with the
+  resumed prefix, pauses and speed caps excluded. Those samples never write
+  Bolt from `sampleLocked`; the background task flushes changed rows. Bolt stores
+  inventory and each health outcome immediately, while active leases remain
+  in memory. The manager owns the pool, opens it lazily on enable, and closes
+  it after workers finish. Explicit routes must never
+  fall back to direct or disable destination certificate verification.
+
+  A slow, range-capable transfer can move to a proven faster route after
+  sustained evidence that the remaining time saved covers setup costs.
+  `Lease.Upgrade` reserves the replacement atomically. Only the attempt's
+  child context is cancelled: `transferRouted` waits for the old response and
+  part file to close, then changes leases and resumes. A user cancellation
+  wins, and a settings change that invalidates the reservation resumes on
+  the old lease. Unknown routes never preempt working transfers. Feed
+  attempts are 24 hours apart unless runnable K2S demand exceeds distinct
+  addresses with sufficient scores; early top-ups still wait five minutes.
+
+  Proxy settings can change while workers run. `settingsMu` serializes
+  preparation with shutdown, and a failing database open leaves the whole
+  update unapplied. Disabling keeps the pool and its active leases alive;
+  normal K2S admission waits for those transfers to drain. Enabling waits
+  for any unleased direct transfer before the pool may lease that address.
+  Both modes use `httpx.DirectRoute` for K2S's ticket and cooldown identity.
+  Queued direct cooldowns are cleared on enable so new routes can run, while
+  the resolver retains the address's actual timer. Source edits preserve
+  active leases, and late results from removed feeds are discarded.
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be
@@ -1408,6 +1456,15 @@ once: contdep redeploys under open tabs, the stream reconnects to the new
 server, and the page goes on running the interface it was loaded with. The
 first version a snapshot reports is taken as the page's own, and a later,
 different one turns the badge into a reload button.
+
+The header's Settings button opens live concurrency, streams, speed and K2S
+proxy controls. `ProxyList` polls `/api/proxies` only while mounted and the
+tab is visible; the inventory can contain tens of thousands of routes and
+must not be added to SSE snapshots. Filtering, sorting and pagination happen
+server-side. Scores use the selector's deterministic mean estimate, not a
+fresh random draw when viewed. Source drafts fetch `/api/settings` separately
+and survive failed saves; source credentials never belong in the list or
+queue snapshots. Runtime settings last for the session, like concurrency.
 
 `styles.css` is a single design system: one accent gradient, one surface
 ramp, one shadow scale, dark and light via `prefers-color-scheme`. Prefer

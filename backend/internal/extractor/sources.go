@@ -14,11 +14,11 @@ import (
 
 // Expanding a page of links into the files behind them.
 //
-// Two extractors here answer "what is behind this whole page of links"
+// Index extractors answer "what is behind this whole page of links"
 // rather than "what is behind this one link": the harvester (links.go),
-// pointed at a forum thread, and the bunkr album index (balbums.go), which
-// is a search over somebody else's host. Neither hosts anything itself, and
-// both resolve what they find through the registry they belong to.
+// the bunkr album index (balbums.go), and the K2S video index (voyeurking.go).
+// None hosts anything itself; each resolves what it finds through its own
+// registry.
 //
 // The parts they share are here, because each was arrived at for a reason
 // and reproducing them slightly differently is how the second copy gets one

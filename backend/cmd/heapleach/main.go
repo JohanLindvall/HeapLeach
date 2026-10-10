@@ -80,6 +80,11 @@ func run() error {
 	registry := extractor.NewRegistry(cfg, client)
 
 	manager := download.New(cfg, registry, client, log)
+	if cfg.Proxies {
+		if err := manager.ApplySettings(download.Settings{Proxies: &cfg.Proxies}); err != nil {
+			return err
+		}
+	}
 	// Before Start, so the restored queue is in place by the time anything
 	// can look at it. Nothing is fetched here, and nothing restored is
 	// queued, so unfinished work waits for a retry without the whole queue
@@ -94,14 +99,13 @@ func run() error {
 			"jobs", unfinished, "file", cfg.StateFile)
 	}
 	manager.Start()
+	defer manager.Close()
 	// Releasing the queue is the word a held job waits for, so a service
 	// told to resume says it for itself. After Start, so there are workers
 	// to take what the jobs resolve to.
 	if cfg.ResumeRestored {
 		manager.SetPaused(false)
 	}
-	// Close is idempotent; this covers the error paths below.
-	defer manager.Close()
 
 	// URLs on the command line mean "download these and quit" — no server,
 	// no browser, progress on the terminal.
@@ -321,6 +325,8 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.StringVar(&cfg.DownloadDir, "dir", cfg.DownloadDir, "directory to download into")
 	flags.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency,
 		fmt.Sprintf("parallel transfers (1-%d)", config.MaxConcurrency))
+	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use free proxy routes for per-address download limits (Keep2Share)")
+	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,
 		fmt.Sprintf("connections to split a slow file across (1-%d)", config.MaxStreams))

@@ -358,14 +358,57 @@ func TestInvalidSettingsLeaveEverySettingUnchanged(t *testing.T) {
 		`{"concurrency":8,"streams":0}`,
 		`{"concurrency":8,"streams":2,"speedLimit":-1}`,
 		`{"concurrency":8,"streams":2,"downloadDir":""}`,
+		`{"concurrency":8,"proxies":true,"proxyEndpoints":["file:///tmp/proxy"]}`,
+		`{"concurrency":8,"proxies":true,"proxyEndpoints":[],"proxyFeeds":[]}`,
+		`{"concurrency":8,"proxyFeeds":["not-a-feed"]}`,
 	} {
 		rec := postJSON(t, handler, "/api/settings", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
 		}
 		after := manager.Snapshot()
-		if after.Concurrency != before.Concurrency || after.Streams != before.Streams || after.SpeedLimit != before.SpeedLimit || after.DownloadDir != before.DownloadDir {
+		if after.Concurrency != before.Concurrency || after.Streams != before.Streams || after.SpeedLimit != before.SpeedLimit || after.DownloadDir != before.DownloadDir || after.Proxies != before.Proxies {
 			t.Fatalf("invalid settings partially applied: %s", body)
 		}
+	}
+}
+
+func TestProxySettingsAndInventoryAPI(t *testing.T) {
+	m, handler := newTestServer(t)
+	if rec := get(t, handler, "/api/proxies"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rows":[]`) {
+		t.Fatalf("disabled pool: %d %s", rec.Code, rec.Body)
+	}
+	rec := postJSON(t, handler, "/api/settings", `{"proxies":true,"concurrency":4,"proxyEndpoints":["http://reader:private-password@proxy.example.test:80","direct"],"proxyFeeds":[]}`)
+	if rec.Code != http.StatusOK || !m.Snapshot().Proxies || m.Snapshot().Concurrency != 4 {
+		t.Fatalf("enable at runtime: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "private-password") {
+		t.Fatal("queue snapshot exposed a proxy password")
+	}
+	rec = get(t, handler, "/api/settings")
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || !strings.Contains(rec.Body.String(), "private-password") {
+		t.Fatal("explicit settings editor cannot round-trip an authenticated endpoint")
+	}
+	rec = get(t, handler, "/api/proxies?limit=1&offset=1&sort=address")
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || strings.Contains(rec.Body.String(), "private-password") {
+		t.Fatalf("inventory response or credential redaction failed: %d", rec.Code)
+	}
+	var page struct {
+		Rows                 []json.RawMessage
+		Total, Offset, Limit int
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || len(page.Rows) != 1 || page.Total != 2 || page.Offset != 1 {
+		t.Fatalf("bounded inventory: %v %+v", err, page)
+	}
+	for _, query := range []string{"limit=0", "limit=999999", "offset=-1", "limit=no", "sort=wrong", "status=wrong"} {
+		if rec := get(t, handler, "/api/proxies?"+query); rec.Code != http.StatusBadRequest {
+			t.Fatalf("accepted %q", query)
+		}
+	}
+	if rec := postJSON(t, handler, "/api/settings", `{"proxies":false}`); rec.Code != http.StatusOK || m.Snapshot().Proxies {
+		t.Fatal("could not disable proxies at runtime")
+	}
+	if rec := get(t, handler, "/api/proxies"); !strings.Contains(rec.Body.String(), `"total":2`) {
+		t.Fatal("disabling lost the inventory")
 	}
 }

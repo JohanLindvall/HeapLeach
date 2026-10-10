@@ -4,6 +4,49 @@ package config
 
 import "time"
 
+// Proxy discovery and health, following amzscrape's persistent inventory and
+// throughput selection. Feed scores never substitute for measured outcomes.
+const (
+	DefaultProxyFeed         = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
+	ProxyRefresh             = 24 * time.Hour
+	ProxyRefreshRetry        = 5 * time.Minute
+	ProxyTick                = time.Minute
+	ProxyDispatchTick        = time.Second
+	ProxyFeedTimeout         = 20 * time.Second
+	ProxyFeedBytes           = 32 << 20
+	ProxyMaxEntries          = 100000
+	ProxyMaxFeeds            = 32
+	ProxyPageSize            = 50
+	ProxyMaxPageSize         = 200
+	ProxyDBTimeout           = time.Second
+	ProxyRetireAfter         = 30 * 24 * time.Hour
+	ProxyRefusalBase         = time.Minute
+	ProxyRefusalMax          = 30 * time.Minute
+	ProxyBrokenCooldown      = 10 * time.Minute
+	ProxyDeadCooldown        = 24 * time.Hour
+	ProxyOutcomeDecay        = 0.9
+	ProxyDurationAlpha       = 0.3
+	ProxyPriorValid          = 0.25
+	ProxyPriorSeconds        = 8.0
+	ProxyPriorWeight         = 4.0
+	ProxyPriorStrength       = 2.0
+	ProxyInvalidPenalty      = 10.0
+	ProxyMinSeconds          = 0.05
+	ProxyThroughputMinBytes  = 64 << 10
+	ProxyPriorBytesPerSecond = 1 << 20
+	ProxyPriorSetup          = 30 * time.Second
+	ProxyScoreBytes          = 32 << 20
+	ProxySampleWindow        = 5 * time.Second
+	ProxyExploreInterval     = 30 * time.Second
+	ProxyUpgradeWarmup       = 20 * time.Second
+	ProxyUpgradeInterval     = 10 * time.Second
+	ProxyUpgradeMinGain      = 15 * time.Second
+	ProxyUpgradeMinBytes     = 4 << 20
+	ProxyUpgradeRatio        = 1.25
+	ProxyUpgradeConfirm      = 2
+	DefaultProxyRetries      = 20
+)
+
 // Tunables shared across packages. They live here rather than next to their
 // single use so the whole system's behaviour can be read, and adjusted, in
 // one place.

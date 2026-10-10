@@ -123,6 +123,10 @@ type Pace struct {
 	// uses the item's host. Set it when the limit belongs to the service,
 	// independently of which domain serves a file or whether it resolved yet.
 	Group string
+	// PerRoute allows a configured proxy pool to apply Files to each egress
+	// address instead of the whole service. Group must name that service;
+	// a route is leased before Resolve and held through the file transfer.
+	PerRoute bool
 }
 
 // StreamCipher describes payload that arrives encrypted.
@@ -393,6 +397,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// The album index hosts nothing either, and resolves each result the
 	// same way, so it is wired once the registry exists for the same reason.
 	reg.extractors = append(reg.extractors, NewBalbums(client, reg))
+	reg.extractors = append(reg.extractors, NewVoyeurKing(client, reg))
 	return reg
 }
 
