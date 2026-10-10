@@ -55,7 +55,7 @@ func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]s
 	if info.Width <= 0 || info.Height <= 0 || info.Width > config.Keep2ShareCaptchaPixels/info.Height {
 		return nil, errors.New("captcha: CAPTCHA dimensions are too large")
 	}
-	resolveNote(ctx, "waiting for a local CAPTCHA reader")
+	ResolveNote(ctx, "waiting for a local CAPTCHA reader")
 	select {
 	case keep2ShareOCRSlots <- struct{}{}:
 	case <-ctx.Done():
@@ -83,7 +83,7 @@ func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]s
 	output := &util.BoundedBuffer{Limit: config.ErrorBodySample}
 	stderr := &util.BoundedBuffer{Limit: config.ErrorBodySample}
 	cmd.Stdout, cmd.Stderr = output, stderr
-	resolveNote(ctx, "reading CAPTCHA")
+	ResolveNote(ctx, "reading CAPTCHA")
 	err = cmd.Run()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()

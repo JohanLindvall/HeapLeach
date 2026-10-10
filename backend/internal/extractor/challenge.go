@@ -10,7 +10,8 @@ import (
 )
 
 // ChallengeRecovery lets the queue retry a complete extraction on another
-// route. Keeping the hook on the context also reaches nested source links.
+// route after a challenge or an opted-in temporary failure. Keeping the
+// hook on the context also reaches nested source links.
 // The extractor package does not own proxy clients, leases or their budget.
 type ChallengeRecovery func(context.Context, func(context.Context) (*Result, error), error) (*Result, error)
 

@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -31,13 +31,16 @@ func challengePace(original *extractor.Pace) *extractor.Pace {
 	return &pace
 }
 
-// recoverExtraction retries the whole source operation, so a challenge in
+// recoverExtraction retries the whole source operation, so a failure in
 // the middle of a multi-request protocol cannot move its cookies or signed
 // URLs to another address. Successful files refresh their source once their
 // own worker has a lease; Registry installs that resolver.
 func (m *Manager) recoverExtraction(ctx context.Context, read func(context.Context) (*extractor.Result, error), cause error) (*extractor.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if !retryRouteFailure(cause) {
+		return nil, cause
 	}
 	m.mu.Lock()
 	pool, enabled := m.proxies, m.proxyEnabled
@@ -56,16 +59,27 @@ func (m *Manager) recoverExtraction(ctx context.Context, read func(context.Conte
 		m.mu.Unlock()
 	}()
 	pool.RefusedDirect("cloudflare", cause, 0)
-	for attempt := 0; attempt <= m.cfg.ProxyRetries; attempt++ {
-		lease, err := m.challengeLease(ctx, pool)
+	for attempt, retries := 2, 0; ; attempt++ {
+		attemptCtx := extractor.WithResolveNote(ctx, func(note string) {
+			extractor.ResolveNote(ctx, connectionNote(note, attempt))
+		})
+		extractor.ResolveNote(attemptCtx, "Waiting for an available proxy")
+		lease, err := m.challengeLease(attemptCtx, pool)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			return nil, fmt.Errorf("%w: %v", cause, err)
 		}
-		res, err := read(lease.Context(ctx))
+		start := time.Now()
+		res, err := read(lease.Context(attemptCtx))
+		if _, refused := errors.AsType[*extractor.RefusedError](err); refused && ctx.Err() == nil {
+			lease.Failed(err, time.Since(start), false)
+		}
 		lease.Release()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err == nil {
 			if res != nil {
 				for i := range res.Files {
@@ -75,11 +89,25 @@ func (m *Manager) recoverExtraction(ctx context.Context, read func(context.Conte
 			return res, nil
 		}
 		cause = err
-		if _, routed := errors.AsType[*httpx.RouteError](err); !routed || ctx.Err() != nil {
+		if !retryRouteFailure(err) {
 			return nil, err
 		}
+		// Match file downloads: unreachable/dropped/refused proxy routes
+		// do not exhaust the file's budget before a usable address is found.
+		if !routeAtFault(err) {
+			if retries >= m.cfg.ProxyRetries {
+				return nil, cause
+			}
+			retries++
+		}
 	}
-	return nil, cause
+}
+
+func connectionNote(note string, attempt int) string {
+	if note != "" && attempt > 1 {
+		return fmt.Sprintf("%s — connection attempt %d", note, attempt)
+	}
+	return note
 }
 
 // Source discovery has no queued Item yet. Wait for a lease within the
@@ -93,7 +121,7 @@ func (m *Manager) challengeLease(ctx context.Context, pool *proxy.Pool) (*proxy.
 	defer cancel()
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("waiting for a Cloudflare proxy route: %w", err)
+			return nil, fmt.Errorf("waiting for a proxy recovery route: %w", err)
 		}
 		m.mu.Lock()
 		enabled := m.proxyEnabled

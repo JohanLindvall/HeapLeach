@@ -12,7 +12,9 @@ func WithResolveNote(ctx context.Context, note func(string)) context.Context {
 	return context.WithValue(ctx, resolveNoteKey{}, note)
 }
 
-func resolveNote(ctx context.Context, text string) {
+// ResolveNote reports the current stage to the installed callback. Recovery
+// can wrap that callback to include the proxy connection attempt.
+func ResolveNote(ctx context.Context, text string) {
 	if note, ok := ctx.Value(resolveNoteKey{}).(func(string)); ok && note != nil {
 		note(text)
 	}

@@ -15,11 +15,23 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-func TestChallengeRecoveryIncludesDoodTokensAndRefreshesOnTheNewRoute(t *testing.T) {
-	for _, turnstile := range []bool{false, true} {
-		t.Run(fmt.Sprintf("turnstile=%t", turnstile), func(t *testing.T) {
+func TestDoodProxyRecoveryIncludesTokensAndRefreshesOnTheNewRoute(t *testing.T) {
+	for _, mode := range []string{"cloudflare", "turnstile", "reload", "refused"} {
+		t.Run(mode, func(t *testing.T) {
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if turnstile {
+				if mode == "reload" {
+					if strings.HasPrefix(r.URL.Path, "/pass_md5/") {
+						fmt.Fprint(w, "RELOAD")
+					} else {
+						fmt.Fprint(w, `<script>fetch('/pass_md5/session/expired')</script>`)
+					}
+					return
+				}
+				if mode == "refused" {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				if mode == "turnstile" {
 					w.Header().Set(httpx.HeaderContentType, "text/html")
 					fmt.Fprint(w, doodGateFixture)
 					return

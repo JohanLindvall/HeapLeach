@@ -43,7 +43,7 @@ type Manager struct {
 	proxyConfig    proxy.Configuration
 	proxyEnabled   bool
 	proxyRunning   map[string]int // leased workers per service, including the direct route
-	proxyResolving int            // source extractions waiting for or using WAF recovery
+	proxyResolving int            // source extractions waiting for or using proxy recovery
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -293,6 +293,14 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 // resolve scrapes the source page and enqueues the files it found.
 func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	defer m.wg.Done()
+	ctx = extractor.WithResolveNote(ctx, func(note string) {
+		m.mu.Lock()
+		if ctx.Err() == nil && m.jobs[job.ID] == job && job.resolveID == generation && job.resolving {
+			job.resolveNote = note
+		}
+		m.mu.Unlock()
+		m.markDirty()
+	})
 
 	m.mu.Lock()
 	finished := job.finished
@@ -442,23 +450,24 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		size = -1
 	}
 	return &Item{
-		ID:         newID(),
-		JobID:      job.ID,
-		Name:       name,
-		Dir:        filepath.Join(folder, SafeRelPath(f.Dir)),
-		URL:        f.URL,
-		Headers:    f.Headers,
-		Segments:   f.Segments,
-		SegmentKey: f.SegmentKey,
-		External:   f.External,
-		Size:       size,
-		SizeApprox: f.SizeApprox,
-		Status:     StatusQueued,
-		resolve:    f.Resolve,
-		refresh:    f.Refresh,
-		cipher:     f.Cipher,
-		pace:       f.Pace,
-		reject:     f.Reject,
+		ID:            newID(),
+		JobID:         job.ID,
+		Name:          name,
+		Dir:           filepath.Join(folder, SafeRelPath(f.Dir)),
+		URL:           f.URL,
+		Headers:       f.Headers,
+		Segments:      f.Segments,
+		SegmentKey:    f.SegmentKey,
+		External:      f.External,
+		Size:          size,
+		SizeApprox:    f.SizeApprox,
+		Status:        StatusQueued,
+		resolve:       f.Resolve,
+		refresh:       f.Refresh,
+		proxyFallback: f.ProxyFallback,
+		cipher:        f.Cipher,
+		pace:          f.Pace,
+		reject:        f.Reject,
 	}
 }
 
@@ -939,6 +948,7 @@ func (m *Manager) rereadLocked(job *Job) {
 	job.Items = nil
 	job.Err = ""
 	job.resolving = true
+	job.resolveNote = ""
 	ctx, cancel := context.WithCancel(m.ctx)
 	job.cancel = cancel
 	job.resolveID++
@@ -1019,7 +1029,7 @@ func (m *Manager) itemNoteLocked(it *Item) string {
 	}
 	if it.waitingFor == "" {
 		if it.Status == StatusRunning && it.route != nil && it.routeAttempts > 1 && it.Note != "" {
-			return fmt.Sprintf("%s — connection attempt %d", it.Note, it.routeAttempts)
+			return connectionNote(it.Note, it.routeAttempts)
 		}
 		return it.Note
 	}

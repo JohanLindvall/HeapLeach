@@ -74,6 +74,8 @@ func TestDoodReloadRefreshesThePageSessionAndToken(t *testing.T) {
 			client := httpx.New("test", "en", 0, time.Second)
 			defer client.CloseIdleConnections()
 			ctx := context.Background()
+			var notes []string
+			ctx = WithResolveNote(ctx, func(note string) { notes = append(notes, note) })
 			if routed {
 				proxyClient, err := client.ThroughProxy(srv.URL)
 				if err != nil {
@@ -116,6 +118,10 @@ func TestDoodReloadRefreshesThePageSessionAndToken(t *testing.T) {
 			}
 			if aliases.Load() != 2 || pages.Load() != 4 || tokens.Load() != 4 {
 				t.Fatalf("aliases=%d pages=%d tokens=%d; want 2, 4, 4", aliases.Load(), pages.Load(), tokens.Load())
+			}
+			if !f.ProxyFallback || len(notes) != 8 || notes[0] != "Doodstream: requesting player (1/3)" ||
+				notes[3] != "Doodstream: requesting media token (2/3)" {
+				t.Fatalf("fallback=%t notes=%v", f.ProxyFallback, notes)
 			}
 		})
 	}

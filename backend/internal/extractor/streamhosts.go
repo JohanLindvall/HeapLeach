@@ -158,6 +158,8 @@ func NewDoodStream(client *httpx.Client) *DoodStream {
 
 func (d *DoodStream) Name() string { return "doodstream" }
 
+func (d *DoodStream) ProxyFallback() bool { return true }
+
 // Extract resolves a watch or embed page.
 func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	// The embed page is the one carrying the token endpoint; a /d/ link is
@@ -169,6 +171,7 @@ func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	}
 	return &Result{Title: title, Files: []File{{
 		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers,
+		ProxyFallback: true,
 		Resolve: func(ctx context.Context) (*Target, error) {
 			fresh, _, err := d.media(ctx, page)
 			return fresh, err
@@ -178,11 +181,17 @@ func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 
 func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, error) {
 	var title string
+	attempt := 0
 	target, err := withExtractRetries(ctx, func() (*Target, error) {
+		attempt++
+		note := func(stage string) {
+			ResolveNote(ctx, fmt.Sprintf("Doodstream: %s (%d/%d)", stage, attempt, config.ExtractRetries))
+		}
 		base, err := url.Parse(page)
 		if err != nil {
 			return nil, fmt.Errorf("doodstream: %w", err)
 		}
+		note("requesting player")
 		doc, final, err := d.client.GetPage(ctx, page, httpx.Referer(util.Origin(base)+"/"), doodChallengePage)
 		if err != nil {
 			return nil, fmt.Errorf("doodstream: fetch %s: %w", page, err)
@@ -196,6 +205,7 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 		}
 		pass := util.Origin(final) + m[1]
 
+		note("requesting media token")
 		prefix, _, err := d.client.GetPage(ctx, pass, httpx.Referer(page), doodChallengePage)
 		if err != nil {
 			return nil, fmt.Errorf("doodstream: fetch media token: %w", err)

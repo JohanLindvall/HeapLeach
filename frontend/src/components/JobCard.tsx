@@ -158,7 +158,7 @@ function JobCardView({
       {job.error && <p className="job__error">{job.error}</p>}
 
       {job.status === 'resolving' && (
-        <p className="job__resolving">Reading the page and collecting files…</p>
+        <p className="job__resolving">{job.note || 'Reading the page and collecting files…'}</p>
       )}
 
       {open && job.items.length > 0 && (

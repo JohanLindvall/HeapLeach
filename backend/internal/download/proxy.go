@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"slices"
 	"syscall"
 	"time"
@@ -136,7 +137,8 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	if lease == nil {
 		start := time.Now()
 		err := m.transfer(ctx, it)
-		if _, challenged := errors.AsType[*httpx.ChallengeError](err); !challenged || ctx.Err() != nil {
+		_, challenged := errors.AsType[*httpx.ChallengeError](err)
+		if ctx.Err() != nil || (!challenged && (!it.proxyFallback || !retryRouteFailure(err))) {
 			return err
 		}
 		m.mu.Lock()
@@ -144,6 +146,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		fallback := m.proxyEnabled && pool != nil
 		if fallback {
 			it.pace, it.preferredRoute = challengePace(it.pace), ""
+			it.routeAttempts = 1 // the failed direct attempt precedes the first proxy
 			if it.refresh != nil {
 				it.resolve = it.refresh
 			}
@@ -151,7 +154,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		m.mu.Unlock()
 		if fallback {
 			pool.RefusedDirect(it.pace.Group, err, time.Since(start))
-			return &extractor.WaitError{Until: time.Now(), Reason: "Cloudflare challenge; retrying through a proxy"}
+			return &extractor.WaitError{Until: time.Now(), Reason: "Retrying through a proxy"}
 		}
 		return err
 	}
@@ -258,6 +261,34 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	lease.Release()
 	// runItem clears the route together with its dispatch accounting.
 	return err
+}
+
+// retryRouteFailure is shared by source recovery and opted-in direct files.
+// Local disk/parser errors and missing files never trigger a proxy search.
+func retryRouteFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, ok := errors.AsType[*httpx.RouteError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*httpx.ChallengeError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*stalledError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*busyHostError](err); ok {
+		return true
+	}
+	if transientRouteFailure(err) || routeAtFault(err) {
+		return true
+	}
+	if status, ok := errors.AsType[*httpx.StatusError](err); ok {
+		return status.Code == http.StatusForbidden || status.Code == http.StatusRequestTimeout ||
+			status.Code == http.StatusTooManyRequests || status.Code >= 500
+	}
+	return false
 }
 
 // sampleProxyLocked feeds useful-byte windows into the route score. A

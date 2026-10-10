@@ -466,8 +466,18 @@ Host-specific notes:
   Repeat the whole page/token exchange on the same route, keeping its cookies
   and re-reading the token path from the final page. The shared extraction
   retry budget bounds this, with cancelable backoff; persistent `RELOAD`
-  becomes a transient failure, while a challenge on the refreshed page still
-  goes through WAF recovery.
+  becomes a transient failure. Doodstream opts sources and files into
+  `ProxyFallback`, so temporary network/HTTP failures and persistent reloads
+  try the shared recovery pool after the normal connection fails. The
+  manager classifies errors and owns reservations, penalties and random
+  unmeasured draws; a missing video or parser error cannot start a proxy
+  search. Source recovery exempts unreachable/dropped/refused proxies from
+  the retry budget just as file workers do, while other temporary failures
+  remain bounded. A challenge still records its separate WAF penalty.
+  `ResolveNote` reports player/token stages. Recovery adds the connection
+  attempt during source discovery; workers use the existing item counter.
+  `JobView.Note` carries source progress to the browser and terminal, guarded
+  by the source generation and cleared from the view after resolving ends.
 - **voyeurking** is an index of K2S and FileBoom files. Category and collection
   pages expose their video links and `rel="next"` pager in HTML. Pagination stays within the
   same listing type and slug. A video's file link lives in the

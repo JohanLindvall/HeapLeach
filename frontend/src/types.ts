@@ -54,6 +54,7 @@ export interface JobView {
   host: string;
   status: Status;
   error?: string;
+  note?: string;
   createdAt: string;
   items: ItemView[];
   total: number;

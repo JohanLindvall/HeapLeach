@@ -242,6 +242,14 @@ func frame(snap download.Snapshot, r *renderer, started time.Time) []string {
 		r.paintColour(dim, headDetail(snap, started)))
 
 	lines := []string{head}
+	resolving := 0
+	for _, job := range snap.Jobs {
+		if job.Status == download.StatusResolving && job.Note != "" && resolving < config.CLIMaxRows {
+			lines = append(lines, r.paintColour(dim, "  "+terminalText(job.Title)),
+				r.paintColour(yellow, "      "+terminalText(job.Note)))
+			resolving++
+		}
+	}
 	shown := 0
 	for _, job := range snap.Jobs {
 		for _, it := range job.Items {

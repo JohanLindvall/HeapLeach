@@ -296,7 +296,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			if delay > config.Keep2ShareInPlaceWait {
 				return nil, d.host.wait(ctx, delay)
 			}
-			resolveNote(ctx, fmt.Sprintf("%s: waiting %s for the free-download timer", d.host.label, delay.Round(time.Second)))
+			ResolveNote(ctx, fmt.Sprintf("%s: waiting %s for the free-download timer", d.host.label, delay.Round(time.Second)))
 			if err := util.SleepCtx(ctx, delay); err != nil {
 				return nil, err
 			}
@@ -330,9 +330,9 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			readings = readings[1:]
 		}
 		if d.key != "" {
-			resolveNote(ctx, d.host.label+": requesting download link")
+			ResolveNote(ctx, d.host.label+": requesting download link")
 		} else {
-			resolveNote(ctx, fmt.Sprintf("%s: submitting CAPTCHA answer (%d/%d)", d.host.label, attempts, config.Keep2ShareCaptchaAttempts))
+			ResolveNote(ctx, fmt.Sprintf("%s: submitting CAPTCHA answer (%d/%d)", d.host.label, attempts, config.Keep2ShareCaptchaAttempts))
 		}
 		out, err := d.host.call(ctx, "getUrl", in)
 		if out == nil || out.ErrorCode != 31 {
@@ -399,7 +399,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 // and up to Keep2ShareCaptchaGuesses readings, most likely first.
 func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (string, []string, error) {
 	note := func(stage string) {
-		resolveNote(ctx, fmt.Sprintf("%s: %s (%d/%d)", d.host.label, stage, attempt, config.Keep2ShareCaptchaAttempts))
+		ResolveNote(ctx, fmt.Sprintf("%s: %s (%d/%d)", d.host.label, stage, attempt, config.Keep2ShareCaptchaAttempts))
 	}
 	solver := d.host.solver
 	if solver == nil {

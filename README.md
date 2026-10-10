@@ -682,6 +682,16 @@ to obtain fresh signed links and keeps the resolver, cookies and media on
 the chosen route. Attempts use the configured proxy retry budget, and
 waiting for an extraction route is bounded by the request timeout.
 
+Doodstream also switches to this proxy pool after temporary network/HTTP
+failures or repeated `RELOAD` replies from its token endpoint. It tries the
+normal connection first. Each retry refreshes the player and token together
+on one reserved route, using the same random draw for unmeasured candidates
+as Keep2Share. Source discovery and file downloads both skip dead or dropped
+proxies without spending the file's retry budget; other temporary failures
+remain bounded. Missing videos and parser errors remain final. Progress
+messages show the player/token stage and connection attempt in the browser
+and terminal, including while the source is still being resolved.
+
 WAF refusals affect only the WAF success score and cooldown. They do not
 reduce ordinary service scores, erase speed measurements or mark a proxy
 broken. WAF selection still uses ordinary reliability and measured transfer

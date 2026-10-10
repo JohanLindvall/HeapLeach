@@ -75,6 +75,9 @@ type File struct {
 	// its media. The registry supplies it for challenge recovery; ordinary
 	// attempts keep the host's cheaper Resolve path.
 	Refresh func(ctx context.Context) (*Target, error)
+	// ProxyFallback opts this file into proxy recovery after a temporary
+	// failure on the normal connection. Permanent file errors still fail.
+	ProxyFallback bool
 	// Pace, when set, holds the downloader back from this host. Nil is the
 	// normal case: go as fast as the queue's own settings allow.
 	Pace *Pace
@@ -257,6 +260,13 @@ type Extractor interface {
 	Match(u *url.URL) bool
 	// Extract resolves the URL into downloadable files. opts may be zero.
 	Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error)
+}
+
+// ProxyFallback opts a source into the manager's temporary-failure recovery.
+// It still starts on the normal connection; the manager owns error
+// classification, proxy availability and the shared route retry policy.
+type ProxyFallback interface {
+	ProxyFallback() bool
 }
 
 // Options carries per-request extras supplied by the caller.
@@ -496,7 +506,9 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	}
 	res, err := read(ctx)
 	recovered := false
-	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged && httpx.RouteID(ctx) == "" {
+	_, challenged := errors.AsType[*httpx.ChallengeError](err)
+	fallback, optedIn := ex.(ProxyFallback)
+	if err != nil && httpx.RouteID(ctx) == "" && (challenged || (optedIn && fallback.ProxyFallback())) {
 		if recover, ok := ctx.Value(challengeRecoveryKey{}).(ChallengeRecovery); ok {
 			res, err = recover(ctx, read, err)
 			recovered = err == nil

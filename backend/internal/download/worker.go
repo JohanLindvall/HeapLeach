@@ -196,6 +196,16 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 			return err
 		}
+		if it.proxyFallback && httpx.RouteID(ctx) == "" && retryRouteFailure(err) {
+			// Let direct-first hosts recover on another address before
+			// ordinary retries or host backoff repeat the same failed route.
+			m.mu.Lock()
+			canRecover := m.proxyEnabled && m.proxies != nil
+			m.mu.Unlock()
+			if canRecover {
+				return err
+			}
+		}
 		if _, busy := errors.AsType[*busyHostError](err); busy && httpx.RouteID(ctx) != "" {
 			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: onDisk(part, len(it.Segments), files) > before}
 		}

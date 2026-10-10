@@ -75,9 +75,10 @@ type Item struct {
 
 	downloaded atomic.Int64
 	// streams is how many connections are currently fetching this item.
-	streams atomic.Int32
-	resolve func(context.Context) (*extractor.Target, error)
-	refresh func(context.Context) (*extractor.Target, error)
+	streams       atomic.Int32
+	resolve       func(context.Context) (*extractor.Target, error)
+	refresh       func(context.Context) (*extractor.Target, error)
+	proxyFallback bool
 	// cipher, when set, means this host serves the file encrypted and the
 	// bytes are decrypted on their way into the part file. It belongs to
 	// the item rather than to a resolved target: the URL is re-minted per
@@ -172,8 +173,9 @@ type Job struct {
 	Items     []*Item
 
 	// resolving is true between submission and the extractor returning.
-	resolving bool
-	resolveID uint64 // identifies the only extractor result allowed to publish
+	resolving   bool
+	resolveNote string // transient source progress, guarded by Manager.mu
+	resolveID   uint64 // identifies the only extractor result allowed to publish
 	// canceled records an explicit user cancellation, which outranks the
 	// status derived from the items.
 	canceled bool
@@ -251,6 +253,7 @@ type JobView struct {
 	Host       string     `json:"host"`
 	Status     Status     `json:"status"`
 	Error      string     `json:"error,omitempty"`
+	Note       string     `json:"note,omitempty"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	Items      []ItemView `json:"items"`
 	Total      int        `json:"total"`
@@ -371,6 +374,9 @@ func (j *Job) view(note func(*Item) string) JobView {
 		Total:     len(j.Items),
 		SizeKnown: true,
 		Held:      j.restored,
+	}
+	if j.resolving && !j.canceled {
+		v.Note = j.resolveNote
 	}
 	var t itemTally
 	for _, it := range j.Items {

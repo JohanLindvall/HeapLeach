@@ -327,6 +327,17 @@ func TestFrameRowsAreBounded(t *testing.T) {
 	}
 }
 
+func TestFrameShowsSourceProxyRetryProgress(t *testing.T) {
+	const note = "Doodstream: requesting media token (1/3) — connection attempt 4"
+	snap := download.Snapshot{Jobs: []download.JobView{{
+		ID: "source", Title: "Test Clip", Status: download.StatusResolving, Note: note,
+	}}}
+	lines := Frame(snap, 120, time.Second)
+	if !strings.Contains(strings.Join(lines, "\n"), note) {
+		t.Fatalf("source retry progress is missing: %v", lines)
+	}
+}
+
 // discardWriter swallows the display so tests can exercise the renderer.
 type discardWriter struct{}
 
