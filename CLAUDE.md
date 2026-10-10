@@ -349,16 +349,28 @@ row changes once a minute, not every frame. Sleeping in the resolver was
 how a Keep2Share file read "Downloading" for an hour in which nothing moved,
 while holding a worker the rest of the queue could have used.
 
+The `Direct` fallback checks ordinary HTML pages for every registered host's
+links before using a generic embedded player. `filelinks.go` shares the
+`links:` harvester's bounded expansion, but never follows links assigned to
+the generic fallback: a plain HTML navigation link cannot start another
+scan. Named hosts and recognised platforms retain their own extractors.
+K2S/FileBoom links are deduplicated by service and file ID across aliases;
+other links keep their full URLs, including Mega keys. The fetch checks HTML
+headers before reading a bounded body, and supports extensionless pages and
+common HTML/script extensions. Supported links that all fail are reported as
+an error rather than saved as an HTML shell. Partial results report counts.
+
 Host-specific notes:
 
-- **voyeurking** is an index of K2S files. Category pages expose their video
-  links and `rel="next"` pager in HTML, but a video's file link lives in the
+- **voyeurking** is an index of K2S and FileBoom files. Category and collection
+  pages expose their video links and `rel="next"` pager in HTML. Pagination stays within the
+  same listing type and slug. A video's file link lives in the
   flattened React Router data table. Read only the primary route's
   `video.file`: the same table also contains related videos and player
-  assets. Expansion goes through the registry so Keep2Share's deferred
-  resolver and per-route pacing reach the downloader intact. The category
-  page itself stays on the ordinary HTTP client; only K2S transfers use
-  the configured proxy pool.
+  assets. Expansion goes through the registry so the host's deferred
+  resolver and per-route pacing reach the downloader intact. The listing
+  page itself stays on the ordinary HTTP client; only K2S and FileBoom
+  transfers use the configured proxy pool.
 - **keep2share** uses the public `/api/v2` free-download flow, on both
   `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
   resolver requests one, reads it with the optional local `heapleach-ocr`
@@ -377,6 +389,13 @@ Host-specific notes:
   `make dependencies`) and included in the runtime image. Its model and
   Python runtime stay separate from the static Go executable.
 
+  **fileboom** on `fboom.me` shares this implementation with its own
+  `/api/v2` base, label and `Pace.Group`. The API namespaces are separate:
+  a FileBoom file ID cannot be resolved through K2S. Each instance keeps its
+  own tickets and address cooldowns. Proxy statistics and admission limits
+  are per service too, with one transfer per address per service under the
+  manager's shared live concurrency limit.
+
   The helper prints ranked readings, not one answer. The challenge is six
   letters and digits compared without regard to case, and a wrong answer
   leaves it open, so `resolve` tries up to `Keep2ShareCaptchaGuesses`
@@ -393,14 +412,14 @@ Host-specific notes:
 
   `-proxies` enables a persistent egress pool (`internal/proxy`, bbolt),
   adapted from amzscrape. `Pace.PerRoute` marks the service's addressing rule;
-  the manager currently allows only the `keep2share` group to use proxies. The
+  the manager allows the `keep2share` and `fileboom` groups to use proxies. The
   dispatcher leases a route before resolving and holds it through the
-  transfer, one file per address across aliases and proxy protocols. The
-  HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
+  transfer, one file per address per service across aliases and proxy protocols.
+  The HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
   isolated client. Changing routes invalidates an IP-bound ticket and cached
   target; a retry on the same healthy route may reuse them. Cooldowns belong
-  to the service and route, never all K2S files. Transport failures return
-  the item to the queue to try another route, with their own bounded retry
+  to the service and route, never the entire service's queue. Transport failures
+  return the item to the queue to try another route, with their own bounded retry
   budget. The score estimates useful bytes per second for the remaining
   file size, including reliability and observed setup delay. Five-second
   progress windows train throughput before a long file finishes, with the
@@ -410,6 +429,9 @@ Host-specific notes:
   in memory. The manager owns the pool, opens it lazily on enable, and closes
   it after workers finish. Explicit routes must never
   fall back to direct or disable destination certificate verification.
+  An HTTPS proxy's outer TLS connection accepts self-signed certificates;
+  `DialTLSContext` handles that hop alone. TLS inside CONNECT still uses the
+  original certificate verification, tested with both transport modes.
 
   A slow, range-capable transfer can move to a proven faster route after
   sustained evidence that the remaining time saved covers setup costs.
@@ -418,18 +440,21 @@ Host-specific notes:
   part file to close, then changes leases and resumes. A user cancellation
   wins, and a settings change that invalidates the reservation resumes on
   the old lease. Unknown routes never preempt working transfers. Feed
-  attempts are 24 hours apart unless runnable K2S demand exceeds distinct
-  addresses with sufficient scores; early top-ups still wait five minutes.
+  attempts are 24 hours apart unless runnable demand for either service
+  exceeds distinct addresses with sufficient scores; early top-ups still wait five minutes.
 
   Proxy settings can change while workers run. `settingsMu` serializes
   preparation with shutdown, and a failing database open leaves the whole
   update unapplied. Disabling keeps the pool and its active leases alive;
-  normal K2S admission waits for those transfers to drain. Enabling waits
-  for any unleased direct transfer before the pool may lease that address.
-  Both modes use `httpx.DirectRoute` for K2S's ticket and cooldown identity.
+  normal admission for each service waits for that service's transfers to drain.
+  Enabling waits for its unleased direct transfer before the pool may lease
+  that address. Both modes use `httpx.DirectRoute` for ticket and cooldown identity.
   Queued direct cooldowns are cleared on enable so new routes can run, while
   the resolver retains the address's actual timer. Source edits preserve
   active leases, and late results from removed feeds are discarded.
+  Discovery demand shares the global worker budget across both services;
+  `SetDemand` publishes their allocations atomically so an obsolete demand
+  cannot trigger an early feed reload.
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be
@@ -1457,8 +1482,9 @@ server, and the page goes on running the interface it was loaded with. The
 first version a snapshot reports is taken as the page's own, and a later,
 different one turns the badge into a reload button.
 
-The header's Settings button opens live concurrency, streams, speed and K2S
-proxy controls. `ProxyList` polls `/api/proxies` only while mounted and the
+The header's Settings button opens live concurrency, streams, speed and
+download proxy controls. `ProxyList` selects Keep2Share or FileBoom with the
+`site` query and polls `/api/proxies` only while mounted and the
 tab is visible; the inventory can contain tens of thousands of routes and
 must not be added to SSE snapshots. Filtering, sorting and pagination happen
 server-side. Scores use the selector's deterministic mean estimate, not a

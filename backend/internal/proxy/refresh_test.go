@@ -72,36 +72,48 @@ func TestEarlyRefreshRequiresScoredCapacityForRunnableDemand(t *testing.T) {
 		wantRefresh bool
 	}{
 		{"idle", func(p *Pool) {}, false},
-		{"paused demand", func(p *Pool) { p.SetDemand("keep2share", 4); p.SetDemand("keep2share", 0) }, false},
-		{"untried list", func(p *Pool) { p.SetDemand("keep2share", 1) }, true},
-		{"enough scored addresses", func(p *Pool) { scoreRefreshRoutes(p); p.SetDemand("keep2share", 2) }, false},
-		{"ports do not add capacity", func(p *Pool) { scoreRefreshRoutes(p); p.SetDemand("keep2share", 3) }, true},
+		{"paused demand", func(p *Pool) {
+			p.SetDemand(map[string]int{"keep2share": 4})
+			p.SetDemand(map[string]int{"keep2share": 0})
+		}, false},
+		{"untried list", func(p *Pool) { p.SetDemand(map[string]int{"keep2share": 1}) }, true},
+		{"enough scored addresses", func(p *Pool) { scoreRefreshRoutes(p); p.SetDemand(map[string]int{"keep2share": 2}) }, false},
+		{"another service needs measurements", func(p *Pool) {
+			scoreRefreshRoutes(p)
+			p.SetDemand(map[string]int{"keep2share": 1, "fileboom": 1})
+		}, true},
+		{"completed service clears its demand", func(p *Pool) {
+			scoreRefreshRoutes(p)
+			p.SetDemand(map[string]int{"fileboom": 4})
+			p.SetDemand(map[string]int{"keep2share": 2})
+		}, false},
+		{"ports do not add capacity", func(p *Pool) { scoreRefreshRoutes(p); p.SetDemand(map[string]int{"keep2share": 3}) }, true},
 		{"low throughput", func(p *Pool) {
 			scoreRefreshRoutes(p)
 			p.entries["http://two.example.test:8000"].stat("keep2share").BytesPerSecond = 100
-			p.SetDemand("keep2share", 2)
+			p.SetDemand(map[string]int{"keep2share": 2})
 		}, true},
 		{"low throughput while active", func(p *Pool) {
 			scoreRefreshRoutes(p)
 			s := p.entries["http://two.example.test:8000"].stat("keep2share")
 			s.BytesPerSecond, s.active = 100, 1
-			p.SetDemand("keep2share", 2)
+			p.SetDemand(map[string]int{"keep2share": 2})
 		}, true},
 		{"unreliable", func(p *Pool) {
 			scoreRefreshRoutes(p)
 			s := p.entries["http://two.example.test:8000"].stat("keep2share")
 			s.OK, s.Bad = 0.01, 10
-			p.SetDemand("keep2share", 2)
+			p.SetDemand(map[string]int{"keep2share": 2})
 		}, true},
 		{"cooling address", func(p *Pool) {
 			scoreRefreshRoutes(p)
 			p.entries["http://one.example.test:8000"].stat("keep2share").Until = time.Now().Add(time.Hour)
-			p.SetDemand("keep2share", 2)
+			p.SetDemand(map[string]int{"keep2share": 2})
 		}, true},
 		{"active unmeasured transfers", func(p *Pool) {
 			p.entries["http://one.example.test:8000"].stat("keep2share").active = 1
 			p.entries["http://two.example.test:8000"].stat("keep2share").active = 1
-			p.SetDemand("keep2share", 2)
+			p.SetDemand(map[string]int{"keep2share": 2})
 		}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,7 +154,7 @@ func TestFailedFeedDoesNotRetryEarlyWithoutDemand(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatal("failure made an idle pool retry before 24 hours")
 	}
-	p.SetDemand("keep2share", 1)
+	p.SetDemand(map[string]int{"keep2share": 1})
 	p.Refresh(context.Background())
 	if calls.Load() != 2 {
 		t.Fatal("pending work could not retry a failed feed")

@@ -30,6 +30,7 @@ type siteStat struct {
 	BytesPerSecond    float64
 	SetupSeconds      float64
 	SetupSamples      int
+	LastSuccess       time.Time
 	Tries, Fails      int
 	Until             time.Time
 	active            int
@@ -408,6 +409,7 @@ func (l *Lease) observe(o httpx.RouteObservation) {
 			}
 		}
 		e.LastSuccess = now
+		s.LastSuccess = now
 		e.Fails, s.Fails = 0, 0
 		// An observed success does not cancel a server's still-running timer.
 	} else if o.Status == 0 || o.Status == http.StatusProxyAuthRequired || (o.Status >= 200 && o.Status < 300) {

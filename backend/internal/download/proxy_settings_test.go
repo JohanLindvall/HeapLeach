@@ -100,7 +100,7 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 				return false
 			}
 		}
-		return m.proxyRunning == 0
+		return m.proxyRunning["keep2share"] == 0
 	})
 }
 
@@ -154,7 +154,7 @@ func TestProxyScopeAndSettingsErrorsAreAtomic(t *testing.T) {
 	got := m.nextLocked()
 	m.mu.Unlock()
 	if got == nil || got.route != nil {
-		t.Fatal("a non-K2S host was routed through the public pool")
+		t.Fatal("an unsupported host was routed through the public pool")
 	}
 	before := m.CurrentSettings()
 	bad := []string{"file:///not-a-proxy"}
@@ -163,6 +163,37 @@ func TestProxyScopeAndSettingsErrorsAreAtomic(t *testing.T) {
 	}
 	if m.Snapshot().Concurrency != *before.Concurrency || m.ProxyPage(proxy.Query{}).Total != 1 {
 		t.Fatal("invalid live source edit changed the settings")
+	}
+}
+
+func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
+	m := busyManager(t)
+	p := attachPool(t, m, []string{proxy.Direct})
+	job := addProxyFiles(m, 2, nil)
+	for i, service := range proxy.Services() {
+		lease := p.Acquire(service, "", 1)
+		if lease == nil {
+			t.Fatalf("another service's transfer blocked %s", service)
+		}
+		defer lease.Release()
+		it := job.Items[i]
+		it.pace = &extractor.Pace{Group: service, PerRoute: true, Files: 1}
+		it.route, it.inFlight, it.speed = lease, true, float64((i+1)*1024)
+		defer func() { it.inFlight = false }()
+		if duplicate := p.Acquire(service, "", 1); duplicate != nil {
+			duplicate.Release()
+			t.Fatalf("same address admitted a second %s transfer", service)
+		}
+	}
+	for i, service := range proxy.Services() {
+		page := m.ProxyPage(proxy.Query{Site: service})
+		if len(page.Rows) != 1 || page.Rows[0].Active != 1 || page.Rows[0].CurrentSpeed != float64((i+1)*1024) {
+			t.Fatalf("service %s included another service's measurements: %+v", service, page)
+		}
+	}
+	job.Items[0].route.Cooldown(time.Now().Add(time.Hour))
+	if page := m.ProxyPage(proxy.Query{Site: "fileboom"}); !page.Rows[0].CooldownUntil.IsZero() {
+		t.Fatal("K2S cooldown appeared in FileBoom inventory")
 	}
 }
 

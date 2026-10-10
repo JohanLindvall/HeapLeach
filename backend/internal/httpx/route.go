@@ -4,9 +4,11 @@ package httpx
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -36,6 +38,31 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
 		tr.Proxy = http.ProxyURL(u)
+		if u.Scheme == "https" {
+			// DialTLSContext handles only the first hop to the fixed proxy.
+			// TLS inside CONNECT still uses TLSClientConfig and verifies the
+			// destination. Public HTTPS proxies often use self-signed certs.
+			tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if addr != u.Host {
+					return nil, errors.New("unexpected HTTPS proxy address")
+				}
+				conn, err := tr.DialContext(ctx, network, addr)
+				if err != nil {
+					return nil, err
+				}
+				secured := tls.Client(conn, &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // only the proxy's outer TLS hop
+					ServerName:         u.Hostname(), NextProtos: []string{"http/1.1"},
+				})
+				handshake, cancel := context.WithTimeout(ctx, tr.TLSHandshakeTimeout)
+				defer cancel()
+				if err := secured.HandshakeContext(handshake); err != nil {
+					conn.Close()
+					return nil, err
+				}
+				return secured, nil
+			}
+		}
 	}
 	return cp, nil
 }

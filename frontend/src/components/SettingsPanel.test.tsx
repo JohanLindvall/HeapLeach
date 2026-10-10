@@ -82,13 +82,16 @@ it('shows measured and live throughput, scoring and success, and pages on the se
   expect(host.textContent).toContain('3.0 MB/s now');
   expect(host.textContent).toContain('90%');
   expect(host.querySelector('tbody')!.textContent).toContain('17');
-  expect(host.textContent).toContain('K2S only');
+  expect(host.textContent).toContain('K2S · FileBoom');
   expect(button('Previous').disabled).toBe(true);
   vi.mocked(fetchProxies).mockResolvedValue({ ...inventory, offset: 50 });
   await act(async () => { button('Next').click(); });
   expect(fetchProxies).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 50 }), expect.any(AbortSignal));
   expect(button('Next').disabled).toBe(true);
   expect(host.textContent).toContain('51–51 of 51');
+  const service = host.querySelector<HTMLSelectElement>('[aria-label="Proxy service"]')!;
+  await act(async () => { service.value = 'fileboom'; service.dispatchEvent(new Event('change', { bubbles: true })); });
+  expect(fetchProxies).toHaveBeenLastCalledWith(expect.objectContaining({ site: 'fileboom', offset: 0 }), expect.any(AbortSignal));
   await type('input[type="search"]', 'other');
   await act(async () => { await vi.advanceTimersByTimeAsync(250); });
   expect(fetchProxies).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0, search: 'other' }), expect.any(AbortSignal));

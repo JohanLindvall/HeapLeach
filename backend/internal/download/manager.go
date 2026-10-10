@@ -41,7 +41,7 @@ type Manager struct {
 	proxies      *proxy.Pool // guarded by mu
 	proxyConfig  proxy.Configuration
 	proxyEnabled bool
-	proxyRunning int
+	proxyRunning map[string]int // leased workers per service, including the direct route
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -170,6 +170,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		jobs:            make(map[string]*Job),
 		parts:           make(map[string]struct{}),
 		hostActive:      make(map[string]int),
+		proxyRunning:    make(map[string]int),
 		hostGate:        newHostGate(),
 		dir:             cfg.DownloadDir,
 		stateFile:       cfg.StateFile,
@@ -428,7 +429,7 @@ func (m *Manager) dispatch() {
 			it.hostKey = m.hostKeyLocked(it)
 			m.hostActive[it.hostKey]++
 			if it.route != nil {
-				m.proxyRunning++
+				m.proxyRunning[it.pace.Group]++
 			}
 			if itemHeld != nil {
 				itemHeld(it, true)
@@ -542,7 +543,7 @@ func (m *Manager) hostFullLocked(it *Item) bool {
 		// finish before the pool can lease the same direct address. When
 		// disabling, the normal group cap below drains all leased transfers
 		// before returning to the ordinary connection.
-		return m.hostActive[m.hostKeyLocked(it)] > m.proxyRunning
+		return m.hostActive[m.hostKeyLocked(it)] > m.proxyRunning[it.pace.Group]
 	}
 	if it.pace != nil && it.pace.Files > 0 &&
 		m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files {
@@ -655,7 +656,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	}
 	m.running--
 	if it.route != nil {
-		m.proxyRunning--
+		m.proxyRunning[it.pace.Group]--
 		it.route = nil
 	}
 	if m.hostActive[it.hostKey]--; m.hostActive[it.hostKey] <= 0 {

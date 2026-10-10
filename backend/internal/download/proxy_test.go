@@ -65,80 +65,99 @@ func addProxyFiles(m *Manager, count int, resolve func(context.Context) (*extrac
 }
 
 func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
-	m := busyManager(t)
-	m.limit = 4
-	arrived := make(chan string, 4)
-	finish := make(chan struct{})
-	var once sync.Once
-	defer once.Do(func() { close(finish) })
-	payload := strings.Repeat("x", 128<<10)
-	var endpoints []string
-	for i, address := range []string{"127.0.0.2", "127.0.0.3"} {
-		id := fmt.Sprint(i)
-		var active atomic.Int32
-		srv := proxyServer(t, address, func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/ticket" {
-				fmt.Fprint(w, id)
-				return
+	for _, service := range proxy.Services() {
+		t.Run(service, func(t *testing.T) {
+			m := busyManager(t)
+			m.limit = 1
+			arrived := make(chan string, 4)
+			finish := make(chan struct{})
+			var once sync.Once
+			defer once.Do(func() { close(finish) })
+			payload := strings.Repeat("x", 128<<10)
+			var endpoints []string
+			for i, address := range []string{"127.0.0.2", "127.0.0.3", "127.0.0.4", "127.0.0.5"} {
+				id := fmt.Sprint(i)
+				var active atomic.Int32
+				srv := proxyServer(t, address, func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/ticket" {
+						fmt.Fprint(w, id)
+						return
+					}
+					if r.URL.Path != "/file/"+id {
+						t.Errorf("ticket changed routes: path=%s route=%s", r.URL.Path, id)
+					}
+					if active.Add(1) != 1 {
+						t.Error("two files used the same egress simultaneously")
+					}
+					defer active.Add(-1)
+					arrived <- id
+					select {
+					case <-finish:
+					case <-r.Context().Done():
+						return
+					}
+					w.Header().Set("Content-Type", "application/octet-stream")
+					w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
+					fmt.Fprint(w, payload)
+				})
+				endpoints = append(endpoints, srv.URL)
 			}
-			if r.URL.Path != "/file/"+id {
-				t.Errorf("ticket changed routes: path=%s route=%s", r.URL.Path, id)
+			attachPool(t, m, endpoints)
+			client := httpx.New("test", "en", 0, time.Second)
+			job := addProxyFiles(m, 4, func(ctx context.Context) (*extractor.Target, error) {
+				id, err := client.GetString(ctx, "http://api.example.test/ticket", nil)
+				if err != nil {
+					return nil, err
+				}
+				return &extractor.Target{URL: "http://storage.example.test/file/" + id, Size: int64(len(payload))}, nil
+			})
+			for _, it := range job.Items {
+				it.pace = &extractor.Pace{Files: 1, Streams: 1, Group: service, PerRoute: true}
 			}
-			if active.Add(1) != 1 {
-				t.Error("two files used the same egress simultaneously")
+			m.Start()
+			m.signal()
+			ids := make(map[string]bool)
+			for n := range 3 {
+				select {
+				case id := <-arrived:
+					ids[id] = true
+				case <-time.After(5 * time.Second):
+					t.Fatal("downloads did not overlap")
+				}
+				if n == 0 {
+					if snap := m.Snapshot(); snap.Active != 1 {
+						t.Fatalf("ignored initial concurrency: %d", snap.Active)
+					}
+					limit := 3
+					if err := m.ApplySettings(Settings{Concurrency: &limit}); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
-			defer active.Add(-1)
-			arrived <- id
-			select {
-			case <-finish:
-			case <-r.Context().Done():
-				return
+			if len(ids) != 3 {
+				t.Fatal("parallel transfers shared an address")
 			}
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
-			fmt.Fprint(w, payload)
+			if snap := m.Snapshot(); snap.Active != 3 || snap.Queued != 1 {
+				t.Fatalf("proxy downloads must follow general concurrency: active=%d queued=%d", snap.Active, snap.Queued)
+			}
+			once.Do(func() { close(finish) })
+			waitFor(t, 5*time.Second, func() bool {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				for _, it := range job.Items {
+					if it.Status != StatusDone {
+						return false
+					}
+				}
+				return true
+			})
+			for i := range 4 {
+				body, err := os.ReadFile(filepath.Join(m.DownloadDir(), fmt.Sprintf("file-%d.bin", i)))
+				if err != nil || string(body) != payload {
+					t.Fatalf("file %d: bytes=%d err=%v", i, len(body), err)
+				}
+			}
 		})
-		endpoints = append(endpoints, srv.URL)
-	}
-	attachPool(t, m, endpoints)
-	client := httpx.New("test", "en", 0, time.Second)
-	job := addProxyFiles(m, 4, func(ctx context.Context) (*extractor.Target, error) {
-		id, err := client.GetString(ctx, "http://api.example.test/ticket", nil)
-		if err != nil {
-			return nil, err
-		}
-		return &extractor.Target{URL: "http://storage.example.test/file/" + id, Size: int64(len(payload))}, nil
-	})
-	m.Start()
-	m.signal()
-	ids := make(map[string]bool)
-	for range 2 {
-		select {
-		case id := <-arrived:
-			ids[id] = true
-		case <-time.After(5 * time.Second):
-			t.Fatal("downloads did not overlap")
-		}
-	}
-	if len(ids) != 2 {
-		t.Fatal("parallel transfers shared an address")
-	}
-	once.Do(func() { close(finish) })
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		for _, it := range job.Items {
-			if it.Status != StatusDone {
-				return false
-			}
-		}
-		return true
-	})
-	for i := range 4 {
-		body, err := os.ReadFile(filepath.Join(m.DownloadDir(), fmt.Sprintf("file-%d.bin", i)))
-		if err != nil || string(body) != payload {
-			t.Fatalf("file %d: bytes=%d err=%v", i, len(body), err)
-		}
 	}
 }
 

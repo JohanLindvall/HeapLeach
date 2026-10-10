@@ -83,7 +83,7 @@ export interface Settings {
    * Everything still queued goes to the new place.
    */
   downloadDir: string;
-  /** Enable the K2S route pool for new attempts. */
+  /** Enable the shared proxy pool for supported free-download services. */
   proxies: boolean;
   proxyEndpoints: string[];
   proxyFeeds: string[];
@@ -95,6 +95,7 @@ export function fetchSettings(signal?: AbortSignal): Promise<Settings> {
 }
 
 export interface ProxyQuery {
+  site: string;
   offset: number;
   search: string;
   status: string;

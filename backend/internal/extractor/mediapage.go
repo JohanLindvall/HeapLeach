@@ -79,7 +79,12 @@ func mediaPageSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Res
 	if err != nil {
 		return nil, false
 	}
+	return mediaPageResult(ctx, client, u, root, doc)
+}
 
+// mediaPageResult also serves the generic fallback after it has checked the
+// same document for file-host links, avoiding another page fetch.
+func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node, doc string) (*Result, bool) {
 	found, ok := mediaPageFind(ctx, client, root, doc, u)
 	if !ok {
 		return nil, false

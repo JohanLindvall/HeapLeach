@@ -17,14 +17,14 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-var errKeep2ShareOCR = errors.New("keep2share: could not read the CAPTCHA")
+var errKeep2ShareOCR = errors.New("captcha: could not read the CAPTCHA")
 
 // Check the helper before requesting a challenge: an installation without
 // OCR must not leave a succession of unanswered CAPTCHAs on the host.
 func keep2ShareOCR() (func(context.Context, []byte) ([]string, error), error) {
 	program, ok := tools.Find(tools.CaptchaOCR)
 	if !ok {
-		return nil, errors.New("keep2share: free downloads need local CAPTCHA recognition; " + tools.NotInstalled(tools.CaptchaOCR))
+		return nil, errors.New("captcha: free downloads need local CAPTCHA recognition; " + tools.NotInstalled(tools.CaptchaOCR))
 	}
 	return func(ctx context.Context, raw []byte) ([]string, error) {
 		return keep2ShareReadCaptcha(ctx, program, raw)
@@ -37,10 +37,10 @@ func keep2ShareOCR() (func(context.Context, []byte) ([]string, error), error) {
 func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]string, error) {
 	info, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("keep2share: expected an image CAPTCHA: %w", err)
+		return nil, fmt.Errorf("captcha: expected an image CAPTCHA: %w", err)
 	}
 	if info.Width <= 0 || info.Height <= 0 || info.Width > config.Keep2ShareCaptchaPixels/info.Height {
-		return nil, errors.New("keep2share: CAPTCHA dimensions are too large")
+		return nil, errors.New("captcha: CAPTCHA dimensions are too large")
 	}
 	ctx, cancel := context.WithTimeout(ctx, config.Keep2ShareOCRTimeout)
 	defer cancel()
@@ -54,7 +54,7 @@ func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]s
 		return nil, ctx.Err()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("keep2share: CAPTCHA reader: %w: %s", err, util.Truncate(strings.TrimSpace(stderr.String()), 200))
+		return nil, fmt.Errorf("captcha: CAPTCHA reader: %w: %s", err, util.Truncate(strings.TrimSpace(stderr.String()), 200))
 	}
 	if output.Truncated {
 		return nil, errKeep2ShareOCR

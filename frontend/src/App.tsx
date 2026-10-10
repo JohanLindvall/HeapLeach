@@ -280,7 +280,7 @@ export default function App() {
                 <p className="empty__body">
                   {query
                     ? `Nothing in the queue matches “${query}”.`
-                    : 'Paste one or more links above. Anything without an extractor of its own is treated as a direct file link.'}
+                    : 'Paste file, album or webpage links above. Webpages are scanned for links to supported download sites.'}
                 </p>
               </div>
             ) : (

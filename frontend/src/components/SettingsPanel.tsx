@@ -71,19 +71,19 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
           value={snapshot.concurrency} max={snapshot.maxConcurrency}
           onCommit={(concurrency) => { void change({ concurrency }); }} />
         <SettingSlider id="streams" icon={<SplitIcon />} label="Streams per file"
-          title="Connections a slow file may be split across; K2S uses one"
+          title="Connections a slow file may be split across; K2S and FileBoom use one"
           value={snapshot.streams} max={snapshot.maxStreams}
           onCommit={(streams) => { void change({ streams }); }} />
         <SpeedLimit value={snapshot.speedLimit} onChange={(speedLimit) => { void change({ speedLimit }); }} />
       </div>
       <div className="settings-panel__proxy-head">
         <div>
-          <h3>K2S proxies <span className="settings-panel__scope">K2S only</span></h3>
-          <p>Use separate proxy addresses for simultaneous free downloads.</p>
+          <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom</span></h3>
+          <p>Use “Files at once” across proxy addresses, with one transfer per address for each service.</p>
         </div>
         <label className="proxy-switch">
           <input type="checkbox" role="switch" checked={proxies} disabled={switching}
-            onChange={() => { void toggle(); }} aria-label="Use proxies for K2S" />
+            onChange={() => { void toggle(); }} aria-label="Use download proxies" />
           {switching ? 'Applying…' : proxies ? 'Enabled' : 'Disabled'}
         </label>
       </div>

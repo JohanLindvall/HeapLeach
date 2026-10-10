@@ -5,6 +5,7 @@ package download
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
@@ -12,10 +13,10 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
-// Only K2S is opted in. PerRoute is a future extension point, not permission
-// to send other hosts through public proxies today.
+// PerRoute applies the host's file cap to each address. Only supported
+// download protocols may opt in; unrelated hosts keep their normal client.
 func proxyEligible(it *Item) bool {
-	return it.pace != nil && it.pace.PerRoute && it.pace.Group == "keep2share"
+	return it.pace != nil && it.pace.PerRoute && slices.Contains(proxy.Services(), it.pace.Group)
 }
 
 func (m *Manager) usesProxies(it *Item) bool {
@@ -23,29 +24,42 @@ func (m *Manager) usesProxies(it *Item) bool {
 }
 
 // updateProxyDemandLocked lets discovery replenish only when the runnable
-// K2S queue needs routes. Other hosts, deferred items, a pause or full disk
+// queue needs routes. Other hosts, deferred items, a pause or full disk
 // must not turn a quiet pool into a five-minute feed poller. Active proxy
 // transfers count toward demand; workers occupied by other hosts do not.
 func (m *Manager) updateProxyDemandLocked() {
 	if m.proxies != nil {
-		m.proxies.SetDemand("keep2share", m.proxyDemandLocked())
+		m.proxies.SetDemand(m.proxyDemandLocked())
 	}
 }
 
-func (m *Manager) proxyDemandLocked() int {
-	if !m.proxyEnabled || m.closing || m.throttle.isPaused() || m.lowOnSpace() ||
-		m.hostActive["group:keep2share"] > m.proxyRunning {
-		return 0
+func (m *Manager) proxyDemandLocked() map[string]int {
+	wanted := make(map[string]int)
+	if !m.proxyEnabled || m.closing || m.throttle.isPaused() || m.lowOnSpace() {
+		return wanted
 	}
-	capacity := max(0, m.limit-(m.running-m.proxyRunning))
-	wanted := min(m.proxyRunning, capacity)
+	running := 0
+	for _, n := range m.proxyRunning {
+		running += n
+	}
+	capacity := max(0, m.limit-(m.running-running))
+	blocked := make(map[string]bool)
+	for _, site := range proxy.Services() {
+		active := min(m.proxyRunning[site], capacity)
+		capacity -= active
+		blocked[site] = m.hostActive["group:"+site] > m.proxyRunning[site]
+		if !blocked[site] {
+			wanted[site] = active
+		}
+	}
 	now := time.Now()
 	for _, it := range m.queue {
-		if wanted >= capacity {
+		if capacity == 0 {
 			break
 		}
-		if proxyEligible(it) && it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) {
-			wanted++
+		if proxyEligible(it) && !blocked[it.pace.Group] && it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) {
+			wanted[it.pace.Group]++
+			capacity--
 		}
 	}
 	return wanted
@@ -54,12 +68,15 @@ func (m *Manager) proxyDemandLocked() int {
 // ProxyPage samples active transfer speeds under mu, then reads the large
 // inventory without holding the queue lock.
 func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
+	if q.Site == "" {
+		q.Site = "keep2share"
+	}
 	m.mu.Lock()
 	pool := m.proxies
 	speeds := make(map[string]float64)
 	for _, job := range m.jobs {
 		for _, it := range job.Items {
-			if it.inFlight && it.route != nil {
+			if it.inFlight && it.route != nil && it.pace.Group == q.Site {
 				speeds[it.route.ID()] += it.speed
 			}
 		}
@@ -68,7 +85,7 @@ func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
 	if pool == nil {
 		return proxy.EmptyPage(q)
 	}
-	page := pool.Page("keep2share", q)
+	page := pool.Page(q.Site, q)
 	for i := range page.Rows {
 		page.Rows[i].CurrentSpeed = speeds[page.Rows[i].ID]
 	}
@@ -200,7 +217,7 @@ func (m *Manager) sampleProxyLocked(it *Item, now time.Time, bytes int64, elapse
 	}
 	if next := it.route.Upgrade(now, it.Size-it.downloaded.Load(), it.speed); next != nil {
 		it.routeUpgrade = next
-		it.Note = "Switching to a faster K2S route"
+		it.Note = "Switching to a faster download route"
 		it.routeCancel()
 	}
 }

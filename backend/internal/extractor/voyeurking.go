@@ -17,8 +17,8 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// VoyeurKing indexes videos hosted by Keep2Share. Listing pages carry the
-// detail links; each detail page's React Router data names its K2S file.
+// VoyeurKing indexes videos hosted by Keep2Share and FileBoom. Listing pages
+// carry the detail links; each detail page's React Router data names its file.
 // Keep the host's File intact so its resolver, free-download pacing and
 // proxy route are chosen by the downloader when the transfer starts.
 type VoyeurKing struct {
@@ -38,12 +38,12 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	if len(segs) == 2 && segs[0] == "video" {
 		return v.video(ctx, u, opts)
 	}
-	if !voyeurKingCategory(u) {
-		return nil, fmt.Errorf("voyeurking: expected /categories/<name> or /video/<slug>")
+	if !voyeurKingListing(u) {
+		return nil, fmt.Errorf("voyeurking: expected /categories/<name>, /collection/<slug> or /video/<slug>")
 	}
-	// A pasted later page means the entire category, with its chosen sort.
+	// A pasted later page means the entire listing, with its chosen sort.
 	first := *u
-	first.Path = "/categories/" + segs[1]
+	first.Path = "/" + segs[0] + "/" + segs[1]
 	first.RawPath, first.Fragment = "", ""
 	query := first.Query()
 	query.Del("page")
@@ -57,7 +57,7 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 		return nil, err
 	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("voyeurking: no accessible K2S files in %d videos", len(sources))
+		return nil, fmt.Errorf("voyeurking: no accessible files in %d videos", len(sources))
 	}
 	var notes []string
 	if note != "" {
@@ -72,12 +72,15 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	return &Result{Title: title, Note: strings.Join(notes, "; "), Files: e.files}, nil
 }
 
-func voyeurKingCategory(u *url.URL) bool {
+func voyeurKingListing(u *url.URL) bool {
 	segs := util.PathSegments(u)
-	if len(segs) == 2 {
-		return segs[0] == "categories"
+	if len(segs) < 2 || (segs[0] != "categories" && segs[0] != "collection") {
+		return false
 	}
-	if len(segs) == 4 && segs[0] == "categories" && segs[2] == "page" {
+	if len(segs) == 2 {
+		return true
+	}
+	if len(segs) == 4 && segs[2] == "page" {
 		page, err := strconv.Atoi(segs[3])
 		return err == nil && page > 0
 	}
@@ -87,7 +90,8 @@ func voyeurKingCategory(u *url.URL) bool {
 func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sources []string, title, note string, err error) {
 	seen, pages := make(map[string]bool), make(map[string]bool)
 	page := first
-	title = util.PathSegments(first)[1]
+	listing := util.PathSegments(first)
+	title = listing[1]
 	for n := range config.MaxAlbumPages {
 		if pages[page.String()] {
 			return sources, title, "partial — repeated page", nil
@@ -99,7 +103,7 @@ func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sourc
 				return nil, "", "", ctx.Err()
 			}
 			if n == 0 {
-				return nil, "", "", fmt.Errorf("voyeurking: fetch category: %w", fetchErr)
+				return nil, "", "", fmt.Errorf("voyeurking: fetch listing: %w", fetchErr)
 			}
 			return sources, title, "partial — could not fetch next page", nil
 		}
@@ -110,9 +114,9 @@ func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sourc
 		main := findFirst(root, func(node *html.Node) bool { return isElem(node, atom.Main) })
 		if main == nil {
 			if n > 0 {
-				return sources, title, "partial — category listing is missing on next page", nil
+				return sources, title, "partial — listing is missing on next page", nil
 			}
-			return nil, "", "", fmt.Errorf("voyeurking: category listing is missing")
+			return nil, "", "", fmt.Errorf("voyeurking: listing is missing")
 		}
 		if n == 0 {
 			title = util.FirstNonEmpty(firstText(main, atom.H1), title)
@@ -131,7 +135,7 @@ func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sourc
 			link.Fragment = ""
 			segs := util.PathSegments(link)
 			if isNext {
-				if voyeurKingCategory(link) && segs[1] == util.PathSegments(first)[1] {
+				if voyeurKingListing(link) && segs[0] == listing[0] && segs[1] == listing[1] {
 					next = link
 				} else {
 					note = "partial — invalid next page"
@@ -183,11 +187,11 @@ func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Resu
 	}
 	link, err := ParseURL(data.text(data.field(video, "file")))
 	if err != nil {
-		return nil, fmt.Errorf("voyeurking: video has no K2S file")
+		return nil, fmt.Errorf("voyeurking: video has no download file")
 	}
 	ex, known := v.registry.Known(link)
-	if !known || ex.Name() != "keep2share" {
-		return nil, fmt.Errorf("voyeurking: video file is not hosted by K2S")
+	if !known || (ex.Name() != "keep2share" && ex.Name() != "fileboom") {
+		return nil, fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
 	}
 	res, _, err := v.registry.Extract(ctx, link.String(), opts)
 	if err != nil {

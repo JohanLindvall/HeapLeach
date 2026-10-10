@@ -11,7 +11,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
   const [page, setPage] = useState<ProxyPage | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [query, setQuery] = useState<ProxyQuery>({ offset: 0, search: '', status: 'all', sort: 'score' });
+  const [query, setQuery] = useState<ProxyQuery>({ site: 'keep2share', offset: 0, search: '', status: 'all', sort: 'score' });
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery((previous) => previous.search === search ? previous : { ...previous, search, offset: 0 }), SEARCH_DELAY_MS);
     return () => window.clearTimeout(timer);
@@ -50,8 +50,8 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
   }, [query, revision, enabled]);
 
   return (
-    <div className="proxy-list" aria-label="K2S proxy inventory">
-      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above to discover and use routes for K2S.</p>}
+    <div className="proxy-list" aria-label="Download proxy inventory">
+      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above to discover and use routes for K2S and FileBoom.</p>}
       {page && (
         <div className="proxy-list__summary">
           <span><strong>{page.summary.total.toLocaleString()}</strong> routes</span>
@@ -62,6 +62,11 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
         </div>
       )}
       <div className="proxy-list__tools">
+        <select aria-label="Proxy service" value={query.site}
+          onChange={(e) => setQuery({ ...query, site: e.target.value, offset: 0 })}>
+          <option value="keep2share">Keep2Share</option>
+          <option value="fileboom">FileBoom</option>
+        </select>
         <input type="search" value={search} placeholder="Find proxy address" aria-label="Find proxy address"
           onChange={(e) => setSearch(e.target.value)} />
         <select aria-label="Proxy status" value={query.status}
@@ -84,7 +89,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
       <p className="proxy-list__help" id="proxy-score-help">Score estimates useful throughput for a 32 MiB transfer, including reliability, measured speed, and setup time. Higher is better; actual downloads also account for remaining file size. Speed estimates update during transfers.</p>
       {error && <p className="settings-error" role="alert">{error} Retrying automatically{page ? '; showing the last update.' : '.'}</p>}
       {!page ? (!error && <p role="status">Loading proxy list…</p>) : page.rows.length === 0 ? (
-        <p className="proxy-list__empty">{page.summary.total > 0 ? 'No proxies match these filters.' : 'No routes loaded yet. Configure sources above, then enable K2S proxies.'}</p>
+        <p className="proxy-list__empty">{page.summary.total > 0 ? 'No proxies match these filters.' : 'No routes loaded yet. Configure sources above, then enable download proxies.'}</p>
       ) : (
         <>
           <div className="proxy-list__scroll" tabIndex={0} role="region" aria-label="Proxy measurements">
@@ -92,7 +97,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
               <thead><tr>
                 <th scope="col">Endpoint</th><th scope="col">Status</th>
                 <th scope="col" aria-describedby="proxy-score-help">Score</th>
-                <th scope="col" title="Smoothed rate from completed transfers; current speed appears while downloading">Throughput</th>
+                <th scope="col" title="Smoothed transfer rate; current speed appears while downloading">Throughput</th>
                 <th scope="col" title="Recent successful requests, with older outcomes weighted less">Success</th>
                 <th scope="col">Requests</th><th scope="col">Last success</th>
               </tr></thead>
@@ -119,7 +124,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
           ))}</ul>
         </details>
       )}
-      <p className="proxy-list__help">Measurements are for K2S and refresh every 5 seconds while this panel is open.</p>
+      <p className="proxy-list__help">Measurements and cooldowns are separate for each service and refresh every 5 seconds while this panel is open.</p>
     </div>
   );
 }

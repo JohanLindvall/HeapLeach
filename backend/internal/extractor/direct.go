@@ -14,7 +14,8 @@ import (
 // the URL as a file and lets the downloader learn the name and size from the
 // response headers.
 type Direct struct {
-	client *httpx.Client
+	client   *httpx.Client
+	registry *Registry
 }
 
 // NewDirect builds the fallback extractor.
@@ -86,26 +87,14 @@ var directSniffs = []directSniff{
 		res, _ := autoindexSniff(ctx, c, u, opts)
 		return res, nil
 	},
-	// Last, and least certain: an ordinary page that happens to carry a
-	// video in its markup or its metadata.
-	func(ctx context.Context, c *httpx.Client, u *url.URL, _ Options) (*Result, error) {
-		res, _ := mediaPageSniff(ctx, c, u)
-		return res, nil
-	},
 }
 
 func (d *Direct) Name() string { return "direct" }
 
 func (d *Direct) Match(*url.URL) bool { return true }
 
-// Extract wraps the URL as a single file.
-//
-// One shape is looked at more closely first. A URL laid out like a Kernel
-// Video Sharing video page is very likely to be one — the platform runs on
-// far more hosts than any list will name — and treating such a page as a
-// file would download the HTML shell instead of the video. A page that turns
-// out not to be one falls through to the handling below, which is what would
-// have happened anyway.
+// Extract recognises platform pages first, then ordinary pages carrying
+// download links or media, before treating the URL as a file itself.
 func (d *Direct) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	for _, sniff := range directSniffs {
 		switch res, err := sniff(ctx, d.client, u, opts); {
@@ -114,6 +103,9 @@ func (d *Direct) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		case res != nil:
 			return res, nil
 		}
+	}
+	if res, err := d.pageSniff(ctx, u, opts); res != nil || err != nil {
+		return res, err
 	}
 
 	name := util.FirstNonEmpty(util.NameFromURL(u.String()), u.Hostname())

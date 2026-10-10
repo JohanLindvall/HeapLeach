@@ -116,7 +116,7 @@ type Config struct {
 	// Password unlocks protected sources in that mode.
 	Password string
 
-	// Proxies enables extra egress routes for K2S. The inventory and its
+	// Proxies enables extra egress routes for K2S and FileBoom. The inventory and its
 	// learned health live independently of the queue.
 	Proxies        bool
 	ProxyDB        string

@@ -60,7 +60,7 @@ func TestInventoryHealthThroughputAndCooldownSurviveRestart(t *testing.T) {
 	defer p2.Close()
 	e := p2.entries[raw]
 	s := e.stat("keep2share")
-	if s.BytesPerSecond != 2<<20 || s.Tries != 2 || !s.Until.Equal(until) || e.LastSuccess.IsZero() {
+	if s.BytesPerSecond != 2<<20 || s.Tries != 2 || !s.Until.Equal(until) || e.LastSuccess.IsZero() || !s.LastSuccess.Equal(e.LastSuccess) {
 		t.Fatalf("lost persisted measurement: %+v %+v", e, s)
 	}
 	if p2.priors["keep2share"].Attempts != 1 {

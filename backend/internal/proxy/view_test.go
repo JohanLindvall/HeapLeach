@@ -23,6 +23,7 @@ func TestProxyPageUsesMeasuredScoringAndRedactsCredentials(t *testing.T) {
 	for _, raw := range []string{fast, slow} {
 		s := p.entries[raw].stat("keep2share")
 		s.Tries, s.OK, s.Bad, s.Duration, s.BytesPerSecond = 10, 8, 2, 2, 1<<20
+		s.LastSuccess = time.Now()
 	}
 	p.entries[fast].stat("keep2share").BytesPerSecond = 8 << 20
 	a, b := p.Page("keep2share", Query{}), p.Page("keep2share", Query{})
@@ -40,7 +41,7 @@ func TestProxyPageUsesMeasuredScoringAndRedactsCredentials(t *testing.T) {
 		t.Fatal("reading the inventory changed the selector")
 	}
 	unknown := p.Page("another-service", Query{})
-	if unknown.Summary.Untested != 2 || unknown.Rows[0].Throughput != 0 {
+	if unknown.Summary.Untested != 2 || unknown.Rows[0].Throughput != 0 || !unknown.Rows[0].LastSuccess.IsZero() {
 		t.Fatal("K2S measurements leaked into another service")
 	}
 }

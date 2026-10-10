@@ -292,6 +292,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewErome(client),
 		NewPixeldrain(client),
 		NewKeep2Share(client),
+		NewFileBoom(client),
 		NewTurbo(client),
 		NewDropbox(client),
 		NewMediafire(client),
@@ -376,10 +377,12 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// named host would have claimed.
 	extractors = append(extractors, NewHLSDirect(client))
 
+	direct := NewDirect(client)
 	reg := &Registry{
-		fallback: NewDirect(client),
+		fallback: direct,
 		limits:   Limits{Sources: cfg.MaxSources, Files: cfg.MaxFiles},
 	}
+	direct.registry = reg
 	// The link harvester resolves what it finds through the registry it is
 	// part of, so it is handed that registry rather than building one. It
 	// claims no host: only an explicit "links:" prefix reaches it.

@@ -78,7 +78,7 @@ export interface Snapshot {
   /** Ceiling on connections one slow file may be split across. */
   streams: number;
   maxStreams: number;
-  /** Public proxy routing is currently limited to K2S. */
+  /** Public proxy routing for Keep2Share and FileBoom. */
   proxies: boolean;
   active: number;
   queued: number;

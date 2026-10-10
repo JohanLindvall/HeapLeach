@@ -5,6 +5,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
+
+// Services are the download protocols currently opted into per-address routing.
+func Services() []string { return []string{"keep2share", "fileboom"} }
 
 // Configuration is immutable once published. ParseConfiguration owns its slices.
 type Configuration struct {
@@ -68,22 +72,23 @@ func (p *Pool) Configure(c Configuration, discovery bool) {
 	}
 }
 
-// SetDemand publishes the number of distinct routes the runnable queue can
-// use, including active transfers. Zero suppresses shortage-driven refreshes
-// while idle, paused or unable to write. Demand is not persisted: restoring
-// a pool does not mean a queue is ready to download.
-func (p *Pool) SetDemand(site string, routes int) {
+// SetDemand publishes every service's runnable route demand atomically, so
+// discovery cannot act on a mix of old and new concurrency allocations.
+// An empty map suppresses shortage-driven refreshes while idle or paused.
+// Demand is not persisted: restoring a pool does not mean a queue is ready.
+func (p *Pool) SetDemand(routes map[string]int) {
+	wanted := make(map[string]int, len(routes))
+	for site, n := range routes {
+		if n > 0 {
+			wanted[site] = n
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	routes = max(0, routes)
-	if p.closed || p.demand[site] == routes {
+	if p.closed || maps.Equal(p.demand, wanted) {
 		return
 	}
-	if routes == 0 {
-		delete(p.demand, site)
-	} else {
-		p.demand[site] = routes
-	}
+	p.demand = wanted
 	select {
 	case p.wake <- struct{}{}:
 	default:

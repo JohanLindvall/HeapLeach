@@ -24,13 +24,14 @@ import (
 // of them. This turns the thirty single-host extractors into one bulk
 // operation without any of them knowing about it.
 //
-// It is deliberately not matched by host, and that is the whole of its
-// interface design. A harvester that recognised pages on its own would quietly
-// change what pasting an ordinary URL means — a video page that happens to
-// list a hundred related videos would start queueing all of them — so it is
-// reached only through an explicit prefix on the input:
+// The prefix explicitly asks to harvest a page, including one on a host
+// that would otherwise be handled by its own extractor:
 //
 //	links:https://board.example.test/threads/a-thread
+//
+// The Direct fallback also harvests ordinary pages automatically. Both paths
+// expand only registered extractors, never arbitrary HTML links, and share
+// the expansion below, preserving deferred resolvers and per-address pacing.
 //
 // Only links this build has an extractor of its own for survive. Everything
 // else is dropped rather than handed to the direct fallback, because the
@@ -117,22 +118,29 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 			"knows (the page may be showing a login rather than its content)",
 			len(candidates), page.Redacted())
 	}
+	return expandPageLinks(ctx, l.registry, page, root, sources, opts)
+}
 
+func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, root *html.Node, sources []string, opts Options) (*Result, error) {
 	found := len(sources)
 	if limit := opts.maxSources(); len(sources) > limit {
 		sources = sources[:limit]
 	}
 
-	e := expandSources(ctx, l.registry, sources, opts)
+	e := expandSources(ctx, registry, sources, opts)
 	if len(e.files) == 0 {
 		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
 			"(they may all have expired)", len(sources), page.Redacted())
 	}
 
 	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
+	note := partialNote("links", e, found, len(sources) < found)
+	if note == "" && e.used < found {
+		note = fmt.Sprintf("%d of %d links resolved", e.used, found)
+	}
 	return &Result{
 		Title: title,
-		Note:  partialNote("links", e, found, len(sources) < found),
+		Note:  note,
 		Files: e.files,
 	}, nil
 }

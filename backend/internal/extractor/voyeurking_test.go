@@ -85,97 +85,120 @@ func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *Keep2Share) (
 	}
 }
 
-func TestVoyeurKingCategoryHandsOffDeferredK2SFiles(t *testing.T) {
-	var resolved atomic.Int32
-	k := keep2ShareTestSite(t, func(w http.ResponseWriter, _ map[string]string) {
-		resolved.Add(1)
-		fmt.Fprint(w, `{"status":"success","url":"https://storage.example.test/first-clip"}`)
-	})
-	pages := map[string]string{
-		"/categories/example?sort=mv":        voyeurKingIndexHTML("/categories/example/page/2?sort=mv", "first", "second"),
-		"/categories/example/page/2?sort=mv": voyeurKingIndexHTML("", "second", "third"),
-	}
-	for _, slug := range []string{"first", "second", "third"} {
-		pages["/video/"+slug] = voyeurKingVideoHTML(slug, "Example "+slug, "https://files.example.test/file/"+slug)
-	}
-	// The shared K2S protocol fixture redeems this synthetic file id.
-	pages["/video/first"] = voyeurKingVideoHTML("first", "Example first", "https://files.example.test/file/test-file")
-	reg, _, base, asked := voyeurKingTestIndex(t, pages, k)
-	res, ex, err := reg.Extract(context.Background(), base+"/categories/example/page/7?sort=mv#top", Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ex.Name() != "voyeurking" || res.Title != "Example Collection" || res.Note != "" || len(res.Files) != 3 {
-		t.Fatalf("unexpected category result: %+v", res)
-	}
-	if resolved.Load() != 0 {
-		t.Fatal("listing spent a K2S download ticket before dispatch")
-	}
-	for i, slug := range []string{"first", "second", "third"} {
-		file := res.Files[i]
-		if file.Dir != "Example "+slug || file.Name != "First Clip.mp4" || file.URL != "" || file.Resolve == nil || file.Pace == nil || *file.Pace != keep2SharePace {
-			t.Fatalf("K2S handoff lost ordering, metadata or proxy pacing: %+v", file)
-		}
-	}
-	requests := asked()
-	for _, slug := range []string{"first", "second", "third"} {
-		count := 0
-		for _, path := range requests {
-			if path == "/video/"+slug {
-				count++
+func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
+	for _, tc := range []struct{ section, host string }{
+		{"categories", "keep2share"}, {"collection", "keep2share"},
+		{"categories", "fileboom"}, {"collection", "fileboom"},
+	} {
+		t.Run(tc.section+"/"+tc.host, func(t *testing.T) {
+			prefix := "/" + tc.section + "/example"
+			create := NewKeep2Share
+			if tc.host == "fileboom" {
+				create = NewFileBoom
 			}
-		}
-		if count != 1 {
-			t.Fatalf("duplicate thumbnail/title/page links fetched %s %d times", slug, count)
-		}
-	}
-	if len(requests) != 5 {
-		t.Fatalf("followed something outside the category: %v", requests)
-	}
-	// The propagated resolver still obeys the route selected at dispatch.
-	k.wait(httpx.WithRoute(context.Background(), "cooling", k.client, nil), time.Hour)
-	if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "cooling", k.client, nil)); !isWait(err) {
-		t.Fatalf("lost route cooldown: %v", err)
-	}
-	if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "available", k.client, nil)); err != nil {
-		t.Fatal(err)
-	}
-	if resolved.Load() != 1 {
-		t.Fatalf("download resolutions = %d", resolved.Load())
+			var resolved atomic.Int32
+			k := keep2ShareProtocolTestSite(t, create, func(w http.ResponseWriter, _ map[string]string) {
+				resolved.Add(1)
+				fmt.Fprint(w, `{"status":"success","url":"https://storage.example.test/first-clip"}`)
+			})
+			pages := map[string]string{
+				prefix + "?sort=mv":        voyeurKingIndexHTML(prefix+"/page/2?sort=mv", "first", "second"),
+				prefix + "/page/2?sort=mv": voyeurKingIndexHTML("", "second", "third"),
+			}
+			for _, slug := range []string{"first", "second", "third"} {
+				pages["/video/"+slug] = voyeurKingVideoHTML(slug, "Example "+slug, "https://files.example.test/file/"+slug)
+			}
+			// The shared K2S protocol fixture redeems this synthetic file id.
+			pages["/video/first"] = voyeurKingVideoHTML("first", "Example first", "https://files.example.test/file/test-file")
+			reg, _, base, asked := voyeurKingTestIndex(t, pages, k)
+			res, ex, err := reg.Extract(context.Background(), base+prefix+"/page/7?sort=mv#top", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ex.Name() != "voyeurking" || res.Title != "Example Collection" || res.Note != "" || len(res.Files) != 3 {
+				t.Fatalf("unexpected listing result: %+v", res)
+			}
+			if resolved.Load() != 0 {
+				t.Fatal("listing spent a K2S download ticket before dispatch")
+			}
+			for i, slug := range []string{"first", "second", "third"} {
+				file := res.Files[i]
+				want := Pace{Streams: 1, Files: 1, Group: tc.host, PerRoute: true}
+				if file.Dir != "Example "+slug || file.Name != "First Clip.mp4" || file.URL != "" || file.Resolve == nil || file.Pace == nil || *file.Pace != want {
+					t.Fatalf("K2S handoff lost ordering, metadata or proxy pacing: %+v", file)
+				}
+			}
+			requests := asked()
+			for _, slug := range []string{"first", "second", "third"} {
+				count := 0
+				for _, path := range requests {
+					if path == "/video/"+slug {
+						count++
+					}
+				}
+				if count != 1 {
+					t.Fatalf("duplicate thumbnail/title/page links fetched %s %d times", slug, count)
+				}
+			}
+			if len(requests) != 5 {
+				t.Fatalf("followed something outside the listing: %v", requests)
+			}
+			// The propagated resolver still obeys the route selected at dispatch.
+			k.wait(httpx.WithRoute(context.Background(), "cooling", k.client, nil), time.Hour)
+			if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "cooling", k.client, nil)); !isWait(err) {
+				t.Fatalf("lost route cooldown: %v", err)
+			}
+			if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "available", k.client, nil)); err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Load() != 1 {
+				t.Fatalf("download resolutions = %d", resolved.Load())
+			}
+		})
 	}
 }
 
 func TestVoyeurKingLimitsAndPartialListings(t *testing.T) {
-	for _, tc := range []struct {
-		name, next, note string
-		limits           Limits
-		secondPage       bool
-		files, requests  int
-	}{
-		{name: "source limit", next: "/categories/example/page/2", limits: Limits{Sources: 1}, note: "source limit", files: 1, requests: 2},
-		{name: "file limit", limits: Limits{Files: 1}, note: "file limit", files: 1, requests: 3},
-		{name: "next page failed", next: "/categories/example/page/2", note: "could not fetch next page", files: 2, requests: 4},
-		{name: "repeated page", next: "/categories/example/page/2", secondPage: true, note: "repeated", files: 2, requests: 4},
-		{name: "other category", next: "/categories/unrelated/page/2", note: "invalid next page", files: 2, requests: 3},
-		{name: "other host", next: "https://unrelated.example.test/categories/example/page/2", note: "invalid next page", files: 2, requests: 3},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			k := keep2ShareTestSite(t, func(http.ResponseWriter, map[string]string) { t.Error("resolved early") })
-			pages := map[string]string{
-				"/categories/example": voyeurKingIndexHTML(tc.next, "first", "second"),
-				"/video/first":        voyeurKingVideoHTML("first", "First", "https://files.example.test/file/first"),
-				"/video/second":       voyeurKingVideoHTML("second", "Second", "https://files.example.test/file/second"),
+	for _, section := range []string{"categories", "collection"} {
+		t.Run(section, func(t *testing.T) {
+			prefix := "/" + section + "/example"
+			other := "/categories/example/page/2"
+			if section == "categories" {
+				other = "/collection/example/page/2"
 			}
-			if tc.secondPage {
-				pages["/categories/example/page/2"] = voyeurKingIndexHTML("/categories/example/page/2", "first", "second")
-			}
-			reg, _, base, asked := voyeurKingTestIndex(t, pages, k)
-			res, _, err := reg.Extract(context.Background(), base+"/categories/example", Options{limits: tc.limits})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(res.Files) != tc.files || !strings.Contains(res.Note, tc.note) || len(asked()) != tc.requests {
-				t.Fatalf("files=%d note=%q requests=%v", len(res.Files), res.Note, asked())
+			for _, tc := range []struct {
+				name, next, note string
+				limits           Limits
+				secondPage       bool
+				files, requests  int
+			}{
+				{name: "source limit", next: prefix + "/page/2", limits: Limits{Sources: 1}, note: "source limit", files: 1, requests: 2},
+				{name: "file limit", limits: Limits{Files: 1}, note: "file limit", files: 1, requests: 3},
+				{name: "next page failed", next: prefix + "/page/2", note: "could not fetch next page", files: 2, requests: 4},
+				{name: "repeated page", next: prefix + "/page/2", secondPage: true, note: "repeated", files: 2, requests: 4},
+				{name: "other listing", next: "/" + section + "/unrelated/page/2", note: "invalid next page", files: 2, requests: 3},
+				{name: "other listing type", next: other, note: "invalid next page", files: 2, requests: 3},
+				{name: "other host", next: "https://unrelated.example.test" + prefix + "/page/2", note: "invalid next page", files: 2, requests: 3},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					k := keep2ShareTestSite(t, func(http.ResponseWriter, map[string]string) { t.Error("resolved early") })
+					pages := map[string]string{
+						prefix:          voyeurKingIndexHTML(tc.next, "first", "second"),
+						"/video/first":  voyeurKingVideoHTML("first", "First", "https://files.example.test/file/first"),
+						"/video/second": voyeurKingVideoHTML("second", "Second", "https://files.example.test/file/second"),
+					}
+					if tc.secondPage {
+						pages[prefix+"/page/2"] = voyeurKingIndexHTML(prefix+"/page/2", "first", "second")
+					}
+					reg, _, base, asked := voyeurKingTestIndex(t, pages, k)
+					res, _, err := reg.Extract(context.Background(), base+prefix, Options{limits: tc.limits})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(res.Files) != tc.files || !strings.Contains(res.Note, tc.note) || len(asked()) != tc.requests {
+						t.Fatalf("files=%d note=%q requests=%v", len(res.Files), res.Note, asked())
+					}
+				})
 			}
 		})
 	}
@@ -206,7 +229,7 @@ func TestVoyeurKingVideoRejectsWrongOrMissingSource(t *testing.T) {
 		"/video/no-file":    voyeurKingVideoHTML("no-file", "No file", ""),
 		"/video/no-data":    `<main><h1>Empty</h1></main>`,
 	}, k)
-	for _, path := range []string{"/video/wrong-page", "/video/other-host", "/video/no-file", "/video/no-data", "/", "/categories", "/categories/example/page/0"} {
+	for _, path := range []string{"/video/wrong-page", "/video/other-host", "/video/no-file", "/video/no-data", "/", "/categories", "/categories/example/page/0", "/collection", "/collection/example/page/0", "/collection/example/page/invalid", "/collections/example"} {
 		if _, _, err := reg.Extract(context.Background(), base+path, Options{}); err == nil {
 			t.Errorf("accepted %s", path)
 		}

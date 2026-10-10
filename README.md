@@ -243,6 +243,7 @@ must be writable only by people you trust to run code as this account.
 | **bunkr** | `/f/<slug>`, `/a/<slug>`, any `bunkr*` domain | Page → numeric file id → metadata endpoint → separate signing service for the `token`/`ex` pair the CDN demands. |
 | **pixeldrain** | `/l/<id>`, `/u/<id>`, `/f/<id>` | Public JSON API. |
 | **keep2share** | `/file/<id>`, with or without a filename, on `k2s.cc` or `keep2share.cc` | Free downloads through the public API. Reads the image CAPTCHA locally, waits for the host's timer, and reuses the resulting link when resuming. Requires `make captcha-helper`; included in the container image. Premium-only and private files are reported as restricted. |
+| **fileboom** | `fboom.me/file/<id>`, with or without a filename | Uses FileBoom's own API with the same free-download protocol as Keep2Share, including local OCR and optional proxy routing. Tickets, scores and cooldowns are tracked separately for each service. |
 | **turbo** | `/embed/<id>`, `/d/<id>` | `/api/sign` issues a short-lived signed URL. |
 | **mega** | `/file/<id>#<key>`, `/folder/<id>#<key>`, and the older `#!`/`#F!` shapes | Nothing about a mega link is legible to the server: names, sizes and bytes are all encrypted under the key in the fragment. Attributes decrypt with AES-CBC; the payload is AES-CTR, undone as the bytes arrive, so ranges, resume and parallel connections all still apply. A link quoted without its `#` fragment cannot be opened by anyone. |
 | **dropbox** | `/s/…`, `/scl/fi/…`, folder shares | Asks for `dl=1`, with the content host kept as a mirror to fail over to. A folder share downloads as the zip dropbox builds for it. |
@@ -281,10 +282,11 @@ must be writable only by people you trust to run code as this account.
 | *a bare `.m3u8`* | any adaptive manifest | Joined into a playable file. A `.mpd` is refused with a reason rather than saved: DASH is usually demuxed, so concatenating it would yield a silent video. |
 | *a directory listing* | Apache, nginx, lighttpd autoindex | Walked recursively, with sizes and structure taken from the listing. Also covers IPFS gateway directories. |
 | *`links:<url>`* | any public page | Reads the page and downloads every link a supported host claims, each into its own folder. Aimed at the forum thread with two hundred links in it. |
-| **voyeurking** | `voyeurking.com/categories/<name>` and `/video/<slug>` | Walks a category's pages and reads each video's K2S file from its page data. Files use the Keep2Share downloader, including its per-address free-download waits and optional proxy pool. Enable K2S proxies in Settings to use parallel routes. Category results keep each video in its own folder; source and file caps apply. |
+| *an ordinary webpage* | any public HTML page without a dedicated extractor | Automatically reads links to every registered host, including albums and files, without a `links:` prefix. Ordinary HTML links are ignored so navigation cannot recursively crawl the web. Links keep their host's resolver and download settings; source and file caps apply. |
+| **voyeurking** | `voyeurking.com/categories/<name>`, `/collection/<slug>` and `/video/<slug>` | Walks category and collection pages and reads each video's K2S or FileBoom file from its page data. Files use the corresponding downloader, including its per-address waits and optional proxy pool. Enable download proxies in Settings to use parallel routes. Listing results keep each video in its own folder; source and file caps apply. |
 | **balbums** | `balbums.st/?search=<query>` | An index of somebody else's albums rather than a host: a search is walked page by page and every album it lists is handed to the extractor that does host it, each into its own folder. Asking for a hundred results a page is what makes a search of three hundred albums four requests rather than eighteen — ask for more and the site quietly serves twenty, so nothing trusts the parameter. Only searches are taken. The charts are built in the browser and the front page is the same grid over the whole catalogue. |
 | **KVS listings** | `/members/<id>/`, `/search/<query>/`, and any category, model, tag, channel or site-wide list on any KVS install | A member's public videos, everything a search turns up, or every video a category, model, tag or channel lists. Sections are recognised by the page rather than by name, since an install may rename them. The platform pages through its own asynchronous block loader, and which parameter pages a block is the block's own business — a wrong one is not refused, it serves page one again — so the walk sends exactly what the pager's own control carries. The last page says it is the last, and the walk stops there without asking. |
-| *anything else* | any `http(s)` URL | Treated as a direct file link — but the page is checked first for a player, a manifest, a directory index or a known platform, so pasting a video page no longer saves the HTML shell. |
+| *anything else* | any `http(s)` URL | Treated as a direct file link after checking for a known platform, a manifest, a directory index, supported download links or a player. |
 
 Several of these hand out URLs that expire in minutes, so bunkr, turbo,
 mega, mediafire, ok.ru, cyberdrop, streamable, wetransfer and the three
@@ -301,9 +303,17 @@ A family is always the better trade, and the ones here key off something that
 cannot rot: a version endpoint, a `generator` tag, or the `nodeinfo`
 specification.
 
-Three more entries are not hosts at all but **shapes** — an adaptive
-manifest, an open directory, and any page carrying a video in its markup.
+Four more entries are not hosts at all but **shapes** — an adaptive
+manifest, an open directory, a page carrying supported download links,
+and a page carrying a video in its markup.
 Those cover the sites nobody will ever get round to naming.
+
+Automatic webpage scanning reads anchors, embedded frames and links printed
+as text, then expands only links claimed by registered extractors. It never
+follows a plain HTML link through the generic fallback. Exact duplicates are
+removed; K2S aliases and repeated file IDs are also merged within each service.
+Recognised platforms keep their own extraction behavior. Use `links:<url>`
+to explicitly scan a page that would otherwise go to a dedicated extractor.
 
 ### Every supported site
 
@@ -314,7 +324,7 @@ section and the binary disagree.
 <!-- BEGIN HOSTS -->
 <!-- Generated by `make hosts`. Do not edit by hand. -->
 
-189 sites across 99 extractors, plus 6 that match by shape rather than by host.
+190 sites across 100 extractors, plus 6 that match by shape rather than by host.
 
 | Extractor | Sites |
 |---|---|
@@ -348,6 +358,7 @@ section and the binary disagree.
 | `erome` | `erome.com` |
 | `fapello` | `fapello.com` |
 | `fapster` | `fapster.xyz` |
+| `fileboom` | `fboom.me` |
 | `filester` | `filester.*` |
 | `framatube` | `framatube.org` |
 | `francetv` | `france.tv` |
@@ -576,8 +587,8 @@ PATH — so the copies in `./bin` are picked up without touching the system.
 That is also why deno is passed to the helper by path: yt-dlp finds one on
 PATH by itself, and `./bin` is the place it would not look.
 
-Keep2Share free downloads use `heapleach-ocr`, a separate helper containing
-the [ddddocr](https://github.com/sml2h3/ddddocr) recognition model and its
+Keep2Share and FileBoom free downloads use `heapleach-ocr`, a separate helper
+containing the [ddddocr](https://github.com/sml2h3/ddddocr) recognition model and its
 runtime. Recognition happens locally, without an account, API key or paid
 solver. `make captcha-helper` builds just this helper with Docker on Linux
 (glibc 2.36 or newer); `make dependencies` includes that step. The container
@@ -586,12 +597,13 @@ image already carries it. Native builds on other platforms are described in
 
 The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting
-time, and allows one file and one connection at a time across both domain
-names. Unreadable challenges fail with a retryable error; OCR is not always
-correct. With `-proxies`, the one-file limit applies to each proxy address,
+time, and allows one file and one connection at a time per service, shared
+across its aliases. Unreadable challenges fail with a retryable error; OCR is
+not always correct. With `-proxies`, the one-file limit applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
-`-concurrency`. Keep2Share's speed limits and cooldowns still apply per
-address. A file held
+`-concurrency` across both services. Each address may carry one K2S transfer
+and one FileBoom transfer simultaneously. The hosts' speed limits and
+cooldowns still apply per address and service. A file held
 back by the wait between free downloads goes back to the queue as waiting,
 with the time left, and its download slot goes to other files meanwhile.
 Waiting is cancelable and bounded to two hours per attempt; retrying within
@@ -599,16 +611,17 @@ the same process preserves an accepted ticket and reuses unexpired download
 links.
 
 Open **Settings** in the UI to change files downloaded at once, streams per
-file, and the speed limit. The same panel enables or disables **K2S proxies**
+file, and the speed limit. The same panel enables or disables **download proxies**
 and edits proxy endpoints and discovery feeds without restarting HeapLeach.
 These settings apply to the current session; flags and environment variables
 set the startup defaults. Active transfers keep their assigned route. When
-switching routing modes, existing K2S transfers finish before new ones use
-the new mode, preserving the per-address limit and download tickets.
+switching routing modes, a service's existing transfers finish before new
+ones use the new mode, preserving the per-address limit and download tickets.
 
 The proxy list shows the selection score, measured average and current
 throughput, recent success rate, request count, active transfers, cooldowns,
-and last successful request. Search, status filters and sorting work across
+and last successful request. Choose Keep2Share or FileBoom to view that
+service's measurements. Search, status filters and sorting work across
 the entire inventory, with 50 rows per page. Scores are estimated useful
 bytes per second using the selector's mean success probability; actual
 selection also explores untried routes. The list refreshes every five seconds
@@ -629,8 +642,8 @@ Each transfer attempt keeps its route through the CAPTCHA, ticket, redirects
 and file requests.
 A refused or broken route returns the file to the queue to try another;
 other hosts continue downloading while routes are busy or cooling down.
-Proxy use currently applies to Keep2Share. Its local OCR helper is still
-required, and premium-only files remain restricted.
+Proxy use currently applies to Keep2Share and FileBoom. The local OCR helper
+is still required, and premium-only files remain restricted.
 
 The pool adapts [amzscrape's proxy logic](https://github.com/JohanLindvall/amzscrape)
 and stores inventory, source memberships, request outcomes, measured **bytes
@@ -638,11 +651,13 @@ per second**, and cooldowns in a private bbolt database. Faster, reliable
 routes score higher; bodies under 64 KiB do not train bandwidth, so a quick
 CAPTCHA response cannot stand in for a fast file transfer. Recent measurements
 carry more weight. Refusals cool only that service; connection
-failures cool the endpoint across services. Routing never disables TLS checks
-or silently falls back from an explicit proxy to a direct connection.
+failures cool the endpoint across services. HTTPS proxies may use self-signed
+certificates on the connection to the proxy. Destination certificates are
+still verified inside the tunnel. An explicit proxy never silently falls
+back to a direct connection.
 
 The scheduler maximises **expected useful bytes per second** within the live
-file-concurrency setting and K2S's one-file-per-address rule:
+file-concurrency setting and each service's one-file-per-address rule:
 
 1. For each free worker, score available routes for the next file's remaining
    bytes `B`: `p × B / (setup + B / speed + (1 − p) × recovery)`.
@@ -673,9 +688,9 @@ This is an adaptive estimate: public proxy capacity changes and cannot be
 known in advance. Setup costs, confirmation windows and ticket affinity keep
 small, noisy speed changes from spending time on repeated route switches.
 
-Saved inventory is available immediately after restart. Feed requests, including
-GitHub, are normally 24 hours apart. An earlier top-up requires runnable K2S
-work and too few distinct usable addresses for its current concurrency, with
+Saved inventory is available immediately after restart. Feed requests,
+including GitHub, are normally 24 hours apart. An earlier top-up requires
+runnable K2S or FileBoom work and too few distinct usable addresses for its current concurrency, with
 at least five minutes between attempts. New active transfers count while
 their first speed sample is pending; measured and standby routes must have
 succeeded and score at least as well as an untried route's learned prior.
@@ -718,7 +733,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. Also settable live in Settings. |
-| `HEAPLEACH_PROXIES` | off | Enable extra free proxy routes for Keep2Share only. Flag: `-proxies`. Also settable live in Settings. |
+| `HEAPLEACH_PROXIES` | off | Enable extra free proxy routes for Keep2Share and FileBoom. Flag: `-proxies`. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode. Flag: `-proxy-db`. |
 | `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
@@ -754,7 +769,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
 | `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
 | `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |
-| `GET` | `/api/proxies` | K2S proxy measurements and feed status. Query: `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
+| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, or `fileboom`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `DELETE` | `/api/jobs/{id}` | Cancel and forget. |

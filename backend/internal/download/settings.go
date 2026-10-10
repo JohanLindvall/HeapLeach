@@ -108,7 +108,7 @@ func (m *Manager) ApplySettings(s Settings) error {
 		}
 		if changed && enabled {
 			// A queued direct-address cooldown must not conceal the newly
-			// available proxies. The K2S resolver still remembers that timer
+			// available proxies. The host's resolver still remembers that timer
 			// if the pool tries the direct address again.
 			for _, it := range m.queue {
 				if proxyEligible(it) && !it.inFlight {

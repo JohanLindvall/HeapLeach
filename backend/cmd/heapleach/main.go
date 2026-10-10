@@ -325,7 +325,7 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.StringVar(&cfg.DownloadDir, "dir", cfg.DownloadDir, "directory to download into")
 	flags.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency,
 		fmt.Sprintf("parallel transfers (1-%d)", config.MaxConcurrency))
-	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use free proxy routes for per-address download limits (Keep2Share)")
+	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use free proxy routes for per-address download limits (Keep2Share and FileBoom)")
 	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,

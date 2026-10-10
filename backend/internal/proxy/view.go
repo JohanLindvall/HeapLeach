@@ -17,6 +17,7 @@ import (
 type Query struct {
 	Offset, Limit        int
 	Search, Status, Sort string
+	Site                 string
 }
 
 type Row struct {
@@ -94,7 +95,7 @@ func (p *Pool) Page(site string, q Query) Page {
 		}
 		row := Row{ID: routeID(e.URL), URL: redacted(e.URL), Source: "discovered",
 			Status: "available", Throughput: s.BytesPerSecond, Active: s.active,
-			Requests: s.Tries, LastSuccess: e.LastSuccess}
+			Requests: s.Tries, LastSuccess: s.LastSuccess}
 		if e.URL == Direct {
 			row.Source = "direct"
 		} else if slices.Contains(p.static, e.URL) {

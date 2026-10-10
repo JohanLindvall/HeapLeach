@@ -88,61 +88,93 @@ func TestRouteRefusalReturnsToOwnerWithoutHTTPRetries(t *testing.T) {
 }
 
 func TestRouteCONNECTVerifiesDestinationAndNeverFallsBack(t *testing.T) {
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "verified") }))
-	defer origin.Close()
-	var connects atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodConnect {
-			t.Error("not a CONNECT")
-			w.WriteHeader(400)
-			return
+	for _, mode := range []string{"0", "1"} {
+		for _, secure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("utls=%s/https-proxy=%t", mode, secure), func(t *testing.T) {
+				t.Setenv("HEAPLEACH_UTLS", mode)
+				origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "verified") }))
+				defer origin.Close()
+				var connects atomic.Int32
+				srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodConnect {
+						t.Error("not a CONNECT")
+						w.WriteHeader(400)
+						return
+					}
+					connects.Add(1)
+					upstream, err := net.Dial("tcp", r.Host)
+					if err != nil {
+						w.WriteHeader(502)
+						return
+					}
+					defer upstream.Close()
+					conn, rw, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer conn.Close()
+					fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n")
+					rw.Flush()
+					done := make(chan struct{})
+					go func() { io.Copy(upstream, rw); close(done) }()
+					io.Copy(conn, upstream)
+					conn.Close()
+					<-done
+				}))
+				if secure {
+					srv.StartTLS()
+				} else {
+					srv.Start()
+				}
+				defer srv.Close()
+				base := New("test", "en", 0, time.Second)
+				route, _ := base.ThroughProxy(srv.URL)
+				defer route.CloseIdleConnections()
+				ctx := WithRoute(context.Background(), "route", route, nil)
+				req, _ := base.NewRequest(ctx, http.MethodGet, origin.URL, nil)
+				if _, err := base.Bytes(req); err == nil {
+					t.Fatal("accepted an untrusted destination certificate")
+				}
+				var standard *http.Transport
+				switch tr := route.hc.Transport.(type) {
+				case *http.Transport:
+					standard = tr
+				case *browserTransport:
+					standard = tr.standard
+				}
+				// Trust only the fixture certificate and repeat the same CONNECT path.
+				standard.CloseIdleConnections()
+				standard.TLSClientConfig = &tls.Config{RootCAs: x509.NewCertPool()}
+				standard.TLSClientConfig.RootCAs.AddCert(origin.Certificate())
+				if body, err := base.Bytes(req); err != nil || string(body) != "verified" {
+					t.Fatalf("CONNECT body=%q err=%v", body, err)
+				}
+				if connects.Load() != 2 {
+					t.Fatalf("CONNECT count=%d", connects.Load())
+				}
+			})
 		}
-		connects.Add(1)
-		upstream, err := net.Dial("tcp", r.Host)
-		if err != nil {
-			w.WriteHeader(502)
-			return
+	}
+}
+
+func TestHTTPSProxyAllowsSelfSignedCertificateForHTTP(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Host != "origin.example.test" {
+			t.Errorf("lost the forwarding target: %s", r.URL.Host)
 		}
-		defer upstream.Close()
-		conn, rw, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer conn.Close()
-		fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n")
-		rw.Flush()
-		done := make(chan struct{})
-		go func() { io.Copy(upstream, rw); close(done) }()
-		io.Copy(conn, upstream)
-		conn.Close()
-		<-done
+		fmt.Fprint(w, "proxied")
 	}))
 	defer srv.Close()
 	base := New("test", "en", 0, time.Second)
-	route, _ := base.ThroughProxy(srv.URL)
+	route, err := base.ThroughProxy(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer route.CloseIdleConnections()
-	ctx := WithRoute(context.Background(), "route", route, nil)
-	req, _ := base.NewRequest(ctx, http.MethodGet, origin.URL, nil)
-	if _, err := base.Bytes(req); err == nil {
-		t.Fatal("accepted an untrusted destination certificate")
-	}
-	var standard *http.Transport
-	switch tr := route.hc.Transport.(type) {
-	case *http.Transport:
-		standard = tr
-	case *browserTransport:
-		standard = tr.standard
-	}
-	// Trust only the fixture certificate and repeat the same CONNECT path.
-	standard.CloseIdleConnections()
-	standard.TLSClientConfig = &tls.Config{RootCAs: x509.NewCertPool()}
-	standard.TLSClientConfig.RootCAs.AddCert(origin.Certificate())
-	if body, err := base.Bytes(req); err != nil || string(body) != "verified" {
-		t.Fatalf("CONNECT body=%q err=%v", body, err)
-	}
-	if connects.Load() != 2 {
-		t.Fatalf("CONNECT count=%d", connects.Load())
+	ctx := WithRoute(context.Background(), "https-proxy", route, nil)
+	if body, err := base.GetString(ctx, "http://origin.example.test/file", nil); err != nil || body != "proxied" {
+		t.Fatalf("self-signed HTTPS proxy: body=%q error=%v", body, err)
 	}
 }
 

@@ -118,6 +118,11 @@ func TestKeep2ShareRejectsRestrictedOrMissingFilesBeforeRequestingCaptcha(t *tes
 
 func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[string]string)) *Keep2Share {
 	t.Helper()
+	return keep2ShareProtocolTestSite(t, NewKeep2Share, getURL)
+}
+
+func keep2ShareProtocolTestSite(t *testing.T, create func(*httpx.Client) *Keep2Share, getURL func(http.ResponseWriter, map[string]string)) *Keep2Share {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v2/getFileStatus", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, keep2ShareTestInfo)
@@ -145,7 +150,7 @@ func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[strin
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	k := NewKeep2Share(httpx.New("test-agent", "en-US", 0, time.Second))
+	k := create(httpx.New("test-agent", "en-US", 0, time.Second))
 	k.api = srv.URL + "/api/v2"
 	k.solver = func(ctx context.Context, raw []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
 	return k

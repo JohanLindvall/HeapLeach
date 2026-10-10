@@ -19,7 +19,11 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	values := r.URL.Query()
-	q := proxy.Query{Search: values.Get("search"), Status: values.Get("status"), Sort: values.Get("sort")}
+	q := proxy.Query{Search: values.Get("search"), Status: values.Get("status"), Sort: values.Get("sort"), Site: values.Get("site")}
+	if q.Site != "" && !slices.Contains(proxy.Services(), q.Site) {
+		writeError(w, http.StatusBadRequest, "invalid proxy service")
+		return
+	}
 	for key, dst := range map[string]*int{"offset": &q.Offset, "limit": &q.Limit} {
 		if raw := values.Get(key); raw != "" {
 			n, err := strconv.Atoi(raw)

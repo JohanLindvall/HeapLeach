@@ -66,7 +66,7 @@ export function StatsBar({
           aria-expanded={settingsOpen}
           aria-controls="live-settings"
           onClick={onToggleSettings}
-          title="Live settings and K2S proxy pool"
+          title="Live settings and download proxy pool"
         >
           <SettingsIcon />
           Settings
