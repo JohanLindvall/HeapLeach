@@ -323,7 +323,7 @@ func TestKeep2ShareCancellationKeepsAnAcceptedTicket(t *testing.T) {
 	var calls atomic.Int32
 	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
 		if calls.Add(1) == 1 {
-			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":3600}`)
+			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":30}`)
 			return
 		}
 		if in["free_download_key"] != "ticket" {
@@ -347,10 +347,10 @@ func TestKeep2ShareCancellationKeepsAnAcceptedTicket(t *testing.T) {
 	if d.key != "ticket" || d.ready.IsZero() {
 		t.Fatal("cancellation forgot an accepted ticket or its remaining wait")
 	}
-	if len(notes) != 2 || !strings.Contains(notes[0], "CAPTCHA") || !strings.Contains(notes[1], "1h0m0s") {
+	if len(notes) != 2 || !strings.Contains(notes[0], "CAPTCHA") || !strings.Contains(notes[1], "30s") {
 		t.Fatalf("progress notes = %v; want CAPTCHA progress and the host's wait", notes)
 	}
-	// Advance the host's deadline without waiting an hour in the test.
+	// Advance the host's deadline without waiting it out in the test.
 	d.ready = time.Now()
 	if _, err := d.resolve(context.Background()); err != nil {
 		t.Fatal(err)
@@ -367,6 +367,69 @@ func TestKeep2ShareReportsRestrictionsInsteadOfRetryingCaptchas(t *testing.T) {
 	_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "Premium") || calls.Load() != 1 {
 		t.Fatalf("calls=%d error=%v; want the actual access restriction", calls.Load(), err)
+	}
+	if _, refused := errors.AsType[*RefusedError](err); refused {
+		t.Error("a restriction on the file was taken for a refusal of the address")
+	}
+}
+
+// "Download is not available" with no reason given is about the address:
+// through public proxies the same file got that answer from some and
+// tickets from the rest. The downloader can then try another route.
+func TestKeep2ShareTakesAnUnexplainedRefusalForTheAddresses(t *testing.T) {
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		w.WriteHeader(http.StatusNotAcceptable)
+		_, _ = fmt.Fprint(w, `{"status":"error","code":406,"message":"Download is not available","errorCode":42}`)
+	})
+	_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+	if _, refused := errors.AsType[*RefusedError](err); !refused {
+		t.Fatalf("error = %v; want a refusal of the address", err)
+	}
+	if !strings.Contains(err.Error(), "refused from this address") {
+		t.Errorf("error = %q; want it to say the address was refused", err)
+	}
+}
+
+// A ticket can arrive with seventy minutes on it, which is the wait between
+// free downloads by another road. It goes back to the queue rather than
+// holding a worker, and the ticket is redeemed when the file comes round.
+func TestKeep2ShareSendsALongTicketWaitBackToTheQueue(t *testing.T) {
+	var solves atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		if in["free_download_key"] == "ticket" {
+			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/first-clip"}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":4300}`)
+	})
+	k.solver = func(context.Context, []byte) ([]string, error) {
+		solves.Add(1)
+		return []string{"aB3dE7"}, nil
+	}
+	d := &keep2ShareDownload{host: k, id: "test-file"}
+	start := time.Now()
+	_, err := d.resolve(context.Background())
+	wait, deferred := errors.AsType[*WaitError](err)
+	if !deferred || time.Since(start) > 5*time.Second {
+		t.Fatalf("resolve = %v after %s; want the ticket's wait handed back to the queue", err, time.Since(start))
+	}
+	if left := time.Until(wait.Until); left < 71*time.Minute || left > 72*time.Minute {
+		t.Errorf("the wait ends in %s, want the ticket's seventy-odd minutes", left)
+	}
+	if d.key != "ticket" {
+		t.Fatal("the ticket was dropped on the way back to the queue")
+	}
+
+	// When it comes round again, the ticket is redeemed: no second CAPTCHA.
+	d.ready = time.Now()
+	k.mu.Lock()
+	clear(k.cooldowns)
+	k.mu.Unlock()
+	if target, err := d.resolve(context.Background()); err != nil || target.URL != "https://cdn.example.test/first-clip" {
+		t.Fatalf("target=%+v error=%v", target, err)
+	}
+	if solves.Load() != 1 {
+		t.Errorf("solved %d CAPTCHAs, want only the one the ticket came from", solves.Load())
 	}
 }
 
