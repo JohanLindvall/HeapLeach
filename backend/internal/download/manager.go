@@ -343,8 +343,14 @@ func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Resul
 }
 
 // stillOnDisk keeps the files a job saved before that are still where it
-// saved them, at the length it saved them at. Outside mu: Stat is a
-// syscall, and the destination may be a network mount.
+// saved them. Outside mu: Stat is a syscall, and the destination may be a
+// network mount.
+//
+// The path is the evidence, not the length. A file can change size after it
+// was counted: a playlist is recorded at the length of the transport stream
+// it was joined into, then rewrapped as an MP4 a few percent smaller. Asking
+// for the recorded length passed over every rewrapped video, and each
+// restart saved it again as "(2)", "(3)".
 func (m *Manager) stillOnDisk(finished map[string]finishedFile) map[string]finishedFile {
 	if len(finished) == 0 {
 		return nil
@@ -356,7 +362,8 @@ func (m *Manager) stillOnDisk(finished map[string]finishedFile) map[string]finis
 	defer root.Close()
 	present := make(map[string]finishedFile, len(finished))
 	for key, f := range finished {
-		if info, err := root.Stat(f.path); err == nil && info.Mode().IsRegular() && info.Size() == f.size {
+		if info, err := root.Stat(f.path); err == nil && info.Mode().IsRegular() {
+			f.size = info.Size()
 			present[key] = f
 		}
 	}

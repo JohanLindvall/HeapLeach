@@ -52,14 +52,22 @@ func TestARestartDoesNotFetchAgainWhatTheJobSaved(t *testing.T) {
 	srv := unsizedServer(t, func() []byte { return photo }, &fetched)
 
 	for name, tc := range map[string]struct {
-		onDisk  bool
-		fetches int32
+		onDisk   bool
+		recorded int64 // the length the record holds; 0 for the file's own
+		fetches  int32
 	}{
 		"still there": {onDisk: true, fetches: 0},
 		"gone since":  {onDisk: false, fetches: 1},
+		// A playlist is counted at its transport stream's length and then
+		// rewrapped as a smaller MP4: the record's length is not the file's.
+		"rewrapped since": {onDisk: true, recorded: 30489464, fetches: 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fetched.Store(0)
+			recorded := int64(len(photo))
+			if tc.recorded != 0 {
+				recorded = tc.recorded
+			}
 			m, dir := newTestManager(t)
 			m.SetPaused(true)
 			if tc.onDisk {
@@ -72,7 +80,7 @@ func TestARestartDoesNotFetchAgainWhatTheJobSaved(t *testing.T) {
 				ID: "restored", Source: srv.URL + "/album/photo.jpg", Title: "photo.jpg", Host: "direct",
 				CreatedAt: time.Now(), restored: true,
 				Items: []*Item{
-					{ID: "saved", Name: "photo.jpg", Status: StatusDone, Path: "photo.jpg", Size: int64(len(photo))},
+					{ID: "saved", Name: "photo.jpg", Status: StatusDone, Path: "photo.jpg", Size: recorded},
 				},
 			}
 			m.jobs[job.ID] = job

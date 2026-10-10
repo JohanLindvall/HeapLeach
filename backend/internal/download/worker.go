@@ -1248,9 +1248,13 @@ func identicalOnDisk(dir, name, part string, scopes ...transferFiles) (string, b
 		return "", false
 	}
 	same := func(entry string) bool {
-		fi, err := files.stat(filepath.Join(dir, entry))
+		path := filepath.Join(dir, entry)
+		if path == filepath.Clean(part) {
+			return false // the new file itself, already under a numbered name
+		}
+		fi, err := files.stat(path)
 		return err == nil && fi.Mode().IsRegular() && fi.Size() == info.Size() &&
-			sameContent(files, filepath.Join(dir, entry), part)
+			sameContent(files, path, part)
 	}
 	if same(name) {
 		return name, true

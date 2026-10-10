@@ -137,6 +137,40 @@ func TestRemuxKeepsBestStreams(t *testing.T) {
 	t.Logf("best streams kept: %v (from %v)", after, before)
 }
 
+// A playlist fetched again rewraps to the very bytes of the MP4 already
+// there. That one is the file, and the copy is not kept beside it as "(2)".
+func TestRewrappingAPlaylistAlreadyThereKeepsOneMP4(t *testing.T) {
+	ffmpeg := requireFFmpeg(t)
+	dir := t.TempDir()
+	source := filepath.Join(dir, "clip.ts")
+	buildTS(t, ffmpeg, source, []string{"-c:a", "aac"}, nil)
+	stream, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	first := manager.remuxToMP4(context.Background(), source)
+	if first == source {
+		t.Fatal("the fixture did not rewrap")
+	}
+	// The same stream again, as fetching the playlist once more joins it.
+	if err := os.WriteFile(source, stream, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := manager.remuxToMP4(context.Background(), source)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if second != first || len(names) != 1 || names[0] != "clip.mp4" {
+		t.Fatalf("second rewrap gave %s, directory holds %q; want clip.mp4 once", filepath.Base(second), names)
+	}
+}
+
 func TestRemuxLeavesNonTransportStreamsAlone(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"movie.mp4", "clip.webm", "image.jpg"} {

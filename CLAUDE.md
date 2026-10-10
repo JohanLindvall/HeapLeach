@@ -1054,16 +1054,21 @@ in one evening. Two things now cover it.
   key `separateNames` uses). `resolve` stats them outside `mu`
   (`stillOnDisk`). `applyResultLocked` marks an item done, without
   queueing it, when its destination was saved before and that file is still
-  there at the recorded length. The record is added to rather than
-  replaced, so a job read again before an earlier reading lands keeps it.
+  there. The recorded path is the evidence, not the length: a playlist is
+  counted at its transport stream's length and then rewrapped as a smaller
+  MP4. Matching on length passed over every rewrapped video, which a restart
+  then saved again as "(2)". The record is added to rather than replaced, so
+  a job read again before an earlier reading lands keeps it.
 - **A byte-for-byte check at the end** (`identicalOnDisk`, before
   `reserve`). A whole file identical to one already under its name, or a
   numbered name beside it, is that file: the part is dropped and the item
   points at it, marked skipped. That catches a re-added job, and a file
   finished after the shutdown save recorded it. A different file with the
-  same name still gets its own "(2)". A playlist remuxed to MP4 escapes
-  this check, since the part is a `.ts` and the copy on disk an `.mp4`, so
-  the record is what protects those.
+  same name still gets its own "(2)". A playlist's part is a `.ts`, while
+  the copy on disk is the `.mp4` it became, so `remuxToMP4` makes the same
+  check on its output. Rewrapping is deterministic, and the three copies of
+  one video were byte for byte the same. `identicalOnDisk` skips the new
+  file itself, which by then already sits under a numbered name.
 
 **External transfers** (`external.go`, `internal/tools`) cover pages where
 reaching the media needs more than HTTP. `tools.Find` resolves a helper

@@ -117,6 +117,19 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 		return path
 	}
 
+	// Rewrapping is deterministic, so a playlist fetched again (re-added, or
+	// finished after the last save recorded it) comes out as the very bytes
+	// of the MP4 already there, which reserve has just numbered this copy
+	// to avoid. The copy already there is this file.
+	if unique != target {
+		if existing, ok := identicalOnDisk(filepath.Dir(target), filepath.Base(target), unique); ok {
+			_ = os.Remove(unique)
+			_ = os.Remove(path)
+			m.log.Debug("rewrapped as an mp4 already there", "path", existing)
+			return filepath.Join(filepath.Dir(target), existing)
+		}
+	}
+
 	_ = os.Remove(path)
 	m.log.Debug("rewrapped as mp4", "path", filepath.Base(unique))
 	return unique
