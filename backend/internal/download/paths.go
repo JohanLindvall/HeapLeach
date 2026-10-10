@@ -135,9 +135,7 @@ func numberedName(name string, number int) string {
 // when two other entries both arrive as "clip.bin". Compare sanitized paths
 // without case, including on case-sensitive hosts, for portable queues.
 func separateNames(items []*Item) {
-	key := func(it *Item, name string) string {
-		return strings.ToLower(filepath.Join(it.Dir, SafeName(name)))
-	}
+	key := func(it *Item, name string) string { return destinationKey(it.Dir, name) }
 	reserved := make(map[string]int, len(items))
 	for _, it := range items {
 		reserved[key(it, it.Name)]++
@@ -162,6 +160,12 @@ func separateNames(items []*Item) {
 			reserved[key(it, it.Name)] = 1
 		}
 	}
+}
+
+// destinationKey names where an item will be saved, as separateNames
+// compares destinations: sanitized, and without regard to case.
+func destinationKey(dir, name string) string {
+	return strings.ToLower(filepath.Join(dir, SafeName(name)))
 }
 
 // newID returns a short random identifier for a job or item.

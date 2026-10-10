@@ -152,7 +152,7 @@ func TestAJobIsFiledUnderItsTitleNotItsNote(t *testing.T) {
 	}
 
 	m.mu.Lock()
-	m.applyResultLocked(job, "stub", res)
+	m.applyResultLocked(job, "stub", res, nil)
 	m.mu.Unlock()
 
 	if job.Title != "a band (224 of 2700 albums)" {

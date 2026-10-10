@@ -65,7 +65,7 @@ func TestDarkGramAlbumDownloadsVideoAndOriginalPhoto(t *testing.T) {
 	job := &Job{ID: "album-job", Source: srv.URL + "/post.html"}
 	m.mu.Lock()
 	m.jobs[job.ID] = job
-	m.applyResultLocked(job, ex.Name(), res)
+	m.applyResultLocked(job, ex.Name(), res, nil)
 	m.mu.Unlock()
 	wants := []struct {
 		name string

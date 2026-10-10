@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -293,7 +294,15 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	defer m.wg.Done()
 
+	m.mu.Lock()
+	finished := job.finished
+	m.mu.Unlock()
+
 	res, ex, err := m.extractSource(ctx, job)
+	var present map[string]finishedFile
+	if err == nil {
+		present = m.stillOnDisk(finished)
+	}
 
 	m.mu.Lock()
 	if m.jobs[job.ID] != job || job.resolveID != generation {
@@ -309,7 +318,7 @@ func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 		job.Err = err.Error()
 		m.log.Warn("resolve failed", "job", job.ID, "url", job.Source, "err", err)
 	default:
-		m.applyResultLocked(job, ex.Name(), res)
+		m.applyResultLocked(job, ex.Name(), res, present)
 	}
 	m.mu.Unlock()
 
@@ -333,9 +342,51 @@ func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Resul
 	return m.reg.Extract(ctx, job.Source, extractor.Options{Password: job.Password})
 }
 
+// stillOnDisk keeps the files a job saved before that are still where it
+// saved them, at the length it saved them at. Outside mu: Stat is a
+// syscall, and the destination may be a network mount.
+func (m *Manager) stillOnDisk(finished map[string]finishedFile) map[string]finishedFile {
+	if len(finished) == 0 {
+		return nil
+	}
+	root, err := os.OpenRoot(m.DownloadDir())
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	present := make(map[string]finishedFile, len(finished))
+	for key, f := range finished {
+		if info, err := root.Stat(f.path); err == nil && info.Mode().IsRegular() && info.Size() == f.size {
+			present[key] = f
+		}
+	}
+	return present
+}
+
+// finishedLocked adds the job's saved items to what it has finished, by
+// destination. Added to rather than replaced, so a job read again before an
+// earlier reading lands keeps the record. Caller holds mu.
+func finishedLocked(job *Job) {
+	for _, it := range job.Items {
+		if it.Status != StatusDone || it.Path == "" {
+			continue
+		}
+		if job.finished == nil {
+			job.finished = make(map[string]finishedFile)
+		}
+		job.finished[destinationKey(it.Dir, it.Name)] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+	}
+}
+
 // applyResultLocked turns a resolved source into the job's items. Caller
 // holds mu.
-func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result) {
+//
+// A file the job saved before, and that is still there (present), is done
+// as it stands. That is decided by the job's own record rather than by
+// size, because some hosts state no size anywhere: a DarkGram photo comes
+// with no Content-Length at all, so every restart fetched each one again
+// and kept the copy beside it as "(2)", then "(3)".
+func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result, present map[string]finishedFile) {
 	job.Host = host
 	if res.Title != "" {
 		// What the job is shown as carries the extractor's note — a listing
@@ -358,8 +409,19 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 	}
 	separateNames(items)
 	job.Items = append(job.Items, items...)
-	m.queue = append(m.queue, items...)
-	m.log.Info("resolved", "job", job.ID, "host", host, "title", job.Title, "files", len(res.Files))
+	saved := 0
+	for _, it := range items {
+		if f, ok := present[destinationKey(it.Dir, it.Name)]; ok {
+			it.Status = StatusDone
+			it.Path, it.Size, it.Skipped = f.path, f.size, f.skipped
+			it.downloaded.Store(f.size)
+			saved++
+			continue
+		}
+		m.queue = append(m.queue, it)
+	}
+	job.finished = nil
+	m.log.Info("resolved", "job", job.ID, "host", host, "title", job.Title, "files", len(res.Files), "already saved", saved)
 }
 
 // newItem converts an extractor result into a queued item.
@@ -866,6 +928,7 @@ func (m *Manager) rereadLocked(job *Job) {
 	job.restored = false
 	job.unfetchable = false
 	job.canceled = false
+	finishedLocked(job)
 	job.Items = nil
 	job.Err = ""
 	job.resolving = true

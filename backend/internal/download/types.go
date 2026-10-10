@@ -187,6 +187,13 @@ type Job struct {
 	// attempt. So the source is read again before anything is transferred,
 	// and the part files on disk supply the bytes already fetched.
 	restored bool
+	// finished records what the job had already saved when its items were
+	// last dropped for a re-read, keyed by destination (destinationKey). A
+	// file whose length is unknown until it arrives (no size in the listing,
+	// no Content-Length) cannot be recognised on disk before it is fetched,
+	// so without this every restart fetched it again and kept it as "(2)".
+	// Set by rereadLocked, used and cleared by applyResultLocked.
+	finished map[string]finishedFile
 	// unfetchable marks a job read back from the state file at all, whether
 	// or not it was held: its items carry no URL, for the reason above, so
 	// retrying any of them means reading the source again. restored alone
@@ -194,6 +201,13 @@ type Job struct {
 	// back unheld, and re-queueing a cancelled one on its own failed with
 	// "no download URL".
 	unfetchable bool
+}
+
+// finishedFile is where a job saved one file, and at what length.
+type finishedFile struct {
+	path    string
+	size    int64
+	skipped bool
 }
 
 // ItemView is the JSON shape of an item sent to the browser.

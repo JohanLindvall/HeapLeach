@@ -31,7 +31,7 @@ func TestSameNamedListingEntriesKeepDistinctBytes(t *testing.T) {
 	job := &Job{ID: "job", Source: "https://example.test/album"}
 	m.mu.Lock()
 	m.jobs[job.ID] = job
-	m.applyResultLocked(job, "fixture", res)
+	m.applyResultLocked(job, "fixture", res, nil)
 	m.mu.Unlock()
 	for i, it := range job.Items {
 		// A late name must not undo the destination allocated from the listing.
@@ -59,7 +59,7 @@ func TestSameNamedListingEntriesKeepDistinctBytes(t *testing.T) {
 	again := &Job{ID: "again", Source: job.Source}
 	m.mu.Lock()
 	m.jobs[again.ID] = again
-	m.applyResultLocked(again, "fixture", res)
+	m.applyResultLocked(again, "fixture", res, nil)
 	m.mu.Unlock()
 	for _, it := range again.Items {
 		if err := m.transfer(t.Context(), it); err != nil || !it.Skipped {

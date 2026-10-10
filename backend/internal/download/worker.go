@@ -3,6 +3,7 @@
 package download
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -410,6 +411,21 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		}
 	}
 
+	// A file whose length was unknown until it arrived, with no size in the
+	// listing and no Content-Length, could not be checked against the
+	// destination before it was fetched. Now that it is whole, an identical
+	// file already under its name is this one, saved before, and reserving
+	// another name would keep it twice.
+	if existing, ok := identicalOnDisk(dir, name, part, files); ok {
+		_ = files.remove(part)
+		clearTransferState(part, files)
+		clearPlaylistState(part, files)
+		m.mu.Lock()
+		it.Skipped = true
+		m.mu.Unlock()
+		m.setPath(it, filepath.Join(rel, existing))
+		return nil
+	}
 	dest, err := files.reserve(dir, name)
 	if err != nil {
 		return err
@@ -1219,6 +1235,83 @@ func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64, sco
 	m.mu.Unlock()
 	m.setPath(it, filepath.Join(rel, found))
 	return true
+}
+
+// identicalOnDisk finds a file already in dir, under name or one of the
+// numbered names beside it, that holds exactly the bytes of the finished
+// part file. Sizes are compared first, so the contents are read only for a
+// file of the same length.
+func identicalOnDisk(dir, name, part string, scopes ...transferFiles) (string, bool) {
+	files := fileScope(scopes)
+	info, err := files.stat(part)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	same := func(entry string) bool {
+		fi, err := files.stat(filepath.Join(dir, entry))
+		return err == nil && fi.Mode().IsRegular() && fi.Size() == info.Size() &&
+			sameContent(files, filepath.Join(dir, entry), part)
+	}
+	if same(name) {
+		return name, true
+	}
+	directory, err := files.open(dir, os.O_RDONLY, 0)
+	if err != nil {
+		return "", false
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return "", false
+	}
+	ext := filepath.Ext(name)
+	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
+	for _, entry := range entries {
+		n := entry.Name()
+		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
+			continue
+		}
+		if _, err := strconv.Atoi(n[len(prefix) : len(n)-len(suffix)]); err != nil {
+			continue
+		}
+		if same(n) {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+// sameContent reports whether two files hold the same bytes.
+func sameContent(files transferFiles, a, b string) bool {
+	fa, err := files.open(a, os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	defer fa.Close()
+	fb, err := files.open(b, os.O_RDONLY, 0)
+	if err != nil {
+		return false
+	}
+	defer fb.Close()
+	bufA, releaseA := borrowChunk()
+	defer releaseA()
+	bufB, releaseB := borrowChunk()
+	defer releaseB()
+	for {
+		na, errA := io.ReadFull(fa, bufA)
+		nb, errB := io.ReadFull(fb, bufB)
+		if na != nb || !bytes.Equal(bufA[:na], bufB[:nb]) {
+			return false
+		}
+		endA := errors.Is(errA, io.EOF) || errors.Is(errA, io.ErrUnexpectedEOF)
+		endB := errors.Is(errB, io.EOF) || errors.Is(errB, io.ErrUnexpectedEOF)
+		if endA || endB {
+			return endA && endB
+		}
+		if errA != nil || errB != nil {
+			return false
+		}
+	}
 }
 
 // onDiskAs finds the file of this length saved under name or under one of

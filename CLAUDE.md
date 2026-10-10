@@ -1037,6 +1037,27 @@ without this a second entry was skipped as though the first were its bytes.
 All original names are reserved before numbering duplicates, and `fixedName`
 prevents a late resolver or disposition header undoing that allocation.
 
+Neither check works for a file whose length nobody states. A DarkGram photo
+comes with no size in the listing and no `Content-Length`, and every restart
+re-reads each unfinished job. So every restart fetched each such photo again
+and `reserve` kept it beside itself as "(2)", then "(3)": 404 identical copies
+in one evening. Two things now cover it.
+- **The job's own record.** `rereadLocked` records the items the job had
+  already saved, by destination (`finishedLocked`, `destinationKey`, the
+  key `separateNames` uses). `resolve` stats them outside `mu`
+  (`stillOnDisk`). `applyResultLocked` marks an item done, without
+  queueing it, when its destination was saved before and that file is still
+  there at the recorded length. The record is added to rather than
+  replaced, so a job read again before an earlier reading lands keeps it.
+- **A byte-for-byte check at the end** (`identicalOnDisk`, before
+  `reserve`). A whole file identical to one already under its name, or a
+  numbered name beside it, is that file: the part is dropped and the item
+  points at it, marked skipped. That catches a re-added job, and a file
+  finished after the shutdown save recorded it. A different file with the
+  same name still gets its own "(2)". A playlist remuxed to MP4 escapes
+  this check, since the part is a `.ts` and the copy on disk an `.mp4`, so
+  the record is what protects those.
+
 **External transfers** (`external.go`, `internal/tools`) cover pages where
 reaching the media needs more than HTTP. `tools.Find` resolves a helper
 binary next to the running executable before falling back to PATH, which is
