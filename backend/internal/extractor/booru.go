@@ -195,8 +195,10 @@ func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 	if site == nil {
 		return nil, fmt.Errorf("booru: %s is not a supported board", u.Redacted())
 	}
-	site = site.forURL(u)
+	return b.extract(ctx, u, site.forURL(u))
+}
 
+func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Result, error) {
 	tags, postID, listing := site.parseTarget(u)
 	if postID != "" {
 		files, err := b.fetch(ctx, site, "id:"+postID, postID)
@@ -224,6 +226,66 @@ func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 		title += " latest"
 	}
 	return &Result{Title: title, Files: files}, nil
+}
+
+// booruSniff uses the route to select plausible API dialects, then requires
+// a post id and original-media metadata in the response. Danbooru and e621
+// share an endpoint; the nested file in the answer distinguishes them.
+func booruSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+	segs := util.PathSegments(u)
+	var candidates []booruAPI
+	switch {
+	case u.Query().Get("page") == "post" && (u.Path == "/" || u.Path == "/index.php"):
+		candidates = []booruAPI{apiGelbooru}
+	case len(segs) > 0 && segs[0] == "posts":
+		candidates = []booruAPI{apiDanbooru, apiSzurubooru, apiTwibooru, apiPhilomena}
+	case len(segs) > 0 && segs[0] == "post":
+		if len(segs) == 1 || (len(segs) >= 3 && segs[1] == "show") {
+			candidates = []booruAPI{apiMoebooru}
+		} else {
+			candidates = []booruAPI{apiSzurubooru}
+		}
+	case len(segs) > 0 && (segs[0] == "images" || segs[0] == "search"):
+		candidates = []booruAPI{apiPhilomena, apiTwibooru}
+	case len(segs) == 0 && u.Query().Has("tags"):
+		candidates = []booruAPI{apiDanbooru, apiMoebooru, apiGelbooru, apiSzurubooru, apiPhilomena, apiTwibooru}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
+	defer cancel()
+	for _, api := range candidates {
+		if probeCtx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if api == apiSzurubooru && len(segs) > 1 && segs[0] == "posts" {
+			continue // szurubooru's single-post route is /post/<id>
+		}
+		site := &booruSite{name: u.Hostname(), root: util.Origin(u), api: api}
+		tags, postID, listing := site.parseTarget(u)
+		if !listing && postID == "" {
+			continue
+		}
+		if postID != "" {
+			tags = "id:" + postID
+		}
+		var raw json.RawMessage
+		if !platformJSON(probeCtx, client, site.endpoint(tags, 0), site.apiHeaders(), &raw) {
+			continue
+		}
+		posts, err := booruDecode(raw)
+		if err != nil {
+			continue
+		}
+		for _, post := range posts {
+			if post.ID.String() == "" || post.fileURL(site) == "" || (postID != "" && post.ID.String() != postID) {
+				continue
+			}
+			if api == apiDanbooru && post.File.URL != "" {
+				site.api = apiE621
+			}
+			return NewBooru(client).extract(ctx, u, site)
+		}
+	}
+	return nil, nil
 }
 
 // parseTarget pulls a tag query or a single post id out of a URL, and
@@ -419,7 +481,10 @@ func (b *Booru) page(ctx context.Context, endpoint string, headers httpx.Header)
 	if err := b.client.GetJSON(ctx, endpoint, headers, &raw); err != nil {
 		return nil, err
 	}
+	return booruDecode(raw)
+}
 
+func booruDecode(raw json.RawMessage) ([]booruPost, error) {
 	// The families wrap their results differently: a bare array, or an
 	// object keyed by "posts", "images", "results" or "post".
 	if len(raw) > 0 && raw[0] == '{' {

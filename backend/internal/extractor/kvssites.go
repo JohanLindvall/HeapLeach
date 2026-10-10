@@ -29,9 +29,9 @@ import (
 //   - It rots. Sites move platforms, new ones appear, and a list compiled
 //     into a binary cannot follow. HEAPLEACH_KVS_HOSTS extends it at runtime.
 //   - It will never be complete. There are far more KVS installs than anyone
-//     will enumerate — so the direct-link fallback sniffs for the page shape
-//     on any URL laid out like a KVS video page, which covers the tail
-//     without naming a single host. See kvsSniff.
+//     will enumerate — so the direct-link fallback recognises the licensed
+//     player and asynchronous listing controls without naming the host.
+//     See kvsSniff and platformPage.
 type KVS struct {
 	hostSet
 	client *httpx.Client
@@ -88,17 +88,28 @@ func (k *KVS) Name() string {
 // everything a search turns up, or any other listing the install lays out —
 // a category, a model, a tag, a channel, the site's own latest list.
 func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	return k.extract(ctx, u, opts, "")
+}
+
+// extract can start from an already identified document on an unknown host.
+// Canonical member/search URLs still take precedence over the pasted page.
+func (k *KVS) extract(ctx context.Context, u *url.URL, opts Options, doc string) (*Result, error) {
+	var l kvsListing
 	if listing, ok := kvsMemberPath(u); ok {
-		l := kvsListingForMember(listing)
-		l.limit = opts.maxFiles()
-		return kvsListingResult(ctx, k.client, l, k.Name())
+		l = kvsListingForMember(listing)
+	} else if query, listing, ok := kvsSearchPath(u); ok {
+		l = kvsListingForSearch(query, listing)
+	} else {
+		if doc != "" && len(util.PathSegments(u)) > 0 {
+			return kvsBrowseDocument(ctx, k.client, u, k.Name(), opts.maxFiles(), doc)
+		}
+		return kvsBrowse(ctx, k.client, u, k.Name(), opts.maxFiles())
 	}
-	if query, listing, ok := kvsSearchPath(u); ok {
-		l := kvsListingForSearch(query, listing)
-		l.limit = opts.maxFiles()
-		return kvsListingResult(ctx, k.client, l, k.Name())
+	l.limit = opts.maxFiles()
+	if l.url == u.String() {
+		l.first = doc
 	}
-	return kvsBrowse(ctx, k.client, u, k.Name(), opts.maxFiles())
+	return kvsListingResult(ctx, k.client, l, k.Name())
 }
 
 // kvsExtract fetches a video page and resolves it. Everything needed is

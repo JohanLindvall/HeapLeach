@@ -58,9 +58,35 @@ func kemonoRoot(u *url.URL) string {
 	return ""
 }
 
+// kemonoSniff verifies the requested creator's profile, whose service and
+// id must agree with the URL. This also identifies an empty creator without
+// mistaking an arbitrary JSON array for this platform.
+func kemonoSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options) (*Result, error) {
+	segs := util.PathSegments(u)
+	if len(segs) < 3 || segs[1] != "user" || (len(segs) != 3 && (len(segs) != 5 || segs[3] != "post")) {
+		return nil, nil
+	}
+	root := util.Origin(u)
+	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/profile", root, url.PathEscape(segs[0]), url.PathEscape(segs[2]))
+	var profile struct {
+		ID      string `json:"id"`
+		Service string `json:"service"`
+		Name    string `json:"name"`
+	}
+	if !platformJSON(ctx, client, endpoint, httpx.Header{
+		httpx.HeaderAccept: kemonoScrapeAccept, httpx.HeaderReferer: root + "/",
+	}, &profile) || profile.ID != segs[2] || profile.Service != segs[0] || profile.Name == "" {
+		return nil, nil
+	}
+	return NewKemono(client).extract(ctx, u, root)
+}
+
 // Extract handles a creator (/​<service>/user/<id>) or a single post.
 func (k *Kemono) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	root := kemonoRoot(u)
+	return k.extract(ctx, u, kemonoRoot(u))
+}
+
+func (k *Kemono) extract(ctx context.Context, u *url.URL, root string) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) < 3 || segs[1] != "user" {
 		return nil, fmt.Errorf("kemono: %s is not a creator or post link", u.Redacted())

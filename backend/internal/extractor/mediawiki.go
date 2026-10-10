@@ -192,7 +192,8 @@ func (m *MediaWiki) Name() string { return "mediawiki" }
 // A title in the File, Category or Special namespace is enough on its own —
 // nothing else on the web lays a URL out that way. Everything else needs the
 // host to be a wiki this knows, since /wiki/<anything> would otherwise claim
-// every page of every site that happens to use that prefix.
+// every page of every site that happens to use that prefix. On unregistered
+// hosts the direct fallback probes siteinfo before selecting this extractor.
 func (m *MediaWiki) Match(u *url.URL) bool {
 	title, explicit := mediaWikiTitle(u)
 	switch {
@@ -203,6 +204,46 @@ func (m *MediaWiki) Match(u *url.URL) bool {
 	default:
 		return explicit && m.knownHost(u.Host)
 	}
+}
+
+// mediaWikiSniff extends article support beyond the known farms. A wiki-like
+// path only warrants a probe: the siteinfo response must name MediaWiki.
+func mediaWikiSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+	if title, explicit := mediaWikiTitle(u); title == "" || !explicit {
+		return nil, nil
+	}
+	return mediaWikiDetect(ctx, client, u, opts, "")
+}
+
+// An API advertised by the page is tried before the conventional paths, so
+// custom script directories work without registering the domain. Even an
+// index.php URL must prove its API here; resolveSite's shortcut is for hosts
+// already assigned to this extractor.
+func mediaWikiDetect(ctx context.Context, client *httpx.Client, u *url.URL, opts Options, advertised string) (*Result, error) {
+	var apis []string
+	if advertised != "" {
+		apis = append(apis, advertised)
+	}
+	if script, ok := mediaWikiScriptPath(u.Path); ok {
+		apis = append(apis, util.Origin(u)+script)
+	}
+	for _, path := range mediaWikiAPIPaths {
+		apis = append(apis, util.Origin(u)+path)
+	}
+	query := mediaWikiQuery()
+	query.Set("meta", "siteinfo")
+	query.Set("siprop", "general")
+	for _, api := range util.Dedupe(apis) {
+		var resp mediaWikiResponse
+		if !platformJSON(ctx, client, api+"?"+query.Encode(), nil, &resp) || resp.Error != nil ||
+			!strings.HasPrefix(resp.Query.General.Generator, "MediaWiki") {
+			continue
+		}
+		m := NewMediaWiki(nil, client)
+		m.api = map[string]mediaWikiSite{strings.ToLower(u.Host): {api: api, name: resp.Query.General.SiteName}}
+		return m.Extract(ctx, u, opts)
+	}
+	return nil, ctx.Err()
 }
 
 // knownHost reports whether a host runs a wiki this build knows about.

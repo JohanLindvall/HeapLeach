@@ -13,10 +13,11 @@ import (
 
 // pageSniff recognises WordPress categories, then gives an ordinary HTML
 // page's file links precedence over an embedded preview. Named hosts and
-// earlier platform sniffs have already had their turn. Outside a recognised
-// category, only registered extractors are expanded: ordinary HTML navigation
-// cannot recurse through this fallback. A page without supported links keeps
-// the existing media fallback.
+// earlier platform sniffs have already had their turn; remaining platforms
+// identify themselves in the fetched page or through a bounded API probe.
+// Outside a recognised category, only registered extractors are expanded:
+// ordinary HTML navigation cannot recurse through this fallback. A page
+// without supported links keeps the existing media fallback.
 func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	ext := strings.ToLower(path.Ext(u.Path))
 	switch ext {
@@ -28,22 +29,33 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	// page, even when its signed URL has no extension.
 	doc, page, ok := mediaPageFetchURL(ctx, d.client, u)
 	if !ok {
-		return nil, nil
+		return platformAPIs(ctx, d.client, u, opts)
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, nil
 	}
+	if res, err := platformPage(ctx, d.client, page, root, doc, opts); res != nil || err != nil {
+		return res, err
+	}
 	if d.registry != nil {
 		if wordPressCategory(root, page) {
 			return wordPressExtract(ctx, d.client, d.registry, page, root, opts)
 		}
+	}
+	album, albumErr := darkGramResult(d.client, page, root, opts)
+	if album == nil && albumErr == nil {
+		if res, err := platformAPIs(ctx, d.client, page, opts); res != nil || err != nil {
+			return res, err
+		}
+	}
+	if d.registry != nil {
 		if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
 			return expandPageLinks(ctx, d.registry, u, root, sources, opts)
 		}
 	}
-	if res, err := darkGramResult(d.client, page, root, opts); res != nil || err != nil {
-		return res, err
+	if album != nil || albumErr != nil {
+		return album, albumErr
 	}
 	if ext == "" {
 		res, _ := mediaPageResult(ctx, d.client, u, root, doc)

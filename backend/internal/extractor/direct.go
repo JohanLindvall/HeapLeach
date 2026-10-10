@@ -97,6 +97,9 @@ func (d *Direct) Match(*url.URL) bool { return true }
 // download links or media, before treating the URL as a file itself.
 func (d *Direct) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	for _, sniff := range directSniffs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		switch res, err := sniff(ctx, d.client, u, opts); {
 		case err != nil:
 			return nil, err
@@ -106,6 +109,9 @@ func (d *Direct) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 	}
 	if res, err := d.pageSniff(ctx, u, opts); res != nil || err != nil {
 		return res, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	name := util.FirstNonEmpty(util.NameFromURL(u.String()), u.Hostname())

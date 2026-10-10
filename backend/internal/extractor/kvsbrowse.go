@@ -52,6 +52,10 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label stri
 	if err != nil {
 		return nil, fmt.Errorf("%s: fetch %s: %w", label, u.Redacted(), err)
 	}
+	return kvsBrowseDocument(ctx, client, u, label, limit, doc)
+}
+
+func kvsBrowseDocument(ctx context.Context, client *httpx.Client, u *url.URL, label string, limit int, doc string) (*Result, error) {
 	res, err := kvsResult(doc, u, label)
 	if err == nil {
 		return res, nil

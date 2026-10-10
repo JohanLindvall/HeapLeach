@@ -297,14 +297,21 @@ streaming hosts are **resolved at download time**, not when the link is
 queued — otherwise a large queue would start failing halfway down.
 
 Several entries above are **platform families**: one extractor covering
-every site running a piece of software, rather than one per site. That is
-where the reach comes from — the KVS row is nine named tube sites plus an
-unbounded tail recognised by the shape of its URLs, the booru row is
-nineteen named boards through seven API families, and PeerTube alone is some
-1,795 instances.
-A family is always the better trade, and the ones here key off something that
-cannot rot: a version endpoint, a `generator` tag, or the `nodeinfo`
-specification.
+sites running the same software. On unregistered hosts, Pixeldrain-compatible
+services, booru boards, FoolFuuka archives, Kemono-compatible services and
+MediaWiki articles are detected through distinctive API responses or platform
+markup. KVS detection also covers member, search and other listing pages
+through its player or asynchronous block controls. Existing PeerTube,
+Chevereto and Bandzoogle detection continues to work the same way.
+
+A familiar URL path selects a possible API; it does not establish support.
+Guessed API requests are bounded and do not retry. Recognised platforms
+use their normal extractors, including pagination, deferred resolvers and
+transfer pacing. Unidentified pages continue through the generic fallback.
+Known-host registrations remain useful for discovering embedded download
+links, naming supported sites, and retaining aliases and site-specific settings
+such as booru filters. They are shortcuts, not a requirement for detecting a
+compatible platform from a pasted URL.
 
 Other entries are not hosts at all but **shapes** — an adaptive
 manifest, an open directory, a page carrying supported download links,

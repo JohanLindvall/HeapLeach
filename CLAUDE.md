@@ -360,6 +360,27 @@ headers before reading a bounded body, and supports extensionless pages and
 common HTML/script extensions. Supported links that all fail are reported as
 an error rather than saved as an HTML shell. Partial results report counts.
 
+Unregistered platform installs are identified in that fallback too.
+`platform.go` supplies bounded, single-attempt JSON probes and page-marker
+detection. Pixeldrain file/list/filesystem metadata, booru original-media
+records, FoolFuuka archive records, Kemono creator profiles and MediaWiki
+siteinfo select the existing extractors at the pasted URL's origin. KVS
+player signatures and asynchronous listing controls identify its pages,
+including members and searches; a generic videos container alone does not.
+MediaWiki's generator and EditURI link also locate custom API directories.
+Recognised page content is tried before guessed APIs, so an ordinary blog
+post with an embedded album does not probe unrelated services.
+
+Keep these broad URL shapes out of `Registry.Known`: its answer controls
+which links the ordinary page scanner follows. Host registrations still
+provide that discovery boundary, the generated inventory, canonical aliases
+and per-site settings (including booru filters). Dropping a registration
+because direct input now autodetects would silently lose embedded-link
+discovery. Positive identification commits to an extractor, whose errors
+must be returned rather than falling back to saving the page shell. The
+fediverse's existing `/u/` and `/post/` path matches overlap two of these
+platforms; if nodeinfo does not identify the site, their APIs get a turn.
+
 **DarkGram albums** are recognised in that same fetched HTML, by the player's
 `darkgram-album` class and JSON `data-album` attribute. The first player supplies
 its own videos (`hls_url`) and full-size photos (`photo_url`); thumbnails and

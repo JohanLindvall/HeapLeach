@@ -255,6 +255,9 @@ const (
 	// MaxResponseBytes caps a buffered JSON or HTML body held in memory.
 	MaxResponseBytes = 8 << 20
 
+	// PlatformProbeTimeout bounds a guessed API endpoint on an unknown host.
+	PlatformProbeTimeout = 5 * time.Second
+
 	// MaxSegmentBytes caps one playlist part, which is assembled in memory
 	// before being appended in order. Set far above any real part — those
 	// are seconds of video — so it never truncates a genuine one; it is a

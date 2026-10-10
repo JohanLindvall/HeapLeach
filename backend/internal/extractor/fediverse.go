@@ -136,7 +136,7 @@ func (f *Fediverse) Name() string { return "fediverse" }
 func (f *Fediverse) Match(u *url.URL) bool { return fediTargetOf(u) != nil }
 
 // Extract discovers what the instance runs, then asks it in its own dialect.
-func (f *Fediverse) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	target := fediTargetOf(u)
 	if target == nil {
 		return nil, fmt.Errorf("fediverse: %s is not an account (/@name), a community "+
@@ -145,6 +145,12 @@ func (f *Fediverse) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 
 	software, err := f.softwareName(ctx, u)
 	if err != nil {
+		// /u/<id> also names a Pixeldrain file, and /post/<id> a
+		// szurubooru post. A path match has not identified this platform;
+		// without nodeinfo, let a compatible API establish the other one.
+		if res, probeErr := platformAPIs(ctx, f.client, u, opts); res != nil || probeErr != nil {
+			return res, probeErr
+		}
 		return nil, err
 	}
 	dialect, known := fediDialects[software]

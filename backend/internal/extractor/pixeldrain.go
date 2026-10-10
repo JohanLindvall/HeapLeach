@@ -77,6 +77,54 @@ func NewPixeldrain(client *httpx.Client) *Pixeldrain {
 
 func (p *Pixeldrain) Name() string { return "pixeldrain" }
 
+// pixeldrainSniff recognises compatible installs by their file, list or
+// filesystem metadata. The short paths alone are common on unrelated sites.
+func pixeldrainSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+	segs := util.PathSegments(u)
+	if len(segs) < 2 {
+		return nil, nil
+	}
+	origin := util.Origin(u)
+	validFile := func(f pixeldrainFile) bool {
+		return f.ID != "" && f.Name != "" && f.MimeType != ""
+	}
+	recognised := false
+	switch {
+	case len(segs) == 2 && (segs[0] == "u" || segs[0] == "f"):
+		var f pixeldrainFile
+		recognised = platformJSON(ctx, client, origin+pixeldrainAPI+"/file/"+url.PathEscape(segs[1])+"/info", nil, &f) &&
+			f.ID == segs[1] && validFile(f)
+	case len(segs) == 2 && segs[0] == "l":
+		var list struct {
+			Success bool             `json:"success"`
+			Files   []pixeldrainFile `json:"files"`
+		}
+		if platformJSON(ctx, client, origin+pixeldrainAPI+"/list/"+url.PathEscape(segs[1]), nil, &list) && list.Success {
+			for _, f := range list.Files {
+				if validFile(f) {
+					recognised = true
+					break
+				}
+			}
+		}
+	case segs[0] == "d":
+		var stat struct {
+			Path      []pixeldrainNode `json:"path"`
+			BaseIndex *int             `json:"base_index"`
+		}
+		if platformJSON(ctx, client, pixeldrainFSURL(origin, segs[1:])+"?stat", nil, &stat) &&
+			stat.BaseIndex != nil && *stat.BaseIndex >= 0 && *stat.BaseIndex < len(stat.Path) {
+			node := stat.Path[*stat.BaseIndex]
+			recognised = node.Name != "" &&
+				(node.Type == pixeldrainDirNode || node.Type == pixeldrainFileNode)
+		}
+	}
+	if !recognised {
+		return nil, nil
+	}
+	return NewPixeldrain(client).Extract(ctx, u, opts)
+}
+
 // Extract lists a whole album, a shared directory, or a single file.
 func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	origin := util.Origin(u)

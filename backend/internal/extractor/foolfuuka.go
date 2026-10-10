@@ -224,6 +224,53 @@ func foolFuukaLabel(host string) string {
 
 func (f *FoolFuuka) Name() string { return f.site.name }
 
+// foolFuukaSniff asks only the API corresponding to the pasted route. A
+// post number and the archive's media record identify the response; generic
+// "posts" objects and empty/error responses do not.
+func foolFuukaSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+	t, err := foolFuukaParse(u)
+	if err != nil {
+		return nil, nil
+	}
+	endpoint := foolFuukaIndexAPI
+	query := url.Values{"board": {t.board}, "page": {strconv.Itoa(t.page)}}
+	switch t.kind {
+	case foolFuukaThreadTarget, foolFuukaPostTarget:
+		endpoint = foolFuukaThreadAPI
+		if t.kind == foolFuukaPostTarget {
+			endpoint = foolFuukaPostAPI
+		}
+		query = url.Values{"board": {t.board}, "num": {t.num}}
+	case foolFuukaSearchTarget:
+		endpoint = foolFuukaSearchAPI
+		maps.Copy(query, t.search)
+	}
+	f := &FoolFuuka{client: client, site: foolFuukaSite{
+		root: util.Origin(u), name: foolFuukaLabel(u.Hostname()),
+	}}
+	var raw json.RawMessage
+	if !platformJSON(ctx, client, f.site.root+endpoint+"?"+query.Encode(), f.headers(), &raw) {
+		return nil, nil
+	}
+	var posts []foolFuukaPost
+	if t.kind == foolFuukaPostTarget {
+		var post foolFuukaPost
+		if json.Unmarshal(raw, &post) == nil {
+			posts = append(posts, post)
+		}
+	} else if entries, err := foolFuukaDecode(raw); err == nil {
+		for _, entry := range entries {
+			posts = append(posts, entry.posts()...)
+		}
+	}
+	for _, post := range posts {
+		if post.Num.String() != "" && post.Media != nil && post.Media.Media != "" && post.Media.Status != "" {
+			return f.Extract(ctx, u, opts)
+		}
+	}
+	return nil, nil
+}
+
 // Extract resolves a thread, a single post, a board index page or a search.
 func (f *FoolFuuka) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	target, err := foolFuukaParse(u)
