@@ -36,29 +36,33 @@ type Keep2Share struct {
 	// holds back every file from this address, not only the one that was
 	// told, so the rest learn it here rather than each solving a CAPTCHA to
 	// be told again.
-	mu       sync.Mutex
-	cooldown time.Time
+	mu        sync.Mutex
+	cooldowns map[string]time.Time
 }
 
 const keep2ShareCooldown = "Keep2Share: waiting between free downloads"
 
 // wait records the host's wait between free downloads and returns the error
 // that puts a file back in the queue until it is over.
-func (k *Keep2Share) wait(delay time.Duration) error {
+func (k *Keep2Share) wait(ctx context.Context, delay time.Duration) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if until := time.Now().Add(delay); until.After(k.cooldown) {
-		k.cooldown = until
+	if k.cooldowns == nil {
+		k.cooldowns = make(map[string]time.Time)
 	}
-	return &WaitError{Until: k.cooldown, Reason: keep2ShareCooldown}
+	route := httpx.RouteID(ctx)
+	if until := time.Now().Add(delay); until.After(k.cooldowns[route]) {
+		k.cooldowns[route] = until
+	}
+	return &WaitError{Until: k.cooldowns[route], Reason: keep2ShareCooldown}
 }
 
 // waiting returns that error while the wait is still on, and nil after.
-func (k *Keep2Share) waiting() error {
+func (k *Keep2Share) waiting(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if time.Now().Before(k.cooldown) {
-		return &WaitError{Until: k.cooldown, Reason: keep2ShareCooldown}
+	if until := k.cooldowns[httpx.RouteID(ctx)]; time.Now().Before(until) {
+		return &WaitError{Until: until, Reason: keep2ShareCooldown}
 	}
 	return nil
 }
@@ -73,7 +77,7 @@ func NewKeep2Share(client *httpx.Client) *Keep2Share {
 
 func (k *Keep2Share) Name() string { return "keep2share" }
 
-var keep2SharePace = Pace{Streams: 1, Files: 1, Group: "keep2share"}
+var keep2SharePace = Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
 
 func (k *Keep2Share) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	parts := util.PathSegments(u)
@@ -195,6 +199,7 @@ type keep2ShareDownload struct {
 	ready    time.Time
 	target   *Target
 	expires  time.Time
+	route    string
 }
 
 func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
@@ -202,6 +207,12 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 	defer d.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if route := httpx.RouteID(ctx); route != d.route {
+		// CAPTCHA tickets and storage links belong to the public IP that
+		// obtained them. A different route must start its own free flow.
+		d.route, d.key, d.target = route, "", nil
+		d.ready, d.expires = time.Time{}, time.Time{}
 	}
 	// A transfer retry may resume the same free link. Solving another
 	// CAPTCHA would spend a second download and can trigger the hourly
@@ -233,7 +244,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			in["free_download_key"] = d.key
 		} else {
 			if len(readings) == 0 {
-				if err := d.host.waiting(); err != nil {
+				if err := d.host.waiting(ctx); err != nil {
 					return nil, err
 				}
 				if attempts >= config.Keep2ShareCaptchaAttempts {
@@ -270,7 +281,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 				// hour, which the file spends back in the queue rather
 				// than holding a worker.
 				if d.key == "" {
-					return nil, d.host.wait(delay)
+					return nil, d.host.wait(ctx, delay)
 				}
 				waits++
 				if waits > config.Keep2ShareWaits {

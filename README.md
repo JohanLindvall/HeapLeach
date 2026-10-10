@@ -586,12 +586,51 @@ The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting
 time, and allows one file and one connection at a time across both domain
 names. Unreadable challenges fail with a retryable error; OCR is not always
-correct. Keep2Share's speed limits and cooldowns still apply. A file held
+correct. With `-proxies`, the one-file limit applies to each proxy address,
+allowing several free downloads at once without a subscription, up to
+`-concurrency`. Keep2Share's speed limits and cooldowns still apply per
+address. A file held
 back by the wait between free downloads goes back to the queue as waiting,
 with the time left, and its download slot goes to other files meanwhile.
 Waiting is cancelable and bounded to two hours per attempt; retrying within
 the same process preserves an accepted ticket and reuses unexpired download
 links.
+
+Enable free proxy routes with `heapleach -proxies -concurrency 4`. The default
+pool combines the normal outbound connection with
+[Proxifly's free proxy feed](https://github.com/proxifly/free-proxy-list).
+HTTP, HTTPS and SOCKS5 endpoints are supported; SOCKS5 resolves destination
+names through the proxy. Plain `host:port` entries mean HTTP. Set
+`HEAPLEACH_PROXY_ENDPOINTS` to a comma-separated list of explicit endpoints,
+including `direct` if the normal connection should participate, and
+`HEAPLEACH_PROXY_FEEDS` to plain-text or Proxifly JSON feed URLs. An explicitly
+empty feed setting disables discovery; an empty endpoint setting excludes
+the normal connection. Explicit proxies take precedence over `NO_PROXY`.
+
+Each file keeps its route through the CAPTCHA, ticket, redirects and transfer.
+A refused or broken route returns the file to the queue to try another;
+other hosts continue downloading while routes are busy or cooling down.
+Proxy use currently applies to Keep2Share. Its local OCR helper is still
+required, and premium-only files remain restricted.
+
+The pool adapts [amzscrape's proxy logic](https://github.com/JohanLindvall/amzscrape)
+and stores inventory, source memberships, request outcomes, measured **bytes
+per second**, and cooldowns in a private bbolt database. Faster, reliable
+routes score higher; bodies under 64 KiB do not train bandwidth, so a quick
+CAPTCHA response cannot stand in for a fast file transfer. Recent measurements
+carry more weight, and untried routes share an exploration opportunity rather
+than overwhelming proven routes. Refusals cool only that service; connection
+failures cool the endpoint across services. Routing never disables TLS checks
+or silently falls back from an explicit proxy to a direct connection.
+
+Saved inventory is available immediately after restart. Feeds refresh hourly,
+or after five minutes when fewer than ten proxies are ready. A failed feed
+keeps its last good list and refreshes preserve health. Entries absent from
+feeds are retired after 30 days without success; current feed entries and
+explicit endpoints are retained. Public proxy availability and bandwidth vary,
+so extra parallel downloads depend on finding usable routes. The database
+allows one HeapLeach process at a time; use a separate `-proxy-db` for a second
+instance, and mount its directory on a persistent volume in containers.
 
 The YouTube download itself runs through `yt-download.sh` rather than inline
 Go, so the recipe is in one readable place. A copy of that script placed
@@ -622,6 +661,11 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. |
+| `HEAPLEACH_PROXIES` | off | Enable extra free proxy routes for Keep2Share. Flag: `-proxies`. |
+| `HEAPLEACH_PROXY_DB` | `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode. Flag: `-proxy-db`. |
+| `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. |
+| `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. |
+| `HEAPLEACH_PROXY_RETRIES` | `20` | Route changes after failures that make no disk progress. A host's free-download cooldown does not spend this budget. |
 | `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI. |
 | `HEAPLEACH_SLOW_SPEED` | `2MB` | Rate per second below which extra connections are opened. Flag: `-slow-speed`. |
@@ -762,6 +806,9 @@ flowchart TD
     cli --> download
     download["download<br>worker pool · resumable transfers · progress"]
     download --> extractor
+    download --> proxy
+    proxy["proxy<br>egress leases · throughput scoring · Bolt inventory"]
+    proxy --> httpx
     extractor["extractor<br>one file per host, and a fallback that sniffs"]
     extractor --> httpx
     httpx["httpx<br>browser-shaped client · redirects · retry and backoff"]

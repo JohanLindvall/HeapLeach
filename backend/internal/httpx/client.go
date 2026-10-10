@@ -110,6 +110,13 @@ var errHeaderTimeout = errors.New("timed out waiting for response headers")
 // do bounds connection setup and response headers without timing out a
 // streaming body. The body owns cancellation after the timer is stopped.
 func (c *Client) do(req *http.Request) (*http.Response, error) {
+	if route, ok := req.Context().Value(routeContextKey{}).(*requestRoute); ok {
+		return route.do(c, req)
+	}
+	return c.doDirect(req)
+}
+
+func (c *Client) doDirect(req *http.Request) (*http.Response, error) {
 	if c.headerTimeout <= 0 {
 		return c.hc.Do(req)
 	}
@@ -269,6 +276,11 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			// A cancelled context is the user's decision, never a retry.
 			if ctxErr := req.Context().Err(); ctxErr != nil {
 				return nil, ctxErr
+			}
+			// A leased route gets one attempt. Its owner returns the file to
+			// the queue to try another route, without changing IP mid-ticket.
+			if _, routed := errors.AsType[*RouteError](err); routed {
+				return nil, err
 			}
 			lastErr = err
 		case resp.StatusCode == http.StatusTooManyRequests:

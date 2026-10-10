@@ -28,6 +28,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 	"github.com/JohanLindvall/HeapLeach/internal/server"
 	"github.com/JohanLindvall/HeapLeach/internal/webui"
 )
@@ -80,6 +81,19 @@ func run() error {
 	registry := extractor.NewRegistry(cfg, client)
 
 	manager := download.New(cfg, registry, client, log)
+	if cfg.Proxies {
+		pool, err := proxy.Open(cfg.ProxyDB, cfg.ProxyEndpoints, cfg.ProxyFeeds, client, log)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := pool.Close(); err != nil {
+				log.Warn("close proxy database", "err", err)
+			}
+		}()
+		pool.Start(ctx)
+		manager.SetProxyPool(pool)
+	}
 	// Before Start, so the restored queue is in place by the time anything
 	// can look at it. Nothing is fetched here, and nothing restored is
 	// queued, so unfinished work waits for a retry without the whole queue
@@ -321,6 +335,8 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.StringVar(&cfg.DownloadDir, "dir", cfg.DownloadDir, "directory to download into")
 	flags.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency,
 		fmt.Sprintf("parallel transfers (1-%d)", config.MaxConcurrency))
+	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use free proxy routes for per-address download limits (Keep2Share)")
+	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,
 		fmt.Sprintf("connections to split a slow file across (1-%d)", config.MaxStreams))

@@ -43,6 +43,11 @@ type browserTransport struct {
 	fellBack map[string]bool // hosts the impersonated path failed for
 }
 
+func (t *browserTransport) CloseIdleConnections() {
+	t.standard.CloseIdleConnections()
+	t.impersonated.CloseIdleConnections()
+}
+
 // newBrowserTransport builds the impersonating transport around a standard
 // one, which stays in use as the fallback.
 func newBrowserTransport(standard *http.Transport) http.RoundTripper {

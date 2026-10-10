@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/klauspost/compress v1.18.7
 	github.com/refraction-networking/utls v1.8.2
+	go.etcd.io/bbolt v1.5.0
 	golang.org/x/net v0.57.0
 	golang.org/x/term v0.45.0
 )

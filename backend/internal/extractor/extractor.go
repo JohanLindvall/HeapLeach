@@ -123,6 +123,10 @@ type Pace struct {
 	// uses the item's host. Set it when the limit belongs to the service,
 	// independently of which domain serves a file or whether it resolved yet.
 	Group string
+	// PerRoute allows a configured proxy pool to apply Files to each egress
+	// address instead of the whole service. Group must name that service;
+	// a route is leased before Resolve and held through the file transfer.
+	PerRoute bool
 }
 
 // StreamCipher describes payload that arrives encrypted.

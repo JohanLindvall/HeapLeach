@@ -196,7 +196,7 @@ Packages depend one way only, enforced by convention:
 
 ```
 config, util  (no internal deps)
-  └─ httpx  └─ extractor  └─ download  └─ server, cli
+  └─ httpx  └─ extractor, proxy  └─ download  └─ server, cli
 ```
 
 `webui` stands alone and only carries the embedded assets.
@@ -382,6 +382,21 @@ Host-specific notes:
   the CAPTCHA, so a made-up id is no oracle; and once a free download is
   pending for a file, `getUrl` hands out the link whatever the answer, so
   every guess against that file "succeeds".
+
+  `-proxies` enables a persistent egress pool (`internal/proxy`, bbolt),
+  adapted from amzscrape. `Pace.PerRoute` opts this service into it: the
+  dispatcher leases a route before resolving and holds it through the
+  transfer, one file per address across aliases and proxy protocols. The
+  HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
+  isolated client. Changing routes invalidates an IP-bound ticket and cached
+  target; a retry on the same healthy route may reuse them. Cooldowns belong
+  to the service and route, never all K2S files. Transport failures return
+  the item to the queue to try another route, with their own bounded retry
+  budget. Throughput samples come from bodies of at least 64 KiB; success
+  probability and measured bytes per second determine the score. Bolt stores
+  inventory and each health outcome immediately, while active leases remain
+  in memory. Close the manager before the pool. Explicit routes must never
+  fall back to direct or disable destination certificate verification.
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be

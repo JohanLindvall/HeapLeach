@@ -10,6 +10,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
 // Status is the lifecycle state of a job or an item.
@@ -84,6 +85,11 @@ type Item struct {
 	// pace, when set, holds this item back from a host that punishes
 	// parallelism rather than refusing it. See extractor.Pace.
 	pace *extractor.Pace
+	// A proxy lease spans one worker's ownership. The preferred route stays
+	// after release so resuming can reuse that address's download ticket.
+	route          *proxy.Lease
+	preferredRoute string
+	proxyRetries   int
 	// reject, when set, recognises this host's way of answering a dead
 	// resource with a valid-looking body. See extractor.File.Reject.
 	reject func(string, http.Header) error
