@@ -394,10 +394,14 @@ the ordinary link scan, rather than claimed by domain. `wordpress.go` reads
 classic post permalinks or block-theme query loops, follows the category's
 own next control, and opens only the listed posts. The category heading and
 pager may sit outside `main`, so the primary content area is kept around it.
-Post content supplies supported host links and JPEG images; original-image
-links and metadata outrank thumbnails. Registered extractors still resolve
-the host links, retaining their deferred resolvers and pacing. The shared
-source expansion also accepts a post-reading function, so folder names,
+Post content supplies supported host links, embedded media and JPEG images;
+original-image links and metadata outrank thumbnails. Registered extractors
+still resolve the host links, retaining their deferred resolvers and pacing.
+Without those links, the same album and player parsers used by the generic
+fallback read the post's content and title, keeping sidebar players and head
+metadata out. DarkGram videos retain their deferred playlist resolvers; player
+artwork is excluded, and independent JPEGs are kept without duplicates. The
+shared source expansion also accepts a post-reading function, so folder names,
 concurrency and caps use the existing implementation. No host-specific
 WordPress category scraper is maintained beside this one. Tests use invented
 classic/block-theme pages; saved browser archives stay untracked and can be

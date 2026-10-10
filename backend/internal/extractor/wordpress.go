@@ -5,6 +5,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	stdhtml "html"
 	"net/url"
 	"path"
 	"strconv"
@@ -55,7 +56,7 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 		return nil, err
 	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("wordpress: no accessible file links or JPEG images in %d posts", len(sources))
+		return nil, fmt.Errorf("wordpress: no accessible downloads in %d posts", len(sources))
 	}
 	notes := []string{}
 	if note != "" {
@@ -348,6 +349,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if content == nil {
 		return nil, fmt.Errorf("wordpress: post content is missing")
 	}
+	title := util.FirstNonEmpty(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
 	// Related-post plugins can append their own thumbnails inside entry-content.
 	for _, related := range findAll(content, func(n *html.Node) bool {
 		return hasClass(n, "crp_related") || hasClass(n, "related-posts") || hasClass(n, "wp-block-query")
@@ -382,7 +384,34 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if e.partial > 0 {
 		notes = append(notes, fmt.Sprintf("%d linked sources are incomplete", e.partial))
 	}
+	// A supported download link takes precedence over an embedded preview,
+	// just as it does on an ordinary page. Without one, use the same album
+	// and player parsers, scoped to this post rather than its sidebar/head.
+	if len(sources) == 0 {
+		media, err := wordPressMedia(ctx, client, page, content, title, opts)
+		if err != nil {
+			return nil, err
+		}
+		if media != nil {
+			e.files = media.Files
+			if media.Note != "" {
+				notes = append(notes, media.Note)
+			}
+		}
+	}
 	images := wordPressJPEGs(content, page)
+	// A photo may also be printed beside its album. Keep one original.
+	seen := make(map[string]bool, len(e.files))
+	for _, file := range e.files {
+		seen[file.URL] = true
+	}
+	unique := images[:0]
+	for _, link := range images {
+		if !seen[link] {
+			unique = append(unique, link)
+		}
+	}
+	images = unique
 	room := opts.maxFiles() - len(e.files)
 	if e.full || len(images) > room {
 		notes = append(notes, "partial — file limit")
@@ -391,10 +420,30 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 		e.files = append(e.files, File{Name: util.NameFromURL(link), URL: link, Size: -1, Headers: httpx.Referer(page.String())})
 	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("wordpress: post has no accessible file links or JPEG images")
+		return nil, fmt.Errorf("wordpress: post has no accessible downloads")
 	}
-	title := util.FirstNonEmpty(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
-	return &Result{Title: title, Note: strings.Join(notes, "; "), Files: e.files}, nil
+	return &Result{Title: title, Note: strings.Join(util.Dedupe(notes), "; "), Files: e.files}, nil
+}
+
+// Give the generic parsers only the post body and its own title. Rendering
+// that subtree also keeps script-based players available without including
+// a player or sharing metadata from elsewhere on the page. No second page
+// request or recursive scan is needed.
+func wordPressMedia(ctx context.Context, client *httpx.Client, page *url.URL, content *html.Node, title string, opts Options) (*Result, error) {
+	var doc strings.Builder
+	fmt.Fprintf(&doc, "<title>%s</title>", stdhtml.EscapeString(title))
+	if err := html.Render(&doc, content); err != nil {
+		return nil, err
+	}
+	root, err := parseHTML(doc.String())
+	if err != nil {
+		return nil, err
+	}
+	if album, err := darkGramResult(client, page, root, opts); album != nil || err != nil {
+		return album, err
+	}
+	media, _ := mediaPageResult(ctx, client, page, root, doc.String())
+	return media, ctx.Err()
 }
 
 func wordPressJPEGURL(base *url.URL, ref string) string {
@@ -428,6 +477,19 @@ func wordPressJPEGs(content *html.Node, page *url.URL) []string {
 		return true
 	}
 	walk(content, func(n *html.Node) {
+		if !isElem(n, atom.A) && !isElem(n, atom.Img) {
+			return
+		}
+		// Player artwork is not an independent photograph. In particular,
+		// DarkGram's originals come from its album data, never its thumbnails.
+		for parent := n; parent != nil; parent = parent.Parent {
+			if hasClass(parent, "darkgram-album") || isElem(parent, atom.Video) || isElem(parent, atom.Audio) {
+				return
+			}
+			if parent == content {
+				break
+			}
+		}
 		if isElem(n, atom.A) {
 			add(attr(n, "href"))
 		}

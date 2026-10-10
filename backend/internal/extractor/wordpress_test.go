@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	stdhtml "html"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -323,6 +324,107 @@ func TestWordPressHandsOtherHostLinksAndOptionsToRegistry(t *testing.T) {
 	}
 	if !slices.Equal(albums.passwords, []string{"example-password"}) {
 		t.Fatalf("options lost during handoff: %v", albums.passwords)
+	}
+}
+
+func TestWordPressCategoryUsesGenericAlbumAndPlayerParsers(t *testing.T) {
+	albumData := strings.ReplaceAll(darkGramTestAlbum, "photo-two.PNG", "photo-two.jpg")
+	album := `<div class="darkgram-album" data-album="` + stdhtml.EscapeString(albumData) + `">
+<a href="/thumb/photo.jpg"><img src="/thumb/video.jpg"></a></div>
+<img src="/media/photo-two.jpg?token=one&amp;size=full">
+<img src="media/photo-one/photo"><a href="/other-post/">Navigation</a>`
+	reg, _, base, asked := wordPressTestSite(t, map[string]string{
+		"/category/example/": wordPressIndexHTML("", "/album/", "/clip/"),
+		"/album/": wordPressPostHTML("Album & Notes", album) +
+			`<aside><div class="darkgram-album" data-album="broken"></div></aside>`,
+		"/clip/": `<head><meta property="og:video" content="/advert.mp4"></head>` + wordPressPostHTML("Plain Clip",
+			`<video poster="/poster.jpg"><source src="/media/clip.mp4" type="video/mp4"><img src="/player-fallback.jpg"></video>
+<img src="/uploads/still.jpg"><div class="related-posts"><video src="/related.mp4"></video></div>`),
+	})
+	res, _, err := reg.Extract(context.Background(), base+"/category/example/", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 5 || res.Note != "" {
+		t.Fatalf("embedded media result = %+v", res)
+	}
+	for i, want := range []struct {
+		path, dir string
+		resolve   bool
+	}{
+		{"/media/video-one/hls/master.m3u8", "Album & Notes", true},
+		{"/album/media/photo-one/photo", "Album & Notes", false},
+		{"/media/photo-two.jpg?token=one&size=full", "Album & Notes", false},
+		{"/media/clip.mp4", "Plain Clip", false},
+		{"/uploads/still.jpg", "Plain Clip", false},
+	} {
+		f := res.Files[i]
+		if f.URL != base+want.path || f.Dir != want.dir || (f.Resolve != nil) != want.resolve {
+			t.Errorf("file %d lost its media or resolver: %+v", i, f)
+		}
+		post := "/album/"
+		if i >= 3 {
+			post = "/clip/"
+		}
+		if f.Headers[httpx.HeaderReferer] != base+post {
+			t.Errorf("file %d lost the post referer: %v", i, f.Headers)
+		}
+	}
+	if res.Files[0].Name != "Album & Notes - 001.ts" || res.Files[3].Name != "Plain Clip.mp4" {
+		t.Fatalf("post titles lost in media names: %q, %q", res.Files[0].Name, res.Files[3].Name)
+	}
+	for path, count := range asked() {
+		if path == "/category/example/" {
+			continue // The direct fallback's other platform probes also read this page.
+		}
+		if (path != "/album/" && path != "/clip/") || count != 1 {
+			t.Errorf("discovery fetched media/navigation or re-read a post: %s (%d times)", path, count)
+		}
+	}
+}
+
+func TestWordPressEmbeddedAlbumsRespectLimitsAndErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name, album  string
+		limit, files int
+		wantError    bool
+	}{
+		{"capped", darkGramTestAlbum, 2, 2, false},
+		{"broken", `{not-json}`, 0, 0, true},
+		{"missing original", `{"items":[{"kind":"video","thumb_url":"/preview.jpg"}]}`, 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg, _, base, asked := wordPressTestSite(t, map[string]string{
+				"/category/example/": wordPressIndexHTML("", "/album/"),
+				"/album/":            wordPressPostHTML("Album", `<div class="darkgram-album" data-album="`+stdhtml.EscapeString(tc.album)+`"><img src="/preview.jpg"></div>`),
+			})
+			res, _, err := reg.Extract(context.Background(), base+"/category/example/", Options{limits: Limits{Files: tc.limit}})
+			if tc.wantError {
+				if err == nil || res != nil {
+					t.Fatalf("broken album saved a preview or page: %+v, %v", res, err)
+				}
+				return
+			}
+			if err != nil || len(res.Files) != tc.files || !strings.Contains(res.Note, "incomplete") {
+				t.Fatalf("album cap or partial note lost: %+v, %v", res, err)
+			}
+			if len(asked()) != 2 {
+				t.Fatalf("fetched outside category/posts: %v", asked())
+			}
+		})
+	}
+}
+
+func TestWordPressDownloadLinksOutrankEmbeddedPreviews(t *testing.T) {
+	reg, _, base, _ := wordPressTestSite(t, map[string]string{
+		"/category/example/": wordPressIndexHTML("", "/post/"),
+		"/post/": wordPressPostHTML("Full Download", `<a href="https://keep2share.example.test/file/original">Download</a>
+<video src="/preview.mp4"><img src="/player-preview.jpg"></video>
+<div class="darkgram-album" data-album="invalid"><img src="/album-preview.jpg"></div>`),
+	})
+	res, _, err := reg.Extract(context.Background(), base+"/category/example/", Options{})
+	if err != nil || len(res.Files) != 1 || res.Files[0].Name != "original.bin" || res.Files[0].Resolve == nil {
+		t.Fatalf("embedded preview replaced the download: %+v, %v", res, err)
 	}
 }
 
