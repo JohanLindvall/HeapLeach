@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -143,6 +145,8 @@ var doodHosts = hostSet{
 // doodPassPath finds the token endpoint the page points at.
 var doodPassPath = regexp.MustCompile(`(/pass_md5/[^'"\s]+)`)
 
+var errDoodReload = errors.New("doodstream: player requested RELOAD")
+
 // doodTailLength is how many random characters the player appends. The value
 // is the player's, not ours: the host checks the total length.
 const doodTailLength = 10
@@ -173,38 +177,50 @@ func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 }
 
 func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, error) {
-	base, err := url.Parse(page)
-	if err != nil {
-		return nil, "", fmt.Errorf("doodstream: %w", err)
-	}
-	doc, final, err := d.client.GetPage(ctx, page, httpx.Referer(util.Origin(base)+"/"), doodChallengePage)
-	if err != nil {
-		return nil, "", fmt.Errorf("doodstream: fetch %s: %w", page, err)
-	}
-	page = final.String()
+	var title string
+	target, err := withExtractRetries(ctx, func() (*Target, error) {
+		base, err := url.Parse(page)
+		if err != nil {
+			return nil, fmt.Errorf("doodstream: %w", err)
+		}
+		doc, final, err := d.client.GetPage(ctx, page, httpx.Referer(util.Origin(base)+"/"), doodChallengePage)
+		if err != nil {
+			return nil, fmt.Errorf("doodstream: fetch %s: %w", page, err)
+		}
+		page = final.String()
 
-	m := doodPassPath.FindStringSubmatch(doc)
-	if m == nil {
-		return nil, "", fmt.Errorf("doodstream: no media token on %s "+
-			"(the video may have been removed, or the page layout changed)", page)
-	}
-	pass := util.Origin(final) + m[1]
+		m := doodPassPath.FindStringSubmatch(doc)
+		if m == nil {
+			return nil, fmt.Errorf("doodstream: no media token on %s "+
+				"(the video may have been removed, or the page layout changed)", page)
+		}
+		pass := util.Origin(final) + m[1]
 
-	prefix, _, err := d.client.GetPage(ctx, pass, httpx.Referer(page), doodChallengePage)
-	if err != nil {
-		return nil, "", fmt.Errorf("doodstream: fetch media token: %w", err)
-	}
-	prefix = strings.TrimSpace(prefix)
-	if !strings.HasPrefix(prefix, "http") {
-		return nil, "", fmt.Errorf("doodstream: media token endpoint returned %q", util.Truncate(prefix, 80))
-	}
+		prefix, _, err := d.client.GetPage(ctx, pass, httpx.Referer(page), doodChallengePage)
+		if err != nil {
+			return nil, fmt.Errorf("doodstream: fetch media token: %w", err)
+		}
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "RELOAD" {
+			// The player calls location.reload(): revisit the final page,
+			// retaining this route's cookies and reading its new token path.
+			return nil, errDoodReload
+		}
+		if !strings.HasPrefix(prefix, "http") {
+			return nil, fmt.Errorf("doodstream: media token endpoint returned %q", util.Truncate(prefix, 80))
+		}
 
-	token := m[1][strings.LastIndex(m[1], "/")+1:]
-	link := prefix + randomToken(doodTailLength) +
-		"?token=" + url.QueryEscape(token) +
-		"&expiry=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-	title := util.FirstNonEmpty(pageTitle(doc), "doodstream")
-	return &Target{URL: link, Name: title + ".mp4", Size: -1, Headers: httpx.Referer(page)}, title, nil
+		token := m[1][strings.LastIndex(m[1], "/")+1:]
+		link := prefix + randomToken(doodTailLength) +
+			"?token=" + url.QueryEscape(token) +
+			"&expiry=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+		title = util.FirstNonEmpty(pageTitle(doc), "doodstream")
+		return &Target{URL: link, Name: title + ".mp4", Size: -1, Headers: httpx.Referer(page)}, nil
+	}, func(_ *Target, err error) bool { return errors.Is(err, errDoodReload) })
+	if errors.Is(err, errDoodReload) {
+		err = &TransientError{Err: fmt.Errorf("%w after %d attempts", err, config.ExtractRetries)}
+	}
+	return target, title, err
 }
 
 // Dood's own Turnstile gate is a 200 player page without cf-mitigated.

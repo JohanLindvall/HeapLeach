@@ -461,7 +461,13 @@ Host-specific notes:
   so a challenged proxy is retried and is not credited with a successful
   transfer. A background Cloudflare script alone is not a gate. The final
   page URL after redirects supplies both the token endpoint's origin and
-  the media referer, refreshed together on each attempt.
+  the media referer, refreshed together on each attempt. The token endpoint
+  can also answer `RELOAD`, which the player handles with `location.reload()`.
+  Repeat the whole page/token exchange on the same route, keeping its cookies
+  and re-reading the token path from the final page. The shared extraction
+  retry budget bounds this, with cancelable backoff; persistent `RELOAD`
+  becomes a transient failure, while a challenge on the refreshed page still
+  goes through WAF recovery.
 - **voyeurking** is an index of K2S and FileBoom files. Category and collection
   pages expose their video links and `rel="next"` pager in HTML. Pagination stays within the
   same listing type and slug. A video's file link lives in the
