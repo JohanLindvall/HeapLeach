@@ -14,6 +14,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // Video hosts that embed rather than list: the page is a player, and the
@@ -158,43 +159,69 @@ func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	// The embed page is the one carrying the token endpoint; a /d/ link is
 	// the same video behind a landing page.
 	page := strings.Replace(u.String(), "/d/", "/e/", 1)
-	return refetchedVideo(ctx, ".mp4", httpx.Referer(page), func(ctx context.Context) (string, string, error) {
-		link, title, err := d.media(ctx, page)
-		return title, link, err
-	})
+	target, title, err := d.media(ctx, page)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: title, Files: []File{{
+		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers,
+		Resolve: func(ctx context.Context) (*Target, error) {
+			fresh, _, err := d.media(ctx, page)
+			return fresh, err
+		},
+	}}}, nil
 }
 
-func (d *DoodStream) media(ctx context.Context, page string) (link, title string, err error) {
+func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, error) {
 	base, err := url.Parse(page)
 	if err != nil {
-		return "", "", fmt.Errorf("doodstream: %w", err)
+		return nil, "", fmt.Errorf("doodstream: %w", err)
 	}
-	doc, err := d.client.GetString(ctx, page, httpx.Referer(util.Origin(base)+"/"))
+	doc, final, err := d.client.GetPage(ctx, page, httpx.Referer(util.Origin(base)+"/"), doodChallengePage)
 	if err != nil {
-		return "", "", fmt.Errorf("doodstream: fetch %s: %w", page, err)
+		return nil, "", fmt.Errorf("doodstream: fetch %s: %w", page, err)
 	}
+	page = final.String()
 
 	m := doodPassPath.FindStringSubmatch(doc)
 	if m == nil {
-		return "", "", fmt.Errorf("doodstream: no media token on %s "+
-			"(the video may have been removed)", page)
+		return nil, "", fmt.Errorf("doodstream: no media token on %s "+
+			"(the video may have been removed, or the page layout changed)", page)
 	}
-	pass := util.Origin(base) + m[1]
+	pass := util.Origin(final) + m[1]
 
-	prefix, err := d.client.GetString(ctx, pass, httpx.Referer(page))
+	prefix, _, err := d.client.GetPage(ctx, pass, httpx.Referer(page), doodChallengePage)
 	if err != nil {
-		return "", "", fmt.Errorf("doodstream: fetch media token: %w", err)
+		return nil, "", fmt.Errorf("doodstream: fetch media token: %w", err)
 	}
 	prefix = strings.TrimSpace(prefix)
 	if !strings.HasPrefix(prefix, "http") {
-		return "", "", fmt.Errorf("doodstream: media token endpoint returned %q", util.Truncate(prefix, 80))
+		return nil, "", fmt.Errorf("doodstream: media token endpoint returned %q", util.Truncate(prefix, 80))
 	}
 
 	token := m[1][strings.LastIndex(m[1], "/")+1:]
-	link = prefix + randomToken(doodTailLength) +
+	link := prefix + randomToken(doodTailLength) +
 		"?token=" + url.QueryEscape(token) +
 		"&expiry=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-	return link, util.FirstNonEmpty(pageTitle(doc), "doodstream"), nil
+	title := util.FirstNonEmpty(pageTitle(doc), "doodstream")
+	return &Target{URL: link, Name: title + ".mp4", Size: -1, Headers: httpx.Referer(page)}, title, nil
+}
+
+// Dood's own Turnstile gate is a 200 player page without cf-mitigated.
+// Require the CAPTCHA player and its widget, not the background Cloudflare
+// script or a widget elsewhere on a page that still supplies a media token.
+func doodChallengePage(doc string) bool {
+	if doodPassPath.MatchString(doc) {
+		return false
+	}
+	root, err := parseHTML(doc)
+	if err != nil {
+		return false
+	}
+	gate := findFirst(root, func(n *html.Node) bool { return hasClass(n, "captcha-player") })
+	return gate != nil && findFirst(gate, func(n *html.Node) bool {
+		return attr(n, "id") == "turnstile-container"
+	}) != nil
 }
 
 // ----------------------------------------------------------------- mixdrop

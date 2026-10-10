@@ -454,7 +454,14 @@ Host-specific notes:
   player goes through the existing native token resolver and range engine.
   This is how linked players work without a dedicated extractor for every
   blog embedding them. Cloudflare challenges use the shared WAF recovery
-  path; Doodstream has no special proxy registration.
+  path; Doodstream has no special proxy registration. Its own Turnstile
+  player gate returns HTTP 200 without `cf-mitigated`: the `captcha-player`
+  containing `turnstile-container`, without a media token, identifies it.
+  `httpx.GetPage` checks that HTML before challenge capture and route scoring,
+  so a challenged proxy is retried and is not credited with a successful
+  transfer. A background Cloudflare script alone is not a gate. The final
+  page URL after redirects supplies both the token endpoint's origin and
+  the media referer, refreshed together on each attempt.
 - **voyeurking** is an index of K2S and FileBoom files. Category and collection
   pages expose their video links and `rel="next"` pager in HTML. Pagination stays within the
   same listing type and slug. A video's file link lives in the
@@ -832,8 +839,8 @@ Host-specific notes:
   they were. `unpackJS` reverses the p,a,c,k,e,d packer and is host-neutral.
   Their `Extract` bodies, and those of xhamster, tnaflix and pornone, are all
   the same shape — one file, re-read at download time because the link is
-  signed per visit — so they share `refetchedVideo` (`tube.go`) and supply
-  only the per-host fetch.
+  signed per visit. Most share `refetchedVideo` (`tube.go`); Doodstream also
+  refreshes its redirected page's media referer with the link.
 - **suvobox** resolves an album from the listing alone, which is unusually
   generous: each tile carries the file id, the full name *with* extension and
   the size, so a whole album costs one request and shows real names while it

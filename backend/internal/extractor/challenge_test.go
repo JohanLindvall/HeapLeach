@@ -16,50 +16,59 @@ import (
 )
 
 func TestChallengeRecoveryIncludesDoodTokensAndRefreshesOnTheNewRoute(t *testing.T) {
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(httpx.HeaderCFMitigated, "challenge")
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer origin.Close()
-	client := httpx.New("test", "en", 0, time.Second)
-	defer client.CloseIdleConnections()
-	route := func(id string) context.Context {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/pass_md5/") {
-				cookie, err := r.Cookie("route")
-				if err != nil || cookie.Value != id {
-					t.Error("token lost its page's route cookie")
+	for _, turnstile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("turnstile=%t", turnstile), func(t *testing.T) {
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if turnstile {
+					w.Header().Set(httpx.HeaderContentType, "text/html")
+					fmt.Fprint(w, doodGateFixture)
+					return
 				}
-				fmt.Fprintf(w, "http://media.example.test/%s/", id)
-				return
+				w.Header().Set(httpx.HeaderCFMitigated, "challenge")
+				w.WriteHeader(http.StatusForbidden)
+			}))
+			defer origin.Close()
+			client := httpx.New("test", "en", 0, time.Second)
+			defer client.CloseIdleConnections()
+			route := func(id string) context.Context {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasPrefix(r.URL.Path, "/pass_md5/") {
+						cookie, err := r.Cookie("route")
+						if err != nil || cookie.Value != id {
+							t.Error("token lost its page's route cookie")
+						}
+						fmt.Fprintf(w, "http://media.example.test/%s/", id)
+						return
+					}
+					http.SetCookie(w, &http.Cookie{Name: "route", Value: id, Path: "/"})
+					fmt.Fprint(w, `<title>Test Clip</title><script>fetch('/pass_md5/session/synthetic')</script>`)
+				}))
+				t.Cleanup(srv.Close)
+				proxyClient, err := client.ThroughProxy(srv.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(proxyClient.CloseIdleConnections)
+				return httpx.WithRoute(context.Background(), id, proxyClient, nil)
 			}
-			http.SetCookie(w, &http.Cookie{Name: "route", Value: id, Path: "/"})
-			fmt.Fprint(w, `<title>Test Clip</title><script>fetch('/pass_md5/session/synthetic')</script>`)
-		}))
-		t.Cleanup(srv.Close)
-		proxyClient, err := client.ThroughProxy(srv.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(proxyClient.CloseIdleConnections)
-		return httpx.WithRoute(context.Background(), id, proxyClient, nil)
-	}
-	first, second := route("first"), route("second")
-	reg := &Registry{fallback: NewDoodStream(client)}
-	ctx := WithChallengeRecovery(context.Background(), func(_ context.Context, read func(context.Context) (*Result, error), _ error) (*Result, error) {
-		return read(first)
-	})
-	res, _, err := reg.Extract(ctx, origin.URL+"/e/synthetic", Options{})
-	if err != nil || len(res.Files) != 1 || res.Files[0].Refresh == nil {
-		t.Fatalf("result=%v err=%v", res, err)
-	}
-	target, err := res.Files[0].Resolve(second)
-	if err != nil || !strings.HasPrefix(target.URL, "http://media.example.test/second/") {
-		t.Fatalf("fresh token=%+v err=%v", target, err)
-	}
-	u, _ := url.Parse(target.URL)
-	if u.Query().Get("token") != "synthetic" {
-		t.Fatal("fresh token was lost")
+			first, second := route("first"), route("second")
+			reg := &Registry{fallback: NewDoodStream(client)}
+			ctx := WithChallengeRecovery(context.Background(), func(_ context.Context, read func(context.Context) (*Result, error), _ error) (*Result, error) {
+				return read(first)
+			})
+			res, _, err := reg.Extract(ctx, origin.URL+"/e/synthetic", Options{})
+			if err != nil || len(res.Files) != 1 || res.Files[0].Refresh == nil {
+				t.Fatalf("result=%v err=%v", res, err)
+			}
+			target, err := res.Files[0].Resolve(second)
+			if err != nil || !strings.HasPrefix(target.URL, "http://media.example.test/second/") {
+				t.Fatalf("fresh token=%+v err=%v", target, err)
+			}
+			u, _ := url.Parse(target.URL)
+			if u.Query().Get("token") != "synthetic" {
+				t.Fatal("fresh token was lost")
+			}
+		})
 	}
 }
 

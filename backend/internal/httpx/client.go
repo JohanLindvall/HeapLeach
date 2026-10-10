@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -376,20 +377,25 @@ func (c *Client) Bytes(req *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return responseBytes(resp)
+}
+
+func responseBytes(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
+	page := resp.Request.URL.Redacted()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("%s: read body: %w", req.URL.Redacted(), err)
+		return nil, fmt.Errorf("%s: read body: %w", page, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &StatusError{
 			Code: resp.StatusCode, Status: resp.Status,
-			URL: req.URL.Redacted(), Body: string(body),
+			URL: page, Body: string(body),
 		}
 	}
 	if len(body) > config.MaxResponseBytes {
-		return nil, fmt.Errorf("%s: response exceeds %d bytes", req.URL.Redacted(), config.MaxResponseBytes)
+		return nil, fmt.Errorf("%s: response exceeds %d bytes", page, config.MaxResponseBytes)
 	}
 	return body, nil
 }
@@ -408,16 +414,31 @@ func (c *Client) JSON(req *http.Request, out any) error {
 
 // GetString fetches a URL as text, applying any extra headers.
 func (c *Client) GetString(ctx context.Context, url string, headers Header) (string, error) {
-	req, err := c.NewRequest(ctx, http.MethodGet, url, nil)
+	body, _, err := c.GetPage(ctx, url, headers, nil)
+	return body, err
+}
+
+// GetPage retains the URL after redirects for relative links and referrers.
+// An optional host-specific check recognises challenge HTML before retries,
+// challenge capture and route scoring, just like the cf-mitigated header.
+func (c *Client) GetPage(ctx context.Context, rawURL string, headers Header, isChallenge func(string) bool) (string, *url.URL, error) {
+	if isChallenge != nil {
+		ctx = context.WithValue(ctx, pageChallengeKey{}, isChallenge)
+	}
+	req, err := c.NewRequest(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set(HeaderAccept, AcceptHTML)
 	req.Header.Set(HeaderSecFetchDest, "document")
 	req.Header.Set(HeaderSecFetchMode, "navigate")
 	applyHeaders(req, headers)
-	body, err := c.Bytes(req)
-	return string(body), err
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	body, err := responseBytes(resp)
+	return string(body), resp.Request.URL, err
 }
 
 // GetJSON fetches and decodes a JSON document.
