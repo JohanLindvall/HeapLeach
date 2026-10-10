@@ -476,6 +476,26 @@ func TestStreamingClientSharesEverythingButTheTimeout(t *testing.T) {
 	}
 }
 
+func TestRequestTimeoutCapKeepsShorterLimitsAndSharesTheSession(t *testing.T) {
+	c := New("test", "en", 2, time.Minute)
+	defer c.CloseIdleConnections()
+	limited := c.WithTimeout(100 * time.Millisecond)
+	if limited.hc.Timeout != 100*time.Millisecond || c.hc.Timeout != time.Minute {
+		t.Fatalf("limited timeout=%s original=%s", limited.hc.Timeout, c.hc.Timeout)
+	}
+	if limited.hc.Transport != c.hc.Transport || limited.hc.Jar != c.hc.Jar || limited.maxRetries != c.maxRetries {
+		t.Fatal("the request timeout changed the session or retry policy")
+	}
+	if got := limited.WithTimeout(time.Second).hc.Timeout; got != limited.hc.Timeout {
+		t.Fatalf("lengthened an existing timeout: %s", got)
+	}
+	streaming := c.Streaming()
+	bounded := streaming.WithTimeout(time.Second)
+	if bounded.hc.Timeout != time.Second || bounded.headerTimeout != 0 || streaming.hc.Timeout != 0 {
+		t.Fatal("bounding a complete response changed the original streaming client")
+	}
+}
+
 // rateLimitedClient is testClient with the rate limit's waits shortened, so
 // the behaviour is exercised without sitting out the production intervals.
 func rateLimitedClient(t *testing.T, retries int) *Client {

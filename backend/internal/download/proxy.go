@@ -160,6 +160,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	for {
 		attempt, abort := context.WithCancel(ctx)
 		m.mu.Lock()
+		it.routeAttempts++
 		it.routeCancel, it.routeResumable = abort, false
 		if m.throttle.isPaused() || m.throttle.currentLimit() > 0 {
 			lease.Constrain()

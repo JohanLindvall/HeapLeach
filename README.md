@@ -664,7 +664,10 @@ empty feed setting disables discovery; an empty endpoint setting excludes
 the normal connection. Explicit proxies take precedence over `NO_PROXY`.
 
 Each transfer attempt keeps its route through the CAPTCHA, ticket, redirects
-and file requests.
+and file requests. Keep2Share and FileBoom API calls and CAPTCHA image
+requests have a 20-second timeout. A network timeout penalises and cools the
+route before another is tried. Status notes show the connection attempt
+number on retries, separately from the CAPTCHA image count.
 A refused or broken route returns the file to the queue to try another;
 other hosts continue downloading while routes are busy or cooling down.
 Keep2Share and FileBoom still require the local OCR helper, and premium-only

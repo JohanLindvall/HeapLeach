@@ -91,6 +91,9 @@ type Item struct {
 	route          *proxy.Lease
 	preferredRoute string
 	proxyRetries   int
+	// routeAttempts includes proxy faults exempt from the retry budget, so
+	// another CAPTCHA on another connection is visible as a new attempt.
+	routeAttempts  int
 	routeCancel    context.CancelFunc
 	routeUpgrade   *proxy.Lease
 	routeResumable bool

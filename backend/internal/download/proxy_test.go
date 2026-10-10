@@ -478,6 +478,23 @@ func TestProxiesAtFaultDoNotSpendTheRetryBudget(t *testing.T) {
 				}
 				return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
 			})
+			it := job.Items[0]
+			resolve := it.resolve
+			it.resolve = func(ctx context.Context) (*extractor.Target, error) {
+				const note = "Keep2Share: requesting CAPTCHA (1/3)"
+				m.note(it, note)
+				m.mu.Lock()
+				got := m.itemNoteLocked(it)
+				m.mu.Unlock()
+				want := note
+				if n := attempts.Load() + 1; n > 1 {
+					want += fmt.Sprintf(" — connection attempt %d", n)
+				}
+				if got != want {
+					t.Errorf("retry note=%q, want %q", got, want)
+				}
+				return resolve(ctx)
+			}
 			m.Start()
 			m.signal()
 			waitFor(t, 10*time.Second, func() bool {

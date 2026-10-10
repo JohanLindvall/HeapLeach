@@ -965,6 +965,7 @@ var recheckTools = tools.Recheck
 func (m *Manager) enqueueLocked(it *Item) {
 	if it.Status.Terminal() {
 		it.proxyRetries = 0
+		it.routeAttempts = 0
 	}
 	// Whatever was true of the destination last time is re-established by
 	// the worker, not carried over.
@@ -1006,6 +1007,8 @@ func (m *Manager) enqueueLocked(it *Item) {
 // left is worked out here, rounded up to the minute so the row changes once
 // a minute rather than in every frame, and the note goes once the time has
 // come — the item is then only waiting for a worker like any other.
+// Active notes include the connection attempt when routing has retried,
+// since each new route starts its CAPTCHA count over at one.
 func (m *Manager) itemNoteLocked(it *Item) string {
 	if !it.notBefore.IsZero() {
 		left := time.Until(it.notBefore)
@@ -1015,6 +1018,9 @@ func (m *Manager) itemNoteLocked(it *Item) string {
 		return fmt.Sprintf("%s — %s left", it.Note, minutesLeft(left))
 	}
 	if it.waitingFor == "" {
+		if it.Status == StatusRunning && it.route != nil && it.routeAttempts > 1 && it.Note != "" {
+			return fmt.Sprintf("%s — connection attempt %d", it.Note, it.routeAttempts)
+		}
 		return it.Note
 	}
 	limit, _ := m.hostGate.waiting(it.waitingFor)

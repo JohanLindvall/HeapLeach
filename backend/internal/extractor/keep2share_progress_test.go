@@ -15,8 +15,57 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
+
+// Exercise the production budget, with a longer general HTTP deadline. A
+// shortened test client alone would also pass if the host forgot its cap.
+func TestKeep2ShareCaptchaRequestUsesItsOwnTimeout(t *testing.T) {
+	for _, newHost := range []func(*httpx.Client) *Keep2Share{NewKeep2Share, NewFileBoom} {
+		base := httpx.New("test", "en", 3, time.Minute)
+		k := newHost(base)
+		t.Run(k.Name(), func(t *testing.T) {
+			t.Parallel()
+			defer base.CloseIdleConnections()
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				io.Copy(io.Discard, r.Body)
+				calls.Add(1)
+				if r.URL.Path != "/api/v2/requestCaptcha" {
+					t.Errorf("unexpected request: %s", r.URL.Path)
+				}
+				w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			defer srv.Close()
+			route, err := base.ThroughProxy(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer route.CloseIdleConnections()
+			k.api = "http://service.example.test/api/v2"
+			k.solver = func(context.Context, []byte) ([]string, error) {
+				t.Error("OCR ran before the CAPTCHA request finished")
+				return nil, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), config.Keep2ShareRequestTimeout+3*time.Second)
+			defer cancel()
+			var observations []httpx.RouteObservation
+			ctx = httpx.WithRoute(ctx, "silent-proxy", route, func(o httpx.RouteObservation) { observations = append(observations, o) })
+			d := &keep2ShareDownload{host: k, id: "synthetic-file"}
+			_, err = d.resolve(ctx)
+			if _, ok := errors.AsType[*httpx.RouteError](err); !ok || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				t.Fatalf("CAPTCHA request escaped its own timeout: error=%v caller=%v", err, ctx.Err())
+			}
+			if calls.Load() != 1 || len(observations) != 1 || observations[0].Err == nil {
+				t.Fatalf("requests=%d observations=%+v; want one penalised timeout", calls.Load(), observations)
+			}
+		})
+	}
+}
 
 // A silent proxy can block any network step around OCR. The note must name
 // that step, and its timeout must reach route scoring rather than looking

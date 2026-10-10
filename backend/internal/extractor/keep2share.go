@@ -84,7 +84,7 @@ func (k *Keep2Share) waiting(ctx context.Context) error {
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
 	return &Keep2Share{
 		hostSet: hostSet{"k2s.cc", "keep2share.cc"},
-		client:  client,
+		client:  client.WithTimeout(config.Keep2ShareRequestTimeout),
 		api:     "https://k2s.cc/api/v2",
 		label:   "Keep2Share",
 		pace:    keep2SharePace,
@@ -94,7 +94,7 @@ func NewKeep2Share(client *httpx.Client) *Keep2Share {
 func NewFileBoom(client *httpx.Client) *Keep2Share {
 	return &Keep2Share{
 		hostSet: hostSet{"fboom.me"},
-		client:  client,
+		client:  client.WithTimeout(config.Keep2ShareRequestTimeout),
 		api:     "https://fboom.me/api/v2",
 		label:   "FileBoom",
 		pace:    fileBoomPace,

@@ -178,6 +178,46 @@ func TestHTTPSProxyAllowsSelfSignedCertificateForHTTP(t *testing.T) {
 	}
 }
 
+func TestRouteRequestTimeoutBoundsProxyCONNECT(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("https-proxy=%t", secure), func(t *testing.T) {
+			var connects atomic.Int32
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodConnect {
+					t.Errorf("expected CONNECT, got %s", r.Method)
+				}
+				connects.Add(1)
+				<-r.Context().Done()
+			}))
+			if secure {
+				srv.StartTLS()
+			} else {
+				srv.Start()
+			}
+			defer srv.Close()
+			base := New("test", "en", 3, time.Minute)
+			defer base.CloseIdleConnections()
+			route, err := base.ThroughProxy(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer route.CloseIdleConnections()
+			var observations []RouteObservation
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ctx = WithRoute(ctx, "silent-proxy", route, func(o RouteObservation) { observations = append(observations, o) })
+			req, _ := base.NewRequest(ctx, http.MethodPost, "https://service.example.test/api/v2/requestCaptcha", []byte(`{}`))
+			_, err = base.WithTimeout(100 * time.Millisecond).Bytes(req)
+			if _, ok := errors.AsType[*RouteError](err); !ok || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				t.Fatalf("proxy timeout=%v caller=%v", err, ctx.Err())
+			}
+			if connects.Load() != 1 || len(observations) != 1 || observations[0].Err == nil {
+				t.Fatalf("connects=%d observations=%+v; want one scored timeout with no HTTP retry", connects.Load(), observations)
+			}
+		})
+	}
+}
+
 func TestRouteCancellationDoesNotPenaliseProxyAndStreamingKeepsItsTimeout(t *testing.T) {
 	started := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +258,43 @@ func TestRouteCancellationDoesNotPenaliseProxyAndStreamingKeepsItsTimeout(t *tes
 	req, _ := base.NewRequest(ctx, http.MethodGet, "http://example.test/file", nil)
 	if body, err := base.Streaming().Bytes(req); err != nil || string(body) != "file" {
 		t.Fatalf("streaming body=%q err=%v", body, err)
+	}
+}
+
+func TestSOCKSRouteTimeoutPenalisesAnUnansweredHandshake(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, _ := listener.Accept()
+		accepted <- conn
+	}()
+	defer func() {
+		listener.Close()
+		if conn := <-accepted; conn != nil {
+			conn.Close()
+		}
+	}()
+	base := New("test", "en", 3, time.Minute)
+	defer base.CloseIdleConnections()
+	route, err := base.ThroughProxy("socks5h://" + listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer route.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var observations []RouteObservation
+	ctx = WithRoute(ctx, "silent-socks-proxy", route, func(o RouteObservation) { observations = append(observations, o) })
+	req, _ := base.NewRequest(ctx, http.MethodPost, "https://service.example.test/api/v2/requestCaptcha", []byte(`{}`))
+	_, err = base.WithTimeout(100 * time.Millisecond).Bytes(req)
+	if _, ok := errors.AsType[*RouteError](err); !ok || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		t.Fatalf("SOCKS timeout=%v caller=%v", err, ctx.Err())
+	}
+	if len(observations) != 1 || observations[0].Err == nil {
+		t.Fatalf("observations=%+v; want one scored timeout", observations)
 	}
 }
 

@@ -425,6 +425,14 @@ const (
 	Keep2ShareCaptchaBytes    = 1 << 20
 	Keep2ShareCaptchaPixels   = 128 << 10
 
+	// Keep2ShareRequestTimeout bounds the small API and CAPTCHA-image
+	// requests. Waiting a minute on each silent public proxy pins workers
+	// long before a file can start. OCR and the host's ticket timer have
+	// their own budgets; media bodies use the transfer stall watchdog. Leave
+	// room for the 15-second dial timeout to identify an unreachable proxy
+	// before the request deadline would turn it into a generic timeout.
+	Keep2ShareRequestTimeout = 20 * time.Second
+
 	// Keep2ShareOCRConcurrency is how many CAPTCHA readers run at once. Each
 	// is a Python runtime and an ONNX model that uses every core it can.
 	Keep2ShareOCRConcurrency = 2

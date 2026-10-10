@@ -93,6 +93,24 @@ func New(userAgent, acceptLanguage string, maxRetries int, timeout time.Duration
 	}
 }
 
+// WithTimeout caps a request's duration, including its response body, while
+// retaining a stricter existing timeout. The copy shares transport and
+// cookies. A client deadline, rather than a caller context deadline, lets a
+// leased route recognise and score a network timeout as its own failure.
+func (c *Client) WithTimeout(limit time.Duration) *Client {
+	if c == nil || limit <= 0 {
+		return c
+	}
+	hc := *c.hc
+	if hc.Timeout <= 0 || hc.Timeout > limit {
+		hc.Timeout = limit
+	}
+	cp := *c
+	cp.hc = &hc
+	cp.headerTimeout = 0
+	return &cp
+}
+
 // Streaming returns a shallow copy with no client-level timeout, for response
 // bodies that are read over minutes. Cancellation comes from the context.
 func (c *Client) Streaming() *Client {

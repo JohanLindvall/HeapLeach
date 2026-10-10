@@ -555,6 +555,18 @@ Host-specific notes:
   are per service too, with one transfer per address per service under the
   manager's shared live concurrency limit.
 
+  API calls and CAPTCHA images use a client capped at
+  `Keep2ShareRequestTimeout` (20 seconds), retaining a stricter configured
+  timeout. A general one-minute timeout made every silent proxy occupy a
+  worker for a minute before another route could try. Set this on the HTTP
+  client, not a child request context: route accounting excludes caller
+  cancellation, so a child deadline there would lose the proxy penalty.
+  Media transfers still use their streaming client and stall watchdog; OCR
+  and the host's ticket timer keep their own budgets. The item counts route
+  attempts independently of its retry budget, including dead proxies that
+  cost no retry, and appends the connection attempt to active notes so
+  successive `requesting CAPTCHA (1/3)` attempts visibly differ.
+
   The helper prints ranked readings, not one answer. The challenge is six
   letters and digits compared without regard to case, and a wrong answer
   leaves it open, so `resolve` tries up to `Keep2ShareCaptchaGuesses`
