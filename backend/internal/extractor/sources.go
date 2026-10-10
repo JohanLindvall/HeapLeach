@@ -58,6 +58,8 @@ type expansion struct {
 	files []File
 	// used is how many sources the files came from.
 	used int
+	// partial counts sources that themselves reported an incomplete result.
+	partial int
 	// full reports that the file cap ended the expansion: sources after the
 	// last one used were never resolved.
 	full bool
@@ -88,9 +90,18 @@ type expansion struct {
 // job: every thread of any age has dead links in it, and the live ones are
 // still worth having.
 func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) expansion {
+	return expandSourcesWith(ctx, sources, opts, func(ctx context.Context, link string) (*Result, error) {
+		res, _, err := registry.Extract(ctx, link, opts)
+		return res, err
+	})
+}
+
+// expandSourcesWith also lets a recognised platform read its own posts,
+// without registering every page on that host as a supported source.
+func expandSourcesWith(ctx context.Context, sources []string, opts Options, extract func(context.Context, string) (*Result, error)) expansion {
 	limit := opts.maxFiles()
 	fetch := func(ctx context.Context, link string) ([]sourceResult, error) {
-		res, _, err := registry.Extract(ctx, link, opts)
+		res, err := extract(ctx, link)
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +150,9 @@ walk:
 		uses[strings.ToLower(sourceFolder(r.res.Title))]++
 	}
 	for _, r := range resolved {
+		if r.res.Note != "" {
+			e.partial++
+		}
 		folder := sourceFolder(r.res.Title)
 		if uses[strings.ToLower(folder)] > 1 {
 			folder = strings.TrimSpace(folder + " [" + sourceTag(r.link) + "]")

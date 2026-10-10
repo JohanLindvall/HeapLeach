@@ -360,6 +360,20 @@ headers before reading a bounded body, and supports extensionless pages and
 common HTML/script extensions. Supported links that all fail are reported as
 an error rather than saved as an HTML shell. Partial results report counts.
 
+**WordPress categories** are recognised in that same fetched document, before
+the ordinary link scan, rather than claimed by domain. `wordpress.go` reads
+classic post permalinks or block-theme query loops, follows the category's
+own next control, and opens only the listed posts. The category heading and
+pager may sit outside `main`, so the primary content area is kept around it.
+Post content supplies supported host links and JPEG images; original-image
+links and metadata outrank thumbnails. Registered extractors still resolve
+the host links, retaining their deferred resolvers and pacing. The shared
+source expansion also accepts a post-reading function, so folder names,
+concurrency and caps use the existing implementation. No host-specific
+WordPress category scraper is maintained beside this one. Tests use invented
+classic/block-theme pages; saved browser archives stay untracked and can be
+parsed offline without contacting their source sites.
+
 Host-specific notes:
 
 - **filejump** public shares use `/s/<id>`, with `?access=download` on some
@@ -423,7 +437,8 @@ Host-specific notes:
   pending for a file, `getUrl` hands out the link whatever the answer, so
   every guess against that file "succeeds".
 
-  `-proxies` enables a persistent egress pool (`internal/proxy`, bbolt),
+  The persistent egress pool is enabled by default (`internal/proxy`, bbolt),
+  with `-proxies=false` or `HEAPLEACH_PROXIES=0` to disable it. It is
   adapted from amzscrape. `Pace.PerRoute` marks the service's addressing rule;
   the manager allows the `keep2share` and `fileboom` groups to use proxies. The
   dispatcher leases a route before resolving and holds it through the

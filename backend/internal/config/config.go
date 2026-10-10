@@ -150,12 +150,15 @@ func FromEnv() (*Config, error) {
 		MinFreeDisk:    DefaultMinFreeDisk,
 		MaxSources:     MaxExpandedSources,
 		MaxFiles:       MaxListingFiles,
+		Proxies:        true,
 		ProxyDB:        env("PROXY_DB", defaultProxyDB()),
 		ProxyEndpoints: envList("PROXY_ENDPOINTS"),
 		ProxyFeeds:     []string{DefaultProxyFeed},
 		ProxyRetries:   DefaultProxyRetries,
 	}
-	c.Proxies, _ = EnvBool("PROXIES")
+	if enabled, set := EnvBool("PROXIES"); set {
+		c.Proxies = enabled
+	}
 	if _, set := os.LookupEnv(envPrefix + "PROXY_ENDPOINTS"); !set {
 		c.ProxyEndpoints = []string{"direct"}
 	}

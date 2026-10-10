@@ -165,9 +165,16 @@ func mediaPageFind(ctx context.Context, client *httpx.Client, root *html.Node, d
 // as likely to be a signed media link as a page, and one that answers
 // video/mp4 costs an aborted request here rather than a download.
 func mediaPageFetch(ctx context.Context, client *httpx.Client, u *url.URL) (string, bool) {
+	doc, _, ok := mediaPageFetchURL(ctx, client, u)
+	return doc, ok
+}
+
+// mediaPageFetchURL retains the final URL, so a redirected site resolves
+// relative post links and pagination against the page actually received.
+func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (string, *url.URL, bool) {
 	req, err := client.NewRequest(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 	// Asking as a browser navigating to the page, which is what the sniff is
 	// pretending to be and what some hosts serve their real markup to.
@@ -178,26 +185,26 @@ func mediaPageFetch(ctx context.Context, client *httpx.Client, u *url.URL) (stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", false
+		return "", nil, false
 	}
 	// A host that will not say what it sent is treated as not having sent a
 	// page. That is at worst today's behaviour, which is the whole bargain
 	// this sniff makes.
 	kind, _, _ := mime.ParseMediaType(resp.Header.Get(httpx.HeaderContentType))
 	if !mediaPageIsHTMLType(kind) {
-		return "", false
+		return "", nil, false
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
 	if err != nil {
-		return "", false
+		return "", nil, false
 	}
-	return string(body), true
+	return string(body), resp.Request.URL, true
 }
 
 // ------------------------------------------------------- the page's player

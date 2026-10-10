@@ -11,9 +11,10 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-// pageSniff gives an ordinary HTML page's file links precedence over an
-// embedded preview. Named hosts and recognised platforms have already had
-// their turn. Only registered extractors are expanded: ordinary HTML links
+// pageSniff recognises WordPress categories, then gives an ordinary HTML
+// page's file links precedence over an embedded preview. Named hosts and
+// earlier platform sniffs have already had their turn. Outside a recognised
+// category, only registered extractors are expanded: ordinary HTML navigation
 // cannot recurse through this fallback. A page without supported links keeps
 // the existing media fallback.
 func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -29,13 +30,16 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	}
 	// Header-gated and bounded: a binary response must never be read as a
 	// page, even when its signed URL has no extension.
-	doc, ok := mediaPageFetch(ctx, d.client, u)
+	doc, page, ok := mediaPageFetchURL(ctx, d.client, u)
 	if !ok {
 		return nil, nil
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, nil
+	}
+	if wordPressCategory(root, page) {
+		return wordPressExtract(ctx, d.client, d.registry, page, root, opts)
 	}
 	if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
 		return expandPageLinks(ctx, d.registry, u, root, sources, opts)

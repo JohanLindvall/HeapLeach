@@ -94,6 +94,32 @@ func TestOtherFlags(t *testing.T) {
 	}
 }
 
+func TestProxyStartupDefaultsAndFlagOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+		args []string
+		want bool
+	}{
+		{"default on", "", nil, true},
+		{"flag disables default", "", []string{"-proxies=false"}, false},
+		{"environment disables default", "off", nil, false},
+		{"flag overrides environment", "off", []string{"-proxies"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HEAPLEACH_PROXIES", tc.env)
+			t.Setenv("HEAPLEACH_DIR", t.TempDir())
+			cfg, err := loadConfig(tc.args, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Proxies != tc.want {
+				t.Fatalf("Proxies = %v, want %v", cfg.Proxies, tc.want)
+			}
+		})
+	}
+}
+
 // The byte-count flags read units, print their defaults in units, and
 // -min-free exists at all: the floor had been environment-only, which is a
 // strange gap for the one setting that decides whether a run fills a disk.

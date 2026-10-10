@@ -83,6 +83,24 @@ func TestProxyConfigurationDoesNotCreateStateUntilStartup(t *testing.T) {
 	}
 }
 
+func TestProxyDefaultAndEnvironmentOptOut(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{{"", true}, {"1", true}, {"true", true}, {"0", false}, {"false", false}, {"off", false}} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("HEAPLEACH_PROXIES", tc.value)
+			cfg, err := FromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Proxies != tc.want {
+				t.Fatalf("Proxies = %v for %q, want %v", cfg.Proxies, tc.value, tc.want)
+			}
+		})
+	}
+}
+
 func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_ADDR", ":9999")
 	t.Setenv("HEAPLEACH_CONCURRENCY", "7")

@@ -284,7 +284,8 @@ must be writable only by people you trust to run code as this account.
 | *a directory listing* | Apache, nginx, lighttpd autoindex | Walked recursively, with sizes and structure taken from the listing. Also covers IPFS gateway directories. |
 | *`links:<url>`* | any public page | Reads the page and downloads every link a supported host claims, each into its own folder. Aimed at the forum thread with two hundred links in it. |
 | *an ordinary webpage* | any public HTML page without a dedicated extractor | Automatically reads links to every registered host, including albums and files, without a `links:` prefix. Ordinary HTML links are ignored so navigation cannot recursively crawl the web. Links keep their host's resolver and download settings; source and file caps apply. |
-| **voyeurking** | `voyeurking.com/categories/<name>`, `/collection/<slug>` and `/video/<slug>` | Walks category and collection pages and reads each video's K2S or FileBoom file from its page data. Files use the corresponding downloader, including its per-address waits and optional proxy pool. Enable download proxies in Settings to use parallel routes. Listing results keep each video in its own folder; source and file caps apply. |
+| **WordPress categories** | any domain; category permalinks, custom category bases and `?cat=<id>` | Recognises classic and block theme markup without a domain list or version check. Follows the selected category's pagination and reads each post's supported file-host links and JPEG images, preferring linked originals and full-size image metadata. File links go through the existing host extractors, including deferred K2S/FileBoom resolution and proxy pacing. Each post gets a folder; previews, navigation and related-post widgets are excluded. Source/file caps and incomplete results are reported. |
+| **voyeurking** | `voyeurking.com/categories/<name>`, `/collection/<slug>` and `/video/<slug>` | Walks category and collection pages and reads each video's K2S or FileBoom file from its page data. Files use the corresponding downloader, including its per-address waits and proxy pool, enabled by default. Listing results keep each video in its own folder; source and file caps apply. |
 | **balbums** | `balbums.st/?search=<query>` | An index of somebody else's albums rather than a host: a search is walked page by page and every album it lists is handed to the extractor that does host it, each into its own folder. Asking for a hundred results a page is what makes a search of three hundred albums four requests rather than eighteen — ask for more and the site quietly serves twenty, so nothing trusts the parameter. Only searches are taken. The charts are built in the browser and the front page is the same grid over the whole catalogue. |
 | **KVS listings** | `/members/<id>/`, `/search/<query>/`, and any category, model, tag, channel or site-wide list on any KVS install | A member's public videos, everything a search turns up, or every video a category, model, tag or channel lists. Sections are recognised by the page rather than by name, since an install may rename them. The platform pages through its own asynchronous block loader, and which parameter pages a block is the block's own business — a wrong one is not refused, it serves page one again — so the walk sends exactly what the pager's own control carries. The last page says it is the last, and the walk stops there without asking. |
 | *anything else* | any `http(s)` URL | Treated as a direct file link after checking for a known platform, a manifest, a directory index, supported download links or a player. |
@@ -294,7 +295,7 @@ mega, mediafire, ok.ru, cyberdrop, streamable, wetransfer and the three
 streaming hosts are **resolved at download time**, not when the link is
 queued — otherwise a large queue would start failing halfway down.
 
-Seven of the entries above are **platform families**: one extractor covering
+Several entries above are **platform families**: one extractor covering
 every site running a piece of software, rather than one per site. That is
 where the reach comes from — the KVS row is nine named tube sites plus an
 unbounded tail recognised by the shape of its URLs, the booru row is
@@ -304,17 +305,25 @@ A family is always the better trade, and the ones here key off something that
 cannot rot: a version endpoint, a `generator` tag, or the `nodeinfo`
 specification.
 
-Four more entries are not hosts at all but **shapes** — an adaptive
+Other entries are not hosts at all but **shapes** — an adaptive
 manifest, an open directory, a page carrying supported download links,
 and a page carrying a video in its markup.
 Those cover the sites nobody will ever get round to naming.
 
 Automatic webpage scanning reads anchors, embedded frames and links printed
-as text, then expands only links claimed by registered extractors. It never
-follows a plain HTML link through the generic fallback. Exact duplicates are
+as text, then expands only links claimed by registered extractors. A recognised
+WordPress category also follows its own post permalinks and pagination;
+ordinary navigation links are not followed. Exact duplicates are
 removed; K2S aliases and repeated file IDs are also merged within each service.
 Recognised platforms keep their own extraction behavior. Use `links:<url>`
 to explicitly scan a page that would otherwise go to a dedicated extractor.
+
+WordPress category extraction uses the HTML the site serves. It supports
+classic post markup, block query loops, older/newer-post navigation, and
+path or query pagination. A pasted later page starts from the category's
+first page. Login-only content and listings rendered entirely by scripts
+are not exposed by this parser. Domain redirects are followed, and relative
+links use the final page's address.
 
 ### Every supported site
 
@@ -601,7 +610,8 @@ The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting
 time, and allows one file and one connection at a time per service, shared
 across its aliases. Unreadable challenges fail with a retryable error; OCR is
-not always correct. With `-proxies`, the one-file limit applies to each proxy address,
+not always correct. With proxies enabled (the default), the one-file limit
+applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
 `-concurrency` across both services. Each address may carry one K2S transfer
 and one FileBoom transfer simultaneously. The hosts' speed limits and
@@ -629,8 +639,9 @@ bytes per second using the selector's mean success probability; actual
 selection also explores untried routes. The list refreshes every five seconds
 while open. Discovery status is shown with each feed.
 
-Enable free proxy routes at startup with `heapleach -proxies -concurrency 4`. The default
-pool combines the normal outbound connection with
+Free proxy routes are enabled at startup. Disable them with `-proxies=false`,
+`HEAPLEACH_PROXIES=0`, or the Settings switch. The default pool combines the
+normal outbound connection with
 [Proxifly's free proxy feed](https://github.com/proxifly/free-proxy-list).
 HTTP, HTTPS and SOCKS5 endpoints are supported; SOCKS5 resolves destination
 names through the proxy. Plain `host:port` entries mean HTTP. Set
@@ -735,7 +746,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. Also settable live in Settings. |
-| `HEAPLEACH_PROXIES` | off | Enable extra free proxy routes for Keep2Share and FileBoom. Flag: `-proxies`. Also settable live in Settings. |
+| `HEAPLEACH_PROXIES` | on | Enable extra free proxy routes for Keep2Share and FileBoom. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode. Flag: `-proxy-db`. |
 | `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
