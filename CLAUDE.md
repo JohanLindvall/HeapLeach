@@ -484,13 +484,19 @@ Host-specific notes:
   which a run of unread CAPTCHAs comes back as. Nothing is charged to the
   route for these, since the route layer has already scored what the
   network did. Those attempts spend the file's `ProxyRetries` like any route
-  failure. A proxy that could not be reached at all does not
-  (`deadProxy`: a `proxyconnect` or `socks connect` around a failed dial),
-  because the pool shelves it for a day and public lists are mostly such
-  addresses: twenty of them in a row used to fail the file with
-  `proxyconnect tcp: dial tcp …: i/o timeout` before it met one that
-  answered. A proxy that answered and then could not reach the host still
-  counts, so an outage there cannot walk one file through the whole pool.
+  failure. A failure that is the proxy's does not (`routeAtFault`): a proxy
+  that could not be reached at all (`deadProxy`: a `proxyconnect` or
+  `socks connect` around a failed dial), a connection it dropped (a bare or
+  unexpected EOF, a reset), or an address the host refuses (`RefusedError`).
+  Public lists are mostly such proxies, so twenty in a row used to fail the
+  file with `proxyconnect tcp: dial tcp …: i/o timeout`, `unexpected EOF` or
+  "free downloads are refused from this address" before it met one that
+  worked. The pool already shelves each such route. The cost, accepted on
+  purpose, is that a host refusing every proxy would have files trying
+  routes for as long as the pool offers any, then waiting in the queue,
+  rather than failing; each refusal also costs a CAPTCHA. Timeouts, HTTP
+  refusals, stalls and a proxy that answered but could not reach the host
+  still count.
 
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's

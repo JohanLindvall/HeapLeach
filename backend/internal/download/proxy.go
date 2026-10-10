@@ -208,13 +208,14 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			if moved {
 				it.proxyRetries = 0
 			}
-			// A proxy that could not be reached at all carried nothing,
-			// and the pool has put it away for a day. Public lists are
-			// mostly such addresses, and charging them to the file spent
-			// its whole budget before it met a proxy that answered.
-			dead := deadProxy(err)
-			if moved || dead || it.proxyRetries < m.cfg.ProxyRetries {
-				if !moved && !dead {
+			// Some failures are the proxy's and nothing to do with the
+			// file, and public lists are full of proxies that have them; see
+			// routeAtFault. They cost the file nothing: the pool has already
+			// put the route away, and charging them spent a file's whole
+			// budget before it met a proxy that worked.
+			free := routeAtFault(err)
+			if moved || free || it.proxyRetries < m.cfg.ProxyRetries {
+				if !moved && !free {
 					it.proxyRetries++
 				}
 				err = &extractor.WaitError{Until: time.Now(), Reason: "Retrying through another download route"}
@@ -288,6 +289,24 @@ func transientRouteFailure(err error) bool {
 		}
 	}
 	return false
+}
+
+// routeAtFault reports a route failure that is the proxy's and not the
+// file's, which does not spend the file's retry budget: a proxy that could
+// not be reached, a connection it dropped (a bare or unexpected EOF, a
+// reset), or an address the host refuses outright. With these exempt, a host
+// that refused every proxy would have files trying routes for as long as the
+// pool has any to offer, and waiting in the queue for one after that,
+// rather than failing; the refusal backoff keeps each route from being
+// asked again for a while. Timeouts, HTTP refusals and stalls still count.
+func routeAtFault(err error) bool {
+	if deadProxy(err) {
+		return true
+	}
+	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 // deadProxy reports a failure to reach the proxy itself, before anything

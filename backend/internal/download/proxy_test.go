@@ -411,24 +411,32 @@ func deadProxyError() error {
 
 func TestRouteFailuresAreToldApart(t *testing.T) {
 	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	cutShort := &httpx.RouteError{Err: &url.Error{Op: "Post", URL: "https://service.example.test/api/v2/requestCaptcha", Err: io.ErrUnexpectedEOF}}
+	forbidden := &httpx.RouteError{Err: &httpx.StatusError{Code: http.StatusForbidden, Status: "403 Forbidden"}}
 	for name, tc := range map[string]struct {
-		err             error
-		dead, transient bool
+		err                   error
+		dead, free, transient bool
 	}{
-		"unreachable proxy": {err: deadProxyError(), dead: true, transient: true},
+		"unreachable proxy": {err: deadProxyError(), dead: true, free: true, transient: true},
 		"unreachable SOCKS proxy": {err: &url.Error{Op: "Get", URL: "https://service.example.test/f",
-			Err: &net.OpError{Op: "socks connect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}}, dead: true, transient: true},
+			Err: &net.OpError{Op: "socks connect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}}, dead: true, free: true, transient: true},
 		"proxy that could not reach the host": {err: &url.Error{Op: "Get", URL: "https://service.example.test/f",
 			Err: &net.OpError{Op: "socks connect", Net: "tcp", Err: errors.New("host unreachable")}}},
-		"reset mid-body":      {err: fmt.Errorf("read body: %w", reset), transient: true},
+		"dropped by the proxy": {err: fmt.Errorf("keep2share: requestCaptcha: %w", cutShort), free: true, transient: true},
+		"reset mid-body":       {err: fmt.Errorf("read body: %w", reset), free: true, transient: true},
+		"refused address": {err: &httpx.RouteError{Err: &extractor.RefusedError{
+			Err: errors.New("keep2share: Download is not available: free downloads are refused from this address")}}, free: true},
 		"deadline":            {err: fmt.Errorf("captcha: %w", context.DeadlineExceeded), transient: true},
-		"cut short":           {err: io.ErrUnexpectedEOF, transient: true},
 		"unread CAPTCHAs":     {err: &extractor.TransientError{Err: errors.New("could not obtain a free download")}, transient: true},
+		"refused by HTTP":     {err: forbidden},
 		"premium only":        {err: errors.New("keep2share: this file requires a Premium account")},
 		"cancelled by a user": {err: context.Canceled},
 	} {
 		if got := deadProxy(tc.err); got != tc.dead {
 			t.Errorf("%s: deadProxy = %v, want %v", name, got, tc.dead)
+		}
+		if got := routeAtFault(tc.err); got != tc.free {
+			t.Errorf("%s: routeAtFault = %v, want %v", name, got, tc.free)
 		}
 		if got := transientRouteFailure(tc.err); got != tc.transient {
 			t.Errorf("%s: transientRouteFailure = %v, want %v", name, got, tc.transient)
@@ -436,37 +444,55 @@ func TestRouteFailuresAreToldApart(t *testing.T) {
 	}
 }
 
-// Public proxy lists are mostly dead addresses. Meeting more of them than
-// the retry budget allows must not fail the file: they cost it nothing.
-func TestUnreachableProxiesDoNotSpendTheRetryBudget(t *testing.T) {
-	m := busyManager(t)
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		io.WriteString(w, "file")
-	}
-	a := proxyServer(t, "127.0.0.2", handler)
-	b := proxyServer(t, "127.0.0.3", handler)
-	attachPool(t, m, []string{a.URL, b.URL})
-	unreachable := m.cfg.ProxyRetries + 3
-	var attempts atomic.Int32
-	job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
-		if int(attempts.Add(1)) <= unreachable {
-			return nil, deadProxyError()
-		}
-		return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
-	})
-	m.Start()
-	m.signal()
-	waitFor(t, 10*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
-	})
-	m.mu.Lock()
-	status, failure := job.Items[0].Status, job.Items[0].Err
-	m.mu.Unlock()
-	if status != StatusDone {
-		t.Fatalf("status=%s error=%q after %d unreachable proxies; want them retried past the budget", status, failure, unreachable)
+// Public proxy lists are mostly addresses that cannot be reached, drop the
+// connection or are refused by the host. Meeting more of them than the
+// retry budget allows must not fail the file: they cost it nothing.
+func TestProxiesAtFaultDoNotSpendTheRetryBudget(t *testing.T) {
+	for name, fault := range map[string]func() error{
+		"unreachable": deadProxyError,
+		"dropped": func() error {
+			return fmt.Errorf("keep2share: requestCaptcha: %w", &httpx.RouteError{Err: &url.Error{
+				Op: "Post", URL: "https://service.example.test/api/v2/requestCaptcha", Err: io.ErrUnexpectedEOF}})
+		},
+		"refused": func() error {
+			return &extractor.RefusedError{Err: errors.New("keep2share: Download is not available: free downloads are refused from this address")}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := busyManager(t)
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				io.WriteString(w, "file")
+			}
+			// A refusal holds its route back, so each needs a route of its own.
+			var routes []string
+			for _, address := range []string{"127.0.0.2", "127.0.0.3", "127.0.0.4", "127.0.0.5"} {
+				routes = append(routes, proxyServer(t, address, handler).URL)
+			}
+			attachPool(t, m, routes)
+			faults := m.cfg.ProxyRetries + 1
+			var attempts atomic.Int32
+			job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
+				if int(attempts.Add(1)) <= faults {
+					return nil, fault()
+				}
+				return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
+			})
+			m.Start()
+			m.signal()
+			waitFor(t, 10*time.Second, func() bool {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
+			})
+			m.mu.Lock()
+			status, failure := job.Items[0].Status, job.Items[0].Err
+			m.mu.Unlock()
+			if status != StatusDone {
+				t.Fatalf("status=%s error=%q after %d such routes; want them retried past the budget of %d",
+					status, failure, faults, m.cfg.ProxyRetries)
+			}
+		})
 	}
 }
 
