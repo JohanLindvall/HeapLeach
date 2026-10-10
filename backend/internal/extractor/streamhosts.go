@@ -136,7 +136,7 @@ type DoodStream struct {
 var doodHosts = hostSet{
 	"doodstream.com", "dood.to", "dood.so", "dood.watch", "dood.la", "dood.ws",
 	"dood.sh", "dood.yt", "dood.re", "dood.li", "ds2play.com", "d0o0d.com",
-	"do0od.com", "dooood.com", "vidply.com",
+	"do0od.com", "dooood.com", "vidply.com", "d000d.com", "playmogo.com",
 }
 
 // doodPassPath finds the token endpoint the page points at.

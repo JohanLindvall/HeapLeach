@@ -141,6 +141,8 @@ func TestStreamHostMatching(t *testing.T) {
 		{host: "streamtape.example.test", match: NewStreamtape(nil).Match, want: false},
 		{host: "dood.to", match: NewDoodStream(nil).Match, want: true},
 		{host: "d0o0d.com", match: NewDoodStream(nil).Match, want: true},
+		{host: "d000d.com", match: NewDoodStream(nil).Match, want: true},
+		{host: "playmogo.com", match: NewDoodStream(nil).Match, want: true},
 		{host: "mixdrop.co", match: NewMixDrop(nil).Match, want: true},
 		{host: "www.mixdrop.ag", match: NewMixDrop(nil).Match, want: true},
 		{host: "mixdrop.example.test", match: NewMixDrop(nil).Match, want: false},

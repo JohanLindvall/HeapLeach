@@ -362,6 +362,19 @@ an error rather than saved as an HTML shell. Partial results report counts.
 
 Host-specific notes:
 
+- **filejump** public shares use `/s/<id>`, with `?access=download` on some
+  pasted links. The original filename is in the share's `.title`; `.meta`
+  rounds the size and includes thousands separators, so strip commas and
+  mark it `SizeApprox`. Keep the matching `/s/<id>/download` button URL,
+  which redirects to freshly signed storage at request time. The native
+  downloader follows it and supports ranges; no eager signing or external
+  helper is needed. A player preview alone is not a download permission:
+  require the public download button and reject unavailable shares.
+- **doodstream** includes the `d000d.com` and `playmogo.com` aliases. An
+  ordinary page embedding one is reached by the generic link scanner; its
+  player goes through the existing native token resolver and range engine.
+  This is how linked players work without a dedicated extractor for every
+  blog embedding them.
 - **voyeurking** is an index of K2S and FileBoom files. Category and collection
   pages expose their video links and `rel="next"` pager in HTML. Pagination stays within the
   same listing type and slug. A video's file link lives in the
