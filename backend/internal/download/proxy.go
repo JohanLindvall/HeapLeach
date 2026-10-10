@@ -176,6 +176,13 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			err = &routeTransferError{err: &httpx.RouteError{Err: err}, moved: stall.moved}
 		} else if _, busy := errors.AsType[*busyHostError](err); busy {
 			lease.Failed(err, time.Since(start), false)
+		} else if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
+			// The host turned this address away, not the file: hold the
+			// route back from it as for any refusal, and let the file try
+			// another. The API's own answer came back as an ordinary
+			// response, so nothing below HTTP has counted it.
+			lease.Failed(err, time.Since(start), false)
+			err = &httpx.RouteError{Err: err}
 		}
 		if wait, ok := errors.AsType[*extractor.WaitError](err); ok {
 			lease.Cooldown(wait.Until)

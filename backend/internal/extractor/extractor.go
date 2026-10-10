@@ -182,6 +182,18 @@ func (e *WaitError) Error() string {
 	return fmt.Sprintf("%s until %s", e.Reason, e.Until.Format(time.TimeOnly))
 }
 
+// RefusedError is a resolver's way of saying a host refused the address it
+// was asked from, not the file. Keep2Share answers "Download is not
+// available", and nothing more, to free downloads from some addresses while
+// handing the same file to the next one. Through a proxy route the
+// downloader holds that route back from the host for a while and tries the
+// file through another; without one there is nowhere else to ask, and it is
+// an ordinary failure.
+type RefusedError struct{ Err error }
+
+func (e *RefusedError) Error() string { return e.Err.Error() }
+func (e *RefusedError) Unwrap() error { return e.Err }
+
 // SegmentKey is how a playlist's segments are encrypted: HLS's
 // METHOD=AES-128, which is AES-128 in CBC mode applied to each segment on
 // its own, PKCS#7-padded, under one key fetched from a URL.

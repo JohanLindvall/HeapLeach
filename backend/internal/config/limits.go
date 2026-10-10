@@ -422,6 +422,11 @@ const (
 	Keep2ShareCaptchaBytes    = 1 << 20
 	Keep2ShareCaptchaPixels   = 128 << 10
 
+	// Keep2ShareInPlaceWait is the longest ticket timer sat out in the
+	// worker. The usual one is half a minute; past this it is the wait
+	// between free downloads, which the file spends back in the queue.
+	Keep2ShareInPlaceWait = time.Minute
+
 	// MaxFolderDepth bounds recursion into nested remote folders.
 	MaxFolderDepth = 8
 

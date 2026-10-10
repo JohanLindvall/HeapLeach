@@ -402,11 +402,24 @@ Host-specific notes:
   `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
   resolver requests one, reads it with the optional local `heapleach-ocr`
   helper, and waits for the API's timer before redeeming the accepted key.
-  That timer is short and is sat out in place, holding the key. The host's
-  wait *between* free downloads, given when there is no key, is the best
-  part of an hour and covers every file from the address. So it goes back to
-  the queue as a `WaitError`, and is kept on the `Keep2Share` value so other
-  files return the same wait without solving a CAPTCHA to be told it.
+  That timer is usually half a minute and is sat out in place, holding the
+  key. The host's wait *between* free downloads, given when there is no key,
+  is the best part of an hour and covers every file from the address. So it
+  goes back to the queue as a `WaitError`, and is kept on the `Keep2Share`
+  value so other files return the same wait without solving a CAPTCHA to be
+  told it. That same wait also arrives on a ticket (a `time_wait` of 4300
+  has been seen, where a fresh address gets 30), so a ticket timer longer
+  than `Keep2ShareInPlaceWait` goes back to the queue too, keeping its key
+  for the same route.
+
+  "Download is not available" (errorCode 42) with no reason given is about
+  the address, not the file. Asked for one file through twenty-two public
+  proxies, six got exactly that answer while sixteen got tickets. The
+  resolver returns it as `RefusedError`. Through a proxy route,
+  `transferRouted` then holds the route back from the service with the
+  ordinary refusal backoff and retries the file through another route. The
+  API's answer is an HTTP 406 the route layer counts as a success, so
+  nothing else would. On the direct route it is a failure saying so.
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's
   hourly allowance even when only a range was fetched. `Pace.Group` keeps

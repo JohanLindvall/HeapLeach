@@ -165,6 +165,9 @@ type keep2ShareResponse struct {
 
 func (r *keep2ShareResponse) Error() string {
 	message := util.FirstNonEmpty(r.Message, fmt.Sprintf("API error %d", r.ErrorCode))
+	if r.ErrorCode == 42 && len(r.Errors) == 0 {
+		message += ": free downloads are refused from this address"
+	}
 	for _, detail := range r.Errors {
 		if detail.Message != "" {
 			message += ": " + detail.Message
@@ -172,6 +175,8 @@ func (r *keep2ShareResponse) Error() string {
 			switch detail.Code {
 			case 3, 7:
 				message += ": this file requires a Premium account"
+			case 5:
+				message += ": this address must wait longer than the waiting limit"
 			case 6:
 				message += ": only one free download may run at a time"
 			case 8:
@@ -182,6 +187,27 @@ func (r *keep2ShareResponse) Error() string {
 		}
 	}
 	return r.host + ": " + message
+}
+
+// refusesAddress reports a refusal of the address asking rather than of the
+// file. Asked for the same file through twenty-two public proxies in one
+// sample, six were answered errorCode 42 with no reason at all while sixteen
+// got tickets, so that answer says nothing about the file. Neither do a wait
+// longer than the limit (detail 5, once retryDelay has declined it) or
+// another free download running from the same address (detail 6).
+func (r *keep2ShareResponse) refusesAddress() bool {
+	if r.ErrorCode != 42 {
+		return false
+	}
+	if len(r.Errors) == 0 {
+		return true
+	}
+	for _, detail := range r.Errors {
+		if detail.Code == 5 || detail.Code == 6 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *keep2ShareResponse) retryDelay() time.Duration {
@@ -261,6 +287,15 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			if delay > config.Keep2ShareMaxWait-waited {
 				return nil, d.host.errorf("free-download wait exceeds the waiting limit; retry later")
 			}
+			// A ticket's timer is usually half a minute and the transfer
+			// follows it, so a short one is sat out here. Tickets have also
+			// come with seventy minutes on them, which is the wait between
+			// free downloads arriving by another road: that goes back to
+			// the queue, as it does without a ticket, and the ticket is
+			// redeemed when the item comes round again on this route.
+			if delay > config.Keep2ShareInPlaceWait {
+				return nil, d.host.wait(ctx, delay)
+			}
 			resolveNote(ctx, fmt.Sprintf("%s: waiting %s for the free-download timer", d.host.label, delay.Round(time.Second)))
 			if err := util.SleepCtx(ctx, delay); err != nil {
 				return nil, err
@@ -303,11 +338,11 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			}
 			last = err
 			if delay := out.retryDelay(); delay > 0 {
-				// A ticket's own timer is short and the transfer follows
-				// it, so it is sat out here. Without one, this is the
-				// host's wait between free downloads: the best part of an
-				// hour, which the file spends back in the queue rather
-				// than holding a worker.
+				// With a ticket this is its own timer, which the top of
+				// the loop sits out or sends back to the queue by length.
+				// Without one, this is the host's wait between free
+				// downloads: the best part of an hour, which the file
+				// spends back in the queue rather than holding a worker.
 				if d.key == "" {
 					return nil, d.host.wait(ctx, delay)
 				}
@@ -322,6 +357,9 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			case 30, 31, 40:
 				d.key = ""
 				continue
+			}
+			if out.refusesAddress() {
+				return nil, &RefusedError{Err: err}
 			}
 			return nil, err
 		}

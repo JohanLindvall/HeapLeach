@@ -200,6 +200,51 @@ func TestProxyCooldownRotatesAndDoesNotConsumeAnotherWorker(t *testing.T) {
 	lease.Release()
 }
 
+// A host that turns an address away, not the file — Keep2Share's bare
+// "Download is not available" — sends the file to another route, and the
+// refusing one is held back from that host instead of being offered again.
+func TestARefusedAddressRetriesTheFileOnAnotherRoute(t *testing.T) {
+	m := busyManager(t)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		io.WriteString(w, "file")
+	}
+	a := proxyServer(t, "127.0.0.2", handler)
+	b := proxyServer(t, "127.0.0.3", handler)
+	pool := attachPool(t, m, []string{a.URL, b.URL})
+	var refused sync.Map
+	var attempts atomic.Int32
+	job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
+		attempts.Add(1)
+		id := httpx.RouteID(ctx)
+		if _, again := refused.Load(id); again {
+			t.Error("the file was sent back to the route that refused it")
+		}
+		if attempts.Load() == 1 {
+			refused.Store(id, true)
+			return nil, &extractor.RefusedError{Err: fmt.Errorf("keep2share: Download is not available")}
+		}
+		return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
+	})
+	m.Start()
+	m.signal()
+	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return job.Items[0].Status == StatusDone })
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts=%d, want the refusal and one more route", attempts.Load())
+	}
+	lease := pool.Acquire("keep2share", "", 1)
+	if lease == nil {
+		t.Fatal("the route that served the file was not released")
+	}
+	defer lease.Release()
+	if _, wasRefused := refused.Load(lease.ID()); wasRefused {
+		t.Error("the refusing route was offered again straight away")
+	}
+	if pool.Acquire("keep2share", "", 1) != nil {
+		t.Error("the refusing route was not held back")
+	}
+}
+
 func TestProxyTransportFailureRetriesOnAnotherRoute(t *testing.T) {
 	m := busyManager(t)
 	var first atomic.Bool
