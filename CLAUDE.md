@@ -476,6 +476,22 @@ Host-specific notes:
   resolver tries another. Each run gets a `TMPDIR` of its own, removed
   afterwards, which PyInstaller's bootloader unpacks into. A normal exit
   leaves files there too.
+
+  Through a proxy route, a failure that the next attempt may well not meet
+  is retried on the best route free rather than failing the file:
+  `transientRouteFailure` covers an expired deadline, a timeout, a
+  connection refused, reset or cut short, and `extractor.TransientError`,
+  which a run of unread CAPTCHAs comes back as. Nothing is charged to the
+  route for these, since the route layer has already scored what the
+  network did. Those attempts spend the file's `ProxyRetries` like any route
+  failure. A proxy that could not be reached at all does not
+  (`deadProxy`: a `proxyconnect` or `socks connect` around a failed dial),
+  because the pool shelves it for a day and public lists are mostly such
+  addresses: twenty of them in a row used to fail the file with
+  `proxyconnect tcp: dial tcp …: i/o timeout` before it met one that
+  answered. A proxy that answered and then could not reach the host still
+  counts, so an outage there cannot walk one file through the whole pool.
+
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's
   hourly allowance even when only a range was fetched. `Pace.Group` keeps

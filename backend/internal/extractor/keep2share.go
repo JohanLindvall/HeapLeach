@@ -311,7 +311,9 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 					return nil, err
 				}
 				if attempts >= config.Keep2ShareCaptchaAttempts {
-					return nil, d.host.errorf("could not obtain a free download after %d CAPTCHA attempts: %w", attempts, last)
+					// Unread or misread images say nothing about the file,
+					// and fresh ones may read; another attempt is worth it.
+					return nil, &TransientError{Err: d.host.errorf("could not obtain a free download after %d CAPTCHA attempts: %w", attempts, last)}
 				}
 				attempts++
 				var err error

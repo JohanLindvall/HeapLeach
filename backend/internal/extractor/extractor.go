@@ -194,6 +194,16 @@ type RefusedError struct{ Err error }
 func (e *RefusedError) Error() string { return e.Err.Error() }
 func (e *RefusedError) Unwrap() error { return e.Err }
 
+// TransientError marks a resolver's failure that the next attempt may well
+// not meet, though nothing below HTTP saw it fail: a run of CAPTCHAs that
+// could not be read in time, say. Through a proxy route the downloader
+// tries the file again, on the best route free; without one it is an
+// ordinary failure, for a retry by hand.
+type TransientError struct{ Err error }
+
+func (e *TransientError) Error() string { return e.Err.Error() }
+func (e *TransientError) Unwrap() error { return e.Err }
+
 // SegmentKey is how a playlist's segments are encrypted: HLS's
 // METHOD=AES-128, which is AES-128 in CBC mode applied to each segment on
 // its own, PKCS#7-padded, under one key fetched from a URL.

@@ -5,7 +5,10 @@ package download
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
@@ -183,6 +186,14 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			// response, so nothing below HTTP has counted it.
 			lease.Failed(err, time.Since(start), false)
 			err = &httpx.RouteError{Err: err}
+		} else if transientRouteFailure(err) {
+			// A deadline, a timeout or a dropped connection says the
+			// attempt went badly, not that the file has gone, and through
+			// public proxies it is the commonest way for one to end. So the
+			// file tries again on the best route free. Nothing is charged
+			// to this one: what the network did the route layer has already
+			// scored, and a CAPTCHA reader out of time is not its doing.
+			err = &httpx.RouteError{Err: err}
 		}
 		if wait, ok := errors.AsType[*extractor.WaitError](err); ok {
 			lease.Cooldown(wait.Until)
@@ -197,8 +208,13 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			if moved {
 				it.proxyRetries = 0
 			}
-			if moved || it.proxyRetries < m.cfg.ProxyRetries {
-				if !moved {
+			// A proxy that could not be reached at all carried nothing,
+			// and the pool has put it away for a day. Public lists are
+			// mostly such addresses, and charging them to the file spent
+			// its whole budget before it met a proxy that answered.
+			dead := deadProxy(err)
+			if moved || dead || it.proxyRetries < m.cfg.ProxyRetries {
+				if !moved && !dead {
 					it.proxyRetries++
 				}
 				err = &extractor.WaitError{Until: time.Now(), Reason: "Retrying through another download route"}
@@ -250,3 +266,47 @@ type routeTransferError struct {
 
 func (e *routeTransferError) Error() string { return e.err.Error() }
 func (e *routeTransferError) Unwrap() error { return e.err }
+
+// transientRouteFailure reports a failure that another attempt may well
+// not meet: a resolver's own word for it, an expired deadline (a CAPTCHA
+// reader's included), a timeout, or a connection refused, reset or cut
+// short. The caller has already excluded the item's own cancellation.
+func transientRouteFailure(err error) bool {
+	if _, ok := errors.AsType[*extractor.TransientError](err); ok {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
+		return true
+	}
+	for _, errno := range []syscall.Errno{syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ECONNABORTED,
+		syscall.ETIMEDOUT, syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.EPIPE} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
+}
+
+// deadProxy reports a failure to reach the proxy itself, before anything
+// was asked of the host behind it: an HTTP proxy's "proxyconnect" or a
+// SOCKS proxy's "socks connect" around a dial that failed. A proxy that
+// answered and then could not reach the host is not one; that answer is
+// about the host as much as the proxy, and an outage there would otherwise
+// walk one file through the entire pool.
+func deadProxy(err error) bool {
+	for err != nil {
+		op, ok := errors.AsType[*net.OpError](err)
+		if !ok {
+			return false
+		}
+		if op.Op == "proxyconnect" || op.Op == "socks connect" {
+			dial, ok := errors.AsType[*net.OpError](op.Err)
+			return ok && dial.Op == "dial"
+		}
+		err = op.Err
+	}
+	return false
+}

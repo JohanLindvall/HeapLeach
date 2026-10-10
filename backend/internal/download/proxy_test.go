@@ -5,17 +5,20 @@ package download
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -387,5 +390,127 @@ func TestProxyChangeResumesBytesAndDoesNotSpendRetriesOnProgress(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(m.DownloadDir(), "file-0.bin"))
 	if err != nil || !bytes.Equal(got, payload) || resumed.Load() <= 0 {
 		t.Fatalf("resumed=%d bytes=%d err=%v state=%+v", resumed.Load(), len(got), err, m.Snapshot().Jobs)
+	}
+}
+
+// errTestTimeout stands in for a dial's i/o timeout.
+type errTestTimeout struct{}
+
+func (errTestTimeout) Error() string   { return "i/o timeout" }
+func (errTestTimeout) Timeout() bool   { return true }
+func (errTestTimeout) Temporary() bool { return true }
+
+// The shape net/http gives a proxy that never answered: a request through
+// it, a proxyconnect around a dial, and the dial's own failure.
+func deadProxyError() error {
+	return fmt.Errorf("keep2share: requestCaptcha: %w", &httpx.RouteError{Err: &url.Error{
+		Op: "Post", URL: "https://service.example.test/api/v2/requestCaptcha",
+		Err: &net.OpError{Op: "proxyconnect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errTestTimeout{}}},
+	}})
+}
+
+func TestRouteFailuresAreToldApart(t *testing.T) {
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	for name, tc := range map[string]struct {
+		err             error
+		dead, transient bool
+	}{
+		"unreachable proxy": {err: deadProxyError(), dead: true, transient: true},
+		"unreachable SOCKS proxy": {err: &url.Error{Op: "Get", URL: "https://service.example.test/f",
+			Err: &net.OpError{Op: "socks connect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}}, dead: true, transient: true},
+		"proxy that could not reach the host": {err: &url.Error{Op: "Get", URL: "https://service.example.test/f",
+			Err: &net.OpError{Op: "socks connect", Net: "tcp", Err: errors.New("host unreachable")}}},
+		"reset mid-body":      {err: fmt.Errorf("read body: %w", reset), transient: true},
+		"deadline":            {err: fmt.Errorf("captcha: %w", context.DeadlineExceeded), transient: true},
+		"cut short":           {err: io.ErrUnexpectedEOF, transient: true},
+		"unread CAPTCHAs":     {err: &extractor.TransientError{Err: errors.New("could not obtain a free download")}, transient: true},
+		"premium only":        {err: errors.New("keep2share: this file requires a Premium account")},
+		"cancelled by a user": {err: context.Canceled},
+	} {
+		if got := deadProxy(tc.err); got != tc.dead {
+			t.Errorf("%s: deadProxy = %v, want %v", name, got, tc.dead)
+		}
+		if got := transientRouteFailure(tc.err); got != tc.transient {
+			t.Errorf("%s: transientRouteFailure = %v, want %v", name, got, tc.transient)
+		}
+	}
+}
+
+// Public proxy lists are mostly dead addresses. Meeting more of them than
+// the retry budget allows must not fail the file: they cost it nothing.
+func TestUnreachableProxiesDoNotSpendTheRetryBudget(t *testing.T) {
+	m := busyManager(t)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		io.WriteString(w, "file")
+	}
+	a := proxyServer(t, "127.0.0.2", handler)
+	b := proxyServer(t, "127.0.0.3", handler)
+	attachPool(t, m, []string{a.URL, b.URL})
+	unreachable := m.cfg.ProxyRetries + 3
+	var attempts atomic.Int32
+	job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
+		if int(attempts.Add(1)) <= unreachable {
+			return nil, deadProxyError()
+		}
+		return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
+	})
+	m.Start()
+	m.signal()
+	waitFor(t, 10*time.Second, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
+	})
+	m.mu.Lock()
+	status, failure := job.Items[0].Status, job.Items[0].Err
+	m.mu.Unlock()
+	if status != StatusDone {
+		t.Fatalf("status=%s error=%q after %d unreachable proxies; want them retried past the budget", status, failure, unreachable)
+	}
+}
+
+// A deadline or a dropped connection through a proxy is retried on the next
+// route; something the file itself cannot do still fails it straight away.
+func TestTransientRouteFailuresRetryAndPermanentOnesDoNot(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err      error
+		attempts int32
+		status   Status
+	}{
+		"deadline":     {err: fmt.Errorf("captcha: %w", context.DeadlineExceeded), attempts: 2, status: StatusDone},
+		"reset":        {err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, attempts: 2, status: StatusDone},
+		"premium only": {err: errors.New("keep2share: this file requires a Premium account"), attempts: 1, status: StatusFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := busyManager(t)
+			handler := func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				io.WriteString(w, "file")
+			}
+			a := proxyServer(t, "127.0.0.2", handler)
+			b := proxyServer(t, "127.0.0.3", handler)
+			attachPool(t, m, []string{a.URL, b.URL})
+			var attempts atomic.Int32
+			job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
+				if attempts.Add(1) == 1 {
+					return nil, tc.err
+				}
+				return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
+			})
+			m.Start()
+			m.signal()
+			waitFor(t, 10*time.Second, func() bool {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
+			})
+			m.mu.Lock()
+			status := job.Items[0].Status
+			m.mu.Unlock()
+			if status != tc.status || attempts.Load() != tc.attempts {
+				t.Fatalf("status=%s after %d attempts; want %s after %d", status, attempts.Load(), tc.status, tc.attempts)
+			}
+		})
 	}
 }
