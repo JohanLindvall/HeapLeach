@@ -169,13 +169,9 @@ func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf 
 				}
 			}
 		}
-		next := untried[0]
-		for _, e := range untried {
-			if e.URL > p.last[site] {
-				next = e
-				break
-			}
-		}
+		// Draw one eligible unmeasured endpoint uniformly. Walking sorted
+		// URLs can spend many attempts on adjacent dead networks or ports.
+		next := untried[rand.IntN(len(untried))]
 		if best == nil || rate(next) > bestRate {
 			best = next
 			p.lastProbe[site] = time.Now()

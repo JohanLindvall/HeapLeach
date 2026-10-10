@@ -721,10 +721,13 @@ file-concurrency setting and each service's one-file-per-address rule:
    periods do not train throughput or setup estimates. These live samples
    update both route selection and the proxy list before the file finishes,
    and the background task saves them to BoltDB.
-3. Give unmeasured routes one shared exploration opportunity. While measured
-   routes are free, allow at most one active unmeasured transfer and space
-   exploration starts by 30 seconds. If no measured route is available,
-   use idle workers to discover capacity instead of leaving them unused.
+3. Give unmeasured routes one shared exploration opportunity, choosing its
+   candidate uniformly at random from the available unmeasured endpoints.
+   Busy and cooling addresses are excluded before the draw; selection and
+   reservation are atomic. While measured routes are free, allow at most
+   one active unmeasured transfer and space exploration starts by 30 seconds.
+   If no measured route is available, use idle workers to discover capacity
+   instead of leaving them unused.
 4. Reassess slow transfers after 20 seconds of samples. A proven alternative
    must predict at least 25% higher useful throughput, save at least 15 seconds
    after setup and recovery costs, and win two checks ten seconds apart.

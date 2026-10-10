@@ -237,6 +237,31 @@ func TestParseFeedsAndRejectMalformedEndpoints(t *testing.T) {
 	}
 }
 
+func TestUnmeasuredCandidateIsRandomAcrossTheEligibleList(t *testing.T) {
+	var endpoints []string
+	for i := range 8 {
+		endpoints = append(endpoints, fmt.Sprintf("http://unrated-%d.example.test:8000", i))
+	}
+	p := testPool(t, endpoints, nil)
+	// Keep the candidate order fixed: random map iteration must not be
+	// what spreads exploration through the inventory.
+	var candidates []*entry
+	for _, raw := range endpoints {
+		candidates = append(candidates, p.entries[raw])
+	}
+	counts := make(map[string]int)
+	for range 1000 {
+		counts[p.selectEntry("keep2share", candidates).URL]++
+	}
+	for _, raw := range endpoints {
+		// Each endpoint averages 125 draws. These broad bounds reject
+		// always picking an early entry without a tight statistical test.
+		if counts[raw] < 32 || counts[raw] > 256 {
+			t.Fatalf("unmeasured candidates were not spread across the list: %v", counts)
+		}
+	}
+}
+
 func TestScoringPrefersMeasuredBandwidthWithoutRewardingRefusals(t *testing.T) {
 	p := testPool(t, []string{"http://fast.example.test:80", "http://slow.example.test:80", "http://refused.example.test:80"}, nil)
 	var entries []*entry

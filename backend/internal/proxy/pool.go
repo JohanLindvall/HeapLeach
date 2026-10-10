@@ -83,7 +83,6 @@ type Pool struct {
 	entries       map[string]*entry
 	sources       map[string]*source
 	priors        map[string]*prior
-	last          map[string]string
 	demand        map[string]int
 	lastProbe     map[string]time.Time
 	dirty         map[string]bool
@@ -110,7 +109,7 @@ func Open(path string, endpoints, feeds []string, client *httpx.Client, log *slo
 		return nil, err
 	}
 	p := &Pool{entries: make(map[string]*entry), sources: make(map[string]*source),
-		priors: make(map[string]*prior), last: make(map[string]string), demand: make(map[string]int), client: client, log: log,
+		priors: make(map[string]*prior), demand: make(map[string]int), client: client, log: log,
 		lastProbe: make(map[string]time.Time), dirty: make(map[string]bool),
 		static: c.Endpoints, feeds: c.Feeds, discovery: true, wake: make(chan struct{}, 1)}
 	if err := p.openStore(path); err != nil {
@@ -295,7 +294,6 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, wa
 	if len(candidates) == 0 {
 		return nil
 	}
-	slices.SortFunc(candidates, func(a, b *entry) int { return compareURL(a.URL, b.URL) })
 	var chosen *entry
 	for _, e := range candidates {
 		if preferred == "" {
@@ -349,18 +347,7 @@ func (p *Pool) lease(chosen *entry, site string) *Lease {
 		}
 	}
 	chosen.stat(site).active++
-	p.last[site] = chosen.URL
 	return &Lease{pool: p, entry: chosen, site: site, started: time.Now()}
-}
-
-func compareURL(a, b string) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
-	}
-	return 0
 }
 
 func identity(raw string) string {

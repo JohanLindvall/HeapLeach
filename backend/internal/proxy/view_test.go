@@ -37,7 +37,7 @@ func TestProxyPageUsesMeasuredScoringAndRedactsCredentials(t *testing.T) {
 	if strings.Contains(string(body), "private-password") {
 		t.Fatal("inventory exposed proxy credentials")
 	}
-	if len(p.priors) != 0 || p.last["keep2share"] != "" {
+	if len(p.priors) != 0 || len(p.lastProbe) != 0 {
 		t.Fatal("reading the inventory changed the selector")
 	}
 	unknown := p.Page("another-service", Query{})

@@ -593,10 +593,14 @@ Host-specific notes:
   to the service and route, never the entire service's queue. Transport failures
   return the item to the queue to try another route, with their own bounded retry
   budget. The score estimates useful bytes per second for the remaining
-  file size, including reliability and observed setup delay. Five-second
-  progress windows train throughput before a long file finishes, with the
-  resumed prefix, pauses and speed caps excluded. Those samples never write
-  Bolt from `sampleLocked`; the background task flushes changed rows. Bolt stores
+  file size, including reliability and observed setup delay. Unmeasured
+  endpoints share one exploration candidate, drawn uniformly at random from
+  the eligible list, so discovery does not walk adjacent addresses in URL
+  order. Selection and reservation share the pool lock, including for these
+  unrated routes. Five-second progress windows train throughput before a long
+  file finishes, with the resumed prefix, pauses and speed caps excluded.
+  Those samples never write Bolt from `sampleLocked`; the background task
+  flushes changed rows. Bolt stores
   inventory and each health outcome immediately, while active leases remain
   in memory. The manager owns the pool, opens it lazily on enable, and closes
   it after workers finish. Explicit routes must never
