@@ -95,13 +95,29 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 		return "", errors.New("playlist has no segments")
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Watch the key request as well as the media parts: both use streaming
+	// bodies, so headers followed by silence otherwise wait indefinitely.
+	// The item's counter only advances when a whole part lands in order;
+	// raw fetched bytes also recognise a large part arriving slowly.
+	var (
+		fetched atomic.Int64
+		stalled atomic.Bool
+	)
+	go watchForStall(ctx, fetched.Load, cancel, &stalled, m.stallTimeout(), m.throttle.isPaused)
+	fail := func(err error) (string, error) {
+		return "", annotateTransfer(name, err, &stalled, m.stallTimeout())
+	}
+
 	// An encrypted playlist's key, fetched once per attempt — it is signed
 	// like the segments, and a resolver may just have minted it afresh.
 	var key []byte
 	if segmentKey != nil {
 		var err error
-		if key, err = m.fetchSegment(ctx, segmentKey.URI, headers, new(atomic.Int64)); err != nil {
-			return "", fmt.Errorf("fetch the key for %s: %w", name, err)
+		if key, err = m.fetchSegment(ctx, segmentKey.URI, headers, &fetched); err != nil {
+			return fail(fmt.Errorf("fetch the key for %s: %w", name, err))
 		}
 	}
 	if workers < 1 {
@@ -137,21 +153,6 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 
 	m.setProgress(it, written)
 	m.setSegmentProgress(it, start, len(segments))
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// The item's own counter only advances when a whole part lands in
-	// order, so the watchdog samples raw fetched bytes instead: a large
-	// part arriving slowly is progress, a connection gone silent is not.
-	var (
-		fetched atomic.Int64
-		stalled atomic.Bool
-	)
-	go watchForStall(ctx, fetched.Load, cancel, &stalled, m.stallTimeout(), m.throttle.isPaused)
-	fail := func(err error) (string, error) {
-		return "", annotateTransfer(name, err, &stalled, m.stallTimeout())
-	}
 
 	results := make(chan fetchedSegment, workers)
 	slots := make(chan struct{}, workers)

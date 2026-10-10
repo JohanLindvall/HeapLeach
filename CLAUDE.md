@@ -1160,7 +1160,10 @@ Two things here are easy to get wrong, and both were:
   item counter only moves when a whole part lands *in order*, so a large part
   arriving slowly looks identical to a dead connection to anything watching
   it. `watchForStall` therefore takes a progress function rather than an
-  item.
+  item. It starts before fetching an encryption key and counts those bytes
+  too: the key uses the streaming client, so a silent body otherwise waits
+  forever. Through a proxy, that stall follows the same failure penalty,
+  cooldown and route retry as a stalled media body.
 
 **AES-128 playlists are decrypted natively** (`hlscrypt.go`). HLS's
 `METHOD=AES-128` encrypts each segment on its own (AES-CBC, PKCS#7), so each
