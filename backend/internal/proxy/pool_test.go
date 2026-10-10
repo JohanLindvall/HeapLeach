@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -101,33 +102,69 @@ func TestTransportFailureIsGlobalButRefusalIsPerService(t *testing.T) {
 }
 
 func TestLeaseLimitsAcrossProtocolsAndConcurrentAcquisitions(t *testing.T) {
-	p := testPool(t, []string{"http://one.example.test:8000", "socks5://one.example.test:1080", "http://two.example.test:8000"}, nil)
-	var wg sync.WaitGroup
-	leases := make(chan *Lease, 40)
-	for range 40 {
-		wg.Go(func() {
-			if l := p.Acquire("keep2share", "", 1); l != nil {
-				leases <- l
+	for _, preferred := range []string{"", routeID("http://one.example.test:8000")} {
+		t.Run("preferred="+preferred, func(t *testing.T) {
+			// Every endpoint is unrated, including alternate ports and
+			// protocols for the same address. All contenders start together.
+			p := testPool(t, []string{
+				"http://one.example.test:8000", "http://one.example.test:8080",
+				"https://one.example.test:8443", "socks5://one.example.test:1080",
+				"http://two.example.test:8000", "socks5://two.example.test:1080",
+			}, nil)
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			leases := make(chan *Lease, 40)
+			for range cap(leases) {
+				wg.Go(func() {
+					<-start
+					if l := p.Acquire("keep2share", preferred, 1); l != nil {
+						leases <- l
+					}
+				})
+			}
+			close(start)
+			wg.Wait()
+			close(leases)
+			var held []*Lease
+			addresses := make(map[string]bool)
+			for l := range leases {
+				held = append(held, l)
+				t.Cleanup(l.Release)
+				u, err := url.Parse(l.entry.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if addresses[u.Hostname()] {
+					t.Fatalf("concurrent attempts shared proxy address %s", u.Hostname())
+				}
+				addresses[u.Hostname()] = true
+			}
+			if len(held) != 2 {
+				t.Fatalf("leased %d routes; want two distinct addresses", len(held))
+			}
+			for _, l := range held {
+				if extra := p.Acquire("keep2share", l.ID(), 1); extra != nil {
+					extra.Release()
+					t.Fatal("a preferred route bypassed its active reservation")
+				}
+			}
+			// Freeing one address must leave the other reserved, even if
+			// Release is called twice during attempt cleanup.
+			held[0].Release()
+			held[0].Release()
+			again := p.Acquire("keep2share", held[0].ID(), 1)
+			if again == nil {
+				t.Fatal("released route remained unavailable")
+			}
+			defer again.Release()
+			if again.ID() != held[0].ID() {
+				t.Fatal("did not reuse the released preferred route")
+			}
+			if extra := p.Acquire("keep2share", "", 1); extra != nil {
+				extra.Release()
+				t.Fatal("releasing one route freed another active reservation")
 			}
 		})
-	}
-	wg.Wait()
-	close(leases)
-	var held []*Lease
-	for l := range leases {
-		held = append(held, l)
-	}
-	if len(held) != 2 {
-		t.Fatalf("leased %d routes; want two distinct addresses", len(held))
-	}
-	for _, l := range held {
-		l.Release()
-		l.Release()
-	}
-	if l := p.Acquire("keep2share", "", 1); l == nil {
-		t.Fatal("leases leaked")
-	} else {
-		l.Release()
 	}
 }
 

@@ -72,6 +72,10 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 		t.Run(service, func(t *testing.T) {
 			m := busyManager(t)
 			m.limit = 1
+			tickets := make(chan string, 4)
+			issueTickets := make(chan struct{})
+			var issueOnce sync.Once
+			defer issueOnce.Do(func() { close(issueTickets) })
 			arrived := make(chan string, 4)
 			finish := make(chan struct{})
 			var once sync.Once
@@ -81,18 +85,24 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 			for i, address := range []string{"127.0.0.2", "127.0.0.3", "127.0.0.4", "127.0.0.5"} {
 				id := fmt.Sprint(i)
 				var active atomic.Int32
-				srv := proxyServer(t, address, func(w http.ResponseWriter, r *http.Request) {
+				handler := func(w http.ResponseWriter, r *http.Request) {
+					if active.Add(1) != 1 {
+						t.Error("two attempts used the same proxy address simultaneously")
+					}
+					defer active.Add(-1)
 					if r.URL.Path == "/ticket" {
+						tickets <- id
+						select {
+						case <-issueTickets:
+						case <-r.Context().Done():
+							return
+						}
 						fmt.Fprint(w, id)
 						return
 					}
 					if r.URL.Path != "/file/"+id {
 						t.Errorf("ticket changed routes: path=%s route=%s", r.URL.Path, id)
 					}
-					if active.Add(1) != 1 {
-						t.Error("two files used the same egress simultaneously")
-					}
-					defer active.Add(-1)
 					arrived <- id
 					select {
 					case <-finish:
@@ -102,11 +112,16 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 					w.Header().Set("Content-Type", "application/octet-stream")
 					w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
 					fmt.Fprint(w, payload)
-				})
-				endpoints = append(endpoints, srv.URL)
+				}
+				// A second port on the same address is another pool entry,
+				// but cannot admit another CAPTCHA/ticket or file attempt.
+				for range 2 {
+					srv := proxyServer(t, address, handler)
+					endpoints = append(endpoints, srv.URL)
+				}
 			}
 			attachPool(t, m, endpoints)
-			client := httpx.New("test", "en", 0, time.Second)
+			client := httpx.New("test", "en", 0, 10*time.Second)
 			job := addProxyFiles(m, 4, func(ctx context.Context) (*extractor.Target, error) {
 				id, err := client.GetString(ctx, "http://api.example.test/ticket", nil)
 				if err != nil {
@@ -122,10 +137,10 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 			ids := make(map[string]bool)
 			for n := range 3 {
 				select {
-				case id := <-arrived:
+				case id := <-tickets:
 					ids[id] = true
 				case <-time.After(5 * time.Second):
-					t.Fatal("downloads did not overlap")
+					t.Fatal("ticket requests did not overlap")
 				}
 				if n == 0 {
 					if snap := m.Snapshot(); snap.Active != 1 {
@@ -138,10 +153,23 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 				}
 			}
 			if len(ids) != 3 {
-				t.Fatal("parallel transfers shared an address")
+				t.Fatal("parallel ticket requests shared an unrated proxy address")
 			}
 			if snap := m.Snapshot(); snap.Active != 3 || snap.Queued != 1 {
 				t.Fatalf("proxy downloads must follow general concurrency: active=%d queued=%d", snap.Active, snap.Queued)
+			}
+			issueOnce.Do(func() { close(issueTickets) })
+			transfers := make(map[string]bool)
+			for range 3 {
+				select {
+				case id := <-arrived:
+					if !ids[id] || transfers[id] {
+						t.Fatal("ticket reservations were not retained for the transfers")
+					}
+					transfers[id] = true
+				case <-time.After(5 * time.Second):
+					t.Fatal("downloads did not overlap")
+				}
 			}
 			once.Do(func() { close(finish) })
 			waitFor(t, 5*time.Second, func() bool {

@@ -283,6 +283,8 @@ func (p *Pool) Acquire(site, preferred string, files int) *Lease {
 
 // AcquireFor ranks routes for the bytes this file still needs. A short
 // remaining tail values setup latency more than a long transfer does.
+// Selection and reservation share one lock: unrated and preferred routes
+// obey the same per-address limit, starting before the first request.
 func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, waf bool) *Lease {
 	p.mu.Lock()
 	defer p.mu.Unlock()
