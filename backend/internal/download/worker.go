@@ -557,6 +557,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	// whatever a redirect landed on — the queue, the evidence and the cap
 	// have to name the same machine or the throttle can never fire.
 	m.hostGate.serving(hostOf(rawURL))
+	m.mu.Lock()
+	it.routeResumable = resp.StatusCode == http.StatusPartialContent
+	m.mu.Unlock()
 
 	total := totalSize(resp, offset)
 	if state != nil && total <= 0 {

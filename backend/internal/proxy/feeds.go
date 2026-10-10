@@ -125,8 +125,10 @@ func (p *Pool) fetch(ctx context.Context, src string) ([]string, error) {
 }
 
 // Refresh retains surviving health and each failed source's last good list.
-// Inventory is topped up when few usable proxies remain, at most once every
-// five minutes. Network I/O holds neither the pool lock nor a Bolt transaction.
+// Routine attempts are a day apart, including across restarts or failures.
+// Earlier top-ups require runnable demand and too few usable, scored routes,
+// and are at least five minutes apart. Network I/O holds neither the pool
+// lock nor a Bolt transaction.
 func (p *Pool) Refresh(ctx context.Context) {
 	p.mu.Lock()
 	if p.closed {
@@ -138,7 +140,10 @@ func (p *Pool) Refresh(ctx context.Context) {
 			p.log.Error("could not save proxy inventory", "err", err)
 		} else {
 			p.configDirty = false
+			clear(p.dirty)
 		}
+	} else if err := p.flushMeasurements(); err != nil {
+		p.log.Error("could not save proxy measurements", "err", err)
 	}
 	feeds := slices.Clone(p.feeds)
 	p.mu.Unlock()
@@ -161,24 +166,9 @@ func (p *Pool) Refresh(ctx context.Context) {
 			s = &source{}
 			p.sources[src] = s
 		}
-		ready := 0
-		for _, e := range p.entries {
-			if e.URL == Direct || !p.enabled(e) || e.Until.After(now) {
-				continue
-			}
-			cooling := false
-			for _, stat := range e.Sites {
-				if stat.Until.After(now) {
-					cooling = true
-					break
-				}
-			}
-			if !cooling {
-				ready++
-			}
-		}
-		due := now.Sub(s.Attempted) >= config.ProxyRefreshRetry &&
-			(s.Fetched.IsZero() || now.Sub(s.Fetched) >= config.ProxyRefresh || ready < config.ProxyMinReady)
+		elapsed := now.Sub(s.Attempted)
+		due := s.Attempted.IsZero() || elapsed >= config.ProxyRefresh ||
+			(elapsed >= config.ProxyRefreshRetry && p.shortOfRoutes(now))
 		if !due || s.refreshing {
 			p.mu.Unlock()
 			continue
@@ -216,6 +206,48 @@ func (p *Pool) Refresh(ctx context.Context) {
 		}
 		p.mu.Unlock()
 	}
+}
+
+// shortOfRoutes judges capacity, not the size of a feed. Untried entries and
+// weak scores cannot conceal a depleted pool. A standby route must have
+// succeeded and score at least as well as the learned prior for an untried
+// route; this uses the UI's mean score, without drawing random samples.
+// Active leases count during their first measurement window; after that,
+// their measured score must qualify too. Ports and protocols on one address
+// count only once, just as in Acquire.
+// Caller holds mu.
+func (p *Pool) shortOfRoutes(now time.Time) bool {
+	for site, wanted := range p.demand {
+		if wanted <= 0 {
+			continue
+		}
+		prior := p.scorePrior(site)
+		threshold := prior.meanRate(siteStat{})
+		cooling, ready := make(map[string]bool), make(map[string]bool)
+		for _, e := range p.entries {
+			if e.readStat(site).Until.After(now) {
+				cooling[identity(e.URL)] = true
+			}
+		}
+		for _, e := range p.entries {
+			key, s := identity(e.URL), e.readStat(site)
+			if e.Until.After(now) || cooling[key] {
+				continue
+			}
+			starting := s.active > 0 && s.BytesPerSecond == 0
+			scored := s.OK > 0 && prior.meanRate(s) >= threshold
+			if starting || ((p.enabled(e) || s.active > 0) && scored) {
+				ready[key] = true
+				if len(ready) >= wanted {
+					break
+				}
+			}
+		}
+		if len(ready) < wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Pool) retire(now time.Time) {

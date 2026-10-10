@@ -90,6 +90,9 @@ type Item struct {
 	route          *proxy.Lease
 	preferredRoute string
 	proxyRetries   int
+	routeCancel    context.CancelFunc
+	routeUpgrade   *proxy.Lease
+	routeResumable bool
 	// reject, when set, recognises this host's way of answering a dead
 	// resource with a valid-looking body. See extractor.File.Reject.
 	reject func(string, http.Header) error

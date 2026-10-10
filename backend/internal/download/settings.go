@@ -138,6 +138,8 @@ func (m *Manager) ApplySettings(s Settings) error {
 		}
 		m.dirMu.Unlock()
 	}
+	m.updateProxyDemandLocked()
+	m.constrainProxyMeasurementsLocked()
 	m.mu.Unlock()
 	if proxyUpdate && enabled && pool != nil {
 		pool.Start(m.ctx)

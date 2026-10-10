@@ -411,6 +411,9 @@ func (m *Manager) dispatch() {
 			}
 		}
 
+		m.mu.Lock()
+		m.updateProxyDemandLocked()
+		m.mu.Unlock()
 		for {
 			m.mu.Lock()
 			it := m.nextLocked()

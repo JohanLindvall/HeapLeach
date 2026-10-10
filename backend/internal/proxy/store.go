@@ -102,7 +102,31 @@ func (p *Pool) persist(e *entry, site string) {
 	})
 	if err != nil {
 		p.log.Error("could not save proxy health", "err", err)
+	} else {
+		delete(p.dirty, e.URL)
 	}
+}
+
+// Live speed samples must not write Bolt transactions on the UI/progress
+// thread. Flush only changed entries from the background task or on close.
+func (p *Pool) flushMeasurements() error {
+	if len(p.dirty) == 0 {
+		return nil
+	}
+	err := p.db.Update(func(tx *bolt.Tx) error {
+		for raw := range p.dirty {
+			if e := p.entries[raw]; e != nil {
+				if err := putJSON(tx.Bucket(entriesBucket), raw, e); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		clear(p.dirty)
+	}
+	return err
 }
 
 func (p *Pool) saveAll() error {

@@ -28,6 +28,8 @@ const Direct = "direct"
 type siteStat struct {
 	OK, Bad, Duration float64
 	BytesPerSecond    float64
+	SetupSeconds      float64
+	SetupSamples      int
 	Tries, Fails      int
 	Until             time.Time
 	active            int
@@ -73,6 +75,9 @@ type Pool struct {
 	sources       map[string]*source
 	priors        map[string]*prior
 	last          map[string]string
+	demand        map[string]int
+	lastProbe     map[string]time.Time
+	dirty         map[string]bool
 	static, feeds []string
 	discovery     bool
 	configDirty   bool
@@ -96,7 +101,8 @@ func Open(path string, endpoints, feeds []string, client *httpx.Client, log *slo
 		return nil, err
 	}
 	p := &Pool{entries: make(map[string]*entry), sources: make(map[string]*source),
-		priors: make(map[string]*prior), last: make(map[string]string), client: client, log: log,
+		priors: make(map[string]*prior), last: make(map[string]string), demand: make(map[string]int), client: client, log: log,
+		lastProbe: make(map[string]time.Time), dirty: make(map[string]bool),
 		static: c.Endpoints, feeds: c.Feeds, discovery: true, wake: make(chan struct{}, 1)}
 	if err := p.openStore(path); err != nil {
 		return nil, err
@@ -182,6 +188,8 @@ func (p *Pool) Close() error {
 	var err error
 	if p.configDirty {
 		err = p.saveAll()
+	} else {
+		err = p.flushMeasurements()
 	}
 	return errors.Join(err, p.db.Close())
 }
@@ -192,6 +200,15 @@ type Lease struct {
 	entry *entry
 	site  string
 	once  sync.Once
+	// Measurement and upgrade state is guarded by pool.mu. Progress
+	// samples are in memory; the background refresh flushes dirty rows.
+	started                  time.Time
+	released, sawBytes       bool
+	measured, constrained    bool
+	windowBytes, received    int64
+	windowTime, transferTime time.Duration
+	lastUpgrade              time.Time
+	upgradeWins              int
 }
 
 func routeID(raw string) string {
@@ -203,6 +220,15 @@ func routeID(raw string) string {
 
 func (l *Lease) ID() string { return routeID(l.entry.URL) }
 
+// Configured checks a reserved replacement again after a live source edit.
+// Existing requests can finish on removed routes; a not-yet-used upgrade
+// should not start a new request there.
+func (l *Lease) Configured() bool {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	return !l.pool.closed && l.pool.enabled(l.entry)
+}
+
 func (l *Lease) Context(ctx context.Context) context.Context {
 	return httpx.WithRoute(ctx, l.ID(), l.entry.client, l.observe)
 }
@@ -212,6 +238,7 @@ func (l *Lease) Release() {
 		l.pool.mu.Lock()
 		defer l.pool.mu.Unlock()
 		l.entry.stat(l.site).active--
+		l.released = true
 	})
 }
 
@@ -228,12 +255,39 @@ func (l *Lease) Failed(err error, elapsed time.Duration, transport bool) {
 // Acquire never waits or writes to disk. A preferred route lets a paused or
 // interrupted file reuse its unexpired, IP-bound ticket when it is healthy.
 func (p *Pool) Acquire(site, preferred string, files int) *Lease {
+	return p.AcquireFor(site, preferred, files, 0)
+}
+
+// AcquireFor ranks routes for the bytes this file still needs. A short
+// remaining tail values setup latency more than a long transfer does.
+func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64) *Lease {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return nil
 	}
-	now := time.Now()
+	candidates := p.available(site, files, time.Now())
+	if len(candidates) == 0 {
+		return nil
+	}
+	slices.SortFunc(candidates, func(a, b *entry) int { return compareURL(a.URL, b.URL) })
+	var chosen *entry
+	for _, e := range candidates {
+		if preferred == "" {
+			break
+		}
+		if routeID(e.URL) == preferred {
+			chosen = e
+			break
+		}
+	}
+	if chosen == nil {
+		chosen = p.selectEntry(site, candidates, remaining)
+	}
+	return p.lease(chosen, site)
+}
+
+func (p *Pool) available(site string, files int, now time.Time) []*entry {
 	var candidates []*entry
 	active := make(map[string]int)
 	cooling := make(map[string]bool)
@@ -253,23 +307,10 @@ func (p *Pool) Acquire(site, preferred string, files int) *Lease {
 			candidates = append(candidates, e)
 		}
 	}
-	if len(candidates) == 0 {
-		return nil
-	}
-	slices.SortFunc(candidates, func(a, b *entry) int { return compareURL(a.URL, b.URL) })
-	var chosen *entry
-	for _, e := range candidates {
-		if preferred == "" {
-			break
-		}
-		if routeID(e.URL) == preferred {
-			chosen = e
-			break
-		}
-	}
-	if chosen == nil {
-		chosen = p.selectEntry(site, candidates)
-	}
+	return candidates
+}
+
+func (p *Pool) lease(chosen *entry, site string) *Lease {
 	if chosen.client == nil {
 		// URLs were validated before entering the inventory.
 		var err error
@@ -280,7 +321,7 @@ func (p *Pool) Acquire(site, preferred string, files int) *Lease {
 	}
 	chosen.stat(site).active++
 	p.last[site] = chosen.URL
-	return &Lease{pool: p, entry: chosen, site: site}
+	return &Lease{pool: p, entry: chosen, site: site, started: time.Now()}
 }
 
 func compareURL(a, b string) int {
@@ -358,7 +399,7 @@ func (l *Lease) observe(o httpx.RouteObservation) {
 	if ok {
 		// API replies and CAPTCHA images measure responsiveness, not file
 		// throughput. Only substantial response bodies train bandwidth.
-		if o.Bytes >= config.ProxyThroughputMinBytes {
+		if o.Bytes >= config.ProxyThroughputMinBytes && !l.measured && !l.constrained {
 			rate := float64(o.Bytes) / max(seconds, config.ProxyMinSeconds)
 			if s.BytesPerSecond == 0 {
 				s.BytesPerSecond = rate

@@ -397,6 +397,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// The album index hosts nothing either, and resolves each result the
 	// same way, so it is wired once the registry exists for the same reason.
 	reg.extractors = append(reg.extractors, NewBalbums(client, reg))
+	reg.extractors = append(reg.extractors, NewVoyeurKing(client, reg))
 	return reg
 }
 

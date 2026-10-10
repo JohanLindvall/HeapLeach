@@ -81,7 +81,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
           <option value="address">Address</option>
         </select>
       </div>
-      <p className="proxy-list__help" id="proxy-score-help">Score estimates useful throughput from recent success, measured speed, and retry cost. Higher is better; untested routes use an estimate and are explored as downloads run.</p>
+      <p className="proxy-list__help" id="proxy-score-help">Score estimates useful throughput for a 32 MiB transfer, including reliability, measured speed, and setup time. Higher is better; actual downloads also account for remaining file size. Speed estimates update during transfers.</p>
       {error && <p className="settings-error" role="alert">{error} Retrying automatically{page ? '; showing the last update.' : '.'}</p>}
       {!page ? (!error && <p role="status">Loading proxy list…</p>) : page.rows.length === 0 ? (
         <p className="proxy-list__empty">{page.summary.total > 0 ? 'No proxies match these filters.' : 'No routes loaded yet. Configure sources above, then enable K2S proxies.'}</p>

@@ -5,6 +5,7 @@ package proxy
 import (
 	"math"
 	"math/rand/v2"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -44,25 +45,43 @@ func (e *entry) readStat(site string) siteStat {
 
 // expectedRate is shared by the selector and its deterministic UI estimate.
 func (prior scorePrior) expectedRate(s siteStat, chance float64) float64 {
-	seconds := prior.seconds
-	if s.Tries > 0 {
-		seconds = s.Duration
+	return prior.workRate(s, chance, 0)
+}
+
+func (prior scorePrior) workRate(s siteStat, chance float64, remaining int64) float64 {
+	if remaining <= 0 {
+		remaining = config.ProxyScoreBytes
+	}
+	setup := config.ProxyPriorSetup.Seconds()
+	if s.SetupSamples > 0 {
+		setup = s.SetupSeconds
 	}
 	speed := s.BytesPerSecond
-	if speed == 0 {
+	if speed <= 0 {
 		speed = prior.bandwidth
 	}
-	// File size itself must not make a long, fast download rank below a
-	// tiny API response. Failure probability and recovery time reduce it.
-	return chance * speed / (1 + config.ProxyInvalidPenalty*(1-chance)/max(seconds, config.ProxyMinSeconds))
+	seconds := setup + float64(remaining)/max(speed, 1) +
+		(1-chance)*max(prior.seconds, config.ProxyInvalidPenalty)
+	return chance * float64(remaining) / max(seconds, config.ProxyMinSeconds)
+}
+
+// meanRate is the same deterministic, throughput-weighted score used by the
+// inventory UI and by discovery's assessment of standby routes.
+func (prior scorePrior) meanRate(s siteStat) float64 {
+	chance := (prior.a + s.OK) / (prior.a + prior.b + s.OK + s.Bad)
+	return prior.expectedRate(s, chance)
 }
 
 // selectEntry follows amzscrape's throughput policy: sample each tried route's
 // chance of success, divided by its observed cost. Untried routes get ONE
 // shared draw, so thousands of dead feed entries cannot outvote a proven one
 // merely through the number of lottery tickets they hold.
-func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
+func (p *Pool) selectEntry(site string, candidates []*entry, work ...int64) *entry {
 	prior := p.scorePrior(site)
+	var remaining int64
+	if len(work) > 0 {
+		remaining = work[0]
+	}
 	var best *entry
 	bestRate := -1.0
 	var untried []*entry
@@ -70,10 +89,10 @@ func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
 		s := e.readStat(site)
 		x, y := gamma(prior.a+s.OK), gamma(prior.b+s.Bad)
 		chance := x / (x + y)
-		return prior.expectedRate(s, chance)
+		return prior.workRate(s, chance, remaining)
 	}
 	for _, e := range candidates {
-		if e.stat(site).Tries == 0 {
+		if e.stat(site).BytesPerSecond == 0 {
 			untried = append(untried, e)
 			continue
 		}
@@ -82,6 +101,20 @@ func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
 		}
 	}
 	if len(untried) > 0 {
+		// While proven routes are free, at most one unmeasured transfer
+		// explores, and new exploration slots are spaced apart. When no
+		// proven route is free, fill idle workers to bootstrap or recover.
+		if best != nil {
+			if time.Since(p.lastProbe[site]) < config.ProxyExploreInterval {
+				return best
+			}
+			for _, e := range p.entries {
+				s := e.readStat(site)
+				if s.active > 0 && s.BytesPerSecond == 0 {
+					return best
+				}
+			}
+		}
 		next := untried[0]
 		for _, e := range untried {
 			if e.URL > p.last[site] {
@@ -91,6 +124,7 @@ func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
 		}
 		if best == nil || rate(next) > bestRate {
 			best = next
+			p.lastProbe[site] = time.Now()
 		}
 	}
 	return best

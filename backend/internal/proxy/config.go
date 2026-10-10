@@ -67,3 +67,25 @@ func (p *Pool) Configure(c Configuration, discovery bool) {
 	default:
 	}
 }
+
+// SetDemand publishes the number of distinct routes the runnable queue can
+// use, including active transfers. Zero suppresses shortage-driven refreshes
+// while idle, paused or unable to write. Demand is not persisted: restoring
+// a pool does not mean a queue is ready to download.
+func (p *Pool) SetDemand(site string, routes int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	routes = max(0, routes)
+	if p.closed || p.demand[site] == routes {
+		return
+	}
+	if routes == 0 {
+		delete(p.demand, site)
+	} else {
+		p.demand[site] = routes
+	}
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}

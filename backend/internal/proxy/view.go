@@ -100,8 +100,7 @@ func (p *Pool) Page(site string, q Query) Page {
 		} else if slices.Contains(p.static, e.URL) {
 			row.Source = "manual"
 		}
-		chance := (prior.a + s.OK) / (prior.a + prior.b + s.OK + s.Bad)
-		row.Score = prior.expectedRate(s, chance)
+		row.Score = prior.meanRate(s)
 		if s.OK+s.Bad > 0 {
 			row.SuccessRate = s.OK / (s.OK + s.Bad)
 		}

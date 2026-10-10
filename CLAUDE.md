@@ -351,6 +351,14 @@ while holding a worker the rest of the queue could have used.
 
 Host-specific notes:
 
+- **voyeurking** is an index of K2S files. Category pages expose their video
+  links and `rel="next"` pager in HTML, but a video's file link lives in the
+  flattened React Router data table. Read only the primary route's
+  `video.file`: the same table also contains related videos and player
+  assets. Expansion goes through the registry so Keep2Share's deferred
+  resolver and per-route pacing reach the downloader intact. The category
+  page itself stays on the ordinary HTTP client; only K2S transfers use
+  the configured proxy pool.
 - **keep2share** uses the public `/api/v2` free-download flow, on both
   `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
   resolver requests one, reads it with the optional local `heapleach-ocr`
@@ -393,12 +401,25 @@ Host-specific notes:
   target; a retry on the same healthy route may reuse them. Cooldowns belong
   to the service and route, never all K2S files. Transport failures return
   the item to the queue to try another route, with their own bounded retry
-  budget. Throughput samples come from bodies of at least 64 KiB; success
-  probability and measured bytes per second determine the score. Bolt stores
+  budget. The score estimates useful bytes per second for the remaining
+  file size, including reliability and observed setup delay. Five-second
+  progress windows train throughput before a long file finishes, with the
+  resumed prefix, pauses and speed caps excluded. Those samples never write
+  Bolt from `sampleLocked`; the background task flushes changed rows. Bolt stores
   inventory and each health outcome immediately, while active leases remain
   in memory. The manager owns the pool, opens it lazily on enable, and closes
   it after workers finish. Explicit routes must never
   fall back to direct or disable destination certificate verification.
+
+  A slow, range-capable transfer can move to a proven faster route after
+  sustained evidence that the remaining time saved covers setup costs.
+  `Lease.Upgrade` reserves the replacement atomically. Only the attempt's
+  child context is cancelled: `transferRouted` waits for the old response and
+  part file to close, then changes leases and resumes. A user cancellation
+  wins, and a settings change that invalidates the reservation resumes on
+  the old lease. Unknown routes never preempt working transfers. Feed
+  attempts are 24 hours apart unless runnable K2S demand exceeds distinct
+  addresses with sufficient scores; early top-ups still wait five minutes.
 
   Proxy settings can change while workers run. `settingsMu` serializes
   preparation with shutdown, and a failing database open leaves the whole

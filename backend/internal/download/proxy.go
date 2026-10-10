@@ -22,6 +22,35 @@ func (m *Manager) usesProxies(it *Item) bool {
 	return m.proxyEnabled && m.proxies != nil && proxyEligible(it)
 }
 
+// updateProxyDemandLocked lets discovery replenish only when the runnable
+// K2S queue needs routes. Other hosts, deferred items, a pause or full disk
+// must not turn a quiet pool into a five-minute feed poller. Active proxy
+// transfers count toward demand; workers occupied by other hosts do not.
+func (m *Manager) updateProxyDemandLocked() {
+	if m.proxies != nil {
+		m.proxies.SetDemand("keep2share", m.proxyDemandLocked())
+	}
+}
+
+func (m *Manager) proxyDemandLocked() int {
+	if !m.proxyEnabled || m.closing || m.throttle.isPaused() || m.lowOnSpace() ||
+		m.hostActive["group:keep2share"] > m.proxyRunning {
+		return 0
+	}
+	capacity := max(0, m.limit-(m.running-m.proxyRunning))
+	wanted := min(m.proxyRunning, capacity)
+	now := time.Now()
+	for _, it := range m.queue {
+		if wanted >= capacity {
+			break
+		}
+		if proxyEligible(it) && it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) {
+			wanted++
+		}
+	}
+	return wanted
+}
+
 // ProxyPage samples active transfer speeds under mu, then reads the large
 // inventory without holding the queue lock.
 func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
@@ -64,7 +93,7 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 	if unavailable[group] {
 		return false
 	}
-	it.route = m.proxies.Acquire(it.pace.Group, it.preferredRoute, it.pace.Files)
+	it.route = m.proxies.AcquireFor(it.pace.Group, it.preferredRoute, it.pace.Files, it.Size-it.downloaded.Load())
 	if it.route == nil {
 		// A large queue must not rescan the whole inventory for every file
 		// while every route in the same service is already busy/cooling.
@@ -84,7 +113,46 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		return m.transfer(ctx, it)
 	}
 	start := time.Now()
-	err := m.transfer(lease.Context(ctx), it)
+	var err error
+	for {
+		attempt, abort := context.WithCancel(ctx)
+		m.mu.Lock()
+		it.routeCancel, it.routeResumable = abort, false
+		if m.throttle.isPaused() || m.throttle.currentLimit() > 0 {
+			lease.Constrain()
+		}
+		m.mu.Unlock()
+		err = m.transfer(lease.Context(attempt), it)
+		abort()
+		m.mu.Lock()
+		upgrade := it.routeUpgrade
+		it.routeUpgrade, it.routeCancel = nil, nil
+		retry := upgrade != nil && ctx.Err() == nil && errors.Is(err, context.Canceled)
+		switchRoute := retry && m.proxyEnabled && upgrade.Configured() &&
+			!m.throttle.isPaused() && m.throttle.currentLimit() == 0
+		if switchRoute {
+			it.route, it.preferredRoute = upgrade, upgrade.ID()
+			it.speed, it.proxyRetries = 0, 0
+			it.lastBytes, it.lastSample = it.downloaded.Load(), time.Now()
+		}
+		m.mu.Unlock()
+		if !switchRoute {
+			if upgrade != nil {
+				upgrade.Release()
+			}
+			if retry {
+				// Settings changed after sampling reserved a replacement.
+				// Resume on the original lease instead of turning our own
+				// optimization cancellation into a user-visible failure.
+				continue
+			}
+			break
+		}
+		// transfer has closed the response and flushed the part file before
+		// releasing the old address or minting a ticket on the new one.
+		lease.Release()
+		lease, start = upgrade, time.Now()
+	}
 	if ctx.Err() == nil {
 		if stall, ok := errors.AsType[*stalledError](err); ok {
 			lease.Failed(err, time.Since(start), true)
@@ -117,6 +185,37 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	lease.Release()
 	// runItem clears the route together with its dispatch accounting.
 	return err
+}
+
+// sampleProxyLocked feeds useful-byte windows into the route score. A
+// replacement is reserved before aborting the current attempt, and only a
+// confirmed range response permits moving a healthy transfer mid-file.
+func (m *Manager) sampleProxyLocked(it *Item, now time.Time, bytes int64, elapsed time.Duration, limited bool) {
+	if it.route == nil {
+		return
+	}
+	if !it.route.Progress(now, bytes, elapsed, limited) || limited || !m.proxyEnabled ||
+		!it.routeResumable || it.routeCancel == nil || it.routeUpgrade != nil || m.lowOnSpace() {
+		return
+	}
+	if next := it.route.Upgrade(now, it.Size-it.downloaded.Load(), it.speed); next != nil {
+		it.routeUpgrade = next
+		it.Note = "Switching to a faster K2S route"
+		it.routeCancel()
+	}
+}
+
+func (m *Manager) constrainProxyMeasurementsLocked() {
+	if !m.throttle.isPaused() && m.throttle.currentLimit() == 0 {
+		return
+	}
+	for _, job := range m.jobs {
+		for _, it := range job.Items {
+			if it.route != nil {
+				it.route.Constrain()
+			}
+		}
+	}
 }
 
 // A resumed prefix already on disk is not progress from this attempt.
