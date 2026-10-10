@@ -128,7 +128,21 @@ func (p *Pool) fetch(ctx context.Context, src string) ([]string, error) {
 // Inventory is topped up when few usable proxies remain, at most once every
 // five minutes. Network I/O holds neither the pool lock nor a Bolt transaction.
 func (p *Pool) Refresh(ctx context.Context) {
-	for _, src := range p.feeds {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	if p.configDirty {
+		if err := p.saveAll(); err != nil {
+			p.log.Error("could not save proxy inventory", "err", err)
+		} else {
+			p.configDirty = false
+		}
+	}
+	feeds := slices.Clone(p.feeds)
+	p.mu.Unlock()
+	for _, src := range feeds {
 		if ctx.Err() != nil {
 			return
 		}
@@ -136,6 +150,10 @@ func (p *Pool) Refresh(ctx context.Context) {
 		if p.closed {
 			p.mu.Unlock()
 			return
+		}
+		if !p.discovery || !slices.Contains(p.feeds, src) {
+			p.mu.Unlock()
+			continue
 		}
 		now := time.Now()
 		s := p.sources[src]
@@ -161,18 +179,24 @@ func (p *Pool) Refresh(ctx context.Context) {
 		}
 		due := now.Sub(s.Attempted) >= config.ProxyRefreshRetry &&
 			(s.Fetched.IsZero() || now.Sub(s.Fetched) >= config.ProxyRefresh || ready < config.ProxyMinReady)
-		if !due {
+		if !due || s.refreshing {
 			p.mu.Unlock()
 			continue
 		}
-		s.Attempted = now
+		s.Attempted, s.refreshing = now, true
 		p.mu.Unlock()
 		members, err := p.fetch(ctx, src)
 		p.mu.Lock()
+		s.refreshing = false
 		if p.closed {
 			p.mu.Unlock()
 			return
 		}
+		if !p.discovery || !slices.Contains(p.feeds, src) {
+			p.mu.Unlock()
+			continue
+		}
+		s.Failed = err != nil && ctx.Err() == nil
 		if err == nil {
 			s.Fetched, s.Members = time.Now(), members
 			for _, raw := range members {

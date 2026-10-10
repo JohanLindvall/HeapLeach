@@ -56,6 +56,8 @@ func (e *entry) stat(site string) *siteStat {
 type source struct {
 	Members            []string
 	Attempted, Fetched time.Time
+	Failed             bool
+	refreshing         bool
 }
 
 type prior struct {
@@ -72,6 +74,9 @@ type Pool struct {
 	priors        map[string]*prior
 	last          map[string]string
 	static, feeds []string
+	discovery     bool
+	configDirty   bool
+	wake          chan struct{}
 	client        *httpx.Client
 	log           *slog.Logger
 	db            *bolt.DB
@@ -86,26 +91,13 @@ func Open(path string, endpoints, feeds []string, client *httpx.Client, log *slo
 	if len(endpoints) == 0 && len(feeds) == 0 {
 		return nil, errors.New("proxy pool needs endpoints or discovery feeds")
 	}
+	c, err := ParseConfiguration(endpoints, feeds)
+	if err != nil {
+		return nil, err
+	}
 	p := &Pool{entries: make(map[string]*entry), sources: make(map[string]*source),
-		priors: make(map[string]*prior), last: make(map[string]string), client: client, log: log}
-	for _, raw := range endpoints {
-		u, err := normalize(raw)
-		if err != nil {
-			return nil, fmt.Errorf("proxy endpoint: %w", err)
-		}
-		if !slices.Contains(p.static, u) {
-			p.static = append(p.static, u)
-		}
-	}
-	for _, raw := range feeds {
-		u, err := url.Parse(raw)
-		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return nil, fmt.Errorf("proxy feed must be an HTTP(S) URL")
-		}
-		if !slices.Contains(p.feeds, raw) {
-			p.feeds = append(p.feeds, raw)
-		}
-	}
+		priors: make(map[string]*prior), last: make(map[string]string), client: client, log: log,
+		static: c.Endpoints, feeds: c.Feeds, discovery: true, wake: make(chan struct{}, 1)}
 	if err := p.openStore(path); err != nil {
 		return nil, err
 	}
@@ -161,6 +153,7 @@ func (p *Pool) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
+			case <-p.wake:
 			}
 		}
 	}()
@@ -186,7 +179,11 @@ func (p *Pool) Close() error {
 			e.client.CloseIdleConnections()
 		}
 	}
-	return p.db.Close()
+	var err error
+	if p.configDirty {
+		err = p.saveAll()
+	}
+	return errors.Join(err, p.db.Close())
 }
 
 // Lease reserves one slot for a service on one route, across aliases and jobs.
@@ -197,7 +194,14 @@ type Lease struct {
 	once  sync.Once
 }
 
-func (l *Lease) ID() string { return fmt.Sprintf("%x", sha256.Sum256([]byte(l.entry.URL))) }
+func routeID(raw string) string {
+	if raw == Direct {
+		return httpx.DirectRoute
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+}
+
+func (l *Lease) ID() string { return routeID(l.entry.URL) }
 
 func (l *Lease) Context(ctx context.Context) context.Context {
 	return httpx.WithRoute(ctx, l.ID(), l.entry.client, l.observe)
@@ -255,7 +259,10 @@ func (p *Pool) Acquire(site, preferred string, files int) *Lease {
 	slices.SortFunc(candidates, func(a, b *entry) int { return compareURL(a.URL, b.URL) })
 	var chosen *entry
 	for _, e := range candidates {
-		if fmt.Sprintf("%x", sha256.Sum256([]byte(e.URL))) == preferred {
+		if preferred == "" {
+			break
+		}
+		if routeID(e.URL) == preferred {
 			chosen = e
 			break
 		}

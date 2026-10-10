@@ -16,6 +16,9 @@ const (
 	ProxyFeedTimeout         = 20 * time.Second
 	ProxyFeedBytes           = 32 << 20
 	ProxyMaxEntries          = 100000
+	ProxyMaxFeeds            = 32
+	ProxyPageSize            = 50
+	ProxyMaxPageSize         = 200
 	ProxyDBTimeout           = time.Second
 	ProxyRetireAfter         = 30 * 24 * time.Hour
 	ProxyRefusalBase         = time.Minute

@@ -78,6 +78,8 @@ export interface Snapshot {
   /** Ceiling on connections one slow file may be split across. */
   streams: number;
   maxStreams: number;
+  /** Public proxy routing is currently limited to K2S. */
+  proxies: boolean;
   active: number;
   queued: number;
   speed: number;
@@ -114,3 +116,28 @@ export interface AddResponse {
 
 /** Connection state of the event stream. */
 export type ConnectionState = 'connecting' | 'live' | 'offline';
+
+export interface ProxyRow {
+  id: string;
+  url: string;
+  source: 'direct' | 'manual' | 'discovered';
+  status: 'available' | 'untested' | 'active' | 'busy' | 'cooling' | 'finishing';
+  /** Estimated useful bytes/second; the mean of the selector's score. */
+  score: number;
+  throughput: number;
+  currentSpeed: number;
+  successRate: number;
+  requests: number;
+  active: number;
+  cooldownUntil?: string;
+  lastSuccess?: string;
+}
+
+export interface ProxyPage {
+  rows: ProxyRow[];
+  total: number;
+  offset: number;
+  limit: number;
+  summary: { total: number; available: number; active: number; cooling: number; untested: number };
+  sources: { url: string; count: number; fetched?: string; refreshing: boolean; failed: boolean }[];
+}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -129,14 +130,16 @@ func newTestParts(t *testing.T) (*download.Manager, *Server) {
 	t.Helper()
 
 	cfg := &config.Config{
-		DownloadDir:  t.TempDir(),
-		Concurrency:  1,
-		UserAgent:    config.DefaultUserAgent,
-		Language:     config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   0,
-		Timeout:      10 * time.Second,
-		Version:      "v0.0.0-test",
+		DownloadDir:    t.TempDir(),
+		Concurrency:    1,
+		UserAgent:      config.DefaultUserAgent,
+		Language:       config.DefaultLanguage,
+		GofileSecret:   config.FallbackGofileSecret,
+		MaxRetries:     0,
+		Timeout:        10 * time.Second,
+		Version:        "v0.0.0-test",
+		ProxyDB:        filepath.Join(t.TempDir(), "proxies.db"),
+		ProxyEndpoints: []string{"direct"},
 	}
 	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import type { AddResponse, Snapshot } from './types';
+import type { AddResponse, ProxyPage, Snapshot } from './types';
 
 /** Error carrying the server's message for a failed API call. */
 export class ApiError extends Error {
@@ -83,6 +83,27 @@ export interface Settings {
    * Everything still queued goes to the new place.
    */
   downloadDir: string;
+  /** Enable the K2S route pool for new attempts. */
+  proxies: boolean;
+  proxyEndpoints: string[];
+  proxyFeeds: string[];
+}
+
+/** The source editor fetches this explicitly; credentials stay out of SSE. */
+export function fetchSettings(signal?: AbortSignal): Promise<Settings> {
+  return request<Settings>('/api/settings', { signal });
+}
+
+export interface ProxyQuery {
+  offset: number;
+  search: string;
+  status: string;
+  sort: string;
+}
+
+export function fetchProxies(query: ProxyQuery, signal?: AbortSignal): Promise<ProxyPage> {
+  const params = new URLSearchParams({ ...query, offset: String(query.offset) });
+  return request<ProxyPage>(`/api/proxies?${params}`, { signal });
 }
 
 /** Change one or more settings; the answer is the state as it now stands. */

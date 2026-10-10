@@ -12,12 +12,38 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
-// SetProxyPool installs the process's shared pool before Start. The caller
-// closes it after the manager, so no in-flight request outlives its database.
-func (m *Manager) SetProxyPool(pool *proxy.Pool) { m.proxies = pool }
+// Only K2S is opted in. PerRoute is a future extension point, not permission
+// to send other hosts through public proxies today.
+func proxyEligible(it *Item) bool {
+	return it.pace != nil && it.pace.PerRoute && it.pace.Group == "keep2share"
+}
 
 func (m *Manager) usesProxies(it *Item) bool {
-	return m.proxies != nil && it.pace != nil && it.pace.PerRoute && it.pace.Group != ""
+	return m.proxyEnabled && m.proxies != nil && proxyEligible(it)
+}
+
+// ProxyPage samples active transfer speeds under mu, then reads the large
+// inventory without holding the queue lock.
+func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
+	m.mu.Lock()
+	pool := m.proxies
+	speeds := make(map[string]float64)
+	for _, job := range m.jobs {
+		for _, it := range job.Items {
+			if it.inFlight && it.route != nil {
+				speeds[it.route.ID()] += it.speed
+			}
+		}
+	}
+	m.mu.Unlock()
+	if pool == nil {
+		return proxy.EmptyPage(q)
+	}
+	page := pool.Page("keep2share", q)
+	for i := range page.Rows {
+		page.Rows[i].CurrentSpeed = speeds[page.Rows[i].ID]
+	}
+	return page
 }
 
 type routeGroup struct {
@@ -89,9 +115,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		}
 	}
 	lease.Release()
-	m.mu.Lock()
-	it.route = nil
-	m.mu.Unlock()
+	// runItem clears the route together with its dispatch accounting.
 	return err
 }
 

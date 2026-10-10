@@ -384,7 +384,8 @@ Host-specific notes:
   every guess against that file "succeeds".
 
   `-proxies` enables a persistent egress pool (`internal/proxy`, bbolt),
-  adapted from amzscrape. `Pace.PerRoute` opts this service into it: the
+  adapted from amzscrape. `Pace.PerRoute` marks the service's addressing rule;
+  the manager currently allows only the `keep2share` group to use proxies. The
   dispatcher leases a route before resolving and holds it through the
   transfer, one file per address across aliases and proxy protocols. The
   HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
@@ -395,8 +396,19 @@ Host-specific notes:
   budget. Throughput samples come from bodies of at least 64 KiB; success
   probability and measured bytes per second determine the score. Bolt stores
   inventory and each health outcome immediately, while active leases remain
-  in memory. Close the manager before the pool. Explicit routes must never
+  in memory. The manager owns the pool, opens it lazily on enable, and closes
+  it after workers finish. Explicit routes must never
   fall back to direct or disable destination certificate verification.
+
+  Proxy settings can change while workers run. `settingsMu` serializes
+  preparation with shutdown, and a failing database open leaves the whole
+  update unapplied. Disabling keeps the pool and its active leases alive;
+  normal K2S admission waits for those transfers to drain. Enabling waits
+  for any unleased direct transfer before the pool may lease that address.
+  Both modes use `httpx.DirectRoute` for K2S's ticket and cooldown identity.
+  Queued direct cooldowns are cleared on enable so new routes can run, while
+  the resolver retains the address's actual timer. Source edits preserve
+  active leases, and late results from removed feeds are discarded.
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be
@@ -1423,6 +1435,15 @@ once: contdep redeploys under open tabs, the stream reconnects to the new
 server, and the page goes on running the interface it was loaded with. The
 first version a snapshot reports is taken as the page's own, and a later,
 different one turns the badge into a reload button.
+
+The header's Settings button opens live concurrency, streams, speed and K2S
+proxy controls. `ProxyList` polls `/api/proxies` only while mounted and the
+tab is visible; the inventory can contain tens of thousands of routes and
+must not be added to SSE snapshots. Filtering, sorting and pagination happen
+server-side. Scores use the selector's deterministic mean estimate, not a
+fresh random draw when viewed. Source drafts fetch `/api/settings` separately
+and survive failed saves; source credentials never belong in the list or
+queue snapshots. Runtime settings last for the session, like concurrency.
 
 `styles.css` is a single design system: one accent gradient, one surface
 ramp, one shadow scale, dark and light via `prefers-color-scheme`. Prefer

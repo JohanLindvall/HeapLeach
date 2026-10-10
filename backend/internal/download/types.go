@@ -261,6 +261,7 @@ type Snapshot struct {
 	MaxConcur   int       `json:"maxConcurrency"`
 	Streams     int       `json:"streams"`
 	MaxStreams  int       `json:"maxStreams"`
+	Proxies     bool      `json:"proxies"`
 	Active      int       `json:"active"`
 	Queued      int       `json:"queued"`
 	// Paused holds the whole queue; SpeedLimit caps total throughput in

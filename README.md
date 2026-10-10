@@ -596,7 +596,23 @@ Waiting is cancelable and bounded to two hours per attempt; retrying within
 the same process preserves an accepted ticket and reuses unexpired download
 links.
 
-Enable free proxy routes with `heapleach -proxies -concurrency 4`. The default
+Open **Settings** in the UI to change files downloaded at once, streams per
+file, and the speed limit. The same panel enables or disables **K2S proxies**
+and edits proxy endpoints and discovery feeds without restarting HeapLeach.
+These settings apply to the current session; flags and environment variables
+set the startup defaults. Active transfers keep their assigned route. When
+switching routing modes, existing K2S transfers finish before new ones use
+the new mode, preserving the per-address limit and download tickets.
+
+The proxy list shows the selection score, measured average and current
+throughput, recent success rate, request count, active transfers, cooldowns,
+and last successful request. Search, status filters and sorting work across
+the entire inventory, with 50 rows per page. Scores are estimated useful
+bytes per second using the selector's mean success probability; actual
+selection also explores untried routes. The list refreshes every five seconds
+while open. Discovery status is shown with each feed.
+
+Enable free proxy routes at startup with `heapleach -proxies -concurrency 4`. The default
 pool combines the normal outbound connection with
 [Proxifly's free proxy feed](https://github.com/proxifly/free-proxy-list).
 HTTP, HTTPS and SOCKS5 endpoints are supported; SOCKS5 resolves destination
@@ -660,11 +676,11 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 |---|---|---|
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
-| `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. |
-| `HEAPLEACH_PROXIES` | off | Enable extra free proxy routes for Keep2Share. Flag: `-proxies`. |
+| `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers (1–32). Flag: `-concurrency`. Also settable live in Settings. |
+| `HEAPLEACH_PROXIES` | off | Enable extra free proxy routes for Keep2Share only. Flag: `-proxies`. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode. Flag: `-proxy-db`. |
-| `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. |
-| `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. |
+| `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
+| `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_RETRIES` | `20` | Route changes after failures that make no disk progress. A host's free-download cooldown does not spend this budget. |
 | `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI. |
@@ -695,14 +711,19 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `GET` | `/api/state` | Current snapshot. |
 | `GET` | `/api/events` | Complete initial snapshot, then item patches; missed updates are replaced with a complete snapshot. |
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
-| `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…"}` — each optional, so a request carries only what changed. |
+| `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
+| `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |
+| `GET` | `/api/proxies` | K2S proxy measurements and feed status. Query: `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `DELETE` | `/api/jobs/{id}` | Cancel and forget. |
 | `POST` | `/api/jobs/{id}/items/{itemId}/cancel` · `/retry` | One file. |
 
 Settings updates are validated together: an invalid field leaves the
-current settings unchanged. In an SSE job marked `patch`, merge items by
+current settings unchanged, including when opening the proxy database fails.
+Proxy inventory is paged separately from queue snapshots; endpoint passwords
+are redacted there and only included when explicitly fetching settings for
+editing. In an SSE job marked `patch`, merge items by
 ID and retain unmentioned items; otherwise replace its item list. Every
 frame contains the complete job list and current aggregates.
 

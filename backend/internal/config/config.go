@@ -116,8 +116,8 @@ type Config struct {
 	// Password unlocks protected sources in that mode.
 	Password string
 
-	// Proxies enables extra egress routes for extractors with per-address
-	// limits. The inventory and its learned health live independently of the queue.
+	// Proxies enables extra egress routes for K2S. The inventory and its
+	// learned health live independently of the queue.
 	Proxies        bool
 	ProxyDB        string
 	ProxyEndpoints []string
@@ -360,6 +360,9 @@ func (c *Config) Prepare() error {
 		if strings.TrimSpace(c.ProxyDB) == "" {
 			return errors.New("proxy-db must name a Bolt database")
 		}
+	}
+	if c.ProxyDB != "" {
+		// A disabled pool can be enabled through the live settings later.
 		var err error
 		c.ProxyDB, err = expandHome(c.ProxyDB)
 		if err != nil {

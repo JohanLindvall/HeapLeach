@@ -42,6 +42,13 @@ type Keep2Share struct {
 
 const keep2ShareCooldown = "Keep2Share: waiting between free downloads"
 
+func keep2ShareRoute(ctx context.Context) string {
+	if id := httpx.RouteID(ctx); id != "" {
+		return id
+	}
+	return httpx.DirectRoute
+}
+
 // wait records the host's wait between free downloads and returns the error
 // that puts a file back in the queue until it is over.
 func (k *Keep2Share) wait(ctx context.Context, delay time.Duration) error {
@@ -50,7 +57,7 @@ func (k *Keep2Share) wait(ctx context.Context, delay time.Duration) error {
 	if k.cooldowns == nil {
 		k.cooldowns = make(map[string]time.Time)
 	}
-	route := httpx.RouteID(ctx)
+	route := keep2ShareRoute(ctx)
 	if until := time.Now().Add(delay); until.After(k.cooldowns[route]) {
 		k.cooldowns[route] = until
 	}
@@ -61,7 +68,7 @@ func (k *Keep2Share) wait(ctx context.Context, delay time.Duration) error {
 func (k *Keep2Share) waiting(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if until := k.cooldowns[httpx.RouteID(ctx)]; time.Now().Before(until) {
+	if until := k.cooldowns[keep2ShareRoute(ctx)]; time.Now().Before(until) {
 		return &WaitError{Until: until, Reason: keep2ShareCooldown}
 	}
 	return nil
@@ -208,7 +215,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if route := httpx.RouteID(ctx); route != d.route {
+	if route := keep2ShareRoute(ctx); route != d.route {
 		// CAPTCHA tickets and storage links belong to the public IP that
 		// obtained them. A different route must start its own free flow.
 		d.route, d.key, d.target = route, "", nil

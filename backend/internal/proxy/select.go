@@ -9,11 +9,9 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
-// selectEntry follows amzscrape's throughput policy: sample each tried route's
-// chance of success, divided by its observed cost. Untried routes get ONE
-// shared draw, so thousands of dead feed entries cannot outvote a proven one
-// merely through the number of lottery tickets they hold.
-func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
+type scorePrior struct{ a, b, seconds, bandwidth float64 }
+
+func (p *Pool) scorePrior(site string) scorePrior {
 	first := p.priors[site]
 	if first == nil {
 		first = &prior{}
@@ -24,7 +22,7 @@ func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
 	a, b := config.ProxyPriorStrength*q, config.ProxyPriorStrength*(1-q)
 	bandwidth, sampled := 0.0, 0
 	for _, e := range p.entries {
-		if speed := e.stat(site).BytesPerSecond; speed > 0 && p.enabled(e) {
+		if speed := e.readStat(site).BytesPerSecond; speed > 0 && p.enabled(e) {
 			bandwidth += speed
 			sampled++
 		}
@@ -34,25 +32,45 @@ func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
 	} else {
 		bandwidth = config.ProxyPriorBytesPerSecond
 	}
+	return scorePrior{a, b, d, bandwidth}
+}
+
+func (e *entry) readStat(site string) siteStat {
+	if s := e.Sites[site]; s != nil {
+		return *s
+	}
+	return siteStat{}
+}
+
+// expectedRate is shared by the selector and its deterministic UI estimate.
+func (prior scorePrior) expectedRate(s siteStat, chance float64) float64 {
+	seconds := prior.seconds
+	if s.Tries > 0 {
+		seconds = s.Duration
+	}
+	speed := s.BytesPerSecond
+	if speed == 0 {
+		speed = prior.bandwidth
+	}
+	// File size itself must not make a long, fast download rank below a
+	// tiny API response. Failure probability and recovery time reduce it.
+	return chance * speed / (1 + config.ProxyInvalidPenalty*(1-chance)/max(seconds, config.ProxyMinSeconds))
+}
+
+// selectEntry follows amzscrape's throughput policy: sample each tried route's
+// chance of success, divided by its observed cost. Untried routes get ONE
+// shared draw, so thousands of dead feed entries cannot outvote a proven one
+// merely through the number of lottery tickets they hold.
+func (p *Pool) selectEntry(site string, candidates []*entry) *entry {
+	prior := p.scorePrior(site)
 	var best *entry
 	bestRate := -1.0
 	var untried []*entry
 	rate := func(e *entry) float64 {
-		s := e.stat(site)
-		x, y := gamma(a+s.OK), gamma(b+s.Bad)
+		s := e.readStat(site)
+		x, y := gamma(prior.a+s.OK), gamma(prior.b+s.Bad)
 		chance := x / (x + y)
-		seconds := d
-		if s.Tries > 0 {
-			seconds = s.Duration
-		}
-		speed := s.BytesPerSecond
-		if speed == 0 {
-			speed = bandwidth
-		}
-		// Expected useful bytes/second, discounted for failed attempts and
-		// their recovery cost. File size itself must not make a long, fast
-		// download rank below a tiny API response.
-		return chance * speed / (1 + config.ProxyInvalidPenalty*(1-chance)/max(seconds, config.ProxyMinSeconds))
+		return prior.expectedRate(s, chance)
 	}
 	for _, e := range candidates {
 		if e.stat(site).Tries == 0 {

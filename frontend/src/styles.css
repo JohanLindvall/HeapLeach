@@ -574,6 +574,119 @@ code {
   gap: 0.6rem;
 }
 
+/* Live controls and the separately paged K2S inventory. */
+.settings-count {
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.settings-panel {
+  padding: clamp(1rem, 2.5vw, 1.5rem);
+  border: 1px solid var(--edge-hi);
+  border-radius: var(--r-lg);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.settings-panel h2, .settings-panel h3 { margin: 0; font-size: 1rem; }
+.settings-panel p { margin: 0.4rem 0 0; font-size: 0.8rem; color: var(--text-dim); }
+.settings-panel__transfers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  padding: 1.15rem 0;
+  border-bottom: 1px solid var(--edge-flat);
+}
+
+.settings-panel__proxy-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1.15rem 0 0.75rem;
+}
+
+.settings-panel__scope {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 550;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 0.22rem 0.5rem;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
+.proxy-switch { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; cursor: pointer; }
+.proxy-switch input { accent-color: var(--accent); width: 1.1rem; height: 1.1rem; cursor: pointer; }
+.settings-panel .settings-error { color: var(--failed); margin: 0.75rem 0; }
+.proxy-sources { margin-top: 1rem; }
+.proxy-sources fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
+.proxy-sources__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 0.8rem; }
+.proxy-sources__field { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.8rem; }
+.proxy-sources small { color: var(--text-dim); line-height: 1.5; }
+.proxy-sources textarea,
+.proxy-list__tools input,
+.proxy-list__tools select {
+  border: 1px solid var(--edge-hi);
+  border-radius: var(--r-sm);
+  padding: 0.55rem 0.65rem;
+  background: var(--surface-solid);
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+}
+
+.proxy-sources textarea { resize: vertical; font-family: var(--mono); font-size: 0.75rem; line-height: 1.6; }
+.proxy-list { margin-top: 1rem; }
+.proxy-list__summary { display: flex; flex-wrap: wrap; gap: 0.5rem 1.15rem; margin-bottom: 1rem; font-size: 0.78rem; color: var(--text-dim); }
+.proxy-list__summary strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.proxy-list__tools { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.78rem; }
+.proxy-list__tools input { flex: 1 1 12rem; }
+.proxy-list__tools select { flex: 0 1 auto; }
+.settings-panel .proxy-list__help { color: var(--text-faint); font-size: 0.72rem; line-height: 1.55; margin: 0.7rem 0; }
+.settings-panel .proxy-list__off { color: var(--text-dim); margin-bottom: 0.9rem; }
+.proxy-list__scroll { max-height: 28rem; overflow: auto; border: 1px solid var(--edge-flat); border-radius: var(--r-sm); }
+.proxy-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.75rem; white-space: nowrap; }
+.proxy-table th, .proxy-table td { padding: 0.75rem; vertical-align: top; font-variant-numeric: tabular-nums; }
+.proxy-table thead { position: sticky; top: 0; color: var(--text-dim); background: var(--surface-solid); }
+.proxy-table thead th { font-size: 0.67rem; font-weight: 600; }
+.proxy-table tbody tr + tr { border-top: 1px solid var(--edge-flat); }
+.proxy-table tbody tr:hover { background: var(--surface-2); }
+.proxy-table th[scope='row'] { font-weight: 500; }
+.proxy-table code { display: block; overflow: hidden; max-width: 23rem; text-overflow: ellipsis; font-size: 0.72rem; }
+.proxy-table small { display: block; margin-top: 0.2rem; color: var(--text-faint); font-size: 0.66rem; font-weight: 400; }
+.proxy-status--active { color: var(--running); }
+.proxy-status--available { color: var(--done); }
+.proxy-status--cooling { color: var(--queued); }
+.proxy-status--untested, .proxy-status--busy, .proxy-status--finishing { color: var(--text-dim); }
+.proxy-list__pager { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.7rem; font-size: 0.75rem; color: var(--text-dim); }
+.proxy-list__pager span { margin-right: auto; }
+.proxy-list__feeds { font-size: 0.73rem; color: var(--text-dim); margin: 1rem 0; }
+.proxy-list__feeds summary { cursor: pointer; }
+.proxy-list__feeds ul { padding-left: 1.1rem; }
+.proxy-list__feeds li { margin: 0.6rem 0; }
+.proxy-list__feeds code { overflow-wrap: anywhere; font-size: 0.7rem; }
+.proxy-list__feeds span { display: block; color: var(--text-faint); margin-top: 0.25rem; }
+
+@media (max-width: 700px) {
+  .proxy-sources__fields { grid-template-columns: 1fr; }
+  .settings-panel__transfers { flex-direction: column; align-items: stretch; }
+  .settings-panel__transfers .concurrency input { flex: 1; }
+  .proxy-table th, .proxy-table td { padding: 0.65rem; }
+  .proxy-table code { max-width: 15rem; }
+  .settings-count { display: none; }
+}
+
 .concurrency {
   display: flex;
   align-items: center;
@@ -1793,20 +1906,6 @@ button.jobs__dir:hover {
 }
 
 /* ========================================================== responsive == */
-
-/* Below this the header carries more controls than fit beside the numbers.
-   The captions go first: every control keeps its icon, its value and its
-   title, so nothing becomes unreadable — the row just gets shorter. */
-@media (max-width: 1500px) {
-  .concurrency__label,
-  .speedcap__label {
-    display: none;
-  }
-
-  .concurrency {
-    padding: 0.38rem 0.7rem;
-  }
-}
 
 @media (max-width: 1080px) {
   .shell { grid-template-columns: 190px minmax(0, 1fr); }

@@ -31,11 +31,17 @@ import (
 // streams counters is guarded by mu. Workers take mu to publish transitions,
 // never while blocked on I/O.
 type Manager struct {
-	cfg     *config.Config
-	reg     *extractor.Registry
-	client  *httpx.Client
-	log     *slog.Logger
-	proxies *proxy.Pool
+	cfg    *config.Config
+	reg    *extractor.Registry
+	client *httpx.Client
+	log    *slog.Logger
+	// settingsMu serializes preparation/publication with shutdown. The pool
+	// is opened lazily and owned until Close, even when routing is disabled.
+	settingsMu   sync.Mutex
+	proxies      *proxy.Pool // guarded by mu
+	proxyConfig  proxy.Configuration
+	proxyEnabled bool
+	proxyRunning int
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -154,6 +160,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 	}
 	return &Manager{
 		cfg:             cfg,
+		proxyConfig:     proxy.Configuration{Endpoints: slices.Clone(cfg.ProxyEndpoints), Feeds: slices.Clone(cfg.ProxyFeeds)},
 		reg:             reg,
 		hostCount:       hostCount,
 		version:         cfg.Version,
@@ -206,6 +213,7 @@ func (m *Manager) Start() {
 // can both defer it and call it explicitly at the right moment.
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
+		m.settingsMu.Lock()
 		// Before the cancellation, not after it. Stopping cancels every
 		// transfer in flight, and a worker winding down marks its item
 		// canceled — which is indistinguishable, once written, from an item
@@ -229,7 +237,13 @@ func (m *Manager) Close() {
 		m.persistState(st)
 		m.stop()
 		m.persistMu.Unlock()
+		m.settingsMu.Unlock()
 		m.wg.Wait()
+		if m.proxies != nil {
+			if err := m.proxies.Close(); err != nil {
+				m.log.Warn("close proxy database", "err", err)
+			}
+		}
 
 		m.subsMu.Lock()
 		m.closed = true
@@ -379,19 +393,22 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 func (m *Manager) dispatch() {
 	defer m.wg.Done()
 	// Timers in the persistent pool and refreshed feeds can make a route
-	// available without a worker completing. Only enabled pools need polling.
-	var proxyTick <-chan time.Time
-	if m.proxies != nil {
-		ticker := time.NewTicker(config.ProxyDispatchTick)
-		defer ticker.Stop()
-		proxyTick = ticker.C
-	}
+	// available without a worker completing. Settings can enable a pool at
+	// any point after this dispatcher starts.
+	ticker := time.NewTicker(config.ProxyDispatchTick)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-m.wake:
-		case <-proxyTick:
+		case <-ticker.C:
+			m.mu.Lock()
+			enabled := m.proxyEnabled
+			m.mu.Unlock()
+			if !enabled {
+				continue
+			}
 		}
 
 		for {
@@ -407,6 +424,9 @@ func (m *Manager) dispatch() {
 			// spans exactly the worker's ownership of the item.
 			it.hostKey = m.hostKeyLocked(it)
 			m.hostActive[it.hostKey]++
+			if it.route != nil {
+				m.proxyRunning++
+			}
 			if itemHeld != nil {
 				itemHeld(it, true)
 			}
@@ -515,8 +535,11 @@ func (m *Manager) lowOnSpace() bool {
 // queue the transfer itself waits in — see hostGate. Caller holds mu.
 func (m *Manager) hostFullLocked(it *Item) bool {
 	if m.usesProxies(it) {
-		// The pool counts Files per address.
-		return false
+		// A transfer started before enabling proxies has no lease. Let it
+		// finish before the pool can lease the same direct address. When
+		// disabling, the normal group cap below drains all leased transfers
+		// before returning to the ordinary connection.
+		return m.hostActive[m.hostKeyLocked(it)] > m.proxyRunning
 	}
 	if it.pace != nil && it.pace.Files > 0 &&
 		m.hostActive[m.hostKeyLocked(it)] >= it.pace.Files {
@@ -628,6 +651,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		m.enqueueLocked(it)
 	}
 	m.running--
+	if it.route != nil {
+		m.proxyRunning--
+		it.route = nil
+	}
 	if m.hostActive[it.hostKey]--; m.hostActive[it.hostKey] <= 0 {
 		delete(m.hostActive, it.hostKey)
 	}
@@ -972,6 +999,11 @@ func (m *Manager) deferWaitLocked(it *Item, err error) bool {
 	wait, ok := errors.AsType[*extractor.WaitError](err)
 	if !ok || it.retryPending {
 		return false
+	}
+	if it.route == nil && m.usesProxies(it) {
+		// Proxies may have been enabled while this ordinary direct attempt
+		// was still resolving. Its timer belongs to that address alone.
+		wait = &extractor.WaitError{Until: time.Now(), Reason: "Waiting for an available download route"}
 	}
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
 	it.notBefore = wait.Until

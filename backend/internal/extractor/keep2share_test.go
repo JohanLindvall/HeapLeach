@@ -22,6 +22,29 @@ import (
 
 const keep2ShareTestInfo = `{"status":"success","code":200,"name":"First Clip.mp4","is_available":true,"is_folder":false,"size":1234,"isAvailableForFree":true}`
 
+func TestKeep2ShareDirectTicketsAndCooldownSurviveProxyToggle(t *testing.T) {
+	var calls atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, _ map[string]string) {
+		calls.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{"status": "success", "url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d", time.Now().Add(time.Hour).Unix())})
+	})
+	f := keep2ShareTestExtract(t, k)
+	plain := context.Background()
+	routed := httpx.WithRoute(plain, httpx.DirectRoute, k.client, nil)
+	for _, ctx := range []context.Context{plain, routed, plain} {
+		if _, err := f.Resolve(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatal("toggling proxies spent another direct-address ticket")
+	}
+	k.wait(routed, time.Hour)
+	if err := k.waiting(plain); !isWait(err) {
+		t.Fatal("disabled pool lost its direct-address cooldown")
+	}
+}
+
 func TestKeep2ShareCooldownIsPerRoute(t *testing.T) {
 	var calls atomic.Int32
 	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
@@ -351,7 +374,7 @@ func TestKeep2ShareRefreshesExpiredLinksWithTheAcceptedTicket(t *testing.T) {
 		}
 		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/fresh"}`)
 	})
-	d := &keep2ShareDownload{host: k, id: "test-file", key: "ticket",
+	d := &keep2ShareDownload{host: k, id: "test-file", key: "ticket", route: httpx.DirectRoute,
 		target: &Target{URL: "https://cdn.example.test/expired"}, expires: time.Now().Add(-time.Second)}
 	target, err := d.resolve(context.Background())
 	if err != nil || target.URL != "https://cdn.example.test/fresh" || calls.Load() != 1 {
@@ -427,7 +450,7 @@ func TestKeep2ShareSendsTheWaitBetweenFreeDownloadsBackToTheQueue(t *testing.T) 
 
 	// Once it is over, the next turn goes ahead.
 	k.mu.Lock()
-	k.cooldowns[""] = time.Now().Add(-time.Second)
+	k.cooldowns[httpx.DirectRoute] = time.Now().Add(-time.Second)
 	k.mu.Unlock()
 	cooling.Store(false)
 	target, err := next.Resolve(context.Background())

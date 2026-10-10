@@ -32,6 +32,16 @@ export function DownloadIcon({ size = 16 }: IconProps) {
   );
 }
 
+export function SettingsIcon({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <path d="M4 7h5m4 0h7M4 17h9m4 0h3" />
+      <circle cx="11" cy="7" r="2" />
+      <circle cx="15" cy="17" r="2" />
+    </svg>
+  );
+}
+
 export function CancelIcon({ size = 16 }: IconProps) {
   return (
     <svg {...svgProps(size)}>

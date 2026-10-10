@@ -28,7 +28,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 	"github.com/JohanLindvall/HeapLeach/internal/server"
 	"github.com/JohanLindvall/HeapLeach/internal/webui"
 )
@@ -82,17 +81,9 @@ func run() error {
 
 	manager := download.New(cfg, registry, client, log)
 	if cfg.Proxies {
-		pool, err := proxy.Open(cfg.ProxyDB, cfg.ProxyEndpoints, cfg.ProxyFeeds, client, log)
-		if err != nil {
+		if err := manager.ApplySettings(download.Settings{Proxies: &cfg.Proxies}); err != nil {
 			return err
 		}
-		defer func() {
-			if err := pool.Close(); err != nil {
-				log.Warn("close proxy database", "err", err)
-			}
-		}()
-		pool.Start(ctx)
-		manager.SetProxyPool(pool)
 	}
 	// Before Start, so the restored queue is in place by the time anything
 	// can look at it. Nothing is fetched here, and nothing restored is
@@ -108,14 +99,13 @@ func run() error {
 			"jobs", unfinished, "file", cfg.StateFile)
 	}
 	manager.Start()
+	defer manager.Close()
 	// Releasing the queue is the word a held job waits for, so a service
 	// told to resume says it for itself. After Start, so there are workers
 	// to take what the jobs resolve to.
 	if cfg.ResumeRestored {
 		manager.SetPaused(false)
 	}
-	// Close is idempotent; this covers the error paths below.
-	defer manager.Close()
 
 	// URLs on the command line mean "download these and quit" — no server,
 	// no browser, progress on the terminal.

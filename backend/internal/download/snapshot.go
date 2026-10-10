@@ -25,6 +25,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 		MaxConcur:   config.MaxConcurrency,
 		Streams:     m.streams,
 		MaxStreams:  config.MaxStreams,
+		Proxies:     m.proxyEnabled,
 		Active:      m.running,
 		Queued:      0,
 		Paused:      m.throttle.isPaused(),

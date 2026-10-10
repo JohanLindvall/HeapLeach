@@ -44,6 +44,10 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 func (c *Client) CloseIdleConnections() { c.hc.CloseIdleConnections() }
 
 type routeContextKey struct{}
+
+// DirectRoute keeps an IP-bound ticket's identity across live proxy toggles.
+const DirectRoute = "direct"
+
 type requestRoute struct {
 	id      string
 	client  *Client

@@ -41,19 +41,12 @@ func proxyServer(t *testing.T, address string, handler http.HandlerFunc) *httpte
 func attachPool(t *testing.T, m *Manager, endpoints []string) *proxy.Pool {
 	t.Helper()
 	m.cfg.ProxyRetries = 2
-	p, err := proxy.Open(filepath.Join(t.TempDir(), "proxies.db"), endpoints, nil,
-		httpx.New("test", "en", 0, time.Second), m.log)
-	if err != nil {
+	m.cfg.ProxyDB = filepath.Join(t.TempDir(), "proxies.db")
+	enabled := true
+	if err := m.ApplySettings(Settings{Proxies: &enabled, ProxyEndpoints: &endpoints}); err != nil {
 		t.Fatal(err)
 	}
-	m.SetProxyPool(p)
-	t.Cleanup(func() {
-		m.Close()
-		if err := p.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	return p
+	return m.proxies
 }
 
 func addProxyFiles(m *Manager, count int, resolve func(context.Context) (*extractor.Target, error)) *Job {

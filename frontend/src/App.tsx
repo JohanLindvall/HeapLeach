@@ -17,6 +17,7 @@ import { JobCard } from './components/JobCard';
 import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
+import { SettingsPanel } from './components/SettingsPanel';
 import { VersionBadge } from './components/VersionBadge';
 import { DownloadIcon, TrashIcon } from './components/Icons';
 import {
@@ -66,6 +67,7 @@ export default function App() {
     setPhase(null);
   }, []);
   const [query, setQuery] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const nextNoticeId = useRef(0);
 
@@ -191,10 +193,9 @@ export default function App() {
           speedSeries={speedSeries}
           theme={theme}
           onToggleTheme={toggleTheme}
-          onConcurrencyChange={(concurrency) => run(() => updateSettings({ concurrency }))}
-          onStreamsChange={(streams) => run(() => updateSettings({ streams }))}
           onTogglePause={() => run(() => updateSettings({ paused: !(snapshot.paused || snapshot.held > 0) }))}
-          onSpeedLimitChange={(speedLimit) => run(() => updateSettings({ speedLimit }))}
+          settingsOpen={settingsOpen}
+          onToggleSettings={() => setSettingsOpen((open) => !open)}
         />
       </header>
 
@@ -209,6 +210,7 @@ export default function App() {
         />
 
         <main className="main">
+          {settingsOpen && <SettingsPanel snapshot={snapshot} />}
           <AddForm onNotice={notify} />
 
           <ProgressPanel progress={progress} hostCount={snapshot.hostCount} />
