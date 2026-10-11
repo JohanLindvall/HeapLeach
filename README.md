@@ -336,6 +336,11 @@ Login-only content and listings rendered entirely by scripts
 are not exposed by this parser. Domain redirects are followed, and relative
 links use the final page's address.
 
+Use `-debug` or `HEAPLEACH_DEBUG=1` to trace WordPress category pages, post
+counts, pagination and each post's linked sources, including player/proxy
+progress and failures. Files reach the queue after source resolution finishes;
+these logs show which post and source are still being resolved during that wait.
+
 ### Every supported site
 
 Generated from the registry by `make hosts`, so it cannot drift from the

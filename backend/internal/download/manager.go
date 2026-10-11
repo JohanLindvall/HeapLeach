@@ -346,6 +346,7 @@ func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Resul
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	ctx = extractor.WithLogger(ctx, m.log.With("job", job.ID))
 	ctx = extractor.WithChallengeRecovery(ctx, m.recoverExtraction)
 	return m.reg.Extract(ctx, job.Source, extractor.Options{Password: job.Password})
 }

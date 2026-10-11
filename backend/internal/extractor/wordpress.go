@@ -10,6 +10,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -43,14 +45,38 @@ func wordPressCategory(root *html.Node, page *url.URL) bool {
 		page.Query().Get("cat") != "" || page.Query().Get("category_name") != "")
 }
 
-func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Registry, page *url.URL, root *html.Node, opts Options) (*Result, error) {
+func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Registry, page *url.URL, root *html.Node, opts Options) (result *Result, err error) {
+	log := extractionLogger(ctx).With("category", page.Redacted())
+	ctx = WithLogger(ctx, log)
+	start := time.Now()
+	log.DebugContext(ctx, "wordpress: category detected", "source_limit", opts.maxSources(), "file_limit", opts.maxFiles())
+	defer func() {
+		if err != nil {
+			log.DebugContext(ctx, "wordpress: extraction failed", "error", err, "elapsed", time.Since(start))
+		} else {
+			log.DebugContext(ctx, "wordpress: extraction complete", "files", len(result.Files), "note", result.Note, "elapsed", time.Since(start))
+		}
+	}()
 	sources, title, note, err := wordPressList(ctx, client, page, root, opts.maxSources())
 	if err != nil {
 		return nil, err
 	}
+	log.DebugContext(ctx, "wordpress: resolving posts before queueing files", "posts", len(sources))
+	var finished atomic.Int64
 	e := expandSourcesWith(ctx, sources, opts, func(ctx context.Context, link string) (*Result, error) {
 		u, _ := url.Parse(link)
-		return wordPressPost(ctx, client, registry, u, opts)
+		postLog := log.With("post", u.Redacted())
+		ctx = WithLogger(ctx, postLog)
+		start := time.Now()
+		postLog.DebugContext(ctx, "wordpress: resolving post")
+		res, err := wordPressPost(ctx, client, registry, u, opts)
+		completed := finished.Add(1)
+		if err != nil {
+			postLog.DebugContext(ctx, "wordpress: post failed", "error", err, "posts_finished", completed, "posts_total", len(sources), "elapsed", time.Since(start))
+		} else {
+			postLog.DebugContext(ctx, "wordpress: post resolved", "files", len(res.Files), "note", res.Note, "posts_finished", completed, "posts_total", len(sources), "elapsed", time.Since(start))
+		}
+		return res, err
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -75,6 +101,10 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 }
 
 func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, root *html.Node, limit int) (sources []string, title, note string, err error) {
+	log := extractionLogger(ctx)
+	defer func() {
+		log.DebugContext(ctx, "wordpress: category listing finished", "posts", len(sources), "note", note, "error", err)
+	}()
 	first := wordPressFirstPage(pasted)
 	page := first
 	if wordPressPageKey(pasted) != wordPressPageKey(first) {
@@ -91,10 +121,12 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 			return sources, title, "partial — repeated page", nil
 		}
 		pages[key] = true
+		log.DebugContext(ctx, "wordpress: reading category page", "page", page.Redacted(), "page_number", n+1, "cached", root != nil)
 		if root == nil {
 			var final *url.URL
 			root, final, err = wordPressFetch(ctx, client, page)
 			if err != nil {
+				log.DebugContext(ctx, "wordpress: category page failed", "page", page.Redacted(), "error", err)
 				if ctx.Err() != nil {
 					return nil, "", "", ctx.Err()
 				}
@@ -104,6 +136,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 				return sources, title, "partial — could not fetch next page", nil
 			}
 			if !wordPressSameCategory(first, final) || !wordPressCategory(root, final) {
+				log.DebugContext(ctx, "wordpress: category page not recognised", "page", page.Redacted(), "final", final.Redacted())
 				if n == 0 {
 					return nil, "", "", fmt.Errorf("wordpress: category page is missing")
 				}
@@ -116,7 +149,9 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 			title = util.FirstNonEmpty(wordPressTitle(area, true), trimSiteSuffix(firstText(root, atomTitle)), title)
 		}
 		before := len(sources)
-		for _, ref := range wordPressPostLinks(area) {
+		links := wordPressPostLinks(area)
+		log.DebugContext(ctx, "wordpress: category page parsed", "page", page.Redacted(), "post_links", len(links))
+		for _, ref := range links {
 			link := wordPressLocalLink(page, ref)
 			if link == nil {
 				continue
@@ -131,6 +166,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 			}
 			sources = append(sources, link.String())
 		}
+		log.DebugContext(ctx, "wordpress: posts collected", "page", page.Redacted(), "new_posts", len(sources)-before, "posts_total", len(sources))
 		if len(sources) == before {
 			if n == 0 {
 				return nil, "", "", fmt.Errorf("wordpress: category has no post permalinks")
@@ -149,11 +185,13 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 		}
 		next := wordPressLocalLink(page, ref)
 		if next == nil || !wordPressSameCategory(first, next) {
+			log.DebugContext(ctx, "wordpress: invalid next page", "page", page.Redacted(), "next", ref)
 			return sources, title, "partial — invalid next page", nil
 		}
 		if len(sources) == limit {
 			return sources, title, "partial — source limit", nil
 		}
+		log.DebugContext(ctx, "wordpress: following next page", "page", page.Redacted(), "next", next.Redacted())
 		page, root = next, nil
 	}
 	return sources, title, "partial — page limit", nil
@@ -370,7 +408,11 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	sources := fileLinkSources(registry, candidates)
 	found := len(sources)
 	sources = sources[:min(found, opts.maxSources())]
-	e := expandSources(ctx, registry, sources, opts)
+	log := extractionLogger(ctx)
+	log.DebugContext(ctx, "wordpress: post links found", "page", page.Redacted(), "supported_links", found, "selected_links", len(sources))
+	e := expandSourcesWith(ctx, sources, opts, func(ctx context.Context, link string) (*Result, error) {
+		return wordPressLinkedSource(ctx, registry, link, opts)
+	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -388,6 +430,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	// just as it does on an ordinary page. Without one, use the same album
 	// and player parsers, scoped to this post rather than its sidebar/head.
 	if len(sources) == 0 {
+		log.DebugContext(ctx, "wordpress: inspecting embedded media")
 		media, err := wordPressMedia(ctx, client, page, content, title, opts)
 		if err != nil {
 			return nil, err
@@ -400,6 +443,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 		}
 	}
 	images := wordPressJPEGs(content, page)
+	log.DebugContext(ctx, "wordpress: post media collected", "resolved_links", e.used, "files", len(e.files), "jpeg_images", len(images))
 	// A photo may also be printed beside its album. Keep one original.
 	seen := make(map[string]bool, len(e.files))
 	for _, file := range e.files {
@@ -423,6 +467,27 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 		return nil, fmt.Errorf("wordpress: post has no accessible downloads")
 	}
 	return &Result{Title: title, Note: strings.Join(util.Dedupe(notes), "; "), Files: e.files}, nil
+}
+
+// Log the source before entering its resolver: a player can spend a long time
+// recovering through proxies while the category still has no queued files.
+func wordPressLinkedSource(ctx context.Context, registry *Registry, link string, opts Options) (*Result, error) {
+	u, _ := url.Parse(link)
+	log := extractionLogger(ctx).With("source", u.Redacted(), "extractor", registry.Find(u).Name())
+	ctx = WithLogger(ctx, log)
+	progress := WithResolveNote(ctx, func(note string) {
+		log.DebugContext(ctx, "wordpress: linked source progress", "stage", note)
+		ResolveNote(ctx, note)
+	})
+	start := time.Now()
+	log.DebugContext(ctx, "wordpress: resolving linked source")
+	res, _, err := registry.Extract(progress, link, opts)
+	if err != nil {
+		log.DebugContext(ctx, "wordpress: linked source failed", "error", err, "elapsed", time.Since(start))
+	} else {
+		log.DebugContext(ctx, "wordpress: linked source resolved", "files", len(res.Files), "note", res.Note, "elapsed", time.Since(start))
+	}
+	return res, err
 }
 
 // Give the generic parsers only the post body and its own title. Rendering
