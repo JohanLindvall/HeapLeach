@@ -16,6 +16,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/logstore"
 	"github.com/JohanLindvall/HeapLeach/internal/webui"
 )
 
@@ -142,7 +143,8 @@ func newTestParts(t *testing.T) (*download.Manager, *Server) {
 		ProxyEndpoints: []string{"direct"},
 	}
 	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	history := logstore.New()
+	log := slog.New(slog.NewTextHandler(history, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	manager := download.New(cfg, extractor.NewRegistry(cfg, client), client, log)
 	manager.Start()
@@ -152,5 +154,5 @@ func newTestParts(t *testing.T) (*download.Manager, *Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return manager, New(cfg, manager, log, assets)
+	return manager, New(cfg, manager, log, assets, history)
 }

@@ -183,3 +183,12 @@ export function AlertIcon({ size = 16 }: IconProps) {
     </svg>
   );
 }
+
+export function LogIcon({ size = 16 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M7 8h10M7 12h10M7 16h6" />
+    </svg>
+  );
+}

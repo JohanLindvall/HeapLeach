@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import type { AddResponse, ProxyPage, Snapshot } from './types';
+import type { AddResponse, LogPage, ProxyPage, Snapshot } from './types';
 
 /** Error carrying the server's message for a failed API call. */
 export class ApiError extends Error {
@@ -61,6 +61,11 @@ export function addUrls(urls: string, password: string): Promise<AddResponse> {
 /** Fetch the current state; used as a fallback when SSE is unavailable. */
 export function fetchState(signal?: AbortSignal): Promise<Snapshot> {
   return request<Snapshot>('/api/state', { signal });
+}
+
+export function fetchLogs(session: string, after: number, signal?: AbortSignal): Promise<LogPage> {
+  const params = new URLSearchParams({ session, after: String(after) });
+  return request<LogPage>(`/api/logs?${params}`, { signal, cache: 'no-store' });
 }
 
 /**

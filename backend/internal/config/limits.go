@@ -51,6 +51,12 @@ const (
 // single use so the whole system's behaviour can be read, and adjusted, in
 // one place.
 const (
+	// Service logs are kept only for the current run. Bound both ordinary
+	// bursts and unusually large diagnostic records before exposing them.
+	ServiceLogEntries    = 1000
+	ServiceLogBytes      = 4 << 20
+	ServiceLogEntryBytes = 16 << 10
+
 	// MaxConcurrency caps the worker pool. Past this the bottleneck is the
 	// remote host, and hammering it invites rate limiting.
 	MaxConcurrency = 32

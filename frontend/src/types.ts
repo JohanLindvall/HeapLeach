@@ -1,4 +1,22 @@
 // SPDX-License-Identifier: MIT
+/** Recent service diagnostics, independent of download snapshots. */
+export interface LogEntry {
+  id: number;
+  time: string;
+  level: string;
+  text: string;
+  truncated?: boolean;
+}
+
+export interface LogPage {
+  session: string;
+  entries: LogEntry[];
+  oldest: number;
+  next: number;
+  limit: number;
+  reset: boolean;
+}
+
 /** Lifecycle state of a job or a single file. Mirrors download.Status in Go. */
 export type Status =
   | 'resolving'

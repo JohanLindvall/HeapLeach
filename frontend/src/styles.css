@@ -586,7 +586,8 @@ code {
   background: var(--accent-soft);
 }
 
-.settings-panel {
+.settings-panel,
+.log-panel {
   padding: clamp(1rem, 2.5vw, 1.5rem);
   border: 1px solid var(--edge-hi);
   border-radius: var(--r-lg);
@@ -594,6 +595,46 @@ code {
   box-shadow: var(--shadow-sm);
   min-width: 0;
 }
+
+.log-panel h2 { margin: 0; font-size: 1rem; }
+.log-panel__head { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.log-panel__head p { margin: 0.35rem 0 0; color: var(--text-dim); font-size: 0.8rem; }
+.log-panel__status { flex: none; padding: 0.2rem 0.55rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.73rem; }
+.log-panel__status--error, .log-panel__error { color: var(--failed); }
+.log-panel__error { font-size: 0.8rem; }
+.log-panel__tools { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0 0.75rem; }
+.log-panel__tools input,
+.log-panel__tools select {
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--edge-flat);
+  border-radius: var(--r-sm);
+  background: var(--surface-solid);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+}
+.log-panel__tools input { flex: 1 1 13rem; }
+.log-panel__viewport {
+  height: 22rem;
+  max-height: 55vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--edge-flat);
+  border-radius: var(--r-sm);
+  background: var(--surface-solid);
+  font: 0.73rem/1.65 var(--mono);
+}
+.log-row { display: flex; gap: 0.75rem; width: max-content; min-width: 100%; padding: 0.25rem 0.7rem; border-bottom: 1px solid var(--edge-lo); white-space: pre; }
+.log-row__time { flex: none; width: 12ch; color: var(--text-faint); }
+.log-row__level { flex: none; min-width: 5ch; color: var(--text-dim); }
+.log-row__text { flex: none; }
+.log-row--warn .log-row__level { color: var(--queued); }
+.log-row--error .log-row__level { color: var(--failed); }
+.log-row--error { background: color-mix(in srgb, var(--failed) 5%, transparent); }
+.log-panel__empty { padding: 1rem; margin: 0; color: var(--text-dim); font-family: var(--sans); }
+.log-panel__foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.6rem; font-size: 0.71rem; color: var(--text-faint); }
 
 .settings-panel h2, .settings-panel h3 { margin: 0; font-size: 1rem; }
 .settings-panel p { margin: 0.4rem 0 0; font-size: 0.8rem; color: var(--text-dim); }

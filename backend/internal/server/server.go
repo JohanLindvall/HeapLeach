@@ -16,6 +16,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
+	"github.com/JohanLindvall/HeapLeach/internal/logstore"
 )
 
 // Server wires the routes.
@@ -23,6 +24,7 @@ type Server struct {
 	cfg    *config.Config
 	mgr    *download.Manager
 	log    *slog.Logger
+	logs   *logstore.Buffer
 	static http.Handler
 
 	// lastSeen is when a browser last said anything, as Unix nanoseconds.
@@ -39,8 +41,8 @@ type Server struct {
 }
 
 // New builds the HTTP handler set.
-func New(cfg *config.Config, mgr *download.Manager, log *slog.Logger, assets fs.FS) *Server {
-	s := &Server{cfg: cfg, mgr: mgr, log: log, static: spaHandler(assets)}
+func New(cfg *config.Config, mgr *download.Manager, log *slog.Logger, assets fs.FS, logs *logstore.Buffer) *Server {
+	s := &Server{cfg: cfg, mgr: mgr, log: log, logs: logs, static: spaHandler(assets)}
 	// Counted from startup rather than from zero, so a process that is
 	// never visited still gets its full grace period before deciding
 	// nobody is coming.
@@ -69,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("GET /api/logs", s.handleLogs)
 	mux.HandleFunc("POST /api/downloads", s.handleAdd)
 	mux.HandleFunc("POST /api/settings", s.handleSettings)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
@@ -152,14 +155,14 @@ func serveIndex(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(body))
 }
 
-// logRequests records API calls at debug level, skipping the SSE stream,
-// which is long-lived and would only ever log once.
+// logRequests skips the long-lived SSE stream and the log reader: observing
+// logs must not itself keep generating more logs.
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every request counts as someone being there, including the ones
 		// too dull to log — a page load is the clearest sign of all.
 		s.seen()
-		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/events" {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/events" || r.URL.Path == "/api/logs" {
 			next.ServeHTTP(w, r)
 			return
 		}

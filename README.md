@@ -345,6 +345,14 @@ Player diagnostics also record response status, content type, redirects,
 challenge markers and connection route for discovery and token refreshes.
 Debug logging defaults on; use `-debug=false` or `HEAPLEACH_DEBUG=0` to disable it.
 
+Open **Logs** beside Settings to view the service's recent messages without
+opening a terminal. The panel updates while visible, with search, severity
+filters, pause/resume and a download of the filtered messages. Scrolling up
+stops following new messages; **Jump to latest** resumes following. The service
+retains up to 1,000 messages or 4 MiB for the current run, truncating unusually
+large entries. Older messages roll off and a restart clears this history.
+Console logging continues as usual.
+
 ### Every supported site
 
 Generated from the registry by `make hosts`, so it cannot drift from the
@@ -840,6 +848,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `GET` | `/api/health` | Liveness. |
 | `GET` | `/api/state` | Current snapshot. |
 | `GET` | `/api/events` | Complete initial snapshot, then item patches; missed updates are replaced with a complete snapshot. |
+| `GET` | `/api/logs` | Recent service logs. Pass the returned `session` and `next` as `session` and `after` for new entries; `reset` replaces prior history after a restart or retention gap. |
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
 | `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
 | `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |

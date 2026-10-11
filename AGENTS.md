@@ -1552,6 +1552,19 @@ Four things are easy to break:
 
 ### Server and shutdown
 
+The service's text logger also writes into `internal/logstore` before startup
+work begins, preserving job/item fields and the configured log level. The
+buffer retains at most 1,000 records or 4 MiB, with 16 KiB per record and UTF-8
+boundaries preserved. Headless mode has no history buffer. `/api/logs` copies
+entries under the buffer lock and encodes them afterwards; a browser never
+holds that lock while reading. Session IDs distinguish restarts, and cursors
+before retention or ahead of the current run reset the client's window.
+Keep log reads out of API request logging or the viewer generates its own
+endless traffic. The Logs panel polls deltas only while open, visible and
+unpaused, aborts pending reads on close/pause, and discards expired rows even
+when the byte limit shortens the window. Export uses the current filters;
+messages render as text, including markup in remote error messages.
+
 The API is `net/http` with Go 1.22 method+pattern routing. `/api/events` is a
 server-sent-events stream starting with a **complete state snapshot** and
 then carrying changed item rows. Dropped patches are replaced with a complete

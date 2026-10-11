@@ -28,6 +28,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/logstore"
 	"github.com/JohanLindvall/HeapLeach/internal/server"
 	"github.com/JohanLindvall/HeapLeach/internal/webui"
 )
@@ -59,7 +60,11 @@ func run() error {
 	}
 	cfg.Version = version
 	headless := len(cfg.URLs) > 0
-	log := newLogger(cfg.Debug, headless)
+	var history *logstore.Buffer
+	if !headless {
+		history = logstore.New()
+	}
+	log := newLogger(cfg.Debug, headless, history)
 
 	// First, so everything after it — a headless run included — can be
 	// profiled. See startProfiler for why it has a listener of its own.
@@ -130,7 +135,7 @@ func run() error {
 		log.Warn("frontend is a placeholder — run `make frontend` to build the UI")
 	}
 
-	api := server.New(cfg, manager, log, assets)
+	api := server.New(cfg, manager, log, assets, history)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Handler(),
@@ -260,7 +265,7 @@ func openBrowser(url string) error {
 // A headless run owns stdout — the progress display repaints it — so its log
 // goes to stderr. Debug logging defaults on and disables animation so the
 // two never compete; opting out also limits headless logs to warnings.
-func newLogger(debug, headless bool) *slog.Logger {
+func newLogger(debug, headless bool, history *logstore.Buffer) *slog.Logger {
 	level := slog.LevelInfo
 	if debug {
 		level = slog.LevelDebug
@@ -271,6 +276,9 @@ func newLogger(debug, headless bool) *slog.Logger {
 		if !debug {
 			level = slog.LevelWarn
 		}
+	}
+	if history != nil {
+		out = io.MultiWriter(history, out)
 	}
 	return slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: level}))
 }

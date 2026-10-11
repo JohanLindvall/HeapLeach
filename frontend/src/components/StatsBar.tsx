@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { formatSpeed } from '../format';
 import type { ConnectionState, Snapshot } from '../types';
-import { MoonIcon, PauseIcon, PlayIcon, SettingsIcon, SunIcon } from './Icons';
+import { LogIcon, MoonIcon, PauseIcon, PlayIcon, SettingsIcon, SunIcon } from './Icons';
 import { Sparkline } from './Sparkline';
 
 interface StatsBarProps {
@@ -13,6 +13,8 @@ interface StatsBarProps {
   readonly onTogglePause: () => void;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
+  readonly logsOpen: boolean;
+  readonly onToggleLogs: () => void;
 }
 
 /** Header: live totals, access to settings and connection status. */
@@ -25,6 +27,8 @@ export function StatsBar({
   onTogglePause,
   settingsOpen,
   onToggleSettings,
+  logsOpen,
+  onToggleLogs,
 }: StatsBarProps) {
   const totals = snapshot.jobs.reduce(
     (acc, job) => {
@@ -60,6 +64,10 @@ export function StatsBar({
       </div>
 
       <div className="stats__controls">
+        <button type="button" className={`btn${logsOpen ? ' is-selected' : ''}`}
+          aria-expanded={logsOpen} aria-controls="service-logs" onClick={onToggleLogs} title="View service logs">
+          <LogIcon />Logs
+        </button>
         <button
           type="button"
           className={`btn${settingsOpen ? ' is-selected' : ''}`}

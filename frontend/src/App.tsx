@@ -14,6 +14,7 @@ import { AddForm } from './components/AddForm';
 import { DownloadDir } from './components/DownloadDir';
 import { FileList } from './components/FileList';
 import { JobCard } from './components/JobCard';
+import { LogPanel } from './components/LogPanel';
 import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar } from './components/Sidebar';
 import { StatsBar } from './components/StatsBar';
@@ -68,6 +69,7 @@ export default function App() {
   }, []);
   const [query, setQuery] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const nextNoticeId = useRef(0);
 
@@ -196,6 +198,8 @@ export default function App() {
           onTogglePause={() => run(() => updateSettings({ paused: !(snapshot.paused || snapshot.held > 0) }))}
           settingsOpen={settingsOpen}
           onToggleSettings={() => setSettingsOpen((open) => !open)}
+          logsOpen={logsOpen}
+          onToggleLogs={() => setLogsOpen((open) => !open)}
         />
       </header>
 
@@ -210,6 +214,7 @@ export default function App() {
         />
 
         <main className="main">
+          {logsOpen && <LogPanel />}
           {settingsOpen && <SettingsPanel snapshot={snapshot} />}
           <AddForm onNotice={notify} />
 
