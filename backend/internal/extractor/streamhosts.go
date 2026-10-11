@@ -17,6 +17,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Video hosts that embed rather than list: the page is a player, and the
@@ -192,7 +193,7 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 			return nil, fmt.Errorf("doodstream: %w", err)
 		}
 		note("requesting player")
-		doc, final, err := d.client.GetPage(ctx, page, httpx.Referer(util.Origin(base)+"/"), doodChallengePage)
+		doc, final, err := d.getPage(ctx, page, util.Origin(base)+"/", "player", attempt)
 		if err != nil {
 			return nil, fmt.Errorf("doodstream: fetch %s: %w", page, err)
 		}
@@ -206,7 +207,7 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 		pass := util.Origin(final) + m[1]
 
 		note("requesting media token")
-		prefix, _, err := d.client.GetPage(ctx, pass, httpx.Referer(page), doodChallengePage)
+		prefix, _, err := d.getPage(ctx, pass, page, "token", attempt)
 		if err != nil {
 			return nil, fmt.Errorf("doodstream: fetch media token: %w", err)
 		}
@@ -233,15 +234,27 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 	return target, title, err
 }
 
-// Dood's own Turnstile gate is a 200 player page without cf-mitigated.
-// Require the CAPTCHA player and its widget, not the background Cloudflare
-// script or a widget elsewhere on a page that still supplies a media token.
+// Recognise both the host's Turnstile player gate and an interstitial whose
+// cf-mitigated header is absent. A background script or unrelated widget is
+// not a gate. Check the interstitial first: it can echo the requested token
+// endpoint in its challenge options without supplying a playable video.
 func doodChallengePage(doc string) bool {
-	if doodPassPath.MatchString(doc) {
-		return false
-	}
 	root, err := parseHTML(doc)
 	if err != nil {
+		return false
+	}
+	if findFirst(root, func(n *html.Node) bool {
+		if !isElem(n, atom.Script) {
+			return false
+		}
+		script := textOf(n)
+		return strings.Contains(script, "_cf_chl_opt") &&
+			strings.Contains(script, "/cdn-cgi/challenge-platform/") &&
+			strings.Contains(script, "/orchestrate/chl_page/")
+	}) != nil {
+		return true
+	}
+	if doodPassPath.MatchString(doc) {
 		return false
 	}
 	gate := findFirst(root, func(n *html.Node) bool { return hasClass(n, "captcha-player") })

@@ -133,6 +133,7 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	m.mu.Lock()
 	lease := it.route
+	ctx = extractor.WithLogger(ctx, m.log.With("job", it.JobID, "item", it.ID))
 	m.mu.Unlock()
 	if lease == nil {
 		start := time.Now()

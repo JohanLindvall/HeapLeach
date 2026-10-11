@@ -471,9 +471,16 @@ Host-specific notes:
   containing `turnstile-container`, without a media token, identifies it.
   `httpx.GetPage` checks that HTML before challenge capture and route scoring,
   so a challenged proxy is retried and is not credited with a successful
-  transfer. A background Cloudflare script alone is not a gate. The final
-  page URL after redirects supplies both the token endpoint's origin and
-  the media referer, refreshed together on each attempt. The token endpoint
+  transfer. A background Cloudflare script alone is not a gate. Cloudflare's
+  interstitial is also recognised by its `_cf_chl_opt` script loading
+  `orchestrate/chl_page`, if its usual header is absent. Check this before
+  accepting a token path: a challenge can echo that path in its options.
+  Debug diagnostics record response status/type, final player URL, route,
+  attempt and gate
+  markers, keeping raw HTML, cookies and successful media tokens out of the
+  logs. Both source discovery and deferred refreshes inherit the job logger.
+  The final page URL after redirects supplies both the token endpoint's origin
+  and the media referer, refreshed together on each attempt. The token endpoint
   can also answer `RELOAD`, which the player handles with `location.reload()`.
   Repeat the whole page/token exchange on the same route, keeping its cookies
   and re-reading the token path from the final page. The shared extraction
@@ -1519,9 +1526,10 @@ returns once every job is terminal.
 
 Four things are easy to break:
 
-- **The display owns stdout.** A headless run sends its log to *stderr* at
-  warn level, because a log line written into the live region corrupts the
-  frame. `-debug` turns the animation off entirely for the same reason.
+- **The display owns stdout.** A headless run sends its log to *stderr*.
+  Debug logging defaults on and uses plain progress lines. `-debug=false`
+  or `HEAPLEACH_DEBUG=0` restores warning-level logs and terminal animation,
+  because a log line written into the live region corrupts the frame.
 - **One painted line must be one screen row.** The live region is repainted
   by counting rows and moving the cursor up that many times. Every line is
   truncated to the terminal width first — counting printable runes, not

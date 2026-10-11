@@ -40,7 +40,7 @@ func TestFromEnvDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Addr != ":8080" || cfg.Concurrency != DefaultConcurrency ||
-		cfg.MaxRetries != DefaultMaxRetries || cfg.Streams != DefaultStreams {
+		cfg.MaxRetries != DefaultMaxRetries || cfg.Streams != DefaultStreams || !cfg.Debug {
 		t.Errorf("defaults = %+v", cfg)
 	}
 	if cfg.UserAgent == "" || cfg.Language == "" {

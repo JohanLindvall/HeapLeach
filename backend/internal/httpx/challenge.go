@@ -47,6 +47,7 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 	if err != nil {
 		return resp, err
 	}
+	logResponse(resp)
 	challenged := strings.EqualFold(strings.TrimSpace(resp.Header.Get(HeaderCFMitigated)), "challenge")
 	// Some hosts put Turnstile in their own player page, which has neither
 	// the interstitial header nor an error status. Only an explicit page

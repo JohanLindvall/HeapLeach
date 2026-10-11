@@ -150,6 +150,7 @@ func FromEnv() (*Config, error) {
 		MinFreeDisk:    DefaultMinFreeDisk,
 		MaxSources:     MaxExpandedSources,
 		MaxFiles:       MaxListingFiles,
+		Debug:          true,
 		Proxies:        true,
 		ProxyDB:        env("PROXY_DB", defaultProxyDB()),
 		ProxyEndpoints: envList("PROXY_ENDPOINTS"),
@@ -211,7 +212,9 @@ func FromEnv() (*Config, error) {
 		c.StallTimeout = d
 	}
 
-	c.Debug = env("DEBUG", "") != ""
+	if enabled, set := EnvBool("DEBUG"); set {
+		c.Debug = enabled
+	}
 	c.OpenBrowser, _ = EnvBool("OPEN")
 	c.ResumeRestored, _ = EnvBool("RESUME")
 	c.ProfileAddr = env("PPROF", "")

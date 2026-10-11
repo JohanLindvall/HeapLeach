@@ -258,8 +258,8 @@ func openBrowser(url string) error {
 // newLogger builds a text logger.
 //
 // A headless run owns stdout — the progress display repaints it — so its log
-// goes to stderr, and only for things the display cannot show. Asking for
-// -debug turns the animation off, so the two never compete.
+// goes to stderr. Debug logging defaults on and disables animation so the
+// two never compete; opting out also limits headless logs to warnings.
 func newLogger(debug, headless bool) *slog.Logger {
 	level := slog.LevelInfo
 	if debug {
@@ -470,9 +470,12 @@ browser at it — nothing to choose and nothing to collide with. Give it any
 argument and it uses the settings below instead.
 
 With no URLs heapleach serves its web UI. Given URLs it downloads them to
-disk, animating progress on the terminal, and exits non-zero if any
+disk, printing progress on the terminal, and exits non-zero if any
 file failed. A "-" argument reads URLs from standard input, one per
 line (blank lines and #comments are ignored).
+
+Debug logging defaults on. Use -debug=false or HEAPLEACH_DEBUG=0 for
+quieter logs and animated terminal progress.
 
 Files are saved to the download directory, which may be given as an
 argument, with -dir, or through HEAPLEACH_DIR. The argument wins.

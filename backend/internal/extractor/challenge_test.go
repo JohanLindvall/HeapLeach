@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestDoodProxyRecoveryIncludesTokensAndRefreshesOnTheNewRoute(t *testing.T) {
-	for _, mode := range []string{"cloudflare", "turnstile", "reload", "refused"} {
+	for _, mode := range []string{"cloudflare", "interstitial", "turnstile", "reload", "refused"} {
 		t.Run(mode, func(t *testing.T) {
 			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if mode == "reload" {
@@ -34,6 +35,11 @@ func TestDoodProxyRecoveryIncludesTokensAndRefreshesOnTheNewRoute(t *testing.T) 
 				if mode == "turnstile" {
 					w.Header().Set(httpx.HeaderContentType, "text/html")
 					fmt.Fprint(w, doodGateFixture)
+					return
+				}
+				if mode == "interstitial" {
+					w.Header().Set(httpx.HeaderContentType, "text/html")
+					fmt.Fprint(w, doodInterstitialFixture)
 					return
 				}
 				w.Header().Set(httpx.HeaderCFMitigated, "challenge")
@@ -65,7 +71,12 @@ func TestDoodProxyRecoveryIncludesTokensAndRefreshesOnTheNewRoute(t *testing.T) 
 			}
 			first, second := route("first"), route("second")
 			reg := &Registry{fallback: NewDoodStream(client)}
-			ctx := WithChallengeRecovery(context.Background(), func(_ context.Context, read func(context.Context) (*Result, error), _ error) (*Result, error) {
+			ctx := WithChallengeRecovery(context.Background(), func(_ context.Context, read func(context.Context) (*Result, error), cause error) (*Result, error) {
+				if mode == "cloudflare" || mode == "interstitial" || mode == "turnstile" {
+					if _, ok := errors.AsType[*httpx.ChallengeError](cause); !ok {
+						t.Fatalf("recovery did not receive a challenge: %v", cause)
+					}
+				}
 				return read(first)
 			})
 			res, _, err := reg.Extract(ctx, origin.URL+"/e/synthetic", Options{})

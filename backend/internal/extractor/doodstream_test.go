@@ -21,37 +21,53 @@ const doodGateFixture = `<html><div id="video_player">
 	<div class="captcha-player"><div class="g-recaptcha" id="turnstile-container"></div></div>
 </div><script src="//challenges.cloudflare.com/turnstile/v0/api.js"></script></html>`
 
-func TestDoodTurnstileChallengeAtPageOrToken(t *testing.T) {
-	for _, stage := range []string{"page", "token"} {
-		t.Run(stage, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set(httpx.HeaderContentType, "text/html; charset=UTF-8")
-				if stage == "token" && r.URL.Path == "/e/synthetic" {
-					fmt.Fprint(w, `<title>Test Clip</title><script>fetch('/pass_md5/session/synthetic')</script>`)
-					return
+const doodInterstitialFixture = `<html><title>Just a moment...</title><script>
+window._cf_chl_opt = {cType: 'managed', cUPMDTk: '/e/synthetic?__cf_chl_tk=example'};
+var script = document.createElement('script');
+script.src = '/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1';
+document.head.appendChild(script);
+</script></html>`
+
+func TestDoodChallengeAtPageOrToken(t *testing.T) {
+	for _, gate := range []struct{ name, body string }{
+		{"turnstile", doodGateFixture},
+		{"interstitial", doodInterstitialFixture},
+	} {
+		for _, stage := range []string{"page", "token"} {
+			t.Run(gate.name+"/"+stage, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set(httpx.HeaderContentType, "text/html; charset=UTF-8")
+					if stage == "token" && r.URL.Path == "/e/synthetic" {
+						fmt.Fprint(w, `<title>Test Clip</title><script>fetch('/pass_md5/session/synthetic')</script>`)
+						return
+					}
+					body := gate.body
+					if stage == "token" {
+						body = strings.ReplaceAll(body, "/e/synthetic", "/pass_md5/session/synthetic")
+					}
+					fmt.Fprint(w, body)
+				}))
+				defer srv.Close()
+				alias := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, srv.URL+r.URL.Path, http.StatusFound)
+				}))
+				defer alias.Close()
+				client := httpx.New("test", "en", 0, time.Second)
+				defer client.CloseIdleConnections()
+				_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, alias.URL+"/e/synthetic"), Options{})
+				challenge, ok := errors.AsType[*httpx.ChallengeError](err)
+				path := "/e/synthetic"
+				if stage == "token" {
+					path = "/pass_md5/session/synthetic"
 				}
-				fmt.Fprint(w, doodGateFixture)
-			}))
-			defer srv.Close()
-			alias := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				http.Redirect(w, r, srv.URL+r.URL.Path, http.StatusFound)
-			}))
-			defer alias.Close()
-			client := httpx.New("test", "en", 0, time.Second)
-			defer client.CloseIdleConnections()
-			_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, alias.URL+"/e/synthetic"), Options{})
-			challenge, ok := errors.AsType[*httpx.ChallengeError](err)
-			path := "/e/synthetic"
-			if stage == "token" {
-				path = "/pass_md5/session/synthetic"
-			}
-			if !ok || challenge.Err.Code != http.StatusOK || challenge.Err.URL != srv.URL+path {
-				t.Fatalf("challenge=%+v err=%v", challenge, err)
-			}
-			if strings.Contains(err.Error(), "removed") {
-				t.Fatalf("challenge was reported as a removed video: %v", err)
-			}
-		})
+				if !ok || challenge.Err.Code != http.StatusOK || challenge.Err.URL != srv.URL+path {
+					t.Fatalf("challenge=%+v err=%v", challenge, err)
+				}
+				if strings.Contains(err.Error(), "removed") {
+					t.Fatalf("challenge was reported as a removed video: %v", err)
+				}
+			})
+		}
 	}
 }
 
@@ -61,11 +77,17 @@ func TestDoodChallengeNeedsABlockedPlayer(t *testing.T) {
 		challenge  bool
 	}{
 		{"gate", doodGateFixture, true},
+		{"interstitial", doodInterstitialFixture, true},
 		{"removed", `<html>Video not found</html>`, false},
 		{"background", `<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>`, false},
+		{"background-with-options", `<script>window._cf_chl_opt = {}; load('/cdn-cgi/challenge-platform/scripts/jsd/main.js');</script>`, false},
+		{"challenge-title-only", `<title>Just a moment...</title>`, false},
+		{"challenge-text-only", `<pre>window._cf_chl_opt /cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1</pre>`, false},
 		{"unrelated-widget", `<div id="turnstile-container"></div>`, false},
+		{"invisible-widget", `<script>turnstile.render(document.body, {size: 'invisible'});</script>`, false},
 		{"no-widget", `<div class="captcha-player"></div>`, false},
 		{"playable", doodGateFixture + `<script>fetch('/pass_md5/session/synthetic')</script>`, false},
+		{"interstitial-echoes-token-path", strings.ReplaceAll(doodInterstitialFixture, "/e/synthetic", "/pass_md5/session/synthetic"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := doodChallengePage(tc.body); got != tc.challenge {

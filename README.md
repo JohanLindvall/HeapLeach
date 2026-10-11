@@ -130,7 +130,7 @@ heapleach [options] <url>... [download-dir]   download and exit
   -min-free size        room to leave at the destination before starting another
                         transfer (0 turns the check off) (default 10GiB)
   -stall-timeout dur    abandon and retry a transfer stuck this long (default 1m30s)
-  -debug                verbose logging
+  -debug                verbose logging (default true; -debug=false disables)
   -open                 open the UI in a browser once it is listening
   -version              print the version and exit
 ```
@@ -140,7 +140,7 @@ Sizes take a unit — `5MB`, `1.5GB`, `10GiB` — or a plain byte count.
 ### On the command line
 
 Hand it URLs and it never opens a socket: the files are downloaded to disk,
-progress is animated on the terminal, and the process exits.
+progress is printed on the terminal, and the process exits.
 
 ```bash
 heapleach https://example.com/d/abc123 ~/Downloads
@@ -159,10 +159,11 @@ Failures are named, so it drops straight into a script or a cron job. `Ctrl-C` e
 continues them rather than starting over.
 
 Everything the server does, this does: the same extractors, the same
-multi-connection transfers, the same resume. When stdout is not a terminal
-— a pipe, a log file, CI — the animation is replaced by plain progress
-lines at a slower cadence, and `-debug` does the same so log output and the
-display never fight over the screen.
+multi-connection transfers, the same resume. Debug logging is enabled by
+default, with plain progress lines so logs and the display never fight over
+the screen. Use `-debug=false` or `HEAPLEACH_DEBUG=0` for quieter output and
+animated progress on a terminal. Pipes, log files and CI always use plain
+progress lines.
 
 The download directory can be given three ways. The most explicit wins:
 
@@ -336,10 +337,13 @@ Login-only content and listings rendered entirely by scripts
 are not exposed by this parser. Domain redirects are followed, and relative
 links use the final page's address.
 
-Use `-debug` or `HEAPLEACH_DEBUG=1` to trace WordPress category pages, post
-counts, pagination and each post's linked sources, including player/proxy
-progress and failures. Files reach the queue after source resolution finishes;
+Debug logs trace WordPress category pages, post counts, pagination and each
+post's linked sources, including player/proxy progress and failures.
+Files reach the queue after source resolution finishes;
 these logs show which post and source are still being resolved during that wait.
+Player diagnostics also record response status, content type, redirects,
+challenge markers and connection route for discovery and token refreshes.
+Debug logging defaults on; use `-debug=false` or `HEAPLEACH_DEBUG=0` to disable it.
 
 ### Every supported site
 
@@ -822,7 +826,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_KVS_HOSTS` | unset | The original KVS-only form of the above, still honoured. |
 | `HEAPLEACH_IA_FORMATS` | unset | Archive.org format labels to keep, overriding the per-mediatype rendition policy — the escape for when an item's interesting rendition is one the policy passes over. |
 | `HEAPLEACH_UTLS` | unset | `HEAPLEACH_UTLS=0` turns the browser-shaped TLS handshake off and uses Go's standard one. A few hosts (wiki.gg) challenge the default fingerprint; a few others require it. |
-| `HEAPLEACH_DEBUG` | unset | Debug logging. Flag: `-debug`. |
+| `HEAPLEACH_DEBUG` | `1` | Debug logging. Set `0`, `false`, `no` or `off` to disable it. Flag: `-debug=false`. |
 | `HEAPLEACH_MAX_SOURCES` | `500` | How many of a page's links are followed: the albums of an index search, the links of a harvested thread. Flag: `-max-sources`. |
 | `HEAPLEACH_MAX_FILES` | `20000` | How many files one submitted URL may resolve to. A listing past it stops at a whole album and says so beside the job's name — never in its folder, so raising the cap and adding the URL again files the rest beside what is already downloaded. Flag: `-max-files`. |
 | `HEAPLEACH_PPROF` | unset | Serve Go's runtime profiles at this address, on a listener of their own — `go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30` then shows where the CPU goes. Flag: `-pprof`. Off unless set. Name a loopback address: the profiles describe the process from the inside, and a non-loopback one is logged as a warning. In a container, the container's own 127.0.0.1 is reached with `docker exec`. |
