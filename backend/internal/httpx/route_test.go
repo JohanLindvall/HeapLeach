@@ -182,12 +182,17 @@ func TestRouteRequestTimeoutBoundsProxyCONNECT(t *testing.T) {
 	for _, secure := range []bool{false, true} {
 		t.Run(fmt.Sprintf("https-proxy=%t", secure), func(t *testing.T) {
 			var connects atomic.Int32
+			finish := make(chan struct{})
 			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodConnect {
 					t.Errorf("expected CONNECT, got %s", r.Method)
 				}
 				connects.Add(1)
-				<-r.Context().Done()
+				select {
+				case <-finish:
+				case <-r.Context().Done():
+				}
+				w.WriteHeader(http.StatusBadGateway)
 			}))
 			if secure {
 				srv.StartTLS()
@@ -195,6 +200,7 @@ func TestRouteRequestTimeoutBoundsProxyCONNECT(t *testing.T) {
 				srv.Start()
 			}
 			defer srv.Close()
+			defer close(finish)
 			base := New("test", "en", 3, time.Minute)
 			defer base.CloseIdleConnections()
 			route, err := base.ThroughProxy(srv.URL)
@@ -210,6 +216,9 @@ func TestRouteRequestTimeoutBoundsProxyCONNECT(t *testing.T) {
 			_, err = base.WithTimeout(100 * time.Millisecond).Bytes(req)
 			if _, ok := errors.AsType[*RouteError](err); !ok || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 				t.Fatalf("proxy timeout=%v caller=%v", err, ctx.Err())
+			}
+			if _, ok := errors.AsType[*ProxyConnectError](err); !ok {
+				t.Fatalf("silent proxy lost its connection failure: %v", err)
 			}
 			if connects.Load() != 1 || len(observations) != 1 || observations[0].Err == nil {
 				t.Fatalf("connects=%d observations=%+v; want one scored timeout with no HTTP retry", connects.Load(), observations)
@@ -261,6 +270,175 @@ func TestRouteCancellationDoesNotPenaliseProxyAndStreamingKeepsItsTimeout(t *tes
 	}
 }
 
+func TestRouteSetupTimeoutOnlyBlamesAnExplicitProxy(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("direct=%t/streaming=%t", direct, streaming), func(t *testing.T) {
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				accepted := make(chan net.Conn, 1)
+				go func() {
+					conn, _ := listener.Accept()
+					accepted <- conn
+				}()
+				defer func() {
+					listener.Close()
+					if conn := <-accepted; conn != nil {
+						conn.Close()
+					}
+				}()
+				base := New("test", "en", 3, 100*time.Millisecond)
+				defer base.CloseIdleConnections()
+				endpoint, target := "https://"+listener.Addr().String(), "https://origin.example.test/file"
+				if direct {
+					endpoint, target = DirectRoute, "https://"+listener.Addr().String()+"/file"
+				}
+				route, err := base.ThroughProxy(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer route.CloseIdleConnections()
+				var observations []RouteObservation
+				ctx := WithRoute(context.Background(), endpoint, route, func(o RouteObservation) { observations = append(observations, o) })
+				if streaming {
+					base = base.Streaming()
+				}
+				_, err = base.GetString(ctx, target, nil)
+				if err == nil || ctx.Err() != nil {
+					t.Fatalf("expected client timeout, got %v with context=%v", err, ctx.Err())
+				}
+				if _, proxyFailure := errors.AsType[*ProxyConnectError](err); proxyFailure == direct {
+					t.Fatalf("direct=%t proxy failure=%t: %v", direct, proxyFailure, err)
+				}
+				if len(observations) != 1 || observations[0].Err == nil {
+					t.Fatalf("route timeout must be scored once: %+v", observations)
+				}
+			})
+		}
+	}
+}
+
+func TestRouteTimeoutAfterProxySetupStillPenalisesWithoutAConnectFailure(t *testing.T) {
+	for _, stage := range []string{"headers", "body", "destination TLS"} {
+		for _, secure := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/https-proxy=%t", stage, secure), func(t *testing.T) {
+				finish := make(chan struct{})
+				srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if stage == "destination TLS" {
+						if r.Method != http.MethodConnect {
+							t.Errorf("expected CONNECT, got %s", r.Method)
+						}
+						conn, rw, err := w.(http.Hijacker).Hijack()
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						defer conn.Close()
+						fmt.Fprint(rw, "HTTP/1.1 200 Connection Established\r\n\r\n")
+						rw.Flush()
+						<-finish
+						return
+					}
+					if stage == "body" {
+						w.Header().Set("Content-Length", "4")
+						w.WriteHeader(http.StatusOK)
+						w.(http.Flusher).Flush()
+					}
+					select {
+					case <-finish:
+					case <-r.Context().Done():
+					}
+				}))
+				if secure {
+					srv.StartTLS()
+				} else {
+					srv.Start()
+				}
+				defer srv.Close()
+				defer close(finish)
+				base := New("test", "en", 3, 100*time.Millisecond)
+				defer base.CloseIdleConnections()
+				route, err := base.ThroughProxy(srv.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer route.CloseIdleConnections()
+				var observations []RouteObservation
+				ctx := WithRoute(context.Background(), "route", route, func(o RouteObservation) { observations = append(observations, o) })
+				target := "http://origin.example.test/file"
+				if stage == "destination TLS" {
+					target = "https://origin.example.test/file"
+				}
+				_, err = base.GetString(ctx, target, nil)
+				if _, ok := errors.AsType[*RouteError](err); !ok || !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected routed timeout, got %v", err)
+				}
+				if _, ok := errors.AsType[*ProxyConnectError](err); ok {
+					t.Fatalf("timeout after proxy setup marked as an unanswered connection: %v", err)
+				}
+				if len(observations) != 1 || observations[0].Err == nil {
+					t.Fatalf("timeout should still penalise the proxy once: %+v", observations)
+				}
+			})
+		}
+	}
+}
+
+func TestProxyConnectCancellationDoesNotPenaliseTheRoute(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deadline=%t", deadline), func(t *testing.T) {
+			started, finish := make(chan struct{}), make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(started)
+				select {
+				case <-finish:
+				case <-r.Context().Done():
+				}
+				w.WriteHeader(http.StatusBadGateway)
+			}))
+			defer srv.Close()
+			defer close(finish)
+			base := New("test", "en", 0, time.Second)
+			defer base.CloseIdleConnections()
+			route, err := base.ThroughProxy(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer route.CloseIdleConnections()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if deadline {
+				ctx, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
+				defer cancel()
+			}
+			var observations atomic.Int32
+			ctx = WithRoute(ctx, "route", route, func(RouteObservation) { observations.Add(1) })
+			done := make(chan error, 1)
+			go func() {
+				_, err := base.GetString(ctx, "https://origin.example.test/file", nil)
+				done <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("proxy did not receive CONNECT")
+			}
+			if !deadline {
+				cancel()
+			}
+			err = <-done
+			if !errors.Is(err, ctx.Err()) || observations.Load() != 0 {
+				t.Fatalf("cancellation=%v context=%v observations=%d", err, ctx.Err(), observations.Load())
+			}
+			if _, ok := errors.AsType[*RouteError](err); ok {
+				t.Fatalf("caller cancellation marked as a route failure: %v", err)
+			}
+		})
+	}
+}
+
 func TestSOCKSRouteTimeoutPenalisesAnUnansweredHandshake(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -292,6 +470,9 @@ func TestSOCKSRouteTimeoutPenalisesAnUnansweredHandshake(t *testing.T) {
 	_, err = base.WithTimeout(100 * time.Millisecond).Bytes(req)
 	if _, ok := errors.AsType[*RouteError](err); !ok || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 		t.Fatalf("SOCKS timeout=%v caller=%v", err, ctx.Err())
+	}
+	if _, ok := errors.AsType[*ProxyConnectError](err); !ok {
+		t.Fatalf("silent SOCKS proxy lost its connection failure: %v", err)
 	}
 	if len(observations) != 1 || observations[0].Err == nil {
 		t.Fatalf("observations=%+v; want one scored timeout", observations)

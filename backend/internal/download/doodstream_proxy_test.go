@@ -70,8 +70,130 @@ func TestSourceRecoveryRedrawsBrokenProxiesBeyondTheRetryBudget(t *testing.T) {
 	}
 }
 
+func TestDoodProxyTimeoutRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		headers    bool
+		failures   int32
+		wantFailed bool
+	}{
+		{name: "connection", failures: 3},
+		{name: "headers", headers: true, failures: 1},
+		{name: "header retry limit", headers: true, failures: 3, wantFailed: true},
+	} {
+		for _, stage := range []string{"source", "file"} {
+			t.Run(tc.name+"/"+stage, func(t *testing.T) {
+				m := busyManager(t)
+				finish := make(chan struct{})
+				defer close(finish)
+				var players, connects atomic.Int32
+				var endpoints []string
+				const origin = "http://player.example.test"
+				const payload = "synthetic video bytes"
+				for _, address := range []string{"127.0.0.2", "127.0.0.3", "127.0.0.4", "127.0.0.5"} {
+					srv := proxyServer(t, address, func(w http.ResponseWriter, r *http.Request) {
+						switch {
+						case r.Method == http.MethodConnect:
+							connects.Add(1)
+							select {
+							case <-finish:
+							case <-r.Context().Done():
+							}
+							w.WriteHeader(http.StatusBadGateway)
+						case r.URL.Path == "/e/synthetic":
+							if players.Add(1) <= tc.failures {
+								if tc.headers {
+									select {
+									case <-finish:
+									case <-r.Context().Done():
+									}
+									return
+								}
+								// A successful first hop must not hide a timeout
+								// connecting through this proxy after a redirect.
+								http.Redirect(w, r, "https://player.example.test/e/synthetic", http.StatusFound)
+								return
+							}
+							fmt.Fprint(w, `<title>Test Clip</title><script>fetch('/pass_md5/session/synthetic')</script>`)
+						case strings.HasPrefix(r.URL.Path, "/pass_md5/"):
+							fmt.Fprint(w, origin+"/media/")
+						default:
+							w.Header().Set(httpx.HeaderContentType, "video/mp4")
+							http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader(payload))
+						}
+					})
+					endpoints = append(endpoints, srv.URL)
+				}
+				pool := attachPool(t, m, endpoints)
+				m.cfg.ProxyRetries = 1
+				client := httpx.New("test", "en", 3, 100*time.Millisecond)
+				defer client.CloseIdleConnections()
+				dood := extractor.NewDoodStream(client)
+				u, _ := url.Parse(origin + "/e/synthetic")
+				read := func(ctx context.Context) (*extractor.Result, error) {
+					return dood.Extract(ctx, u, extractor.Options{})
+				}
+				if stage == "source" {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					res, err := m.recoverExtraction(ctx, read, context.DeadlineExceeded)
+					if tc.wantFailed {
+						if !errors.Is(err, context.DeadlineExceeded) {
+							t.Fatalf("source timeout=%v, want exhausted retries", err)
+						}
+					} else if err != nil || res == nil || len(res.Files) != 1 {
+						t.Fatalf("source recovery: result=%+v err=%v", res, err)
+					}
+				} else {
+					job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
+						res, err := read(ctx)
+						if err != nil {
+							return nil, err
+						}
+						f := res.Files[0]
+						return &extractor.Target{URL: f.URL, Headers: f.Headers, Size: f.Size}, nil
+					})
+					job.Items[0].pace = challengePace(nil)
+					m.Start()
+					m.signal()
+					waitFor(t, 5*time.Second, func() bool { return m.Snapshot().Jobs[0].Items[0].Status.Terminal() })
+					if tc.wantFailed {
+						if it := m.Snapshot().Jobs[0].Items[0]; it.Status != StatusFailed || it.Error == "" {
+							t.Fatalf("file timeout=%+v, want exhausted retries", it)
+						}
+					} else {
+						body, err := os.ReadFile(filepath.Join(m.DownloadDir(), "file-0.bin"))
+						if err != nil || string(body) != payload {
+							t.Fatalf("file recovery: body=%q err=%v job=%+v", body, err, m.Snapshot().Jobs[0])
+						}
+					}
+				}
+				page := pool.Page("cloudflare", proxy.Query{})
+				wantPlayers, wantCooling, wantConnects := tc.failures+1, int(tc.failures), int32(0)
+				if !tc.headers {
+					wantConnects = tc.failures
+				}
+				if tc.wantFailed {
+					wantPlayers, wantCooling = 2, 2
+				}
+				if players.Load() != wantPlayers || connects.Load() != wantConnects || page.Summary.Cooling != wantCooling || page.Summary.Active != 0 {
+					t.Fatalf("players=%d connects=%d inventory=%+v", players.Load(), connects.Load(), page.Summary)
+				}
+				for _, row := range page.Rows {
+					if row.Status == "cooling" && (row.Requests != 1 || row.SuccessRate != 0 || row.WAFRequests != 0) {
+						t.Fatalf("silent proxy did not receive exactly one transport penalty: %+v", row)
+					}
+				}
+				if pool.Page("keep2share", proxy.Query{}).Summary.Cooling != wantCooling {
+					t.Fatal("silent proxies remained available for other services")
+				}
+			})
+		}
+	}
+}
+
 func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) {
-	for _, stage := range []string{"reload", "media", "stall"} {
+	for _, stage := range []string{"reload", "media", "stall", "timeout"} {
 		t.Run(stage, func(t *testing.T) {
 			m := busyManager(t)
 			m.cfg.StallTimeout = 90 * time.Millisecond
@@ -84,6 +206,10 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 			handler := func(route string) http.HandlerFunc {
 				return func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/e/synthetic" {
+						if route == "direct" && failed.Load() && stage == "timeout" {
+							<-r.Context().Done()
+							return
+						}
 						http.SetCookie(w, &http.Cookie{Name: "route", Value: route, Path: "/"})
 						fmt.Fprintf(w, `<title>Test Clip</title><script>fetch('/pass_md5/session/%s')</script>`, route)
 						return
@@ -133,6 +259,9 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 			route := proxyServer(t, "127.0.0.2", handler("proxy"))
 			pool := attachPool(t, m, []string{proxy.Direct, route.URL})
 			client := m.client.WithTimeout(5 * time.Second)
+			if stage == "timeout" {
+				client = client.WithTimeout(100 * time.Millisecond)
+			}
 			defer client.CloseIdleConnections()
 			u, _ := url.Parse(origin + "/e/synthetic")
 			res, err := extractor.NewDoodStream(client).Extract(context.Background(), u, extractor.Options{})

@@ -266,6 +266,15 @@ Two traps that cost time here:
   A suite that suddenly takes a minute instead of three seconds is this, not
   a hang.
 
+Proxy connection and response-header timeouts both penalise the route and
+cool its endpoint across services. An unanswered explicit proxy connection
+also returns `httpx.ProxyConnectError`, so it does not spend the file's retry
+budget. Go's client timeout otherwise hides the underlying dial/CONNECT
+error behind "request canceled while waiting for connection". Request traces
+reset on each redirect; a CONNECT reply or completed SOCKS negotiation ends
+proxy setup, so later TLS and response timeouts retain their bounded retry
+budget. Caller cancellation and caller deadlines are never proxy penalties.
+
 ### WAF recovery
 
 Cloudflare's `cf-mitigated: challenge` header becomes `httpx.ChallengeError`,
@@ -545,9 +554,9 @@ Host-specific notes:
   worked. The pool already shelves each such route. The cost, accepted on
   purpose, is that a host refusing every proxy would have files trying
   routes for as long as the pool offers any, then waiting in the queue,
-  rather than failing; each refusal also costs a CAPTCHA. Timeouts, HTTP
-  refusals, stalls and a proxy that answered but could not reach the host
-  still count.
+  rather than failing; each refusal also costs a CAPTCHA. Timeouts after
+  proxy setup, HTTP refusals, stalls and a proxy that answered but could not
+  reach the host still count.
 
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's

@@ -692,10 +692,12 @@ failures or repeated `RELOAD` replies from its token endpoint. It tries the
 normal connection first. Each retry refreshes the player and token together
 on one reserved route, using the same random draw for unmeasured candidates
 as Keep2Share. Source discovery and file downloads both skip dead or dropped
-proxies without spending the file's retry budget; other temporary failures
-remain bounded. Missing videos and parser errors remain final. Progress
-messages show the player/token stage and connection attempt in the browser
-and terminal, including while the source is still being resolved.
+proxies without spending the file's retry budget, including timeouts waiting
+for a proxy connection. Response-header timeouts also penalise the proxy and
+retry another route, within the configured retry budget. User cancellation
+does not penalise a route. Missing videos and parser errors remain final.
+Progress messages show the player/token stage and connection attempt in the
+browser and terminal, including while the source is still being resolved.
 
 WAF refusals affect only the WAF success score and cooldown. They do not
 reduce ordinary service scores, erase speed measurements or mark a proxy

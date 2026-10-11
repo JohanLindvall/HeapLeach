@@ -35,6 +35,8 @@ type Client struct {
 	ua         string
 	acceptLang string
 	maxRetries int
+	// Only explicit pool routes can attribute connection setup to a proxy.
+	proxyScheme string
 	// Streaming requests still need a deadline for receiving headers.
 	headerTimeout time.Duration
 

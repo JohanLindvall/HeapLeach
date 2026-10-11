@@ -361,7 +361,8 @@ func transientRouteFailure(err error) bool {
 // that refused every proxy would have files trying routes for as long as the
 // pool has any to offer, and waiting in the queue for one after that,
 // rather than failing; the refusal backoff keeps each route from being
-// asked again for a while. Timeouts, HTTP refusals and stalls still count.
+// asked again for a while. Timeouts after proxy setup, HTTP refusals and
+// stalls still count.
 func routeAtFault(err error) bool {
 	if deadProxy(err) {
 		return true
@@ -374,11 +375,14 @@ func routeAtFault(err error) bool {
 
 // deadProxy reports a failure to reach the proxy itself, before anything
 // was asked of the host behind it: an HTTP proxy's "proxyconnect" or a
-// SOCKS proxy's "socks connect" around a dial that failed. A proxy that
-// answered and then could not reach the host is not one; that answer is
-// about the host as much as the proxy, and an outage there would otherwise
-// walk one file through the entire pool.
+// SOCKS proxy's "socks connect" around a dial that failed, or an unanswered
+// proxy handshake. A proxy that answered and then could not reach the host
+// is not one; that answer is about the host as much as the proxy, and an
+// outage there would otherwise walk one file through the entire pool.
 func deadProxy(err error) bool {
+	if _, ok := errors.AsType[*httpx.ProxyConnectError](err); ok {
+		return true
+	}
 	for err != nil {
 		op, ok := errors.AsType[*net.OpError](err)
 		if !ok {

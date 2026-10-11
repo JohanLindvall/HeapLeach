@@ -10,8 +10,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,6 +40,13 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
 		tr.Proxy = http.ProxyURL(u)
+		cp.proxyScheme = u.Scheme
+		tr.OnProxyConnectResponse = func(ctx context.Context, _ *url.URL, _ *http.Request, _ *http.Response) error {
+			if pending, ok := ctx.Value(proxyConnectKey{}).(*atomic.Bool); ok {
+				pending.Store(false)
+			}
+			return nil
+		}
 		if u.Scheme == "https" {
 			// DialTLSContext handles only the first hop to the fixed proxy.
 			// TLS inside CONNECT still uses TLSClientConfig and verifies the
@@ -71,6 +80,7 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 func (c *Client) CloseIdleConnections() { c.hc.CloseIdleConnections() }
 
 type routeContextKey struct{}
+type proxyConnectKey struct{}
 
 // DirectRoute keeps an IP-bound ticket's identity across live proxy toggles.
 const DirectRoute = "direct"
@@ -111,12 +121,37 @@ type RouteError struct{ Err error }
 func (e *RouteError) Error() string { return e.Err.Error() }
 func (e *RouteError) Unwrap() error { return e.Err }
 
+// ProxyConnectError preserves a timeout before an explicit proxy supplied
+// a connection. net/http's client timeout otherwise hides the dial/CONNECT
+// error, making an unanswered proxy look like a slow origin response.
+type ProxyConnectError struct{ Err error }
+
+func (e *ProxyConnectError) Error() string { return e.Err.Error() }
+func (e *ProxyConnectError) Unwrap() error { return e.Err }
+
 func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, error) {
 	// Preserve the caller's streaming/header timeout while borrowing only
 	// the selected route's transport and cookies.
 	cp, hc := *original, *r.client.hc
 	hc.Timeout = original.hc.Timeout
 	cp.hc = &hc
+	var pending atomic.Bool
+	if r.client.proxyScheme != "" {
+		trace := &httptrace.ClientTrace{
+			// Reset on every redirect or transport reconnect: a completed
+			// earlier hop says nothing about the next connection.
+			GetConn: func(string) { pending.Store(true) },
+			GotConn: func(httptrace.GotConnInfo) { pending.Store(false) },
+		}
+		if r.client.proxyScheme == "socks5" || r.client.proxyScheme == "socks5h" {
+			// SOCKS negotiation finishes before destination TLS starts.
+			// HTTP(S) proxies signal this via OnProxyConnectResponse; an
+			// HTTPS proxy's own TLS handshake is still proxy setup.
+			trace.TLSHandshakeStart = func() { pending.Store(false) }
+		}
+		ctx := context.WithValue(req.Context(), proxyConnectKey{}, &pending)
+		req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
+	}
 	start := time.Now()
 	resp, err := cp.doDirect(req)
 	report := func(status int, n int64, err error, until time.Time) {
@@ -127,6 +162,10 @@ func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, 
 	if err != nil {
 		if req.Context().Err() != nil {
 			return nil, req.Context().Err()
+		}
+		if ne, timeout := errors.AsType[net.Error](err); pending.Load() &&
+			((timeout && ne.Timeout()) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errHeaderTimeout)) {
+			err = &ProxyConnectError{Err: err}
 		}
 		status := 0
 		if _, challenged := errors.AsType[*ChallengeError](err); challenged {
