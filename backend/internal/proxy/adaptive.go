@@ -94,13 +94,15 @@ func (l *Lease) Upgrade(now time.Time, remaining int64, currentRate float64) *Le
 		return nil
 	}
 	l.lastUpgrade = now
-	prior := p.scorePrior(l.site)
+	prior := p.measuredPrior(l.site) // every route rated below is measured
 	var best *entry
 	var bestRate float64
 	for _, e := range p.available(l.site, 1, now, l.waf) {
-		s := e.scoreStat(l.site)
-		if s.BytesPerSecond <= 0 || s.OK <= 0 {
+		if e.speed(l.site) <= 0 {
 			continue // never interrupt a working file to try an unknown route
+		}
+		if s := e.scoreStat(l.site); s.OK <= 0 {
+			continue
 		}
 		if rate := prior.entryRate(e, l.site, l.waf, remaining); rate > bestRate {
 			best, bestRate = e, rate

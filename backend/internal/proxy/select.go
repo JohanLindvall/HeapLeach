@@ -13,6 +13,17 @@ import (
 type scorePrior struct{ a, b, seconds, bandwidth float64 }
 
 func (p *Pool) scorePrior(site string) scorePrior {
+	prior := p.measuredPrior(site)
+	prior.bandwidth = p.meanBandwidth(site)
+	return prior
+}
+
+// measuredPrior is scorePrior without the bandwidth, which is what ranking
+// assumes of a route that has carried nothing yet and is used for nothing
+// else (see workRate). Finding it walks the whole inventory, so ranking that
+// rates only measured routes, as an upgrade does, leaves it out and gets
+// exactly the rates scorePrior would give.
+func (p *Pool) measuredPrior(site string) scorePrior {
 	first := p.priors[site]
 	if first == nil {
 		first = &prior{}
@@ -21,19 +32,22 @@ func (p *Pool) scorePrior(site string) scorePrior {
 	q := (first.Valid + config.ProxyPriorValid*w) / (float64(first.Attempts) + w)
 	d := (first.Seconds + config.ProxyPriorSeconds*w) / (float64(first.Timed) + w)
 	a, b := config.ProxyPriorStrength*q, config.ProxyPriorStrength*(1-q)
+	return scorePrior{a: a, b: b, seconds: d}
+}
+
+// meanBandwidth is the average speed of the enabled routes measured for site.
+func (p *Pool) meanBandwidth(site string) float64 {
 	bandwidth, sampled := 0.0, 0
 	for _, e := range p.entries {
-		if speed := e.scoreStat(site).BytesPerSecond; speed > 0 && p.enabled(e) {
+		if speed := e.speed(site); speed > 0 && p.enabled(e) {
 			bandwidth += speed
 			sampled++
 		}
 	}
-	if sampled > 0 {
-		bandwidth /= float64(sampled)
-	} else {
-		bandwidth = config.ProxyPriorBytesPerSecond
+	if sampled == 0 {
+		return config.ProxyPriorBytesPerSecond
 	}
-	return scorePrior{a, b, d, bandwidth}
+	return bandwidth / float64(sampled)
 }
 
 func (e *entry) readStat(site string) siteStat {
@@ -41,6 +55,28 @@ func (e *entry) readStat(site string) siteStat {
 		return *s
 	}
 	return siteStat{}
+}
+
+// speed is scoreStat(site).BytesPerSecond, read without copying the stats.
+// Ranking asks it of every route in the inventory, most of which have never
+// carried a byte, and copying each one's stats only to read this was most of
+// what acquiring a route cost. Keep it in step with scoreStat.
+func (e *entry) speed(site string) float64 {
+	s := e.Sites[site]
+	var own float64
+	if s != nil {
+		own = s.BytesPerSecond
+	}
+	if others := len(e.Sites); own != 0 || site != "cloudflare" || others == 0 || (others == 1 && s != nil) {
+		return own
+	}
+	var speed float64
+	for name, other := range e.Sites {
+		if name != site && name != "keep2share" && name != "fileboom" {
+			speed = max(speed, other.BytesPerSecond)
+		}
+	}
+	return speed
 }
 
 // WAF recovery reuses the proxy's ordinary measurements. Its own samples
@@ -132,7 +168,7 @@ func (p *Pool) selectEntry(site string, candidates []*entry, work ...int64) *ent
 }
 
 func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf bool) *entry {
-	prior := p.scorePrior(site)
+	prior := p.measuredPrior(site) // the bandwidth is found below, if an unmeasured route is rated
 	var best *entry
 	bestRate := -1.0
 	var untried []*entry
@@ -146,7 +182,7 @@ func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf 
 		return prior.workRate(s, chance, remaining)
 	}
 	for _, e := range candidates {
-		if e.scoreStat(site).BytesPerSecond == 0 {
+		if e.speed(site) == 0 {
 			untried = append(untried, e)
 			continue
 		}
@@ -163,8 +199,7 @@ func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf 
 				return best
 			}
 			for _, e := range p.entries {
-				s := e.scoreStat(site)
-				if s.active > 0 && s.BytesPerSecond == 0 {
+				if s := e.Sites[site]; s != nil && s.active > 0 && e.speed(site) == 0 {
 					return best
 				}
 			}
@@ -172,6 +207,9 @@ func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf 
 		// Draw one eligible unmeasured endpoint uniformly. Walking sorted
 		// URLs can spend many attempts on adjacent dead networks or ports.
 		next := untried[rand.IntN(len(untried))]
+		if best != nil {
+			prior.bandwidth = p.meanBandwidth(site)
+		}
 		if best == nil || rate(next) > bestRate {
 			best = next
 			p.lastProbe[site] = time.Now()
