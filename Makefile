@@ -2,8 +2,8 @@
 # HeapLeach — parallel bulk downloader
 #
 # The default build runs entirely inside Docker (no local Go or Node needed)
-# and writes the resulting single, self-contained binary to ./bin/heapleach on
-# the host. The TypeScript UI is compiled and embedded into that binary.
+# and exports the application and its ocr/ data to ./bin on the host.
+# The TypeScript UI is compiled and embedded into the binary.
 
 SHELL     := /bin/bash
 .DEFAULT_GOAL := help
@@ -12,9 +12,9 @@ BIN_DIR   := bin
 DIST_DIR  := dist
 BINARY    := $(BIN_DIR)/heapleach
 
-# What `make dist` cross-compiles. The program is pure Go with cgo off, so
-# every one of these builds from whichever machine runs make.
-RELEASE_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+# cgo needs a C toolchain for each target. Releases use native CI runners;
+# local archives default to this host. Set RELEASE_TARGETS and CC to cross-build.
+RELEASE_TARGETS ?= $(shell go env GOOS)/$(shell go env GOARCH)
 IMAGE     ?= heapleach
 TAG       ?= latest
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -37,13 +37,12 @@ GO_SOURCES := $(shell find backend -type f \( -name '*.go' -o -name '*.sh' \) -n
 UI_SOURCES := $(shell find frontend -type f \
                 \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \
                 -not -path 'frontend/node_modules/*' -not -path 'frontend/dist/*' 2>/dev/null)
-BUILD_SOURCES := $(GO_SOURCES) $(UI_SOURCES) Dockerfile Makefile .dockerignore
-CAPTCHA_SOURCES := $(wildcard helpers/captcha/*.py helpers/captcha/testdata/*.png) helpers/captcha/requirements.txt
+BUILD_SOURCES := $(GO_SOURCES) $(UI_SOURCES) Dockerfile Makefile .dockerignore helpers/captcha/install.sh
 
 # Optional helpers the service uses when present: yt-dlp resolves YouTube,
 # ffmpeg rewraps and muxes, and deno runs the player JavaScript YouTube signs
 # its media URLs with — yt-dlp has deprecated extracting without a runtime.
-# The local CAPTCHA reader is frozen with its own runtime using Docker.
+# Local OCR runs in-process using a pinned model and native runtime.
 # `make dependencies` puts these helpers in ./bin, where the service looks
 # before falling back to PATH.
 UNAME_M := $(shell uname -m)
@@ -68,7 +67,7 @@ HAVE_GO   := $(shell command -v go 2>/dev/null)
 
 .PHONY: help build binary run image run-image stop logs shell dev dev-backend dev-frontend \
         frontend frontend-clean screenshots dist tag native test test-frontend test-live check fmt fmt-check vet tidy lock dependencies \
-        hosts hosts-check captcha-helper test-captcha test-release spdx-check \
+        hosts hosts-check ocr-assets captcha-helper test-captcha test-release spdx-check \
         clean distclean
 
 ## help: show this help
@@ -80,8 +79,8 @@ help:
 	@echo "  Variables: PORT=$(PORT) (run-image)"
 	@echo "             DOWNLOADS=$(DOWNLOADS) IMAGE=$(IMAGE):$(TAG)"
 
-## build: build in Docker and export the standalone binary to ./bin/heapleach
-build: $(BINARY)
+## build: build in Docker and export the application and OCR data into ./bin
+build: $(BINARY) $(BIN_DIR)/ocr/VERSIONS
 
 # The rule that does the work. Its prerequisites are the sources the binary
 # is made of, which is what lets `build` be asked for freely: it is a no-op
@@ -99,7 +98,7 @@ $(BINARY): $(BUILD_SOURCES) | $(BIN_DIR)
 	@# BuildKit writes the file with the timestamp it had in the image, which
 	@# can predate the sources and would leave the target permanently stale.
 	@touch $(BINARY)
-	@echo ">> $(BINARY) ($$(du -h $(BINARY) | cut -f1)) — self-contained, UI embedded"
+	@echo ">> $(BINARY) ($$(du -h $(BINARY) | cut -f1)) — UI embedded, OCR data in $(BIN_DIR)/ocr"
 
 ## binary: alias for build
 binary: build
@@ -141,16 +140,16 @@ shell: image
 	docker run --rm -it --entrypoint sh $(IMAGE):$(TAG)
 
 ## native: build on the host (needs Go; uses Docker for the UI if Node is absent)
-native: frontend $(BIN_DIR)
+native: frontend ocr-assets $(BIN_DIR)
 ifndef HAVE_GO
 	$(error Go is not installed — use `make build` to build in Docker instead)
 endif
-	cd backend && CGO_ENABLED=0 go build -trimpath \
+	cd backend && CGO_ENABLED=1 go build -trimpath \
 	  -ldflags "-s -w -X main.version=$(VERSION)" \
 	  -o ../$(BINARY) ./cmd/heapleach
 	@echo ">> $(BINARY)"
 
-## dist: cross-compile the release archives into ./dist
+## dist: build release archives for this host (or RELEASE_TARGETS with a suitable CC)
 dist: frontend
 ifndef HAVE_GO
 	$(error Go is not installed — a release build needs it on the host)
@@ -162,20 +161,28 @@ endif
 	  binary=heapleach; \
 	  [ "$$goos" = windows ] && binary=heapleach.exe; \
 	  stage=$$(mktemp -d); \
-	  ( cd backend && CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -trimpath \
+	  ( cd backend && CGO_ENABLED=1 GOOS=$$goos GOARCH=$$goarch go build -trimpath \
 	      -ldflags "-s -w -X main.version=$(VERSION)" \
 	      -o "$$stage/$$binary" ./cmd/heapleach ); \
 	  cp README.md LICENSE "$$stage/"; \
+	  bash helpers/captcha/install.sh "$$target" "$$stage/ocr"; \
 	  base="heapleach_$(VERSION)_$${goos}_$${goarch}"; \
 	  if [ "$$goos" = windows ]; then \
-	    ( cd "$$stage" && zip -qr - . ) > "$(DIST_DIR)/$$base.zip"; \
+	    if command -v zip >/dev/null 2>&1; then \
+	      ( cd "$$stage" && zip -qr - . ) > "$(DIST_DIR)/$$base.zip"; \
+	    else \
+	      ( cd "$$stage" && 7z a -tzip "$(abspath $(DIST_DIR))/$$base.zip" . >/dev/null ); \
+	    fi; \
 	  else \
 	    tar -czf "$(DIST_DIR)/$$base.tar.gz" -C "$$stage" .; \
 	  fi; \
 	  rm -rf "$$stage"; \
 	  echo ">> $(DIST_DIR)/$$base"; \
 	done; \
-	cd $(DIST_DIR) && sha256sum * > SHA256SUMS
+	cd $(DIST_DIR) && shopt -s nullglob && archives=(*.tar.gz *.zip) && \
+	if command -v sha256sum >/dev/null 2>&1; then \
+	  sha256sum "$${archives[@]}"; \
+	else shasum -a 256 "$${archives[@]}"; fi > SHA256SUMS
 	@echo ">> $(DIST_DIR)/SHA256SUMS"
 
 ## tag: cut a release, e.g. `make tag V=v0.1.0` — CI builds and publishes it
@@ -206,17 +213,23 @@ else
 endif
 	@echo ">> UI built into $(DIST)"
 
-## captcha-helper: build the optional local CAPTCHA reader into ./bin (Linux, Docker)
-captcha-helper: $(BIN_DIR)/heapleach-ocr
+# The executable discovers this directory next to itself. The installer can
+# also run natively on macOS and Windows (Git Bash), without Python or Docker.
+OCR_TARGET ?= $(if $(HAVE_GO),$(shell go env GOOS)/$(shell go env GOARCH),linux/$(if $(filter aarch64,$(UNAME_M)),arm64,amd64))
 
-$(BIN_DIR)/heapleach-ocr: $(CAPTCHA_SOURCES) Dockerfile .dockerignore | $(BIN_DIR)
-	DOCKER_BUILDKIT=1 docker build --target captcha-export \
-	  --output type=local,dest=$(BIN_DIR) -f Dockerfile .
-	@chmod +x $@
-	@touch $@
+## ocr-assets: install the pinned OCR model and CPU runtime into ./bin/ocr
+ocr-assets:
+	bash helpers/captcha/install.sh "$(OCR_TARGET)" "$(BIN_DIR)/ocr"
+	@touch $(BIN_DIR)/ocr/VERSIONS
 
-## dependencies: install yt-dlp, ffmpeg, deno and the local CAPTCHA reader into ./bin
-dependencies: captcha-helper $(BIN_DIR)
+$(BIN_DIR)/ocr/VERSIONS: helpers/captcha/install.sh
+	$(MAKE) ocr-assets
+
+## captcha-helper: compatibility alias for ocr-assets (no external OCR process)
+captcha-helper: ocr-assets
+
+## dependencies: install yt-dlp, ffmpeg, deno and local OCR data into ./bin
+dependencies: ocr-assets $(BIN_DIR)
 	@echo ">> yt-dlp  ($(YTDLP_ASSET))"
 	@curl -fsSL --retry 3 -o "$(BIN_DIR)/yt-dlp.tmp" "$(YTDLP_URL)"
 	@chmod +x "$(BIN_DIR)/yt-dlp.tmp" && mv "$(BIN_DIR)/yt-dlp.tmp" "$(BIN_DIR)/yt-dlp"
@@ -259,13 +272,13 @@ lock:
 dev:
 	@echo ">> API on :8080, UI on http://localhost:5173"
 	@trap 'kill 0' EXIT INT TERM; \
-	( cd backend && go run ./cmd/heapleach -debug "$(DOWNLOADS)" ) & \
+	( cd backend && HEAPLEACH_OCR_DIR="$(CURDIR)/$(BIN_DIR)/ocr" go run ./cmd/heapleach -debug "$(DOWNLOADS)" ) & \
 	( cd frontend && npm run dev ) & \
 	wait
 
 ## dev-backend: run only the Go API on port 8080
 dev-backend:
-	cd backend && go run ./cmd/heapleach -debug "$(DOWNLOADS)"
+	cd backend && HEAPLEACH_OCR_DIR="$(CURDIR)/$(BIN_DIR)/ocr" go run ./cmd/heapleach -debug "$(DOWNLOADS)"
 
 ## dev-frontend: run only the Vite dev server on port 5173
 dev-frontend:
@@ -333,9 +346,14 @@ else
 	  sh -c 'npm ci --no-audit --no-fund >/dev/null && npm run typecheck && npm test'
 endif
 
-## test-captcha: test the local CAPTCHA reader and model on synthetic images (Docker)
+## test-captcha: test the in-process OCR reader with the real model (Docker fallback)
+ifdef HAVE_GO
+test-captcha: ocr-assets
+	cd backend && HEAPLEACH_OCR_DIR="$(CURDIR)/$(BIN_DIR)/ocr" CGO_ENABLED=1 go test -race -count=1 ./internal/captcha
+else
 test-captcha:
 	DOCKER_BUILDKIT=1 docker build --target captcha-test -f Dockerfile .
+endif
 
 ## test-release: check automatic version tags against a temporary Git remote
 test-release:

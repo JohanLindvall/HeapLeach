@@ -6,7 +6,8 @@ This file provides guidance to coding agents working in this repository.
 
 `HeapLeach` is a bulk downloader: a Go backend with per-host extractors and a
 parallel worker pool, plus a React + TypeScript UI that is **compiled into
-the Go binary**. The shipped artefact is one static executable.
+the Go binary**. Releases also carry an `ocr/` directory with the pinned
+CAPTCHA model, native ONNX Runtime and license notices.
 
 ## Commands
 
@@ -29,8 +30,8 @@ make frontend       # compile the UI into the Go embed dir (Docker if npm is abs
 make hosts          # regenerate README's supported-site inventory from the registry
 make check          # CI checks: formatting, vet, hosts, Go, UI, OCR and release tests
 make dependencies   # install yt-dlp, ffmpeg, deno and local OCR into ./bin
-make captcha-helper # build only the optional OCR helper (Linux, Docker)
-make dist           # cross-compile the release archives into ./dist
+make ocr-assets     # install the pinned OCR model and native runtime into ./bin/ocr
+make dist           # package this host (RELEASE_TARGETS + CC for cross-compilation)
 make tag            # choose a version manually: make tag V=v1.2.3 (main pushes bump the patch)
 make help           # every target
 ```
@@ -58,9 +59,9 @@ the same numbers, and the paired tables are what hold them together.
 Node is **not** installed on this machine — the frontend builds via Docker.
 `make build` and `make frontend` both handle that automatically.
 
-Toolchain versions live in the Dockerfile (Go 1.27, Node 24 LTS, Alpine 3.24
-for the build stages, Debian trixie-slim for the runtime image, which carries
-the glibc-linked yt-dlp/ffmpeg/deno helpers beside the binary)
+Toolchain versions live in the Dockerfile (Go 1.27 on Debian bookworm, Node 24
+LTS on Alpine for the UI, Debian trixie-slim for the runtime image, which carries
+the glibc-linked helpers and complete OCR data beside the binary)
 and in `backend/go.mod`. The local Go is older than the `go.mod` directive, so
 `go` commands auto-download the pinned toolchain on first use.
 
@@ -84,28 +85,28 @@ publisher directly: tags pushed with `GITHUB_TOKEN` do not trigger another
 workflow. `.github/scripts/release-tag.sh` handles version selection, tested
 against a temporary Git remote by `make test-release`.
 
-The OCR job runs alongside the main checks; both gate publication. The caller
-passes its tested SHA, and the publisher verifies the checkout against it before
+Native archive builds and OCR model tests run on all five platforms alongside
+the main checks; all gate publication. The caller passes its tested SHA, and
+the publisher verifies the checkout against it before
 reusing those results. Standalone tag pushes still run the Go suite. Release
 compilation has a separate cache keyed by toolchain/dependencies and commit,
 restoring the previous commit's output and saving the new one. Sharing CI's
 immutable `go.sum` cache left every cross-platform build cold on every push.
 
 `make tag V=v1.2.3` still writes and pushes an explicit annotated tag;
-the release workflow also fires on `v*`. It cross-compiles the five
-archives and publishes them alongside a `SHA256SUMS`. Its second job, which
-waits for the first, pushes the runtime image for amd64 and arm64 to
+the release workflow also fires on `v*`. Native runners build the five
+archives, then the publisher uploads them alongside `SHA256SUMS`. The image
+job waits for publication, then pushes the runtime image for amd64 and arm64 to
 `ghcr.io/johanlindvall/heapleach` as `vX.Y.Z` and `X.Y.Z` (the git tag's
 spelling and Docker's), `vX.Y` and `X.Y`, and `latest`. The image job downloads
 the published Linux archives, verifies their checksums and amd64 version, and
 selects Docker's `released-binary` stage with `BINARY_STAGE`. Thus both release
 formats carry the same executable and UI. Local image builds default to the
 `backend` stage: the UI and Go stages run on the builder's platform
-(`--platform=$BUILDPLATFORM`) and Go cross-compiles. QEMU emulates the native
-OCR helper build and runtime package install — which is why an arm64 image
-needs binfmt locally, supplied by the
-QEMU setup step in CI. The tag target refuses a dirty tree, which is what
-makes step 3 below necessary rather than tidy.
+(`--platform=$BUILDPLATFORM`) and Go uses a target C compiler for cross-builds.
+QEMU emulates the runtime package install, so an arm64 image needs binfmt
+locally, supplied by the QEMU setup step in CI. The tag target refuses a dirty
+tree, which is what makes step 3 below necessary rather than tidy.
 
 Worth doing for release-related changes and manual tags, because each step
 has caught something:
@@ -517,8 +518,8 @@ Host-specific notes:
   transfers use the configured proxy pool.
 - **keep2share** uses the public `/api/v2` free-download flow, on both
   `k2s.cc` and `keep2share.cc`. Metadata does not need a CAPTCHA; the
-  resolver requests one, reads it with the optional local `heapleach-ocr`
-  helper, and waits for the API's timer before redeeming the accepted key.
+  resolver requests one, reads it with the in-process CAPTCHA model, and waits
+  for the API's timer before redeeming the accepted key.
   That timer is usually half a minute and is sat out in place, holding the
   key. The host's wait *between* free downloads, given when there is no key,
   is the best part of an hour and covers every file from the address. So it
@@ -548,43 +549,26 @@ Host-specific notes:
   route is set aside for that long and the file goes on through another; on
   the direct route it waits in the queue.
 
-  With proxy routes, a dozen free downloads can reach a CAPTCHA at once, and
-  each reading starts a frozen Python runtime and an ONNX model. Run side by
-  side, they took the load past fifty on sixteen cores, each ran past its
-  timeout and failed its file with a bare `context deadline exceeded`, and
-  each one killed left its unpacked runtime in the container's `/tmp`, a
-  tmpfs: 2 GB in thirty-two `_MEI*` directories within minutes. So readings
-  take a turn (`Keep2ShareOCRConcurrency`, two) and the timeout starts with
-  it. Running out of time is `errKeep2ShareOCR`, an image not read, so the
-  resolver tries another. Each run gets a `TMPDIR` of its own, removed
-  afterwards, which PyInstaller's bootloader unpacks into. A normal exit
-  leaves files there too. Waiting for a local reader has its own progress
-  note, since a busy queue can wait much longer than one reader's 20-second
-  budget. "Reading CAPTCHA" starts only when the helper has the image;
-  requesting the challenge, fetching its image, submitting the answer and
-  redeeming the ticket each name their own network step. Those requests
-  retain their HTTP deadlines and proxy scoring; waiting for local OCR is
-  cancelable and is not evidence against the proxy.
+  With proxy routes, many free downloads reach a CAPTCHA at once. The shared
+  `internal/captcha` pool bounds native sessions to `Keep2ShareOCRConcurrency`
+  (two), each with two ONNX Runtime threads and spinning disabled. The budget
+  starts after acquiring a slot. Caller cancellation stays cancellation;
+  exhausting the OCR budget is `errKeep2ShareOCR`, so another image can be tried.
+  Waiting, model loading and reading have separate progress notes. Network
+  requests keep their own deadlines and proxy scoring.
 
-  Readers are kept between images (`keep2shareocrserve.go`). Reading an image
-  takes a tenth of a second; the rest of the five and a quarter each reading
-  took was starting the reader: the bootloader unpacking 150 MB, Python
-  starting, the model loading. The helper's `--serve` mode says `ready` once
-  the model is loaded, then reads images one after another, each as a line
-  giving its length followed by its bytes, and answers each with its
-  readings and an empty line. A reader that fails, outruns its budget or is
-  cancelled mid-reading is stopped, never reused, since what it would say
-  next is unknown; one idle for `Keep2ShareOCRIdle` is stopped, since each
-  holds a model in memory. The turn still bounds how many there are. A
-  helper built before `--serve` ignores the argument and waits for its input
-  to end, so it never says it is ready: after `Keep2ShareOCRStart` it is used
-  one image per helper, as before, for `Keep2ShareOCRServeRetry`, with a
-  warning naming `make captcha-helper`. A cancelled start is not that, and
-  must not be read as it. The helper also holds ONNX Runtime to two inference
-  threads with spinning off: by default it starts a thread per core and spins
-  them between operations, five to ten times the CPU per reading for no
-  faster reading and the same readings. Over twelve images, a kept reader
-  took 2.8 seconds of CPU and a helper per image 59.
+  Sessions are reused and released after `Keep2ShareOCRIdle`. Native inference
+  is terminated with per-run options on cancellation. Session construction
+  cannot be interrupted, so a cancelled caller returns while the worker keeps
+  its slot until construction finishes, then frees the unused session. This
+  prevents repeated cancellations from creating unbounded native work.
+
+  The ddddocr beta model is unchanged. Go matches Pillow's image conversion,
+  contrast stretching and Lanczos resize, then runs the model through cgo.
+  CTC decoding pools letter cases, enforces six characters and ranks readings
+  jointly across the cropped and whole-image views. Synthetic fixtures pin
+  both the preprocessing tensors and all five readings against the previous
+  Python reader. `make test-captcha` tests real native inference and cancellation.
 
   Through a proxy route, a failure that the next attempt may well not meet
   is retried on the best route free rather than failing the file:
@@ -612,9 +596,12 @@ Host-specific notes:
   hourly allowance even when only a range was fetched. `Pace.Group` keeps
   the one-file limit shared across aliases and storage hosts, and
   `WithResolveNote` carries the CAPTCHA/wait status to the existing item
-  note. The helper is built with `make captcha-helper` (also part of
-  `make dependencies`) and included in the runtime image. Its model and
-  Python runtime stay separate from the static Go executable.
+  note. The model and runtime are installed by `make ocr-assets` (also part of
+  `make dependencies`) and bundled in release archives and the Docker image.
+  `helpers/captcha/install.sh` pins and verifies every download and includes
+  upstream license notices. `HEAPLEACH_OCR_DIR` overrides the default `ocr/`
+  directory alongside the executable. Official builds enable cgo; deliberately
+  cgo-free source builds still run other hosts and explain that OCR is disabled.
 
   **fileboom** on `fboom.me` shares this implementation with its own
   `/api/v2` base, label and `Pace.Group`. The API namespaces are separate:

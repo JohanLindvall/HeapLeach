@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/JohanLindvall/HeapLeach)](https://github.com/JohanLindvall/HeapLeach/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/JohanLindvall/HeapLeach)](LICENSE)
 
-**HeapLeach is a bulk downloader in one static binary.** Paste links from
+**HeapLeach is a bulk downloader with an embedded web UI.** Paste links from
 180+ sites — file hosts such as gofile, bunkr, MEGA and pixeldrain, image
 galleries, video and broadcaster pages — and it resolves every album, folder
 and playlist behind them, then downloads the files in parallel: resumable
@@ -26,7 +26,7 @@ docker run -p 8080:8080 -v ~/Downloads:/downloads --user "$(id -u):$(id -g)" ghc
 
 - **Backend** — Go. Worker pool, per-host extractors, resumable transfers.
 - **Frontend** — TypeScript + React, compiled and **embedded into the Go
-  binary**. One file to ship, nothing to serve from disk.
+  binary**. No separate frontend files to serve.
 - **Build** — runs entirely in Docker; the binary is exported to your host.
 - **Two ways to run** — serve the UI, or hand it URLs on the command line and
   watch them download in the terminal.
@@ -54,8 +54,9 @@ the same progress on the terminal:
 
 Grab a build from [releases](https://github.com/JohanLindvall/HeapLeach/releases)
 — Linux (x86-64, arm64), macOS (Intel, Apple silicon) and Windows — unpack it
-and run it. It is one static binary with the UI inside; there is nothing to
-install alongside.
+and run it. The UI is embedded in the executable. Keep the bundled `ocr/`
+directory beside it for local CAPTCHA recognition; the Docker image includes
+the complete model and native runtime too.
 
 ```bash
 tar -xzf heapleach_*_linux_amd64.tar.gz
@@ -244,7 +245,7 @@ must be writable only by people you trust to run code as this account.
 | **gofile** | `/d/<code>` | Mints a guest token, then signs each API call with `sha256(ua :: lang :: token :: 4h-slot :: secret)` in an `X-Website-Token` header. The secret is rotated server-side, so it is read out of gofile's own obfuscated script rather than pinned: its string table is RC4 under a shuffled base64 alphabet, and the one rotation that decodes the whole file is what proves the answer. A signature gofile rejects is not repeated — it blocks addresses that sign badly. Downloads carry the token as a cookie. Walks nested folders. |
 | **bunkr** | `/f/<slug>`, `/a/<slug>`, any `bunkr*` domain | Page → numeric file id → metadata endpoint → separate signing service for the `token`/`ex` pair the CDN demands. |
 | **pixeldrain** | `/l/<id>`, `/u/<id>`, `/f/<id>` | Public JSON API. |
-| **keep2share** | `/file/<id>`, with or without a filename, on `k2s.cc` or `keep2share.cc` | Free downloads through the public API. Reads the image CAPTCHA locally, waits for the host's timer, and reuses the resulting link when resuming. Requires `make captcha-helper`; included in the container image. Premium-only and private files are reported as restricted. |
+| **keep2share** | `/file/<id>`, with or without a filename, on `k2s.cc` or `keep2share.cc` | Free downloads through the public API. Reads the image CAPTCHA locally, waits for the host's timer, and reuses the resulting link when resuming. OCR model and runtime included in releases and the container image. Premium-only and private files are reported as restricted. |
 | **fileboom** | `fboom.me/file/<id>`, with or without a filename | Uses FileBoom's own API with the same free-download protocol as Keep2Share, including local OCR and optional proxy routing. Tickets, scores and cooldowns are tracked separately for each service. |
 | **filejump** | `filejump.com/s/<id>`, including `?access=download` | Reads the public share's filename and download button, then uses the native ranged downloader. Keeps the stable download endpoint so each transfer obtains a fresh storage signature. Rounded display sizes are estimates; expired or restricted shares fail before queueing. |
 | **turbo** | `/embed/<id>`, `/d/<id>` | `/api/sign` issues a short-lived signed URL. |
@@ -628,17 +629,22 @@ PATH — so the copies in `./bin` are picked up without touching the system.
 That is also why deno is passed to the helper by path: yt-dlp finds one on
 PATH by itself, and `./bin` is the place it would not look.
 
-Keep2Share and FileBoom free downloads use `heapleach-ocr`, a separate helper
-containing the [ddddocr](https://github.com/sml2h3/ddddocr) recognition model and its
-runtime. Recognition happens locally, without an account, API key or paid
-solver. `make captcha-helper` builds just this helper with Docker on Linux
-(glibc 2.36 or newer); `make dependencies` includes that step. The container
-image already carries it. Native builds on other platforms are described in
-[helpers/captcha/README.md](helpers/captcha/README.md). The reader is started
-once and kept for the CAPTCHAs that follow, which it reads in about a tenth
-of a second each instead of the several seconds starting it takes, and it is
-stopped after five idle minutes. A helper built before this works as before,
-started for each image; rebuild it with `make captcha-helper`.
+Keep2Share and FileBoom free downloads read CAPTCHAs inside the Go process,
+using the [ddddocr](https://github.com/sml2h3/ddddocr) beta recognition model
+and ONNX Runtime's native CPU library. Recognition happens locally, without
+Python, a helper process, an account, API key or paid solver. Release archives
+bundle the model, runtime and license notices in `ocr/` beside the executable.
+The Docker image includes these files and their system libraries; it makes no
+downloads to set up OCR when it starts.
+
+For a source build, `make ocr-assets` installs the same pinned, checksum-verified
+files into `bin/ocr`; `make dependencies` includes this step. `make captcha-helper`
+is retained as an alias. `HEAPLEACH_OCR_DIR` can name another asset directory
+and is set by the development commands. See
+[helpers/captcha/README.md](helpers/captcha/README.md) for packaging details.
+At most two sessions read images at once, with two inference threads each and
+spinning disabled. Models are reused and released after five idle minutes.
+Cancellation terminates native inference; waiting for a session is cancelable.
 
 The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting
@@ -693,7 +699,7 @@ route before another is tried. Status notes show the connection attempt
 number on retries, separately from the CAPTCHA image count.
 A refused or broken route returns the file to the queue to try another;
 other hosts continue downloading while routes are busy or cooling down.
-Keep2Share and FileBoom still require the local OCR helper, and premium-only
+Keep2Share and FileBoom require the bundled OCR data, and premium-only
 files remain restricted.
 
 Every host using HeapLeach's HTTP client can recover through proxies after
@@ -1009,7 +1015,7 @@ make check        # formatting, vet, host inventory, Go, UI, OCR and release tes
 make test-live    # include local, gitignored live extractor tests (when present)
 make frontend     # build the UI into the Go embed directory
 make lock         # regenerate frontend/package-lock.json
-make dist         # cross-compile the release archives into ./dist
+make dist         # package this host into ./dist (native cgo toolchain required)
 make tag V=v0.1.0 # manually choose a release version (main pushes bump the patch)
 make help         # every target
 ```
@@ -1035,6 +1041,7 @@ backend/
   internal/util/    shared helpers (no dependencies)
   internal/httpx/   HTTP client: browser headers, redirects, retry/backoff
   internal/tools/   locates the optional yt-dlp, ffmpeg and deno
+  internal/captcha/ in-process OCR, image preprocessing and ranked decoding
   internal/extractor/  one file per host + a direct-link fallback
   internal/download/   worker pool, resumable transfers, progress
   internal/server/     JSON API, SSE, embedded-asset serving
@@ -1056,8 +1063,8 @@ the host issues links that expire.
 
 Every push to `main` and pull request runs the tests, `go vet` and a `gofmt` check, with
 the UI compiled first so the binary is built against the real embedded
-frontend rather than the placeholder. The independent OCR checks run alongside
-the main checks, and both must pass before a release starts.
+frontend rather than the placeholder. Native builds and real-model OCR tests run on all five release platforms
+alongside the main checks; all must pass before a release starts.
 
 After a push to `main` passes CI, it automatically tags the tested commit
 with the next patch version and publishes the archives and container images.
@@ -1072,8 +1079,7 @@ retains compilation output for all five targets between commits. Container
 images use the published Linux binaries after checking their checksums and
 version, so the archives and images carry the same executable and embedded UI.
 
-One Linux runner produces every archive, because the program is pure Go
-with cgo off and the targets differ only by `GOOS` and `GOARCH`:
+Native Linux, macOS and Windows runners build and test these archives with cgo:
 
 | Archive | For |
 |---|---|
@@ -1083,9 +1089,10 @@ with cgo off and the targets differ only by `GOOS` and `GOARCH`:
 | `heapleach_<tag>_darwin_arm64.tar.gz` | macOS, Apple silicon |
 | `heapleach_<tag>_windows_amd64.zip` | Windows, x86-64 |
 
-Each carries the binary, the README and the licence, and `SHA256SUMS` covers
-the set. `make dist` builds exactly the same archives locally, which is the
-way to check a release before tagging one.
+Each carries the binary, README, licence and the complete `ocr/` directory.
+`SHA256SUMS` covers the set. `make dist` builds the matching archive for the
+current host. Cross-compiling requires `RELEASE_TARGETS` and a suitable `CC`;
+CI uses native runners and tests OCR from the extracted archive on every target.
 
 ## About the name
 

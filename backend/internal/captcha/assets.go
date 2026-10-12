@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: MIT
+
+package captcha
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+)
+
+const modelSHA256 = "33b5cd351ee94e73a6bf8fa18c415ed8b819b3ffd342e267c30d8ad8334e34e8"
+
+func assetPaths() (model, library string, err error) {
+	dir := os.Getenv("HEAPLEACH_OCR_DIR")
+	if dir == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", "", err
+		}
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		dir = filepath.Join(filepath.Dir(exe), "ocr")
+	}
+	lib := "libonnxruntime.so"
+	switch runtime.GOOS {
+	case "darwin":
+		lib = "libonnxruntime.dylib"
+	case "windows":
+		lib = "onnxruntime.dll"
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return "", "", err
+	}
+	model, library = filepath.Join(dir, "common.onnx"), filepath.Join(dir, lib)
+	for _, path := range []string{model, library} {
+		info, statErr := os.Stat(path)
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return "", "", fmt.Errorf("captcha: local OCR data is missing from %s; keep the release's ocr directory beside heapleach, or run `make ocr-assets`", dir)
+		}
+	}
+	return model, library, nil
+}

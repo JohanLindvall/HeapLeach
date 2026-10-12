@@ -31,7 +31,7 @@ type Keep2Share struct {
 	label  string
 	pace   Pace
 	// The production solver uses local OCR. Keeping the image reader apart
-	// lets protocol tests exercise refusals and waits without an OCR binary.
+	// lets protocol tests exercise refusals and waits without loading the OCR model.
 	// It returns at least one reading, most likely first, or an error.
 	solver func(context.Context, []byte) ([]string, error)
 

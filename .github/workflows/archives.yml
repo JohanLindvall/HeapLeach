@@ -1,0 +1,109 @@
+name: Build release archives
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+      version:
+        type: string
+        required: true
+      tested-sha:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  archives:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-22.04
+            target: linux/amd64
+          - name: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: linux/arm64
+          - name: darwin-amd64
+            runner: macos-15-intel
+            target: darwin/amd64
+          - name: darwin-arm64
+            runner: macos-15
+            target: darwin/arm64
+          - name: windows-amd64
+            runner: windows-2025
+            target: windows/amd64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ inputs.version }}
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Verify the tested commit
+        if: inputs.tested-sha != ''
+        env:
+          TESTED_SHA: ${{ inputs.tested-sha }}
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+      - name: Locate Go caches
+        id: go-cache
+        run: |
+          printf 'modules=%s\n' "$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          printf 'build=%s\n' "$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.go-cache.outputs.modules }}
+            ${{ steps.go-cache.outputs.build }}
+          key: ${{ runner.os }}-${{ runner.arch }}-archives-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-archives-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/heapleach/ocr
+          key: ocr-${{ matrix.name }}-${{ hashFiles('helpers/captcha/install.sh') }}
+
+      # Standalone tags still run the Go suite. Main and PR callers already
+      # run it on the exact checked-out SHA alongside this build matrix.
+      - name: Test standalone tag
+        if: inputs.tested-sha == '' && matrix.name == 'linux-amd64'
+        working-directory: backend
+        run: go test ./... -count=1
+
+      - name: Build archive
+        env:
+          RELEASE_TARGETS: ${{ matrix.target }}
+        run: make dist VERSION="$VERSION"
+
+      # Exercise the model and native library extracted from the archive on
+      # their actual OS/architecture, including both macOS variants and Windows.
+      - name: Verify packaged application and OCR
+        run: bash .github/scripts/smoke-archive.sh "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: archives-${{ inputs.version }}-${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 7

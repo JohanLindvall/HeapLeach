@@ -3,18 +3,18 @@
 #
 # Build layout:
 #   frontend -> compiles the TypeScript UI to static js/css/html
-#   backend  -> embeds those assets with go:embed and links one static binary
-#   export   -> scratch stage holding only the binary, for `--output`
+#   backend  -> embeds those assets with go:embed and links the cgo-enabled application
+#   export   -> scratch stage holding the binary and OCR data, for `--output`
 #   helpers  -> yt-dlp, ffmpeg/ffprobe and deno, the same builds
 #               `make dependencies` fetches for the host
-#   captcha-test -> tests the local OCR reader against synthetic challenges
-#   captcha  -> freezes the local OCR model and its Python runtime
-#   captcha-export -> optional OCR helper for `make captcha-helper`
+#   ocr-assets -> downloads the pinned model and native CPU runtime
+#   captcha-test -> tests the Go OCR reader against synthetic challenges
+#   ocr-export -> exports the OCR data for source builds
 #   released-binary -> verified release archive, used by the publishing job
 #   runtime  -> the image that actually runs (default target)
 #
-# The app itself is one self-contained binary: the UI is inside it, so there
-# is nothing to serve from disk. The helpers are what some hosts need beyond
+# The UI is inside the application binary. OCR runs in-process using the
+# adjacent ocr/ model and native library. Helpers are what some hosts need beyond
 # HTTP (see internal/tools); they sit beside the binary, which is the first
 # place tools.Find looks.
 
@@ -22,9 +22,8 @@
 ARG BINARY_STAGE=backend
 
 # --------------------------------------------------------------- frontend
-# The UI and Go stages run on the builder's own platform and cross-compile.
-# The OCR helper freezes native libraries, so that stage runs on the target
-# platform (under QEMU when cross-building the runtime image).
+# UI, Go and asset downloads run on the builder platform. Only the runtime
+# package install needs QEMU when producing an image for another architecture.
 FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
 WORKDIR /app/frontend
 
@@ -37,34 +36,63 @@ COPY frontend/ ./
 # tsc type-checks in strict mode, then vite emits to ../backend/.../dist.
 RUN npm run build && ls -la /app/backend/internal/webui/dist
 
+# -------------------------------------------------------------- OCR assets
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS ocr-assets
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+ && rm -rf /var/lib/apt/lists/*
+COPY helpers/captcha/install.sh /install.sh
+ARG TARGETOS
+ARG TARGETARCH
+RUN --mount=type=cache,target=/root/.cache/heapleach/ocr \
+    bash /install.sh "${TARGETOS:-linux}/${TARGETARCH:-amd64}" /out/ocr
+
+FROM scratch AS ocr-export
+COPY --from=ocr-assets /out/ /
+
 # ---------------------------------------------------------------- backend
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS backend
+# glibc matches the bundled runtime; cgo cannot load it from a static musl
+# executable. Bookworm gives local builds a glibc 2.36 baseline.
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS backend-source
 WORKDIR /src
-
 COPY backend/go.mod backend/go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
-
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY backend/ ./
+
+FROM backend-source AS captcha-test
+COPY --from=ocr-assets /out/ocr /ocr
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    HEAPLEACH_OCR_DIR=/ocr CGO_ENABLED=1 go test -race -count=1 ./internal/captcha
+
+FROM backend-source AS backend
 # Replace the checked-in placeholder with the real build.
 RUN rm -rf ./internal/webui/dist
 COPY --from=frontend /app/backend/internal/webui/dist ./internal/webui/dist
-
 ARG VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH
-# CGO off and -trimpath give a portable, reproducible static binary.
+ARG BUILDARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    set -eu; \
+    if [ "${TARGETARCH}" != "${BUILDARCH}" ]; then \
+      case "${TARGETARCH}" in \
+        arm64) compiler=aarch64-linux-gnu ;; \
+        amd64) compiler=x86_64-linux-gnu ;; \
+        *) echo "unsupported target ${TARGETARCH}" >&2; exit 1 ;; \
+      esac; \
+      apt-get update; apt-get install -y --no-install-recommends "gcc-${compiler}" "libc6-dev-${TARGETARCH}-cross"; \
+      export CC="${compiler}-gcc"; \
+    fi; \
+    CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/heapleach ./cmd/heapleach
+COPY --from=ocr-assets /out/ocr /out/ocr
 
 # ----------------------------------------------------------------- export
-# `docker build --target export --output type=local,dest=bin .` drops the
-# binary straight onto the host without running a container.
 FROM scratch AS export
-COPY --from=backend /out/heapleach /heapleach
+COPY --from=backend /out/ /
 
 # ---------------------------------------------------------------- helpers
 # The upstream builds are linked against glibc, which is why the runtime
@@ -92,38 +120,12 @@ RUN set -eu; \
     unzip -q deno.zip deno && rm deno.zip; \
     chmod 0755 yt-dlp ffmpeg ffprobe deno
 
-# ---------------------------------------------------------------- captcha
-# A separate optional helper keeps the application itself pure Go. Bookworm
-# sets the helper's glibc baseline to 2.36; the runtime below is newer. Only
-# the beta recognition model is needed, not the detector or older model.
-FROM python:3.12-slim-bookworm AS captcha-test
-RUN apt-get update \
- && apt-get install -y --no-install-recommends binutils \
- && rm -rf /var/lib/apt/lists/*
-WORKDIR /build
-COPY helpers/captcha/requirements.txt ./
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
-COPY helpers/captcha/recognize.py helpers/captcha/test_recognize.py ./
-COPY helpers/captcha/testdata/ ./testdata/
-RUN python -m unittest -v
-
-FROM captcha-test AS captcha
-RUN model_dir=$(python -c 'import pathlib, ddddocr; print(pathlib.Path(ddddocr.__file__).parent)') \
- && pyinstaller --noconfirm --onefile --name heapleach-ocr \
-      --add-data "$model_dir/common.onnx:ddddocr" \
-      --add-data "/usr/local/lib/python3.12/LICENSE.txt:python" \
-      --collect-binaries onnxruntime --recursive-copy-metadata ddddocr \
-      recognize.py
-
-FROM scratch AS captcha-export
-COPY --from=captcha /build/dist/heapleach-ocr /heapleach-ocr
-
 # --------------------------------------------------------- release binary
 # Only reached with BINARY_STAGE=released-binary. The release workflow checks
 # the archives' checksums before placing the two Linux binaries here.
 FROM scratch AS released-binary
 ARG TARGETARCH
-COPY dist/runtime/${TARGETARCH}/heapleach /out/heapleach
+COPY dist/runtime/${TARGETARCH}/ /out/
 
 FROM ${BINARY_STAGE} AS app
 
@@ -133,15 +135,14 @@ FROM debian:trixie-slim AS runtime
 # ca-certificates for TLS to the download hosts; tzdata for sane timestamps;
 # wget for the health check.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tzdata wget \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata wget libstdc++6 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --uid 10001 --home-dir /home/heapleach heapleach \
  && mkdir -p /downloads \
  && chown -R heapleach:heapleach /downloads
 
 COPY --from=helpers /out/ /usr/local/bin/
-COPY --from=captcha /build/dist/heapleach-ocr /usr/local/bin/heapleach-ocr
-COPY --from=app /out/heapleach /usr/local/bin/heapleach
+COPY --from=app /out/ /usr/local/bin/
 
 ENV HEAPLEACH_ADDR=:8080 \
     HEAPLEACH_DIR=/downloads \
