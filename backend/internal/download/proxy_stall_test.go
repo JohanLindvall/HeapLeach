@@ -35,8 +35,10 @@ func TestProxyZeroByteStallsPenaliseTheRouteAndRetry(t *testing.T) {
 			m.cfg.StallTimeout = 90 * time.Millisecond
 			m.cfg.MaxRetries = 0
 			// Connection setup and headers have their own request deadline;
-			// the stall watchdog covers the streaming body after that.
-			m.client = httpx.New("test", "en", 0, 90*time.Millisecond).Streaming()
+			// the stall watchdog covers the streaming body after that. The
+			// deadline also binds the retry through the working proxy, which
+			// a loaded CI runner once failed to connect to within 90 ms.
+			m.client = httpx.New("test", "en", 0, 400*time.Millisecond).Streaming()
 			payload := []byte("synthetic file bytes")
 			key := []byte("0123456789abcdef")
 			served := payload
