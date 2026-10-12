@@ -111,6 +111,7 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_RESUME", "true")
 	t.Setenv("HEAPLEACH_MAX_SOURCES", "5000")
 	t.Setenv("HEAPLEACH_MAX_FILES", "400000")
+	t.Setenv("HEAPLEACH_MAX_CONCURRENCY", "256")
 	t.Setenv("HEAPLEACH_PPROF", "127.0.0.1:6060")
 
 	cfg, err := FromEnv()
@@ -119,7 +120,8 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	}
 	if cfg.Addr != ":9999" || cfg.Concurrency != 7 || cfg.SpeedLimit != 1000000 ||
 		cfg.StallTimeout != 45*time.Second || !cfg.Debug || !cfg.ResumeRestored ||
-		cfg.MaxSources != 5000 || cfg.MaxFiles != 400000 || cfg.ProfileAddr != "127.0.0.1:6060" {
+		cfg.MaxSources != 5000 || cfg.MaxFiles != 400000 || cfg.ProfileAddr != "127.0.0.1:6060" ||
+		cfg.MaxConcurrency != 256 {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	kvs := cfg.ExtraHostsFor(FamilyKVS)
@@ -182,7 +184,9 @@ func TestPrepareValidates(t *testing.T) {
 		hint   string
 	}{
 		{"zero concurrency", func(c *Config) { c.Concurrency = 0 }, "concurrency"},
-		{"too much concurrency", func(c *Config) { c.Concurrency = MaxConcurrency + 1 }, "concurrency"},
+		{"over a ceiling set lower", func(c *Config) { c.MaxConcurrency, c.Concurrency = 16, 17 }, "concurrency"},
+		{"negative ceiling on concurrency", func(c *Config) { c.MaxConcurrency = -1 }, "max-concurrency"},
+		{"too much concurrency", func(c *Config) { c.Concurrency = DefaultMaxConcurrency + 1 }, "concurrency"},
 		{"negative retries", func(c *Config) { c.MaxRetries = -1 }, "retries"},
 		{"zero streams", func(c *Config) { c.Streams = 0 }, "streams"},
 		{"negative slow speed", func(c *Config) { c.SlowSpeed = -1 }, "slow-speed"},
@@ -201,6 +205,20 @@ func TestPrepareValidates(t *testing.T) {
 
 	if err := base().Prepare(); err != nil {
 		t.Errorf("a sound config should prepare cleanly: %v", err)
+	}
+}
+
+// The ceiling on parallel transfers defaults to a hundred and twenty-eight,
+// and a higher one can be set: a pool of proxy addresses carries one
+// Keep2Share transfer each.
+func TestTheConcurrencyCeilingIsASetting(t *testing.T) {
+	cfg := &Config{DownloadDir: t.TempDir(), Concurrency: 128, Streams: 8, StallTimeout: time.Minute}
+	if err := cfg.Prepare(); err != nil || cfg.MaxConcurrency != DefaultMaxConcurrency {
+		t.Fatalf("default: max=%d err=%v; want %d allowed", cfg.MaxConcurrency, err, DefaultMaxConcurrency)
+	}
+	raised := &Config{DownloadDir: t.TempDir(), Concurrency: 300, MaxConcurrency: 512, Streams: 8, StallTimeout: time.Minute}
+	if err := raised.Prepare(); err != nil {
+		t.Fatalf("a raised ceiling refused what it allows: %v", err)
 	}
 }
 

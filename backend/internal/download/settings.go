@@ -38,13 +38,22 @@ func (m *Manager) CurrentSettings() Settings {
 		ProxyEndpoints: &endpoints, ProxyFeeds: &feeds}
 }
 
+// maxConcurrency is the configured ceiling on parallel transfers. A manager
+// built without a config, as tests build them, gets the default.
+func (m *Manager) maxConcurrency() int {
+	if m.cfg != nil && m.cfg.MaxConcurrency > 0 {
+		return m.cfg.MaxConcurrency
+	}
+	return config.DefaultMaxConcurrency
+}
+
 // ApplySettings validates the whole update before changing any setting.
 // Filesystem preparation happens outside mu; publishing the new settings
 // happens together so an invalid field cannot leave a half-applied request.
 func (m *Manager) ApplySettings(s Settings) error {
 	defer m.nudge()
-	if s.Concurrency != nil && (*s.Concurrency < 1 || *s.Concurrency > config.MaxConcurrency) {
-		return fmt.Errorf("concurrency must be between 1 and %d", config.MaxConcurrency)
+	if most := m.maxConcurrency(); s.Concurrency != nil && (*s.Concurrency < 1 || *s.Concurrency > most) {
+		return fmt.Errorf("concurrency must be between 1 and %d", most)
 	}
 	if s.Streams != nil && (*s.Streams < 1 || *s.Streams > config.MaxStreams) {
 		return fmt.Errorf("streams must be between 1 and %d", config.MaxStreams)

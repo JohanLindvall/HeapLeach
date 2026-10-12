@@ -126,8 +126,24 @@ func TestSettingsRefuseTheOutOfRange(t *testing.T) {
 	if err := m.SetConcurrency(0); err == nil {
 		t.Error("concurrency 0 was accepted")
 	}
-	if err := m.SetConcurrency(config.MaxConcurrency + 1); err == nil {
+	if err := m.SetConcurrency(config.DefaultMaxConcurrency + 1); err == nil {
 		t.Error("concurrency above the ceiling was accepted")
+	}
+	if got := m.Snapshot().MaxConcur; got != config.DefaultMaxConcurrency {
+		t.Errorf("snapshot ceiling = %d, want %d for the slider", got, config.DefaultMaxConcurrency)
+	}
+	// The ceiling is the configured one, live settings included. Set on a
+	// manager that has not started, so nothing else is reading it.
+	set := busyManager(t)
+	set.cfg.MaxConcurrency = 40
+	if err := set.SetConcurrency(41); err == nil {
+		t.Error("concurrency above a configured ceiling was accepted")
+	}
+	if err := set.SetConcurrency(40); err != nil {
+		t.Errorf("concurrency at a configured ceiling: %v", err)
+	}
+	if got := set.Snapshot().MaxConcur; got != 40 {
+		t.Errorf("snapshot ceiling = %d, want the configured 40", got)
 	}
 	if err := m.SetConcurrency(3); err != nil {
 		t.Errorf("concurrency 3: %v", err)

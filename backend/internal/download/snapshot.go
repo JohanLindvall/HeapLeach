@@ -22,7 +22,7 @@ func (m *Manager) snapshotLocked() Snapshot {
 	snap := Snapshot{
 		Jobs:        make([]JobView, 0, len(m.order)),
 		Concurrency: m.limit,
-		MaxConcur:   config.MaxConcurrency,
+		MaxConcur:   m.maxConcurrency(),
 		Streams:     m.streams,
 		MaxStreams:  config.MaxStreams,
 		Proxies:     m.proxyEnabled,

@@ -57,9 +57,12 @@ const (
 	ServiceLogBytes      = 4 << 20
 	ServiceLogEntryBytes = 16 << 10
 
-	// MaxConcurrency caps the worker pool. Past this the bottleneck is the
-	// remote host, and hammering it invites rate limiting.
-	MaxConcurrency = 32
+	// DefaultMaxConcurrency is the default ceiling on parallel transfers, the
+	// most the concurrency setting may be raised to at startup or live. It is
+	// a setting (HEAPLEACH_MAX_CONCURRENCY, -max-concurrency): with proxy
+	// routes each address carries its own Keep2Share transfer, so a pool of
+	// addresses can use far more than one host could stand.
+	DefaultMaxConcurrency = 128
 
 	// DefaultMinFreeDisk is how much room must be left at the destination
 	// before another transfer starts. A bulk downloader fills a disk faster

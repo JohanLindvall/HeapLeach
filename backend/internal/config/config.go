@@ -104,6 +104,9 @@ type Config struct {
 	// in the saved queue. Zero means the default.
 	MaxSources int
 	MaxFiles   int
+	// MaxConcurrency is the ceiling on Concurrency, whether set at startup
+	// or live in Settings. Zero means DefaultMaxConcurrency.
+	MaxConcurrency int
 	// ExitWhenIdle ends the process once there is nothing left to download
 	// and no browser is watching. Set only for a bare invocation, which is
 	// a desktop session rather than a service: see applyBareDefaults.
@@ -186,6 +189,9 @@ func FromEnv() (*Config, error) {
 		return nil, err
 	}
 	if c.Streams, err = envInt("STREAMS", c.Streams); err != nil {
+		return nil, err
+	}
+	if c.MaxConcurrency, err = envInt("MAX_CONCURRENCY", c.MaxConcurrency); err != nil {
 		return nil, err
 	}
 	if c.MaxSources, err = envInt("MAX_SOURCES", c.MaxSources); err != nil {
@@ -382,8 +388,14 @@ func (c *Config) Prepare() error {
 		c.StateFile = ""
 		c.LegacyStateFile = ""
 	}
-	if c.Concurrency < 1 || c.Concurrency > MaxConcurrency {
-		return fmt.Errorf("concurrency must be between 1 and %d, got %d", MaxConcurrency, c.Concurrency)
+	if c.MaxConcurrency < 0 {
+		return fmt.Errorf("max-concurrency cannot be negative, got %d", c.MaxConcurrency)
+	}
+	if c.MaxConcurrency == 0 {
+		c.MaxConcurrency = DefaultMaxConcurrency
+	}
+	if c.Concurrency < 1 || c.Concurrency > c.MaxConcurrency {
+		return fmt.Errorf("concurrency must be between 1 and %d, got %d", c.MaxConcurrency, c.Concurrency)
 	}
 	if c.MaxRetries < 0 {
 		return fmt.Errorf("retries cannot be negative, got %d", c.MaxRetries)

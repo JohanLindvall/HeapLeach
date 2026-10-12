@@ -331,8 +331,9 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	var showVersion bool
 	flags.StringVar(&cfg.Addr, "addr", cfg.Addr, "listen address")
 	flags.StringVar(&cfg.DownloadDir, "dir", cfg.DownloadDir, "directory to download into")
-	flags.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency,
-		fmt.Sprintf("parallel transfers (1-%d)", config.MaxConcurrency))
+	flags.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency, "parallel transfers (1 to -max-concurrency)")
+	flags.IntVar(&cfg.MaxConcurrency, "max-concurrency", cfg.MaxConcurrency,
+		fmt.Sprintf("ceiling on parallel transfers, live setting included (0 is the default, %d)", config.DefaultMaxConcurrency))
 	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host")
 	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
@@ -500,7 +501,8 @@ Environment:
   HEAPLEACH_DEBUG, HEAPLEACH_OPEN, HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE,
   HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
   HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME,
-  HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES, HEAPLEACH_PPROF
+  HEAPLEACH_MAX_CONCURRENCY, HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES,
+  HEAPLEACH_PPROF
 
 Sizes take a unit: 5MB, 1.5GB, 10GiB, or a plain byte count.
 

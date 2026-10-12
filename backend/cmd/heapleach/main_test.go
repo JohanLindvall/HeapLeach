@@ -188,7 +188,8 @@ func TestRejectsBadInput(t *testing.T) {
 		want string
 	}{
 		{"two directories", []string{dir, t.TempDir()}, "at most one"},
-		{"concurrency too high", []string{"-concurrency", "99", dir}, "between 1 and"},
+		{"concurrency too high", []string{"-concurrency", "129", dir}, "between 1 and"},
+		{"over a lowered ceiling", []string{"-max-concurrency", "8", "-concurrency", "9", dir}, "between 1 and 8"},
 		{"concurrency zero", []string{"-concurrency", "0", dir}, "between 1 and"},
 		{"negative retries", []string{"-retries", "-1", dir}, "negative"},
 		{"path is a file", []string{notADir}, "not a directory"},
