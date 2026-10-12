@@ -443,8 +443,19 @@ const (
 	Keep2ShareRequestTimeout = 20 * time.Second
 
 	// Keep2ShareOCRConcurrency is how many CAPTCHA readers run at once. Each
-	// is a Python runtime and an ONNX model that uses every core it can.
+	// is a Python runtime and an ONNX model.
 	Keep2ShareOCRConcurrency = 2
+
+	// A CAPTCHA reader is kept for the next image rather than started for
+	// each (see keep2shareocrserve.go). Keep2ShareOCRStart bounds a start:
+	// unpacking the runtime and loading the model, five seconds on a busy
+	// host. A helper too old to serve never says it is ready, so that is
+	// also how long finding that out takes; it is then used one image at a
+	// time for Keep2ShareOCRServeRetry. A reader idle for Keep2ShareOCRIdle
+	// is stopped, since each holds a model in memory.
+	Keep2ShareOCRStart      = 30 * time.Second
+	Keep2ShareOCRIdle       = 5 * time.Minute
+	Keep2ShareOCRServeRetry = 10 * time.Minute
 
 	// Keep2ShareAddressLimitWait is how long an address whose free traffic or
 	// download count is used up is left alone. The host does not say when

@@ -12,6 +12,12 @@ One reading per line, most likely first. A wrong answer does not spend the
 challenge, so the caller can try the next; it bounds how many, as well as
 image size, runtime and retries. No network service is used.
 
+With --serve, the model is loaded once and one image is read after another,
+since starting is nearly all a reading costs: "ready" once the model is
+loaded, then for each image a line giving its length in bytes, the image,
+and in answer its readings followed by an empty line. It stops at the end
+of its input, and on an image it cannot read, as it would without --serve.
+
 The beta model is selected deliberately: its predecessor regularly misreads
 the outlined, coloured characters in Keep2Share's challenges.
 """
@@ -22,6 +28,7 @@ import sys
 
 import ddddocr
 import numpy as np
+import onnxruntime
 from PIL import Image, ImageOps
 
 LENGTH = 6
@@ -31,6 +38,8 @@ BEAM = 32  # prefixes kept at each step of the search
 PROPOSALS = 8  # readings each view puts forward for the joint ranking
 FLOOR = -9.0  # a symbol less likely than this at a step is not extended
 NONE = float("-inf")
+THREADS = 2  # inference threads; see load
+LARGEST = 4 << 20  # bytes in one image under --serve; a sanity bound only
 
 
 def add(a, b):
@@ -130,7 +139,49 @@ def readings(reader, image):
     return [r for _, r in ranked[:READINGS]]
 
 
+def load():
+    """The model, on a few inference threads that sleep between images.
+
+    ONNX Runtime otherwise starts a thread per core and keeps them spinning
+    between operations: several times the CPU for no faster reading of an
+    image this small, and the same readings.
+    """
+    session = onnxruntime.InferenceSession
+
+    def bounded(path, sess_options=None, **kwargs):
+        options = sess_options or onnxruntime.SessionOptions()
+        options.intra_op_num_threads = THREADS
+        options.inter_op_num_threads = 1
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        return session(path, sess_options=options, **kwargs)
+
+    onnxruntime.InferenceSession = bounded
+    try:
+        return ddddocr.DdddOcr(show_ad=False, beta=True)
+    finally:
+        onnxruntime.InferenceSession = session
+
+
+def serve(reader, source, sink):
+    """Read image after image from source, answering each on sink."""
+    sink.write(b"ready\n")
+    sink.flush()
+    while line := source.readline():
+        size = int(line)
+        if not 0 < size <= LARGEST:
+            raise ValueError(f"an image of {size} bytes")
+        raw = source.read(size)
+        if len(raw) < size:
+            return
+        found = readings(reader, Image.open(io.BytesIO(raw)))
+        sink.write("".join(r + "\n" for r in found).encode() + b"\n")
+        sink.flush()
+
+
 if __name__ == "__main__":
-    reader = ddddocr.DdddOcr(show_ad=False, beta=True)
-    for reading in readings(reader, Image.open(io.BytesIO(sys.stdin.buffer.read()))):
-        print(reading)
+    reader = load()
+    if sys.argv[1:] == ["--serve"]:
+        serve(reader, sys.stdin.buffer, sys.stdout.buffer)
+    else:
+        for reading in readings(reader, Image.open(io.BytesIO(sys.stdin.buffer.read()))):
+            print(reading)

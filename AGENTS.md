@@ -560,11 +560,31 @@ Host-specific notes:
   afterwards, which PyInstaller's bootloader unpacks into. A normal exit
   leaves files there too. Waiting for a local reader has its own progress
   note, since a busy queue can wait much longer than one reader's 20-second
-  budget. "Reading CAPTCHA" starts only when the helper runs; requesting
-  the challenge, fetching its image, submitting the answer and redeeming
-  the ticket each name their own network step. Those requests retain their
-  HTTP deadlines and proxy scoring; waiting for local OCR is cancelable
-  and is not evidence against the proxy.
+  budget. "Reading CAPTCHA" starts only when the helper has the image;
+  requesting the challenge, fetching its image, submitting the answer and
+  redeeming the ticket each name their own network step. Those requests
+  retain their HTTP deadlines and proxy scoring; waiting for local OCR is
+  cancelable and is not evidence against the proxy.
+
+  Readers are kept between images (`keep2shareocrserve.go`). Reading an image
+  takes a tenth of a second; the rest of the five and a quarter each reading
+  took was starting the reader: the bootloader unpacking 150 MB, Python
+  starting, the model loading. The helper's `--serve` mode says `ready` once
+  the model is loaded, then reads images one after another, each as a line
+  giving its length followed by its bytes, and answers each with its
+  readings and an empty line. A reader that fails, outruns its budget or is
+  cancelled mid-reading is stopped, never reused, since what it would say
+  next is unknown; one idle for `Keep2ShareOCRIdle` is stopped, since each
+  holds a model in memory. The turn still bounds how many there are. A
+  helper built before `--serve` ignores the argument and waits for its input
+  to end, so it never says it is ready: after `Keep2ShareOCRStart` it is used
+  one image per helper, as before, for `Keep2ShareOCRServeRetry`, with a
+  warning naming `make captcha-helper`. A cancelled start is not that, and
+  must not be read as it. The helper also holds ONNX Runtime to two inference
+  threads with spinning off: by default it starts a thread per core and spins
+  them between operations, five to ten times the CPU per reading for no
+  faster reading and the same readings. Over twelve images, a kept reader
+  took 2.8 seconds of CPU and a helper per image 59.
 
   Through a proxy route, a failure that the next attempt may well not meet
   is retried on the best route free rather than failing the file:

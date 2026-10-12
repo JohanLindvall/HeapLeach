@@ -634,7 +634,11 @@ runtime. Recognition happens locally, without an account, API key or paid
 solver. `make captcha-helper` builds just this helper with Docker on Linux
 (glibc 2.36 or newer); `make dependencies` includes that step. The container
 image already carries it. Native builds on other platforms are described in
-[helpers/captcha/README.md](helpers/captcha/README.md).
+[helpers/captcha/README.md](helpers/captcha/README.md). The reader is started
+once and kept for the CAPTCHAs that follow, which it reads in about a tenth
+of a second each instead of the several seconds starting it takes, and it is
+stopped after five idle minutes. A helper built before this works as before,
+started for each image; rebuild it with `make captcha-helper`.
 
 The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting

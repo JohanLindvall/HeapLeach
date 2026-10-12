@@ -4,11 +4,26 @@
 to standard output, one per line, most likely first. HeapLeach validates
 each reading and tries up to three on the same challenge, since a wrong
 answer does not spend it, before requesting another image. It also bounds
-image size and runtime and terminates the helper on cancellation. It runs
-at most two helpers at a time, since each loads the model and uses every core
-it can. Each gets a `TMPDIR` of its own, which the frozen executable unpacks
+image size and runtime and terminates the helper on cancellation.
+
+Starting the helper costs far more than reading: the frozen executable
+unpacks its runtime, starts Python and loads the model, several seconds for
+a reading of about a tenth of one. So HeapLeach runs it with `--serve`, which
+loads the model once, writes `ready`, and then reads image after image from
+standard input, each given as a line holding its length in bytes followed by
+the bytes. Each is answered with its readings, one per line, and an empty
+line. It stops at the end of its input, and exits on an image it cannot
+read, as it would without `--serve`. HeapLeach keeps at most two readers,
+stops one that fails, runs out of time or is cancelled rather than reusing
+it, and stops one left idle for five minutes. A helper built before
+`--serve` is still used, started for each image.
+
+Each reader gets a `TMPDIR` of its own, which the frozen executable unpacks
 its runtime into and which is removed after it exits, however it exits. The
-helper uses CPU inference and makes no network calls.
+model runs on two inference threads that sleep between images: ONNX
+Runtime's default, a spinning thread per core, costs several times the CPU
+for no faster reading. The helper uses CPU inference and makes no network
+calls.
 
 Keep2Share's challenges are six letters and digits, and the site compares
 answers without regard to case. The model's own best string regularly

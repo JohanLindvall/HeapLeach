@@ -20,12 +20,14 @@ import (
 
 var errKeep2ShareOCR = errors.New("captcha: could not read the CAPTCHA")
 
-// Reading a CAPTCHA starts a frozen Python runtime and an ONNX model, and
-// with proxy routes a dozen free downloads reach one at once. Run side by
-// side, they took the load past fifty on sixteen cores, ran past their
-// timeout and failed their files, and each one killed left the runtime it
-// had unpacked behind in /tmp, which is memory in the container. So a few
-// run at a time, the rest wait for a turn, and the timeout starts with it.
+// A CAPTCHA reader is a frozen Python runtime and an ONNX model, and with
+// proxy routes a dozen free downloads reach a CAPTCHA at once. Started side
+// by side, one per image, they took the load past fifty on sixteen cores,
+// ran past their timeout and failed their files, and each one killed left
+// the runtime it had unpacked behind in /tmp, which is memory in the
+// container. So a few run at a time, the rest wait for a turn, and the
+// timeout starts with it. Readers are now kept between images as well (see
+// keep2shareocrserve.go); the turn is what bounds how many there are.
 var keep2ShareOCRSlots = make(chan struct{}, config.Keep2ShareOCRConcurrency)
 
 // keep2ShareOCRTimeout is a reader's budget once it has its turn. A
@@ -44,9 +46,7 @@ func keep2ShareOCR() (func(context.Context, []byte) ([]string, error), error) {
 	}, nil
 }
 
-// The helper prints its readings one per line, most likely first. Each line
-// is judged on its own, so a malformed one costs that reading rather than
-// the image; an image with no well-formed reading at all is unreadable.
+// The helper answers with its readings one per line, most likely first.
 func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]string, error) {
 	info, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
@@ -65,7 +65,37 @@ func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if !keep2ShareOCRServes(program) {
+		return keep2ShareReadOnce(ctx, program, raw)
+	}
+	r := takeOCRReader(program)
+	if r == nil {
+		ResolveNote(ctx, "starting a local CAPTCHA reader")
+		var err error
+		r, err = startOCRReader(ctx, program)
+		if errors.Is(err, errOCRCannotServe) {
+			keep2ShareOCRCannotServe(program)
+			extractionLogger(ctx).WarnContext(ctx, "captcha: the CAPTCHA reader never said it was ready, so it is "+
+				"started for each image; rebuild it (make captcha-helper) if it predates --serve",
+				"program", program, "waited", keep2ShareOCRStart, "retry_in", config.Keep2ShareOCRServeRetry)
+			return keep2ShareReadOnce(ctx, program, raw)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	ResolveNote(ctx, "reading CAPTCHA")
+	lines, err := r.read(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	putOCRReader(r)
+	return keep2ShareReadings(lines)
+}
 
+// keep2ShareReadOnce reads one image with a helper started for it, the way
+// a helper too old to serve is used.
+func keep2ShareReadOnce(ctx context.Context, program string, raw []byte) ([]string, error) {
 	// The frozen helper unpacks its runtime under TMPDIR and removes it on
 	// the way out, which a killed one never reaches. A directory of its own,
 	// removed here, cannot be left behind however the helper ends.
@@ -99,8 +129,15 @@ func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]s
 	if output.Truncated {
 		return nil, errKeep2ShareOCR
 	}
+	return keep2ShareReadings(strings.Split(output.String(), "\n"))
+}
+
+// Each line is judged on its own, so a malformed one costs that reading
+// rather than the image; an image with no well-formed reading at all is
+// unreadable.
+func keep2ShareReadings(lines []string) ([]string, error) {
 	var readings []string
-	for _, line := range strings.Split(output.String(), "\n") {
+	for _, line := range lines {
 		if answer := strings.Join(strings.Fields(line), ""); keep2ShareAnswer(answer) {
 			readings = append(readings, answer)
 		}

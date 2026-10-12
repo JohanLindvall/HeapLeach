@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: MIT
 
+import io
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-import ddddocr
+import onnxruntime
 from PIL import Image
 
-from recognize import readings
+from recognize import load, readings, serve
 
 # Enough of the model's alphabet for the decoder: the blank, both cases of
 # every letter, the digits, and one symbol no answer can contain.
@@ -45,7 +46,12 @@ IMAGE = Image.new("RGB", (100, 50))
 class RecognitionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.reader = ddddocr.DdddOcr(show_ad=False, beta=True)
+        session = onnxruntime.InferenceSession
+        cls.reader = load()
+        cls.restored = onnxruntime.InferenceSession is session
+
+    def test_loading_leaves_onnx_runtime_as_it_found_it(self):
+        self.assertTrue(self.restored)
 
     def test_reads_outlined_characters_with_the_bundled_model(self):
         for filename, expected in (
@@ -84,6 +90,43 @@ class RecognitionTests(unittest.TestCase):
         reader = Mock()
         self.assertEqual(readings(reader, Image.new("RGB", (100, 50), "white")), [])
         reader.classification.assert_not_called()
+
+
+def framed(*images):
+    """Images as --serve reads them: each one's length, then its bytes."""
+    return io.BytesIO(b"".join(b"%d\n" % len(raw) + raw for raw in images))
+
+
+def encoded(image):
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
+
+
+class ServeTests(unittest.TestCase):
+    def test_answers_one_image_after_another(self):
+        reader = reader_saying(*spelled("ab3de7"))
+        sink = io.BytesIO()
+        serve(reader, framed(encoded(IMAGE), encoded(IMAGE)), sink)
+        expected = readings(reader, IMAGE)
+        self.assertEqual(expected[0], "ab3de7")
+        answer = "".join(r + "\n" for r in expected) + "\n"
+        self.assertEqual(sink.getvalue().decode(), "ready\n" + answer * 2)
+
+    def test_an_image_without_text_is_answered_with_no_readings(self):
+        sink = io.BytesIO()
+        serve(Mock(), framed(encoded(Image.new("RGB", (100, 50), "white"))), sink)
+        self.assertEqual(sink.getvalue(), b"ready\n\n")
+
+    def test_input_that_ends_inside_an_image_ends_the_reader(self):
+        sink = io.BytesIO()
+        serve(Mock(), io.BytesIO(b"100\n" + encoded(IMAGE)[:10]), sink)
+        self.assertEqual(sink.getvalue(), b"ready\n")
+
+    def test_a_length_that_cannot_be_an_image_is_refused(self):
+        for line in (b"0\n", b"-1\n", b"99999999999\n", b"many\n"):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                serve(Mock(), io.BytesIO(line), io.BytesIO())
 
 
 if __name__ == "__main__":
