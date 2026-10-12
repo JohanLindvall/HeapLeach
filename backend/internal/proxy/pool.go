@@ -45,6 +45,22 @@ type entry struct {
 	Sites                                        map[string]*siteStat
 	WAF                                          wafStat
 	client                                       *httpx.Client
+	// hostname is identity(URL), parsed once: see host. hostID numbers it
+	// within the pool: see Pool.hostID.
+	hostname string
+	hostID   int
+}
+
+// host is the address a proxy is known by, without scheme or port, since
+// several ports or protocols on one address are not extra public IPs. The URL
+// never changes, so it is parsed once. Route selection asks for it of every
+// entry on every lease, and parsing it each time was most of the service's
+// CPU with a public feed's inventory. Caller holds the pool's lock.
+func (e *entry) host() string {
+	if e.hostname == "" {
+		e.hostname = identity(e.URL)
+	}
+	return e.hostname
 }
 
 // WAF refusals do not change transport health or ordinary service scores.
@@ -96,6 +112,36 @@ type Pool struct {
 	closed        bool
 	stop          context.CancelFunc
 	wg            sync.WaitGroup
+
+	// hostIDs numbers the addresses entries are known by (entry.host), so
+	// that available can total them in a slice rather than hashing every
+	// entry's host into a map on every lease. addresses is that slice,
+	// reused under mu. Numbers start at 1; an entry's 0 means not yet seen.
+	hostIDs   map[string]int
+	addresses []address
+}
+
+// address is what available totals for one proxy address: the leases on
+// all its ports and protocols, and whether any of them is cooling.
+type address struct {
+	active  int
+	cooling bool
+}
+
+// hostID is the number of the address an entry is known by. Caller holds mu.
+func (p *Pool) hostID(e *entry) int {
+	if e.hostID == 0 {
+		if p.hostIDs == nil {
+			p.hostIDs = make(map[string]int)
+		}
+		id, ok := p.hostIDs[e.host()]
+		if !ok {
+			id = len(p.hostIDs) + 1
+			p.hostIDs[e.host()] = id
+		}
+		e.hostID = id
+	}
+	return e.hostID
 }
 
 // Open restores inventory before any network request. Invalid configuration
@@ -315,24 +361,35 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, wa
 }
 
 func (p *Pool) available(site string, files int, now time.Time, waf bool) []*entry {
-	var candidates []*entry
-	active := make(map[string]int)
-	cooling := make(map[string]bool)
+	// Different ports/protocols on the same proxy address are not extra
+	// public IPs: their leases count together, conservatively, and a
+	// cooldown on one holds back all of them.
+	size := len(p.hostIDs) + 1
+	p.addresses = slices.Grow(p.addresses[:0], size)[:size]
+	clear(p.addresses)
 	for _, e := range p.entries {
-		active[identity(e.URL)] += e.stat(site).active
-		if e.stat(site).Until.After(now) || (waf && e.WAF.Until.After(now)) {
-			cooling[identity(e.URL)] = true
+		id := p.hostID(e)
+		for id >= len(p.addresses) { // an address not seen before
+			p.addresses = append(p.addresses, address{})
 		}
+		a := &p.addresses[id]
+		if s := e.Sites[site]; s != nil {
+			a.active += s.active
+			a.cooling = a.cooling || s.Until.After(now)
+		}
+		a.cooling = a.cooling || (waf && e.WAF.Until.After(now))
 	}
+	var candidates []*entry
 	for _, e := range p.entries {
-		if !p.enabled(e) || e.Until.After(now) || cooling[identity(e.URL)] {
+		// Cheapest first: a long-running public pool is mostly dead
+		// addresses sitting out a day, which never get to the settings.
+		if e.Until.After(now) {
 			continue
 		}
-		// Different ports/protocols on the same proxy address are not extra
-		// public IPs. Count their leases together, conservatively.
-		if active[identity(e.URL)] < max(1, files) {
-			candidates = append(candidates, e)
+		if a := p.addresses[e.hostID]; a.cooling || a.active >= max(1, files) || !p.enabled(e) {
+			continue
 		}
+		candidates = append(candidates, e)
 	}
 	return candidates
 }
@@ -368,7 +425,7 @@ func (l *Lease) Cooldown(until time.Time) {
 		return
 	}
 	for _, e := range p.entries {
-		if identity(e.URL) == identity(l.entry.URL) && until.After(e.stat(l.site).Until) {
+		if e.host() == l.entry.host() && until.After(e.stat(l.site).Until) {
 			e.stat(l.site).Until = until
 			p.persist(e, l.site)
 		}

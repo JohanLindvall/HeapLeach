@@ -226,11 +226,11 @@ func (p *Pool) shortOfRoutes(now time.Time) bool {
 		cooling, ready := make(map[string]bool), make(map[string]bool)
 		for _, e := range p.entries {
 			if e.readStat(site).Until.After(now) || (site == "cloudflare" && e.WAF.Until.After(now)) {
-				cooling[identity(e.URL)] = true
+				cooling[e.host()] = true
 			}
 		}
 		for _, e := range p.entries {
-			key, s := identity(e.URL), e.scoreStat(site)
+			key, s := e.host(), e.scoreStat(site)
 			if e.Until.After(now) || cooling[key] {
 				continue
 			}

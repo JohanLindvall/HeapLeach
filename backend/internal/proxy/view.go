@@ -83,7 +83,7 @@ func (p *Pool) Page(site string, q Query) Page {
 	cooling := make(map[string]time.Time)
 	for _, e := range p.entries {
 		s := e.readStat(site)
-		key := identity(e.URL)
+		key := e.host()
 		active[key] += s.active
 		if s.Until.After(cooling[key]) {
 			cooling[key] = s.Until
@@ -114,7 +114,7 @@ func (p *Pool) Page(site string, q Query) Page {
 		if s.OK+s.Bad > 0 {
 			row.SuccessRate = s.OK / (s.OK + s.Bad)
 		}
-		until := cooling[identity(e.URL)]
+		until := cooling[e.host()]
 		if e.Until.After(until) {
 			until = e.Until
 		}
@@ -134,7 +134,7 @@ func (p *Pool) Page(site string, q Query) Page {
 		case until.After(now):
 			row.Status = "cooling"
 			page.Summary.Cooling++
-		case active[identity(e.URL)] > 0:
+		case active[e.host()] > 0:
 			row.Status = "busy"
 		default:
 			page.Summary.Available++
