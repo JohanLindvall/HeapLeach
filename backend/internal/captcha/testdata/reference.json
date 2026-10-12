@@ -1,0 +1,40 @@
+{
+  "narrow-outlines.png": {
+    "tensors": [
+      {
+        "width": 137,
+        "sha256": "a81b3126fcf3136984d68c03a89121f950215071ff67d7f288ca160c1061138d"
+      },
+      {
+        "width": 115,
+        "sha256": "ad5784f69b3a13b2d458bac43c16a36104080976a668cd7675a69524c3a1e1b2"
+      }
+    ],
+    "readings": [
+      "m4qr7t",
+      "m4qt7t",
+      "m4qm7t",
+      "m4gr7t",
+      "m4qn7t"
+    ]
+  },
+  "faint-outlines.png": {
+    "tensors": [
+      {
+        "width": 153,
+        "sha256": "2b1e73f4b109cc7182535ccfffa340fc83f7fd7bdb63a478845187ac839de2d8"
+      },
+      {
+        "width": 134,
+        "sha256": "48bf367bd476346b13e9aa3845b9a439f7f7f93a1c16b0f8593833ae93e31a1c"
+      }
+    ],
+    "readings": [
+      "b3xk9p",
+      "63xk9p",
+      "b3xk9d",
+      "53xk9p",
+      "d3xk9p"
+    ]
+  }
+}

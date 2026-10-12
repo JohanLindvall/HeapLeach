@@ -3,159 +3,20 @@
 package extractor
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
-	"os"
-	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/tools"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"github.com/JohanLindvall/HeapLeach/internal/captcha"
 )
 
-var errKeep2ShareOCR = errors.New("captcha: could not read the CAPTCHA")
+var errKeep2ShareOCR = captcha.ErrUnreadable
 
-// A CAPTCHA reader is a frozen Python runtime and an ONNX model, and with
-// proxy routes a dozen free downloads reach a CAPTCHA at once. Started side
-// by side, one per image, they took the load past fifty on sixteen cores,
-// ran past their timeout and failed their files, and each one killed left
-// the runtime it had unpacked behind in /tmp, which is memory in the
-// container. So a few run at a time, the rest wait for a turn, and the
-// timeout starts with it. Readers are now kept between images as well (see
-// keep2shareocrserve.go); the turn is what bounds how many there are.
-var keep2ShareOCRSlots = make(chan struct{}, config.Keep2ShareOCRConcurrency)
-
-// keep2ShareOCRTimeout is a reader's budget once it has its turn. A
-// variable so that tests need not sit the real one out.
-var keep2ShareOCRTimeout = config.Keep2ShareOCRTimeout
-
-// Check the helper before requesting a challenge: an installation without
-// OCR must not leave a succession of unanswered CAPTCHAs on the host.
+// Check the runtime and model before requesting a challenge. The shared reader
+// owns concurrency, session reuse, inference cancellation and ranked decoding.
 func keep2ShareOCR() (func(context.Context, []byte) ([]string, error), error) {
-	program, ok := tools.Find(tools.CaptchaOCR)
-	if !ok {
-		return nil, errors.New("captcha: free downloads need local CAPTCHA recognition; " + tools.NotInstalled(tools.CaptchaOCR))
+	if err := captcha.Available(); err != nil {
+		return nil, err
 	}
 	return func(ctx context.Context, raw []byte) ([]string, error) {
-		return keep2ShareReadCaptcha(ctx, program, raw)
+		return captcha.Read(ctx, raw, func(note string) { ResolveNote(ctx, note) })
 	}, nil
-}
-
-// The helper answers with its readings one per line, most likely first.
-func keep2ShareReadCaptcha(ctx context.Context, program string, raw []byte) ([]string, error) {
-	info, _, err := image.DecodeConfig(bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("captcha: expected an image CAPTCHA: %w", err)
-	}
-	if info.Width <= 0 || info.Height <= 0 || info.Width > config.Keep2ShareCaptchaPixels/info.Height {
-		return nil, errors.New("captcha: CAPTCHA dimensions are too large")
-	}
-	ResolveNote(ctx, "waiting for a local CAPTCHA reader")
-	select {
-	case keep2ShareOCRSlots <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	defer func() { <-keep2ShareOCRSlots }()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if !keep2ShareOCRServes(program) {
-		return keep2ShareReadOnce(ctx, program, raw)
-	}
-	r := takeOCRReader(program)
-	if r == nil {
-		ResolveNote(ctx, "starting a local CAPTCHA reader")
-		var err error
-		r, err = startOCRReader(ctx, program)
-		if errors.Is(err, errOCRCannotServe) {
-			keep2ShareOCRCannotServe(program)
-			extractionLogger(ctx).WarnContext(ctx, "captcha: the CAPTCHA reader never said it was ready, so it is "+
-				"started for each image; rebuild it (make captcha-helper) if it predates --serve",
-				"program", program, "waited", keep2ShareOCRStart, "retry_in", config.Keep2ShareOCRServeRetry)
-			return keep2ShareReadOnce(ctx, program, raw)
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	ResolveNote(ctx, "reading CAPTCHA")
-	lines, err := r.read(ctx, raw)
-	if err != nil {
-		return nil, err
-	}
-	putOCRReader(r)
-	return keep2ShareReadings(lines)
-}
-
-// keep2ShareReadOnce reads one image with a helper started for it, the way
-// a helper too old to serve is used.
-func keep2ShareReadOnce(ctx context.Context, program string, raw []byte) ([]string, error) {
-	// The frozen helper unpacks its runtime under TMPDIR and removes it on
-	// the way out, which a killed one never reaches. A directory of its own,
-	// removed here, cannot be left behind however the helper ends.
-	scratch, err := os.MkdirTemp("", "heapleach-ocr-")
-	if err != nil {
-		return nil, fmt.Errorf("captcha: %w", err)
-	}
-	defer os.RemoveAll(scratch)
-
-	run, cancel := context.WithTimeout(ctx, keep2ShareOCRTimeout)
-	defer cancel()
-	cmd := tools.CommandContext(run, program)
-	cmd.Env = append(os.Environ(), "TMPDIR="+scratch)
-	cmd.Stdin = bytes.NewReader(raw)
-	output := &util.BoundedBuffer{Limit: config.ErrorBodySample}
-	stderr := &util.BoundedBuffer{Limit: config.ErrorBodySample}
-	cmd.Stdout, cmd.Stderr = output, stderr
-	ResolveNote(ctx, "reading CAPTCHA")
-	err = cmd.Run()
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if run.Err() != nil {
-		// Out of time is an image not read, which the next one may fix:
-		// the file has not failed.
-		return nil, fmt.Errorf("%w: the reader took longer than %s", errKeep2ShareOCR, keep2ShareOCRTimeout)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("captcha: CAPTCHA reader: %w: %s", err, util.Truncate(strings.TrimSpace(stderr.String()), 200))
-	}
-	if output.Truncated {
-		return nil, errKeep2ShareOCR
-	}
-	return keep2ShareReadings(strings.Split(output.String(), "\n"))
-}
-
-// Each line is judged on its own, so a malformed one costs that reading
-// rather than the image; an image with no well-formed reading at all is
-// unreadable.
-func keep2ShareReadings(lines []string) ([]string, error) {
-	var readings []string
-	for _, line := range lines {
-		if answer := strings.Join(strings.Fields(line), ""); keep2ShareAnswer(answer) {
-			readings = append(readings, answer)
-		}
-	}
-	if len(readings) == 0 {
-		return nil, errKeep2ShareOCR
-	}
-	return readings, nil
-}
-
-func keep2ShareAnswer(answer string) bool {
-	if len(answer) != 6 {
-		return false
-	}
-	for _, c := range answer {
-		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
-			return false
-		}
-	}
-	return true
 }

@@ -94,19 +94,17 @@ jobs:
 
       - name: Build
         working-directory: backend
-        run: CGO_ENABLED=0 go build -trimpath ./cmd/...
+        run: CGO_ENABLED=1 go build -trimpath ./cmd/...
 
-  # OCR has no dependency on the UI or Go build. Its model tests should not
-  # hold up those checks, but both jobs must pass before publishing.
-  captcha:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Test the local CAPTCHA reader
-        run: make test-captcha
+  # Native cgo builds and packaged-model tests cover every release platform.
+  archives:
+    uses: ./.github/workflows/archives.yml
+    with:
+      version: ci-${{ github.sha }}
+      tested-sha: ${{ github.sha }}
 
   release:
-    needs: [build, captcha]
+    needs: [build, archives]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
