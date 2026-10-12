@@ -196,6 +196,20 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 			return err
 		}
+		// A link bound to the address that obtained it, refused because
+		// another address is using it now: one route can present several.
+		// The link is no use from here, so the resolver drops it. Through a
+		// proxy that is the route's doing, and the file goes to another route,
+		// which starts its own; on the direct route the next attempt below
+		// mints a link from the address in use now. Either way the part file
+		// carries what was fetched.
+		if discard := m.discarder(it); discard != nil && refusedForAddress(err) {
+			discard()
+			if httpx.RouteID(ctx) != "" {
+				return &extractor.RefusedError{Err: err}
+			}
+			err = &addressRefusedError{err: err}
+		}
 		if it.proxyFallback && httpx.RouteID(ctx) == "" && retryRouteFailure(err) {
 			// Let direct-first hosts recover on another address before
 			// ordinary retries or host backoff repeat the same failed route.
@@ -905,7 +919,7 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	}
 
 	m.mu.Lock()
-	it.URL = target.URL
+	it.URL, it.discard = target.URL, target.Discard
 	if len(target.Headers) > 0 {
 		it.Headers = target.Headers
 	}
@@ -1177,11 +1191,36 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
+// addressRefusedError is a link refused because another address was using
+// it, after the resolver has dropped it: a client error, but one the next
+// attempt does not meet, since it has a new link.
+type addressRefusedError struct{ err error }
+
+func (e *addressRefusedError) Error() string { return e.err.Error() }
+func (e *addressRefusedError) Unwrap() error { return e.err }
+
+// refusedForAddress reports the storage host's answer to a link bound to an
+// address other than the one using it, which is 409 Conflict. Only links
+// whose resolver says they are so bound (Target.Discard) are read this way.
+func refusedForAddress(err error) bool {
+	return httpx.HasStatus(err, http.StatusConflict)
+}
+
+// discarder is the item's current link's Discard, if it has one.
+func (m *Manager) discarder(it *Item) func() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return it.discard
+}
+
 // retryableTransfer reports whether a failed pass is worth repeating. A
 // definitive client error (404, 403, ...) is not.
 func retryableTransfer(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	if _, ok := errors.AsType[*addressRefusedError](err); ok {
+		return true
 	}
 	// The host said the resource is gone. Asking again gets the same answer.
 	if errors.Is(err, errDeadResource) {

@@ -349,6 +349,10 @@ The important subtlety is `File.Resolve`:
   stall, without ever leaving a file with no source left, buys nothing over
   rotating blindly. `MirrorHosts` builds the list when the alternatives
   differ only by host, which is how gofile's storage servers are expressed.
+- A resolver whose links are bound to the address that obtained them sets
+  `Target.Discard`. The downloader calls it when the host refuses the link
+  for another address (409), so that the next resolve mints a new one
+  rather than handing back what is cached. See keep2share below.
 - **bunkr cannot use it, because bunkr does not mirror.** Its metadata
   endpoint (`_001_v2`) names exactly one storage server per file in a plain
   `mediafiles` string — never a list — and the signed path is scoped to that
@@ -602,6 +606,21 @@ Host-specific notes:
   upstream license notices. `HEAPLEACH_OCR_DIR` overrides the default `ocr/`
   directory alongside the executable. Official builds enable cgo; deliberately
   cgo-free source builds still run other hosts and explain that OCR is disabled.
+
+  The storage link is bound to an address (`ip_access_policy=first`), and
+  one route can present more than one. Both hosts are dual-stack, so a new
+  connection can leave by the other address family, and a public proxy can
+  leave by another of its provider's exits. A 2.9 GB file failed that way
+  184 MB in: twenty minutes of serving, then `409 Conflict`, "assigned with
+  another IP address", read as a client error and final. So the resolver
+  hands each link out with `Target.Discard`, which drops the link and its
+  ticket as a change of route does. The downloader calls it on a 409 for
+  such a link. Through a proxy that is an address refusal (`RefusedError`):
+  the route is held back for the service and the file goes to another,
+  free, as with the API's own address refusals. On the direct route the
+  next attempt mints a link from the address in use now, within the
+  ordinary retry budget. Either way the part file carries what was fetched.
+  A late discard of a link already replaced keeps the replacement.
 
   **fileboom** on `fboom.me` shares this implementation with its own
   `/api/v2` base, label and `Pace.Group`. The API namespaces are separate:

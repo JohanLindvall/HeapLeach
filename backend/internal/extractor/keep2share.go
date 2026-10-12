@@ -403,7 +403,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			if expiry, err := strconv.ParseInt(u.Query().Get("temp_url_expires"), 10, 64); err == nil {
 				d.expires = time.Unix(expiry, 0)
 			}
-			d.target = &Target{URL: out.URL, Name: d.name, Size: d.size}
+			d.target = &Target{URL: out.URL, Name: d.name, Size: d.size, Discard: d.discard(out.URL)}
 			copy := *d.target
 			return &copy, nil
 		}
@@ -415,6 +415,19 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 		waits++
 		if waits > config.Keep2ShareWaits {
 			return nil, d.host.errorf("free-download wait did not finish")
+		}
+	}
+}
+
+// discard drops a link the storage host refused because another address was
+// using it, and the ticket it came from, as a change of route does: both
+// belong to the address that obtained them. A link handed out since is kept.
+func (d *keep2ShareDownload) discard(link string) func() {
+	return func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.target != nil && d.target.URL == link {
+			d.route = "" // the next resolve starts the free flow afresh
 		}
 	}
 }

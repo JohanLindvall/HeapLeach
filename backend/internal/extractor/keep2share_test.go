@@ -565,3 +565,39 @@ func TestKeep2ShareTakesAnAddressLimitForThatRoutesWait(t *testing.T) {
 		})
 	}
 }
+
+// A storage link is bound to the address that obtained it. Refused because
+// another address is using it, it is dropped with its ticket, and the next
+// resolve runs the free flow again. Discarding a link already replaced keeps
+// its replacement.
+func TestKeep2ShareDiscardedLinkIsMintedAgain(t *testing.T) {
+	var calls atomic.Int32
+	expires := time.Now().Add(time.Hour).Unix()
+	links := []string{
+		fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d&n=1", expires),
+		fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d&n=2", expires),
+	}
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		n := calls.Add(1)
+		if n%2 == 1 {
+			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":0}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "code": 200, "url": links[n/2-1]})
+	})
+	f := keep2ShareTestExtract(t, k)
+	first, err := f.Resolve(context.Background())
+	if err != nil || first.URL != links[0] || first.Discard == nil {
+		t.Fatalf("first = %+v, %v; want the first link, which can be discarded", first, err)
+	}
+	first.Discard()
+	second, err := f.Resolve(context.Background())
+	if err != nil || second.URL != links[1] || calls.Load() != 4 {
+		t.Fatalf("after discarding: %+v, %v, %d calls; want a new free download", second, err, calls.Load())
+	}
+	first.Discard() // late, for a link already replaced
+	again, err := f.Resolve(context.Background())
+	if err != nil || again.URL != links[1] || calls.Load() != 4 {
+		t.Fatalf("discarding a replaced link dropped its replacement: %+v, %v, %d calls", again, err, calls.Load())
+	}
+}

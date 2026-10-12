@@ -174,6 +174,13 @@ type Target struct {
 	// queue longer than the signature would fail partway down.
 	Segments   []string
 	SegmentKey *SegmentKey
+	// Discard is set by a resolver whose links are bound to the address
+	// that obtained them, and drops what it keeps of this one so that the
+	// next resolve starts afresh. The downloader calls it when the host
+	// refuses the link because another address is using it: one route can
+	// present several, since a new connection may leave by the other
+	// address family or by another of a provider's exits.
+	Discard func()
 }
 
 // WaitError is a resolver's way of saying a file cannot be fetched yet,

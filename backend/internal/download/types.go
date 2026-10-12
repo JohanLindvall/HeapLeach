@@ -79,6 +79,9 @@ type Item struct {
 	resolve       func(context.Context) (*extractor.Target, error)
 	refresh       func(context.Context) (*extractor.Target, error)
 	proxyFallback bool
+	// discard is the last resolved target's Discard: set for a link bound
+	// to the address that obtained it.
+	discard func()
 	// cipher, when set, means this host serves the file encrypted and the
 	// bytes are decrypted on their way into the part file. It belongs to
 	// the item rather than to a resolved target: the URL is re-minted per

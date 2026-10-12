@@ -650,7 +650,10 @@ The free flow tries at most three CAPTCHA images, and at most three readings
 of each, ranked by the reader's confidence. It shows the host's waiting
 time, and allows one file and one connection at a time per service, shared
 across its aliases. Unreadable challenges fail with a retryable error; OCR is
-not always correct. With proxies enabled (the default), the one-file limit
+not always correct. A download link is bound to the address that first uses
+it, so when a route's address changes partway through a file, the link is
+replaced and the file resumes from what it has: through another proxy, or
+from the direct address with a new link. With proxies enabled (the default), the one-file limit
 applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
 `-concurrency` across both services. Each address may carry one K2S transfer
