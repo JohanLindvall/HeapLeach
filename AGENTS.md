@@ -665,7 +665,26 @@ Host-specific notes:
   endpoints share one exploration candidate, drawn uniformly at random from
   the eligible list, so discovery does not walk adjacent addresses in URL
   order. Selection and reservation share the pool lock, including for these
-  unrated routes. Five-second progress windows train throughput before a long
+  unrated routes.
+
+  Ranking never walks the inventory (`index.go`): a public feed's tens of
+  thousands of routes, walked on every lease and every upgrade check, were
+  most of the service's CPU. The index lists every route, the routes by
+  address and by ID, and the routes with a speed on some site. It is rebuilt
+  when routes are added or removed, and a route's first speed adds it where
+  that speed is written, in `observe` and `Progress`, the only ways a speed
+  leaves zero. Everything else is read from the route itself when it is
+  considered, so a speed set anywhere else, as tests do, is missed unless set
+  before the index is built. `eligible` asks of one route what `available`
+  asks of all of them, through its address's other ports. An upgrade rates
+  measured routes only. The exploration ticket is drawn from the whole
+  inventory, drawing again until a route qualifies, which is exactly
+  uniform. After `ProxyDrawTries` misses it lists the qualifying routes, as
+  uniformly, for when few qualify. `leased` counts each route's leases,
+  which is where selection finds an unmeasured transfer in progress. Tests
+  hold each against a scan of the whole inventory.
+
+  Five-second progress windows train throughput before a long
   file finishes, with the resumed prefix, pauses and speed caps excluded.
   Those samples never write Bolt from `sampleLocked`; the background task
   flushes changed rows. Bolt stores

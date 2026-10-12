@@ -279,6 +279,7 @@ func (p *Pool) retire(now time.Time) {
 				e.client.CloseIdleConnections()
 			}
 			delete(p.entries, raw)
+			p.idx.valid = false
 		}
 	}
 }

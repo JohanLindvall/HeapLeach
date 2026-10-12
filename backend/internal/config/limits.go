@@ -45,6 +45,10 @@ const (
 	ProxyUpgradeRatio        = 1.25
 	ProxyUpgradeConfirm      = 2
 	DefaultProxyRetries      = 20
+
+	// ProxyDrawTries is how many routes are drawn at random, looking for an
+	// unmeasured one that could take a transfer, before listing them all.
+	ProxyDrawTries = 64
 )
 
 // Tunables shared across packages. They live here rather than next to their

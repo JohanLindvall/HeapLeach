@@ -46,9 +46,12 @@ type entry struct {
 	WAF                                          wafStat
 	client                                       *httpx.Client
 	// hostname is identity(URL), parsed once: see host. hostID numbers it
-	// within the pool: see Pool.hostID.
-	hostname string
-	hostID   int
+	// within the pool: see Pool.hostID. route is routeID(URL), hashed once:
+	// see id. inMeasured says it is in the index's measured routes.
+	hostname   string
+	hostID     int
+	route      string
+	inMeasured bool
 }
 
 // host is the address a proxy is known by, without scheme or port, since
@@ -61,6 +64,14 @@ func (e *entry) host() string {
 		e.hostname = identity(e.URL)
 	}
 	return e.hostname
+}
+
+// id is the route's routeID, hashed once. Caller holds the pool's lock.
+func (e *entry) id() string {
+	if e.route == "" {
+		e.route = routeID(e.URL)
+	}
+	return e.route
 }
 
 // WAF refusals do not change transport health or ordinary service scores.
@@ -119,6 +130,12 @@ type Pool struct {
 	// reused under mu. Numbers start at 1; an entry's 0 means not yet seen.
 	hostIDs   map[string]int
 	addresses []address
+
+	// idx indexes the routes for ranking (index.go). leased counts the
+	// leases each route holds, across sites, so that selection can find the
+	// routes in use without walking the inventory.
+	idx    inventory
+	leased map[*entry]int
 }
 
 // address is what available totals for one proxy address: the leases on
@@ -177,6 +194,7 @@ func (p *Pool) ensure(raw string, now time.Time) *entry {
 	if e == nil {
 		e = &entry{URL: raw, FirstSeen: now, LastSeen: now, Sites: make(map[string]*siteStat)}
 		p.entries[raw] = e
+		p.idx.valid = false
 	}
 	return e
 }
@@ -293,6 +311,11 @@ func (l *Lease) Release() {
 		l.pool.mu.Lock()
 		defer l.pool.mu.Unlock()
 		l.entry.stat(l.site).active--
+		if p := l.pool; p.leased[l.entry] > 1 {
+			p.leased[l.entry]--
+		} else {
+			delete(p.leased, l.entry)
+		}
 		l.released = true
 	})
 }
@@ -336,22 +359,24 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, wa
 	if p.closed {
 		return nil
 	}
-	candidates := p.available(site, files, time.Now(), waf)
-	if len(candidates) == 0 {
-		return nil
-	}
+	now, ix := time.Now(), p.index()
 	var chosen *entry
-	for _, e := range candidates {
-		if preferred == "" {
-			break
-		}
-		if routeID(e.URL) == preferred {
-			chosen = e
-			break
-		}
+	if e := ix.byID[preferred]; preferred != "" && e != nil && p.eligible(ix, e, site, files, now, waf) {
+		chosen = e
 	}
 	if chosen == nil {
-		chosen = p.selectFor(site, candidates, remaining, waf)
+		var measured []*entry
+		for _, e := range ix.measured {
+			if e.speed(site) != 0 && p.eligible(ix, e, site, files, now, waf) {
+				measured = append(measured, e)
+			}
+		}
+		chosen = p.choose(site, remaining, waf, measured, func() *entry {
+			return p.drawUnmeasured(ix, site, files, now, waf)
+		})
+	}
+	if chosen == nil {
+		return nil
 	}
 	l := p.lease(chosen, site)
 	if l != nil {
@@ -360,6 +385,9 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, wa
 	return l
 }
 
+// available lists every route that could take a transfer for site now.
+// Ranking asks eligible of the routes it considers instead (index.go); this
+// is for listing them all at once.
 func (p *Pool) available(site string, files int, now time.Time, waf bool) []*entry {
 	// Different ports/protocols on the same proxy address are not extra
 	// public IPs: their leases count together, conservatively, and a
@@ -404,6 +432,10 @@ func (p *Pool) lease(chosen *entry, site string) *Lease {
 		}
 	}
 	chosen.stat(site).active++
+	if p.leased == nil {
+		p.leased = make(map[*entry]int)
+	}
+	p.leased[chosen]++
 	return &Lease{pool: p, entry: chosen, site: site, started: time.Now()}
 }
 
@@ -424,10 +456,13 @@ func (l *Lease) Cooldown(until time.Time) {
 	if p.closed {
 		return
 	}
-	for _, e := range p.entries {
-		if e.host() == l.entry.host() && until.After(e.stat(l.site).Until) {
-			e.stat(l.site).Until = until
-			p.persist(e, l.site)
+	ix := p.index()
+	if id := p.hostID(l.entry); id < len(ix.byHost) {
+		for _, e := range ix.byHost[id] {
+			if until.After(e.stat(l.site).Until) {
+				e.stat(l.site).Until = until
+				p.persist(e, l.site)
+			}
 		}
 	}
 }
@@ -491,6 +526,7 @@ func (l *Lease) observe(o httpx.RouteObservation) {
 			rate := float64(o.Bytes) / max(seconds, config.ProxyMinSeconds)
 			if s.BytesPerSecond == 0 {
 				s.BytesPerSecond = rate
+				p.noteMeasured(e)
 			} else {
 				s.BytesPerSecond = config.ProxyDurationAlpha*rate + (1-config.ProxyDurationAlpha)*s.BytesPerSecond
 			}

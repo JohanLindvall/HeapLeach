@@ -68,6 +68,7 @@ func (l *Lease) Progress(now time.Time, bytes int64, elapsed time.Duration, limi
 	rate := float64(l.windowBytes) / l.windowTime.Seconds()
 	if s.BytesPerSecond == 0 {
 		s.BytesPerSecond = rate
+		p.noteMeasured(l.entry)
 	} else {
 		s.BytesPerSecond = config.ProxyDurationAlpha*rate + (1-config.ProxyDurationAlpha)*s.BytesPerSecond
 	}
@@ -94,20 +95,7 @@ func (l *Lease) Upgrade(now time.Time, remaining int64, currentRate float64) *Le
 		return nil
 	}
 	l.lastUpgrade = now
-	prior := p.measuredPrior(l.site) // every route rated below is measured
-	var best *entry
-	var bestRate float64
-	for _, e := range p.available(l.site, 1, now, l.waf) {
-		if e.speed(l.site) <= 0 {
-			continue // never interrupt a working file to try an unknown route
-		}
-		if s := e.scoreStat(l.site); s.OK <= 0 {
-			continue
-		}
-		if rate := prior.entryRate(e, l.site, l.waf, remaining); rate > bestRate {
-			best, bestRate = e, rate
-		}
-	}
+	best, bestRate := p.bestUpgrade(l.site, now, l.waf, remaining)
 	if best == nil {
 		l.upgradeWins = 0
 		return nil
@@ -128,4 +116,26 @@ func (l *Lease) Upgrade(now time.Time, remaining int64, currentRate float64) *Le
 		next.waf = l.waf
 	}
 	return next
+}
+
+// bestUpgrade is the fastest route that could take over a transfer: measured
+// routes only, since a working file is never interrupted to try an unknown
+// one. Caller holds mu.
+func (p *Pool) bestUpgrade(site string, now time.Time, waf bool, remaining int64) (*entry, float64) {
+	prior := p.measuredPrior(site) // every route rated below is measured
+	ix := p.index()
+	var best *entry
+	var bestRate float64
+	for _, e := range ix.measured {
+		if e.speed(site) <= 0 || !p.eligible(ix, e, site, 1, now, waf) {
+			continue
+		}
+		if s := e.scoreStat(site); s.OK <= 0 {
+			continue
+		}
+		if rate := prior.entryRate(e, site, waf, remaining); rate > bestRate {
+			best, bestRate = e, rate
+		}
+	}
+	return best, bestRate
 }

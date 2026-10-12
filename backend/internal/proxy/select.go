@@ -38,7 +38,7 @@ func (p *Pool) measuredPrior(site string) scorePrior {
 // meanBandwidth is the average speed of the enabled routes measured for site.
 func (p *Pool) meanBandwidth(site string) float64 {
 	bandwidth, sampled := 0.0, 0
-	for _, e := range p.entries {
+	for _, e := range p.index().measured {
 		if speed := e.speed(site); speed > 0 && p.enabled(e) {
 			bandwidth += speed
 			sampled++
@@ -168,10 +168,29 @@ func (p *Pool) selectEntry(site string, candidates []*entry, work ...int64) *ent
 }
 
 func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf bool) *entry {
+	var measured, untried []*entry
+	for _, e := range candidates {
+		if e.speed(site) == 0 {
+			untried = append(untried, e)
+		} else {
+			measured = append(measured, e)
+		}
+	}
+	return p.choose(site, remaining, waf, measured, func() *entry {
+		if len(untried) == 0 {
+			return nil
+		}
+		return untried[rand.IntN(len(untried))]
+	})
+}
+
+// choose applies the policy to the measured routes that could take the
+// transfer and to unmeasured, which draws one unmeasured route that could, or
+// nil if none could. Caller holds mu.
+func (p *Pool) choose(site string, remaining int64, waf bool, measured []*entry, unmeasured func() *entry) *entry {
 	prior := p.measuredPrior(site) // the bandwidth is found below, if an unmeasured route is rated
 	var best *entry
 	bestRate := -1.0
-	var untried []*entry
 	rate := func(e *entry) float64 {
 		s := e.scoreStat(site)
 		x, y := gamma(prior.a+s.OK), gamma(prior.b+s.Bad)
@@ -181,39 +200,36 @@ func (p *Pool) selectFor(site string, candidates []*entry, remaining int64, waf 
 		}
 		return prior.workRate(s, chance, remaining)
 	}
-	for _, e := range candidates {
-		if e.speed(site) == 0 {
-			untried = append(untried, e)
-			continue
-		}
+	for _, e := range measured {
 		if r := rate(e); r > bestRate {
 			best, bestRate = e, r
 		}
 	}
-	if len(untried) > 0 {
-		// While proven routes are free, at most one unmeasured transfer
-		// explores, and new exploration slots are spaced apart. When no
-		// proven route is free, fill idle workers to bootstrap or recover.
-		if best != nil {
-			if time.Since(p.lastProbe[site]) < config.ProxyExploreInterval {
+	// While proven routes are free, at most one unmeasured transfer
+	// explores, and new exploration slots are spaced apart. When no proven
+	// route is free, fill idle workers to bootstrap or recover.
+	if best != nil {
+		if time.Since(p.lastProbe[site]) < config.ProxyExploreInterval {
+			return best
+		}
+		for e := range p.leased {
+			if s := e.Sites[site]; s != nil && s.active > 0 && e.speed(site) == 0 {
 				return best
 			}
-			for _, e := range p.entries {
-				if s := e.Sites[site]; s != nil && s.active > 0 && e.speed(site) == 0 {
-					return best
-				}
-			}
 		}
-		// Draw one eligible unmeasured endpoint uniformly. Walking sorted
-		// URLs can spend many attempts on adjacent dead networks or ports.
-		next := untried[rand.IntN(len(untried))]
-		if best != nil {
-			prior.bandwidth = p.meanBandwidth(site)
-		}
-		if best == nil || rate(next) > bestRate {
-			best = next
-			p.lastProbe[site] = time.Now()
-		}
+	}
+	// Draw one eligible unmeasured endpoint uniformly. Walking sorted URLs
+	// can spend many attempts on adjacent dead networks or ports.
+	next := unmeasured()
+	if next == nil {
+		return best
+	}
+	if best != nil {
+		prior.bandwidth = p.meanBandwidth(site)
+	}
+	if best == nil || rate(next) > bestRate {
+		best = next
+		p.lastProbe[site] = time.Now()
 	}
 	return best
 }
