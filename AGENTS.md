@@ -493,6 +493,15 @@ Host-specific notes:
   search. Source recovery exempts unreachable/dropped/refused proxies from
   the retry budget just as file workers do, while other temporary failures
   remain bounded. A challenge still records its separate WAF penalty.
+  Some addresses are refused outright, and that is not a missing video
+  either: the player is answered, with a 200 and no gate, by one bare
+  sentence saying the resource "has been removed or is temporarily
+  unavailable", for a video every other address is shown and for one that
+  does not exist alike. A video that really has gone is shown the host's own
+  HTML "Video not found" page. So `doodRefused` reads the missing markup, not
+  the sentence, and returns a `RefusedError`: the route is held back for the
+  site and the file tries another, outside the retry budget. Taken at its
+  word, it failed the file on the first address that met it.
   `ResolveNote` reports player/token stages. Recovery adds the connection
   attempt during source discovery; workers use the existing item counter.
   `JobView.Note` carries source progress to the browser and terminal, guarded

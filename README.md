@@ -709,7 +709,10 @@ as Keep2Share. Source discovery and file downloads both skip dead or dropped
 proxies without spending the file's retry budget, including timeouts waiting
 for a proxy connection. Response-header timeouts also penalise the proxy and
 retry another route, within the configured retry budget. User cancellation
-does not penalise a route. Missing videos and parser errors remain final.
+does not penalise a route. An address the host refuses the player to (a bare
+"removed or temporarily unavailable" sentence where the player should be,
+which other addresses are not shown) is skipped the same way, and the file
+tries another. Missing videos and parser errors remain final.
 Progress messages show the player/token stage and connection attempt in the
 browser and terminal, including while the source is still being resolved.
 

@@ -188,3 +188,33 @@ func TestDoodRedirectKeepsTokensCookiesAndMediaOnTheCurrentHost(t *testing.T) {
 		t.Fatalf("token requests=%d, want one per visit", tokenRequests.Load())
 	}
 }
+
+// Some addresses are served one bare sentence where the player should be, for
+// a real video and a missing one alike, while every other address is shown
+// the player. That is the address refused, for the queue to try another, not
+// the video removed; the host's own not-found page still fails the file.
+func TestDoodRefusalIsTheAddressesNotTheVideos(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		refused    bool
+	}{
+		{"bare-sentence", "The resource you are looking for has been removed or is temporarily unavailable.", true},
+		{"not-found-page", `<html><head><title>Video not found | DoodStream</title></head>` +
+			`<body><div class="container not_found"><h1>Not Found</h1></div></body></html>`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set(httpx.HeaderContentType, "text/html; charset=UTF-8")
+				fmt.Fprint(w, tc.body)
+			}))
+			defer srv.Close()
+			client := httpx.New("test", "en", 0, time.Second)
+			defer client.CloseIdleConnections()
+			_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, srv.URL+"/e/synthetic"), Options{})
+			_, refused := errors.AsType[*RefusedError](err)
+			if err == nil || refused != tc.refused {
+				t.Fatalf("refused=%v, want %v: %v", refused, tc.refused, err)
+			}
+		})
+	}
+}

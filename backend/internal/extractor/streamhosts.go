@@ -200,6 +200,10 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 		page = final.String()
 
 		m := doodPassPath.FindStringSubmatch(doc)
+		if m == nil && doodRefused(doc) {
+			return nil, &RefusedError{Err: fmt.Errorf("doodstream: %s refused the player to this address: %q",
+				final.Hostname(), util.Truncate(strings.TrimSpace(doc), 120))}
+		}
 		if m == nil {
 			return nil, fmt.Errorf("doodstream: no media token on %s "+
 				"(the video may have been removed, or the page layout changed)", page)
@@ -232,6 +236,19 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 		err = &TransientError{Err: fmt.Errorf("%w after %d attempts", err, config.ExtractRetries)}
 	}
 	return target, title, err
+}
+
+// doodRefused recognises the host turning an address away, which is not the
+// video having gone. Some addresses are answered, with a 200, by one bare
+// sentence where the player should be ("…has been removed or is temporarily
+// unavailable"), for a video every other address is shown and for one that
+// does not exist alike; a video that really has gone is shown the host's own
+// HTML page saying so. So what is read is the missing markup, not the
+// sentence: the player and its not-found page are both documents, and this
+// is not one. Only the player is asked: the token endpoint answers in plain
+// text by design.
+func doodRefused(doc string) bool {
+	return !strings.Contains(doc, "<")
 }
 
 // Recognise both the host's Turnstile player gate and an interstitial whose
