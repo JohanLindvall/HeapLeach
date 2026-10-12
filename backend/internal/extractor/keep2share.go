@@ -195,6 +195,24 @@ func (r *keep2ShareResponse) Error() string {
 // got tickets, so that answer says nothing about the file. Neither do a wait
 // longer than the limit (detail 5, once retryDelay has declined it) or
 // another free download running from the same address (detail 6).
+// limitsAddress reports a free-download limit on the address that asked
+// rather than on the file: its traffic (detail 2, "Traffic limit exceed")
+// or its count of downloads (detail 1). Asked for one such file through
+// twelve public proxies, seven answered errorCode 21 with "Traffic limit
+// exceed" while five, and the direct address, got tickets for it. The
+// answer says nothing of when the limit lifts.
+func (r *keep2ShareResponse) limitsAddress() bool {
+	if r.ErrorCode != 21 && r.ErrorCode != 42 {
+		return false
+	}
+	for _, detail := range r.Errors {
+		if detail.Code == 1 || detail.Code == 2 {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *keep2ShareResponse) refusesAddress() bool {
 	if r.ErrorCode != 42 {
 		return false
@@ -364,6 +382,12 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			case 30, 31, 40:
 				d.key = ""
 				continue
+			}
+			// The address has used up its free traffic or downloads. That
+			// is a wait for this route, as long as it is unknown, and the
+			// file goes on through another, or waits here without one.
+			if out.limitsAddress() {
+				return nil, d.host.wait(ctx, config.Keep2ShareAddressLimitWait)
 			}
 			if out.refusesAddress() {
 				return nil, &RefusedError{Err: err}

@@ -529,6 +529,16 @@ Host-specific notes:
   API's answer is an HTTP 406 the route layer counts as a success, so
   nothing else would. On the direct route it is a failure saying so.
 
+  "Traffic limit exceed" and "Download count files exceed" (detail 2 and 1,
+  under errorCode 21 or 42) are the address's free-download limits, not the
+  file's. For one such 6.5 GB file, seven of twelve public proxies answered
+  with the traffic limit, while five and the direct address got tickets. Read
+  as plain failures they ended 375 files of one job. `limitsAddress` now
+  turns them into the route's wait (`Keep2ShareAddressLimitWait`, six hours,
+  since the host says nothing of when the limit lifts). Through a proxy the
+  route is set aside for that long and the file goes on through another; on
+  the direct route it waits in the queue.
+
   With proxy routes, a dozen free downloads can reach a CAPTCHA at once, and
   each reading starts a frozen Python runtime and an ONNX model. Run side by
   side, they took the load past fifty on sixteen cores, each ran past its

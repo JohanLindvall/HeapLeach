@@ -443,6 +443,12 @@ const (
 	// is a Python runtime and an ONNX model that uses every core it can.
 	Keep2ShareOCRConcurrency = 2
 
+	// Keep2ShareAddressLimitWait is how long an address whose free traffic or
+	// download count is used up is left alone. The host does not say when
+	// the limit lifts; this is long enough not to spend a CAPTCHA on such a
+	// route every few minutes, short of the day such limits usually run to.
+	Keep2ShareAddressLimitWait = 6 * time.Hour
+
 	// Keep2ShareInPlaceWait is the longest ticket timer sat out in the
 	// worker. The usual one is half a minute; past this it is the wait
 	// between free downloads, which the file spends back in the queue.

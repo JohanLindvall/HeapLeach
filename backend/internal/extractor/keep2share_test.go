@@ -531,3 +531,37 @@ func isWait(err error) bool {
 	_, ok := errors.AsType[*WaitError](err)
 	return ok
 }
+
+// "Traffic limit exceed" is about the address that asked: through public
+// proxies one file got it from seven while five, and the direct address,
+// got tickets. It is a long wait for that route, not a failure of the file,
+// and other files on the route learn it without solving a CAPTCHA.
+func TestKeep2ShareTakesAnAddressLimitForThatRoutesWait(t *testing.T) {
+	for name, answer := range map[string]string{
+		"traffic": `{"status":"error","code":406,"message":"Download is not available","errorCode":21,"errors":[{"code":2,"message":"Traffic limit exceed"}]}`,
+		"count":   `{"status":"error","code":406,"message":"Download is not available","errorCode":42,"errors":[{"code":1,"message":"Download count files exceed"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var solves atomic.Int32
+			k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+				w.WriteHeader(http.StatusNotAcceptable)
+				_, _ = fmt.Fprint(w, answer)
+			})
+			k.solver = func(context.Context, []byte) ([]string, error) {
+				solves.Add(1)
+				return []string{"aB3dE7"}, nil
+			}
+			_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+			wait, ok := errors.AsType[*WaitError](err)
+			if !ok {
+				t.Fatalf("resolve = %v; want the address's wait, not a failure", err)
+			}
+			if left := time.Until(wait.Until); left < config.Keep2ShareAddressLimitWait-time.Minute || left > config.Keep2ShareAddressLimitWait {
+				t.Errorf("the wait ends in %s, want about %s", left, config.Keep2ShareAddressLimitWait)
+			}
+			if _, err := keep2ShareTestExtract(t, k).Resolve(context.Background()); !isWait(err) || solves.Load() != 1 {
+				t.Errorf("another file on the route: error=%v after %d CAPTCHAs; want the same wait, no new CAPTCHA", err, solves.Load())
+			}
+		})
+	}
+}
