@@ -1753,6 +1753,17 @@ carry, since each address takes its own Keep2Share transfer. Every
 connection buffers up to `WriteBufferSize` (1 MiB) before writing, so 128
 files split eight ways can hold about 1 GiB of buffers at worst.
 
+**Parallel downloads and streams chosen in Settings outlive the process.**
+Every release restarts the service, and each restart put them back to the
+configured values. They are saved with the queue (`savedSettings`), written
+the moment they change rather than at the next save, and taken back by
+`Restore` before `Start`. Each is stored with the configured value it
+overrode, and is kept only while the configuration still says that. A
+configuration changed since is the later word, or a deployment changing it
+would see nothing happen. A queue saved before this has no settings, and the
+configuration stands. A kept concurrency is held under the current ceiling.
+Pause is not kept: resuming stays the user's word, or `HEAPLEACH_RESUME`'s.
+
 **What names a job's folder is `Result.Title` alone.** An extractor that has
 something to admit — a listing cut short by a cap or a rate limit — puts it
 in `Result.Note`, which the job's shown title carries (`Result.Label`) and
@@ -1816,7 +1827,8 @@ must not be added to SSE snapshots. Filtering, sorting and pagination happen
 server-side. Scores use the selector's deterministic mean estimate, not a
 fresh random draw when viewed. Source drafts fetch `/api/settings` separately
 and survive failed saves; source credentials never belong in the list or
-queue snapshots. Runtime settings last for the session, like concurrency.
+queue snapshots. Proxy settings last for the session; parallel downloads and
+streams are kept with the queue (see Configuration).
 
 `styles.css` is a single design system: one accent gradient, one surface
 ramp, one shadow scale, dark and light via `prefers-color-scheme`. Prefer

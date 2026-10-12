@@ -107,7 +107,7 @@ func (m *Manager) ApplySettings(s Settings) error {
 	}
 
 	m.mu.Lock()
-	changed := false
+	changed, kept := false, false
 	if proxyUpdate {
 		changed = enabled != m.proxyEnabled || !slices.Equal(proxyConfig.Endpoints, m.proxyConfig.Endpoints) ||
 			!slices.Equal(proxyConfig.Feeds, m.proxyConfig.Feeds)
@@ -127,10 +127,10 @@ func (m *Manager) ApplySettings(s Settings) error {
 		}
 	}
 	if s.Concurrency != nil && m.limit != *s.Concurrency {
-		m.limit, changed = *s.Concurrency, true
+		m.limit, changed, kept = *s.Concurrency, true, true
 	}
 	if s.Streams != nil && m.streams != *s.Streams {
-		m.streams, changed = *s.Streams, true
+		m.streams, changed, kept = *s.Streams, true, true
 	}
 	if s.SpeedLimit != nil && m.throttle.currentLimit() != *s.SpeedLimit {
 		m.throttle.setLimit(*s.SpeedLimit)
@@ -159,6 +159,12 @@ func (m *Manager) ApplySettings(s Settings) error {
 	if changed {
 		m.markDirty()
 		m.signal()
+	}
+	if kept {
+		// Written now rather than at the next save: these outlive the
+		// process (restoreSettingsLocked), and a crash before the next save
+		// would quietly lose the change.
+		m.persist()
 	}
 	return nil
 }

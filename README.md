@@ -822,7 +822,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 |---|---|---|
 | `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
-| `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers, from 1 to `HEAPLEACH_MAX_CONCURRENCY`. Flag: `-concurrency`. Also settable live in Settings. |
+| `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers, from 1 to `HEAPLEACH_MAX_CONCURRENCY`. Flag: `-concurrency`. Also settable live in Settings, which is kept across restarts until this value is changed. |
 | `HEAPLEACH_MAX_CONCURRENCY` | `128` | Ceiling on parallel transfers, for the startup setting and the Settings slider alike. Flag: `-max-concurrency`. |
 | `HEAPLEACH_PROXIES` | on | Enable proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode. Flag: `-proxy-db`. |
@@ -830,7 +830,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_RETRIES` | `20` | Route changes after failures that make no disk progress. A proxy that cannot be reached, drops the connection or has its address refused does not count. A host's free-download cooldown does not spend this budget. |
 | `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
-| `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI. |
+| `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI, which is kept across restarts until this value is changed. |
 | `HEAPLEACH_SLOW_SPEED` | `2MB` | Rate per second below which extra connections are opened. Flag: `-slow-speed`. |
 | `HEAPLEACH_MAX_SPEED` | `0` | Shared ceiling on the native download rate per second; `0` is unlimited. Does not throttle external helpers. Flag: `-max-speed`. Also settable live in the UI. |
 | `HEAPLEACH_STALL_TIMEOUT` | `90s` | How long a transfer may make no progress before the attempt is retried. Flag: `-stall-timeout`. |

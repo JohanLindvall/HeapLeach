@@ -41,6 +41,7 @@ func (m *Manager) Restore() (unfinished int, err error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.restoreSettingsLocked(st.Settings)
 
 	for _, sj := range st.Jobs {
 		job := &Job{
@@ -98,6 +99,28 @@ func (m *Manager) Restore() (unfinished int, err error) {
 	return unfinished, nil
 }
 
+// restoreSettingsLocked takes back the parallel downloads and streams chosen
+// in the previous run. A restart is not a reason to lose them, and every
+// release restarts the service. Each is kept unless the configuration it
+// would override has been changed since it was chosen: that is the later
+// word, and a deployment that changes it would otherwise see nothing happen.
+// Caller holds mu.
+func (m *Manager) restoreSettingsLocked(s *savedSettings) {
+	if s == nil || m.cfg == nil {
+		return
+	}
+	if s.Concurrency >= 1 && s.ConfiguredConcurrency == m.cfg.Concurrency {
+		m.limit = min(s.Concurrency, m.maxConcurrency())
+	}
+	if s.Streams >= 1 && s.ConfiguredStreams == m.cfg.Streams {
+		m.streams = min(s.Streams, config.MaxStreams)
+	}
+	if m.limit != m.cfg.Concurrency || m.streams != m.cfg.Streams {
+		m.log.Info("kept the settings chosen before the restart", "concurrency", m.limit, "streams", m.streams,
+			"configured_concurrency", m.cfg.Concurrency, "configured_streams", m.cfg.Streams)
+	}
+}
+
 // jobHasWorkLeft reports whether anything about a job is worth doing again.
 //
 // A job that resolved to nothing counts: it never got as far as producing an
@@ -117,6 +140,10 @@ func jobHasWorkLeft(job *Job) bool {
 // stateLocked renders the queue for the state file. Caller holds mu.
 func (m *Manager) stateLocked() *savedState {
 	st := &savedState{Version: stateVersion, Jobs: make([]savedJob, 0, len(m.order))}
+	if m.cfg != nil {
+		st.Settings = &savedSettings{Concurrency: m.limit, Streams: m.streams,
+			ConfiguredConcurrency: m.cfg.Concurrency, ConfiguredStreams: m.cfg.Streams}
+	}
 	for _, id := range m.order {
 		job, ok := m.jobs[id]
 		if !ok {

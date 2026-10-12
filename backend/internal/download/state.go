@@ -72,9 +72,22 @@ const stateVersion = 1
 // an otherwise resumable job, so an unfinished job is resolved afresh
 // instead, and the part files already on disk carry the bytes.
 type savedState struct {
-	Version int        `json:"version"`
-	Jobs    []savedJob `json:"jobs"`
-	Saved   time.Time  `json:"saved"`
+	Version  int            `json:"version"`
+	Settings *savedSettings `json:"settings,omitempty"`
+	Jobs     []savedJob     `json:"jobs"`
+	Saved    time.Time      `json:"saved"`
+}
+
+// savedSettings are the runtime settings kept across a restart: how many
+// files download at once, and how many connections each may use. Each goes
+// with what the configuration said when it was chosen, since a configuration
+// changed after that is the later word (see restoreSettingsLocked). A file
+// from before these were kept has none, and the configuration stands.
+type savedSettings struct {
+	Concurrency           int `json:"concurrency"`
+	Streams               int `json:"streams"`
+	ConfiguredConcurrency int `json:"configuredConcurrency"`
+	ConfiguredStreams     int `json:"configuredStreams"`
 }
 
 type savedJob struct {
@@ -227,6 +240,7 @@ func (st *savedState) fingerprint() uint64 {
 	// Hash every persisted field, with JSON's unambiguous boundaries. Paths,
 	// titles and skip outcomes can change without a status or size changing.
 	// Saved is deliberately excluded: time alone is not a queue change.
+	_ = json.NewEncoder(h).Encode(st.Settings)
 	_ = json.NewEncoder(h).Encode(st.Jobs)
 	return h.Sum64()
 }
