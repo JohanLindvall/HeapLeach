@@ -4,9 +4,9 @@ go 1.27.0
 
 require (
 	github.com/JohanLindvall/proxytron v0.1.2
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.20.1
 	github.com/refraction-networking/utls v1.8.2
-	github.com/yalue/onnxruntime_go v1.25.0
+	github.com/yalue/onnxruntime_go v1.36.0
 	golang.org/x/net v0.61.0
 	golang.org/x/term v0.47.0
 )
