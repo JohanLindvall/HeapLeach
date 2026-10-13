@@ -571,6 +571,24 @@ Host-specific notes:
   API's answer is an HTTP 406 the route layer counts as a success, so
   nothing else would. On the direct route it is a failure saying so.
 
+  Except that a file the site keeps for premium users gets the same bare
+  refusal, from every address. The older API's `getFileStatus` went on
+  calling such files free, while the site's own download dialog said "Free
+  download: unavailable" from the newer API its pages use
+  (`api.k2s.cc/v1/files/<id>`, `isAvailableForFree`). Read as refusals of
+  the addresses, one job of such files spent a CAPTCHA on every route it met
+  and set each aside for an hour, until 59,690 of 62,945 routes were cooling.
+  Three hundred routes, 170 distinct exits and the home address among them,
+  were all refused before any CAPTCHA was asked. In that sample only files
+  under about 500 MB were still free. So `checkFree` asks the newer API before
+  the first CAPTCHA, and again on a bare refusal. A file the site keeps for
+  premium users then fails at once, with no route penalty, and a site that
+  cannot answer leaves the flow as it was. errorCode 43 is that answer in
+  the API's own words. 33 asks for a reCAPTCHA, and is the address's. Asking
+  for a link without a CAPTCHA would tell the two refusals apart more
+  cheaply, but for a free file it is answered "Invalid captcha code", and
+  the site keeps a brute-force ban.
+
   "Traffic limit exceed" and "Download count files exceed" (detail 2 and 1,
   under errorCode 21 or 42) are the address's free-download limits, not the
   file's. For one such 6.5 GB file, seven of twelve public proxies answered
@@ -692,9 +710,20 @@ Host-specific notes:
   (dead, shared, refused, waited, transient, stalled, failed, finished), and
   how many files are moving bytes or still trying. On the dispatcher's tick
   it went quiet exactly when wanted, with files failing routes as fast as
-  they were started. A line per attempt would be twenty a second, and
-  the 1,000-record log buffer would hold under a minute of anything else.
-  A queue that is all dead routes or all refusals says so in one line.
+  they were started. A queue that is all dead routes or all refusals says
+  so in one line.
+
+  Each attempt also says how it ended (`logRouteAttempt`, `route attempt
+  ended`): the route's address without credentials, its exit, the outcome,
+  the cause, and what the file does next (another route, a wait, done or
+  fail). Dead routes and taken exits are logged at debug level, since they
+  can come twenty a second and say nothing about the host. Everything the
+  host answered is logged at info. A file sent on to another route used to
+  be logged as the host asking for a wait until that very moment, which
+  named neither the route nor the cause. `deferWaitLocked` now says that for
+  real waits alone, with their reason. The resolver logs the steps of the
+  free flow: a CAPTCHA served, a wrong reading or a refusal (debug), and a
+  ticket or link granted or a file kept for premium users (info).
 
   The helper prints ranked readings, not one answer. The challenge is six
   letters and digits compared without regard to case, and a wrong answer
@@ -762,7 +791,8 @@ Host-specific notes:
   verdicts were reached wrongly. Epoch 1 forgot a day in which downloads
   could share an exit address, so that the host's refusals of the second
   download were held against routes that were fine, and in which every
-  restart had started the inventory over.
+  restart had started the inventory over. Epoch 2 forgot the refusals that
+  were really files kept for premium users (see above).
 
   **No two downloads share an exit address** (`exit.go`). The address a
   host counts free downloads by is the one a route's requests leave from,

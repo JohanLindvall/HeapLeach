@@ -101,8 +101,11 @@ const (
 	// verdicts already recorded were reached wrongly, so that no route stays
 	// shelved, cooling or favoured on their account. Epoch 1 forgot what was
 	// judged while downloads could share an exit address, and while every
-	// restart started the inventory over.
-	ProxyHealthEpoch = 1
+	// restart started the inventory over. Epoch 2 forgot a day of refusals
+	// that were the files' and not the addresses': files the site offers to
+	// premium users alone, which every address is refused, set aside each
+	// route that was tried on one for an hour.
+	ProxyHealthEpoch = 2
 )
 
 // Tunables shared across packages. They live here rather than next to their
@@ -550,6 +553,11 @@ const (
 	// worker. The usual one is half a minute; past this it is the wait
 	// between free downloads, which the file spends back in the queue.
 	Keep2ShareInPlaceWait = time.Minute
+
+	// Keep2ShareFreeCheck is how long the site's word that a file can be had
+	// free is trusted before it is asked again. A file it offers to premium
+	// users alone fails at once, so only a free one is ever asked twice.
+	Keep2ShareFreeCheck = 10 * time.Minute
 
 	// MaxFolderDepth bounds recursion into nested remote folders.
 	MaxFolderDepth = 8

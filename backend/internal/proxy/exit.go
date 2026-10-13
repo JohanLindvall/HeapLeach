@@ -80,6 +80,14 @@ func (l *Lease) ClaimExit(exit string) bool {
 }
 
 // Claimed reports whether the lease holds its route's exit.
+// Exit is the address the route's requests were seen to leave by, once
+// claimed; empty before then, or when no echo service answered.
+func (l *Lease) Exit() string {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	return l.exit
+}
+
 func (l *Lease) Claimed() bool {
 	l.pool.mu.Lock()
 	defer l.pool.mu.Unlock()

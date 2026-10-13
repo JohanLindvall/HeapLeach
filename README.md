@@ -721,8 +721,9 @@ route before another is tried. Status notes show the connection attempt
 number on retries, separately from the CAPTCHA image count.
 A refused or broken route returns the file to the queue to try another;
 other hosts continue downloading while routes are busy or cooling down.
-Keep2Share and FileBoom require the bundled OCR data, and premium-only
-files remain restricted.
+Keep2Share and FileBoom require the bundled OCR data. A file the site keeps
+for premium users fails at once, saying so, before any CAPTCHA is spent or
+any route is set aside for it.
 
 Every host using HeapLeach's HTTP client can recover through proxies after
 a Cloudflare WAF challenge, including unregistered pages, direct files and

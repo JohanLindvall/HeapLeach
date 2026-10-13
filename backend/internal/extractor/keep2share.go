@@ -28,8 +28,12 @@ type Keep2Share struct {
 	hostSet
 	client *httpx.Client
 	api    string
-	label  string
-	pace   Pace
+	// files is the newer API the site's own pages ask whether a file can be
+	// had free (premiumOnly). The older getFileStatus went on calling files
+	// free that the site offers to premium users alone. Empty asks nothing.
+	files string
+	label string
+	pace  Pace
 	// The production solver uses local OCR. Keeping the image reader apart
 	// lets protocol tests exercise refusals and waits without loading the OCR model.
 	// It returns at least one reading, most likely first, or an error.
@@ -86,6 +90,7 @@ func NewKeep2Share(client *httpx.Client) *Keep2Share {
 		hostSet: hostSet{"k2s.cc", "keep2share.cc"},
 		client:  client.WithTimeout(config.Keep2ShareRequestTimeout),
 		api:     "https://k2s.cc/api/v2",
+		files:   "https://api.k2s.cc/v1/files",
 		label:   "Keep2Share",
 		pace:    keep2SharePace,
 	}
@@ -96,6 +101,7 @@ func NewFileBoom(client *httpx.Client) *Keep2Share {
 		hostSet: hostSet{"fboom.me"},
 		client:  client.WithTimeout(config.Keep2ShareRequestTimeout),
 		api:     "https://fboom.me/api/v2",
+		files:   "https://api.fboom.me/v1/files",
 		label:   "FileBoom",
 		pace:    fileBoomPace,
 	}
@@ -165,8 +171,13 @@ type keep2ShareResponse struct {
 
 func (r *keep2ShareResponse) Error() string {
 	message := util.FirstNonEmpty(r.Message, fmt.Sprintf("API error %d", r.ErrorCode))
-	if r.ErrorCode == 42 && len(r.Errors) == 0 {
+	switch {
+	case r.ErrorCode == 42 && len(r.Errors) == 0:
 		message += ": free downloads are refused from this address"
+	case r.ErrorCode == 33:
+		message += ": this address is asked for a reCAPTCHA, which cannot be read here"
+	case r.ErrorCode == 43:
+		message += ": " + keep2SharePremiumOnly
 	}
 	for _, detail := range r.Errors {
 		if detail.Message != "" {
@@ -214,6 +225,11 @@ func (r *keep2ShareResponse) limitsAddress() bool {
 }
 
 func (r *keep2ShareResponse) refusesAddress() bool {
+	// A reCAPTCHA in place of the image is asked of addresses the host
+	// mistrusts, and another may be given the image.
+	if r.ErrorCode == 33 {
+		return true
+	}
 	if r.ErrorCode != 42 {
 		return false
 	}
@@ -273,6 +289,57 @@ type keep2ShareDownload struct {
 	// ticket timer holds up no other.
 	mu     sync.Mutex
 	routes map[string]*keep2ShareFree
+	// premium is whether the site offers the file to premium users alone,
+	// as it said at checkedAt (checkFree). Guarded by mu.
+	premium   bool
+	checkedAt time.Time
+}
+
+// keep2SharePremiumOnly is what the site's own download dialog says of a file
+// it offers to premium users alone: "Free download: unavailable".
+const keep2SharePremiumOnly = "this file is only for premium users; the site offers no free download of it"
+
+// premiumOnly asks the site whether it offers the file to premium users
+// alone. known is false when no answer could be had, and the free flow then
+// goes on as it did before the question was asked.
+func (k *Keep2Share) premiumOnly(ctx context.Context, id string) (premium, known bool) {
+	if k.files == "" {
+		return false, false
+	}
+	var out struct {
+		Free *bool `json:"isAvailableForFree"`
+	}
+	if err := k.client.GetJSON(ctx, k.files+"/"+url.PathEscape(id)+"?referer=", nil, &out); err != nil || out.Free == nil {
+		extractionLogger(ctx).Debug(k.label+": could not ask whether the file is free", "err", err)
+		return false, false
+	}
+	return !*out.Free, true
+}
+
+// checkFree refuses a file the site offers to premium users alone before a
+// CAPTCHA is spent on it, as the site's own download dialog does. The older
+// API called such files free, and the bare refusal every address then got
+// was taken for a refusal of each address in turn: a CAPTCHA, and an hour
+// set aside, for every route a file was tried on, when nothing could fetch
+// it. The answer is kept for Keep2ShareFreeCheck unless again is set.
+func (d *keep2ShareDownload) checkFree(ctx context.Context, again bool) error {
+	d.mu.Lock()
+	premium, fresh := d.premium, !again && !d.checkedAt.IsZero() && time.Since(d.checkedAt) < config.Keep2ShareFreeCheck
+	d.mu.Unlock()
+	if !fresh {
+		var known bool
+		if premium, known = d.host.premiumOnly(ctx, d.id); !known {
+			return nil
+		}
+		d.mu.Lock()
+		d.premium, d.checkedAt = premium, time.Now()
+		d.mu.Unlock()
+	}
+	if premium {
+		extractionLogger(ctx).Info(d.host.label+": the file is only for premium users", "file", d.name)
+		return d.host.errorf("%s", keep2SharePremiumOnly)
+	}
+	return nil
 }
 
 // keep2ShareFree is one route's free download of a file.
@@ -332,6 +399,12 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 		return &copy, nil
 	}
 
+	log := extractionLogger(ctx).With("file", d.name)
+	if st.key == "" {
+		if err := d.checkFree(ctx, false); err != nil {
+			return nil, err
+		}
+	}
 	var last error
 	var waited time.Duration
 	// The current image's readings not yet submitted. A wrong answer leaves
@@ -394,6 +467,11 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 		if out == nil || out.ErrorCode != 31 {
 			// Anything but a wrong answer spends or outlives the challenge.
 			readings = nil
+		} else if st.key == "" {
+			log.Debug(d.host.label+": CAPTCHA reading was wrong", "attempt", attempts, "readings_left", len(readings))
+		}
+		if err != nil && out != nil && out.ErrorCode != 31 {
+			log.Debug(d.host.label+": host refused the request", "ticket", st.key != "", "code", out.ErrorCode, "err", err)
 		}
 		if err != nil {
 			if out == nil {
@@ -428,6 +506,13 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 				return nil, d.host.wait(ctx, config.Keep2ShareAddressLimitWait)
 			}
 			if out.refusesAddress() {
+				// The bare refusal is also all that a file offered to
+				// premium users alone gets, from every address: ask again.
+				if out.ErrorCode == 42 && len(out.Errors) == 0 {
+					if err := d.checkFree(ctx, true); err != nil {
+						return nil, err
+					}
+				}
 				return nil, &RefusedError{Err: err}
 			}
 			return nil, err
@@ -442,6 +527,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 				st.expires = time.Unix(expiry, 0)
 			}
 			st.target = &Target{URL: out.URL, Name: d.name, Size: d.size, Discard: st.discard(out.URL)}
+			log.Info(d.host.label+": download link granted", "expires", st.expires.Format(time.DateTime))
 			copy := *st.target
 			return &copy, nil
 		}
@@ -450,6 +536,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 		}
 		st.key = out.FreeKey
 		st.ready = time.Now().Add(time.Duration(out.Wait) * time.Second)
+		log.Info(d.host.label+": free download ticket granted", "wait", (time.Duration(out.Wait) * time.Second).String())
 		waits++
 		if waits > config.Keep2ShareWaits {
 			return nil, d.host.errorf("free-download wait did not finish")
@@ -494,6 +581,7 @@ func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (st
 	if captcha.Challenge == "" || captcha.ImageURL == "" {
 		return "", nil, d.host.errorf("CAPTCHA response contains no image or challenge")
 	}
+	extractionLogger(ctx).Debug(d.host.label+": CAPTCHA served", "file", d.name, "attempt", attempt)
 	note("downloading CAPTCHA image")
 	img, err := d.host.captchaImage(ctx, captcha.ImageURL)
 	if err != nil {

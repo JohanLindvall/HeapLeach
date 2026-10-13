@@ -1172,8 +1172,12 @@ func (m *Manager) deferWaitLocked(it *Item, err error, started bool) bool {
 	it.notBefore = wait.Until
 	it.Note = wait.Reason
 	time.AfterFunc(time.Until(wait.Until), m.signal)
-	m.log.Info("host asked for a wait; deferred until then",
-		"item", it.ID, "name", it.Name, "until", wait.Until.Format(time.DateTime))
+	// A file sent on to another route waits for nothing, and its route
+	// attempt has said why (logRouteAttempt).
+	if time.Until(wait.Until) > time.Second {
+		m.log.Info("host asked for a wait; deferred until then",
+			"item", it.ID, "name", it.Name, "until", wait.Until.Format(time.DateTime), "reason", wait.Reason)
+	}
 	return true
 }
 

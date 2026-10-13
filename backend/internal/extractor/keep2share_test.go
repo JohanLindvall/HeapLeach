@@ -137,6 +137,9 @@ func keep2ShareProtocolTestSite(t *testing.T, create func(*httpx.Client) *Keep2S
 	mux.HandleFunc("GET /captcha", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprint(w, "synthetic image, read by the fixture's solver")
 	})
+	mux.HandleFunc("GET /v1/files/test-file", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"id":"test-file","isAvailableForFree":true}`)
+	})
 	mux.HandleFunc("POST /api/v2/getUrl", func(w http.ResponseWriter, r *http.Request) {
 		var in map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -153,8 +156,127 @@ func keep2ShareProtocolTestSite(t *testing.T, create func(*httpx.Client) *Keep2S
 	t.Cleanup(srv.Close)
 	k := create(httpx.New("test-agent", "en-US", 0, time.Second))
 	k.api = srv.URL + "/api/v2"
+	k.files = srv.URL + "/v1/files"
 	k.solver = func(ctx context.Context, raw []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
 	return k
+}
+
+// keep2ShareFreeAnswers has the site answer whether the file can be had free
+// with each of answers in turn, the last one from then on, and counts the
+// questions.
+func keep2ShareFreeAnswers(t *testing.T, k *Keep2Share, answers ...string) *atomic.Int32 {
+	t.Helper()
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := int(asked.Add(1)) - 1
+		_, _ = fmt.Fprint(w, answers[min(n, len(answers)-1)])
+	}))
+	t.Cleanup(srv.Close)
+	k.files = srv.URL
+	return &asked
+}
+
+const (
+	freeFileAnswer    = `{"id":"test-file","isAvailableForFree":true}`
+	premiumFileAnswer = `{"id":"test-file","isAvailableForFree":false}`
+)
+
+// A file the site offers to premium users alone fails at once, as the site's
+// own dialog says, without a CAPTCHA being asked for it: the older API called
+// such files free, and the refusal every address then got was taken for each
+// address in turn, a CAPTCHA and an hour of a route apiece.
+func TestKeep2ShareFailsAPremiumOnlyFileBeforeRequestingACaptcha(t *testing.T) {
+	var calls atomic.Int32
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		calls.Add(1)
+		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://storage.example.test/file"}`)
+	})
+	keep2ShareFreeAnswers(t, k, premiumFileAnswer)
+	_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "only for premium users") {
+		t.Fatalf("error = %v; want the file reported as premium only", err)
+	}
+	if _, refused := errors.AsType[*RefusedError](err); refused {
+		t.Error("a file nothing can fetch free was taken for a refusal of the address")
+	}
+	if _, transient := errors.AsType[*TransientError](err); transient {
+		t.Error("a file nothing can fetch free was taken for a passing failure")
+	}
+	if calls.Load() != 0 {
+		t.Errorf("asked for a free download %d times; want none", calls.Load())
+	}
+}
+
+// The bare refusal is all a file gets once the site keeps it for premium
+// users, from every address, so the site is asked again before the refusal
+// is taken for the address's. Still free, it is the address's.
+func TestKeep2ShareAsksAgainBeforeTakingABareRefusalForTheAddresses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		answers []string
+		premium bool
+	}{
+		{"since kept for premium users", []string{freeFileAnswer, premiumFileAnswer}, true},
+		{"still free", []string{freeFileAnswer}, false},
+		{"no answer to be had", []string{`not json`}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+				w.WriteHeader(http.StatusNotAcceptable)
+				_, _ = fmt.Fprint(w, `{"status":"error","code":406,"message":"Download is not available","errorCode":42}`)
+			})
+			asked := keep2ShareFreeAnswers(t, k, tc.answers...)
+			_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+			_, refused := errors.AsType[*RefusedError](err)
+			if premium := err != nil && strings.Contains(err.Error(), "only for premium users"); premium != tc.premium || refused == tc.premium {
+				t.Fatalf("error = %v (refused %v); want premium only %v", err, refused, tc.premium)
+			}
+			if asked.Load() != 2 {
+				t.Errorf("asked whether the file is free %d times; want before the CAPTCHA and after the refusal", asked.Load())
+			}
+		})
+	}
+}
+
+// The API's own codes for a premium-only file and for an address it wants a
+// reCAPTCHA from: the first is the file's, the second the address's.
+func TestKeep2ShareTellsAPremiumOnlyAnswerFromAReCaptchaDemand(t *testing.T) {
+	for _, tc := range []struct {
+		code    int
+		refused bool
+		want    string
+	}{
+		{43, false, "only for premium users"},
+		{33, true, "reCAPTCHA"},
+	} {
+		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
+			k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+				w.WriteHeader(http.StatusNotAcceptable)
+				_, _ = fmt.Fprintf(w, `{"status":"error","code":406,"message":"Download not available","errorCode":%d}`, tc.code)
+			})
+			_, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+			if _, refused := errors.AsType[*RefusedError](err); refused != tc.refused || err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v (refused %v); want %q, refused %v", err, refused, tc.want, tc.refused)
+			}
+		})
+	}
+}
+
+// A site that cannot say whether the file is free leaves the free flow as it
+// was: the question is a shortcut, never a gate.
+func TestKeep2ShareGoesOnWhenTheSiteCannotSayWhetherAFileIsFree(t *testing.T) {
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://storage.example.test/file"}`)
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	k.files = srv.URL
+	target, err := keep2ShareTestExtract(t, k).Resolve(context.Background())
+	if err != nil || target == nil || target.URL != "https://storage.example.test/file" {
+		t.Fatalf("target = %+v, error = %v; want the link", target, err)
+	}
 }
 
 func keep2ShareTestExtract(t *testing.T, k *Keep2Share) File {

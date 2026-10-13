@@ -46,7 +46,7 @@ func TestKeep2ShareCaptchaRequestUsesItsOwnTimeout(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer route.CloseIdleConnections()
-			k.api = "http://service.example.test/api/v2"
+			k.api, k.files = "http://service.example.test/api/v2", ""
 			k.solver = func(context.Context, []byte) ([]string, error) {
 				t.Error("OCR ran before the CAPTCHA request finished")
 				return nil, nil
@@ -127,7 +127,7 @@ func TestKeep2ShareCaptchaNetworkStallsNameTheStepAndPenaliseTheRoute(t *testing
 			}
 			defer route.CloseIdleConnections()
 			k := NewKeep2Share(client)
-			k.api = "http://service.example.test/api/v2"
+			k.api, k.files = "http://service.example.test/api/v2", ""
 			k.solver = func(context.Context, []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()

@@ -89,7 +89,7 @@ func wordPressTestSite(t *testing.T, pages map[string]string) (*Registry, *Direc
 	reg := NewRegistry(&config.Config{}, client)
 	for _, ex := range reg.extractors {
 		if k, ok := ex.(*Keep2Share); ok {
-			k.api = srv.URL + "/api/" + k.Name()
+			k.api, k.files = srv.URL+"/api/"+k.Name(), ""
 			k.hostSet = hostSet{k.Name() + ".example.test", k.Name() + "-alias.example.test"}
 		}
 	}

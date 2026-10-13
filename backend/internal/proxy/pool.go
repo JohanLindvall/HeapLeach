@@ -317,6 +317,16 @@ func routeID(raw string) string {
 
 func (l *Lease) ID() string { return routeID(l.entry.URL) }
 
+// Address is where the route connects, without any credentials, for logs.
+func (l *Lease) Address() string {
+	u, err := url.Parse(l.entry.URL)
+	if err != nil || u.Host == "" {
+		return l.entry.URL
+	}
+	u.User = nil
+	return u.String()
+}
+
 // Configured checks a reserved replacement again after a live source edit.
 // Existing requests can finish on removed routes; a not-yet-used upgrade
 // should not start a new request there.

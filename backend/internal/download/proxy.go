@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -215,6 +216,8 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		lease, start = upgrade, time.Now()
 	}
 	if ctx.Err() == nil {
+		cause := err
+		defer func() { m.logRouteAttempt(it, lease, cause, err, time.Since(start)) }()
 		m.noteRouteOutcome(it, err)
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 			m.mu.Lock()
@@ -454,6 +457,44 @@ func routeOutcomeKind(err error) string {
 		return "transient"
 	}
 	return "failed"
+}
+
+// logRouteAttempt says how a routed attempt ended and what the file does
+// next: the route and the exit it left by, what the host or the network
+// answered, and whether the file goes on through another route, waits or
+// fails. A dead route, or one whose exit is taken, is the commonest end
+// through a public feed and says nothing about the host, so those are
+// logged at debug level and every answer of the host's at info. A
+// requeue used to be logged as the host asking for a wait until that very
+// moment, which named neither the route nor the reason.
+func (m *Manager) logRouteAttempt(it *Item, lease *proxy.Lease, cause, next error, took time.Duration) {
+	m.mu.Lock()
+	name, attempt, retries, service := it.Name, it.routeAttempts, it.proxyRetries, ""
+	if it.pace != nil {
+		service = it.pace.Group
+	}
+	m.mu.Unlock()
+	outcome := routeOutcomeKind(cause)
+	then := "fail"
+	if next == nil {
+		then = "done"
+	} else if wait, ok := errors.AsType[*extractor.WaitError](next); ok {
+		then = "another route"
+		if time.Until(wait.Until) > time.Second {
+			then = "wait until " + wait.Until.Format(time.DateTime)
+		}
+	}
+	level := slog.LevelInfo
+	if outcome == "dead" || outcome == "shared" {
+		level = slog.LevelDebug
+	}
+	args := []any{"item", it.ID, "name", name, "service", service, "route", lease.Address(), "exit", lease.Exit(),
+		"outcome", outcome, "next", then, "attempt", attempt,
+		"retries", fmt.Sprintf("%d/%d", retries, m.cfg.ProxyRetries), "took", took.Round(100 * time.Millisecond)}
+	if cause != nil {
+		args = append(args, "cause", cause.Error())
+	}
+	m.log.Log(context.Background(), level, "route attempt ended", args...)
 }
 
 // noteRouteOutcome counts how a routed attempt for it ended.
