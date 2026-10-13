@@ -118,10 +118,11 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	}
 	m.mu.Unlock()
 
-	part := filepath.Join(dir, name+"."+partSuffix(source)+".part")
+	parts := partNames(name, source, it.ID)
+	part := filepath.Join(dir, parts[0])
 	release, ok := m.claimPart(part)
 	if !ok {
-		part = filepath.Join(dir, name+"."+it.ID+".part")
+		part = filepath.Join(dir, parts[1])
 		if release, ok = m.claimPart(part); !ok {
 			return fmt.Errorf("part file %s is already in use", part)
 		}

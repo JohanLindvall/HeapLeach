@@ -398,6 +398,19 @@ row changes once a minute, not every frame. Sleeping in the resolver was
 how a Keep2Share file read "Downloading" for an hour in which nothing moved,
 while holding a worker the rest of the queue could have used.
 
+A route that failed a file is deferred the same way, and says as little about
+the file. So a file whose part file holds bytes (`startedOnDisk`, statted by
+`runItem` outside `mu` through `os.Root`) goes back at the front of the queue,
+not the back, and the next route that frees up finishes what is started. At
+the back, one 184 MB into a 2.9 GB transfer waited behind 270 others for each
+new route: twenty-two tries in its first hour, none on a route that worked.
+The part file is the evidence because nothing else is: a job re-read after a
+restart has items that have never reached the transfer, as that one had not.
+`partNames` names the part files for both, so they cannot drift apart. It
+cannot spin: `nextLocked` leases a route before starting an item, and passes
+over one it cannot. Stalls still go to the back, on purpose (see
+`deferStalledLocked`).
+
 The `Direct` fallback checks ordinary HTML pages for every registered host's
 links before using a generic embedded player. `filelinks.go` shares the
 `links:` harvester's bounded expansion, but never follows links assigned to

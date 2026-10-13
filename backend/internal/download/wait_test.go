@@ -27,7 +27,7 @@ func TestAHostsWaitReturnsTheItemToTheQueueUntilItIsOver(t *testing.T) {
 	}
 
 	m.mu.Lock()
-	deferred := m.deferWaitLocked(it, fmt.Errorf("resolve: %w", wait))
+	deferred := m.deferWaitLocked(it, fmt.Errorf("resolve: %w", wait), false)
 	status, note := it.Status, m.itemNoteLocked(it)
 	early := m.nextLocked()
 	m.mu.Unlock()
@@ -59,10 +59,10 @@ func TestAHostsWaitReturnsTheItemToTheQueueUntilItIsOver(t *testing.T) {
 	pending := &Item{ID: newID(), Status: StatusRunning, retryPending: true}
 	other := &Item{ID: newID(), Status: StatusRunning}
 	m.mu.Lock()
-	if m.deferWaitLocked(pending, wait) {
+	if m.deferWaitLocked(pending, wait, false) {
 		t.Error("a pending user retry was overridden by the host's wait")
 	}
-	if m.deferWaitLocked(other, io.ErrUnexpectedEOF) {
+	if m.deferWaitLocked(other, io.ErrUnexpectedEOF, false) {
 		t.Error("an ordinary failure was deferred as though the host had asked for a wait")
 	}
 	m.mu.Unlock()

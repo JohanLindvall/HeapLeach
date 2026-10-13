@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -189,6 +190,36 @@ func newID() string {
 func partSuffix(sourceURL string) string {
 	sum := sha256.Sum256([]byte(sourceURL))
 	return hex.EncodeToString(sum[:8])
+}
+
+// partNames are the part files a transfer of name may write: the one keyed
+// on the job's source, which a later run finds again, then the item's own,
+// for a transfer that found the first already taken (see claimPart).
+func partNames(name, source, id string) [2]string {
+	return [2]string{name + "." + partSuffix(source) + ".part", name + "." + id + ".part"}
+}
+
+// startedOnDisk reports whether an item's part file already holds bytes,
+// fetched by this run or an earlier one. It touches the disk, so the caller
+// holds nothing.
+func (m *Manager) startedOnDisk(it *Item) bool {
+	m.mu.Lock()
+	name, rel, id, source := SafeName(it.Name), it.Dir, it.ID, it.URL
+	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
+		source = job.Source
+	}
+	m.mu.Unlock()
+	root, err := os.OpenRoot(m.DownloadDir())
+	if err != nil {
+		return false
+	}
+	defer root.Close()
+	for _, part := range partNames(name, source, id) {
+		if info, err := root.Stat(filepath.Join(".", rel, part)); err == nil && info.Size() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // claimPart reserves a part path for the caller. The second return value

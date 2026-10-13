@@ -683,6 +683,11 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	defer cancel()
 
 	err := m.transferRouted(ctx, it)
+	// Read here, outside mu, for the one outcome that uses it.
+	var started bool
+	if _, wait := errors.AsType[*extractor.WaitError](err); wait && ctx.Err() == nil {
+		started = m.startedOnDisk(it)
+	}
 
 	m.mu.Lock()
 	it.finishedAt = time.Now()
@@ -717,7 +722,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		// Its host is full and the item has gone back to the queue; the
 		// dispatcher will pick it up when that host has room. Not a
 		// failure, and nothing more to record here.
-	case m.deferWaitLocked(it, err):
+	case m.deferWaitLocked(it, err, started):
 		// Its host named a time to come back, and the item is back in the
 		// queue until then — see deferWaitLocked.
 	case m.deferStalledLocked(it, err):
@@ -1089,7 +1094,15 @@ func (m *Manager) deferHostQueuedLocked(it *Item, err error) bool {
 // the time comes, and a timer wakes the dispatcher then, since nothing else
 // might. Like a full host, this is not an attempt that failed, so it costs
 // the item nothing.
-func (m *Manager) deferWaitLocked(it *Item, err error) bool {
+//
+// A route that failed a file says nothing about the file either, and goes the
+// same way. A file that has bytes on disk (started) keeps its place at the
+// front, so the next route that frees up finishes what is started before it
+// starts anything new. At the back, a file 184 MB into a 2.9 GB transfer
+// waited behind 270 others for each new route: twenty-two tries in an hour,
+// none of them on a route that worked. The dispatcher still leases a route
+// before starting it, so a file at the front cannot spin while none is free.
+func (m *Manager) deferWaitLocked(it *Item, err error, started bool) bool {
 	wait, ok := errors.AsType[*extractor.WaitError](err)
 	if !ok || it.retryPending {
 		return false
@@ -1100,6 +1113,9 @@ func (m *Manager) deferWaitLocked(it *Item, err error) bool {
 		wait = &extractor.WaitError{Until: time.Now(), Reason: "Waiting for an available download route"}
 	}
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
+	if n := len(m.queue); started && n > 0 && m.queue[n-1] == it {
+		m.queue = slices.Insert(m.queue[:n-1], 0, it)
+	}
 	it.notBefore = wait.Until
 	it.Note = wait.Reason
 	time.AfterFunc(time.Until(wait.Until), m.signal)
