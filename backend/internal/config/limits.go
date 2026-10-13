@@ -66,7 +66,7 @@ const (
 	// a setting (HEAPLEACH_MAX_CONCURRENCY, -max-concurrency): with proxy
 	// routes each address carries its own Keep2Share transfer, so a pool of
 	// addresses can use far more than one host could stand.
-	DefaultMaxConcurrency = 128
+	DefaultMaxConcurrency = 256
 
 	// DefaultMinFreeDisk is how much room must be left at the destination
 	// before another transfer starts. A bulk downloader fills a disk faster

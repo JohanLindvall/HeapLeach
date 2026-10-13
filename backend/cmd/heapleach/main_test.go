@@ -11,8 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // The download directory can arrive three ways. The most explicit wins:
@@ -188,7 +191,7 @@ func TestRejectsBadInput(t *testing.T) {
 		want string
 	}{
 		{"two directories", []string{dir, t.TempDir()}, "at most one"},
-		{"concurrency too high", []string{"-concurrency", "129", dir}, "between 1 and"},
+		{"concurrency too high", []string{"-concurrency", strconv.Itoa(config.DefaultMaxConcurrency + 1), dir}, "between 1 and"},
 		{"over a lowered ceiling", []string{"-max-concurrency", "8", "-concurrency", "9", dir}, "between 1 and 8"},
 		{"concurrency zero", []string{"-concurrency", "0", dir}, "between 1 and"},
 		{"negative retries", []string{"-retries", "-1", dir}, "negative"},

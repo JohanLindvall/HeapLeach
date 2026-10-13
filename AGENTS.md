@@ -1775,14 +1775,14 @@ constant. Zero means the default, and there is no "unlimited": every file of
 a job is also a row in the UI and a line in the saved queue.
 
 **So is the ceiling on parallel transfers** (`HEAPLEACH_MAX_CONCURRENCY`,
-`-max-concurrency`, default `config.DefaultMaxConcurrency`, 128; zero means
+`-max-concurrency`, default `config.DefaultMaxConcurrency`, 256; zero means
 the default). It bounds the startup concurrency and the live setting, and
 reaches the Settings slider as the snapshot's `maxConcurrency`, through
 `Manager.maxConcurrency`, which also gives a config-less test manager the
 default. It was a fixed 32. Proxy routes changed what one process can
 carry, since each address takes its own Keep2Share transfer. Every
-connection buffers up to `WriteBufferSize` (1 MiB) before writing, so 128
-files split eight ways can hold about 1 GiB of buffers at worst.
+connection buffers up to `WriteBufferSize` (1 MiB) before writing, so 256
+files split eight ways can hold about 2 GiB of buffers at worst.
 
 **Parallel downloads and streams chosen in Settings outlive the process.**
 Every release restarts the service, and each restart put them back to the
