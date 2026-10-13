@@ -35,9 +35,8 @@ func TestProxyZeroByteStallsPenaliseTheRouteAndRetry(t *testing.T) {
 			m.cfg.StallTimeout = 90 * time.Millisecond
 			m.cfg.MaxRetries = 0
 			// Connection setup and headers have their own request deadline;
-			// the stall watchdog covers the streaming body after that. The
-			// deadline also binds the retry through the working proxy, which
-			// a loaded CI runner once failed to connect to within 90 ms.
+			// the stall watchdog covers the streaming body after that. Short,
+			// so that the stalled-before-headers case trips quickly.
 			m.client = httpx.New("test", "en", 0, 400*time.Millisecond).Streaming()
 			payload := []byte("synthetic file bytes")
 			key := []byte("0123456789abcdef")
@@ -113,7 +112,15 @@ func TestProxyZeroByteStallsPenaliseTheRouteAndRetry(t *testing.T) {
 			if it.route == nil || it.route.ID() == row.ID {
 				t.Fatal("a stalled proxy was selected again despite an available alternative")
 			}
-			if err := m.transferRouted(ctx, it); err != nil {
+			// The retry is about routing, not stall detection, so it gets a
+			// watchdog and a deadline of its own. A playlist's watchdog starts
+			// before its connection does, and a CI runner busy with every
+			// package's race tests has taken longer than 90 ms to get the
+			// working proxy's first byte: twice, in the two playlist cases.
+			m.cfg.StallTimeout = 5 * time.Second
+			retry, cancelRetry := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelRetry()
+			if err := m.transferRouted(retry, it); err != nil {
 				t.Fatalf("retry through the working proxy: %v", err)
 			}
 			got, err := os.ReadFile(filepath.Join(m.DownloadDir(), it.Name))
