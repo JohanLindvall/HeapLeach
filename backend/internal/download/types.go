@@ -79,10 +79,12 @@ type Item struct {
 	// extraBytes counts the part of downloaded that came through extra
 	// streams on routes of their own, and routeExtras how many such streams
 	// are running (multiroute.go). Neither belongs to the item's own route.
-	extraBytes    atomic.Int64
-	routeExtras   atomic.Int32
-	resolve       func(context.Context) (*extractor.Target, error)
-	refresh       func(context.Context) (*extractor.Target, error)
+	extraBytes  atomic.Int64
+	routeExtras atomic.Int32
+	resolve     func(context.Context) (*extractor.Target, error)
+	refresh     func(context.Context) (*extractor.Target, error)
+	// check is extractor.File.Check, asked before a route is spent.
+	check         func(context.Context) error
 	proxyFallback bool
 	// discard is the last resolved target's Discard: set for a link bound
 	// to the address that obtained it.

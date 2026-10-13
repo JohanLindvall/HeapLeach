@@ -144,7 +144,7 @@ func (c *Client) do(req *http.Request) (resp *http.Response, err error) {
 			}
 		}
 	}()
-	if route, ok := req.Context().Value(routeContextKey{}).(*requestRoute); ok {
+	if route, ok := req.Context().Value(routeContextKey{}).(*requestRoute); ok && route != nil {
 		return route.do(c, req)
 	}
 	return c.doDirect(req)

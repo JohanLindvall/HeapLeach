@@ -590,3 +590,34 @@ func TestARefusedTunnelKeepsItsStatus(t *testing.T) {
 		})
 	}
 }
+
+// A question whose answer does not depend on the address asking goes over the
+// caller's own connection, whatever route its context carries.
+func TestWithoutRouteGoesOverTheCallersOwnConnection(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "direct")
+	}))
+	defer origin.Close()
+	var proxied atomic.Int32
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied.Add(1)
+		io.WriteString(w, "proxied")
+	}))
+	defer relay.Close()
+	base := New("test-agent", "en-US", 0, 5*time.Second)
+	route, err := base.ThroughProxy(relay.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithRoute(context.Background(), "route-1", route, nil)
+	if got, err := base.GetString(ctx, origin.URL, nil); err != nil || got != "proxied" {
+		t.Fatalf("through the route: %q, %v", got, err)
+	}
+	direct := WithoutRoute(ctx)
+	if got, err := base.GetString(direct, origin.URL, nil); err != nil || got != "direct" {
+		t.Fatalf("without it: %q, %v; want the caller's own connection", got, err)
+	}
+	if RouteID(direct) != "" || proxied.Load() != 1 {
+		t.Fatalf("route %q, proxied %d times; want none and once", RouteID(direct), proxied.Load())
+	}
+}

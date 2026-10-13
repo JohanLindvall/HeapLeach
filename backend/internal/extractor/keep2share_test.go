@@ -262,6 +262,37 @@ func TestKeep2ShareTellsAPremiumOnlyAnswerFromAReCaptchaDemand(t *testing.T) {
 	}
 }
 
+// The same question is the file's Check, which the downloader asks before it
+// spends a route on the file, over its own connection: through a failing
+// proxy the answer did not come, and the CAPTCHA was spent before the
+// refusal. A route in the context is passed by.
+func TestKeep2ShareChecksAFileOverTheCallersOwnConnection(t *testing.T) {
+	for _, tc := range []struct {
+		answer  string
+		premium bool
+	}{{premiumFileAnswer, true}, {freeFileAnswer, false}} {
+		k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+			t.Error("asked for a download link while checking the file")
+		})
+		asked := keep2ShareFreeAnswers(t, k, tc.answer)
+		f := keep2ShareTestExtract(t, k)
+		if f.Check == nil {
+			t.Fatal("no check offered for the file")
+		}
+		dead, err := httpx.New("test-agent", "en-US", 0, time.Second).ThroughProxy("http://127.0.0.1:1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = f.Check(httpx.WithRoute(context.Background(), "dead", dead, nil))
+		if got := err != nil && strings.Contains(err.Error(), "only for premium users"); got != tc.premium || (err != nil && !tc.premium) {
+			t.Fatalf("check = %v; want premium only %v", err, tc.premium)
+		}
+		if asked.Load() != 1 {
+			t.Fatalf("asked %d times; want once, past the route", asked.Load())
+		}
+	}
+}
+
 // A site that cannot say whether the file is free leaves the free flow as it
 // was: the question is a shortcut, never a gate.
 func TestKeep2ShareGoesOnWhenTheSiteCannotSayWhetherAFileIsFree(t *testing.T) {

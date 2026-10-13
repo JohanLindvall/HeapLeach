@@ -483,6 +483,7 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		Status:        StatusQueued,
 		resolve:       f.Resolve,
 		refresh:       f.Refresh,
+		check:         f.Check,
 		proxyFallback: f.ProxyFallback,
 		cipher:        f.Cipher,
 		pace:          f.Pace,

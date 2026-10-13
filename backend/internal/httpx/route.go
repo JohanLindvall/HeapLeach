@@ -126,8 +126,15 @@ func WithRouteAgent(ctx context.Context, id string, client *Client, observe func
 	return context.WithValue(ctx, routeContextKey{}, &requestRoute{id: id, client: client, observe: observe, agent: agent})
 }
 
+// WithoutRoute is ctx with its route taken off, for a question whose answer
+// does not depend on the address asking: the caller's own connection then
+// carries it, rather than a proxy that may be failing.
+func WithoutRoute(ctx context.Context) context.Context {
+	return context.WithValue(ctx, routeContextKey{}, (*requestRoute)(nil))
+}
+
 func RouteID(ctx context.Context) string {
-	if route, ok := ctx.Value(routeContextKey{}).(*requestRoute); ok {
+	if route, ok := ctx.Value(routeContextKey{}).(*requestRoute); ok && route != nil {
 		return route.id
 	}
 	return ""

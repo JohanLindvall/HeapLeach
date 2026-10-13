@@ -173,6 +173,15 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		}
 		return err
 	}
+	if it.check != nil {
+		// A question about the file, over this machine's own connection,
+		// before the route is used: a file the host will not let anyone
+		// have fails here, at no cost to the route.
+		if err := it.check(ctx); err != nil {
+			lease.Release()
+			return err
+		}
+	}
 	start := time.Now()
 	var err error
 	for {
@@ -219,7 +228,6 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	}
 	if ctx.Err() == nil {
 		cause := err
-		defer func() { m.logRouteAttempt(it, lease, cause, err, time.Since(start)) }()
 		m.noteRouteOutcome(it, err)
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 			m.mu.Lock()
@@ -278,6 +286,8 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			}
 			m.mu.Unlock()
 		}
+		// Before the lease goes: releasing it gives up the exit this names.
+		m.logRouteAttempt(it, lease, cause, err, time.Since(start))
 	}
 	lease.Release()
 	// runItem clears the route together with its dispatch accounting.

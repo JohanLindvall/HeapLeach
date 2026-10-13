@@ -393,6 +393,12 @@ The important subtlety is `File.Resolve`:
   is untouched: it reads names and sizes off the cards and never opens a
   file page.
 
+`File.Check` asks about the file itself before the downloader spends a
+route on it, over the caller's own connection (`transferRouted`, ahead of
+the exit probe). An error fails the file; a question that cannot be answered
+returns nil and leaves the deciding to `Resolve`. Keep2Share asks there
+whether the site still offers the file free.
+
 `File.Cipher` is the other addition to the contract: a host that serves
 ciphertext sets it, and the downloader decrypts on the way to disk. Only
 mega does today, and see the download-manager section for why the mode
@@ -580,10 +586,16 @@ Host-specific notes:
   and set each aside for an hour, until 59,690 of 62,945 routes were cooling.
   Three hundred routes, 170 distinct exits and the home address among them,
   were all refused before any CAPTCHA was asked. In that sample only files
-  under about 500 MB were still free. So `checkFree` asks the newer API before
-  the first CAPTCHA, and again on a bare refusal. A file the site keeps for
-  premium users then fails at once, with no route penalty, and a site that
-  cannot answer leaves the flow as it was. errorCode 43 is that answer in
+  under about 500 MB were still free. So `checkFree` asks the newer API, as
+  the file's `File.Check` before any route is used and again on a bare
+  refusal. A file the site keeps for premium users then fails at once, with
+  no route penalty, and a site that cannot answer leaves the flow as it was.
+  The question goes over this machine's own connection
+  (`httpx.WithoutRoute`), since the answer is the same whoever asks. Asked
+  through a route, it timed out on a failing proxy and a CAPTCHA was spent
+  before the refusal came. And before the check moved ahead of the route,
+  each such file first met the dead routes a feed is full of, five seconds
+  apiece, one file at a time. errorCode 43 is that answer in
   the API's own words. 33 asks for a reCAPTCHA, and is the address's. Asking
   for a link without a CAPTCHA would tell the two refusals apart more
   cheaply, but for a free file it is answered "Invalid captcha code", and

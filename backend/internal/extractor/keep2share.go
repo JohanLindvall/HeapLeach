@@ -140,7 +140,7 @@ func (k *Keep2Share) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	}
 	download := &keep2ShareDownload{host: k, id: id, name: info.Name, size: size}
 	return &Result{Title: info.Name, Files: []File{{
-		Name: info.Name, Size: size, Pace: &k.pace, Resolve: download.resolve,
+		Name: info.Name, Size: size, Pace: &k.pace, Resolve: download.resolve, Check: download.check,
 	}}}, nil
 }
 
@@ -295,6 +295,11 @@ type keep2ShareDownload struct {
 	checkedAt time.Time
 }
 
+// check is File.Check: it refuses a file kept for premium users before the
+// downloader spends a route on it. Through routes, each such file first met
+// the dead ones a public feed is full of, five seconds apiece.
+func (d *keep2ShareDownload) check(ctx context.Context) error { return d.checkFree(ctx, false) }
+
 // keep2SharePremiumOnly is what the site's own download dialog says of a file
 // it offers to premium users alone: "Free download: unavailable".
 const keep2SharePremiumOnly = "this file is only for premium users; the site offers no free download of it"
@@ -309,7 +314,10 @@ func (k *Keep2Share) premiumOnly(ctx context.Context, id string) (premium, known
 	var out struct {
 		Free *bool `json:"isAvailableForFree"`
 	}
-	if err := k.client.GetJSON(ctx, k.files+"/"+url.PathEscape(id)+"?referer=", nil, &out); err != nil || out.Free == nil {
+	// The answer is the file's, whoever asks, so it goes over the caller's
+	// own connection rather than through a proxy that may be failing: through
+	// one, it timed out and the CAPTCHA was spent before the refusal came.
+	if err := k.client.GetJSON(httpx.WithoutRoute(ctx), k.files+"/"+url.PathEscape(id)+"?referer=", nil, &out); err != nil || out.Free == nil {
 		extractionLogger(ctx).Debug(k.label+": could not ask whether the file is free", "err", err)
 		return false, false
 	}

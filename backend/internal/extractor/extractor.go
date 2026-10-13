@@ -75,6 +75,11 @@ type File struct {
 	// its media. The registry supplies it for challenge recovery; ordinary
 	// attempts keep the host's cheaper Resolve path.
 	Refresh func(ctx context.Context) (*Target, error)
+	// Check, when set, asks about the file itself before a route is spent
+	// on it, over the caller's own connection: whether the host still offers
+	// it free, say. An error fails the file; a question that cannot be
+	// answered must return nil, and leave the deciding to Resolve.
+	Check func(ctx context.Context) error
 	// ProxyFallback opts this file into proxy recovery after a temporary
 	// failure on the normal connection. Permanent file errors still fail.
 	ProxyFallback bool

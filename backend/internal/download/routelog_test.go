@@ -62,9 +62,22 @@ func TestARoutedAttemptLogsHowItEndedAndWhatComesNext(t *testing.T) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		io.WriteString(w, "file")
 	}
-	a := proxyServer(t, "127.0.0.2", handler)
-	b := proxyServer(t, "127.0.0.3", handler)
+	a := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "echo.example.test" {
+			io.WriteString(w, "203.0.113.2")
+			return
+		}
+		handler(w, r)
+	})
+	b := proxyServer(t, "127.0.0.3", func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "echo.example.test" {
+			io.WriteString(w, "203.0.113.3")
+			return
+		}
+		handler(w, r)
+	})
 	attachPool(t, m, []string{a.URL, b.URL})
+	m.cfg.ProxyExitProbes = []string{"http://echo.example.test/"}
 	var attempts atomic.Int32
 	job := addProxyFiles(m, 1, func(ctx context.Context) (*extractor.Target, error) {
 		if attempts.Add(1) == 1 {
@@ -81,7 +94,7 @@ func TestARoutedAttemptLogsHowItEndedAndWhatComesNext(t *testing.T) {
 	})
 	out := logs.String()
 	refused := lineWith(out, `msg="route attempt ended"`, "outcome=refused")
-	for _, want := range []string{`next="another route"`, "route=http://127.0.0.", "refused from this address", "attempt=1"} {
+	for _, want := range []string{`next="another route"`, "route=http://127.0.0.", "exit=203.0.113.", "refused from this address", "attempt=1"} {
 		if !strings.Contains(refused, want) {
 			t.Errorf("refused attempt logged as %q; want %s in it", refused, want)
 		}
@@ -111,5 +124,50 @@ func TestOnlyARealWaitIsLoggedAsTheHostsWait(t *testing.T) {
 	}
 	if line := lineWith(out, "host asked for a wait", "item="+job.Items[1].ID); line != "" {
 		t.Errorf("a requeue waiting for nothing was logged as %q", line)
+	}
+}
+
+// A file's own check is asked before any route work, over this machine's own
+// connection, and a file it refuses fails without its resolver running or a
+// route being asked anything.
+func TestAFilesCheckIsAskedBeforeItsRouteIsUsed(t *testing.T) {
+	m := busyManager(t)
+	var echoed atomic.Int32
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "echo.example.test" {
+			echoed.Add(1)
+			io.WriteString(w, "203.0.113.2")
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		io.WriteString(w, "file")
+	}
+	attachPool(t, m, []string{proxyServer(t, "127.0.0.2", handler).URL})
+	m.cfg.ProxyExitProbes = []string{"http://echo.example.test/"}
+	var resolved atomic.Int32
+	job := addProxyFiles(m, 2, func(ctx context.Context) (*extractor.Target, error) {
+		resolved.Add(1)
+		return &extractor.Target{URL: "http://storage.example.test/file", Size: 4}, nil
+	})
+	m.mu.Lock()
+	job.Items[0].check = func(context.Context) error { return errors.New("service: this file is only for premium users") }
+	job.Items[1].check = func(context.Context) error { return nil }
+	m.mu.Unlock()
+	m.Start()
+	m.signal()
+	waitFor(t, 10*time.Second, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return job.Items[0].Status.Terminal() && job.Items[1].Status.Terminal()
+	})
+	m.mu.Lock()
+	first, second, err := job.Items[0].Status, job.Items[1].Status, job.Items[0].Err
+	m.mu.Unlock()
+	if first != StatusFailed || !strings.Contains(err, "only for premium users") {
+		t.Fatalf("refused by its check: %s, %q", first, err)
+	}
+	if second != StatusDone || resolved.Load() != 1 || echoed.Load() != 1 {
+		t.Fatalf("passed by its check: %s, resolved %d, routes asked %d; want only it resolved and its route asked",
+			second, resolved.Load(), echoed.Load())
 	}
 }
