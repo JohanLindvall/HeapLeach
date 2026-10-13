@@ -102,7 +102,9 @@ itself (`workflow_dispatch`, which CI's release job accepts as it does a
 push). That run releases it. Only Dependabot's own pull requests are merged,
 only at the commit CI passed, and nothing from them is checked out or run
 with that token. Each merge is a release and a restart, which is why the
-updates come as one a week rather than one per module.
+updates come as one a week rather than one per module. `onnxruntime_go` is
+left out: it must match the native runtime that `helpers/captcha/install.sh`
+pins, so the two move together by hand.
 
 `make tag V=v1.2.3` still writes and pushes an explicit annotated tag;
 the release workflow also fires on `v*`. Native runners build the five

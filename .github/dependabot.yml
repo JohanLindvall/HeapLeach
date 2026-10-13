@@ -17,3 +17,9 @@ updates:
     groups:
       go-modules:
         patterns: ["*"]
+    # The binding asks the native runtime for a version of its API, and
+    # helpers/captcha/install.sh pins that runtime: they move together, by
+    # hand. v1.36 asked the pinned 1.23.2 for an API it does not have, and
+    # failed every platform's CAPTCHA tests.
+    ignore:
+      - dependency-name: github.com/yalue/onnxruntime_go
