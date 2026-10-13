@@ -119,6 +119,14 @@ func (m *Manager) restoreSettingsLocked(s *savedSettings) {
 		m.log.Info("kept the settings chosen before the restart", "concurrency", m.limit, "streams", m.streams,
 			"configured_concurrency", m.cfg.Concurrency, "configured_streams", m.cfg.Streams)
 	}
+	if len(s.Groups) > 0 {
+		if err := checkGroupLimits(s.Groups, m.maxConcurrency()); err != nil {
+			m.log.Warn("dropped the transfer groups' saved limits", "err", err)
+		} else {
+			m.groupLimits = cloneGroupLimits(s.Groups)
+			m.log.Info("kept the transfer groups' limits", "groups", len(m.groupLimits))
+		}
+	}
 }
 
 // jobHasWorkLeft reports whether anything about a job is worth doing again.
@@ -143,6 +151,9 @@ func (m *Manager) stateLocked() *savedState {
 	if m.cfg != nil {
 		st.Settings = &savedSettings{Concurrency: m.limit, Streams: m.streams,
 			ConfiguredConcurrency: m.cfg.Concurrency, ConfiguredStreams: m.cfg.Streams}
+		if len(m.groupLimits) > 0 {
+			st.Settings.Groups = cloneGroupLimits(m.groupLimits)
+		}
 	}
 	for _, id := range m.order {
 		job, ok := m.jobs[id]

@@ -133,6 +133,9 @@ type Item struct {
 	// resolver may point the item at a different host mid-flight and the
 	// release must match the reservation.
 	hostKey string
+	// groupKey is the transfer group the item was counted against while it
+	// runs (groupOfLocked), released with it.
+	groupKey string
 	// overloadWaits counts the turns this item has been sent away from an
 	// overloaded host. It lives on the item rather than in the transfer
 	// because the waiting happens in the queue: the item loses its slot
@@ -323,6 +326,11 @@ type Snapshot struct {
 	// out of Queued: a queue that is not going to move by itself should not
 	// read as one about to.
 	Held int `json:"held"`
+	// GroupLimits are the transfer groups' own limits, and Groups the groups
+	// the queue has files of still to download or a limit for: what the
+	// settings panel offers to limit.
+	GroupLimits map[string]GroupLimit `json:"groupLimits,omitempty"`
+	Groups      []string              `json:"groups,omitempty"`
 	// Version is the server's build. The browser shows it, and a version
 	// that changes under an open tab is a server replaced by a deploy while
 	// the page goes on running the interface it was loaded with.

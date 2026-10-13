@@ -47,6 +47,10 @@ type Manager struct {
 	// routeWanted remembers, per service, whether a file of it was due to
 	// start and not running when last asked; see multiroute.go.
 	routeWanted map[string]routeWant
+	// groupLimits lowers the queue's limits for transfer groups, and
+	// groupActive counts each group's transfers running (groups.go).
+	groupLimits map[string]GroupLimit
+	groupActive map[string]int
 	// routeOutcomes counts how routed attempts ended since routeSummaryAt;
 	// dispatch logs and clears them once a minute (routeSummaryLocked).
 	routeOutcomes  map[routeOutcome]int
@@ -547,6 +551,11 @@ func (m *Manager) dispatch() {
 			// spans exactly the worker's ownership of the item.
 			it.hostKey = m.hostKeyLocked(it)
 			m.hostActive[it.hostKey]++
+			it.groupKey = m.groupOfLocked(it)
+			if m.groupActive == nil {
+				m.groupActive = make(map[string]int)
+			}
+			m.groupActive[it.groupKey]++
 			if it.route != nil {
 				m.proxyRunning[it.pace.Group]++
 			}
@@ -602,7 +611,7 @@ func (m *Manager) nextLocked() *Item {
 	unavailableRoutes := make(map[routeGroup]bool)
 	for len(m.queue) > 0 {
 		it := m.queue[0]
-		if it.Status == StatusQueued && !it.inFlight && (it.notBefore.After(now) || m.hostFullLocked(it) || !m.leaseRouteLocked(it, unavailableRoutes)) {
+		if it.Status == StatusQueued && !it.inFlight && (it.notBefore.After(now) || m.hostFullLocked(it) || m.groupHeldLocked(it) || !m.leaseRouteLocked(it, unavailableRoutes)) {
 			break
 		}
 		m.queue[0] = nil
@@ -620,7 +629,7 @@ func (m *Manager) nextLocked() *Item {
 			kept = append(kept, it)
 		case it.Status != StatusQueued || it.inFlight:
 			// Cancelled where it stood, or still owned: forget it.
-		case it.notBefore.After(now), m.hostFullLocked(it), !m.leaseRouteLocked(it, unavailableRoutes):
+		case it.notBefore.After(now), m.hostFullLocked(it), m.groupHeldLocked(it), !m.leaseRouteLocked(it, unavailableRoutes):
 			kept = append(kept, it)
 		default:
 			chosen = it
@@ -788,6 +797,10 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		delete(m.hostActive, it.hostKey)
 	}
 	it.hostKey = ""
+	if m.groupActive[it.groupKey]--; m.groupActive[it.groupKey] <= 0 {
+		delete(m.groupActive, it.groupKey)
+	}
+	it.groupKey = ""
 	m.mu.Unlock()
 
 	m.markDirty()

@@ -1974,6 +1974,24 @@ would see nothing happen. A queue saved before this has no settings, and the
 configuration stands. A kept concurrency is held under the current ceiling.
 Pause is not kept: resuming stays the user's word, or `HEAPLEACH_RESUME`'s.
 
+**Transfer groups can be held beneath the queue's limits** (`groups.go`).
+A group is a service's pacing group where its host declares one
+(keep2share, fileboom, cloudflare for WAF recovery), and otherwise the site
+the job was added from. Not the host the file resolved to, which for a
+storage service is a server name nobody would recognise in a list.
+`GroupLimit` sets how many of a group's files download at once and how many
+streams each may use. The queue's own settings still apply over it, and it
+replaces what the host asks for itself within them. A host that allows one
+connection can be allowed three, and one that splits freely capped at two.
+Files of 0 holds the group's new downloads (`groupHeldLocked`, which says so
+in the note), and those running finish. The dispatcher counts each group's
+running transfers (`groupActive`, keyed at dispatch as `Item.groupKey`)
+beside `hostActive`. Limits arrive as the whole set in `Settings.Groups`,
+are saved with the queue like concurrency and streams (no configuration
+sets them, so they are kept whatever it says), and ride in the snapshot
+with the groups the queue has files of (`Snapshot.Groups`), which is what
+the panel offers.
+
 **What names a job's folder is `Result.Title` alone.** An extractor that has
 something to admit — a listing cut short by a cap or a rate limit — puts it
 in `Result.Note`, which the job's shown title carries (`Result.Label`) and
@@ -2030,7 +2048,9 @@ first version a snapshot reports is taken as the page's own, and a later,
 different one turns the badge into a reload button.
 
 The header's Settings button opens live concurrency, streams, speed and
-download proxy controls. `ProxyList` selects Keep2Share, FileBoom or WAF recovery with the
+download proxy controls, and the limits per transfer group (`GroupLimits`):
+a row per group the snapshot names, number fields that commit on Enter or
+blur and are held to the queue's values, the server's value shown otherwise. `ProxyList` selects Keep2Share, FileBoom or WAF recovery with the
 `site` query and polls `/api/proxies` only while mounted and the
 tab is visible; the inventory can contain tens of thousands of routes and
 must not be added to SSE snapshots. Filtering, sorting and pagination happen

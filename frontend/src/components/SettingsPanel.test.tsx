@@ -36,7 +36,7 @@ beforeEach(() => {
   vi.mocked(fetchProxies).mockReset().mockResolvedValue(inventory);
   vi.mocked(fetchSettings).mockReset().mockResolvedValue({
     concurrency: 4, streams: 2, paused: false, speedLimit: 0, downloadDir: '/tmp/downloads',
-    proxies: false, proxyEndpoints: ['direct'], proxyFeeds: ['https://feed.example.test/list'],
+    proxies: false, proxyEndpoints: ['direct'], proxyFeeds: ['https://feed.example.test/list'], groups: {},
   });
   vi.mocked(updateSettings).mockReset().mockResolvedValue(snapshot);
   host = document.createElement('div');

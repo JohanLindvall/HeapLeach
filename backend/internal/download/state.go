@@ -88,6 +88,9 @@ type savedSettings struct {
 	Streams               int `json:"streams"`
 	ConfiguredConcurrency int `json:"configuredConcurrency"`
 	ConfiguredStreams     int `json:"configuredStreams"`
+	// Groups are the transfer groups' own limits, which no configuration
+	// sets, so they are kept whatever it says.
+	Groups map[string]GroupLimit `json:"groups,omitempty"`
 }
 
 type savedJob struct {

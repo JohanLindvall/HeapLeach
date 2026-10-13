@@ -36,6 +36,10 @@ func (m *Manager) snapshotLocked() Snapshot {
 		DiskMinFree: m.minFree,
 		HostCount:   m.hostCount,
 		Version:     m.version,
+		Groups:      m.groupsLocked(),
+	}
+	if len(m.groupLimits) > 0 {
+		snap.GroupLimits = cloneGroupLimits(m.groupLimits)
 	}
 	// Newest first: the job someone just added belongs at the top.
 	for _, v := range slices.Backward(m.order) {

@@ -498,6 +498,10 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	if routeSource != nil {
 		maxStreams, group = m.streams, it.pace.Group
 	}
+	// A transfer group's own limit replaces its host's, beneath the queue's.
+	if limit := m.groupStreamsLocked(it); limit > 0 {
+		maxStreams = min(m.streams, limit)
+	}
 	m.mu.Unlock()
 
 	if rawURL == "" {

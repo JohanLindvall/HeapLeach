@@ -89,6 +89,16 @@ export interface JobView {
   held?: boolean;
 }
 
+/**
+ * One transfer group's own limits, beneath the queue's. A field left out
+ * leaves the group to the queue's settings and its host's own pacing; 0 files
+ * holds its new downloads.
+ */
+export interface GroupLimit {
+  files?: number;
+  streams?: number;
+}
+
 /** Whole-application state, pushed over server-sent events. */
 export interface Snapshot {
   jobs: JobView[];
@@ -123,6 +133,10 @@ export interface Snapshot {
   hostCount: number;
   /** Jobs restored from the last run and waiting for a Resume. */
   held: number;
+  /** Transfer groups with files still to download, or a limit of their own. */
+  groups?: string[];
+  /** The groups' own limits, by group. */
+  groupLimits?: Record<string, GroupLimit>;
   /** The server's build, e.g. "v1.2.62". */
   version?: string;
 }

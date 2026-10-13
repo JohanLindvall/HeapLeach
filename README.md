@@ -682,7 +682,11 @@ the same process preserves an accepted ticket and reuses unexpired download
 links.
 
 Open **Settings** in the UI to change files downloaded at once, streams per
-file, and the speed limit. The same panel enables or disables **download proxies**
+file, and the speed limit. **Limits per group** lowers those for one service
+(Keep2Share, FileBoom) or one site: how many of its files download at once,
+and how many streams each may use, never above the values above them. Files
+set to 0 holds that group's new downloads while those running finish. These
+limits are kept across restarts. The same panel enables or disables **download proxies**
 and edits proxy endpoints and discovery feeds without restarting HeapLeach.
 These settings apply to the current session; flags and environment variables
 set the startup defaults. Active transfers keep their assigned route. When
