@@ -75,7 +75,12 @@ type Item struct {
 
 	downloaded atomic.Int64
 	// streams is how many connections are currently fetching this item.
-	streams       atomic.Int32
+	streams atomic.Int32
+	// extraBytes counts the part of downloaded that came through extra
+	// streams on routes of their own, and routeExtras how many such streams
+	// are running (multiroute.go). Neither belongs to the item's own route.
+	extraBytes    atomic.Int64
+	routeExtras   atomic.Int32
 	resolve       func(context.Context) (*extractor.Target, error)
 	refresh       func(context.Context) (*extractor.Target, error)
 	proxyFallback bool
@@ -160,8 +165,10 @@ type Item struct {
 	speed       float64
 	lastBytes   int64
 	lastSample  time.Time
-	startedAt   time.Time
-	finishedAt  time.Time
+	// lastExtraBytes is extraBytes when lastBytes was taken.
+	lastExtraBytes int64
+	startedAt      time.Time
+	finishedAt     time.Time
 }
 
 // Job is one submitted URL and everything behind it.

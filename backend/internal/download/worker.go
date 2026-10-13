@@ -490,6 +490,14 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	if it.pace != nil && it.pace.Streams > 0 {
 		maxStreams = min(maxStreams, it.pace.Streams)
 	}
+	// Where the host's limit is per link and per address, each extra stream
+	// is on a route of its own (multiroute.go), so the ceiling is the
+	// configured one again, and none is ever a second on this route.
+	routeSource := m.routeSourceLocked(it)
+	var group string
+	if routeSource != nil {
+		maxStreams, group = m.streams, it.pace.Group
+	}
 	m.mu.Unlock()
 
 	if rawURL == "" {
@@ -542,10 +550,19 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
 	// Always ask for a range, even from byte zero. The reply is how we
 	// learn whether this server supports ranges at all: 206 means the
-	// transfer can be split later, 200 means it cannot.
-	if rangeEnd > 0 {
+	// transfer can be split later, 200 means it cannot. A multi-route
+	// transfer asks for one range at a time, this first one included
+	// (multiroute.go); a range past the end is served up to the end.
+	askEnd, routeRange := rangeEnd, m.timings.routeRange
+	if routeRange <= 0 {
+		routeRange = config.RouteRangeSize
+	}
+	if routeSource != nil && (askEnd <= 0 || askEnd-offset > routeRange) {
+		askEnd = offset + routeRange
+	}
+	if askEnd > 0 {
 		req.Header.Set(httpx.HeaderRange,
-			"bytes="+strconv.FormatInt(offset, 10)+"-"+strconv.FormatInt(rangeEnd-1, 10))
+			"bytes="+strconv.FormatInt(offset, 10)+"-"+strconv.FormatInt(askEnd-1, 10))
 	} else {
 		req.Header.Set(httpx.HeaderRange, "bytes="+strconv.FormatInt(offset, 10)+"-")
 	}
@@ -569,7 +586,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 		if state != nil {
 			known = state.Size
 		}
-		if err := validatePartial(resp, offset, rangeEnd, known); err != nil {
+		if err := validatePartial(resp, offset, askEnd, known); err != nil {
 			return "", err
 		}
 	case http.StatusRequestedRangeNotSatisfiable:
@@ -604,6 +621,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	m.mu.Lock()
 	it.routeResumable = resp.StatusCode == http.StatusPartialContent
 	m.mu.Unlock()
+	if resp.StatusCode != http.StatusPartialContent {
+		routeSource = nil // the whole file, which nothing can split
+	}
 
 	total := totalSize(resp, offset)
 	if state != nil && total <= 0 {
@@ -684,6 +704,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	}
 
 	m.setProgress(it, table.written())
+	if routeSource != nil {
+		table.request(segs[primaryIdx], askEnd-offset) // what the response above was asked for
+	}
 
 	transfer := &segmentedTransfer{
 		manager:    m,
@@ -696,6 +719,10 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 		validator:  validator,
 		maxStreams: streamsFor(maxStreams, total, resp),
 		slowBelow:  m.cfg.SlowSpeed,
+
+		routeSource: routeSource,
+		group:       group,
+		routeRange:  routeRange,
 
 		pollInterval:  m.timings.poll,
 		probeInterval: m.timings.probe,

@@ -44,6 +44,9 @@ type Manager struct {
 	proxyEnabled   bool
 	proxyRunning   map[string]int // leased workers per service, including the direct route
 	proxyResolving int            // source extractions waiting for or using proxy recovery
+	// routeWanted remembers, per service, whether a file of it was due to
+	// start and not running when last asked; see multiroute.go.
+	routeWanted map[string]routeWant
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -173,6 +176,7 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 		parts:           make(map[string]struct{}),
 		hostActive:      make(map[string]int),
 		proxyRunning:    make(map[string]int),
+		routeWanted:     make(map[string]routeWant),
 		hostGate:        newHostGate(),
 		dir:             cfg.DownloadDir,
 		stateFile:       cfg.StateFile,
@@ -525,6 +529,7 @@ func (m *Manager) dispatch() {
 			it.startedAt = time.Now()
 			it.lastSample = it.startedAt
 			it.lastBytes = it.downloaded.Load()
+			it.lastExtraBytes = it.extraBytes.Load()
 			ctx, cancel := context.WithCancel(m.ctx)
 			it.cancel = cancel
 			m.mu.Unlock()

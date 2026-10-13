@@ -752,6 +752,42 @@ Host-specific notes:
   attempts are 24 hours apart unless runnable demand for either service
   exceeds distinct addresses with sufficient scores; early top-ups still wait five minutes.
 
+  **A file can also read through several routes at once** (`multiroute.go`).
+  A free link allows one connection, from the address that obtained it,
+  and carries its own speed cap, so each extra stream leases a route of
+  its own and runs a free download of its own there. The resolver keeps a
+  ticket and link per route (`keep2ShareDownload.routes`), so one route's
+  ticket timer holds up no other. Asked for one file through two routes at
+  once, the API issued each its own link, and the second served a range
+  64 MiB in. Extra streams take idle routes only: none starts while a file
+  of the same service is due to start and not running (`routeWanted`, a
+  queue scan kept for `RouteWantedRecheck`), and one still being obtained
+  is given up. Asking whether the dispatcher found a route was the first
+  rule, and it stopped meaning anything once untried routes counted as
+  free: the dispatcher nearly always finds one, mostly dead, and the files
+  cycling through them would be racing extra streams for the few that
+  work. A running extra keeps its route: its address has spent its free
+  download, and a waiting file given it would only be told to come back in
+  an hour. So this engages as a queue drains, for its last files.
+
+  Two things here were each got wrong first. Opening the next range on a
+  route while the host may still count the last one is a second
+  connection, so every request asks for at most `RouteRangeSize` and is
+  read to its end, and the next goes out on the same connection. The
+  first request in `transferOnce` is bounded the same way, and
+  `splitUnrequested` never cuts into a range already asked for: a split
+  that did made the connection abandon its response and open another,
+  which the test rig counts. And the main route's speed estimate is fed
+  only its own bytes. `sampleLocked` subtracts `extraBytes`, each extra
+  trains its own lease through `Lease.Progress`, and no upgrade runs while
+  extras do, since aborting the attempt would end them too. An extra that
+  gets nowhere has cost a CAPTCHA, so attempts back off towards
+  `RouteExtraBackoffMax`. One whose route goes silent for the stall
+  timeout is dropped alone, because the transfer's own watchdog waits for
+  every connection to go quiet. A range left unread, by a stopped extra or
+  a restored sidecar, is claimed by the next connection to finish its own;
+  the main route reads one at a time.
+
   Proxy settings can change while workers run. `settingsMu` serializes
   preparation with shutdown, and a failing database open leaves the whole
   update unapplied. Disabling keeps the pool and its active leases alive;

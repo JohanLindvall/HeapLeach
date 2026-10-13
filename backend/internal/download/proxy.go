@@ -298,12 +298,18 @@ func retryRouteFailure(err error) bool {
 // sampleProxyLocked feeds useful-byte windows into the route score. A
 // replacement is reserved before aborting the current attempt, and only a
 // confirmed range response permits moving a healthy transfer mid-file.
+//
+// bytes are the route's own: what extra streams read through routes of
+// their own is credited to those (multiroute.go). Nor does a transfer with
+// such streams running move: aborting the attempt would end them too, and
+// throw away the free downloads they waited for.
 func (m *Manager) sampleProxyLocked(it *Item, now time.Time, bytes int64, elapsed time.Duration, limited bool) {
 	if it.route == nil {
 		return
 	}
 	if !it.route.Progress(now, bytes, elapsed, limited) || limited || !m.proxyEnabled ||
-		!it.routeResumable || it.routeCancel == nil || it.routeUpgrade != nil || m.lowOnSpace() {
+		!it.routeResumable || it.routeCancel == nil || it.routeUpgrade != nil || m.lowOnSpace() ||
+		it.routeExtras.Load() > 0 {
 		return
 	}
 	if next := it.route.Upgrade(now, it.Size-it.downloaded.Load(), it.speed); next != nil {

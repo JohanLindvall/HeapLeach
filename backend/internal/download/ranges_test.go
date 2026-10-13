@@ -187,7 +187,7 @@ func TestPartialResponsesAreValidatedBeforeWriting(t *testing.T) {
 				t.Errorf("invalid response changed the part to %q", got)
 			}
 			tr := &segmentedTransfer{manager: m, item: it, table: newSegmentTable(6, 3)}
-			body, err := tr.open(context.Background(), newSegment(3, 3, 6), true)
+			body, err := tr.open(context.Background(), newSegment(3, 3, 6), true, nil)
 			if err == nil {
 				body.Close()
 				t.Error("extra connection accepted an invalid partial response")

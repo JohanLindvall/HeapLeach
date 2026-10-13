@@ -301,8 +301,9 @@ func (m *Manager) sampleLocked(now time.Time) bool {
 			} else {
 				it.speed = config.SpeedSmoothing*it.speed + (1-config.SpeedSmoothing)*instant
 			}
-			m.sampleProxyLocked(it, now, current-it.lastBytes, now.Sub(it.lastSample), limited)
-			it.lastBytes, it.lastSample = current, now
+			extra := it.extraBytes.Load()
+			m.sampleProxyLocked(it, now, current-it.lastBytes-(extra-it.lastExtraBytes), now.Sub(it.lastSample), limited)
+			it.lastBytes, it.lastExtraBytes, it.lastSample = current, extra, now
 		}
 	}
 	return moved

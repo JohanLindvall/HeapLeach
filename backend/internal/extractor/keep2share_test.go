@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -344,14 +345,14 @@ func TestKeep2ShareCancellationKeepsAnAcceptedTicket(t *testing.T) {
 	if _, err := d.resolve(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("resolve = %v, want cancellation of the wait", err)
 	}
-	if d.key != "ticket" || d.ready.IsZero() {
+	if st := d.free(httpx.DirectRoute); st.key != "ticket" || st.ready.IsZero() {
 		t.Fatal("cancellation forgot an accepted ticket or its remaining wait")
 	}
 	if len(notes) < 2 || !strings.Contains(notes[0], "CAPTCHA") || !strings.Contains(notes[len(notes)-1], "30s") {
 		t.Fatalf("progress notes = %v; want CAPTCHA progress and the host's wait", notes)
 	}
 	// Advance the host's deadline without waiting it out in the test.
-	d.ready = time.Now()
+	d.free(httpx.DirectRoute).ready = time.Now()
 	if _, err := d.resolve(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -416,12 +417,12 @@ func TestKeep2ShareSendsALongTicketWaitBackToTheQueue(t *testing.T) {
 	if left := time.Until(wait.Until); left < 71*time.Minute || left > 72*time.Minute {
 		t.Errorf("the wait ends in %s, want the ticket's seventy-odd minutes", left)
 	}
-	if d.key != "ticket" {
+	if d.free(httpx.DirectRoute).key != "ticket" {
 		t.Fatal("the ticket was dropped on the way back to the queue")
 	}
 
 	// When it comes round again, the ticket is redeemed: no second CAPTCHA.
-	d.ready = time.Now()
+	d.free(httpx.DirectRoute).ready = time.Now()
 	k.mu.Lock()
 	clear(k.cooldowns)
 	k.mu.Unlock()
@@ -442,8 +443,9 @@ func TestKeep2ShareRefreshesExpiredLinksWithTheAcceptedTicket(t *testing.T) {
 		}
 		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/fresh"}`)
 	})
-	d := &keep2ShareDownload{host: k, id: "test-file", key: "ticket", route: httpx.DirectRoute,
-		target: &Target{URL: "https://cdn.example.test/expired"}, expires: time.Now().Add(-time.Second)}
+	d := &keep2ShareDownload{host: k, id: "test-file"}
+	st := d.free(httpx.DirectRoute)
+	st.key, st.target, st.expires = "ticket", &Target{URL: "https://cdn.example.test/expired"}, time.Now().Add(-time.Second)
 	target, err := d.resolve(context.Background())
 	if err != nil || target.URL != "https://cdn.example.test/fresh" || calls.Load() != 1 {
 		t.Fatalf("target=%+v error=%v calls=%d", target, err, calls.Load())
@@ -599,5 +601,64 @@ func TestKeep2ShareDiscardedLinkIsMintedAgain(t *testing.T) {
 	again, err := f.Resolve(context.Background())
 	if err != nil || again.URL != links[1] || calls.Load() != 4 {
 		t.Fatalf("discarding a replaced link dropped its replacement: %+v, %v, %d calls", again, err, calls.Load())
+	}
+}
+
+// A file fetched through several routes at once has a free download on each:
+// a link per route, kept per route, and one route's ticket timer holds up no
+// other route.
+func TestKeep2ShareKeepsAFreeDownloadPerRoute(t *testing.T) {
+	var calls atomic.Int32
+	var slow atomic.Bool
+	expires := time.Now().Add(time.Hour).Unix()
+	k := keep2ShareTestSite(t, func(w http.ResponseWriter, in map[string]string) {
+		n := calls.Add(1)
+		if in["free_download_key"] == "" { // an answer to a CAPTCHA: a ticket
+			wait := 0
+			if slow.Load() {
+				wait = 2
+			}
+			_, _ = fmt.Fprintf(w, `{"status":"success","code":200,"free_download_key":"ticket-%d","time_wait":%d}`, n, wait)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "code": 200,
+			"url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d&for=%s", expires, in["free_download_key"])})
+	})
+	f := keep2ShareTestExtract(t, k)
+	client := httpx.New("test", "en", 0, time.Second)
+	on := func(route string) context.Context {
+		return httpx.WithRoute(context.Background(), route, client, nil)
+	}
+	a, err := f.Resolve(on("route-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.Resolve(on("route-b"))
+	if err != nil || b.URL == a.URL {
+		t.Fatalf("second route: %+v, %v; want a link of its own", b, err)
+	}
+	if again, err := f.Resolve(on("route-a")); err != nil || again.URL != a.URL || calls.Load() != 4 {
+		t.Fatalf("first route again: %+v, %v after %d calls; want its own link kept", again, err, calls.Load())
+	}
+
+	slow.Store(true)
+	waiting, done := make(chan struct{}), make(chan error, 1)
+	var once sync.Once
+	ctx := WithResolveNote(on("route-c"), func(note string) {
+		if strings.Contains(note, "free-download timer") {
+			once.Do(func() { close(waiting) })
+		}
+	})
+	go func() {
+		_, err := f.Resolve(ctx)
+		done <- err
+	}()
+	<-waiting
+	start := time.Now()
+	if again, err := f.Resolve(on("route-a")); err != nil || again.URL != a.URL || time.Since(start) > time.Second {
+		t.Fatalf("first route during another's ticket timer: %+v, %v after %s", again, err, time.Since(start))
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

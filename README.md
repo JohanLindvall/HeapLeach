@@ -660,7 +660,11 @@ applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
 `-concurrency` across both services. Each address may carry one K2S transfer
 and one FileBoom transfer simultaneously. The hosts' speed limits and
-cooldowns still apply per address and service. A file held
+cooldowns still apply per address and service. When routes would otherwise
+go unused, a slow file also reads through extra routes, up to the streams
+setting, each with a free download and a speed cap of its own. That happens
+only while no other file of the service is waiting to start, so it speeds up
+the end of a queue without slowing the rest. A file held
 back by the wait between free downloads goes back to the queue as waiting,
 with the time left, and its download slot goes to other files meanwhile.
 Waiting is cancelable and bounded to two hours per attempt; retrying within

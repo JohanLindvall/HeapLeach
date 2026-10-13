@@ -52,6 +52,14 @@ const (
 	// across a public feed's inventory: at 64, with two routes in a hundred
 	// free at 256 transfers, a quarter of all leases fell through to the list.
 	ProxyDrawTries = 1024
+
+	// RouteWantedRecheck is how long the answer to whether a service has a
+	// file due to start is kept before the queue is scanned again.
+	RouteWantedRecheck = time.Second
+	// RouteExtraBackoffMax caps the wait between a transfer's attempts at
+	// an extra stream after attempts that got nowhere, each of which cost
+	// the host a CAPTCHA.
+	RouteExtraBackoffMax = 10 * time.Minute
 )
 
 // Tunables shared across packages. They live here rather than next to their
@@ -228,6 +236,14 @@ const (
 
 	// MinSplitFileSize is the smallest file worth splitting at all.
 	MinSplitFileSize = 8 << 20
+
+	// RouteRangeSize is the most one request of a multi-route transfer asks
+	// for. Its connections read every response to the end and ask for the
+	// next range on the same connection, since the link allows one, so a
+	// split can take only what has not been asked for. The last range of a
+	// file is read by one route alone: at a capped free link's 42 kB/s,
+	// 8 MiB is about three minutes.
+	RouteRangeSize = 8 << 20
 
 	// SegmentPollInterval is how often the supervisor checks whether the
 	// transfer has finished. It is short so completion is not delayed by

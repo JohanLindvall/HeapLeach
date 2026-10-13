@@ -266,31 +266,69 @@ type keep2ShareDownload struct {
 	host     *Keep2Share
 	id, name string
 	size     int64
-	mu       sync.Mutex
-	key      string
-	ready    time.Time
-	target   *Target
-	expires  time.Time
-	route    string
+	// routes holds the file's free download on each route it is fetched
+	// through. A ticket and a link belong to the address that obtained them,
+	// and one file may be fetched through several routes at once, as by an
+	// extra stream on an idle route. Each has its own lock, so one route's
+	// ticket timer holds up no other.
+	mu     sync.Mutex
+	routes map[string]*keep2ShareFree
+}
+
+// keep2ShareFree is one route's free download of a file.
+type keep2ShareFree struct {
+	mu      sync.Mutex
+	key     string
+	ready   time.Time
+	target  *Target
+	expires time.Time
+}
+
+// free is the file's free download on route.
+func (d *keep2ShareDownload) free(route string) *keep2ShareFree {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.routes == nil {
+		d.routes = make(map[string]*keep2ShareFree)
+	}
+	st := d.routes[route]
+	if st == nil {
+		st = &keep2ShareFree{}
+		d.routes[route] = st
+	}
+	return st
+}
+
+// prune forgets a route that left nothing behind: a file can try hundreds
+// of routes, most of which end without a ticket or a link. Caller holds
+// st.mu, which is always taken before d.mu.
+func (d *keep2ShareDownload) prune(route string, st *keep2ShareFree) {
+	if st.key != "" || st.target != nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.routes[route] == st {
+		delete(d.routes, route)
+	}
 }
 
 func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	// CAPTCHA tickets and storage links belong to the public IP that
+	// obtained them, so each route has its own free flow.
+	route := keep2ShareRoute(ctx)
+	st := d.free(route)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	defer d.prune(route, st)
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if route := keep2ShareRoute(ctx); route != d.route {
-		// CAPTCHA tickets and storage links belong to the public IP that
-		// obtained them. A different route must start its own free flow.
-		d.route, d.key, d.target = route, "", nil
-		d.ready, d.expires = time.Time{}, time.Time{}
 	}
 	// A transfer retry may resume the same free link. Solving another
 	// CAPTCHA would spend a second download and can trigger the hourly
 	// limit. The storage URL states its own expiry, so no lifetime is guessed.
-	if d.target != nil && time.Now().Add(config.Keep2ShareExpiryMargin).Before(d.expires) {
-		copy := *d.target
+	if st.target != nil && time.Now().Add(config.Keep2ShareExpiryMargin).Before(st.expires) {
+		copy := *st.target
 		return &copy, nil
 	}
 
@@ -301,7 +339,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 	var challenge string
 	var readings []string
 	for attempts, waits := 0, 0; ; {
-		if delay := time.Until(d.ready); delay > 0 {
+		if delay := time.Until(st.ready); delay > 0 {
 			if delay > config.Keep2ShareMaxWait-waited {
 				return nil, d.host.errorf("free-download wait exceeds the waiting limit; retry later")
 			}
@@ -321,8 +359,8 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			waited += delay
 		}
 		in := map[string]string{"file_id": d.id}
-		if d.key != "" {
-			in["free_download_key"] = d.key
+		if st.key != "" {
+			in["free_download_key"] = st.key
 		} else {
 			if len(readings) == 0 {
 				if err := d.host.waiting(ctx); err != nil {
@@ -347,7 +385,7 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			in["captcha_challenge"], in["captcha_response"] = challenge, readings[0]
 			readings = readings[1:]
 		}
-		if d.key != "" {
+		if st.key != "" {
 			ResolveNote(ctx, d.host.label+": requesting download link")
 		} else {
 			ResolveNote(ctx, fmt.Sprintf("%s: submitting CAPTCHA answer (%d/%d)", d.host.label, attempts, config.Keep2ShareCaptchaAttempts))
@@ -368,19 +406,19 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 				// Without one, this is the host's wait between free
 				// downloads: the best part of an hour, which the file
 				// spends back in the queue rather than holding a worker.
-				if d.key == "" {
+				if st.key == "" {
 					return nil, d.host.wait(ctx, delay)
 				}
 				waits++
 				if waits > config.Keep2ShareWaits {
 					return nil, err
 				}
-				d.ready = time.Now().Add(delay)
+				st.ready = time.Now().Add(delay)
 				continue
 			}
 			switch out.ErrorCode {
 			case 30, 31, 40:
-				d.key = ""
+				st.key = ""
 				continue
 			}
 			// The address has used up its free traffic or downloads. That
@@ -399,19 +437,19 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 				return nil, d.host.errorf("invalid download URL")
 			}
-			d.expires = time.Time{}
+			st.expires = time.Time{}
 			if expiry, err := strconv.ParseInt(u.Query().Get("temp_url_expires"), 10, 64); err == nil {
-				d.expires = time.Unix(expiry, 0)
+				st.expires = time.Unix(expiry, 0)
 			}
-			d.target = &Target{URL: out.URL, Name: d.name, Size: d.size, Discard: d.discard(out.URL)}
-			copy := *d.target
+			st.target = &Target{URL: out.URL, Name: d.name, Size: d.size, Discard: st.discard(out.URL)}
+			copy := *st.target
 			return &copy, nil
 		}
 		if out.FreeKey == "" || out.Wait < 0 || out.Wait > int64(config.Keep2ShareMaxWait/time.Second) {
 			return nil, d.host.errorf("no download URL or valid free-download ticket returned")
 		}
-		d.key = out.FreeKey
-		d.ready = time.Now().Add(time.Duration(out.Wait) * time.Second)
+		st.key = out.FreeKey
+		st.ready = time.Now().Add(time.Duration(out.Wait) * time.Second)
 		waits++
 		if waits > config.Keep2ShareWaits {
 			return nil, d.host.errorf("free-download wait did not finish")
@@ -420,14 +458,16 @@ func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 }
 
 // discard drops a link the storage host refused because another address was
-// using it, and the ticket it came from, as a change of route does: both
-// belong to the address that obtained them. A link handed out since is kept.
-func (d *keep2ShareDownload) discard(link string) func() {
+// using it, and the ticket it came from: both belong to the address that
+// obtained them, so the next resolve on this route starts afresh. A link
+// handed out since is kept.
+func (st *keep2ShareFree) discard(link string) func() {
 	return func() {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if d.target != nil && d.target.URL == link {
-			d.route = "" // the next resolve starts the free flow afresh
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		if st.target != nil && st.target.URL == link {
+			st.key, st.target = "", nil
+			st.ready, st.expires = time.Time{}, time.Time{}
 		}
 	}
 }

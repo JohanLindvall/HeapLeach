@@ -41,6 +41,15 @@ type segment struct {
 	pos     atomic.Int64
 	flushed atomic.Int64
 	end     atomic.Int64
+	// requested is the end of the range the segment's connection has asked
+	// for, when that is less than the whole of it; zero otherwise. Only a
+	// multi-route transfer asks for less (see multiroute.go), and its splits
+	// never cut into what has been asked for. Set under the table's lock.
+	requested atomic.Int64
+	// claimed says a connection is reading the segment. Only a multi-route
+	// transfer consults it, where a connection that finishes its range takes
+	// up one nobody is reading. Guarded by the table's lock.
+	claimed bool
 }
 
 func newSegment(start, pos, end int64) *segment {
@@ -179,9 +188,88 @@ func (t *segmentTable) split(minPiece int64) *segment {
 
 	mid := pos + remaining/2
 	tail := newSegment(mid, mid, end)
+	tail.claimed = true // by the connection it was split off for
 	widest.end.Store(mid)
 	t.segs = append(t.segs, tail)
 	return tail
+}
+
+// claim hands a connection the first unfinished segment nobody is reading,
+// or nil. Only a multi-route transfer leaves segments unread: after a
+// restart, and when a route of an extra stream stops partway.
+func (t *segmentTable) claim() *segment {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.segs {
+		if !s.claimed && s.pos.Load() < s.end.Load() {
+			s.claimed = true
+			s.requested.Store(0)
+			return s
+		}
+	}
+	return nil
+}
+
+// request is the next range a multi-route connection asks for: from where
+// the segment stands, at most size bytes, and no further than its end. It is
+// recorded, so that no split gives away a byte of it: the response is read
+// to its end, which is what lets the connection carry the next request
+// rather than the route being asked for a second one while the host may
+// still count the first.
+func (t *segmentTable) request(seg *segment, size int64) (from, to int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	from, to = seg.pos.Load(), seg.end.Load()
+	if size > 0 && to-from > size {
+		to = from + size
+	}
+	seg.requested.Store(to)
+	return from, to
+}
+
+// splitUnrequested is split for a multi-route transfer. It bisects the
+// remaining span of the segment with the most to give, but never inside the
+// range its connection has asked for: the split point is the later of the
+// midpoint and that range's end.
+func (t *segmentTable) splitUnrequested(minPiece int64) *segment {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var widest *segment
+	var widestTail int64
+	for _, s := range t.segs {
+		pos, end := s.pos.Load(), s.end.Load()
+		tail := min(end-max(pos, s.requested.Load()), (end-pos)/2)
+		if widest == nil || tail > widestTail || (tail == widestTail && s.start < widest.start) {
+			widest, widestTail = s, tail
+		}
+	}
+	if widest == nil || widestTail < minPiece {
+		return nil
+	}
+	end := widest.end.Load()
+	mid := end - widestTail
+	tail := newSegment(mid, mid, end)
+	tail.claimed = true // by the connection it was split off for
+	widest.end.Store(mid)
+	t.segs = append(t.segs, tail)
+	return tail
+}
+
+// hold marks a segment as read by the connection given it.
+func (t *segmentTable) hold(seg *segment) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	seg.claimed = true
+}
+
+// release gives a segment's unread remainder back for another connection to
+// claim, when the one reading it stops before its end.
+func (t *segmentTable) release(seg *segment) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	seg.claimed = false
+	seg.requested.Store(0)
 }
 
 // snapshot returns the current segments. The slice is a copy; the segments

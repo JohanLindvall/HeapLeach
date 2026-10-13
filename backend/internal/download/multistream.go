@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -37,6 +38,16 @@ type segmentedTransfer struct {
 	maxStreams int
 	slowBelow  int64
 
+	// routeSource, when set, makes this a multi-route transfer: every
+	// connection beyond the first is on a route of its own (multiroute.go),
+	// and none is ever a second on the main route. group is its host's
+	// pacing group; primaryActive says the main route is reading.
+	routeSource   func(context.Context) (*streamSource, error)
+	group         string
+	primaryActive atomic.Bool
+	// routeRange is the most one of its requests asks for.
+	routeRange int64
+
 	// crowded records that opening a connection measurably slowed this
 	// transfer down, so no more are opened. Touched only by the supervisor
 	// goroutine.
@@ -61,6 +72,12 @@ type downloadTimings struct {
 	// progressRetry is the flat wait before resuming an attempt that moved
 	// bytes and then lost its connection.
 	progressRetry time.Duration
+	// routeRange is a size, not an interval, kept here so tests can shrink
+	// it with the rest: the most one request of a multi-route transfer asks
+	// for (config.RouteRangeSize).
+	routeRange int64
+	// wantedRecheck is how long routeWantedLocked's answer is kept.
+	wantedRecheck time.Duration
 }
 
 func defaultDownloadTimings() downloadTimings {
@@ -72,6 +89,8 @@ func defaultDownloadTimings() downloadTimings {
 		busyBase:      config.BusyRetryBase,
 		busyMax:       config.BusyRetryMax,
 		progressRetry: config.ProgressRetryDelay,
+		routeRange:    config.RouteRangeSize,
+		wantedRecheck: config.RouteWantedRecheck,
 	}
 }
 
@@ -88,6 +107,9 @@ func (t *segmentedTransfer) withDefaults() *segmentedTransfer {
 	}
 	if t.saveInterval <= 0 {
 		t.saveInterval = config.SegmentStateInterval
+	}
+	if t.routeRange <= 0 {
+		t.routeRange = config.RouteRangeSize
 	}
 	return t
 }
@@ -134,15 +156,42 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 		})
 	}
 
-	wg.Go(func() {
-		t.supervise(ctx, func(seg *segment, reserved string) { spawn(seg, nil, reserved) })
-	})
+	if t.routeSource != nil {
+		// The main route's link allows one connection, so whatever the
+		// sidecar held, that route reads one range at a time and the rest
+		// wait to be claimed. See multiroute.go.
+		spawnPrimary := func(seg *segment, body io.ReadCloser) {
+			t.table.hold(seg)
+			t.primaryActive.Store(true)
+			wg.Go(func() {
+				defer t.primaryActive.Store(false)
+				if err := t.pump(ctx, seg, body, ""); err != nil {
+					fail(err)
+				}
+			})
+		}
+		spawnSource := func(seg *segment, src *streamSource, done chan struct{}) {
+			wg.Go(func() {
+				defer close(done)
+				defer src.release()
+				t.pumpSource(seg, src)
+			})
+		}
+		// Before the supervisor, which would otherwise find the main route
+		// idle and set it reading a second time.
+		spawnPrimary(primarySeg, primary)
+		wg.Go(func() { t.superviseRoutes(ctx, spawnPrimary, spawnSource) })
+	} else {
+		wg.Go(func() {
+			t.supervise(ctx, func(seg *segment, reserved string) { spawn(seg, nil, reserved) })
+		})
 
-	spawn(primarySeg, primary, "")
-	// Segments restored from a previous run need their own connections.
-	for _, seg := range t.table.snapshot() {
-		if seg != primarySeg && !seg.done() {
-			spawn(seg, nil, "")
+		spawn(primarySeg, primary, "")
+		// Segments restored from a previous run need their own connections.
+		for _, seg := range t.table.snapshot() {
+			if seg != primarySeg && !seg.done() {
+				spawn(seg, nil, "")
+			}
 		}
 	}
 
@@ -319,7 +368,7 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 	extra := reserved != ""
 	for attempt := 0; ; attempt++ {
 		if body == nil {
-			opened, err := t.open(ctx, seg, extra)
+			opened, err := t.open(ctx, seg, extra, nil)
 			if err != nil {
 				if errors.Is(err, errFileChanged) || ctx.Err() != nil {
 					return err
@@ -346,9 +395,23 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 			body = opened
 		}
 
-		err := t.copy(ctx, seg, body)
+		err := t.copy(ctx, seg, body, nil)
 		body = nil
+		if errors.Is(err, errRangeDone) {
+			// The range asked for has arrived, and the segment goes on in
+			// the next, on the connection the response left free.
+			attempt = -1
+			continue
+		}
 		if err == nil {
+			// A multi-route transfer's main route goes on to a range
+			// nobody is reading, or half of the widest one.
+			if t.routeSource != nil {
+				if next := t.nextSegment(); next != nil {
+					seg, attempt = next, -1
+					continue
+				}
+			}
 			return nil
 		}
 		// A failed flush drops whatever the connection was holding, and pos
@@ -380,7 +443,12 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 // about resuming is in writebuf.go. Reads stay bounded by the chunk size
 // whatever the buffer holds, because the promise that keeps a split point
 // ahead of the writer is stated in those terms — see config.MinSegmentSize.
-func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.ReadCloser) (err error) {
+//
+// A multi-route connection asks for less than its segment, and copy then
+// returns errRangeDone once the range asked for has arrived. counted, when
+// set, is credited with each byte as the item is: an extra stream's own
+// tally, for the route it read through.
+func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.ReadCloser, counted *atomic.Int64) (err error) {
 	defer body.Close()
 
 	buf, release := borrowChunk()
@@ -410,12 +478,19 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 			}
 			continue
 		}
+		requested := seg.requested.Load()
+		if requested > 0 && pos >= requested {
+			return errRangeDone
+		}
 
 		// Never read past this segment's end: the supervisor may have
 		// shrunk it to hand the tail to another connection.
 		limit := int64(len(buf))
 		if remaining := end - pos; remaining < limit {
 			limit = remaining
+		}
+		if requested > 0 && requested-pos < limit {
+			limit = requested - pos
 		}
 
 		n, readErr := reader.Read(buf[:limit])
@@ -425,11 +500,18 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 			}
 			seg.pos.Store(pos + int64(n))
 			t.item.downloaded.Add(int64(n))
+			if counted != nil {
+				counted.Add(int64(n))
+				t.item.extraBytes.Add(int64(n))
+			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
 				if t.table.finish(seg) {
 					return nil
+				}
+				if requested > 0 && seg.pos.Load() >= requested {
+					return errRangeDone
 				}
 				return io.ErrUnexpectedEOF
 			}
@@ -441,13 +523,20 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 // open requests a segment's remaining range. An extra connection does not
 // retry: if the host turns it away, that answer is wanted immediately so the
 // range can be handed back rather than held while the retry budget drains.
-func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool) (io.ReadCloser, error) {
+// src, for an extra stream on a route of its own, names its own link.
+func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool, src *streamSource) (io.ReadCloser, error) {
 	m := t.manager
 
-	m.mu.Lock()
-	rawURL := t.item.URL
-	headers := maps.Clone(t.item.Headers)
-	m.mu.Unlock()
+	var rawURL string
+	var headers httpx.Header
+	if src != nil {
+		rawURL, headers = src.url, maps.Clone(src.headers)
+	} else {
+		m.mu.Lock()
+		rawURL = t.item.URL
+		headers = maps.Clone(t.item.Headers)
+		m.mu.Unlock()
+	}
 
 	if rawURL == "" {
 		return nil, errors.New("no download URL")
@@ -463,9 +552,16 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool) 
 	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
 
 	pos, end := seg.pos.Load(), seg.end.Load()
+	if t.routeSource != nil {
+		pos, end = t.table.request(seg, t.routeRange)
+	}
 	req.Header.Set(httpx.HeaderRange,
 		"bytes="+strconv.FormatInt(pos, 10)+"-"+strconv.FormatInt(end-1, 10))
-	if t.validator != "" {
+	// Another route's link may be on another of the host's storage servers,
+	// whose validator need not match: there, If-Range would read as the file
+	// having changed and throw away what is on disk. The total in its
+	// Content-Range is checked instead (validatePartial).
+	if t.validator != "" && src == nil {
 		req.Header.Set(httpx.HeaderIfRange, t.validator)
 	}
 
@@ -490,6 +586,9 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool) 
 		// changed; saying so makes the retry message honest.
 		if err := rejectWebPage(resp, t.name); err != nil {
 			return nil, err
+		}
+		if src != nil {
+			return nil, errors.New("an extra stream's link ignored the range")
 		}
 		// Otherwise If-Range did not match: this is the whole file from a
 		// different version, so everything on disk is suspect.
