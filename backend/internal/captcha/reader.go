@@ -41,13 +41,24 @@ type pool struct {
 }
 
 var readers = pool{
-	create: newEngine, slots: make(chan struct{}, config.Keep2ShareOCRConcurrency),
+	create: newEngine, slots: make(chan struct{}, config.DefaultCaptchaConcurrency),
 	timeout: config.Keep2ShareOCRTimeout, idleFor: config.Keep2ShareOCRIdle,
 }
 
-// Read returns ranked readings. There are at most two model sessions, reused
-// between images and released after an idle interval. note runs on the caller's
-// goroutine and is never called after Read returns.
+// SetConcurrency sets how many CAPTCHAs are read at once, one model session
+// each; zero or less is config.DefaultCaptchaConcurrency. Call it before the
+// first Read: it replaces the slots that reads in progress would release.
+func SetConcurrency(n int) {
+	if n < 1 {
+		n = config.DefaultCaptchaConcurrency
+	}
+	readers.slots = make(chan struct{}, n)
+}
+
+// Read returns ranked readings. There are at most SetConcurrency's number of
+// model sessions, reused between images and released after an idle
+// interval. note runs on the caller's goroutine and is never called after
+// Read returns.
 func Read(ctx context.Context, raw []byte, note func(string)) ([]string, error) {
 	return readers.read(ctx, raw, note)
 }

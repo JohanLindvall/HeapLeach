@@ -226,3 +226,15 @@ func TestReaderCancellationAndTimeoutHaveDifferentMeanings(t *testing.T) {
 		}
 	}
 }
+
+// The number of CAPTCHAs read at once is a setting: it sizes the slots,
+// and nothing below one is taken.
+func TestTheReadersAreAsManyAsSet(t *testing.T) {
+	defer SetConcurrency(config.DefaultCaptchaConcurrency)
+	for _, tc := range []struct{ set, want int }{{8, 8}, {1, 1}, {0, config.DefaultCaptchaConcurrency}, {-3, config.DefaultCaptchaConcurrency}} {
+		SetConcurrency(tc.set)
+		if got := cap(readers.slots); got != tc.want {
+			t.Errorf("set %d: %d slots; want %d", tc.set, got, tc.want)
+		}
+	}
+}

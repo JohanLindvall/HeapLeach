@@ -146,14 +146,21 @@ func (m *Manager) routeWantedLocked(group string) bool {
 		return w.wanted
 	}
 	wanted := false
-	for _, it := range m.queue {
-		// A file its job holds back is not due to start: counted, a job
-		// paused with hundreds of files queued kept every other file of the
-		// service from extra streams for as long as it stayed paused.
-		if it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) &&
-			it.pace != nil && it.pace.Group == group && !m.jobHeldLocked(it) {
-			wanted = true
-			break
+	// Nor is any file while the queue can start none: at its concurrency
+	// limit, paused or short of room, a waiting file waits for a slot, not a
+	// route, and the transfer whose end frees the slot gives its route back
+	// with it. Counted, fifty files queued behind the limit kept 254 running
+	// ones on a stream apiece, with routes to spare.
+	if m.running < m.limit && !m.throttle.isPaused() && !m.lowOnSpace() {
+		for _, it := range m.queue {
+			// A file its job holds back is not due to start: counted, a job
+			// paused with hundreds of files queued kept every other file of
+			// the service from extra streams for as long as it stayed paused.
+			if it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) &&
+				it.pace != nil && it.pace.Group == group && !m.jobHeldLocked(it) {
+				wanted = true
+				break
+			}
 		}
 	}
 	if m.routeWanted == nil {
@@ -345,12 +352,23 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			if !lastAdd.IsZero() && time.Since(lastAdd) < t.addCooldown || now.Before(nextAcquire) {
 				continue
 			}
+			// The queue sets up only so many at once: each is a hunt and a
+			// CAPTCHA, which the files' own routes need first.
+			most := int32(t.manager.timings.extraAcquisitions)
+			if most <= 0 {
+				most = config.RouteExtraAcquisitions
+			}
+			if t.manager.extraAcquiring.Add(1) > most {
+				t.manager.extraAcquiring.Add(-1)
+				continue
+			}
 			lastAdd = time.Now()
 			meter.reset(current)
 			acquire, cancel := context.WithCancel(ctx)
 			pending, pendingCancel = make(chan sourceResult, 1), cancel
 			go func(out chan<- sourceResult) {
 				src, err := t.routeSource(acquire)
+				t.manager.extraAcquiring.Add(-1)
 				out <- sourceResult{src: src, cancel: cancel, err: err}
 			}(pending)
 		}

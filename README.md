@@ -123,6 +123,8 @@ heapleach [options] <url>... [download-dir]   download and exit
   -addr string          listen address; :0 takes any free port (default ":8080")
   -concurrency int      parallel transfers, 1 to -max-concurrency (default 4)
   -max-concurrency int  ceiling on parallel transfers, live setting included (default 256)
+  -captcha-concurrency int
+                        CAPTCHAs read at once, each in a model session of its own (default 4, at most 64)
   -dir string           directory to download into
   -password string      password for protected sources (headless downloads)
   -retries int          retries per request and per transfer (default 3)
@@ -855,6 +857,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers, from 1 to `HEAPLEACH_MAX_CONCURRENCY`. Flag: `-concurrency`. Also settable live in Settings, which is kept across restarts until this value is changed. |
 | `HEAPLEACH_MAX_CONCURRENCY` | `256` | Ceiling on parallel transfers, for the startup setting and the Settings slider alike. Flag: `-max-concurrency`. |
+| `HEAPLEACH_CAPTCHA_CONCURRENCY` | `4` | Keep2Share and FileBoom CAPTCHAs read at once, from 1 to 64. Each loads its own copy of the 54 MB model and runs two threads. Flag: `-captcha-concurrency`. |
 | `HEAPLEACH_PROXIES` | on | Enable proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `proxies.db` beside `HEAPLEACH_STATE`, else `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode: with no queue kept, the default directory is used. Flag: `-proxy-db`. |
 | `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |

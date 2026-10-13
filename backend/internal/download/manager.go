@@ -50,6 +50,9 @@ type Manager struct {
 	// jobActive counts each job's transfers running, which its limit on
 	// files at once is held to (joblimits.go).
 	jobActive map[string]int
+	// extraAcquiring counts extra streams being set up, queue wide
+	// (downloadTimings.extraAcquisitions).
+	extraAcquiring atomic.Int32
 	// routeOutcomes counts how routed attempts ended since routeSummaryAt;
 	// dispatch logs and clears them once a minute (routeSummaryLocked).
 	routeOutcomes  map[routeOutcome]int

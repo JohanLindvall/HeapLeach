@@ -18,6 +18,14 @@ const (
 	// RouteWantedRecheck is how long the answer to whether a service has a
 	// file due to start is kept before the queue is scanned again.
 	RouteWantedRecheck = time.Second
+	// RouteExtraAcquisitions bounds how many extra streams the whole queue
+	// sets up at once. It is not a bound on how many run, which is files at
+	// once times streams per file. Setting one up is a hunt through mostly
+	// dead routes, then a CAPTCHA and the host's ticket timer, and the
+	// CAPTCHA reader takes a few at a time (CaptchaConcurrency), which the
+	// files' own routes need first. Unbounded, 256 running files would all set one up together the
+	// moment they were let, as after every restart.
+	RouteExtraAcquisitions = 64
 	// RouteExtraBackoffMax caps the wait between a transfer's attempts at
 	// an extra stream after attempts that got nowhere, each of which cost
 	// the host a CAPTCHA.
@@ -499,8 +507,14 @@ const (
 	// before the request deadline would turn it into a generic timeout.
 	Keep2ShareRequestTimeout = 20 * time.Second
 
-	// Keep2ShareOCRConcurrency bounds simultaneous in-process model sessions.
-	Keep2ShareOCRConcurrency = 2
+	// DefaultCaptchaConcurrency is how many CAPTCHAs are read at once, each
+	// in a model session of its own (54 MB of model, two runtime threads).
+	// It is a setting (HEAPLEACH_CAPTCHA_CONCURRENCY, -captcha-concurrency),
+	// held under MaxCaptchaConcurrency. Two kept up with one file at a time.
+	// Hundreds running, each with extra streams on routes of their own, each
+	// wanting a CAPTCHA, queued behind two.
+	DefaultCaptchaConcurrency = 4
+	MaxCaptchaConcurrency     = 64
 
 	// Reuse the loaded model between challenges, releasing it after inactivity.
 	Keep2ShareOCRIdle = 5 * time.Minute

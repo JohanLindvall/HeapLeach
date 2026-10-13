@@ -78,6 +78,9 @@ type downloadTimings struct {
 	routeRange int64
 	// wantedRecheck is how long routeWantedLocked's answer is kept.
 	wantedRecheck time.Duration
+	// extraAcquisitions bounds the extra streams being set up at once, queue
+	// wide (config.RouteExtraAcquisitions).
+	extraAcquisitions int
 }
 
 func defaultDownloadTimings() downloadTimings {
@@ -91,6 +94,8 @@ func defaultDownloadTimings() downloadTimings {
 		progressRetry: config.ProgressRetryDelay,
 		routeRange:    config.RouteRangeSize,
 		wantedRecheck: config.RouteWantedRecheck,
+
+		extraAcquisitions: config.RouteExtraAcquisitions,
 	}
 }
 

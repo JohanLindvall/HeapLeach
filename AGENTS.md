@@ -623,8 +623,13 @@ Host-specific notes:
   the direct route it waits in the queue.
 
   With proxy routes, many free downloads reach a CAPTCHA at once. The shared
-  `internal/captcha` pool bounds native sessions to `Keep2ShareOCRConcurrency`
-  (two), each with two ONNX Runtime threads and spinning disabled. The budget
+  `internal/captcha` pool bounds native sessions to the CAPTCHA concurrency
+  (`HEAPLEACH_CAPTCHA_CONCURRENCY`, `-captcha-concurrency`, default four, at
+  most 64; `captcha.SetConcurrency`, called by `main` before anything is
+  read), each with two ONNX Runtime threads and spinning disabled, and its
+  own copy of the 54 MB model. Two kept up with one file at a time; hundreds
+  of files, each with extra streams on routes of their own, queued behind
+  them. The budget
   starts after acquiring a slot. Caller cancellation stays cancellation;
   exhausting the OCR budget is `errKeep2ShareOCR`, so another image can be tried.
   Waiting, model loading and reading have separate progress notes. Network
@@ -952,7 +957,15 @@ Host-specific notes:
   queue scan kept for `RouteWantedRecheck`), and one still being obtained
   is given up. A file its job holds back is not due, for this or for the
   pool's demand: counted, one paused job kept every other file of the
-  service from extra streams, and asked the feeds for routes. Asking whether the dispatcher found a route was the first
+  service from extra streams, and asked the feeds for routes. Nor is any
+  file while the queue can start none, at its limit on files at once,
+  paused or short of room. Such a file waits for a slot, not a route, and
+  the transfer whose end frees the slot gives its route back with it.
+  Counted, fifty files queued behind the limit kept 254 running ones on a
+  stream apiece. The queue sets up only `RouteExtraAcquisitions` (64) extra
+  streams at a time (`extraAcquiring`). That is no bound on how many run,
+  which is files at once times streams per file. Each set-up is a hunt and
+  a CAPTCHA, and the files' own routes need the reader first. Asking whether the dispatcher found a route was the first
   rule, and it stopped meaning anything once untried routes counted as
   free: the dispatcher nearly always finds one, mostly dead, and the files
   cycling through them would be racing extra streams for the few that

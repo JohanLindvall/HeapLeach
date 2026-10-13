@@ -142,6 +142,7 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_MAX_SOURCES", "5000")
 	t.Setenv("HEAPLEACH_MAX_FILES", "400000")
 	t.Setenv("HEAPLEACH_MAX_CONCURRENCY", "256")
+	t.Setenv("HEAPLEACH_CAPTCHA_CONCURRENCY", "8")
 	t.Setenv("HEAPLEACH_PPROF", "127.0.0.1:6060")
 
 	cfg, err := FromEnv()
@@ -151,7 +152,7 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	if cfg.Addr != ":9999" || cfg.Concurrency != 7 || cfg.SpeedLimit != 1000000 ||
 		cfg.StallTimeout != 45*time.Second || !cfg.Debug || !cfg.ResumeRestored ||
 		cfg.MaxSources != 5000 || cfg.MaxFiles != 400000 || cfg.ProfileAddr != "127.0.0.1:6060" ||
-		cfg.MaxConcurrency != 256 {
+		cfg.MaxConcurrency != 256 || cfg.CaptchaConcurrency != 8 {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	kvs := cfg.ExtraHostsFor(FamilyKVS)
@@ -217,6 +218,8 @@ func TestPrepareValidates(t *testing.T) {
 		{"over a ceiling set lower", func(c *Config) { c.MaxConcurrency, c.Concurrency = 16, 17 }, "concurrency"},
 		{"negative ceiling on concurrency", func(c *Config) { c.MaxConcurrency = -1 }, "max-concurrency"},
 		{"too much concurrency", func(c *Config) { c.Concurrency = DefaultMaxConcurrency + 1 }, "concurrency"},
+		{"negative CAPTCHA concurrency", func(c *Config) { c.CaptchaConcurrency = -1 }, "captcha-concurrency"},
+		{"too many CAPTCHAs at once", func(c *Config) { c.CaptchaConcurrency = MaxCaptchaConcurrency + 1 }, "captcha-concurrency"},
 		{"negative retries", func(c *Config) { c.MaxRetries = -1 }, "retries"},
 		{"zero streams", func(c *Config) { c.Streams = 0 }, "streams"},
 		{"negative slow speed", func(c *Config) { c.SlowSpeed = -1 }, "slow-speed"},
@@ -543,5 +546,17 @@ func TestListingCapsDefaultAndRefuseNegatives(t *testing.T) {
 		if err := c.Prepare(); err == nil {
 			t.Errorf("%d sources, %d files was accepted", bad.sources, bad.files)
 		}
+	}
+}
+
+// CAPTCHAs read at once default to four, and the setting names another.
+func TestTheCaptchaConcurrencyIsASetting(t *testing.T) {
+	cfg := &Config{DownloadDir: t.TempDir(), Concurrency: 4, Streams: 8, StallTimeout: time.Minute}
+	if err := cfg.Prepare(); err != nil || cfg.CaptchaConcurrency != DefaultCaptchaConcurrency || DefaultCaptchaConcurrency != 4 {
+		t.Fatalf("default: %d, err %v; want %d", cfg.CaptchaConcurrency, err, 4)
+	}
+	cfg = &Config{DownloadDir: t.TempDir(), Concurrency: 4, Streams: 8, StallTimeout: time.Minute, CaptchaConcurrency: 8}
+	if err := cfg.Prepare(); err != nil || cfg.CaptchaConcurrency != 8 {
+		t.Fatalf("set to 8: %d, err %v", cfg.CaptchaConcurrency, err)
 	}
 }

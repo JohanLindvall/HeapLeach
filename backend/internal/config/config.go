@@ -107,6 +107,9 @@ type Config struct {
 	// MaxConcurrency is the ceiling on Concurrency, whether set at startup
 	// or live in Settings. Zero means DefaultMaxConcurrency.
 	MaxConcurrency int
+	// CaptchaConcurrency is how many CAPTCHAs are read at once, each in a
+	// model session of its own. Zero means DefaultCaptchaConcurrency.
+	CaptchaConcurrency int
 	// ExitWhenIdle ends the process once there is nothing left to download
 	// and no browser is watching. Set only for a bare invocation, which is
 	// a desktop session rather than a service: see applyBareDefaults.
@@ -201,6 +204,9 @@ func FromEnv() (*Config, error) {
 		return nil, err
 	}
 	if c.MaxConcurrency, err = envInt("MAX_CONCURRENCY", c.MaxConcurrency); err != nil {
+		return nil, err
+	}
+	if c.CaptchaConcurrency, err = envInt("CAPTCHA_CONCURRENCY", c.CaptchaConcurrency); err != nil {
 		return nil, err
 	}
 	if c.MaxSources, err = envInt("MAX_SOURCES", c.MaxSources); err != nil {
@@ -405,6 +411,12 @@ func (c *Config) Prepare() error {
 	}
 	if c.Concurrency < 1 || c.Concurrency > c.MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 1 and %d, got %d", c.MaxConcurrency, c.Concurrency)
+	}
+	if c.CaptchaConcurrency == 0 {
+		c.CaptchaConcurrency = DefaultCaptchaConcurrency
+	}
+	if c.CaptchaConcurrency < 1 || c.CaptchaConcurrency > MaxCaptchaConcurrency {
+		return fmt.Errorf("captcha-concurrency must be between 1 and %d, got %d", MaxCaptchaConcurrency, c.CaptchaConcurrency)
 	}
 	if c.MaxRetries < 0 {
 		return fmt.Errorf("retries cannot be negative, got %d", c.MaxRetries)

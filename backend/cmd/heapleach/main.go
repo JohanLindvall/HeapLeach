@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/JohanLindvall/HeapLeach/internal/captcha"
 	"github.com/JohanLindvall/HeapLeach/internal/cli"
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
@@ -58,6 +59,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Before anything can ask for a CAPTCHA to be read.
+	captcha.SetConcurrency(cfg.CaptchaConcurrency)
 	cfg.Version = version
 	headless := len(cfg.URLs) > 0
 	var history *logstore.Buffer
@@ -334,6 +337,9 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency, "parallel transfers (1 to -max-concurrency)")
 	flags.IntVar(&cfg.MaxConcurrency, "max-concurrency", cfg.MaxConcurrency,
 		fmt.Sprintf("ceiling on parallel transfers, live setting included (0 is the default, %d)", config.DefaultMaxConcurrency))
+	flags.IntVar(&cfg.CaptchaConcurrency, "captcha-concurrency", cfg.CaptchaConcurrency,
+		fmt.Sprintf("CAPTCHAs read at once, each in a model session of its own (0 is the default, %d; at most %d)",
+			config.DefaultCaptchaConcurrency, config.MaxCaptchaConcurrency))
 	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host")
 	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")

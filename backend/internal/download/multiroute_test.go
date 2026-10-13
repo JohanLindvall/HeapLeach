@@ -268,16 +268,18 @@ func TestAFileIsReadThroughIdleRoutesOfTheirOwn(t *testing.T) {
 	}
 }
 
-// No extra stream starts while a file of the service is due to start: it
-// will want a route that works, and the dispatcher finding it one says
-// nothing, since most it can lease are untried. The last file has them.
-func TestNoExtraStreamWhileAFileOfTheServiceIsDue(t *testing.T) {
+// A file waiting behind the queue's limit on files at once waits for a slot,
+// not a route: nothing starts until a transfer ends, and that transfer's
+// route goes back with it. So it keeps no running file from extra streams,
+// as fifty such files kept 254 running ones to a stream apiece. A file that
+// could start does hold them back (routeWantedLocked).
+func TestAFileWaitingBehindTheLimitLeavesTheRunningOneItsExtraStreams(t *testing.T) {
 	r := newRouteRig(t, 3) // one worker
 	first, second := r.add("first.bin", nil), r.add("second.bin", nil)
 	r.m.Start()
 	r.waitDone(60*time.Second, first, second)
-	if n := len(r.servedBy("first.bin")); n != 1 {
-		t.Fatalf("first.bin came through %d routes while second.bin waited to start; want its own alone", n)
+	if n := len(r.servedBy("first.bin")); n < 2 {
+		t.Fatalf("first.bin came through %d route while second.bin waited for the only worker; want extra streams", n)
 	}
 	if n := len(r.servedBy("second.bin")); n < 2 {
 		t.Fatalf("second.bin, the last, came through %d route; want extra streams", n)
@@ -647,5 +649,64 @@ func TestAnUnreadRangeIsClaimedOnce(t *testing.T) {
 	table.release(first)
 	if again := table.claim(); again != first || again.requested.Load() != 0 {
 		t.Fatalf("claimed %+v; want the range given back, asked for afresh", again)
+	}
+}
+
+// The queue sets up only so many extra streams at once: each is a hunt and a
+// CAPTCHA, which the files' own routes need first. Extra streams still come,
+// a few at a time; it is no bound on how many run.
+func TestTheQueueSetsUpOnlySoManyExtraStreamsAtOnce(t *testing.T) {
+	r := newRouteRig(t, 6)
+	concurrency := 2
+	if err := r.m.ApplySettings(Settings{Concurrency: &concurrency}); err != nil {
+		t.Fatal(err)
+	}
+	r.m.timings.extraAcquisitions = 1
+	var mu sync.Mutex
+	own := map[string]string{}
+	slow := func(name string) func(context.Context, string) error {
+		return func(ctx context.Context, route string) error {
+			mu.Lock()
+			if own[name] == "" {
+				own[name] = route
+			}
+			extra := own[name] != route
+			mu.Unlock()
+			if extra { // long enough for the two files' setups to overlap
+				select {
+				case <-time.After(300 * time.Millisecond):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		}
+	}
+	first, second := r.add("first.bin", slow("first.bin")), r.add("second.bin", slow("second.bin"))
+	var most atomic.Int32
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+			if n := r.m.extraAcquiring.Load(); n > most.Load() {
+				most.Store(n)
+			}
+		}
+	}()
+	r.m.Start()
+	r.waitDone(60*time.Second, first, second)
+	close(stop)
+	<-sampled
+	if n := most.Load(); n > 1 {
+		t.Fatalf("%d extra streams were set up at once; want one at a time", n)
+	}
+	if len(r.servedBy("first.bin"))+len(r.servedBy("second.bin")) < 3 {
+		t.Fatal("no extra stream was set up at all")
 	}
 }

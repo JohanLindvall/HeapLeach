@@ -392,3 +392,34 @@ func TestAHeldJobsFilesWantNoRoutes(t *testing.T) {
 		t.Fatalf("held: wanted %v, demand %d; want neither", extra, demand)
 	}
 }
+
+// A file the queue has no slot for is not waiting for a route either: at the
+// concurrency limit nothing starts until a transfer ends, and that transfer's
+// route goes back with it. Counted, fifty files queued behind the limit kept
+// 254 running ones on a stream apiece.
+func TestAFileQueuedBehindTheLimitWantsNoRoute(t *testing.T) {
+	m := busyManager(t)
+	m.limit = 4
+	job := addTestJob(m, "waiting", "http://127.0.0.1:1", 1, 1<<20)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job.Items[0].pace = &extractor.Pace{Group: "keep2share", PerRoute: true}
+	for _, tc := range []struct {
+		running int
+		paused  bool
+		want    bool
+	}{
+		{running: 3, want: true},
+		{running: 4, want: false},
+		{running: 3, paused: true, want: false},
+	} {
+		m.running = tc.running
+		m.throttle.setPaused(tc.paused)
+		m.routeWanted = nil
+		if got := m.routeWantedLocked("keep2share"); got != tc.want {
+			t.Errorf("%d of %d running, paused %v: wanted %v; want %v", tc.running, m.limit, tc.paused, got, tc.want)
+		}
+	}
+	m.running = 0
+	m.throttle.setPaused(false)
+}
