@@ -656,10 +656,12 @@ Host-specific notes:
   met one that worked. The pool already shelves each such route. The cost, accepted on
   purpose, is that a host refusing every proxy would have files trying
   routes for as long as the pool offers any, then waiting in the queue,
-  rather than failing; each refusal also costs a CAPTCHA. Three more are the
+  rather than failing; each refusal also costs a CAPTCHA. Four more are the
   route's alone and cost the file nothing: a tunnel the proxy refuses at 502
   or 504 (it cannot reach the host from where it is), a TLS handshake that
-  never completes through the tunnel, and a challenge from the host. Counted,
+  never completes through the tunnel, a tunnel answered in another protocol
+  (a SOCKS proxy listed as an HTTP one, which net/http calls a malformed
+  response), and a challenge from the host. Counted,
   three files failed in an hour on a CDN that other routes were serving,
   each after forty route attempts. A host down for every route leaves its
   files waiting for one, as for refusals. Other timeouts after proxy setup,

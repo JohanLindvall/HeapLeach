@@ -422,7 +422,11 @@ func routeAtFault(err error) bool {
 	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 		return true
 	}
-	if _, routed := errors.AsType[*httpx.RouteError](err); routed && strings.Contains(err.Error(), "TLS handshake timeout") {
+	// A proxy that answered the tunnel in another protocol altogether, as a
+	// SOCKS proxy listed as an HTTP one does, comes back from net/http as a
+	// malformed response: it carries nothing, whatever is asked of it.
+	if _, routed := errors.AsType[*httpx.RouteError](err); routed &&
+		(strings.Contains(err.Error(), "TLS handshake timeout") || strings.Contains(err.Error(), "malformed HTTP response")) {
 		return true
 	}
 	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {

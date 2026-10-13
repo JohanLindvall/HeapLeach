@@ -512,6 +512,10 @@ func TestProxiesAtFaultDoNotSpendTheRetryBudget(t *testing.T) {
 			return fmt.Errorf("doodstream: fetch: %w", &httpx.RouteError{Err: &url.Error{
 				Op: "Get", URL: "https://cdn.example.test/media", Err: &httpx.ProxyRefusedError{Code: 502, Status: "502 Bad Gateway"}}})
 		},
+		"another protocol answering the tunnel": func() error {
+			return fmt.Errorf("probe: %w", &httpx.RouteError{Err: &url.Error{
+				Op: "Get", URL: "https://echo.example.test/", Err: errors.New(`malformed HTTP response "\x00Z\x00\x00"`)}})
+		},
 		"TLS never completing through the proxy": func() error {
 			return fmt.Errorf("doodstream: fetch: %w", &httpx.RouteError{Err: &url.Error{
 				Op: "Get", URL: "https://player.example.test/e/clip", Err: errTLSHandshakeTimeout{}}})
