@@ -47,6 +47,10 @@ type Manager struct {
 	// routeWanted remembers, per service, whether a file of it was due to
 	// start and not running when last asked; see multiroute.go.
 	routeWanted map[string]routeWant
+	// routeOutcomes counts how routed attempts ended since routeSummaryAt;
+	// dispatch logs and clears them once a minute (routeSummaryLocked).
+	routeOutcomes  map[routeOutcome]int
+	routeSummaryAt time.Time
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
@@ -492,7 +496,11 @@ func (m *Manager) dispatch() {
 		case <-ticker.C:
 			m.mu.Lock()
 			enabled := m.proxyEnabled
+			summary := m.routeSummaryLocked(time.Now())
 			m.mu.Unlock()
+			for _, args := range summary {
+				m.log.Info("route attempts", args...)
+			}
 			if !enabled {
 				continue
 			}

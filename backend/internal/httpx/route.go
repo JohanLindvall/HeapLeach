@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // ThroughProxy creates an isolated transport and cookie jar. Explicit routes
@@ -40,6 +42,7 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
 		tr.Proxy = http.ProxyURL(u)
+		tr.DialContext = (&net.Dialer{Timeout: config.ProxyDialTimeout, KeepAlive: 30 * time.Second}).DialContext
 		cp.proxyScheme = u.Scheme
 		tr.OnProxyConnectResponse = func(ctx context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
 			if pending, ok := ctx.Value(proxyConnectKey{}).(*atomic.Bool); ok {

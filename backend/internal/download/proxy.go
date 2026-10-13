@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -205,6 +207,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		lease, start = upgrade, time.Now()
 	}
 	if ctx.Err() == nil {
+		m.noteRouteOutcome(it, err)
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 			m.mu.Lock()
 			it.pace = challengePace(it.pace)
@@ -381,6 +384,103 @@ func routeAtFault(err error) bool {
 		return true
 	}
 	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
+// routeOutcome is one service's routed attempts that ended one way.
+type routeOutcome struct{ service, kind string }
+
+// routeOutcomeKinds are the ways a routed attempt ends, in the order the
+// summary lists them.
+var routeOutcomeKinds = []string{"dead", "refused", "waited", "transient", "stalled", "failed", "finished"}
+
+// routeOutcomeKind names how a routed attempt ended: dead, a proxy that
+// could not carry the request at all; refused, an address the host turned
+// away; waited, a host's timer for the address; then transient failures,
+// stalls, other failures, and attempts that finished their file.
+func routeOutcomeKind(err error) string {
+	if err == nil || errors.Is(err, errAlreadyComplete) {
+		return "finished"
+	}
+	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
+		return "waited"
+	}
+	if _, ok := errors.AsType[*extractor.RefusedError](err); ok {
+		return "refused"
+	}
+	if _, ok := errors.AsType[*stalledError](err); ok {
+		return "stalled"
+	}
+	if routeBroken(err) {
+		return "dead"
+	}
+	if transientRouteFailure(err) {
+		return "transient"
+	}
+	return "failed"
+}
+
+// noteRouteOutcome counts how a routed attempt for it ended.
+func (m *Manager) noteRouteOutcome(it *Item, err error) {
+	kind := routeOutcomeKind(err)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if it.pace == nil {
+		return
+	}
+	if m.routeOutcomes == nil {
+		m.routeOutcomes = make(map[routeOutcome]int)
+	}
+	m.routeOutcomes[routeOutcome{it.pace.Group, kind}]++
+}
+
+// routeSummaryLocked returns, once a RouteSummaryInterval, a log line's
+// fields per service: how its routed attempts ended since the last one, and
+// how many of its files are moving bytes now and how many are still looking
+// for a route that will. One line a minute says what a queue is spending its
+// routes on, where a line per attempt said it twenty times a second and
+// pushed everything else out of the log. Caller holds mu.
+func (m *Manager) routeSummaryLocked(now time.Time) [][]any {
+	if m.routeSummaryAt.IsZero() {
+		m.routeSummaryAt = now
+		return nil
+	}
+	if now.Sub(m.routeSummaryAt) < config.RouteSummaryInterval {
+		return nil
+	}
+	m.routeSummaryAt = now
+	moving, trying := map[string]int{}, map[string]int{}
+	for _, job := range m.jobs {
+		for _, it := range job.Items {
+			if it.Status != StatusRunning || it.route == nil || it.pace == nil {
+				continue
+			}
+			if it.speed > 0 {
+				moving[it.pace.Group]++
+			} else {
+				trying[it.pace.Group]++
+			}
+		}
+	}
+	services := map[string]bool{}
+	for o := range m.routeOutcomes {
+		services[o.service] = true
+	}
+	for s := range moving {
+		services[s] = true
+	}
+	for s := range trying {
+		services[s] = true
+	}
+	var lines [][]any
+	for _, s := range slices.Sorted(maps.Keys(services)) {
+		args := []any{"service", s}
+		for _, kind := range routeOutcomeKinds {
+			args = append(args, kind, m.routeOutcomes[routeOutcome{s, kind}])
+		}
+		lines = append(lines, append(args, "moving", moving[s], "trying", trying[s]))
+	}
+	clear(m.routeOutcomes)
+	return lines
 }
 
 // routeBroken is routeAtFault short of a refusal: a proxy that could not

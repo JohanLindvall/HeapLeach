@@ -60,6 +60,17 @@ const (
 	// an extra stream after attempts that got nowhere, each of which cost
 	// the host a CAPTCHA.
 	RouteExtraBackoffMax = 10 * time.Minute
+
+	// ProxyDialTimeout bounds the connection to a proxy itself. Most routes
+	// in a public feed are dead, and most dead ones never answer at all, so
+	// this is what one costs a file to find out. A live proxy answers in
+	// well under a second; at the 15 seconds every other dial is allowed,
+	// files spent nearly all their time waiting on routes that never would.
+	ProxyDialTimeout = 5 * time.Second
+
+	// RouteSummaryInterval is how often the outcome of routed attempts is
+	// logged, per service.
+	RouteSummaryInterval = time.Minute
 )
 
 // Tunables shared across packages. They live here rather than next to their

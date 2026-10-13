@@ -666,6 +666,19 @@ Host-specific notes:
   cost no retry, and appends the connection attempt to active notes so
   successive `requesting CAPTCHA (1/3)` attempts visibly differ.
 
+  The connection to a proxy itself is bounded tighter still
+  (`ProxyDialTimeout`, 5 seconds, set in `ThroughProxy`). Most routes in a
+  public feed are dead and most dead ones never answer, so the dial timeout
+  is what each costs a file. After a restart, 250 files spent nearly all
+  their time in 15-second dials, at about 22 dead routes a second.
+
+  Once a minute the dispatcher logs `route attempts` per service
+  (`routeSummaryLocked`): how routed attempts ended (dead, refused, waited,
+  transient, stalled, failed, finished), and how many files are moving
+  bytes or still trying. A line per attempt would be twenty a second, and
+  the 1,000-record log buffer would hold under a minute of anything else.
+  A queue that is all dead routes or all refusals says so in one line.
+
   The helper prints ranked readings, not one answer. The challenge is six
   letters and digits compared without regard to case, and a wrong answer
   leaves it open, so `resolve` tries up to `Keep2ShareCaptchaGuesses`
