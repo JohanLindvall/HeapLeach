@@ -1383,6 +1383,17 @@ them:
   chunk every time, that is 771 write syscalls down to 191; on a real
   connection, where a read is socket-sized, the ratio is far larger.
 
+  A connection starts on `config.WriteBufferStart` (64 KiB), and grows to
+  the full size only on filling that within `WriteBufferGrowWithin`, a
+  second, which is a connection moving at least 64 KiB/s. A free download
+  capped at 42 kB/s took the better part of half a minute to fill a full
+  buffer. That was a mebibyte apiece held for nothing, a quarter of a
+  gibibyte across 256 of them. And a connection dropped before its buffer
+  filled had written nothing, so its attempt looked unproductive to the
+  retry budget, which judges by what is on disk. A write of a full buffer
+  or more still goes straight through, measured against the full size, so a
+  fast connection fills its starting buffer at once and grows.
+
   The buffer belongs to **one connection**, not to the file: eight
   connections fill eight disjoint ranges at once, so a shared buffer would
   have nothing to coalesce and would need a lock to say so.
@@ -1780,9 +1791,10 @@ the default). It bounds the startup concurrency and the live setting, and
 reaches the Settings slider as the snapshot's `maxConcurrency`, through
 `Manager.maxConcurrency`, which also gives a config-less test manager the
 default. It was a fixed 32. Proxy routes changed what one process can
-carry, since each address takes its own Keep2Share transfer. Every
-connection buffers up to `WriteBufferSize` (1 MiB) before writing, so 256
-files split eight ways can hold about 2 GiB of buffers at worst.
+carry, since each address takes its own Keep2Share transfer. A connection
+fast enough to need it buffers up to `WriteBufferSize` (1 MiB) before
+writing, so 256 fast files split eight ways can hold about 2 GiB of buffers
+at worst. Slow ones keep the 64 KiB they start with (see the write buffers).
 
 **Parallel downloads and streams chosen in Settings outlive the process.**
 Every release restarts the service, and each restart put them back to the

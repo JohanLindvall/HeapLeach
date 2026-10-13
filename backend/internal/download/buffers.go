@@ -46,3 +46,17 @@ func borrowWriteBuffer() ([]byte, func()) {
 	buf := writePool.Get().(*[]byte)
 	return *buf, func() { writePool.Put(buf) }
 }
+
+// startPool recycles the WriteBufferStart buffers every connection begins
+// with; see bufferedWriterAt.grow.
+var startPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, config.WriteBufferStart)
+		return &buf
+	},
+}
+
+func borrowStartBuffer() ([]byte, func()) {
+	buf := startPool.Get().(*[]byte)
+	return *buf, func() { startPool.Put(buf) }
+}

@@ -2,7 +2,12 @@
 
 package download
 
-import "io"
+import (
+	"io"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
+)
 
 // Buffering what the engine writes.
 //
@@ -45,13 +50,29 @@ type bufferedWriterAt struct {
 	// is occupied.
 	start int64
 	held  int
+	// filling is when the run now held began, which tells a connection that
+	// needs the full-size buffer from one that does not; grown says buf is
+	// that one. now is time.Now, but for tests.
+	filling time.Time
+	grown   bool
+	now     func() time.Time
 }
 
-// newBufferedWriterAt wraps dst. Close returns the buffer to the pool, so
-// every caller must call it.
+// newBufferedWriterAt wraps dst, starting on a WriteBufferStart buffer (see
+// grow). Close returns the buffer to its pool, so every caller must call it.
 func newBufferedWriterAt(dst io.WriterAt, onFlush func(upTo int64)) *bufferedWriterAt {
-	buf, release := borrowWriteBuffer()
-	return &bufferedWriterAt{dst: dst, onFlush: onFlush, buf: buf, release: release}
+	buf, release := borrowStartBuffer()
+	return &bufferedWriterAt{dst: dst, onFlush: onFlush, buf: buf, release: release, now: time.Now}
+}
+
+// grow swaps the starting buffer, empty after a flush, for a full-size one,
+// for a connection that filled it within WriteBufferGrowWithin. A slower one
+// keeps it: see config.WriteBufferSize for what a full-size buffer costs a
+// connection that cannot fill it.
+func (w *bufferedWriterAt) grow() {
+	w.release()
+	w.buf, w.release = borrowWriteBuffer()
+	w.grown = true
 }
 
 // WriteAt takes p as the bytes at off, writing through only when it has to.
@@ -68,9 +89,11 @@ func (w *bufferedWriterAt) WriteAt(p []byte, off int64) (int, error) {
 			return 0, err
 		}
 	}
-	// Bigger than the buffer, with nothing held: buffering it would be a
-	// copy for nothing, since it cannot wait for company.
-	if w.held == 0 && len(p) >= len(w.buf) {
+	// A full buffer's worth or more, with nothing held: buffering it would
+	// be a copy for nothing, since it cannot wait for company. Measured
+	// against the full size, so a starting buffer still fills, and grows,
+	// from a connection fast enough to deliver large reads.
+	if w.held == 0 && len(p) >= config.WriteBufferSize {
 		n, err := w.dst.WriteAt(p, off)
 		if n > 0 {
 			w.note(off + int64(n))
@@ -78,7 +101,7 @@ func (w *bufferedWriterAt) WriteAt(p []byte, off int64) (int, error) {
 		return n, err
 	}
 	if w.held == 0 {
-		w.start = off
+		w.start, w.filling = off, w.now()
 	}
 
 	written := 0
@@ -87,10 +110,14 @@ func (w *bufferedWriterAt) WriteAt(p []byte, off int64) (int, error) {
 		w.held += n
 		written += n
 		if w.held == len(w.buf) {
+			fast := !w.grown && w.now().Sub(w.filling) < config.WriteBufferGrowWithin
 			if err := w.Flush(); err != nil {
 				return written - n, err
 			}
-			w.start = off + int64(written)
+			w.start, w.filling = off+int64(written), w.now()
+			if fast {
+				w.grow()
+			}
 		}
 	}
 	return written, nil

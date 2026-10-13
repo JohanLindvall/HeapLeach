@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -44,14 +45,16 @@ func (r *recordingWriterAt) WriteAt(p []byte, off int64) (int, error) {
 }
 
 // The whole point: many small positional writes must reach the file as few
-// large ones, with the bytes unchanged and in place.
+// large ones, with the bytes unchanged and in place. A connection this fast
+// fills its starting buffer at once and grows to the full size.
 func TestBufferedWriterCoalescesASequenceOfSmallWrites(t *testing.T) {
 	file := &recordingWriterAt{}
 	var flushed int64
 	w := newBufferedWriterAt(file, func(upTo int64) { flushed = upTo })
 
 	const chunk = 16 << 10
-	count := config.WriteBufferSize / chunk // exactly one buffer's worth
+	total := config.WriteBufferStart + config.WriteBufferSize // a starting buffer, then a full one
+	count := total / chunk
 	payload := make([]byte, chunk)
 	for i := range payload {
 		payload[i] = byte(i)
@@ -65,19 +68,49 @@ func TestBufferedWriterCoalescesASequenceOfSmallWrites(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	if len(file.writes) != 1 {
-		t.Errorf("%d small writes reached the file as %d writes, want 1", count, len(file.writes))
+	if want := []int{config.WriteBufferStart, config.WriteBufferSize}; len(file.sizes) != 2 ||
+		file.sizes[0] != want[0] || file.sizes[1] != want[1] {
+		t.Errorf("%d small writes reached the file as writes of %v, want %v", count, file.sizes, want)
 	}
-	if file.sizes[0] != config.WriteBufferSize {
-		t.Errorf("wrote %d bytes, want a full buffer of %d", file.sizes[0], config.WriteBufferSize)
-	}
-	if flushed != int64(config.WriteBufferSize) {
-		t.Errorf("reported %d bytes durable, want %d", flushed, config.WriteBufferSize)
+	if flushed != int64(total) {
+		t.Errorf("reported %d bytes durable, want %d", flushed, total)
 	}
 	for i := range count {
 		if got := file.data[i*chunk : (i+1)*chunk]; string(got) != string(payload) {
 			t.Fatalf("chunk %d came out wrong", i)
 		}
+	}
+}
+
+// A connection too slow to fill the starting buffer within a second keeps it.
+// At the few tens of kilobytes a second a free download is capped at, a
+// full-size buffer is a mebibyte held for half a minute, and a connection
+// dropped before it fills has nothing on disk to show for its attempt.
+func TestBufferedWriterStaysSmallForASlowConnection(t *testing.T) {
+	file := &recordingWriterAt{}
+	var flushed int64
+	w := newBufferedWriterAt(file, func(upTo int64) { flushed = upTo })
+	clock := time.Unix(0, 0)
+	w.now = func() time.Time { return clock }
+
+	const chunk = 16 << 10 // four to a starting buffer, 400 ms apart: 1.6 s to fill
+	fills := 3
+	payload := make([]byte, chunk)
+	for i := range fills * config.WriteBufferStart / chunk {
+		clock = clock.Add(400 * time.Millisecond)
+		if n, err := w.WriteAt(payload, int64(i*chunk)); n != chunk || err != nil {
+			t.Fatalf("write %d: %d, %v", i, n, err)
+		}
+	}
+	if w.grown || len(w.buf) != config.WriteBufferStart {
+		t.Fatalf("grown=%v with a %d-byte buffer; a slow connection keeps the %d-byte start", w.grown, len(w.buf), config.WriteBufferStart)
+	}
+	if len(file.sizes) != fills || flushed != int64(fills*config.WriteBufferStart) {
+		t.Fatalf("writes %v, %d durable; want %d starting buffers' worth on disk as they fill",
+			file.sizes, flushed, fills)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
