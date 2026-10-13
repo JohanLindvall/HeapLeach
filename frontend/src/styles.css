@@ -646,24 +646,6 @@ code {
   border-bottom: 1px solid var(--edge-flat);
 }
 
-.group-limits {
-  padding: 1.15rem 0;
-  border-bottom: 1px solid var(--edge-flat);
-  font-size: 0.85rem;
-}
-.group-limits h3 { margin: 0 0 0.25rem; font-size: 0.95rem; }
-.group-limits p { margin: 0 0 0.75rem; color: var(--text-dim); }
-.group-limits__table { display: flex; flex-direction: column; gap: 0.35rem; }
-.group-limits__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 7.5rem 7.5rem 4.5rem;
-  gap: 0.6rem;
-  align-items: center;
-}
-.group-limits__row--head { color: var(--text-dim); font-size: 0.75rem; }
-.group-limits__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.group-limits__row input { width: 100%; box-sizing: border-box; }
-
 .settings-panel__proxy-head {
   display: flex;
   justify-content: space-between;
@@ -740,7 +722,6 @@ code {
 @media (max-width: 700px) {
   .proxy-sources__fields { grid-template-columns: 1fr; }
   .settings-panel__transfers { flex-direction: column; align-items: stretch; }
-  .group-limits__row { grid-template-columns: minmax(0, 1fr) 5rem 5rem 4rem; }
   .settings-panel__transfers .concurrency input { flex: 1; }
   .proxy-table th, .proxy-table td { padding: 0.65rem; }
   .proxy-table code { max-width: 15rem; }
@@ -1604,6 +1585,40 @@ button.jobs__dir:hover {
   display: flex;
   gap: 0.15rem;
   flex-shrink: 0;
+}
+
+/* A job holding limits of its own says so even with the editor closed. */
+.btn--icon.is-limited { color: var(--accent-b); }
+
+.job-limits {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem 0.9rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--edge-flat);
+  font-size: 0.76rem;
+}
+
+.job-limits__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--text-dim);
+}
+
+.job-limits__input {
+  width: 8rem;
+  padding: 0.42rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.job-limits__hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-faint);
 }
 
 .job__meta {

@@ -8,12 +8,14 @@ import {
   removeJob,
   retryItem,
   retryJob,
+  setJobLimit,
   updateSettings,
 } from './api';
 import { AddForm } from './components/AddForm';
 import { DownloadDir } from './components/DownloadDir';
 import { FileList } from './components/FileList';
 import { JobCard } from './components/JobCard';
+import type { QueueLimits } from './components/JobLimits';
 import { LogPanel } from './components/LogPanel';
 import { ProgressPanel } from './components/ProgressPanel';
 import { Sidebar } from './components/Sidebar';
@@ -31,6 +33,7 @@ import {
   type Filter,
   type Phase,
 } from './status';
+import type { JobLimit } from './types';
 import { useLiveState } from './useLiveState';
 import { useProgress } from './useProgress';
 import { useSpeedHistory } from './useSpeedHistory';
@@ -133,6 +136,18 @@ export default function App() {
   const onRetryItem = useCallback(
     (jobId: string, itemId: string) => run(() => retryItem(jobId, itemId)),
     [run],
+  );
+  const onLimitJob = useCallback(
+    (jobId: string, limit: JobLimit) => run(() => setJobLimit(jobId, limit)),
+    [run],
+  );
+  // One object while the queue's limits stand, so the cards' memo holds.
+  const concurrency = snapshot?.concurrency ?? 1;
+  const streams = snapshot?.streams ?? 1;
+  const speedLimit = snapshot?.speedLimit ?? 0;
+  const queueLimits = useMemo<QueueLimits>(
+    () => ({ files: concurrency, streams, speed: speedLimit }),
+    [concurrency, streams, speedLimit],
   );
   // A job's retry takes every failed and cancelled file in it, so retrying
   // each job once covers every file in the failed list.
@@ -299,6 +314,8 @@ export default function App() {
                     onRemove={onRemoveJob}
                     onCancelItem={onCancelItem}
                     onRetryItem={onRetryItem}
+                    onLimit={onLimitJob}
+                    queue={queueLimits}
                   />
                 ))}
               </div>

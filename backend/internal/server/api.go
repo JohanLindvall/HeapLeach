@@ -116,6 +116,19 @@ func (s *Server) handleJobRemove(w http.ResponseWriter, r *http.Request) {
 	s.jobAction(w, r, s.mgr.RemoveJob)
 }
 
+// handleJobLimits replaces a job's own limits; a field left out has none.
+func (s *Server) handleJobLimits(w http.ResponseWriter, r *http.Request) {
+	var req download.JobLimit
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := s.mgr.SetJobLimit(r.PathValue("jobID"), req); err != nil {
+		writeManagerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleItemCancel(w http.ResponseWriter, r *http.Request) {
 	s.itemAction(w, r, s.mgr.CancelItem)
 }

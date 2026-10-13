@@ -59,7 +59,7 @@ export interface ItemView {
 }
 
 /** One submitted URL and everything behind it. */
-export interface JobView {
+export interface JobView extends JobLimit {
   /**
    * When set, `items` holds only the rows that changed since the last frame
    * and is to be merged into what is already held rather than replacing it.
@@ -90,13 +90,16 @@ export interface JobView {
 }
 
 /**
- * One transfer group's own limits, beneath the queue's. A field left out
- * leaves the group to the queue's settings and its host's own pacing; 0 files
- * holds its new downloads.
+ * A job's own limits, beneath the queue's. A field left out leaves the job to
+ * the queue's settings and its host's own pacing.
  */
-export interface GroupLimit {
-  files?: number;
-  streams?: number;
+export interface JobLimit {
+  /** Files of the job downloading at once; 0 holds its new downloads. */
+  fileLimit?: number;
+  /** Connections each of its files may use. */
+  streamLimit?: number;
+  /** Bytes per second across the job's transfers; absent is no cap of its own. */
+  speedLimit?: number;
 }
 
 /** Whole-application state, pushed over server-sent events. */
@@ -133,10 +136,6 @@ export interface Snapshot {
   hostCount: number;
   /** Jobs restored from the last run and waiting for a Resume. */
   held: number;
-  /** Transfer groups with files still to download, or a limit of their own. */
-  groups?: string[];
-  /** The groups' own limits, by group. */
-  groupLimits?: Record<string, GroupLimit>;
   /** The server's build, e.g. "v1.2.62". */
   version?: string;
 }

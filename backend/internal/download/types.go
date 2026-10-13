@@ -133,9 +133,9 @@ type Item struct {
 	// resolver may point the item at a different host mid-flight and the
 	// release must match the reservation.
 	hostKey string
-	// groupKey is the transfer group the item was counted against while it
-	// runs (groupOfLocked), released with it.
-	groupKey string
+	// limiter is its job's speed limit, shared by every file of the job and
+	// fixed when the item is made, so readers need no lock to find it.
+	limiter *throttle
 	// overloadWaits counts the turns this item has been sent away from an
 	// overloaded host. It lives on the item rather than in the transfer
 	// because the waiting happens in the queue: the item loses its slot
@@ -184,7 +184,14 @@ type Job struct {
 	Err       string
 	CreatedAt time.Time
 	Items     []*Item
+	// Limit is the job's own limits beneath the queue's (joblimits.go),
+	// replaced whole whenever it changes.
+	Limit JobLimit
 
+	// limiter is the bucket the job's speed limit is kept in. It lives as
+	// long as the job and is changed in place, so a transfer already reading
+	// through it is held to a new limit at once.
+	limiter *throttle
 	// resolving is true between submission and the extractor returning.
 	resolving   bool
 	resolveNote string // transient source progress, guarded by Manager.mu
@@ -289,6 +296,10 @@ type JobView struct {
 	// go. Its items read "queued", which alone says something is about to
 	// start; without this the UI had nothing to offer that would start it.
 	Held bool `json:"held,omitempty"`
+	// The job's own limits, as flat fields (fileLimit, streamLimit,
+	// speedLimit): an object would be a new one in every frame, and the
+	// browser's cards compare a job's fields to skip rendering it again.
+	JobLimit
 }
 
 // Snapshot is the whole application state, broadcast over SSE.
@@ -326,11 +337,6 @@ type Snapshot struct {
 	// out of Queued: a queue that is not going to move by itself should not
 	// read as one about to.
 	Held int `json:"held"`
-	// GroupLimits are the transfer groups' own limits, and Groups the groups
-	// the queue has files of still to download or a limit for: what the
-	// settings panel offers to limit.
-	GroupLimits map[string]GroupLimit `json:"groupLimits,omitempty"`
-	Groups      []string              `json:"groups,omitempty"`
 	// Version is the server's build. The browser shows it, and a version
 	// that changes under an open tab is a server replaced by a deploy while
 	// the page goes on running the interface it was loaded with.
@@ -392,6 +398,7 @@ func (j *Job) view(note func(*Item) string) JobView {
 		Total:     len(j.Items),
 		SizeKnown: true,
 		Held:      j.restored,
+		JobLimit:  j.Limit,
 	}
 	if j.resolving && !j.canceled {
 		v.Note = j.resolveNote

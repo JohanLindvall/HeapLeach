@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/jobs/{jobID}/cancel", s.handleJobCancel)
 	mux.HandleFunc("POST /api/jobs/{jobID}/retry", s.handleJobRetry)
 	mux.HandleFunc("DELETE /api/jobs/{jobID}", s.handleJobRemove)
+	mux.HandleFunc("POST /api/jobs/{jobID}/limits", s.handleJobLimits)
 	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/cancel", s.handleItemCancel)
 	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/retry", s.handleItemRetry)
 

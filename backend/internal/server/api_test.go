@@ -417,3 +417,50 @@ func TestProxySettingsAndInventoryAPI(t *testing.T) {
 		t.Fatal("disabling lost the inventory")
 	}
 }
+
+// A job's limits are replaced whole over the API, refused when no job could
+// have them, and shown in the job's own view.
+func TestJobLimitsOverTheAPI(t *testing.T) {
+	manager, handler := newTestServer(t)
+	if rec := postJSON(t, handler, "/api/jobs/nope/limits", `{}`); rec.Code != http.StatusNotFound {
+		t.Errorf("a job that does not exist = %d, want 404", rec.Code)
+	}
+	// example.test never resolves, so the job exists but goes nowhere.
+	id, err := manager.Add("https://job.example.test/file.bin", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/jobs/" + id + "/limits"
+	for _, bad := range []string{`{"fileLimit":-1}`, `{"streamLimit":0}`, `{"speedLimit":-1}`, `{"files":1}`} {
+		if rec := postJSON(t, handler, path, bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, rec.Code)
+		}
+	}
+	if rec := postJSON(t, handler, path, `{"fileLimit":0,"streamLimit":2,"speedLimit":1000000}`); rec.Code != http.StatusOK {
+		t.Fatalf("set = %d: %s", rec.Code, rec.Body)
+	}
+	limits := func() map[string]any {
+		var state struct {
+			Jobs []map[string]any `json:"jobs"`
+		}
+		if err := json.Unmarshal(get(t, handler, "/api/state").Body.Bytes(), &state); err != nil || len(state.Jobs) != 1 {
+			t.Fatalf("state: %v", err)
+		}
+		got := map[string]any{}
+		for _, field := range []string{"fileLimit", "streamLimit", "speedLimit"} {
+			if v, ok := state.Jobs[0][field]; ok {
+				got[field] = v
+			}
+		}
+		return got
+	}
+	if got := limits(); got["fileLimit"] != 0.0 || got["streamLimit"] != 2.0 || got["speedLimit"] != 1e6 {
+		t.Fatalf("limits shown: %v", got)
+	}
+	if rec := postJSON(t, handler, path, `{}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear = %d: %s", rec.Code, rec.Body)
+	}
+	if got := limits(); len(got) != 0 {
+		t.Fatalf("limits shown after clearing them: %v", got)
+	}
+}

@@ -36,10 +36,6 @@ func (m *Manager) snapshotLocked() Snapshot {
 		DiskMinFree: m.minFree,
 		HostCount:   m.hostCount,
 		Version:     m.version,
-		Groups:      m.groupsLocked(),
-	}
-	if len(m.groupLimits) > 0 {
-		snap.GroupLimits = cloneGroupLimits(m.groupLimits)
 	}
 	// Newest first: the job someone just added belongs at the top.
 	for _, v := range slices.Backward(m.order) {
@@ -306,7 +302,8 @@ func (m *Manager) sampleLocked(now time.Time) bool {
 				it.speed = config.SpeedSmoothing*it.speed + (1-config.SpeedSmoothing)*instant
 			}
 			extra := it.extraBytes.Load()
-			m.sampleProxyLocked(it, now, current-it.lastBytes-(extra-it.lastExtraBytes), now.Sub(it.lastSample), limited)
+			m.sampleProxyLocked(it, now, current-it.lastBytes-(extra-it.lastExtraBytes), now.Sub(it.lastSample),
+				limited || it.limiter.currentLimit() > 0)
 			it.lastBytes, it.lastExtraBytes, it.lastSample = current, extra, now
 		}
 	}

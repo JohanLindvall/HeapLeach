@@ -168,7 +168,7 @@ func TestFetchSegmentCountsBytesAsTheyArrive(t *testing.T) {
 
 	m := busyManager(t)
 	var fetched atomic.Int64
-	data, err := m.fetchSegment(context.Background(), srv.URL, nil, &fetched)
+	data, err := m.fetchSegment(context.Background(), nil, srv.URL, nil, &fetched)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestFetchSegmentRetriesAndGivesUp(t *testing.T) {
 
 	m := busyManager(t)
 	var fetched atomic.Int64
-	if _, err := m.fetchSegment(context.Background(), srv.URL, nil, &fetched); err == nil {
+	if _, err := m.fetchSegment(context.Background(), nil, srv.URL, nil, &fetched); err == nil {
 		t.Fatal("a 404 part fetched successfully")
 	}
 	// 404 is definitive: asking again gets the same answer.

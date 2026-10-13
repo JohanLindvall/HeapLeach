@@ -498,8 +498,8 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	if routeSource != nil {
 		maxStreams, group = m.streams, it.pace.Group
 	}
-	// A transfer group's own limit replaces its host's, beneath the queue's.
-	if limit := m.groupStreamsLocked(it); limit > 0 {
+	// A job's own limit replaces its host's, beneath the queue's.
+	if limit := m.jobStreamsLocked(it); limit > 0 {
 		maxStreams = min(m.streams, limit)
 	}
 	m.mu.Unlock()
@@ -770,7 +770,7 @@ func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterA
 	writer := &offsetWriter{dst: out, at: offset}
 	buf, release := borrowChunk()
 	defer release()
-	_, err = io.CopyBuffer(&progressWriter{item: it, w: writer}, m.throttled(ctx, body), buf)
+	_, err = io.CopyBuffer(&progressWriter{item: it, w: writer}, m.throttled(ctx, it.limiter, body), buf)
 	return err
 }
 

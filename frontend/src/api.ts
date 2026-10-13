@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import type { AddResponse, LogPage, ProxyPage, Snapshot, GroupLimit } from './types';
+import type { AddResponse, JobLimit, LogPage, ProxyPage, Snapshot } from './types';
 
 /** Error carrying the server's message for a failed API call. */
 export class ApiError extends Error {
@@ -92,8 +92,6 @@ export interface Settings {
   proxies: boolean;
   proxyEndpoints: string[];
   proxyFeeds: string[];
-  /** Every transfer group's own limits; a group left out has none. */
-  groups: Record<string, GroupLimit>;
 }
 
 /** The source editor fetches this explicitly; credentials stay out of SSE. */
@@ -133,6 +131,14 @@ export function cancelJob(jobId: string): Promise<void> {
 
 export function retryJob(jobId: string): Promise<void> {
   return request<void>(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
+}
+
+/** Replace a job's own limits; a field left out has none of its own. */
+export function setJobLimit(jobId: string, limit: JobLimit): Promise<void> {
+  return request<void>(`/api/jobs/${encodeURIComponent(jobId)}/limits`, {
+    method: 'POST',
+    body: JSON.stringify(limit),
+  });
 }
 
 export function removeJob(jobId: string): Promise<void> {

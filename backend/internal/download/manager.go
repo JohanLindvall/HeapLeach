@@ -47,10 +47,9 @@ type Manager struct {
 	// routeWanted remembers, per service, whether a file of it was due to
 	// start and not running when last asked; see multiroute.go.
 	routeWanted map[string]routeWant
-	// groupLimits lowers the queue's limits for transfer groups, and
-	// groupActive counts each group's transfers running (groups.go).
-	groupLimits map[string]GroupLimit
-	groupActive map[string]int
+	// jobActive counts each job's transfers running, which its limit on
+	// files at once is held to (joblimits.go).
+	jobActive map[string]int
 	// routeOutcomes counts how routed attempts ended since routeSummaryAt;
 	// dispatch logs and clears them once a minute (routeSummaryLocked).
 	routeOutcomes  map[routeOutcome]int
@@ -293,6 +292,7 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 		Host:      m.reg.Find(u).Name(),
 		Password:  password,
 		CreatedAt: time.Now(),
+		limiter:   newThrottle(0),
 	}
 
 	m.mu.Lock()
@@ -487,6 +487,7 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		cipher:        f.Cipher,
 		pace:          f.Pace,
 		reject:        f.Reject,
+		limiter:       job.limiter,
 	}
 }
 
@@ -551,11 +552,10 @@ func (m *Manager) dispatch() {
 			// spans exactly the worker's ownership of the item.
 			it.hostKey = m.hostKeyLocked(it)
 			m.hostActive[it.hostKey]++
-			it.groupKey = m.groupOfLocked(it)
-			if m.groupActive == nil {
-				m.groupActive = make(map[string]int)
+			if m.jobActive == nil {
+				m.jobActive = make(map[string]int)
 			}
-			m.groupActive[it.groupKey]++
+			m.jobActive[it.JobID]++
 			if it.route != nil {
 				m.proxyRunning[it.pace.Group]++
 			}
@@ -611,7 +611,7 @@ func (m *Manager) nextLocked() *Item {
 	unavailableRoutes := make(map[routeGroup]bool)
 	for len(m.queue) > 0 {
 		it := m.queue[0]
-		if it.Status == StatusQueued && !it.inFlight && (it.notBefore.After(now) || m.hostFullLocked(it) || m.groupHeldLocked(it) || !m.leaseRouteLocked(it, unavailableRoutes)) {
+		if it.Status == StatusQueued && !it.inFlight && (it.notBefore.After(now) || m.hostFullLocked(it) || m.jobHeldLocked(it) || !m.leaseRouteLocked(it, unavailableRoutes)) {
 			break
 		}
 		m.queue[0] = nil
@@ -629,7 +629,7 @@ func (m *Manager) nextLocked() *Item {
 			kept = append(kept, it)
 		case it.Status != StatusQueued || it.inFlight:
 			// Cancelled where it stood, or still owned: forget it.
-		case it.notBefore.After(now), m.hostFullLocked(it), m.groupHeldLocked(it), !m.leaseRouteLocked(it, unavailableRoutes):
+		case it.notBefore.After(now), m.hostFullLocked(it), m.jobHeldLocked(it), !m.leaseRouteLocked(it, unavailableRoutes):
 			kept = append(kept, it)
 		default:
 			chosen = it
@@ -797,10 +797,9 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 		delete(m.hostActive, it.hostKey)
 	}
 	it.hostKey = ""
-	if m.groupActive[it.groupKey]--; m.groupActive[it.groupKey] <= 0 {
-		delete(m.groupActive, it.groupKey)
+	if m.jobActive[it.JobID]--; m.jobActive[it.JobID] <= 0 {
+		delete(m.jobActive, it.JobID)
 	}
-	it.groupKey = ""
 	m.mu.Unlock()
 
 	m.markDirty()
@@ -1080,11 +1079,14 @@ func (m *Manager) itemNoteLocked(it *Item) string {
 	if !it.notBefore.IsZero() {
 		left := time.Until(it.notBefore)
 		if left <= 0 {
-			return ""
+			return m.jobHoldNoteLocked(it)
 		}
 		return fmt.Sprintf("%s — %s left", it.Note, minutesLeft(left))
 	}
 	if it.waitingFor == "" {
+		if note := m.jobHoldNoteLocked(it); note != "" {
+			return note
+		}
 		if it.Status == StatusRunning && it.route != nil && it.routeAttempts > 1 && it.Note != "" {
 			return connectionNote(it.Note, it.routeAttempts)
 		}

@@ -682,11 +682,10 @@ the same process preserves an accepted ticket and reuses unexpired download
 links.
 
 Open **Settings** in the UI to change files downloaded at once, streams per
-file, and the speed limit. **Limits per group** lowers those for one service
-(Keep2Share, FileBoom) or one site: how many of its files download at once,
-and how many streams each may use, never above the values above them. Files
-set to 0 holds that group's new downloads while those running finish. These
-limits are kept across restarts. The same panel enables or disables **download proxies**
+file, and the speed limit. A job's gauge button sets **limits for that job**
+beneath those: how many of its files download at once, how many streams each
+may use, and how fast it may go. Files set to 0 holds the job's new downloads
+while those running finish. These limits are kept across restarts. The same panel enables or disables **download proxies**
 and edits proxy endpoints and discovery feeds without restarting HeapLeach.
 These settings apply to the current session; flags and environment variables
 set the startup defaults. Active transfers keep their assigned route. When
@@ -895,6 +894,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `fileboom`, or `cloudflare`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
+| `POST` | `/api/jobs/{id}/limits` | `{"fileLimit": n, "streamLimit": n, "speedLimit": n}`, each optional: replaces the job's own limits beneath the queue's; a field left out has none. `fileLimit` 0 holds its new downloads. |
 | `DELETE` | `/api/jobs/{id}` | Cancel and forget. |
 | `POST` | `/api/jobs/{id}/items/{itemId}/cancel` · `/retry` | One file. |
 

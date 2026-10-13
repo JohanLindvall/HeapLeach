@@ -1256,7 +1256,7 @@ Tests live in `internal/download/paths_test.go`.
 **Pause and the rate ceiling are one mechanism** (`throttle.go`). Every
 read draws from a single shared token bucket; pausing is a gate on the same
 object, and the dispatcher refuses to start new items while it is closed.
-Three consequences worth keeping in mind:
+Four consequences worth keeping in mind:
 
 - A paused transfer is idle *on purpose*, so `watchForStall` is given the
   pause predicate and does not count that time against it. Without that,
@@ -1270,6 +1270,14 @@ Three consequences worth keeping in mind:
   exactly at the ceiling can go a long time without ever waiting.
 - A nil `*throttle` is valid and inert (unlimited, never paused). The tests
   build `&Manager{}` by hand, and that has to keep working.
+- A job with a speed limit of its own has a second bucket (`Job.limiter`),
+  and `throttledReader` draws on it first: waiting there holds back that job
+  alone, where waiting with the queue's tokens in hand would hold back every
+  other job with it. The supervisors ask its `limiting()` beside the queue's,
+  and a job held to its own speed constrains its route measurements as a
+  capped queue does. The bucket is made with the job and changed in place,
+  so a running transfer is held to a new limit at once, and every item takes
+  the pointer when it is made, so readers need no lock to find it.
 
 **The queue outlives the process** (`persist.go`, `state.go`). Written every
 `config.StateSaveInterval` (ten minutes — it carries a line per file, and at
@@ -1989,23 +1997,23 @@ would see nothing happen. A queue saved before this has no settings, and the
 configuration stands. A kept concurrency is held under the current ceiling.
 Pause is not kept: resuming stays the user's word, or `HEAPLEACH_RESUME`'s.
 
-**Transfer groups can be held beneath the queue's limits** (`groups.go`).
-A group is a service's pacing group where its host declares one
-(keep2share, fileboom, cloudflare for WAF recovery), and otherwise the site
-the job was added from. Not the host the file resolved to, which for a
-storage service is a server name nobody would recognise in a list.
-`GroupLimit` sets how many of a group's files download at once and how many
-streams each may use. The queue's own settings still apply over it, and it
-replaces what the host asks for itself within them. A host that allows one
-connection can be allowed three, and one that splits freely capped at two.
-Files of 0 holds the group's new downloads (`groupHeldLocked`, which says so
-in the note), and those running finish. The dispatcher counts each group's
-running transfers (`groupActive`, keyed at dispatch as `Item.groupKey`)
-beside `hostActive`. Limits arrive as the whole set in `Settings.Groups`,
-are saved with the queue like concurrency and streams (no configuration
-sets them, so they are kept whatever it says), and ride in the snapshot
-with the groups the queue has files of (`Snapshot.Groups`), which is what
-the panel offers.
+**A job can be held beneath the queue's limits** (`joblimits.go`).
+`JobLimit` sets how many of the job's files download at once, how many
+streams each may use, and how fast the job may go (see the throttle above).
+The queue's own settings still apply over it, and its streams replace what
+the host asks for itself within them. A host that allows one connection can
+be allowed three, and one that splits freely capped at two. Files of 0 holds
+the job's new downloads, and those running finish. The dispatcher counts
+each job's running transfers (`jobActive`) beside `hostActive`. The note on
+a held file (`jobHoldNoteLocked`) is rendered per snapshot rather than
+stored, so it follows the limit as it changes and is gone once it is lifted.
+`POST /api/jobs/{id}/limits` replaces a job's limits whole. They are saved
+with the job: no configuration sets them, so they are kept whatever it says,
+under the ceiling in force when they are read back. The job's view carries
+them as flat fields (`fileLimit`, `streamLimit`, `speedLimit`), since an
+object would be a new one in every frame and defeat the cards' memo. These
+limits were first set per transfer group, a service or a site. The job is
+what someone adds and watches, and what they meant.
 
 **What names a job's folder is `Result.Title` alone.** An extractor that has
 something to admit — a listing cut short by a cap or a rate limit — puts it
@@ -2063,9 +2071,11 @@ first version a snapshot reports is taken as the page's own, and a later,
 different one turns the badge into a reload button.
 
 The header's Settings button opens live concurrency, streams, speed and
-download proxy controls, and the limits per transfer group (`GroupLimits`):
-a row per group the snapshot names, number fields that commit on Enter or
-blur and are held to the queue's values, the server's value shown otherwise. `ProxyList` selects Keep2Share, FileBoom or WAF recovery with the
+download proxy controls. Each job card's gauge button opens that job's own
+limits (`JobLimits`): number fields that commit on Enter or blur and are held
+to the queue's values, a speed menu offering only speeds beneath the
+queue's, and the server's value shown otherwise. Tags on the card say which
+limits hold while it is closed. `ProxyList` selects Keep2Share, FileBoom or WAF recovery with the
 `site` query and polls `/api/proxies` only while mounted and the
 tab is visible; the inventory can contain tens of thousands of routes and
 must not be added to SSE snapshots. Filtering, sorting and pagination happen

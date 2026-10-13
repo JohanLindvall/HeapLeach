@@ -21,9 +21,6 @@ type Settings struct {
 	Proxies        *bool     `json:"proxies"`
 	ProxyEndpoints *[]string `json:"proxyEndpoints"`
 	ProxyFeeds     *[]string `json:"proxyFeeds"`
-	// Groups replaces every transfer group's limits (groups.go). A group
-	// left out has none of its own.
-	Groups *map[string]GroupLimit `json:"groups"`
 }
 
 // CurrentSettings is fetched explicitly by the editor. Endpoint credentials
@@ -36,10 +33,9 @@ func (m *Manager) CurrentSettings() Settings {
 	enabled := m.proxyEnabled
 	endpoints := append([]string{}, m.proxyConfig.Endpoints...)
 	feeds := append([]string{}, m.proxyConfig.Feeds...)
-	groups := cloneGroupLimits(m.groupLimits)
 	return Settings{Concurrency: &concurrency, Streams: &streams, Paused: &paused,
 		SpeedLimit: &limit, DownloadDir: &dir, Proxies: &enabled,
-		ProxyEndpoints: &endpoints, ProxyFeeds: &feeds, Groups: &groups}
+		ProxyEndpoints: &endpoints, ProxyFeeds: &feeds}
 }
 
 // maxConcurrency is the configured ceiling on parallel transfers. A manager
@@ -64,11 +60,6 @@ func (m *Manager) ApplySettings(s Settings) error {
 	}
 	if s.SpeedLimit != nil && *s.SpeedLimit < 0 {
 		return fmt.Errorf("speed limit cannot be negative, got %d", *s.SpeedLimit)
-	}
-	if s.Groups != nil {
-		if err := checkGroupLimits(*s.Groups, m.maxConcurrency()); err != nil {
-			return err
-		}
 	}
 	var dir string
 	if s.DownloadDir != nil {
@@ -140,11 +131,6 @@ func (m *Manager) ApplySettings(s Settings) error {
 	}
 	if s.Streams != nil && m.streams != *s.Streams {
 		m.streams, changed, kept = *s.Streams, true, true
-	}
-	if s.Groups != nil {
-		if groups := cloneGroupLimits(*s.Groups); !sameGroupLimits(groups, m.groupLimits) {
-			m.groupLimits, changed, kept = groups, true, true
-		}
 	}
 	if s.SpeedLimit != nil && m.throttle.currentLimit() != *s.SpeedLimit {
 		m.throttle.setLimit(*s.SpeedLimit)

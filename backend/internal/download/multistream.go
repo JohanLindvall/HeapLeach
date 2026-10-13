@@ -347,7 +347,7 @@ func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bo
 	// that cannot help, because the ceiling is shared across all of them —
 	// and with several files running, every one of them would fan out at
 	// once for the same wrong reason.
-	if t.manager.throttle.isPaused() || t.manager.throttle.limiting() {
+	if t.manager.throttle.isPaused() || t.manager.throttle.limiting() || t.item.limiter.limiting() {
 		return false
 	}
 	if speed >= float64(t.slowBelow) {
@@ -464,7 +464,7 @@ func (t *segmentedTransfer) copy(ctx context.Context, seg *segment, body io.Read
 		}
 	}()
 
-	reader := t.manager.throttled(ctx, body)
+	reader := t.manager.throttled(ctx, t.item.limiter, body)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

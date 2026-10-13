@@ -266,11 +266,6 @@ const (
 	// MaxStreams bounds what the setting may be raised to.
 	MaxStreams = 16
 
-	// MaxGroupLimits bounds how many transfer groups may have limits of their
-	// own, and MaxGroupNameLength their names: a group is a service or a site.
-	MaxGroupLimits     = 64
-	MaxGroupNameLength = 253
-
 	// DefaultSlowSpeed is the throughput, in bytes per second, below which a
 	// transfer is considered slow enough to be worth another connection.
 	DefaultSlowSpeed = 2_000_000

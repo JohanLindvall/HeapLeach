@@ -308,7 +308,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			sinceProbe = 0
 			now := time.Now()
 			paused := t.manager.throttle.isPaused()
-			limited := paused || t.manager.throttle.currentLimit() > 0
+			limited := paused || t.manager.throttle.currentLimit() > 0 || t.item.limiter.currentLimit() > 0
 			for _, e := range extras {
 				n := e.src.bytes.Load()
 				if n != e.counted || paused {
@@ -336,7 +336,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			}
 			speed, stable := meter.observe(current, elapsed)
 			if !stable || wanted || pending != nil || 1+len(extras) >= t.maxStreams ||
-				speed >= float64(t.slowBelow) || paused || t.manager.throttle.limiting() {
+				speed >= float64(t.slowBelow) || paused || t.manager.throttle.limiting() || t.item.limiter.limiting() {
 				continue
 			}
 			if !lastAdd.IsZero() && time.Since(lastAdd) < t.addCooldown || now.Before(nextAcquire) {

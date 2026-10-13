@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, fetchSettings, updateSettings, type Settings } from '../api';
 import type { Snapshot } from '../types';
-import { GroupLimits } from './GroupLimits';
 import { BoltIcon, SplitIcon } from './Icons';
 import { ProxyList } from './ProxyList';
 import { SettingSlider } from './SettingSlider';
@@ -77,7 +76,6 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
           onCommit={(streams) => { void change({ streams }); }} />
         <SpeedLimit value={snapshot.speedLimit} onChange={(speedLimit) => { void change({ speedLimit }); }} />
       </div>
-      <GroupLimits snapshot={snapshot} onChange={(groups) => { void change({ groups }); }} />
       <div className="settings-panel__proxy-head">
         <div>
           <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom · WAF recovery</span></h3>

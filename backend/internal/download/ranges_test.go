@@ -29,7 +29,7 @@ func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
 			if _, err := os.Stat(part); !os.IsNotExist(err) {
 				t.Fatalf("refused response created a part file: %v", err)
 			}
-			if _, err := m.fetchSegmentOnce(t.Context(), srv.URL, nil, &atomic.Int64{}); err == nil {
+			if _, err := m.fetchSegmentOnce(t.Context(), nil, srv.URL, nil, &atomic.Int64{}); err == nil {
 				t.Fatal("non-file response completed a playlist segment")
 			}
 		})

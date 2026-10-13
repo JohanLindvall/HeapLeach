@@ -53,9 +53,11 @@ func (m *Manager) Restore() (unfinished int, err error) {
 			Err:       sj.Err,
 			CreatedAt: sj.CreatedAt,
 			canceled:  sj.Canceled,
+			Limit:     restoredJobLimit(sj.Limit, m.maxConcurrency()),
 			// Nothing restored can be fetched as it stands; see unfetchable.
 			unfetchable: true,
 		}
+		job.limiter = newThrottle(job.Limit.SpeedLimit)
 		for _, si := range sj.Items {
 			it := &Item{
 				ID:      si.ID,
@@ -67,6 +69,7 @@ func (m *Manager) Restore() (unfinished int, err error) {
 				Size:    si.Size,
 				Err:     si.Err,
 				Skipped: si.Skipped,
+				limiter: job.limiter,
 			}
 			// A finished file keeps its byte count so the job still reads as
 			// complete. An unfinished one starts from zero on purpose: what
@@ -119,14 +122,6 @@ func (m *Manager) restoreSettingsLocked(s *savedSettings) {
 		m.log.Info("kept the settings chosen before the restart", "concurrency", m.limit, "streams", m.streams,
 			"configured_concurrency", m.cfg.Concurrency, "configured_streams", m.cfg.Streams)
 	}
-	if len(s.Groups) > 0 {
-		if err := checkGroupLimits(s.Groups, m.maxConcurrency()); err != nil {
-			m.log.Warn("dropped the transfer groups' saved limits", "err", err)
-		} else {
-			m.groupLimits = cloneGroupLimits(s.Groups)
-			m.log.Info("kept the transfer groups' limits", "groups", len(m.groupLimits))
-		}
-	}
 }
 
 // jobHasWorkLeft reports whether anything about a job is worth doing again.
@@ -151,9 +146,6 @@ func (m *Manager) stateLocked() *savedState {
 	if m.cfg != nil {
 		st.Settings = &savedSettings{Concurrency: m.limit, Streams: m.streams,
 			ConfiguredConcurrency: m.cfg.Concurrency, ConfiguredStreams: m.cfg.Streams}
-		if len(m.groupLimits) > 0 {
-			st.Settings.Groups = cloneGroupLimits(m.groupLimits)
-		}
 	}
 	for _, id := range m.order {
 		job, ok := m.jobs[id]
@@ -169,6 +161,7 @@ func (m *Manager) stateLocked() *savedState {
 			Err:       job.Err,
 			CreatedAt: job.CreatedAt,
 			Canceled:  job.canceled,
+			Limit:     job.Limit,
 			Items:     make([]savedItem, 0, len(job.Items)),
 		}
 		for _, it := range job.Items {

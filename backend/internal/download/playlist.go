@@ -116,7 +116,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	var key []byte
 	if segmentKey != nil {
 		var err error
-		if key, err = m.fetchSegment(ctx, segmentKey.URI, headers, &fetched); err != nil {
+		if key, err = m.fetchSegment(ctx, it.limiter, segmentKey.URI, headers, &fetched); err != nil {
 			return fail(fmt.Errorf("fetch the key for %s: %w", name, err))
 		}
 	}
@@ -170,7 +170,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 			wg.Add(1)
 			go func(index int) {
 				defer wg.Done()
-				data, err := m.fetchSegment(ctx, segments[index], headers, &fetched)
+				data, err := m.fetchSegment(ctx, it.limiter, segments[index], headers, &fetched)
 				if err == nil && key != nil {
 					data, err = decryptSegment(data, key, segmentIV(segmentKey, index))
 				}
@@ -249,9 +249,9 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 
 // fetchSegment retrieves one part in full, retrying on its own so a single
 // dropped connection does not sink the whole playlist.
-func (m *Manager) fetchSegment(ctx context.Context, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
+func (m *Manager) fetchSegment(ctx context.Context, limiter *throttle, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
-		data, err := m.fetchSegmentOnce(ctx, rawURL, headers, fetched)
+		data, err := m.fetchSegmentOnce(ctx, limiter, rawURL, headers, fetched)
 		if err == nil {
 			return data, nil
 		}
@@ -275,7 +275,7 @@ func (m *Manager) fetchSegment(ctx context.Context, rawURL string, headers httpx
 // arriving slowly as the progress it is. The body is read directly rather
 // than through Client.Bytes, whose in-memory cap is sized for pages and
 // would silently truncate a media part larger than it.
-func (m *Manager) fetchSegmentOnce(ctx context.Context, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
+func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
 	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
@@ -304,7 +304,7 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, rawURL string, headers h
 	// One byte past the ceiling, so reaching it is detectable rather than
 	// arriving as a part that is quietly short.
 	body := io.TeeReader(
-		io.LimitReader(m.throttled(ctx, resp.Body), config.MaxSegmentBytes+1),
+		io.LimitReader(m.throttled(ctx, limiter, resp.Body), config.MaxSegmentBytes+1),
 		countInto(fetched))
 	if _, err := buf.ReadFrom(body); err != nil {
 		return nil, fmt.Errorf("read %s: %w", req.URL.Redacted(), err)

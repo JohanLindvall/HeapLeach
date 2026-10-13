@@ -249,24 +249,36 @@ func (t *throttle) finishReservation(reserved, read int, gate chan struct{}) {
 
 // throttledReader is a reader that asks the throttle for permission before
 // each read, so a paused or limited transfer holds its connection open
-// rather than tearing it down.
+// rather than tearing it down. A job with a speed limit of its own has a
+// bucket of its own too, job, drawn on before the queue's t.
 type throttledReader struct {
 	r   io.Reader
 	t   *throttle
+	job *throttle
 	ctx context.Context
 }
 
 func (tr *throttledReader) Read(p []byte) (int, error) {
-	n, gate, err := tr.t.takeReservation(tr.ctx, len(p))
+	// The job's bucket first. Waiting on it holds back that job alone,
+	// where waiting with the queue's tokens in hand would hold back every
+	// other job's transfers with it.
+	allowed, jobGate, err := tr.job.takeReservation(tr.ctx, len(p))
 	if err != nil {
+		return 0, err
+	}
+	n, gate, err := tr.t.takeReservation(tr.ctx, allowed)
+	if err != nil {
+		tr.job.finishReservation(allowed, 0, jobGate)
 		return 0, err
 	}
 	read, err := tr.r.Read(p[:n])
 	tr.t.finishReservation(n, read, gate)
+	tr.job.finishReservation(allowed, read, jobGate)
 	return read, err
 }
 
-// throttled wraps r unless there is nothing to enforce.
-func (m *Manager) throttled(ctx context.Context, r io.Reader) io.Reader {
-	return &throttledReader{r: r, t: m.throttle, ctx: ctx}
+// throttled wraps r in the queue's bucket and in job's, the job's own speed
+// limit, which may be nil.
+func (m *Manager) throttled(ctx context.Context, job *throttle, r io.Reader) io.Reader {
+	return &throttledReader{r: r, t: m.throttle, job: job, ctx: ctx}
 }

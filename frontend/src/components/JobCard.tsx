@@ -2,9 +2,10 @@
 import { memo, useCallback, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf, sourceURL } from '../format';
 import { isActive, isRetryable } from '../status';
-import type { JobView } from '../types';
-import { CancelIcon, ChevronIcon, PlayIcon, RetryIcon, TrashIcon } from './Icons';
+import type { JobLimit, JobView } from '../types';
+import { CancelIcon, ChevronIcon, GaugeIcon, PlayIcon, RetryIcon, TrashIcon } from './Icons';
 import { ItemRow } from './ItemRow';
+import { JobLimits, type QueueLimits } from './JobLimits';
 import { ProgressBar } from './ProgressBar';
 import { useVirtualRows } from '../useVirtualRows';
 
@@ -18,6 +19,9 @@ interface JobCardProps {
   readonly onRemove: (jobId: string) => void;
   readonly onCancelItem: (jobId: string, itemId: string) => void;
   readonly onRetryItem: (jobId: string, itemId: string) => void;
+  readonly onLimit: (jobId: string, limit: JobLimit) => void;
+  /** What a job's own limits are held beneath; the same object every frame. */
+  readonly queue: QueueLimits;
 }
 
 /**
@@ -48,6 +52,8 @@ function JobCardView({
   onRemove,
   onCancelItem,
   onRetryItem,
+  onLimit,
+  queue,
 }: JobCardProps) {
   // Multi-file jobs stay collapsed to keep a long queue scannable. Derived
   // until the user chooses, rather than captured at mount: a job is usually
@@ -55,6 +61,8 @@ function JobCardView({
   // would leave every album expanded.
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const open = userOpen ?? job.total <= 1;
+  const [limitsOpen, setLimitsOpen] = useState(false);
+  const limited = job.fileLimit !== undefined || job.streamLimit !== undefined || Boolean(job.speedLimit);
 
   // A job of thousands of files is a list only the browser suffers for
   // holding whole, so a long one is rendered a viewport at a time. Closed,
@@ -69,11 +77,16 @@ function JobCardView({
   const jobEta = job.sizeKnown ? formatEta(job.size - job.downloaded, job.speed) : null;
   const busy = isActive(job.status);
   const retryable = isRetryable(job.status);
+  // Held at no files at once. With nothing of it running, that is the job's
+  // state, and where a phone, which shows only the first few tags, sees it.
+  const paused = job.fileLimit === 0 && busy;
+  const status = paused && job.status === 'queued' ? 'paused' : job.status;
 
   // Stable across frames, so an unchanged row's memo holds.
   const jobId = job.id;
   const cancelItem = useCallback((itemId: string) => onCancelItem(jobId, itemId), [jobId, onCancelItem]);
   const retryItem = useCallback((itemId: string) => onRetryItem(jobId, itemId), [jobId, onRetryItem]);
+  const limit = useCallback((next: JobLimit) => onLimit(jobId, next), [jobId, onLimit]);
 
   return (
     <article className={`card job job--${job.status}`}>
@@ -96,7 +109,7 @@ function JobCardView({
             {job.held ? (
               <span className="tag tag--held">held</span>
             ) : (
-              <span className={`tag tag--${job.status}`}>{job.status}</span>
+              <span className={`tag tag--${status === 'paused' ? 'held' : status}`}>{status}</span>
             )}
             {job.total > 0 && (
               <span className="tag">
@@ -104,10 +117,27 @@ function JobCardView({
               </span>
             )}
             {job.failed > 0 && <span className="tag tag--failed">{job.failed} failed</span>}
+            {paused && status !== 'paused' && <span className="tag tag--held">paused</span>}
+            {Boolean(job.fileLimit) && <span className="tag">{job.fileLimit} at a time</span>}
+            {job.streamLimit !== undefined && (
+              <span className="tag">{job.streamLimit === 1 ? '1 stream' : `${job.streamLimit} streams`}</span>
+            )}
+            {Boolean(job.speedLimit) && <span className="tag">≤ {formatSpeed(job.speedLimit ?? 0)}</span>}
           </div>
         </div>
 
         <div className="job__actions">
+          <button
+            type="button"
+            className={`btn btn--icon ${limited ? 'is-limited' : ''}`}
+            onClick={() => setLimitsOpen(!limitsOpen)}
+            title="Limits for this job"
+            aria-expanded={limitsOpen}
+            aria-controls={`limits-${job.id}`}
+          >
+            <GaugeIcon />
+            <span className="sr-only">Limits for this job</span>
+          </button>
           {busy && (
             <button type="button" className="btn btn--icon" onClick={() => onCancel(job.id)} title="Cancel job">
               <CancelIcon />
@@ -132,6 +162,8 @@ function JobCardView({
           </button>
         </div>
       </header>
+
+      {limitsOpen && <JobLimits id={`limits-${job.id}`} limit={job} queue={queue} onChange={limit} />}
 
       <ProgressBar percent={percent} status={job.status} label={`${job.title} progress`} />
 

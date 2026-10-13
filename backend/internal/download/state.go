@@ -88,21 +88,21 @@ type savedSettings struct {
 	Streams               int `json:"streams"`
 	ConfiguredConcurrency int `json:"configuredConcurrency"`
 	ConfiguredStreams     int `json:"configuredStreams"`
-	// Groups are the transfer groups' own limits, which no configuration
-	// sets, so they are kept whatever it says.
-	Groups map[string]GroupLimit `json:"groups,omitempty"`
 }
 
 type savedJob struct {
-	ID        string      `json:"id"`
-	Source    string      `json:"source"`
-	Title     string      `json:"title"`
-	Host      string      `json:"host"`
-	Password  string      `json:"password,omitempty"`
-	Err       string      `json:"error,omitempty"`
-	CreatedAt time.Time   `json:"createdAt"`
-	Canceled  bool        `json:"canceled,omitempty"`
-	Items     []savedItem `json:"items"`
+	ID        string    `json:"id"`
+	Source    string    `json:"source"`
+	Title     string    `json:"title"`
+	Host      string    `json:"host"`
+	Password  string    `json:"password,omitempty"`
+	Err       string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	Canceled  bool      `json:"canceled,omitempty"`
+	// Limit is the job's own limits, which no configuration sets, so they
+	// are kept whatever it says.
+	Limit JobLimit    `json:"limit,omitzero"`
+	Items []savedItem `json:"items"`
 }
 
 type savedItem struct {

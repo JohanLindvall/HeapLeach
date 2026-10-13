@@ -177,7 +177,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		m.mu.Lock()
 		it.routeAttempts++
 		it.routeCancel, it.routeResumable = abort, false
-		if m.throttle.isPaused() || m.throttle.currentLimit() > 0 {
+		if m.throttle.isPaused() || m.throttle.currentLimit() > 0 || it.limiter.currentLimit() > 0 {
 			lease.Constrain()
 		}
 		m.mu.Unlock()
@@ -190,7 +190,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		it.routeUpgrade, it.routeCancel = nil, nil
 		retry := upgrade != nil && ctx.Err() == nil && errors.Is(err, context.Canceled)
 		switchRoute := retry && m.proxyEnabled && upgrade.Configured() &&
-			!m.throttle.isPaused() && m.throttle.currentLimit() == 0
+			!m.throttle.isPaused() && m.throttle.currentLimit() == 0 && it.limiter.currentLimit() == 0
 		if switchRoute {
 			it.route, it.preferredRoute = upgrade, upgrade.ID()
 			it.speed, it.proxyRetries = 0, 0
