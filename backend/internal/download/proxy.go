@@ -122,6 +122,7 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 	}
 	group := routeGroup{it.pace.Group, it.pace.Files, it.pace.WAF}
 	if unavailable[group] {
+		it.Note, it.notBefore = "Waiting for an available download route", time.Time{}
 		return false
 	}
 	it.route = m.proxies.AcquireFor(it.pace.Group, it.preferredRoute, it.pace.Files, it.Size-it.downloaded.Load(), it.pace.WAF)
@@ -130,6 +131,10 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 		// while every route in the same service is already busy/cooling.
 		unavailable[group] = true
 		it.Note = "Waiting for an available download route"
+		// The wait that brought it here has ended (nextLocked checked), and
+		// one left in the past hides the note: a queue of files waiting
+		// for routes read as a queue of files waiting for nothing.
+		it.notBefore = time.Time{}
 		return false
 	}
 	it.preferredRoute = it.route.ID()
@@ -387,6 +392,24 @@ func routeAtFault(err error) bool {
 	if _, broken := errors.AsType[*proxyNotWorkingError](err); broken {
 		return true
 	}
+	// A proxy that answered and could not carry this request on: it
+	// refused the tunnel (a 502 or 504 is a proxy that cannot reach the host
+	// from where it is), or the host's TLS never completed through it. Or
+	// the host challenged the address it saw, which is that address's
+	// standing with the host, recorded apart (entry.WAF). Each is the route
+	// alone: through public proxies a file met twenty in a row, and failed,
+	// on a host other routes were serving. Its route is scored for the
+	// service, and the file moves on at no cost. A host that is down for
+	// every route leaves its files waiting for one, rather than failing.
+	if _, refused := errors.AsType[*httpx.ProxyRefusedError](err); refused {
+		return true
+	}
+	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+		return true
+	}
+	if _, routed := errors.AsType[*httpx.RouteError](err); routed && strings.Contains(err.Error(), "TLS handshake timeout") {
+		return true
+	}
 	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
 		return true
 	}
@@ -398,7 +421,7 @@ type routeOutcome struct{ service, kind string }
 
 // routeOutcomeKinds are the ways a routed attempt ends, in the order the
 // summary lists them.
-var routeOutcomeKinds = []string{"dead", "shared", "refused", "waited", "transient", "stalled", "failed", "finished"}
+var routeOutcomeKinds = []string{"dead", "shared", "challenged", "refused", "waited", "transient", "stalled", "failed", "finished"}
 
 // routeOutcomeKind names how a routed attempt ended: dead, a proxy that
 // could not carry the request at all; shared, a route whose exit another
@@ -411,6 +434,9 @@ func routeOutcomeKind(err error) string {
 	}
 	if errors.Is(err, errExitInUse) {
 		return "shared"
+	}
+	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+		return "challenged"
 	}
 	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
 		return "waited"

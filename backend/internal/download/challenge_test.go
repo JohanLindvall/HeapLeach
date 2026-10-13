@@ -24,6 +24,9 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 		disabled    bool
 		refusals    int32
 		wantFailed  bool
+		// wantWaiting: a file every route challenges waits for one that
+		// does not, since a challenge is the route's, not the file's.
+		wantWaiting bool
 	}{
 		{name: "direct-page"},
 		{name: "direct-file", directFile: true},
@@ -33,7 +36,7 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 		{name: "rotate-page", stage: "page", refusals: 1},
 		{name: "rotate-file", stage: "media", directFile: true, refusals: 1},
 		{name: "exhaust-page", stage: "page", refusals: 3, wantFailed: true},
-		{name: "exhaust-file", stage: "media", directFile: true, refusals: 3, wantFailed: true},
+		{name: "exhaust-file", stage: "media", directFile: true, refusals: 3, wantWaiting: true},
 		{name: "disabled-page", stage: "page", disabled: true, wantFailed: true},
 		{name: "disabled-file", stage: "media", directFile: true, disabled: true, wantFailed: true},
 	} {
@@ -97,6 +100,9 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 				endpoints = append(endpoints, srv.URL)
 			}
 			pool := attachPool(t, m, endpoints)
+			// A page has no queue to wait in: it waits for a route that is
+			// not challenged as long as one request may take, then fails.
+			m.cfg.Timeout = time.Second
 			if tc.disabled {
 				enabled := false
 				if err := m.ApplySettings(Settings{Proxies: &enabled}); err != nil {
@@ -116,6 +122,10 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				job := m.jobs[id]
+				if tc.wantWaiting {
+					return proxyChallenges.Load() == tc.refusals && len(job.Items) == 1 &&
+						job.Items[0].Status == StatusQueued && strings.Contains(m.itemNoteLocked(job.Items[0]), "route")
+				}
 				return job.Err != "" || (len(job.Items) == 1 && job.Items[0].Status.Terminal())
 			})
 			m.mu.Lock()
@@ -143,7 +153,7 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 					t.Fatal("Cloudflare challenge penalised another service")
 				}
 			}
-			if !tc.wantFailed {
+			if !tc.wantFailed && !tc.wantWaiting {
 				body, err := os.ReadFile(filepath.Join(m.DownloadDir(), name))
 				if err != nil || string(body) != payload {
 					t.Fatalf("download=%q err=%v", body, err)

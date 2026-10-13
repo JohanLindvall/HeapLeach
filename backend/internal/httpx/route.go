@@ -204,6 +204,13 @@ func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, 
 			// Record it separately from ordinary proxy health.
 			status = http.StatusForbidden
 		}
+		if refused, ok := errors.AsType[*ProxyRefusedError](err); ok && refused.Code >= http.StatusInternalServerError {
+			// The proxy answered, and could not reach this host: a refusal
+			// for the host's service, not a proxy that is dead to every one.
+			// Scored as dead, one CDN unreachable from many public proxies
+			// shelved them all for Keep2Share as well.
+			status = refused.Code
+		}
 		report(status, 0, err, time.Time{})
 		return nil, &RouteError{err}
 	}

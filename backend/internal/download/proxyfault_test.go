@@ -146,7 +146,8 @@ func TestAProxyThatCannotCarryTheRequestIsTheRoutesFault(t *testing.T) {
 		}), true},
 		{"plain http inside the tunnel", "http://" + fakeProxy(t, "127.0.0.1", answerConnect("HTTP/1.1 200 OK\r\n\r\n", httpInTunnel)), true},
 		{"destination certificate that does not verify", "http://" + fakeProxy(t, "127.0.0.1", answerConnect("HTTP/1.1 200 OK\r\n\r\n", tunnel)), true},
-		{"tunnel the proxy could not open to the host", "http://" + fakeProxy(t, "127.0.0.1", answerConnect("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n", nil)), false},
+		{"tunnel the proxy could not open to the host", "http://" + fakeProxy(t, "127.0.0.1", answerConnect("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n", nil)), true},
+		{"tunnel timed out at the proxy", "http://" + fakeProxy(t, "127.0.0.1", answerConnect("HTTP/1.1 504 Gateway Time-out\r\nContent-Length: 0\r\n\r\n", nil)), true},
 		{"socks proxy that could not reach the host", "socks5h://" + fakeProxy(t, "127.0.0.1", socksAnswering(0, 4)), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,5 +230,31 @@ func TestARouteKeepsOneBrowserUserAgent(t *testing.T) {
 	defer waf.Release()
 	if got := ask(waf); got != m.cfg.UserAgent {
 		t.Fatalf("WAF recovery sent %q; want the client's own %q", got, m.cfg.UserAgent)
+	}
+}
+
+// A proxy that answers and cannot reach the host has refused that host, not
+// died: the route is held back for the service asking, and stays on offer to
+// the others. Scored as dead, one CDN out of public proxies' reach shelved
+// them for every service.
+func TestATunnelRefusedAtTheProxyHoldsTheRouteBackForThatServiceAlone(t *testing.T) {
+	m := busyManager(t)
+	route := "http://" + fakeProxy(t, "127.0.0.2", answerConnect("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n", nil))
+	pool := attachPool(t, m, []string{route})
+	id := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].ID
+	lease := pool.Acquire("keep2share", id, 1)
+	if lease == nil {
+		t.Fatal("no route")
+	}
+	_, err := m.client.WithTimeout(3*time.Second).GetString(lease.Context(t.Context()), "https://cdn.example.test/media", nil)
+	lease.Release()
+	if refused, ok := errors.AsType[*httpx.ProxyRefusedError](err); !ok || refused.Code != 502 {
+		t.Fatalf("error = %v; want the proxy's 502", err)
+	}
+	if row := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" || time.Until(row.CooldownUntil) > 5*time.Minute {
+		t.Fatalf("for the service asking: %+v; want it held back briefly, as a refusal", row)
+	}
+	if row := pool.Page("fileboom", proxy.Query{Search: route}).Rows[0]; row.Status == "cooling" {
+		t.Fatalf("for another service: %+v; want the route still on offer", row)
 	}
 }

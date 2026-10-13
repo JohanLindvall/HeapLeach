@@ -43,8 +43,8 @@ func TestRouteAttemptsAreSummarizedOncePerInterval(t *testing.T) {
 		t.Fatalf("summarized before the interval was up: %v", early)
 	}
 	want := []string{
-		"[service fileboom dead 0 shared 0 refused 0 waited 0 transient 0 stalled 0 failed 0 finished 1 moving 0 trying 0]",
-		"[service keep2share dead 1 shared 1 refused 2 waited 1 transient 0 stalled 0 failed 0 finished 0 moving 0 trying 0]",
+		"[service fileboom dead 0 shared 0 challenged 0 refused 0 waited 0 transient 0 stalled 0 failed 0 finished 1 moving 0 trying 0]",
+		"[service keep2share dead 1 shared 1 challenged 0 refused 2 waited 1 transient 0 stalled 0 failed 0 finished 0 moving 0 trying 0]",
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("lines %v; want %v", lines, want)

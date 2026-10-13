@@ -508,6 +508,18 @@ func TestProxiesAtFaultDoNotSpendTheRetryBudget(t *testing.T) {
 		"refused": func() error {
 			return &extractor.RefusedError{Err: errors.New("keep2share: Download is not available: free downloads are refused from this address")}
 		},
+		"tunnel refused by the proxy": func() error {
+			return fmt.Errorf("doodstream: fetch: %w", &httpx.RouteError{Err: &url.Error{
+				Op: "Get", URL: "https://cdn.example.test/media", Err: &httpx.ProxyRefusedError{Code: 502, Status: "502 Bad Gateway"}}})
+		},
+		"TLS never completing through the proxy": func() error {
+			return fmt.Errorf("doodstream: fetch: %w", &httpx.RouteError{Err: &url.Error{
+				Op: "Get", URL: "https://player.example.test/e/clip", Err: errTLSHandshakeTimeout{}}})
+		},
+		"challenged": func() error {
+			return &httpx.RouteError{Err: &httpx.ChallengeError{Err: &httpx.StatusError{
+				Code: 403, Status: "403 Forbidden", URL: "https://player.example.test/e/clip"}}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := busyManager(t)
@@ -608,3 +620,10 @@ func TestTransientRouteFailuresRetryAndPermanentOnesDoNot(t *testing.T) {
 		})
 	}
 }
+
+// errTLSHandshakeTimeout is net/http's own, which is unexported.
+type errTLSHandshakeTimeout struct{}
+
+func (errTLSHandshakeTimeout) Error() string   { return "net/http: TLS handshake timeout" }
+func (errTLSHandshakeTimeout) Timeout() bool   { return true }
+func (errTLSHandshakeTimeout) Temporary() bool { return true }

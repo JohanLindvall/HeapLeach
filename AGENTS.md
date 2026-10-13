@@ -278,7 +278,10 @@ error behind "request canceled while waiting for connection". A CONNECT
 answered with anything but 200 returns `httpx.ProxyRefusedError` with the
 status, from `OnProxyConnectResponse`, which net/http calls before its own
 check; left to net/http it is the status text alone ("Bad Request"), which
-says neither that a proxy answered nor what it said. Request traces
+says neither that a proxy answered nor what it said. A 5xx refusal is
+scored as the route refusing that service, not as a dead proxy: the proxy
+answered, and cannot reach that host. Scored as dead, one CDN out of
+public proxies' reach shelved them for Keep2Share as well. Request traces
 reset on each redirect; a CONNECT reply or completed SOCKS negotiation ends
 proxy setup, so later TLS and response timeouts retain their bounded retry
 budget. Caller cancellation and caller deadlines are never proxy penalties.
@@ -301,7 +304,10 @@ Existing per-route services retain their group and address limits, adding
 a WAF failure changes no ordinary service counters, speed, transport health
 or cooldown. Recovery combines that penalty with ordinary reliability and
 unthrottled speed measurements; known free-host caps are not shared as an
-estimate of unrestricted capacity. Retries use the existing proxy budget;
+estimate of unrestricted capacity. A challenge through a route costs the
+file or source nothing (`routeAtFault`): finding an address the host does
+not challenge is what recovery is for, and each challenged route is held
+back by its own WAF record. Other failures use the existing proxy budget;
 source lease acquisition is cancelable and bounded by the request timeout.
 
 ### Extractors
@@ -620,10 +626,14 @@ Host-specific notes:
   met one that worked. The pool already shelves each such route. The cost, accepted on
   purpose, is that a host refusing every proxy would have files trying
   routes for as long as the pool offers any, then waiting in the queue,
-  rather than failing; each refusal also costs a CAPTCHA. Timeouts after
-  proxy setup, HTTP refusals, stalls and a proxy that answered but could not
-  reach the host (a tunnel refused at 502 or 504, a SOCKS "host
-  unreachable") still count.
+  rather than failing; each refusal also costs a CAPTCHA. Three more are the
+  route's alone and cost the file nothing: a tunnel the proxy refuses at 502
+  or 504 (it cannot reach the host from where it is), a TLS handshake that
+  never completes through the tunnel, and a challenge from the host. Counted,
+  three files failed in an hour on a CDN that other routes were serving,
+  each after forty route attempts. A host down for every route leaves its
+  files waiting for one, as for refusals. Other timeouts after proxy setup,
+  HTTP refusals, stalls and a SOCKS "host unreachable" still count.
 
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's
