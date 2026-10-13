@@ -46,14 +46,14 @@ func (r *recordingWriterAt) WriteAt(p []byte, off int64) (int, error) {
 
 // The whole point: many small positional writes must reach the file as few
 // large ones, with the bytes unchanged and in place. A connection this fast
-// fills its starting buffer at once and grows to the full size.
+// moves its first mebibyte through the starting buffer and then grows.
 func TestBufferedWriterCoalescesASequenceOfSmallWrites(t *testing.T) {
 	file := &recordingWriterAt{}
 	var flushed int64
 	w := newBufferedWriterAt(file, func(upTo int64) { flushed = upTo })
 
 	const chunk = 16 << 10
-	total := config.WriteBufferStart + config.WriteBufferSize // a starting buffer, then a full one
+	total := 2 * config.WriteBufferSize
 	count := total / chunk
 	payload := make([]byte, chunk)
 	for i := range payload {
@@ -68,9 +68,10 @@ func TestBufferedWriterCoalescesASequenceOfSmallWrites(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	if want := []int{config.WriteBufferStart, config.WriteBufferSize}; len(file.sizes) != 2 ||
-		file.sizes[0] != want[0] || file.sizes[1] != want[1] {
-		t.Errorf("%d small writes reached the file as writes of %v, want %v", count, file.sizes, want)
+	small := config.WriteBufferSize / config.WriteBufferStart
+	if len(file.sizes) != small+1 || file.sizes[small] != config.WriteBufferSize {
+		t.Errorf("%d small writes reached the file as writes of %v; want %d of %d, then one of %d",
+			count, file.sizes, small, config.WriteBufferStart, config.WriteBufferSize)
 	}
 	if flushed != int64(total) {
 		t.Errorf("reported %d bytes durable, want %d", flushed, total)
@@ -82,35 +83,44 @@ func TestBufferedWriterCoalescesASequenceOfSmallWrites(t *testing.T) {
 	}
 }
 
-// A connection too slow to fill the starting buffer within a second keeps it.
-// At the few tens of kilobytes a second a free download is capped at, a
-// full-size buffer is a mebibyte held for half a minute, and a connection
-// dropped before it fills has nothing on disk to show for its attempt.
-func TestBufferedWriterStaysSmallForASlowConnection(t *testing.T) {
-	file := &recordingWriterAt{}
-	var flushed int64
-	w := newBufferedWriterAt(file, func(upTo int64) { flushed = upTo })
-	clock := time.Unix(0, 0)
-	w.now = func() time.Time { return clock }
-
-	const chunk = 16 << 10 // four to a starting buffer, 400 ms apart: 1.6 s to fill
-	fills := 3
-	payload := make([]byte, chunk)
-	for i := range fills * config.WriteBufferStart / chunk {
-		clock = clock.Add(400 * time.Millisecond)
-		if n, err := w.WriteAt(payload, int64(i*chunk)); n != chunk || err != nil {
-			t.Fatalf("write %d: %d, %v", i, n, err)
-		}
-	}
-	if w.grown || len(w.buf) != config.WriteBufferStart {
-		t.Fatalf("grown=%v with a %d-byte buffer; a slow connection keeps the %d-byte start", w.grown, len(w.buf), config.WriteBufferStart)
-	}
-	if len(file.sizes) != fills || flushed != int64(fills*config.WriteBufferStart) {
-		t.Fatalf("writes %v, %d durable; want %d starting buffers' worth on disk as they fill",
-			file.sizes, flushed, fills)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+// A connection grows only once it has moved a mebibyte at 64 KiB a second
+// or more. Free downloads arrive in bursts: one read can fill the starting
+// buffer at once on a connection averaging 42 kB/s, so it is the average
+// that is judged, and a slow one keeps 64 KiB however its bytes arrive.
+func TestBufferedWriterGrowsOnlyForAFastConnection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		read     int           // bytes a read delivers
+		interval time.Duration // between reads
+		grows    bool
+	}{
+		{"steady and fast", 16 << 10, 0, true},
+		{"fast, in large reads", 256 << 10, 0, true},
+		{"steady and slow", 16 << 10, 400 * time.Millisecond, false}, // 40 KiB/s
+		{"slow, in bursts", 256 << 10, 6 * time.Second, false},       // 43 KiB/s
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := &recordingWriterAt{}
+			w := newBufferedWriterAt(file, nil)
+			clock := time.Unix(0, 0)
+			w.now = func() time.Time { return clock }
+			payload := make([]byte, tc.read)
+			for i := range 2 * config.WriteBufferSize / tc.read {
+				clock = clock.Add(tc.interval)
+				if n, err := w.WriteAt(payload, int64(i*tc.read)); n != tc.read || err != nil {
+					t.Fatalf("write %d: %d, %v", i, n, err)
+				}
+			}
+			if w.grown != tc.grows {
+				t.Fatalf("grown = %v, want %v, with writes of %v", w.grown, tc.grows, file.sizes)
+			}
+			if !tc.grows && len(w.buf) != config.WriteBufferStart {
+				t.Fatalf("a slow connection holds a %d-byte buffer, want %d", len(w.buf), config.WriteBufferStart)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

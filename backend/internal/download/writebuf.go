@@ -50,12 +50,14 @@ type bufferedWriterAt struct {
 	// is occupied.
 	start int64
 	held  int
-	// filling is when the run now held began, which tells a connection that
-	// needs the full-size buffer from one that does not; grown says buf is
-	// that one. now is time.Now, but for tests.
-	filling time.Time
-	grown   bool
-	now     func() time.Time
+	// born is when the first byte arrived and received how many have since,
+	// which tell a connection that needs the full-size buffer from one that
+	// does not (see grow); grown says buf is that one. now is time.Now, but
+	// for tests.
+	born     time.Time
+	received int64
+	grown    bool
+	now      func() time.Time
 }
 
 // newBufferedWriterAt wraps dst, starting on a WriteBufferStart buffer (see
@@ -65,10 +67,18 @@ func newBufferedWriterAt(dst io.WriterAt, onFlush func(upTo int64)) *bufferedWri
 	return &bufferedWriterAt{dst: dst, onFlush: onFlush, buf: buf, release: release, now: time.Now}
 }
 
-// grow swaps the starting buffer, empty after a flush, for a full-size one,
-// for a connection that filled it within WriteBufferGrowWithin. A slower one
-// keeps it: see config.WriteBufferSize for what a full-size buffer costs a
-// connection that cannot fill it.
+// fast reports a connection that has moved a full buffer's worth at an
+// average of WriteBufferGrowRate a second or more: one that needs the
+// full-size buffer. A slower one keeps the starting buffer, see
+// config.WriteBufferSize for what a full one costs it.
+func (w *bufferedWriterAt) fast() bool {
+	if w.grown || w.received < config.WriteBufferSize {
+		return false
+	}
+	return float64(w.received)/w.now().Sub(w.born).Seconds() >= config.WriteBufferGrowRate
+}
+
+// grow swaps the starting buffer, empty after a flush, for a full-size one.
 func (w *bufferedWriterAt) grow() {
 	w.release()
 	w.buf, w.release = borrowWriteBuffer()
@@ -84,6 +94,10 @@ func (w *bufferedWriterAt) WriteAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	if w.born.IsZero() {
+		w.born = w.now()
+	}
+	w.received += int64(len(p))
 	if w.held > 0 && off != w.start+int64(w.held) {
 		if err := w.Flush(); err != nil {
 			return 0, err
@@ -101,7 +115,7 @@ func (w *bufferedWriterAt) WriteAt(p []byte, off int64) (int, error) {
 		return n, err
 	}
 	if w.held == 0 {
-		w.start, w.filling = off, w.now()
+		w.start = off
 	}
 
 	written := 0
@@ -110,12 +124,11 @@ func (w *bufferedWriterAt) WriteAt(p []byte, off int64) (int, error) {
 		w.held += n
 		written += n
 		if w.held == len(w.buf) {
-			fast := !w.grown && w.now().Sub(w.filling) < config.WriteBufferGrowWithin
 			if err := w.Flush(); err != nil {
 				return written - n, err
 			}
-			w.start, w.filling = off+int64(written), w.now()
-			if fast {
+			w.start = off + int64(written)
+			if w.fast() {
 				w.grow()
 			}
 		}

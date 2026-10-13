@@ -1399,15 +1399,20 @@ them:
   connection, where a read is socket-sized, the ratio is far larger.
 
   A connection starts on `config.WriteBufferStart` (64 KiB), and grows to
-  the full size only on filling that within `WriteBufferGrowWithin`, a
-  second, which is a connection moving at least 64 KiB/s. A free download
-  capped at 42 kB/s took the better part of half a minute to fill a full
-  buffer. That was a mebibyte apiece held for nothing, a quarter of a
-  gibibyte across 256 of them. And a connection dropped before its buffer
-  filled had written nothing, so its attempt looked unproductive to the
-  retry budget, which judges by what is on disk. A write of a full buffer
-  or more still goes straight through, measured against the full size, so a
-  fast connection fills its starting buffer at once and grows.
+  the full size only once it has moved a mebibyte at an average of
+  `WriteBufferGrowRate` (64 KiB/s) or more. A free download capped at
+  42 kB/s took the better part of half a minute to fill a full buffer.
+  That was a mebibyte apiece held for nothing, a quarter of a gibibyte
+  across 256 of them. And a connection dropped before its buffer filled had
+  written nothing, so its attempt looked unproductive to the retry budget,
+  which judges by what is on disk. It is the average over a mebibyte that
+  is judged, not how fast one buffer filled. The first version grew a
+  connection that filled its starting buffer within a second, and 84 of 138
+  transfers grew, 130 of them slower than 64 KiB/s: those downloads arrive
+  in bursts, and one read fills 64 KiB at once. A write of a full buffer or
+  more still goes straight through. A fast transfer pays sixteen small
+  writes before it grows, so the 200 MB loopback transfer above makes about
+  215 writes rather than 191.
 
   The buffer belongs to **one connection**, not to the file: eight
   connections fill eight disjoint ranges at once, so a shared buffer would

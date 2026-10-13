@@ -48,7 +48,10 @@ const (
 
 	// ProxyDrawTries is how many routes are drawn at random, looking for an
 	// unmeasured one that could take a transfer, before listing them all.
-	ProxyDrawTries = 64
+	// A draw costs well under a microsecond, a listing tens of milliseconds
+	// across a public feed's inventory: at 64, with two routes in a hundred
+	// free at 256 transfers, a quarter of all leases fell through to the list.
+	ProxyDrawTries = 1024
 )
 
 // Tunables shared across packages. They live here rather than next to their
@@ -187,17 +190,20 @@ const (
 	// It deliberately matches MinSegmentSize: a range worth splitting off
 	// is exactly one buffer's worth of work.
 	//
-	// A connection grows to it only once it shows it needs it, by filling
-	// WriteBufferStart within WriteBufferGrowWithin, which is a connection
-	// moving at least 64 KiB a second. Most of a queue of free downloads is
-	// capped at a few tens of kilobytes a second, where a full buffer takes
-	// the better part of half a minute to fill. That held a mebibyte apiece
-	// for nothing, a quarter of a gibibyte across 256 transfers. And it bit
-	// the third bound above: a connection dropped before its buffer filled
-	// had written nothing, so its attempt looked unproductive.
-	WriteBufferSize       = 1 << 20
-	WriteBufferStart      = 64 << 10
-	WriteBufferGrowWithin = time.Second
+	// A connection starts on WriteBufferStart and grows to this only once
+	// it has moved WriteBufferSize at an average of WriteBufferGrowRate a
+	// second or more. Most of a queue of free downloads is capped at a few
+	// tens of kilobytes a second, where a full buffer takes the better part
+	// of half a minute to fill. That held a mebibyte apiece for nothing, a
+	// quarter of a gibibyte across 256 transfers. And it bit the third bound
+	// above: a connection dropped before its buffer filled had written
+	// nothing, so its attempt looked unproductive. It is the average over a
+	// mebibyte that is judged, because those downloads arrive in bursts: a
+	// single read fills the starting buffer at once on a connection averaging
+	// 42 kB/s, and judged by how fast one buffer filled, most of them grew.
+	WriteBufferSize     = 1 << 20
+	WriteBufferStart    = 64 << 10
+	WriteBufferGrowRate = 64 << 10
 
 	// SpeedSmoothing weights the previous rate against the latest sample.
 	// Higher values give steadier, slower-reacting numbers.
