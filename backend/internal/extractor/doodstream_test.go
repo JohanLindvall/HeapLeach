@@ -218,3 +218,22 @@ func TestDoodRefusalIsTheAddressesNotTheVideos(t *testing.T) {
 		})
 	}
 }
+
+// A video the host has removed is shown its own "Video not found" page,
+// which says so: that is the video's absence, not a layout the parser no
+// longer knows, nor an address refused.
+func TestDoodSaysWhenTheHostHasRemovedTheVideo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		fmt.Fprint(w, `<!doctype html><html><head><title>Video not found</title></head><body><div class="error">Not found</div></body></html>`)
+	}))
+	defer srv.Close()
+	client := httpx.New("test", "en", 0, time.Second)
+	_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, srv.URL+"/e/synthetic"), Options{})
+	if err == nil || !strings.Contains(err.Error(), "video not found") || strings.Contains(err.Error(), "layout") {
+		t.Fatalf("error = %v; want it to say the host removed the video", err)
+	}
+	if _, refused := errors.AsType[*RefusedError](err); refused {
+		t.Fatal("a removed video was read as a refused address")
+	}
+}

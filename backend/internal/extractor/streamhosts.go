@@ -204,6 +204,9 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 			return nil, &RefusedError{Err: fmt.Errorf("doodstream: %s refused the player to this address: %q",
 				final.Hostname(), util.Truncate(strings.TrimSpace(doc), 120))}
 		}
+		if m == nil && doodGone(doc) {
+			return nil, fmt.Errorf("doodstream: video not found on %s: the host has removed it", page)
+		}
 		if m == nil {
 			return nil, fmt.Errorf("doodstream: no media token on %s "+
 				"(the video may have been removed, or the page layout changed)", page)
@@ -249,6 +252,16 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 // text by design.
 func doodRefused(doc string) bool {
 	return !strings.Contains(doc, "<")
+}
+
+// doodGone recognises the host's own page for a video that has gone, which
+// is a document titled "Video not found", where a refused address gets one
+// bare sentence (doodRefused). Read as a page without a token, the video's
+// absence was reported as possibly a changed layout, and an hour of one
+// site's posts linking forty-four such players read as forty-four parser
+// faults.
+func doodGone(doc string) bool {
+	return strings.Contains(strings.ToLower(pageTitle(doc)), "video not found")
 }
 
 // Recognise both the host's Turnstile player gate and an interstitial whose

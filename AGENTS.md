@@ -524,6 +524,11 @@ Host-specific notes:
   the sentence, and returns a `RefusedError`: the route is held back for the
   site and the file tries another, outside the retry budget. Taken at its
   word, it failed the file on the first address that met it.
+  That not-found page is recognised by its title (`doodGone`) and reported as
+  the host having removed the video. Read as a page without a token, it was
+  "no media token (the video may have been removed, or the page layout
+  changed)", which an hour of one site's posts produced forty-four times for
+  forty-four removed videos.
   `ResolveNote` reports player/token stages. Recovery adds the connection
   attempt during source discovery; workers use the existing item counter.
   `JobView.Note` carries source progress to the browser and terminal, guarded
