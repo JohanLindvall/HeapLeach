@@ -361,3 +361,34 @@ func TestASavedJobLimitIsHeldUnderTheCeilingInForceNow(t *testing.T) {
 		t.Fatalf("restored %+v; want 4 files, the queue's streams and no speed limit", got)
 	}
 }
+
+// A file its job holds back is not one the service is waiting to start: it
+// neither keeps other files from extra streams on idle routes nor asks the
+// pool for routes. Counted, one paused job kept every other file of the
+// service from extra streams, and asked the feeds for routes nothing would
+// use.
+func TestAHeldJobsFilesWantNoRoutes(t *testing.T) {
+	m := busyManager(t)
+	m.proxyEnabled = true
+	m.limit = 8
+	pace := &extractor.Pace{Group: "keep2share", PerRoute: true}
+	job := addTestJob(m, "held", "http://127.0.0.1:1", 3, 1<<20)
+	m.mu.Lock()
+	for _, it := range job.Items {
+		it.pace = pace
+	}
+	wanted := func() (bool, int) {
+		m.routeWanted = nil
+		return m.routeWantedLocked("keep2share"), m.proxyDemandLocked()["keep2share"]
+	}
+	if extra, demand := wanted(); !extra || demand != 3 {
+		m.mu.Unlock()
+		t.Fatalf("before the hold: wanted %v, demand %d; want the files counted", extra, demand)
+	}
+	job.Limit = JobLimit{Files: intRef(0)}
+	extra, demand := wanted()
+	m.mu.Unlock()
+	if extra || demand != 0 {
+		t.Fatalf("held: wanted %v, demand %d; want neither", extra, demand)
+	}
+}

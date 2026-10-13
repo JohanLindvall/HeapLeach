@@ -68,7 +68,9 @@ func (m *Manager) proxyDemandLocked() map[string]int {
 		if capacity == 0 {
 			break
 		}
-		if proxyEligible(it) && !blocked[it.pace.Group] && it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) {
+		// A file its job holds back wants no route yet (routeWantedLocked).
+		if proxyEligible(it) && !blocked[it.pace.Group] && it.Status == StatusQueued && !it.inFlight &&
+			!it.notBefore.After(now) && !m.jobHeldLocked(it) {
 			wanted[it.pace.Group]++
 			capacity--
 		}

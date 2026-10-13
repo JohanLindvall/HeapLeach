@@ -147,8 +147,11 @@ func (m *Manager) routeWantedLocked(group string) bool {
 	}
 	wanted := false
 	for _, it := range m.queue {
+		// A file its job holds back is not due to start: counted, a job
+		// paused with hundreds of files queued kept every other file of the
+		// service from extra streams for as long as it stayed paused.
 		if it.Status == StatusQueued && !it.inFlight && !it.notBefore.After(now) &&
-			it.pace != nil && it.pace.Group == group {
+			it.pace != nil && it.pace.Group == group && !m.jobHeldLocked(it) {
 			wanted = true
 			break
 		}

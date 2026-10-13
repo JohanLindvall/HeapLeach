@@ -918,7 +918,9 @@ Host-specific notes:
   64 MiB in. Extra streams take idle routes only: none starts while a file
   of the same service is due to start and not running (`routeWanted`, a
   queue scan kept for `RouteWantedRecheck`), and one still being obtained
-  is given up. Asking whether the dispatcher found a route was the first
+  is given up. A file its job holds back is not due, for this or for the
+  pool's demand: counted, one paused job kept every other file of the
+  service from extra streams, and asked the feeds for routes. Asking whether the dispatcher found a route was the first
   rule, and it stopped meaning anything once untried routes counted as
   free: the dispatcher nearly always finds one, mostly dead, and the files
   cycling through them would be racing extra streams for the few that
