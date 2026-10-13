@@ -93,8 +93,9 @@ compilation has a separate cache keyed by toolchain/dependencies and commit,
 restoring the previous commit's output and saving the new one. Sharing CI's
 immutable `go.sum` cache left every cross-platform build cold on every push.
 
-Dependabot (`.github/dependabot.yml`) proposes the Go modules' updates once
-a week, grouped into one pull request, and the pull request lands by itself.
+Dependabot (`.github/dependabot.yml`) proposes the Go modules' updates every
+Monday at 05:00 Stockholm time, a quiet hour, grouped into one pull request,
+and the pull request lands by itself.
 Once its CI passes, `dependabot-merge.yml` squashes it into main. A merge made
 with the workflow's own token starts no workflow, so it then starts CI on main
 itself (`workflow_dispatch`, which CI's release job accepts as it does a
