@@ -90,6 +90,10 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 						t.Error("two attempts used the same proxy address simultaneously")
 					}
 					defer active.Add(-1)
+					if r.URL.Path == "/ping" {
+						fmt.Fprint(w, "pong")
+						return
+					}
 					if r.URL.Path == "/ticket" {
 						tickets <- id
 						select {
@@ -120,8 +124,20 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 					endpoints = append(endpoints, srv.URL)
 				}
 			}
-			attachPool(t, m, endpoints)
+			pool := attachPool(t, m, endpoints)
 			client := httpx.New("test", "en", 0, 10*time.Second)
+			// Each route is tried once first, so its address's limit is its
+			// own: a route never tried answers for itself alone.
+			for _, raw := range endpoints {
+				lease := pool.Acquire(service, pool.Page(service, proxy.Query{Search: raw}).Rows[0].ID, 1)
+				if lease == nil {
+					t.Fatal("no route to try")
+				}
+				if _, err := client.GetString(lease.Context(t.Context()), "http://api.example.test/ping", nil); err != nil {
+					t.Fatal(err)
+				}
+				lease.Release()
+			}
 			job := addProxyFiles(m, 4, func(ctx context.Context) (*extractor.Target, error) {
 				id, err := client.GetString(ctx, "http://api.example.test/ticket", nil)
 				if err != nil {
@@ -153,7 +169,7 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 				}
 			}
 			if len(ids) != 3 {
-				t.Fatal("parallel ticket requests shared an unrated proxy address")
+				t.Fatal("parallel ticket requests shared a proxy address")
 			}
 			if snap := m.Snapshot(); snap.Active != 3 || snap.Queued != 1 {
 				t.Fatalf("proxy downloads must follow general concurrency: active=%d queued=%d", snap.Active, snap.Queued)

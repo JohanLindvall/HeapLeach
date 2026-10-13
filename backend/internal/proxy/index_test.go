@@ -45,6 +45,9 @@ func randomInventory(rng *rand.Rand, routes int) *Pool {
 		if rng.IntN(6) == 0 {
 			e.WAF.Until = now.Add(time.Hour)
 		}
+		if rng.IntN(3) == 0 {
+			e.WAF.Tries = 1
+		}
 	}
 	if rng.IntN(3) == 0 {
 		p.ensure(Direct, now)
@@ -298,7 +301,9 @@ func TestAddressLeasesAreCountedAsLeasesComeAndGo(t *testing.T) {
 		feeds: []string{"feed"}, client: httpx.New("test", "en", 0, time.Second)}
 	now := time.Now()
 	a, b := p.ensure("http://10.6.0.1:8080", now), p.ensure("socks5h://10.6.0.1:1080", now) // one address
-	a.Origins, b.Origins = []string{"feed"}, []string{"feed"}
+	fresh := p.ensure("socks5h://10.6.0.1:1081", now)
+	a.Origins, b.Origins, fresh.Origins = []string{"feed"}, []string{"feed"}, []string{"feed"}
+	b.stat("keep2share").Tries = 1 // tried: it shares its address's leases from now on
 	can := func(e *entry, site string) bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -310,6 +315,9 @@ func TestAddressLeasesAreCountedAsLeasesComeAndGo(t *testing.T) {
 	}
 	if can(b, "keep2share") || !can(b, "fileboom") {
 		t.Fatal("the address's other port must be held for the site leased, and only that one")
+	}
+	if !can(fresh, "keep2share") {
+		t.Fatal("a port never tried was held back by its address's lease")
 	}
 	p.mu.Lock()
 	p.ensure("http://10.6.0.2:8080", now).Origins = []string{"feed"} // the index is rebuilt mid-lease
@@ -330,7 +338,9 @@ func TestAnAddressFoundCoolingIsRememberedUntilItsCooldownEnds(t *testing.T) {
 	p := &Pool{entries: make(map[string]*entry), feeds: []string{"feed"}}
 	now := time.Now()
 	a, b := p.ensure("http://10.7.0.1:8080", now), p.ensure("http://10.7.0.1:8081", now)
-	a.Origins, b.Origins = []string{"feed"}, []string{"feed"}
+	fresh := p.ensure("http://10.7.0.1:8082", now)
+	a.Origins, b.Origins, fresh.Origins = []string{"feed"}, []string{"feed"}, []string{"feed"}
+	a.stat("keep2share").Tries = 1 // tried: it shares its address's cooldowns
 	ix := p.index()
 	if !p.eligible(ix, a, "keep2share", 1, now, false) {
 		t.Fatal("a free address was held back")
@@ -338,6 +348,9 @@ func TestAnAddressFoundCoolingIsRememberedUntilItsCooldownEnds(t *testing.T) {
 	b.stat("keep2share").Until = now.Add(time.Hour)
 	if p.eligible(ix, a, "keep2share", 1, now, false) {
 		t.Fatal("a cooldown starting after the address was found free was missed")
+	}
+	if !p.eligible(ix, fresh, "keep2share", 1, now, false) {
+		t.Fatal("a port never tried was held back by another port's cooldown")
 	}
 	if p.eligible(ix, a, "keep2share", 1, now.Add(30*time.Minute), false) {
 		t.Fatal("the remembered cooldown ended early")
@@ -348,5 +361,95 @@ func TestAnAddressFoundCoolingIsRememberedUntilItsCooldownEnds(t *testing.T) {
 	a.stat("keep2share").Until = now.Add(3 * time.Hour)
 	if p.eligible(ix, a, "keep2share", 1, now.Add(2*time.Hour), false) {
 		t.Fatal("a cooldown starting after the remembered one ended was missed")
+	}
+}
+
+// Ports never tried on one address are each potentially free: each can be
+// leased, once, while the address's tried ports are held by those leases.
+func TestPortsNeverTriedAreEachPotentiallyFree(t *testing.T) {
+	p := testPool(t, []string{
+		"socks5h://gateway.example.test:20001", "socks5h://gateway.example.test:20002",
+		"socks5h://gateway.example.test:20003", "socks5h://gateway.example.test:20004",
+	}, nil)
+	p.mu.Lock()
+	tried := p.entries["socks5h://gateway.example.test:20004"]
+	tried.stat("keep2share").Tries = 1
+	p.mu.Unlock()
+	first := p.Acquire("keep2share", routeID(tried.URL), 1)
+	if first == nil || first.entry != tried {
+		t.Fatal("did not lease the tried port")
+	}
+	t.Cleanup(first.Release)
+	seen := map[string]bool{}
+	for range 3 {
+		l := p.Acquire("keep2share", "", 1)
+		if l == nil {
+			t.Fatalf("leased %d of the three ports never tried, beside a leased one", len(seen))
+		}
+		t.Cleanup(l.Release)
+		if seen[l.entry.URL] || l.entry == tried {
+			t.Fatalf("leased %s, which was not free", l.entry.URL)
+		}
+		seen[l.entry.URL] = true
+	}
+	if l := p.Acquire("keep2share", "", 1); l != nil {
+		t.Fatalf("leased %s; want each port once", l.entry.URL)
+	}
+	first.Release()
+	// Once its siblings are leased, the tried port is held by them.
+	if l := p.Acquire("keep2share", routeID(tried.URL), 1); l != nil {
+		t.Fatal("the tried port was leased beside its address's other leases")
+	}
+}
+
+// A host's cooldown is written on the route it was met through. Tried ports
+// on its address take it up where routes are chosen; one never tried keeps
+// its own state, and so a copy written there by an older build is dropped
+// when the inventory is read back.
+func TestACooldownIsWrittenOnTheRouteItWasMetThrough(t *testing.T) {
+	met, tried, fresh := "http://gateway.example.test:30001", "http://gateway.example.test:30002", "http://gateway.example.test:30003"
+	p := testPool(t, []string{met, tried, fresh}, nil)
+	p.mu.Lock()
+	p.entries[tried].stat("keep2share").Tries = 1
+	p.mu.Unlock()
+	lease := p.Acquire("keep2share", routeID(met), 1)
+	if lease == nil {
+		t.Fatal("no route")
+	}
+	lease.observe(httpx.RouteObservation{Status: 200, Duration: time.Second})
+	until := time.Now().Add(time.Hour)
+	lease.Cooldown(until)
+	lease.Release()
+	p.mu.Lock()
+	if got := p.entries[tried].stat("keep2share").Until; !got.IsZero() {
+		p.mu.Unlock()
+		t.Fatalf("the cooldown was copied onto another port: %v", got)
+	}
+	// As an older build left it: a copy on the port never tried.
+	p.entries[fresh].stat("keep2share").Until = until
+	p.persist(p.entries[fresh], "keep2share")
+	p.mu.Unlock()
+	if l := p.Acquire("keep2share", routeID(tried), 1); l != nil {
+		t.Fatal("a tried port escaped its address's cooldown")
+	}
+	path := p.db.Path()
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p2, err := Open(path, p.static, nil, p.client, p.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p2.Close()
+	p2.mu.Lock()
+	kept, dropped := p2.entries[met].stat("keep2share").Until, p2.entries[fresh].stat("keep2share").Until
+	p2.mu.Unlock()
+	if !kept.Equal(until) || !dropped.IsZero() {
+		t.Fatalf("after a restart: the route's own cooldown %v (want %v), the copy %v (want none)", kept, until, dropped)
+	}
+	if l := p2.Acquire("keep2share", routeID(fresh), 1); l == nil || l.entry.URL != fresh {
+		t.Fatal("the port never tried was not free after the restart")
+	} else {
+		l.Release()
 	}
 }

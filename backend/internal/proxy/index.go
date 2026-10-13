@@ -118,15 +118,42 @@ func (p *Pool) noteMeasured(e *entry) {
 // the rule available applies to the whole inventory at once, asked of one
 // route: alive, enabled, and its address neither cooling for the site (nor,
 // for WAF recovery, after a challenge) nor at the site's per-address limit.
+// A route never tried for the site answers for itself alone (untested).
 // Caller holds mu, and ix is p.index().
 func (p *Pool) eligible(ix *inventory, e *entry, site string, files int, now time.Time, waf bool) bool {
 	if e.Until.After(now) || !p.enabled(e) {
 		return false
 	}
+	if e.untested(site, waf) {
+		return e.freeOnItsOwn(site, files, now, waf)
+	}
 	if ix.leases[addressSite{e.hostID, site}] >= max(1, files) {
 		return false
 	}
 	return !ix.addressCooling(e.hostID, site, now, waf)
+}
+
+// untested reports a route never tried for the site, nor, for WAF recovery,
+// challenged. Such a route is potentially free whatever the other ports on
+// its address are doing. A gateway fronts thousands of ports on one address,
+// and they leave through public addresses of their own: two on one gateway
+// came out at two different addresses, neither the gateway's. So a host's
+// limit met through one port says nothing about another, and one being
+// leased does not make the rest busy, until the route has been tried. From
+// then on it shares its address's leases and cooldowns like any other.
+func (e *entry) untested(site string, waf bool) bool {
+	s := e.Sites[site]
+	return (s == nil || s.Tries == 0) && (!waf || e.WAF.Tries == 0)
+}
+
+// freeOnItsOwn is eligibility for an untested route: its own leases and its
+// own cooldowns, and nothing of its address's.
+func (e *entry) freeOnItsOwn(site string, files int, now time.Time, waf bool) bool {
+	if waf && e.WAF.Until.After(now) {
+		return false
+	}
+	s := e.Sites[site]
+	return s == nil || (s.active < max(1, files) && !s.Until.After(now))
 }
 
 // addressCooling reports whether any port on the address is cooling for the

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	bolt "go.etcd.io/bbolt"
@@ -47,6 +48,15 @@ func (p *Pool) openStore(path string) error {
 				u, err := normalize(e.URL)
 				if err != nil || u != string(k) {
 					return errors.New("invalid proxy inventory record")
+				}
+				// A route never tried for a site cannot have met its limit
+				// there. A cooldown on it was copied from its address's other
+				// ports, as Cooldown once did, or set from a resolver's own
+				// timer, which a restart forgets.
+				for _, s := range e.Sites {
+					if s.Tries == 0 {
+						s.Until = time.Time{}
+					}
 				}
 				p.entries[e.URL] = &e
 				return nil

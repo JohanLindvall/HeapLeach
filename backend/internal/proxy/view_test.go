@@ -76,14 +76,21 @@ func TestProxyPageBoundsFiltersAndSortsBeforePagination(t *testing.T) {
 
 func TestProxyPageShowsAddressCooldownAndRemovedActiveRoute(t *testing.T) {
 	a, alias, b := "http://same.example.test:80", "socks5h://same.example.test:1080", "http://other.example.test:80"
-	p := testPool(t, []string{a, alias, b}, nil)
+	fresh := "socks5h://same.example.test:1081"
+	p := testPool(t, []string{a, alias, b, fresh}, nil)
+	p.mu.Lock()
+	p.entries[alias].stat("keep2share").Tries = 1 // tried: it shares its address's cooldowns
+	p.mu.Unlock()
 	lease := p.Acquire("keep2share", routeID(a), 1)
 	lease.observe(httpx.RouteObservation{Status: 200, Bytes: 1 << 20, Duration: time.Second})
 	until := time.Now().Add(time.Hour)
 	lease.Cooldown(until)
 	page := p.Page("keep2share", Query{Status: "cooling"})
-	if page.Total != 1 || !page.Rows[0].CooldownUntil.Equal(until) {
+	if page.Total != 1 || page.Rows[0].ID != routeID(alias) || !page.Rows[0].CooldownUntil.Equal(until) {
 		t.Fatalf("same-address cooldown is missing: %+v", page)
+	}
+	if page = p.Page("keep2share", Query{Search: fresh}); page.Total != 1 || page.Rows[0].Status != "untested" || !page.Rows[0].CooldownUntil.IsZero() {
+		t.Fatalf("a port never tried was shown held back by its address: %+v", page.Rows)
 	}
 	c, err := ParseConfiguration([]string{b}, nil)
 	if err != nil {

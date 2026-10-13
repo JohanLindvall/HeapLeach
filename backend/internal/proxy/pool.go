@@ -428,6 +428,12 @@ func (p *Pool) available(site string, files int, now time.Time, waf bool) []*ent
 		if e.Until.After(now) {
 			continue
 		}
+		if e.untested(site, waf) { // see untested
+			if p.enabled(e) && e.freeOnItsOwn(site, files, now, waf) {
+				candidates = append(candidates, e)
+			}
+			continue
+		}
 		if a := p.addresses[e.hostID]; a.cooling || a.active >= max(1, files) || !p.enabled(e) {
 			continue
 		}
@@ -464,6 +470,12 @@ func identity(raw string) string {
 
 // Cooldown records an authoritative per-address host timer without treating
 // it as a dead proxy. Other services can keep using the endpoint.
+//
+// It is written on this route alone. The address's other tried ports take it
+// up where routes are chosen (addressCooling), and those never tried may
+// leave through another public address altogether (untested). Writing it on
+// each port was a synced transaction per port, under the pool's lock: on a
+// gateway of thousands, seconds in which no route could be leased.
 func (l *Lease) Cooldown(until time.Time) {
 	p := l.pool
 	p.mu.Lock()
@@ -471,14 +483,9 @@ func (l *Lease) Cooldown(until time.Time) {
 	if p.closed {
 		return
 	}
-	ix := p.index()
-	if id := p.hostID(l.entry); id < len(ix.byHost) {
-		for _, e := range ix.byHost[id] {
-			if until.After(e.stat(l.site).Until) {
-				e.stat(l.site).Until = until
-				p.persist(e, l.site)
-			}
-		}
+	if s := l.entry.stat(l.site); until.After(s.Until) {
+		s.Until = until
+		p.persist(l.entry, l.site)
 	}
 }
 

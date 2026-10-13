@@ -120,10 +120,19 @@ func referenceAvailable(p *Pool, site string, files int, now time.Time, waf bool
 		}
 	}
 	for _, e := range p.entries {
-		if !p.enabled(e) || e.Until.After(now) || cooling[identity(e.URL)] {
+		if !p.enabled(e) || e.Until.After(now) {
 			continue
 		}
-		if active[identity(e.URL)] < max(1, files) {
+		s := e.stat(site)
+		if s.Tries == 0 && (!waf || e.WAF.Tries == 0) {
+			// Never tried: its own leases and cooldowns, and nothing of its
+			// address's.
+			if s.active < max(1, files) && !s.Until.After(now) && !(waf && e.WAF.Until.After(now)) {
+				candidates = append(candidates, e)
+			}
+			continue
+		}
+		if !cooling[identity(e.URL)] && active[identity(e.URL)] < max(1, files) {
 			candidates = append(candidates, e)
 		}
 	}
@@ -152,8 +161,14 @@ func TestAvailableChoosesWhatThePlainScanDid(t *testing.T) {
 			if rng.IntN(4) == 0 {
 				e.stat("keep2share").active = rng.IntN(3)
 			}
+			if rng.IntN(2) == 0 {
+				e.stat("keep2share").Tries = 1 + rng.IntN(3)
+			}
 			if rng.IntN(6) == 0 {
 				e.WAF.Until = now.Add(time.Hour)
+			}
+			if rng.IntN(3) == 0 {
+				e.WAF.Tries = 1
 			}
 		}
 		if rng.IntN(3) == 0 {

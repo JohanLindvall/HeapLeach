@@ -114,7 +114,16 @@ func (p *Pool) Page(site string, q Query) Page {
 		if s.OK+s.Bad > 0 {
 			row.SuccessRate = s.OK / (s.OK + s.Bad)
 		}
+		// A route never tried answers for itself alone (untested), so its
+		// address's cooldown and leases are not its own.
+		untested := e.untested(site, site == "cloudflare")
 		until := cooling[e.host()]
+		if untested {
+			until = s.Until
+			if site == "cloudflare" && e.WAF.Until.After(until) {
+				until = e.WAF.Until
+			}
+		}
 		if e.Until.After(until) {
 			until = e.Until
 		}
@@ -134,7 +143,7 @@ func (p *Pool) Page(site string, q Query) Page {
 		case until.After(now):
 			row.Status = "cooling"
 			page.Summary.Cooling++
-		case active[e.host()] > 0:
+		case active[e.host()] > 0 && !untested:
 			row.Status = "busy"
 		default:
 			page.Summary.Available++

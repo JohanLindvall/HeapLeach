@@ -698,6 +698,27 @@ Host-specific notes:
   order. Selection and reservation share the pool lock, including for these
   unrated routes.
 
+  **A route never tried for a service answers for itself alone**
+  (`entry.untested`): what the other ports on its address are doing says
+  nothing about it. Feeds list gateways of thousands of ports on one
+  address, and those ports leave through public addresses of their own:
+  two on one gateway came out at two different addresses, neither the
+  gateway's. Held to its address, nearly every untested route in the
+  inventory, 46,000 on 57 addresses, sat "busy" or "cooling" because one
+  sibling port was leased or had met a host's limit. So an untested route
+  is eligible unless it is dead, leased itself, or cooling itself, and its
+  own lease still counts against its address, so the address's tried ports
+  stay busy. Once tried, a route shares its address's leases and cooldowns
+  like any other. Most gateway ports turn out dead, so they are tried and
+  set aside: a dead proxy costs a file no retry, and an extra stream no
+  backoff (`routeBroken`). `Lease.Cooldown` writes the host's timer on its
+  own route alone, and tried ports pick it up where routes are chosen
+  (`addressCooling`). Writing it on every port was a synced bbolt
+  transaction per port under the pool's lock: thousands for one Keep2Share
+  wait on a gateway, with the dispatcher waiting on that lock and holding
+  the manager's. Copies an older build wrote onto untried ports are
+  dropped when the inventory is loaded.
+
   Ranking never walks the inventory (`index.go`): a public feed's tens of
   thousands of routes, walked on every lease and every upgrade check, were
   most of the service's CPU. The index lists every route, the routes by

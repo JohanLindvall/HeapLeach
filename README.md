@@ -660,7 +660,10 @@ applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
 `-concurrency` across both services. Each address may carry one K2S transfer
 and one FileBoom transfer simultaneously. The hosts' speed limits and
-cooldowns still apply per address and service. When routes would otherwise
+cooldowns still apply per address and service. A proxy port that has never
+been tried counts as free whatever the other ports on its address are
+doing, since gateway ports often leave through addresses of their own;
+once tried, it shares its address's limits. When routes would otherwise
 go unused, a slow file also reads through extra routes, up to the streams
 setting, each with a free download and a speed cap of its own. That happens
 only while no other file of the service is waiting to start, so it speeds up

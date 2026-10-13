@@ -111,6 +111,13 @@ func TestLeaseLimitsAcrossProtocolsAndConcurrentAcquisitions(t *testing.T) {
 				"https://one.example.test:8443", "socks5://one.example.test:1080",
 				"http://two.example.test:8000", "socks5://two.example.test:1080",
 			}, nil)
+			// Tried once, without a speed, so the address's limit is theirs:
+			// a route never tried answers for itself alone.
+			p.mu.Lock()
+			for _, e := range p.entries {
+				e.stat("keep2share").Tries = 1
+			}
+			p.mu.Unlock()
 			var wg sync.WaitGroup
 			start := make(chan struct{})
 			leases := make(chan *Lease, 40)

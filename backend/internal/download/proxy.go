@@ -383,6 +383,16 @@ func routeAtFault(err error) bool {
 	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
+// routeBroken is routeAtFault short of a refusal: a proxy that could not
+// carry the request at all, which the host either never saw or saw cut off.
+// Most untested ports on a public gateway are such proxies.
+func routeBroken(err error) bool {
+	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
+		return false
+	}
+	return routeAtFault(err)
+}
+
 // proxyUnusable reports a proxy that answered and showed it cannot carry these
 // requests at all, whatever their destination:
 //   - a SOCKS proxy that wants credentials, or methods, it was not given;

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,6 +84,10 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 }
 
 func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string) {
+	if req.URL.Host == "api.example.test" {
+		_, _ = fmt.Fprint(w, `{"status":"success"}`)
+		return
+	}
 	r.mu.Lock()
 	refused, hang := r.refuse[route], r.hang[route]
 	r.mu.Unlock()
@@ -323,6 +328,52 @@ func TestExtraStreamsThatGetNowhereAreTriedLessOften(t *testing.T) {
 	defer r.mu.Unlock()
 	if tries := r.asked[r.ids[1]]; tries == 0 || tries > 10 {
 		t.Fatalf("an extra stream was sought %d times on a route that never gave one; want a few", tries)
+	}
+}
+
+// Routes that cannot carry a request at all cost the host nothing, so they
+// do not slow the search for an extra stream: most untested routes are dead,
+// and each one tried is set aside.
+func TestDeadRoutesDoNotSlowTheSearchForAnExtraStream(t *testing.T) {
+	r := newRouteRig(t, 1)
+	var dead []string
+	for i := range 8 {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.1.%d:0", 1+i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dead = append(dead, "http://"+l.Addr().String())
+		l.Close() // refused from now on
+	}
+	attachPool(t, r.m, append([]string{r.urls[0]}, dead...))
+	it := r.add("clip.bin", func(ctx context.Context, route string) error {
+		// The host's API comes first, through the route, as a CAPTCHA would.
+		req, err := r.m.client.NewRequest(ctx, http.MethodGet, "http://api.example.test/ticket", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := r.m.client.DoOnce(req)
+		if err != nil {
+			return fmt.Errorf("test service: ticket: %w", err)
+		}
+		resp.Body.Close()
+		return nil
+	})
+	r.m.mu.Lock()
+	it.preferredRoute = r.ids[0]
+	r.m.mu.Unlock()
+	r.m.Start()
+	r.waitDone(60*time.Second, it)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	tried := 0
+	for route, n := range r.asked {
+		if route != r.ids[0] && n > 0 {
+			tried++
+		}
+	}
+	if tried != len(dead) {
+		t.Fatalf("tried %d of the %d dead routes while the file downloaded; want every one, without waiting longer each time", tried, len(dead))
 	}
 }
 

@@ -228,7 +228,13 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			if res.err != nil {
 				res.cancel()
 				if !errors.Is(res.err, errNoIdleRoute) && ctx.Err() == nil {
-					backOff()
+					// A route that could not carry the request has cost the
+					// host nothing, and the pool has already set it aside:
+					// the next draw is another one, and most untested
+					// routes are dead.
+					if !routeBroken(res.err) {
+						backOff()
+					}
 					t.manager.log.Debug("no extra stream from that route", "item", t.item.ID, "err", res.err)
 				}
 				continue
