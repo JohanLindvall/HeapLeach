@@ -2132,7 +2132,11 @@ limits hold while it is closed. `ProxyList` selects Keep2Share, FileBoom or WAF 
 `site` query and polls `/api/proxies` only while mounted and the
 tab is visible; the inventory can contain tens of thousands of routes and
 must not be added to SSE snapshots. Filtering, sorting and pagination happen
-server-side. Scores use the selector's deterministic mean estimate, not a
+server-side, in `proxytron/lease`'s `Pool.Page`. Since proxytron v0.1.1 it
+keeps only the rows up to the end of the page asked for, and works out each
+route's ID and shown address once. Hashing, parsing, building and sorting a
+row for every route had taken 230 ms and 74 MB a request in a pool of 63,000,
+every five seconds while the list was open. Scores use the selector's deterministic mean estimate, not a
 fresh random draw when viewed. Source drafts fetch `/api/settings` separately
 and survive failed saves; source credentials never belong in the list or
 queue snapshots. Proxy settings last for the session; parallel downloads and
