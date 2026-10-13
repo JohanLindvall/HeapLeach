@@ -188,6 +188,10 @@ func (ix *inventory) addressCooling(host int, site string, now time.Time, waf bo
 	return true
 }
 
+// listedForDraw, when set, is told each time drawUnmeasured lists the
+// inventory. Only tests set it.
+var listedForDraw func()
+
 // drawUnmeasured draws one route not measured for site that could take the
 // transfer: selection's single exploration ticket. It draws an address at
 // random and then one of its ports, drawing again until the port qualifies,
@@ -195,14 +199,21 @@ func (ix *inventory) addressCooling(host int, site string, now time.Time, waf bo
 // Drawn by route instead, a gateway listing thousands of ports on one
 // address took nearly every draw, while most of its ports were dead and
 // most single proxies had been tried: a fresh inventory spent its first half
-// hour finding that out, one port at a time. When few qualify,
-// ProxyDrawTries misses in a row fall back to listing them, then drawing an
-// address and a port among those. Caller holds mu, and ix is p.index().
+// hour finding that out, one port at a time.
+//
+// Once the single proxies have been tried, though, what qualifies is a
+// share of a few gateways' ports, and an address drawn at random is almost
+// never one of them. So after a quarter of ProxyDrawTries misses it draws
+// by route, as uniformly, which finds one in a few dozen tries. Going
+// straight to the listing instead had the dispatcher listing all 60,000
+// routes for nearly every file it started, under the manager's lock. Only
+// when that misses too does it list them, and draw an address and a port
+// among those. Caller holds mu, and ix is p.index().
 func (p *Pool) drawUnmeasured(ix *inventory, site string, files int, now time.Time, waf bool) *entry {
 	if len(ix.byHost) <= 1 { // address numbers start at 1
 		return nil
 	}
-	for range config.ProxyDrawTries {
+	for range config.ProxyDrawTries / 4 {
 		ports := ix.byHost[1+rand.IntN(len(ix.byHost)-1)]
 		if len(ports) == 0 {
 			continue
@@ -210,6 +221,14 @@ func (p *Pool) drawUnmeasured(ix *inventory, site string, files int, now time.Ti
 		if e := ports[rand.IntN(len(ports))]; e.speed(site) == 0 && p.eligible(ix, e, site, files, now, waf) {
 			return e
 		}
+	}
+	for range config.ProxyDrawTries {
+		if e := ix.all[rand.IntN(len(ix.all))]; e.speed(site) == 0 && p.eligible(ix, e, site, files, now, waf) {
+			return e
+		}
+	}
+	if listedForDraw != nil {
+		listedForDraw()
 	}
 	byAddress := make(map[int][]*entry)
 	var addresses []int

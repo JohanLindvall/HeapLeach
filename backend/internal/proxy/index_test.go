@@ -535,3 +535,40 @@ func TestAnExitIsHeldByOneLeaseAtATime(t *testing.T) {
 		t.Fatal("a route whose exit is cooling was leased")
 	}
 }
+
+// With every single proxy cooling and the free routes a sliver of a few
+// gateways' ports, a draw still finds one by route rather than listing the
+// whole inventory, which the dispatcher did for nearly every file it started.
+func TestADrawAmongAFewGatewaysPortsDoesNotListTheInventory(t *testing.T) {
+	p := &Pool{entries: make(map[string]*entry), priors: make(map[string]*prior), lastProbe: make(map[string]time.Time),
+		static: []string{}, feeds: []string{"feed"}, client: httpx.New("test", "en", 0, time.Second)}
+	now := time.Now()
+	for i := range 4000 {
+		e := p.ensure(fmt.Sprintf("http://10.4.%d.%d:8080", i/250, i%250), now)
+		e.Origins = []string{"feed"}
+		e.Until = now.Add(time.Hour) // tried and shelved
+	}
+	for g := range 4 {
+		for port := range 1000 {
+			e := p.ensure(fmt.Sprintf("socks5h://10.5.0.%d:%d", 1+g, 20000+port), now)
+			e.Origins = []string{"feed"}
+			if port%100 != 0 {
+				e.Until = now.Add(time.Hour)
+			}
+		}
+	}
+	var listed int
+	listedForDraw = func() { listed++ }
+	defer func() { listedForDraw = nil }()
+	for range 200 {
+		p.mu.Lock()
+		e := p.drawUnmeasured(p.index(), "keep2share", 1, now, false)
+		p.mu.Unlock()
+		if e == nil || !strings.HasPrefix(e.URL, "socks5h://10.5.0.") {
+			t.Fatalf("drew %v; want a free gateway port", e)
+		}
+	}
+	if listed > 10 {
+		t.Fatalf("listed the inventory for %d of 200 draws; want hardly ever", listed)
+	}
+}

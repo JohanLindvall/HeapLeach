@@ -212,7 +212,7 @@ func (m *Manager) Start() {
 		return
 	}
 	m.started = true
-	m.wg.Add(3)
+	m.wg.Add(4)
 	m.mu.Unlock()
 	// Measure once up front: the first snapshot a browser is sent is built
 	// before the broadcaster has ticked, and a zero there would draw as a
@@ -222,6 +222,7 @@ func (m *Manager) Start() {
 	go m.dispatch()
 	go m.broadcast()
 	go m.saver()
+	go m.summarizeRoutes()
 }
 
 // Close cancels every in-flight transfer, waits for the workers to exit and
@@ -486,6 +487,29 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 }
 
 // dispatch starts queued items whenever a worker slot frees up.
+// summarizeRoutes logs how routed attempts ended, once a
+// RouteSummaryInterval (routeSummaryLocked). It has a goroutine of its own:
+// from the dispatcher's tick it went quiet exactly when it was wanted, with
+// the dispatcher starting files back to back as fast as routes failed them.
+func (m *Manager) summarizeRoutes() {
+	defer m.wg.Done()
+	ticker := time.NewTicker(config.RouteSummaryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case now := <-ticker.C:
+			m.mu.Lock()
+			summary := m.routeSummaryLocked(now)
+			m.mu.Unlock()
+			for _, args := range summary {
+				m.log.Info("route attempts", args...)
+			}
+		}
+	}
+}
+
 func (m *Manager) dispatch() {
 	defer m.wg.Done()
 	// Timers in the persistent pool and refreshed feeds can make a route
@@ -501,11 +525,7 @@ func (m *Manager) dispatch() {
 		case <-ticker.C:
 			m.mu.Lock()
 			enabled := m.proxyEnabled
-			summary := m.routeSummaryLocked(time.Now())
 			m.mu.Unlock()
-			for _, args := range summary {
-				m.log.Info("route attempts", args...)
-			}
 			if !enabled {
 				continue
 			}

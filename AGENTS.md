@@ -672,10 +672,12 @@ Host-specific notes:
   is what each costs a file. After a restart, 250 files spent nearly all
   their time in 15-second dials, at about 22 dead routes a second.
 
-  Once a minute the dispatcher logs `route attempts` per service
-  (`routeSummaryLocked`): how routed attempts ended (dead, shared, refused,
-  waited, transient, stalled, failed, finished), and how many files are moving
-  bytes or still trying. A line per attempt would be twenty a second, and
+  Once a minute a goroutine of its own (`summarizeRoutes`) logs `route
+  attempts` per service (`routeSummaryLocked`): how routed attempts ended
+  (dead, shared, refused, waited, transient, stalled, failed, finished), and
+  how many files are moving bytes or still trying. On the dispatcher's tick
+  it went quiet exactly when wanted, with files failing routes as fast as
+  they were started. A line per attempt would be twenty a second, and
   the 1,000-record log buffer would hold under a minute of anything else.
   A queue that is all dead routes or all refusals says so in one line.
 
@@ -802,9 +804,14 @@ Host-specific notes:
   upgrade rates measured routes only. The exploration ticket draws an
   address and then one of its ports, drawing again until the port
   qualifies, so each address is drawn in proportion to the share of its
-  ports that could take the transfer. After `ProxyDrawTries` misses it lists
-  the qualifying routes and draws an address and a port among them, for
-  when few qualify. `leased` counts each route's leases,
+  ports that could take the transfer. After a quarter of `ProxyDrawTries`
+  misses it draws by route instead: once the single proxies have been
+  tried, what qualifies is a sliver of a few gateways' ports, which an
+  address drawn at random almost never is. Without that stage the
+  dispatcher listed all 60,000 routes for nearly every file it started,
+  under the manager's lock, at two and a half cores. After `ProxyDrawTries`
+  misses more it lists the qualifying routes and draws an address and a
+  port among them, for when few qualify. `leased` counts each route's leases,
   which is where selection finds an unmeasured transfer in progress. Tests
   hold each against a scan of the whole inventory.
 
