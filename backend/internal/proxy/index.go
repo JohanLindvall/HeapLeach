@@ -188,29 +188,42 @@ func (ix *inventory) addressCooling(host int, site string, now time.Time, waf bo
 	return true
 }
 
-// drawUnmeasured draws one route uniformly from those not measured for site
-// that could take the transfer: selection's single exploration ticket.
-// Drawing from the whole inventory and drawing again until a route qualifies
-// is exactly uniform over the routes that do, and costs a few draws while
-// many do. When few do, ProxyDrawTries misses in a row fall back to listing
-// them, which is just as uniform. Caller holds mu, and ix is p.index().
+// drawUnmeasured draws one route not measured for site that could take the
+// transfer: selection's single exploration ticket. It draws an address at
+// random and then one of its ports, drawing again until the port qualifies,
+// so each address is drawn in proportion to the share of its ports that do.
+// Drawn by route instead, a gateway listing thousands of ports on one
+// address took nearly every draw, while most of its ports were dead and
+// most single proxies had been tried: a fresh inventory spent its first half
+// hour finding that out, one port at a time. When few qualify,
+// ProxyDrawTries misses in a row fall back to listing them, then drawing an
+// address and a port among those. Caller holds mu, and ix is p.index().
 func (p *Pool) drawUnmeasured(ix *inventory, site string, files int, now time.Time, waf bool) *entry {
-	if len(ix.all) == 0 {
+	if len(ix.byHost) <= 1 { // address numbers start at 1
 		return nil
 	}
 	for range config.ProxyDrawTries {
-		if e := ix.all[rand.IntN(len(ix.all))]; e.speed(site) == 0 && p.eligible(ix, e, site, files, now, waf) {
+		ports := ix.byHost[1+rand.IntN(len(ix.byHost)-1)]
+		if len(ports) == 0 {
+			continue
+		}
+		if e := ports[rand.IntN(len(ports))]; e.speed(site) == 0 && p.eligible(ix, e, site, files, now, waf) {
 			return e
 		}
 	}
-	var untried []*entry
+	byAddress := make(map[int][]*entry)
+	var addresses []int
 	for _, e := range p.available(site, files, now, waf) {
 		if e.speed(site) == 0 {
-			untried = append(untried, e)
+			if byAddress[e.hostID] == nil {
+				addresses = append(addresses, e.hostID)
+			}
+			byAddress[e.hostID] = append(byAddress[e.hostID], e)
 		}
 	}
-	if len(untried) == 0 {
+	if len(addresses) == 0 {
 		return nil
 	}
-	return untried[rand.IntN(len(untried))]
+	ports := byAddress[addresses[rand.IntN(len(addresses))]]
+	return ports[rand.IntN(len(ports))]
 }

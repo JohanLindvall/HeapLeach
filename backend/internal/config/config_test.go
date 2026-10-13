@@ -48,6 +48,36 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 }
 
+// The route inventory lives beside the queue wherever the queue is put, and
+// in the default state directory when no queue is kept.
+func TestTheProxyDatabaseLivesBesideTheQueue(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HEAPLEACH_PROXY_DB", "")
+	t.Setenv("HEAPLEACH_STATE", filepath.Join(dir, "mounted", "queue.json.zst"))
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dir, "mounted", "proxies.db"); cfg.ProxyDB != want {
+		t.Fatalf("proxy database %q, want %q beside the queue", cfg.ProxyDB, want)
+	}
+	t.Setenv("HEAPLEACH_STATE", "") // no queue kept
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "xdg"))
+	if cfg, err = FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StateFile != "" || cfg.ProxyDB != defaultProxyDB("") || cfg.ProxyDB == "" {
+		t.Fatalf("with no queue: state %q, proxy database %q", cfg.StateFile, cfg.ProxyDB)
+	}
+	t.Setenv("HEAPLEACH_PROXY_DB", filepath.Join(dir, "elsewhere.db"))
+	if cfg, err = FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyDB != filepath.Join(dir, "elsewhere.db") {
+		t.Fatalf("an explicit proxy database was overridden: %q", cfg.ProxyDB)
+	}
+}
+
 func TestProxyConfigurationDoesNotCreateStateUntilStartup(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HEAPLEACH_PROXIES", "1")

@@ -693,10 +693,16 @@ Host-specific notes:
   return the item to the queue to try another route, with their own bounded retry
   budget. The score estimates useful bytes per second for the remaining
   file size, including reliability and observed setup delay. Unmeasured
-  endpoints share one exploration candidate, drawn uniformly at random from
-  the eligible list, so discovery does not walk adjacent addresses in URL
-  order. Selection and reservation share the pool lock, including for these
-  unrated routes.
+  endpoints share one exploration candidate, drawn at random, first an
+  address and then one of its ports, so discovery neither walks adjacent
+  addresses in URL order nor spends itself on one gateway's thousands of
+  ports. Selection and reservation share the pool lock, including for these
+  unrated routes. The inventory lives beside the queue file wherever that
+  is put (`defaultProxyDB`), and in the default state directory when no
+  queue is kept. It used to sit beside the default queue path alone, so a
+  container with only its configured state directory mounted forgot every
+  route at every restart, and the next half hour went on rediscovering
+  dead ones.
 
   **A route never tried for a service answers for itself alone**
   (`entry.untested`): what the other ports on its address are doing says
@@ -736,10 +742,12 @@ Host-specific notes:
   memory can be wrong only in the safe direction. An address found free is
   never remembered, since a cooldown can start at any moment. Among
   crowded, mostly cooling addresses that took a lease from 21 to 7 µs. An
-  upgrade rates measured routes only. The exploration ticket is drawn from the whole
-  inventory, drawing again until a route qualifies, which is exactly
-  uniform. After `ProxyDrawTries` misses it lists the qualifying routes, as
-  uniformly, for when few qualify. `leased` counts each route's leases,
+  upgrade rates measured routes only. The exploration ticket draws an
+  address and then one of its ports, drawing again until the port
+  qualifies, so each address is drawn in proportion to the share of its
+  ports that could take the transfer. After `ProxyDrawTries` misses it lists
+  the qualifying routes and draws an address and a port among them, for
+  when few qualify. `leased` counts each route's leases,
   which is where selection finds an unmeasured transfer in progress. Tests
   hold each against a scan of the whole inventory.
 

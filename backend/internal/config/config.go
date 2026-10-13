@@ -155,7 +155,7 @@ func FromEnv() (*Config, error) {
 		MaxFiles:       MaxListingFiles,
 		Debug:          true,
 		Proxies:        true,
-		ProxyDB:        env("PROXY_DB", defaultProxyDB()),
+		ProxyDB:        env("PROXY_DB", ""),
 		ProxyEndpoints: envList("PROXY_ENDPOINTS"),
 		ProxyFeeds:     []string{DefaultProxyFeed},
 		ProxyRetries:   DefaultProxyRetries,
@@ -176,6 +176,9 @@ func FromEnv() (*Config, error) {
 		c.StateFile = strings.TrimSpace(value)
 	} else if c.StateFile != "" {
 		c.LegacyStateFile = strings.TrimSuffix(c.StateFile, ".zst")
+	}
+	if c.ProxyDB == "" {
+		c.ProxyDB = defaultProxyDB(c.StateFile)
 	}
 
 	var err error
@@ -516,8 +519,16 @@ func defaultStateFile() string {
 	return filepath.Join(base, "heapleach", "queue.json.zst")
 }
 
-func defaultProxyDB() string {
-	if state := defaultStateFile(); state != "" {
+// defaultProxyDB keeps the route inventory beside the queue, wherever the
+// queue has been put. A deployment mounts that directory to keep its queue,
+// and the inventory went beside the default queue path instead: in a
+// container whose home was not mounted, every restart forgot every route.
+// With no queue, it still has a home of its own.
+func defaultProxyDB(state string) string {
+	if state == "" {
+		state = defaultStateFile()
+	}
+	if state != "" {
 		return filepath.Join(filepath.Dir(state), "proxies.db")
 	}
 	return "proxies.db"

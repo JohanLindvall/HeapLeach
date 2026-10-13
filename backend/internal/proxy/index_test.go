@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -451,5 +452,36 @@ func TestACooldownIsWrittenOnTheRouteItWasMetThrough(t *testing.T) {
 		t.Fatal("the port never tried was not free after the restart")
 	} else {
 		l.Release()
+	}
+}
+
+// Untested routes are drawn by address, then by port: a gateway of a
+// thousand ports is one address among several, not nearly every draw.
+func TestAGatewayIsOneAddressAmongTheDraws(t *testing.T) {
+	p := &Pool{entries: make(map[string]*entry), priors: make(map[string]*prior), lastProbe: make(map[string]time.Time),
+		static: []string{}, feeds: []string{"feed"}, client: httpx.New("test", "en", 0, time.Second)}
+	now := time.Now()
+	for port := range 1000 {
+		p.ensure(fmt.Sprintf("socks5h://10.3.0.1:%d", 20000+port), now).Origins = []string{"feed"}
+	}
+	for i := range 9 {
+		p.ensure(fmt.Sprintf("http://10.3.1.%d:8080", 1+i), now).Origins = []string{"feed"}
+	}
+	gateway, draws := 0, 2000
+	for range draws {
+		p.mu.Lock()
+		ix := p.index()
+		e := p.drawUnmeasured(ix, "keep2share", 1, now, false)
+		p.mu.Unlock()
+		if e == nil {
+			t.Fatal("no route, with routes free")
+		}
+		if strings.HasPrefix(e.URL, "socks5h://10.3.0.1:") {
+			gateway++
+		}
+	}
+	// One address in ten; drawn by route it would be 1000 in 1009.
+	if share := float64(gateway) / float64(draws); share < 0.05 || share > 0.16 {
+		t.Fatalf("the gateway took %.0f%% of the draws; want about one in ten", 100*share)
 	}
 }
