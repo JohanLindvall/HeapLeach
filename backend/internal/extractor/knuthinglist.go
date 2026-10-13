@@ -130,6 +130,12 @@ func (k *Knuthing) list(ctx context.Context, u *url.URL, opts Options) (*Result,
 		}
 		page = next
 	}
+	// A walk that ended while the caller cancelled is a cancellation, not a
+	// partial listing: the page that ended it may have been answered before
+	// its request saw the cancellation.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("knuthing: listing has no videos")
 	}
