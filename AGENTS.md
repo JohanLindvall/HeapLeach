@@ -809,7 +809,11 @@ Host-specific notes:
   could share an exit address, so that the host's refusals of the second
   download were held against routes that were fine, and in which every
   restart had started the inventory over. Epoch 2 forgot the refusals that
-  were really files kept for premium users (see above).
+  were really files kept for premium users (see above). It has a cost: the
+  dead routes are forgotten with the rest, and are found again by files,
+  five seconds a route. For hours after epoch 2, 88% of attempts met dead
+  proxies, and files read "Checking the download route — connection
+  attempt 55". Raise it only when the verdicts of a whole kind are wrong.
 
   **No two downloads share an exit address** (`proxytron/lease/exit.go`). The address a
   host counts free downloads by is the one a route's requests leave from,
