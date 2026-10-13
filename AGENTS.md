@@ -291,10 +291,17 @@ error behind "request canceled while waiting for connection". A CONNECT
 answered with anything but 200 returns `httpx.ProxyRefusedError` with the
 status, from `OnProxyConnectResponse`, which net/http calls before its own
 check; left to net/http it is the status text alone ("Bad Request"), which
-says neither that a proxy answered nor what it said. A 5xx refusal is
-scored as the route refusing that service, not as a dead proxy: the proxy
-answered, and cannot reach that host. Scored as dead, one CDN out of
-public proxies' reach shelved them for Keep2Share as well. Request traces
+says neither that a proxy answered nor what it said. A 502 or 504 refusal
+is scored as the route refusing that service, not as a dead proxy
+(`reachesNoHost`): the proxy works, and cannot reach that host. Scored as
+dead, one CDN out of public proxies' reach shelved them for Keep2Share as
+well. Every other refusal is the proxy's own and sets it aside for every
+service: a Tor port's "501 Tor is not an HTTP Proxy", a server that knows
+no CONNECT ("503 unknown method"), a plain 500. For a while every 5xx was
+taken for the host's. Since the exit probe scores nothing but a success or a
+dead connection, those routes were never set aside at all. They came back
+after a minute's rest, fourteen thousand times in four hours, and took
+nearly every extra stream's turn. Request traces
 reset on each redirect; a CONNECT reply or completed SOCKS negotiation ends
 proxy setup, so later TLS and response timeouts retain their bounded retry
 budget. Caller cancellation and caller deadlines are never proxy penalties.

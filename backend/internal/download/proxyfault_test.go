@@ -258,3 +258,38 @@ func TestATunnelRefusedAtTheProxyHoldsTheRouteBackForThatServiceAlone(t *testing
 		t.Fatalf("for another service: %+v; want the route still on offer", row)
 	}
 }
+
+// A proxy that refuses the tunnel for any other reason than failing to reach
+// the host is no proxy for anyone, and is set aside for every service, by
+// the exit probe as by any other request. Taken for the host's refusals, Tor
+// ports and servers that know no CONNECT came back after a minute's rest and
+// took nearly every extra stream's turn: the probe scores only a success or a
+// dead connection, so it never set them aside.
+func TestAProxyThatCannotTunnelIsSetAsideForEveryService(t *testing.T) {
+	for _, answer := range []string{
+		"HTTP/1.1 501 Tor is not an HTTP Proxy\r\nContent-Length: 0\r\n\r\n",
+		"HTTP/1.1 503 unknown method\r\nContent-Length: 0\r\n\r\n",
+		"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n",
+	} {
+		t.Run(strings.Fields(answer)[1], func(t *testing.T) {
+			m := busyManager(t)
+			route := "http://" + fakeProxy(t, "127.0.0.2", answerConnect(answer, nil))
+			pool := attachPool(t, m, []string{route})
+			id := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].ID
+			lease := pool.Acquire("keep2share", id, 1)
+			if lease == nil {
+				t.Fatal("no route")
+			}
+			_, err := m.client.WithTimeout(3*time.Second).GetString(lease.ProbeContext(t.Context()), "https://echo.example.test/", nil)
+			lease.Release()
+			if _, ok := errors.AsType[*httpx.ProxyRefusedError](err); !ok {
+				t.Fatalf("error = %v; want the proxy's refusal", err)
+			}
+			for _, service := range []string{"keep2share", "fileboom"} {
+				if row := pool.Page(service, proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" {
+					t.Errorf("for %s: %+v; want it set aside", service, row)
+				}
+			}
+		})
+	}
+}

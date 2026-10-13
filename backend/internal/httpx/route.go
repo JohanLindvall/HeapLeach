@@ -189,7 +189,7 @@ func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, 
 			// Record it separately from ordinary proxy health.
 			status = http.StatusForbidden
 		}
-		if refused, ok := errors.AsType[*ProxyRefusedError](err); ok && refused.Code >= http.StatusInternalServerError {
+		if refused, ok := errors.AsType[*ProxyRefusedError](err); ok && reachesNoHost(refused.Code) {
 			// The proxy answered, and could not reach this host: a refusal
 			// for the host's service, not a proxy that is dead to every one.
 			// Scored as dead, one CDN unreachable from many public proxies
@@ -248,4 +248,17 @@ func (b *routeBody) Close() error {
 		b.once.Do(func() { b.report(b.bytes, nil) })
 	}
 	return b.ReadCloser.Close()
+}
+
+// reachesNoHost reports a tunnel refusal that says the proxy works and could
+// not reach the host from where it is: a bad gateway or a gateway timeout.
+// Every other refusal is the proxy's own, whatever the host: a Tor port
+// answering "501 Tor is not an HTTP Proxy", a server that knows no CONNECT
+// ("503 unknown method"), one that fails all it is asked ("500"). Taken for
+// the host's, those routes came back after a minute's rest and took nearly
+// every extra stream's turn, fourteen thousand times in four hours, while the
+// exit probe, which scores nothing but a success or a dead connection,
+// never set them aside.
+func reachesNoHost(code int) bool {
+	return code == http.StatusBadGateway || code == http.StatusGatewayTimeout
 }
