@@ -4,54 +4,16 @@ package config
 
 import "time"
 
-// Proxy discovery and health, following amzscrape's persistent inventory and
-// throughput selection. Feed scores never substitute for measured outcomes.
+// Application proxy configuration and scheduling. Pool health and discovery
+// defaults live in github.com/JohanLindvall/proxytron/lease.
 const (
-	DefaultProxyFeed         = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
-	ProxyRefresh             = 24 * time.Hour
-	ProxyRefreshRetry        = 5 * time.Minute
-	ProxyTick                = time.Minute
-	ProxyDispatchTick        = time.Second
-	ProxyFeedTimeout         = 20 * time.Second
-	ProxyFeedBytes           = 32 << 20
-	ProxyMaxEntries          = 100000
-	ProxyMaxFeeds            = 32
-	ProxyPageSize            = 50
-	ProxyMaxPageSize         = 200
-	ProxyDBTimeout           = time.Second
-	ProxyRetireAfter         = 30 * 24 * time.Hour
-	ProxyRefusalBase         = time.Minute
-	ProxyRefusalMax          = 30 * time.Minute
-	ProxyBrokenCooldown      = 10 * time.Minute
-	ProxyDeadCooldown        = 24 * time.Hour
-	ProxyOutcomeDecay        = 0.9
-	ProxyDurationAlpha       = 0.3
-	ProxyPriorValid          = 0.25
-	ProxyPriorSeconds        = 8.0
-	ProxyPriorWeight         = 4.0
-	ProxyPriorStrength       = 2.0
-	ProxyInvalidPenalty      = 10.0
-	ProxyMinSeconds          = 0.05
-	ProxyThroughputMinBytes  = 64 << 10
-	ProxyPriorBytesPerSecond = 1 << 20
-	ProxyPriorSetup          = 30 * time.Second
-	ProxyScoreBytes          = 32 << 20
-	ProxySampleWindow        = 5 * time.Second
-	ProxyExploreInterval     = 30 * time.Second
-	ProxyUpgradeWarmup       = 20 * time.Second
-	ProxyUpgradeInterval     = 10 * time.Second
-	ProxyUpgradeMinGain      = 15 * time.Second
-	ProxyUpgradeMinBytes     = 4 << 20
-	ProxyUpgradeRatio        = 1.25
-	ProxyUpgradeConfirm      = 2
-	DefaultProxyRetries      = 20
-
-	// ProxyDrawTries is how many routes are drawn at random, looking for an
-	// unmeasured one that could take a transfer, before listing them all.
-	// A draw costs well under a microsecond, a listing tens of milliseconds
-	// across a public feed's inventory: at 64, with two routes in a hundred
-	// free at 256 transfers, a quarter of all leases fell through to the list.
-	ProxyDrawTries = 1024
+	DefaultProxyFeed     = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
+	ProxyDispatchTick    = time.Second
+	ProxyFeedTimeout     = 20 * time.Second
+	ProxyMaxPageSize     = 200
+	ProxyUpgradeWarmup   = 20 * time.Second
+	ProxyUpgradeInterval = 10 * time.Second
+	DefaultProxyRetries  = 20
 
 	// RouteWantedRecheck is how long the answer to whether a service has a
 	// file due to start is kept before the queue is scanned again.

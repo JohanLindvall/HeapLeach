@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/proxytron"
 )
 
 // ThroughProxy creates an isolated transport and cookie jar. Explicit routes
@@ -41,8 +42,10 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 		default:
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
-		tr.Proxy = http.ProxyURL(u)
 		tr.DialContext = (&net.Dialer{Timeout: config.ProxyDialTimeout, KeepAlive: 30 * time.Second}).DialContext
+		if err := proxytron.SetHTTPProxy(tr, raw, &tls.Config{InsecureSkipVerify: true}); err != nil {
+			return nil, err
+		}
 		cp.proxyScheme = u.Scheme
 		tr.OnProxyConnectResponse = func(ctx context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
 			if pending, ok := ctx.Value(proxyConnectKey{}).(*atomic.Bool); ok {
@@ -55,31 +58,6 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 				return &ProxyRefusedError{Code: resp.StatusCode, Status: resp.Status}
 			}
 			return nil
-		}
-		if u.Scheme == "https" {
-			// DialTLSContext handles only the first hop to the fixed proxy.
-			// TLS inside CONNECT still uses TLSClientConfig and verifies the
-			// destination. Public HTTPS proxies often use self-signed certs.
-			tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-				if addr != u.Host {
-					return nil, errors.New("unexpected HTTPS proxy address")
-				}
-				conn, err := tr.DialContext(ctx, network, addr)
-				if err != nil {
-					return nil, err
-				}
-				secured := tls.Client(conn, &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // only the proxy's outer TLS hop
-					ServerName:         u.Hostname(), NextProtos: []string{"http/1.1"},
-				})
-				handshake, cancel := context.WithTimeout(ctx, tr.TLSHandshakeTimeout)
-				defer cancel()
-				if err := secured.HandshakeContext(handshake); err != nil {
-					conn.Close()
-					return nil, err
-				}
-				return secured, nil
-			}
 		}
 	}
 	return cp, nil

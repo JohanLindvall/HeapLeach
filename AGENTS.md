@@ -753,9 +753,12 @@ Host-specific notes:
   pending for a file, `getUrl` hands out the link whatever the answer, so
   every guess against that file "succeeds".
 
-  The persistent egress pool is enabled by default (`internal/proxy`, bbolt),
-  with `-proxies=false` or `HEAPLEACH_PROXIES=0` to disable it. It is
-  adapted from amzscrape. `Pace.PerRoute` marks the service's addressing rule;
+  The persistent egress pool is enabled by default (`internal/proxy` adapts
+  `github.com/JohanLindvall/proxytron/lease`, backed by bbolt), with
+  `-proxies=false` or `HEAPLEACH_PROXIES=0` to disable it. The library owns
+  discovery, scoring, leases, exit claims and their defaults. Application scope
+  policy, health epoch, probe-outage handling and HTTP identity stay here.
+  `Pace.PerRoute` marks the service's addressing rule;
   the manager allows the `keep2share`, `fileboom` and `cloudflare` groups to use proxies. The
   dispatcher leases a route before resolving and holds it through the
   transfer, one file per address per service across aliases and proxy protocols.
@@ -808,7 +811,7 @@ Host-specific notes:
   restart had started the inventory over. Epoch 2 forgot the refusals that
   were really files kept for premium users (see above).
 
-  **No two downloads share an exit address** (`exit.go`). The address a
+  **No two downloads share an exit address** (`proxytron/lease/exit.go`). The address a
   host counts free downloads by is the one a route's requests leave from,
   and that need not be the one the proxy listens on. Of eleven live ports
   on one gateway, nine distinct exits answered, three ports on one of them;
@@ -843,7 +846,7 @@ Host-specific notes:
   claim their routes the same way. `Config.ProxyExitProbes` carries the
   URLs and is empty in a Config built by hand, so tests opt in.
 
-  **Each route of a per-route service is one browser** (`entry.agent`,
+  **Each route of a per-route service is one browser** (`clientAdapter.agent`,
   `httpx.WithRouteAgent`). It draws a User-Agent from
   `config.BrowserUserAgents`, over thirty real desktop Chrome, Edge,
   Firefox and Safari strings, when its client is made, and every request
@@ -861,7 +864,7 @@ Host-specific notes:
   asked again within minutes, after another CAPTCHA, about a thousand times
   a minute in all.
 
-  Ranking never walks the inventory (`index.go`): a public feed's tens of
+  Ranking never walks the inventory (`proxytron/lease/index.go`): a public feed's tens of
   thousands of routes, walked on every lease and every upgrade check, were
   most of the service's CPU. The index lists every route, the routes by
   address and by ID, and the routes with a speed on some site. It is rebuilt
@@ -881,12 +884,12 @@ Host-specific notes:
   upgrade rates measured routes only. The exploration ticket draws an
   address and then one of its ports, drawing again until the port
   qualifies, so each address is drawn in proportion to the share of its
-  ports that could take the transfer. After a quarter of `ProxyDrawTries`
+  ports that could take the transfer. After a quarter of the library's draw limit
   misses it draws by route instead: once the single proxies have been
   tried, what qualifies is a sliver of a few gateways' ports, which an
   address drawn at random almost never is. Without that stage the
   dispatcher listed all 60,000 routes for nearly every file it started,
-  under the manager's lock, at two and a half cores. After `ProxyDrawTries`
+  under the manager's lock, at two and a half cores. After the library's draw limit
   misses more it lists the qualifying routes and draws an address and a
   port among them, for when few qualify. `leased` counts each route's leases,
   which is where selection finds an unmeasured transfer in progress. Tests
