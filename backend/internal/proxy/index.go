@@ -27,6 +27,23 @@ type inventory struct {
 	byHost   [][]*entry        // by Pool.hostID: every port and protocol on one address
 	byID     map[string]*entry // by routeID
 	measured []*entry          // routes with a speed on some site
+	// leases counts each address's leases per site, recounted from the
+	// routes when the index is built and kept by lease and Release, the
+	// only places a lease begins or ends.
+	leases map[addressSite]int
+	// cooling remembers an address found cooling for a site, until the
+	// cooldown it found. See addressCooling.
+	cooling map[addressCooldown]time.Time
+}
+
+type addressSite struct {
+	host int
+	site string
+}
+
+type addressCooldown struct {
+	addressSite
+	waf bool
 }
 
 // index returns the inventory index, rebuilt if routes were added or removed
@@ -53,11 +70,39 @@ func (p *Pool) index() *inventory {
 		}
 	}
 	ix.byHost = make([][]*entry, len(p.hostIDs)+1)
+	ix.leases = make(map[addressSite]int)
+	ix.cooling = make(map[addressCooldown]time.Time)
 	for _, e := range ix.all {
 		ix.byHost[e.hostID] = append(ix.byHost[e.hostID], e)
+		for site, s := range e.Sites {
+			if s.active > 0 {
+				ix.leases[addressSite{e.hostID, site}] += s.active
+			}
+		}
 	}
 	ix.valid = true
 	return ix
+}
+
+// leaseAddress and unleaseAddress keep the index's count of an address's
+// leases as a lease begins and ends. An index not yet built, or about to be
+// rebuilt, counts them itself. Caller holds mu.
+func (p *Pool) leaseAddress(e *entry, site string) {
+	if p.idx.valid && p.entries[e.URL] == e {
+		p.idx.leases[addressSite{p.hostID(e), site}]++
+	}
+}
+
+func (p *Pool) unleaseAddress(e *entry, site string) {
+	if !p.idx.valid || p.entries[e.URL] != e {
+		return
+	}
+	key := addressSite{p.hostID(e), site}
+	if p.idx.leases[key] > 1 {
+		p.idx.leases[key]--
+	} else {
+		delete(p.idx.leases, key)
+	}
 }
 
 // noteMeasured registers a route whose speed on some site has just left
@@ -78,19 +123,42 @@ func (p *Pool) eligible(ix *inventory, e *entry, site string, files int, now tim
 	if e.Until.After(now) || !p.enabled(e) {
 		return false
 	}
-	active := 0
-	for _, o := range ix.byHost[e.hostID] {
-		if s := o.Sites[site]; s != nil {
-			if s.Until.After(now) {
-				return false
-			}
-			active += s.active
+	if ix.leases[addressSite{e.hostID, site}] >= max(1, files) {
+		return false
+	}
+	return !ix.addressCooling(e.hostID, site, now, waf)
+}
+
+// addressCooling reports whether any port on the address is cooling for the
+// site, or, for WAF recovery, after a challenge. Some providers list
+// thousands of ports on one address, and walking them was most of what a
+// route draw cost; so an address found cooling is remembered until the
+// cooldown it found, and is not walked again before then. A cooldown is
+// only ever lengthened, by Cooldown and by refusals in a row, so that cannot
+// go stale but conservatively: a refusal's Retry-After shorter than a
+// cooldown already running leaves the address cooling until the longer one.
+// An address found not cooling is walked every time, since a cooldown can
+// start at any moment.
+func (ix *inventory) addressCooling(host int, site string, now time.Time, waf bool) bool {
+	key := addressCooldown{addressSite{host, site}, waf}
+	if until, ok := ix.cooling[key]; ok && now.Before(until) {
+		return true
+	}
+	var until time.Time
+	for _, o := range ix.byHost[host] {
+		if s := o.Sites[site]; s != nil && s.Until.After(until) {
+			until = s.Until
 		}
-		if waf && o.WAF.Until.After(now) {
-			return false
+		if waf && o.WAF.Until.After(until) {
+			until = o.WAF.Until
 		}
 	}
-	return active < max(1, files)
+	if !until.After(now) {
+		delete(ix.cooling, key)
+		return false
+	}
+	ix.cooling[key] = until
+	return true
 }
 
 // drawUnmeasured draws one route uniformly from those not measured for site

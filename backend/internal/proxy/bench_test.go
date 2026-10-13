@@ -179,3 +179,37 @@ func urls(entries []*entry) []string {
 	slices.Sort(out)
 	return out
 }
+
+// Shaped like the inventory route hunting met: a few providers listing a
+// thousand ports on one address, each address busy, and most single-port
+// routes cooling, so a draw is rejected several times before one qualifies.
+func BenchmarkAcquireAmongCrowdedAddresses(b *testing.B) {
+	p := &Pool{entries: make(map[string]*entry), priors: make(map[string]*prior), lastProbe: make(map[string]time.Time),
+		feeds: []string{"feed"}, client: httpx.New("bench", "en", 0, time.Second)}
+	now := time.Now()
+	for host := range 5 {
+		for port := range 1000 {
+			e := p.ensure(fmt.Sprintf("socks5h://10.200.0.%d:%d", host, 10000+port), now)
+			e.Origins = []string{"feed"}
+			if port == 0 {
+				e.stat("keep2share").active = 1 // the address is in use
+			}
+		}
+	}
+	for i := range 15000 {
+		e := p.ensure(fmt.Sprintf("http://10.%d.%d.%d:8080", 100+i/65536, i/256%256, i%256), now)
+		e.Origins = []string{"feed"}
+		if i%5 != 0 {
+			e.stat("keep2share").Until = now.Add(time.Hour)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		l := p.AcquireFor("keep2share", "", 1, 1<<30, false)
+		if l == nil {
+			b.Fatal("no route")
+		}
+		l.Release()
+	}
+}

@@ -290,3 +290,63 @@ func TestLeasesAreCountedPerRoute(t *testing.T) {
 		t.Fatal("a route with no leases is still counted as leased")
 	}
 }
+
+// An address's leases are counted as they come and go, and the count survives
+// the index being rebuilt partway through a lease.
+func TestAddressLeasesAreCountedAsLeasesComeAndGo(t *testing.T) {
+	p := &Pool{entries: make(map[string]*entry), priors: make(map[string]*prior), lastProbe: make(map[string]time.Time),
+		feeds: []string{"feed"}, client: httpx.New("test", "en", 0, time.Second)}
+	now := time.Now()
+	a, b := p.ensure("http://10.6.0.1:8080", now), p.ensure("socks5h://10.6.0.1:1080", now) // one address
+	a.Origins, b.Origins = []string{"feed"}, []string{"feed"}
+	can := func(e *entry, site string) bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.eligible(p.index(), e, site, 1, time.Now(), false)
+	}
+	l := p.Acquire("keep2share", routeID(a.URL), 1)
+	if l == nil || l.entry != a {
+		t.Fatal("did not lease the first port")
+	}
+	if can(b, "keep2share") || !can(b, "fileboom") {
+		t.Fatal("the address's other port must be held for the site leased, and only that one")
+	}
+	p.mu.Lock()
+	p.ensure("http://10.6.0.2:8080", now).Origins = []string{"feed"} // the index is rebuilt mid-lease
+	p.mu.Unlock()
+	if can(b, "keep2share") {
+		t.Fatal("a rebuilt index lost the lease")
+	}
+	l.Release()
+	if !can(b, "keep2share") {
+		t.Fatal("the address is still counted as leased after its lease ended")
+	}
+}
+
+// An address found cooling is remembered until its cooldown ends, and no
+// longer; an address found not cooling is not remembered at all, so a
+// cooldown starting afterwards is seen at once.
+func TestAnAddressFoundCoolingIsRememberedUntilItsCooldownEnds(t *testing.T) {
+	p := &Pool{entries: make(map[string]*entry), feeds: []string{"feed"}}
+	now := time.Now()
+	a, b := p.ensure("http://10.7.0.1:8080", now), p.ensure("http://10.7.0.1:8081", now)
+	a.Origins, b.Origins = []string{"feed"}, []string{"feed"}
+	ix := p.index()
+	if !p.eligible(ix, a, "keep2share", 1, now, false) {
+		t.Fatal("a free address was held back")
+	}
+	b.stat("keep2share").Until = now.Add(time.Hour)
+	if p.eligible(ix, a, "keep2share", 1, now, false) {
+		t.Fatal("a cooldown starting after the address was found free was missed")
+	}
+	if p.eligible(ix, a, "keep2share", 1, now.Add(30*time.Minute), false) {
+		t.Fatal("the remembered cooldown ended early")
+	}
+	if !p.eligible(ix, a, "keep2share", 1, now.Add(2*time.Hour), false) {
+		t.Fatal("the address stayed cooling after its cooldown ended")
+	}
+	a.stat("keep2share").Until = now.Add(3 * time.Hour)
+	if p.eligible(ix, a, "keep2share", 1, now.Add(2*time.Hour), false) {
+		t.Fatal("a cooldown starting after the remembered one ended was missed")
+	}
+}

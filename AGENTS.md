@@ -707,13 +707,28 @@ Host-specific notes:
   leaves zero. Everything else is read from the route itself when it is
   considered, so a speed set anywhere else, as tests do, is missed unless set
   before the index is built. `eligible` asks of one route what `available`
-  asks of all of them, through its address's other ports. An upgrade rates
-  measured routes only. The exploration ticket is drawn from the whole
+  asks of all of them. An address's leases are a count in the index, kept by
+  `lease` and `Release` and recounted on every rebuild. Its cooldown is
+  found by walking its ports, since some providers list a thousand on one
+  address, and an address found cooling is remembered until the cooldown it
+  found (`addressCooling`). Production only ever lengthens a cooldown, so the
+  memory can be wrong only in the safe direction. An address found free is
+  never remembered, since a cooldown can start at any moment. Among
+  crowded, mostly cooling addresses that took a lease from 21 to 7 µs. An
+  upgrade rates measured routes only. The exploration ticket is drawn from the whole
   inventory, drawing again until a route qualifies, which is exactly
   uniform. After `ProxyDrawTries` misses it lists the qualifying routes, as
   uniformly, for when few qualify. `leased` counts each route's leases,
   which is where selection finds an unmeasured transfer in progress. Tests
   hold each against a scan of the whole inventory.
+
+  A route keeps its HTTP client between leases, except one shelved as dead
+  or broken (`e.Until` ahead), which gives it up when its last lease ends.
+  It will not be leased again for a while, a day for one that never
+  worked, and route hunting tries thousands like it an hour: kept, their
+  clients were the one part of the heap that grew without end. A lease holds
+  the client it was taken with, so dropping the route's own never pulls one
+  from a request in flight, and a later lease makes a new one.
 
   Five-second progress windows train throughput before a long
   file finishes, with the resumed prefix, pauses and speed caps excluded.

@@ -272,7 +272,10 @@ type Lease struct {
 	entry *entry
 	site  string
 	waf   bool
-	once  sync.Once
+	// client is the route's client when the lease was taken, which the
+	// lease's requests go on using whatever becomes of the entry's.
+	client *httpx.Client
+	once   sync.Once
 	// Measurement and upgrade state is guarded by pool.mu. Progress
 	// samples are in memory; the background refresh flushes dirty rows.
 	started                  time.Time
@@ -303,18 +306,29 @@ func (l *Lease) Configured() bool {
 }
 
 func (l *Lease) Context(ctx context.Context) context.Context {
-	return httpx.WithRoute(ctx, l.ID(), l.entry.client, l.observe)
+	return httpx.WithRoute(ctx, l.ID(), l.client, l.observe)
 }
 
 func (l *Lease) Release() {
 	l.once.Do(func() {
 		l.pool.mu.Lock()
 		defer l.pool.mu.Unlock()
-		l.entry.stat(l.site).active--
-		if p := l.pool; p.leased[l.entry] > 1 {
-			p.leased[l.entry]--
+		p, e := l.pool, l.entry
+		e.stat(l.site).active--
+		p.unleaseAddress(e, l.site)
+		if p.leased[e] > 1 {
+			p.leased[e]--
 		} else {
-			delete(p.leased, l.entry)
+			delete(p.leased, e)
+			// A route shelved as dead or broken is not leased again until its
+			// cooldown is over, a day for one that never worked, and its
+			// client is only memory until then. Route hunting tries thousands
+			// of such routes an hour, and each one kept its client for good.
+			// A lease taken later makes a new one.
+			if e.client != nil && e.Until.After(time.Now()) {
+				e.client.CloseIdleConnections()
+				e.client = nil
+			}
 		}
 		l.released = true
 	})
@@ -432,11 +446,12 @@ func (p *Pool) lease(chosen *entry, site string) *Lease {
 		}
 	}
 	chosen.stat(site).active++
+	p.leaseAddress(chosen, site)
 	if p.leased == nil {
 		p.leased = make(map[*entry]int)
 	}
 	p.leased[chosen]++
-	return &Lease{pool: p, entry: chosen, site: site, started: time.Now()}
+	return &Lease{pool: p, entry: chosen, site: site, client: chosen.client, started: time.Now()}
 }
 
 func identity(raw string) string {
