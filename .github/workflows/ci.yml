@@ -4,11 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run on main by dependabot-merge.yml: its own merge's push starts no
+  # workflow, and this is what releases the merged update.
+  workflow_dispatch:
 
 # PR checks may be superseded. Main runs can be publishing a release, so
 # keep each pushed commit alive; release.yml queues the publishing work.
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || '' }}
+  group: ci-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.sha || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -105,7 +108,7 @@ jobs:
 
   release:
     needs: [build, archives]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
       packages: write

@@ -1,0 +1,48 @@
+name: Dependabot merge
+
+# Work here goes straight to main, and so does Dependabot's weekly update once
+# its pull request has passed CI: it is merged, then released and rolled out
+# like any push. A merge made with this workflow's own token starts no
+# workflow, so this starts CI on main itself (workflow_dispatch), which is what
+# releases. Nothing from the pull request is checked out or run here.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge the tested update and release it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open pull request for $BRANCH."
+            exit 0
+          fi
+          author=$(gh api "repos/$GH_REPO/pulls/$pr" --jq .user.login)
+          if [ "$author" != "dependabot[bot]" ]; then
+            echo "Pull request #$pr is by $author, not Dependabot."
+            exit 1
+          fi
+          # Only the commit CI passed: a branch that has moved since waits for
+          # its own run.
+          gh pr merge "$pr" --squash --delete-branch --match-head-commit "$TESTED"
+          gh workflow run ci.yml --ref main

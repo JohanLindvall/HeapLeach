@@ -94,8 +94,14 @@ restoring the previous commit's output and saving the new one. Sharing CI's
 immutable `go.sum` cache left every cross-platform build cold on every push.
 
 Dependabot (`.github/dependabot.yml`) proposes the Go modules' updates once
-a week, grouped into one pull request. Merging it releases and rolls out like
-any other push, which is why it is one a week rather than one per module.
+a week, grouped into one pull request, and the pull request lands by itself.
+Once its CI passes, `dependabot-merge.yml` squashes it into main. A merge made
+with the workflow's own token starts no workflow, so it then starts CI on main
+itself (`workflow_dispatch`, which CI's release job accepts as it does a
+push). That run releases it. Only Dependabot's own pull requests are merged,
+only at the commit CI passed, and nothing from them is checked out or run
+with that token. Each merge is a release and a restart, which is why the
+updates come as one a week rather than one per module.
 
 `make tag V=v1.2.3` still writes and pushes an explicit annotated tag;
 the release workflow also fires on `v*`. Native runners build the five
