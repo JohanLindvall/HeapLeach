@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -48,6 +49,23 @@ func randomInventory(rng *rand.Rand, routes int) *Pool {
 		}
 		if rng.IntN(3) == 0 {
 			e.WAF.Tries = 1
+		}
+		// A few exits, some shared, some held or cooling, some found long ago.
+		if rng.IntN(2) == 0 {
+			e.Exit = fmt.Sprintf("203.0.113.%d", rng.IntN(6))
+			e.ExitAt = now.Add(-time.Duration(rng.IntN(2)) * 2 * config.ProxyExitTTL)
+		}
+	}
+	p.exitLeases, p.exitCooling = map[exitSite]int{}, map[exitSite]time.Time{}
+	for i := range 6 {
+		exit := fmt.Sprintf("203.0.113.%d", i)
+		for _, site := range []string{"keep2share", "fileboom", "cloudflare"} {
+			switch rng.IntN(4) {
+			case 0:
+				p.exitLeases[exitSite{exit, site}] = 1 + rng.IntN(2)
+			case 1:
+				p.exitCooling[exitSite{exit, site}] = now.Add(time.Duration(rng.IntN(3)-1) * time.Hour)
+			}
 		}
 	}
 	if rng.IntN(3) == 0 {
@@ -483,5 +501,53 @@ func TestAGatewayIsOneAddressAmongTheDraws(t *testing.T) {
 	// One address in ten; drawn by route it would be 1000 in 1009.
 	if share := float64(gateway) / float64(draws); share < 0.05 || share > 0.16 {
 		t.Fatalf("the gateway took %.0f%% of the draws; want about one in ten", 100*share)
+	}
+}
+
+// One lease per exit per service: a second route found leaving by an exit
+// another lease holds is refused it, and passed over while that lasts. A
+// host's cooldown met through one route holds back every route known to
+// leave by the same exit.
+func TestAnExitIsHeldByOneLeaseAtATime(t *testing.T) {
+	first, second, other := "http://one.example.test:8080", "http://two.example.test:8080", "http://three.example.test:8080"
+	p := testPool(t, []string{first, second, other}, nil)
+	const exit = "203.0.113.7"
+	a := p.Acquire("keep2share", routeID(first), 1)
+	if a == nil || !a.ClaimExit(exit) || !a.Claimed() {
+		t.Fatal("the first route could not claim its exit")
+	}
+	b := p.Acquire("keep2share", routeID(second), 1)
+	if b == nil || b.entry.URL != second {
+		t.Fatal("the second route was not leased")
+	}
+	if b.ClaimExit(exit) || b.Claimed() {
+		t.Fatal("a second lease claimed an exit already held")
+	}
+	b.Release()
+	if l := p.Acquire("keep2share", routeID(second), 1); l == nil || l.entry.URL == second {
+		t.Fatalf("leased %v; want the route whose exit is held passed over", l)
+	} else {
+		l.Release()
+	}
+	if l := p.Acquire("fileboom", routeID(second), 1); l == nil || l.entry.URL != second {
+		t.Fatal("another service's lease on the exit held this route back")
+	} else {
+		l.Release()
+	}
+	a.Release()
+	c := p.Acquire("keep2share", routeID(second), 1)
+	if c == nil || c.entry.URL != second || !c.ClaimExit(exit) {
+		t.Fatal("the exit was not free once its lease ended")
+	}
+	// The host's timer, met through this route, is the exit's.
+	c.Cooldown(time.Now().Add(time.Hour))
+	c.Release()
+	d := p.Acquire("keep2share", routeID(other), 1)
+	if d == nil || d.ClaimExit(exit) {
+		t.Fatal("a route found leaving by a cooling exit claimed it")
+	}
+	d.Release()
+	if l := p.Acquire("keep2share", routeID(first), 1); l != nil && l.entry.URL == first {
+		t.Fatal("a route whose exit is cooling was leased")
 	}
 }

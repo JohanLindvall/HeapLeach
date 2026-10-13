@@ -126,6 +126,10 @@ type Config struct {
 	ProxyEndpoints []string
 	ProxyFeeds     []string
 	ProxyRetries   int
+	// ProxyExitProbe is asked, through each route, for the public address
+	// the route leaves by (ProxyExitProbeURL). Empty skips the question,
+	// which is what a Config built by hand, as tests build them, does.
+	ProxyExitProbe string
 }
 
 // FromEnv reads HEAPLEACH_*-prefixed environment variables over the defaults.
@@ -159,6 +163,7 @@ func FromEnv() (*Config, error) {
 		ProxyEndpoints: envList("PROXY_ENDPOINTS"),
 		ProxyFeeds:     []string{DefaultProxyFeed},
 		ProxyRetries:   DefaultProxyRetries,
+		ProxyExitProbe: ProxyExitProbeURL,
 	}
 	if enabled, set := EnvBool("PROXIES"); set {
 		c.Proxies = enabled

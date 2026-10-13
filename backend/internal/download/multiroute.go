@@ -98,6 +98,13 @@ func (m *Manager) routeSourceLocked(it *Item) func(context.Context) (*streamSour
 			// A file may be waiting for exactly this route.
 			m.signal()
 		}
+		if err := m.claimExit(ctx, nil, lease); err != nil {
+			release()
+			if errors.Is(err, errExitInUse) {
+				return nil, errNoIdleRoute
+			}
+			return nil, err
+		}
 		// The item's note is its main route's; an extra stream's CAPTCHA and
 		// timer would only overwrite it.
 		start := time.Now()

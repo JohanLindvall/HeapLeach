@@ -71,6 +71,16 @@ const (
 	// RouteSummaryInterval is how often the outcome of routed attempts is
 	// logged, per service.
 	RouteSummaryInterval = time.Minute
+
+	// ProxyExitProbeURL answers a request with the public address it came
+	// from, as plain text. A per-route host counts free downloads by the
+	// address it sees, and a proxy's exit need not be the address it listens
+	// on, so each route is asked it before the host sees the route.
+	ProxyExitProbeURL = "https://api.ipify.org"
+	// ProxyExitProbeTimeout bounds that question.
+	ProxyExitProbeTimeout = 10 * time.Second
+	// ProxyExitTTL is how long a route's exit, once found, is gone by.
+	ProxyExitTTL = time.Hour
 )
 
 // Tunables shared across packages. They live here rather than next to their

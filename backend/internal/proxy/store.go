@@ -82,6 +82,9 @@ func (p *Pool) openStore(path string) error {
 				return nil
 			})
 		})
+		if err == nil {
+			p.seedExitCooling(time.Now())
+		}
 	}
 	if err != nil {
 		db.Close()

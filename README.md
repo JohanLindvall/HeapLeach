@@ -663,7 +663,10 @@ and one FileBoom transfer simultaneously. The hosts' speed limits and
 cooldowns still apply per address and service. A proxy port that has never
 been tried counts as free whatever the other ports on its address are
 doing, since gateway ports often leave through addresses of their own;
-once tried, it shares its address's limits. When routes would otherwise
+once tried, it shares its address's limits. Two downloads never leave through
+the same public address: each route is asked which address it leaves by
+before its first CAPTCHA, through an IP-echo service, and a route whose exit
+another download holds, or the host is holding back, is passed over. When routes would otherwise
 go unused, a slow file also reads through extra routes, up to the streams
 setting, each with a free download and a speed cap of its own. That happens
 only while no other file of the service is waiting to start, so it speeds up

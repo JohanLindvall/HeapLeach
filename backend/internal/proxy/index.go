@@ -121,7 +121,7 @@ func (p *Pool) noteMeasured(e *entry) {
 // A route never tried for the site answers for itself alone (untested).
 // Caller holds mu, and ix is p.index().
 func (p *Pool) eligible(ix *inventory, e *entry, site string, files int, now time.Time, waf bool) bool {
-	if e.Until.After(now) || !p.enabled(e) {
+	if e.Until.After(now) || !p.enabled(e) || !p.exitFree(e, site, files, now) {
 		return false
 	}
 	if e.untested(site, waf) {

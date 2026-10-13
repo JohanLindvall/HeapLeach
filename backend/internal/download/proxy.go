@@ -175,7 +175,9 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			lease.Constrain()
 		}
 		m.mu.Unlock()
-		err = m.transfer(lease.Context(attempt), it)
+		if err = m.claimExit(attempt, it, lease); err == nil {
+			err = m.transfer(lease.Context(attempt), it)
+		}
 		abort()
 		m.mu.Lock()
 		upgrade := it.routeUpgrade
@@ -377,7 +379,7 @@ func transientRouteFailure(err error) bool {
 // asked again for a while. Timeouts after proxy setup, HTTP refusals and
 // stalls still count.
 func routeAtFault(err error) bool {
-	if deadProxy(err) || proxyUnusable(err) {
+	if deadProxy(err) || proxyUnusable(err) || errors.Is(err, errExitInUse) {
 		return true
 	}
 	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
@@ -391,15 +393,19 @@ type routeOutcome struct{ service, kind string }
 
 // routeOutcomeKinds are the ways a routed attempt ends, in the order the
 // summary lists them.
-var routeOutcomeKinds = []string{"dead", "refused", "waited", "transient", "stalled", "failed", "finished"}
+var routeOutcomeKinds = []string{"dead", "shared", "refused", "waited", "transient", "stalled", "failed", "finished"}
 
 // routeOutcomeKind names how a routed attempt ended: dead, a proxy that
-// could not carry the request at all; refused, an address the host turned
-// away; waited, a host's timer for the address; then transient failures,
-// stalls, other failures, and attempts that finished their file.
+// could not carry the request at all; shared, a route whose exit another
+// download held or the host had cooling; refused, an address the host
+// turned away; waited, a host's timer for the address; then transient
+// failures, stalls, other failures, and attempts that finished their file.
 func routeOutcomeKind(err error) string {
 	if err == nil || errors.Is(err, errAlreadyComplete) {
 		return "finished"
+	}
+	if errors.Is(err, errExitInUse) {
+		return "shared"
 	}
 	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
 		return "waited"
@@ -481,6 +487,56 @@ func (m *Manager) routeSummaryLocked(now time.Time) [][]any {
 	}
 	clear(m.routeOutcomes)
 	return lines
+}
+
+// errExitInUse says a route leaves by an exit another download holds for the
+// service, or one the service's host has cooling. The file goes on to
+// another route at no cost, and the pool passes over this one meanwhile.
+var errExitInUse = errors.New("the route's exit address is in use by another download")
+
+// claimExit asks the route of lease for the public address it leaves by,
+// and claims that address for this download (proxy.Lease.ClaimExit) before
+// the host sees the route: a host counting free downloads per address
+// refuses a second one from an exit already downloading. A lease asks once.
+//
+// A route that cannot answer would have failed the host's own first request
+// the same way, and fails here with the same error. One whose exit is taken
+// is given back with errExitInUse. An answer that is no address leaves the
+// exit unknown and the download goes ahead: the question is a precaution,
+// and trouble at the service answering it must not stop every download.
+func (m *Manager) claimExit(ctx context.Context, it *Item, lease *proxy.Lease) error {
+	if m.cfg == nil || m.cfg.ProxyExitProbe == "" || lease.Claimed() {
+		return nil
+	}
+	if it != nil {
+		m.mu.Lock()
+		it.Note = "Checking the download route's exit address"
+		m.mu.Unlock()
+	}
+	client := m.client.WithTimeout(config.ProxyExitProbeTimeout)
+	req, err := client.NewRequest(lease.Context(ctx), http.MethodGet, m.cfg.ProxyExitProbe, nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := client.DoOnce(req)
+	if err != nil {
+		if _, routed := errors.AsType[*httpx.RouteError](err); routed || routeAtFault(err) || ctx.Err() != nil {
+			return err
+		}
+		m.log.Debug("no exit address from the route", "route", lease.ID(), "err", err)
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+	resp.Body.Close()
+	ip := net.ParseIP(strings.TrimSpace(string(body)))
+	if resp.StatusCode != http.StatusOK || ip == nil {
+		m.log.Debug("no exit address from the route", "route", lease.ID(), "status", resp.StatusCode)
+		return nil
+	}
+	if !lease.ClaimExit(ip.String()) {
+		return &httpx.RouteError{Err: errExitInUse}
+	}
+	return nil
 }
 
 // routeBroken is routeAtFault short of a refusal: a proxy that could not

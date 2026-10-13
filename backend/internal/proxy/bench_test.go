@@ -123,6 +123,13 @@ func referenceAvailable(p *Pool, site string, files int, now time.Time, waf bool
 		if !p.enabled(e) || e.Until.After(now) {
 			continue
 		}
+		// Nor one whose known exit is held or cooling.
+		if e.Exit != "" && now.Sub(e.ExitAt) < config.ProxyExitTTL {
+			key := exitSite{e.Exit, site}
+			if p.exitLeases[key] >= max(1, files) || p.exitCooling[key].After(now) {
+				continue
+			}
+		}
 		s := e.stat(site)
 		if s.Tries == 0 && (!waf || e.WAF.Tries == 0) {
 			// Never tried: its own leases and cooldowns, and nothing of its

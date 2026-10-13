@@ -673,8 +673,8 @@ Host-specific notes:
   their time in 15-second dials, at about 22 dead routes a second.
 
   Once a minute the dispatcher logs `route attempts` per service
-  (`routeSummaryLocked`): how routed attempts ended (dead, refused, waited,
-  transient, stalled, failed, finished), and how many files are moving
+  (`routeSummaryLocked`): how routed attempts ended (dead, shared, refused,
+  waited, transient, stalled, failed, finished), and how many files are moving
   bytes or still trying. A line per attempt would be twenty a second, and
   the 1,000-record log buffer would hold under a minute of anything else.
   A queue that is all dead routes or all refusals says so in one line.
@@ -737,6 +737,30 @@ Host-specific notes:
   wait on a gateway, with the dispatcher waiting on that lock and holding
   the manager's. Copies an older build wrote onto untried ports are
   dropped when the inventory is loaded.
+
+  **No two downloads share an exit address** (`exit.go`). The address a
+  host counts free downloads by is the one a route's requests leave from,
+  and that need not be the one the proxy listens on. Of eleven live ports
+  on one gateway, nine distinct exits answered, three ports on one of them;
+  and three exits turned up behind more than one gateway. So no rule about
+  listening addresses can keep two downloads off one exit. Leasing ports of
+  untried gateways freely, about a thousand free downloads a minute were
+  refused while one to three files moved. Before a routed attempt's first
+  request to the host, `claimExit` asks the route for its exit
+  (`ProxyExitProbeURL`, through the route, bounded by
+  `ProxyExitProbeTimeout`), and `Lease.ClaimExit` claims it: one lease per
+  exit per service, as for an address. A route whose exit is taken, or
+  cooling for the service, is handed back at no cost to the file
+  (`errExitInUse`), and selection passes over a route whose known exit is
+  held or cooling (`exitFree`). The host's timers and refusals met through
+  a route cool its exit, so every route known to leave by it waits too.
+  Exits are kept on the routes (`Exit`, `ExitAt`, trusted for
+  `ProxyExitTTL`), and exit cooldowns are seeded from them on load. A route
+  that cannot answer fails as it would have failed the host's first request.
+  An answer that is no address leaves the exit unknown and the download goes
+  ahead, so trouble at the echo service cannot stop every download. Extra
+  streams claim their exits the same way. `Config.ProxyExitProbe` carries
+  the URL and is empty in a Config built by hand, so tests opt in.
 
   Ranking never walks the inventory (`index.go`): a public feed's tens of
   thousands of routes, walked on every lease and every upgrade check, were

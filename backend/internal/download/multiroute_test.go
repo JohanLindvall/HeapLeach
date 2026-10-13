@@ -46,6 +46,11 @@ type routeRig struct {
 	// so asks for its next range on a new one, while the host may still be
 	// counting the old.
 	abandoned atomic.Int32
+	// exits is the public address each route leaves by, as its echo answers,
+	// and exitBusy how many responses each exit is streaming: never more
+	// than one, as a host counting free downloads per address allows.
+	exits    map[string]string
+	exitBusy map[string]int
 }
 
 func newRouteRig(t *testing.T, routes int) *routeRig {
@@ -54,7 +59,8 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 	// that a split which ignored what had been asked for would cut into it.
 	r := &routeRig{t: t, m: busyManager(t), payload: randomPayload(t, 32<<20),
 		served: map[string]map[string]int64{}, asked: map[string]int{},
-		refuse: map[string]bool{}, hang: map[string]int64{}}
+		refuse: map[string]bool{}, hang: map[string]int64{},
+		exits: map[string]string{}, exitBusy: map[string]int{}}
 	r.m.cfg.SlowSpeed = 1 << 40 // always slow, so extra streams are wanted
 	r.m.timings.poll, r.m.timings.probe, r.m.timings.cooldown = 10*time.Millisecond, 40*time.Millisecond, 40*time.Millisecond
 	r.m.timings.wantedRecheck = 10 * time.Millisecond
@@ -76,6 +82,10 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 		ids[i] = r.pool.Page("keep2share", proxy.Query{Search: u}).Rows[0].ID
 	}
 	r.ids, r.urls = ids, urls
+	for i, id := range ids {
+		r.exits[id] = fmt.Sprintf("198.51.100.%d", 1+i) // each its own, unless a test says otherwise
+	}
+	r.m.cfg.ProxyExitProbe = "http://exit.example.test/"
 	streams := 4
 	if err := r.m.ApplySettings(Settings{Streams: &streams}); err != nil {
 		t.Fatal(err)
@@ -89,8 +99,12 @@ func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string)
 		return
 	}
 	r.mu.Lock()
-	refused, hang := r.refuse[route], r.hang[route]
+	refused, hang, exit := r.refuse[route], r.hang[route], r.exits[route]
 	r.mu.Unlock()
+	if req.URL.Host == "exit.example.test" {
+		_, _ = fmt.Fprint(w, exit)
+		return
+	}
 	if refused || req.URL.Query().Get("for") != route {
 		http.Error(w, "this link is assigned to another address", http.StatusConflict)
 		return
@@ -108,6 +122,17 @@ func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string)
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", from, to, len(r.payload)))
 	w.Header().Set("Content-Length", strconv.Itoa(to-from+1))
 	w.WriteHeader(http.StatusPartialContent)
+	r.mu.Lock()
+	r.exitBusy[exit]++
+	if n := r.exitBusy[exit]; n > 1 {
+		r.t.Errorf("%d downloads streamed through exit %s at once", n, exit)
+	}
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.exitBusy[exit]--
+		r.mu.Unlock()
+	}()
 	file := req.URL.Query().Get("file")
 	for at := from; at <= to; {
 		time.Sleep(5 * time.Millisecond) // the link's cap
@@ -346,6 +371,9 @@ func TestDeadRoutesDoNotSlowTheSearchForAnExtraStream(t *testing.T) {
 		l.Close() // refused from now on
 	}
 	attachPool(t, r.m, append([]string{r.urls[0]}, dead...))
+	// Counted at the resolver, which a dead route reaches only without the
+	// question about its exit; with it, the dead route fails there instead.
+	r.m.cfg.ProxyExitProbe = ""
 	it := r.add("clip.bin", func(ctx context.Context, route string) error {
 		// The host's API comes first, through the route, as a CAPTCHA would.
 		req, err := r.m.client.NewRequest(ctx, http.MethodGet, "http://api.example.test/ticket", nil)
@@ -374,6 +402,42 @@ func TestDeadRoutesDoNotSlowTheSearchForAnExtraStream(t *testing.T) {
 	}
 	if tried != len(dead) {
 		t.Fatalf("tried %d of the %d dead routes while the file downloaded; want every one, without waiting longer each time", tried, len(dead))
+	}
+}
+
+// Two routes that leave by one exit never carry two downloads at once: the
+// host would refuse the second. The file sent to the second is turned away
+// at no cost and goes on through the route with an exit of its own, while
+// the first keeps downloading. The rig fails the test if an exit ever
+// streams two responses at once, extra streams' included.
+func TestTwoDownloadsNeverShareAnExit(t *testing.T) {
+	r := newRouteRig(t, 3)
+	r.exits[r.ids[1]] = r.exits[r.ids[0]] // one exit behind two routes
+	concurrency, streams := 2, 1
+	if err := r.m.ApplySettings(Settings{Concurrency: &concurrency, Streams: &streams}); err != nil {
+		t.Fatal(err)
+	}
+	first := r.add("first.bin", nil)
+	r.m.mu.Lock()
+	first.preferredRoute = r.ids[0]
+	r.m.mu.Unlock()
+	r.m.Start()
+	if !waitForCond(10*time.Second, func() bool { return len(r.servedBy("first.bin")) > 0 }) {
+		t.Fatal("first.bin never started")
+	}
+	second := r.add("second.bin", nil)
+	r.m.mu.Lock()
+	second.preferredRoute = r.ids[1] // the route sharing first.bin's exit
+	r.m.mu.Unlock()
+	r.waitDone(60*time.Second, first, second)
+	if got := r.servedBy("second.bin"); got[r.ids[2]] == 0 {
+		t.Fatalf("second.bin came through %v; want the route with an exit of its own", got)
+	}
+	r.m.mu.Lock()
+	shared := r.m.routeOutcomes[routeOutcome{"keep2share", "shared"}]
+	r.m.mu.Unlock()
+	if shared == 0 {
+		t.Fatal("no attempt was turned away from the shared exit")
 	}
 }
 

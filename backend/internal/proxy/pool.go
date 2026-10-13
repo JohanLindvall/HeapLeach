@@ -44,7 +44,11 @@ type entry struct {
 	Until                                        time.Time
 	Sites                                        map[string]*siteStat
 	WAF                                          wafStat
-	client                                       *httpx.Client
+	// Exit is the public address the route was last found to leave by, and
+	// ExitAt when; see exit.go.
+	Exit   string    `json:",omitempty"`
+	ExitAt time.Time `json:",omitzero"`
+	client *httpx.Client
 	// hostname is identity(URL), parsed once: see host. hostID numbers it
 	// within the pool: see Pool.hostID. route is routeID(URL), hashed once:
 	// see id. inMeasured says it is in the index's measured routes.
@@ -136,6 +140,11 @@ type Pool struct {
 	// routes in use without walking the inventory.
 	idx    inventory
 	leased map[*entry]int
+	// exitLeases counts the leases holding each exit per site, and
+	// exitCooling holds an exit back for a site until a time; see exit.go.
+	// Both live in memory: exitCooling is seeded from the routes on load.
+	exitLeases  map[exitSite]int
+	exitCooling map[exitSite]time.Time
 }
 
 // address is what available totals for one proxy address: the leases on
@@ -272,6 +281,10 @@ type Lease struct {
 	entry *entry
 	site  string
 	waf   bool
+	// files is how many leases the site allows one address, and exit the
+	// route's exit while the lease holds it (ClaimExit). Guarded by pool.mu.
+	files int
+	exit  string
 	// client is the route's client when the lease was taken, which the
 	// lease's requests go on using whatever becomes of the entry's.
 	client *httpx.Client
@@ -316,6 +329,7 @@ func (l *Lease) Release() {
 		p, e := l.pool, l.entry
 		e.stat(l.site).active--
 		p.unleaseAddress(e, l.site)
+		p.unclaimExit(l)
 		if p.leased[e] > 1 {
 			p.leased[e]--
 		} else {
@@ -394,7 +408,7 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, wa
 	}
 	l := p.lease(chosen, site)
 	if l != nil {
-		l.waf = waf
+		l.waf, l.files = waf, files
 	}
 	return l
 }
@@ -405,7 +419,8 @@ func (p *Pool) AcquireFor(site, preferred string, files int, remaining int64, wa
 func (p *Pool) available(site string, files int, now time.Time, waf bool) []*entry {
 	// Different ports/protocols on the same proxy address are not extra
 	// public IPs: their leases count together, conservatively, and a
-	// cooldown on one holds back all of them.
+	// cooldown on one holds back all of them. Nor may two leases share an
+	// exit (exit.go).
 	size := len(p.hostIDs) + 1
 	p.addresses = slices.Grow(p.addresses[:0], size)[:size]
 	clear(p.addresses)
@@ -425,7 +440,7 @@ func (p *Pool) available(site string, files int, now time.Time, waf bool) []*ent
 	for _, e := range p.entries {
 		// Cheapest first: a long-running public pool is mostly dead
 		// addresses sitting out a day, which never get to the settings.
-		if e.Until.After(now) {
+		if e.Until.After(now) || !p.exitFree(e, site, files, now) {
 			continue
 		}
 		if e.untested(site, waf) { // see untested
@@ -487,6 +502,7 @@ func (l *Lease) Cooldown(until time.Time) {
 		s.Until = until
 		p.persist(l.entry, l.site)
 	}
+	p.coolExit(l, until)
 }
 
 func (l *Lease) observe(o httpx.RouteObservation) {
@@ -570,6 +586,8 @@ func (l *Lease) observe(o httpx.RouteObservation) {
 		if !o.RetryAfter.IsZero() {
 			s.Until = o.RetryAfter
 		}
+		// A refusal is the host's answer to the address it saw.
+		p.coolExit(l, s.Until)
 	}
 	p.persist(e, l.site)
 }

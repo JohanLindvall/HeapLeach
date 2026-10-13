@@ -127,6 +127,11 @@ func (p *Pool) Page(site string, q Query) Page {
 		if e.Until.After(until) {
 			until = e.Until
 		}
+		// And a route leaving by an exit held or cooling is held back with it.
+		exit, exitKnown := e.exitKnown(now)
+		if c := p.exitCooling[exitSite{exit, site}]; exitKnown && c.After(until) {
+			until = c
+		}
 		if until.After(now) {
 			row.CooldownUntil = until
 		}
@@ -143,7 +148,7 @@ func (p *Pool) Page(site string, q Query) Page {
 		case until.After(now):
 			row.Status = "cooling"
 			page.Summary.Cooling++
-		case active[e.host()] > 0 && !untested:
+		case active[e.host()] > 0 && !untested, exitKnown && p.exitLeases[exitSite{exit, site}] > 0:
 			row.Status = "busy"
 		default:
 			page.Summary.Available++
