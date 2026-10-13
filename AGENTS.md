@@ -93,6 +93,10 @@ compilation has a separate cache keyed by toolchain/dependencies and commit,
 restoring the previous commit's output and saving the new one. Sharing CI's
 immutable `go.sum` cache left every cross-platform build cold on every push.
 
+Dependabot (`.github/dependabot.yml`) proposes the Go modules' updates once
+a week, grouped into one pull request. Merging it releases and rolls out like
+any other push, which is why it is one a week rather than one per module.
+
 `make tag V=v1.2.3` still writes and pushes an explicit annotated tag;
 the release workflow also fires on `v*`. Native runners build the five
 archives, then the publisher uploads them alongside `SHA256SUMS`. The image
