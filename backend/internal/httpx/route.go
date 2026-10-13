@@ -41,9 +41,15 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 		}
 		tr.Proxy = http.ProxyURL(u)
 		cp.proxyScheme = u.Scheme
-		tr.OnProxyConnectResponse = func(ctx context.Context, _ *url.URL, _ *http.Request, _ *http.Response) error {
+		tr.OnProxyConnectResponse = func(ctx context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
 			if pending, ok := ctx.Value(proxyConnectKey{}).(*atomic.Bool); ok {
 				pending.Store(false)
+			}
+			if resp.StatusCode != http.StatusOK {
+				// net/http would return only the status text, "Bad Request",
+				// which says neither that it came from the proxy nor which
+				// status it was.
+				return &ProxyRefusedError{Code: resp.StatusCode, Status: resp.Status}
 			}
 			return nil
 		}
@@ -128,6 +134,15 @@ type ProxyConnectError struct{ Err error }
 
 func (e *ProxyConnectError) Error() string { return e.Err.Error() }
 func (e *ProxyConnectError) Unwrap() error { return e.Err }
+
+// ProxyRefusedError is an HTTP proxy declining to open a tunnel: its answer
+// to CONNECT was not 200.
+type ProxyRefusedError struct {
+	Code   int
+	Status string
+}
+
+func (e *ProxyRefusedError) Error() string { return "proxy refused the tunnel: " + e.Status }
 
 func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, error) {
 	// Preserve the caller's streaming/header timeout while borrowing only

@@ -552,3 +552,41 @@ func TestSOCKSRouteResolvesNamesAtTheProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A proxy declining to open a tunnel says so with a status, which net/http
+// would reduce to its text alone. The route keeps it, so the caller can tell
+// a proxy refusing from one that could not reach the host.
+func TestARefusedTunnelKeepsItsStatus(t *testing.T) {
+	for _, code := range []int{http.StatusBadRequest, http.StatusProxyAuthRequired, http.StatusBadGateway} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer l.Close()
+			go func() {
+				for {
+					c, err := l.Accept()
+					if err != nil {
+						return
+					}
+					br := bufio.NewReader(c)
+					if _, err := http.ReadRequest(br); err == nil {
+						fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\n\r\n", code, http.StatusText(code))
+					}
+					c.Close()
+				}
+			}()
+			c, err := New("test", "en", 0, 3*time.Second).ThroughProxy("http://" + l.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, _ := c.NewRequest(context.Background(), http.MethodGet, "https://destination.example.test/", nil)
+			_, err = c.DoOnce(req)
+			refused, ok := errors.AsType[*ProxyRefusedError](err)
+			if !ok || refused.Code != code {
+				t.Fatalf("error = %v; want the proxy's refusal with status %d", err, code)
+			}
+		})
+	}
+}

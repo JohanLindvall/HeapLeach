@@ -4,11 +4,14 @@ package download
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -365,13 +368,68 @@ func transientRouteFailure(err error) bool {
 // asked again for a while. Timeouts after proxy setup, HTTP refusals and
 // stalls still count.
 func routeAtFault(err error) bool {
-	if deadProxy(err) {
+	if deadProxy(err) || proxyUnusable(err) {
 		return true
 	}
 	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
 		return true
 	}
 	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
+// proxyUnusable reports a proxy that answered and showed it cannot carry these
+// requests at all, whatever their destination:
+//   - a SOCKS proxy that wants credentials, or methods, it was not given;
+//   - an HTTP proxy declining to open a tunnel, below 500. At 502 or 504 it
+//     tried and could not reach the host, which is the host's business as
+//     much as its own, as deadProxy explains;
+//   - one speaking plain HTTP where TLS was expected, from its own hop (an
+//     https proxy that is not one) or from inside the tunnel;
+//   - a certificate for the destination that does not verify. The proxy's
+//     own TLS hop accepts any certificate, so this one came through the
+//     tunnel: through a proxy, that is the proxy reading the traffic. A
+//     certificate expired in 2021 was presented for a host whose own is
+//     current.
+//
+// Public lists are full of all four. Charged to the file, twenty of them in
+// a row failed it at its first step, before a link existed.
+func proxyUnusable(err error) bool {
+	if refused, ok := errors.AsType[*httpx.ProxyRefusedError](err); ok {
+		return refused.Code < http.StatusInternalServerError
+	}
+	if _, ok := errors.AsType[tls.RecordHeaderError](err); ok || errors.Is(err, http.ErrSchemeMismatch) {
+		return true
+	}
+	if _, ok := errors.AsType[x509.CertificateInvalidError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[x509.HostnameError](err); ok {
+		return true
+	}
+	return socksAuthRefused(err)
+}
+
+// socksAuthRefused reports a SOCKS proxy that would not let these requests
+// past its authentication. net/http's SOCKS client returns that as a bare
+// string inside the "socks connect" error; the wording is the standard
+// library's own, fixed with the toolchain, and none of its replies about
+// reaching the host ("host unreachable", "general SOCKS server failure")
+// mentions authentication.
+func socksAuthRefused(err error) bool {
+	for err != nil {
+		op, ok := errors.AsType[*net.OpError](err)
+		if !ok {
+			return false
+		}
+		if op.Op == "socks connect" {
+			return op.Err != nil && strings.Contains(op.Err.Error(), "authentication")
+		}
+		err = op.Err
+	}
+	return false
 }
 
 // deadProxy reports a failure to reach the proxy itself, before anything

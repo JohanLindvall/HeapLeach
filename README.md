@@ -722,7 +722,9 @@ normal connection first. Each retry refreshes the player and token together
 on one reserved route, using the same random draw for unmeasured candidates
 as Keep2Share. Source discovery and file downloads both skip dead or dropped
 proxies without spending the file's retry budget, including timeouts waiting
-for a proxy connection. Response-header timeouts also penalise the proxy and
+for a proxy connection, and proxies that answer but cannot carry the request:
+ones that want credentials, refuse to open a tunnel, speak plain HTTP where
+TLS was expected, or present a certificate that does not verify. Response-header timeouts also penalise the proxy and
 retry another route, within the configured retry budget. User cancellation
 does not penalise a route. An address the host refuses the player to (a bare
 "removed or temporarily unavailable" sentence where the player should be,

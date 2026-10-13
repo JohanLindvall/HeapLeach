@@ -274,7 +274,11 @@ Proxy connection and response-header timeouts both penalise the route and
 cool its endpoint across services. An unanswered explicit proxy connection
 also returns `httpx.ProxyConnectError`, so it does not spend the file's retry
 budget. Go's client timeout otherwise hides the underlying dial/CONNECT
-error behind "request canceled while waiting for connection". Request traces
+error behind "request canceled while waiting for connection". A CONNECT
+answered with anything but 200 returns `httpx.ProxyRefusedError` with the
+status, from `OnProxyConnectResponse`, which net/http calls before its own
+check; left to net/http it is the status text alone ("Bad Request"), which
+says neither that a proxy answered nor what it said. Request traces
 reset on each redirect; a CONNECT reply or completed SOCKS negotiation ends
 proxy setup, so later TLS and response timeouts retain their bounded retry
 budget. Caller cancellation and caller deadlines are never proxy penalties.
@@ -597,16 +601,24 @@ Host-specific notes:
   failure. A failure that is the proxy's does not (`routeAtFault`): a proxy
   that could not be reached at all (`deadProxy`: a `proxyconnect` or
   `socks connect` around a failed dial), a connection it dropped (a bare or
-  unexpected EOF, a reset), or an address the host refuses (`RefusedError`).
-  Public lists are mostly such proxies, so twenty in a row used to fail the
-  file with `proxyconnect tcp: dial tcp …: i/o timeout`, `unexpected EOF` or
-  "free downloads are refused from this address" before it met one that
-  worked. The pool already shelves each such route. The cost, accepted on
+  unexpected EOF, a reset), an address the host refuses (`RefusedError`), or
+  a proxy that answered and showed it cannot carry the request at all
+  (`proxyUnusable`): a SOCKS proxy wanting credentials, a tunnel refused
+  below 500, plain HTTP where TLS was expected (an `https://` proxy that is
+  not one, or HTTP inside the tunnel), or a destination certificate that
+  does not verify. The proxy's own TLS hop accepts any certificate, so that
+  last one came through the tunnel: a certificate expired in 2021 was
+  presented for a host whose own is current. Public lists are mostly such
+  proxies, so twenty in a row used to fail the file with
+  `proxyconnect tcp: dial tcp …: i/o timeout`, `unexpected EOF`, "free
+  downloads are refused from this address", or one of those four, before it
+  met one that worked. The pool already shelves each such route. The cost, accepted on
   purpose, is that a host refusing every proxy would have files trying
   routes for as long as the pool offers any, then waiting in the queue,
   rather than failing; each refusal also costs a CAPTCHA. Timeouts after
   proxy setup, HTTP refusals, stalls and a proxy that answered but could not
-  reach the host still count.
+  reach the host (a tunnel refused at 502 or 504, a SOCKS "host
+  unreachable") still count.
 
   The key survives cancellation within the process, and an unexpired
   storage URL is reused on retries: a new free transfer spends the host's
