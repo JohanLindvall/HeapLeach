@@ -20,6 +20,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	bolt "go.etcd.io/bbolt"
 )
 
 func testPool(t *testing.T, endpoints, feeds []string) *Pool {
@@ -316,5 +317,62 @@ func TestDatabaseLockFailsPromptly(t *testing.T) {
 	}
 	if time.Since(start) > 3*config.ProxyDBTimeout {
 		t.Fatal("database lock was unbounded")
+	}
+}
+
+// A database written under an earlier health epoch keeps its inventory and
+// forgets every verdict on its routes, once: what is learned afterwards is
+// kept across later restarts.
+func TestRouteHealthFromAnEarlierEpochIsForgotten(t *testing.T) {
+	route := "http://one.example.test:8000"
+	p := testPool(t, []string{route}, nil)
+	lease := p.Acquire("keep2share", routeID(route), 1)
+	if lease == nil || !lease.ClaimExit("203.0.113.9") {
+		t.Fatal("no route")
+	}
+	lease.observe(httpx.RouteObservation{Status: 200, Bytes: 4 << 20, Duration: 2 * time.Second})
+	lease.Cooldown(time.Now().Add(time.Hour))
+	lease.Release()
+	path := p.db.Path()
+	// As an earlier build left the database: no epoch recorded.
+	if err := p.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(metaBucket).Delete(healthEpochKey) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopen := func() *Pool {
+		t.Helper()
+		next, err := Open(path, p.static, nil, p.client, p.log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	p2 := reopen()
+	p2.mu.Lock()
+	e := p2.entries[route]
+	forgotten := e != nil && len(e.Sites) == 0 && e.Until.IsZero() && e.LastSuccess.IsZero() && e.Exit == "" && len(p2.priors) == 0
+	p2.mu.Unlock()
+	if !forgotten {
+		t.Fatalf("after the epoch changed: %+v, priors %v; want the route kept and its health forgotten", e, p2.priors)
+	}
+	// Learned under the current epoch, it is kept.
+	l := p2.Acquire("keep2share", routeID(route), 1)
+	if l == nil {
+		t.Fatal("the route was not free after its history was forgotten")
+	}
+	l.Cooldown(time.Now().Add(time.Hour))
+	l.Release()
+	if err := p2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p3 := reopen()
+	defer p3.Close()
+	p3.mu.Lock()
+	kept := p3.entries[route].stat("keep2share").Until
+	p3.mu.Unlock()
+	if kept.IsZero() {
+		t.Fatal("health learned under the current epoch was forgotten on the next restart")
 	}
 }

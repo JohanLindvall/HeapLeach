@@ -75,12 +75,27 @@ const (
 	// ProxyExitProbeURL answers a request with the public address it came
 	// from, as plain text. A per-route host counts free downloads by the
 	// address it sees, and a proxy's exit need not be the address it listens
-	// on, so each route is asked it before the host sees the route.
-	ProxyExitProbeURL = "https://api.ipify.org"
+	// on, so each route is asked it before the host sees the route. The
+	// answer is also how a route shows it works. ProxyExitProbeFallbackURL is
+	// asked when the first gives no address.
+	ProxyExitProbeURL         = "https://api.ipify.org"
+	ProxyExitProbeFallbackURL = "https://checkip.amazonaws.com"
+	// ProxyEchoRecheck is how long the echo services' own health, asked
+	// over the normal connection before blaming a route, is gone by.
+	ProxyEchoRecheck = time.Minute
 	// ProxyExitProbeTimeout bounds that question.
 	ProxyExitProbeTimeout = 10 * time.Second
 	// ProxyExitTTL is how long a route's exit, once found, is gone by.
 	ProxyExitTTL = time.Hour
+
+	// ProxyHealthEpoch numbers the rules routes are judged by. A database
+	// written under another number has every route's health forgotten when
+	// it is opened, keeping the inventory. Raise it when a change means the
+	// verdicts already recorded were reached wrongly, so that no route stays
+	// shelved, cooling or favoured on their account. Epoch 1 forgot what was
+	// judged while downloads could share an exit address, and while every
+	// restart started the inventory over.
+	ProxyHealthEpoch = 1
 )
 
 // Tunables shared across packages. They live here rather than next to their

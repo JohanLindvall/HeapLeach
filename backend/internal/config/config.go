@@ -126,10 +126,11 @@ type Config struct {
 	ProxyEndpoints []string
 	ProxyFeeds     []string
 	ProxyRetries   int
-	// ProxyExitProbe is asked, through each route, for the public address
-	// the route leaves by (ProxyExitProbeURL). Empty skips the question,
-	// which is what a Config built by hand, as tests build them, does.
-	ProxyExitProbe string
+	// ProxyExitProbes are asked, through each route and in turn, for the
+	// public address the route leaves by (ProxyExitProbeURL). None skips the
+	// question, which is what a Config built by hand, as tests build them,
+	// does.
+	ProxyExitProbes []string
 }
 
 // FromEnv reads HEAPLEACH_*-prefixed environment variables over the defaults.
@@ -140,30 +141,30 @@ type Config struct {
 // even when an argument overrides it.
 func FromEnv() (*Config, error) {
 	c := &Config{
-		Addr:           env("ADDR", ":8080"),
-		DownloadDir:    env("DIR", defaultDir()),
-		StateFile:      env("STATE", defaultStateFile()),
-		Concurrency:    DefaultConcurrency,
-		UserAgent:      env("USER_AGENT", DefaultUserAgent),
-		Language:       env("LANGUAGE", DefaultLanguage),
-		GofileSecret:   env("GOFILE_SECRET", FallbackGofileSecret),
-		ExtraHosts:     extraHosts(),
-		ArchiveFormats: envList("IA_FORMATS"),
-		MaxRetries:     DefaultMaxRetries,
-		Streams:        DefaultStreams,
-		SlowSpeed:      DefaultSlowSpeed,
-		StallTimeout:   StallTimeout,
-		Timeout:        DefaultTimeout,
-		MinFreeDisk:    DefaultMinFreeDisk,
-		MaxSources:     MaxExpandedSources,
-		MaxFiles:       MaxListingFiles,
-		Debug:          true,
-		Proxies:        true,
-		ProxyDB:        env("PROXY_DB", ""),
-		ProxyEndpoints: envList("PROXY_ENDPOINTS"),
-		ProxyFeeds:     []string{DefaultProxyFeed},
-		ProxyRetries:   DefaultProxyRetries,
-		ProxyExitProbe: ProxyExitProbeURL,
+		Addr:            env("ADDR", ":8080"),
+		DownloadDir:     env("DIR", defaultDir()),
+		StateFile:       env("STATE", defaultStateFile()),
+		Concurrency:     DefaultConcurrency,
+		UserAgent:       env("USER_AGENT", DefaultUserAgent),
+		Language:        env("LANGUAGE", DefaultLanguage),
+		GofileSecret:    env("GOFILE_SECRET", FallbackGofileSecret),
+		ExtraHosts:      extraHosts(),
+		ArchiveFormats:  envList("IA_FORMATS"),
+		MaxRetries:      DefaultMaxRetries,
+		Streams:         DefaultStreams,
+		SlowSpeed:       DefaultSlowSpeed,
+		StallTimeout:    StallTimeout,
+		Timeout:         DefaultTimeout,
+		MinFreeDisk:     DefaultMinFreeDisk,
+		MaxSources:      MaxExpandedSources,
+		MaxFiles:        MaxListingFiles,
+		Debug:           true,
+		Proxies:         true,
+		ProxyDB:         env("PROXY_DB", ""),
+		ProxyEndpoints:  envList("PROXY_ENDPOINTS"),
+		ProxyFeeds:      []string{DefaultProxyFeed},
+		ProxyRetries:    DefaultProxyRetries,
+		ProxyExitProbes: []string{ProxyExitProbeURL, ProxyExitProbeFallbackURL},
 	}
 	if enabled, set := EnvBool("PROXIES"); set {
 		c.Proxies = enabled

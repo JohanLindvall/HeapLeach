@@ -421,10 +421,10 @@ func TestPortsNeverTriedAreEachPotentiallyFree(t *testing.T) {
 	}
 }
 
-// A host's cooldown is written on the route it was met through. Tried ports
-// on its address take it up where routes are chosen; one never tried keeps
-// its own state, and so a copy written there by an older build is dropped
-// when the inventory is read back.
+// A host's cooldown is written on the route it was met through, not copied
+// onto every port of its address, which was a synced write per port. Tried
+// ports on the address take it up where routes are chosen; one never tried
+// answers for itself.
 func TestACooldownIsWrittenOnTheRouteItWasMetThrough(t *testing.T) {
 	met, tried, fresh := "http://gateway.example.test:30001", "http://gateway.example.test:30002", "http://gateway.example.test:30003"
 	p := testPool(t, []string{met, tried, fresh}, nil)
@@ -436,38 +436,22 @@ func TestACooldownIsWrittenOnTheRouteItWasMetThrough(t *testing.T) {
 		t.Fatal("no route")
 	}
 	lease.observe(httpx.RouteObservation{Status: 200, Duration: time.Second})
-	until := time.Now().Add(time.Hour)
-	lease.Cooldown(until)
+	lease.Cooldown(time.Now().Add(time.Hour))
 	lease.Release()
 	p.mu.Lock()
-	if got := p.entries[tried].stat("keep2share").Until; !got.IsZero() {
-		p.mu.Unlock()
-		t.Fatalf("the cooldown was copied onto another port: %v", got)
-	}
-	// As an older build left it: a copy on the port never tried.
-	p.entries[fresh].stat("keep2share").Until = until
-	p.persist(p.entries[fresh], "keep2share")
+	copied := p.entries[tried].stat("keep2share").Until
 	p.mu.Unlock()
+	if !copied.IsZero() {
+		t.Fatalf("the cooldown was copied onto another port: %v", copied)
+	}
 	if l := p.Acquire("keep2share", routeID(tried), 1); l != nil {
-		t.Fatal("a tried port escaped its address's cooldown")
+		l.Release()
+		if l.entry.URL == tried {
+			t.Fatal("a tried port escaped its address's cooldown")
+		}
 	}
-	path := p.db.Path()
-	if err := p.Close(); err != nil {
-		t.Fatal(err)
-	}
-	p2, err := Open(path, p.static, nil, p.client, p.log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p2.Close()
-	p2.mu.Lock()
-	kept, dropped := p2.entries[met].stat("keep2share").Until, p2.entries[fresh].stat("keep2share").Until
-	p2.mu.Unlock()
-	if !kept.Equal(until) || !dropped.IsZero() {
-		t.Fatalf("after a restart: the route's own cooldown %v (want %v), the copy %v (want none)", kept, until, dropped)
-	}
-	if l := p2.Acquire("keep2share", routeID(fresh), 1); l == nil || l.entry.URL != fresh {
-		t.Fatal("the port never tried was not free after the restart")
+	if l := p.Acquire("keep2share", routeID(fresh), 1); l == nil || l.entry.URL != fresh {
+		t.Fatal("the port never tried was held back by its address's cooldown")
 	} else {
 		l.Release()
 	}

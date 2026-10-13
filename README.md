@@ -666,7 +666,9 @@ doing, since gateway ports often leave through addresses of their own;
 once tried, it shares its address's limits. Two downloads never leave through
 the same public address: each route is asked which address it leaves by
 before its first CAPTCHA, through an IP-echo service, and a route whose exit
-another download holds, or the host is holding back, is passed over. When routes would otherwise
+another download holds, or the host is holding back, is passed over. The same
+question shows whether the proxy works at all: one that answers with anything
+but an address is set aside before it costs a CAPTCHA. When routes would otherwise
 go unused, a slow file also reads through extra routes, up to the streams
 setting, each with a free download and a speed cap of its own. That happens
 only while no other file of the service is waiting to start, so it speeds up

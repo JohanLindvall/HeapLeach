@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -382,6 +383,9 @@ func routeAtFault(err error) bool {
 	if deadProxy(err) || proxyUnusable(err) || errors.Is(err, errExitInUse) {
 		return true
 	}
+	if _, broken := errors.AsType[*proxyNotWorkingError](err); broken {
+		return true
+	}
 	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
 		return true
 	}
@@ -499,44 +503,111 @@ var errExitInUse = errors.New("the route's exit address is in use by another dow
 // the host sees the route: a host counting free downloads per address
 // refuses a second one from an exit already downloading. A lease asks once.
 //
-// A route that cannot answer would have failed the host's own first request
-// the same way, and fails here with the same error. One whose exit is taken
-// is given back with errExitInUse. An answer that is no address leaves the
-// exit unknown and the download goes ahead: the question is a precaution,
-// and trouble at the service answering it must not stop every download.
+// The answer is also how the route shows it works, before a CAPTCHA is
+// spent on it. One that cannot reach the echo service would have failed the
+// host's first request the same way, and fails here with the same error.
+// One that answers, from each echo service in turn, with something other
+// than an address, a page or a refusal of its own, is not carrying requests
+// as a proxy should: it is shelved, and the file goes on at no cost. Unless
+// the echo services themselves are down, which the normal connection
+// settles (echoReachable): then the exit stays unknown and the download goes
+// ahead, since their trouble must not stop every download. A route whose
+// exit is taken is given back with errExitInUse.
 func (m *Manager) claimExit(ctx context.Context, it *Item, lease *proxy.Lease) error {
-	if m.cfg == nil || m.cfg.ProxyExitProbe == "" || lease.Claimed() {
+	if m.cfg == nil || len(m.cfg.ProxyExitProbes) == 0 || lease.Claimed() {
 		return nil
 	}
 	if it != nil {
 		m.mu.Lock()
-		it.Note = "Checking the download route's exit address"
+		it.Note = "Checking the download route"
 		m.mu.Unlock()
 	}
+	start := time.Now()
 	client := m.client.WithTimeout(config.ProxyExitProbeTimeout)
-	req, err := client.NewRequest(lease.Context(ctx), http.MethodGet, m.cfg.ProxyExitProbe, nil)
-	if err != nil {
+	var answer string
+	for _, echo := range m.cfg.ProxyExitProbes {
+		ip, got, err := askAddress(lease.ProbeContext(ctx), client, echo)
+		if err != nil {
+			// A status is an answer, the echo service's or the proxy's
+			// own; anything else is the route failing to carry the request.
+			if status, answered := errors.AsType[*httpx.StatusError](err); answered && ctx.Err() == nil {
+				answer = status.Error()
+				continue
+			}
+			if _, routed := errors.AsType[*httpx.RouteError](err); routed || routeAtFault(err) || ctx.Err() != nil {
+				return err
+			}
+			answer = err.Error()
+			continue
+		}
+		if ip != "" {
+			if !lease.ClaimExit(ip) {
+				return &httpx.RouteError{Err: errExitInUse}
+			}
+			return nil
+		}
+		answer = got
+	}
+	if !m.echoReachable() {
+		m.log.Debug("echo services unreachable; going ahead without the route's exit", "route", lease.ID())
 		return nil
+	}
+	err := &proxyNotWorkingError{answer: answer}
+	lease.Failed(err, time.Since(start), true)
+	return &httpx.RouteError{Err: err}
+}
+
+// proxyNotWorkingError is a route that answered an echo service with
+// something other than the address the request came from.
+type proxyNotWorkingError struct{ answer string }
+
+func (e *proxyNotWorkingError) Error() string {
+	return "the proxy does not pass requests on: an echo service was answered with " + e.answer
+}
+
+// askAddress asks echo, through ctx's route if it has one, for the address
+// the request came from. ip is empty when the answer was no address, and got
+// then says what it was. err is the request's own failure.
+func askAddress(ctx context.Context, client *httpx.Client, echo string) (ip, got string, err error) {
+	req, err := client.NewRequest(ctx, http.MethodGet, echo, nil)
+	if err != nil {
+		return "", "", err
 	}
 	resp, err := client.DoOnce(req)
 	if err != nil {
-		if _, routed := errors.AsType[*httpx.RouteError](err); routed || routeAtFault(err) || ctx.Err() != nil {
-			return err
-		}
-		m.log.Debug("no exit address from the route", "route", lease.ID(), "err", err)
-		return nil
+		return "", "", err
 	}
+	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-	resp.Body.Close()
-	ip := net.ParseIP(strings.TrimSpace(string(body)))
-	if resp.StatusCode != http.StatusOK || ip == nil {
-		m.log.Debug("no exit address from the route", "route", lease.ID(), "status", resp.StatusCode)
-		return nil
+	if addr := net.ParseIP(strings.TrimSpace(string(body))); resp.StatusCode == http.StatusOK && addr != nil {
+		return addr.String(), "", nil
 	}
-	if !lease.ClaimExit(ip.String()) {
-		return &httpx.RouteError{Err: errExitInUse}
+	sample := strings.TrimSpace(string(body))
+	if len(sample) > 60 {
+		sample = sample[:60] + "…"
 	}
-	return nil
+	return "", fmt.Sprintf("%d %q", resp.StatusCode, sample), nil
+}
+
+// echoReachable reports whether any echo service gives an address over the
+// normal connection, asked at most once a ProxyEchoRecheck. Callers waiting
+// meanwhile share the answer.
+func (m *Manager) echoReachable() bool {
+	m.echoMu.Lock()
+	defer m.echoMu.Unlock()
+	if !m.echoCheckedAt.IsZero() && time.Since(m.echoCheckedAt) < config.ProxyEchoRecheck {
+		return m.echoUp
+	}
+	client := m.client.WithTimeout(config.ProxyExitProbeTimeout)
+	up := false
+	for _, echo := range m.cfg.ProxyExitProbes {
+		if ip, _, err := askAddress(context.Background(), client, echo); err == nil && ip != "" {
+			up = true
+			break
+		}
+	}
+	m.echoUp, m.echoCheckedAt = up, time.Now()
+	return up
 }
 
 // routeBroken is routeAtFault short of a refusal: a proxy that could not

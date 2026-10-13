@@ -322,6 +322,20 @@ func (l *Lease) Context(ctx context.Context) context.Context {
 	return httpx.WithRoute(ctx, l.ID(), l.client, l.observe)
 }
 
+// ProbeContext is Context for a question put to a third party through the
+// route, such as which address it leaves by. The route answers for carrying
+// the request: failing to, a dial or a dropped connection, counts against it
+// as on any request, and an answer shows it alive. What the third party says
+// back does not count, a refusal or an outage of its own, since that is not
+// the service's host speaking about the route's address.
+func (l *Lease) ProbeContext(ctx context.Context) context.Context {
+	return httpx.WithRoute(ctx, l.ID(), l.client, func(o httpx.RouteObservation) {
+		if o.Status == 0 || (o.Status >= 200 && o.Status < 300) {
+			l.observe(o)
+		}
+	})
+}
+
 func (l *Lease) Release() {
 	l.once.Do(func() {
 		l.pool.mu.Lock()

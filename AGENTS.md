@@ -735,8 +735,17 @@ Host-specific notes:
   (`addressCooling`). Writing it on every port was a synced bbolt
   transaction per port under the pool's lock: thousands for one Keep2Share
   wait on a gateway, with the dispatcher waiting on that lock and holding
-  the manager's. Copies an older build wrote onto untried ports are
-  dropped when the inventory is loaded.
+  the manager's.
+
+  **Route health can be forgotten wholesale** (`config.ProxyHealthEpoch`).
+  The database records the epoch its verdicts were reached under, and one
+  opened under another has every route's health dropped, keeping the
+  inventory: shelving, cooldowns, answers, speeds, exits and the priors
+  (`forgetHealth`). Raise the epoch when a change means the recorded
+  verdicts were reached wrongly. Epoch 1 forgot a day in which downloads
+  could share an exit address, so that the host's refusals of the second
+  download were held against routes that were fine, and in which every
+  restart had started the inventory over.
 
   **No two downloads share an exit address** (`exit.go`). The address a
   host counts free downloads by is the one a route's requests leave from,
@@ -755,12 +764,23 @@ Host-specific notes:
   held or cooling (`exitFree`). The host's timers and refusals met through
   a route cool its exit, so every route known to leave by it waits too.
   Exits are kept on the routes (`Exit`, `ExitAt`, trusted for
-  `ProxyExitTTL`), and exit cooldowns are seeded from them on load. A route
-  that cannot answer fails as it would have failed the host's first request.
-  An answer that is no address leaves the exit unknown and the download goes
-  ahead, so trouble at the echo service cannot stop every download. Extra
-  streams claim their exits the same way. `Config.ProxyExitProbe` carries
-  the URL and is empty in a Config built by hand, so tests opt in.
+  `ProxyExitTTL`), and exit cooldowns are seeded from them on load.
+
+  The echo is also how a route shows it works, before a CAPTCHA is spent
+  on it. One that cannot reach the echo service fails as it would have
+  failed the host's first request. One that answers each echo service in
+  turn (`ProxyExitProbeURL`, then `ProxyExitProbeFallbackURL`) with
+  something other than an address, a page or a refusal of its own, is not
+  carrying requests as a proxy should (`proxyNotWorkingError`): it is
+  shelved, and the file goes on at no cost. Unless the echo services are
+  down over the normal connection too (`echoReachable`, asked at most once
+  a `ProxyEchoRecheck`): then the exit stays unknown and the download goes
+  ahead, since their outage must not shelve every route. Their answers are
+  not scored as the host's (`Lease.ProbeContext`): only the route's failure
+  to carry the request counts against it there, or one rate-limited answer
+  would have put the route on the refusal backoff. Extra streams check and
+  claim their routes the same way. `Config.ProxyExitProbes` carries the
+  URLs and is empty in a Config built by hand, so tests opt in.
 
   Ranking never walks the inventory (`index.go`): a public feed's tens of
   thousands of routes, walked on every lease and every upgrade check, were

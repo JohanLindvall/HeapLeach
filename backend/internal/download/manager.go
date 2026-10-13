@@ -51,6 +51,11 @@ type Manager struct {
 	// dispatch logs and clears them once a minute (routeSummaryLocked).
 	routeOutcomes  map[routeOutcome]int
 	routeSummaryAt time.Time
+	// echoMu guards whether the echo services answered over the normal
+	// connection, and when that was asked (echoReachable).
+	echoMu        sync.Mutex
+	echoUp        bool
+	echoCheckedAt time.Time
 
 	mu      sync.Mutex
 	jobs    map[string]*Job

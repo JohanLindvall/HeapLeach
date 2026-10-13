@@ -10,6 +10,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -51,6 +52,13 @@ type routeRig struct {
 	// than one, as a host counting free downloads per address allows.
 	exits    map[string]string
 	exitBusy map[string]int
+	// echoHost is the echo service's address, which answers with each
+	// route's exit through the route, or with answers[route] where a test
+	// has a route answer something else; and echoDown makes it answer 503
+	// to everyone, the normal connection included.
+	echoHost string
+	answers  map[string]string
+	echoDown atomic.Bool
 }
 
 func newRouteRig(t *testing.T, routes int) *routeRig {
@@ -60,7 +68,7 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 	r := &routeRig{t: t, m: busyManager(t), payload: randomPayload(t, 32<<20),
 		served: map[string]map[string]int64{}, asked: map[string]int{},
 		refuse: map[string]bool{}, hang: map[string]int64{},
-		exits: map[string]string{}, exitBusy: map[string]int{}}
+		exits: map[string]string{}, exitBusy: map[string]int{}, answers: map[string]string{}}
 	r.m.cfg.SlowSpeed = 1 << 40 // always slow, so extra streams are wanted
 	r.m.timings.poll, r.m.timings.probe, r.m.timings.cooldown = 10*time.Millisecond, 40*time.Millisecond, 40*time.Millisecond
 	r.m.timings.wantedRecheck = 10 * time.Millisecond
@@ -85,7 +93,16 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 	for i, id := range ids {
 		r.exits[id] = fmt.Sprintf("198.51.100.%d", 1+i) // each its own, unless a test says otherwise
 	}
-	r.m.cfg.ProxyExitProbe = "http://exit.example.test/"
+	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if r.echoDown.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = fmt.Fprint(w, "192.0.2.1") // the normal connection's own address
+	}))
+	t.Cleanup(echo.Close)
+	r.echoHost = echo.Listener.Addr().String()
+	r.m.cfg.ProxyExitProbes = []string{echo.URL + "/"}
 	streams := 4
 	if err := r.m.ApplySettings(Settings{Streams: &streams}); err != nil {
 		t.Fatal(err)
@@ -99,10 +116,17 @@ func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string)
 		return
 	}
 	r.mu.Lock()
-	refused, hang, exit := r.refuse[route], r.hang[route], r.exits[route]
+	refused, hang, exit, answer := r.refuse[route], r.hang[route], r.exits[route], r.answers[route]
 	r.mu.Unlock()
-	if req.URL.Host == "exit.example.test" {
-		_, _ = fmt.Fprint(w, exit)
+	if req.URL.Host == r.echoHost {
+		switch {
+		case r.echoDown.Load():
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		case answer != "":
+			_, _ = fmt.Fprint(w, answer)
+		default:
+			_, _ = fmt.Fprint(w, exit)
+		}
 		return
 	}
 	if refused || req.URL.Query().Get("for") != route {
@@ -373,7 +397,7 @@ func TestDeadRoutesDoNotSlowTheSearchForAnExtraStream(t *testing.T) {
 	attachPool(t, r.m, append([]string{r.urls[0]}, dead...))
 	// Counted at the resolver, which a dead route reaches only without the
 	// question about its exit; with it, the dead route fails there instead.
-	r.m.cfg.ProxyExitProbe = ""
+	r.m.cfg.ProxyExitProbes = nil
 	it := r.add("clip.bin", func(ctx context.Context, route string) error {
 		// The host's API comes first, through the route, as a CAPTCHA would.
 		req, err := r.m.client.NewRequest(ctx, http.MethodGet, "http://api.example.test/ticket", nil)
@@ -438,6 +462,53 @@ func TestTwoDownloadsNeverShareAnExit(t *testing.T) {
 	r.m.mu.Unlock()
 	if shared == 0 {
 		t.Fatal("no attempt was turned away from the shared exit")
+	}
+}
+
+// The echo is also how a route shows it works. One that answers it with a
+// page of its own instead of an address is shelved before a CAPTCHA is
+// spent on it, and the file goes on through another, at no cost.
+func TestARouteAnsweringWithoutAnAddressIsShelved(t *testing.T) {
+	r := newRouteRig(t, 2)
+	r.answers[r.ids[0]] = "<html><body>Access denied</body></html>"
+	streams := 1
+	if err := r.m.ApplySettings(Settings{Streams: &streams}); err != nil {
+		t.Fatal(err)
+	}
+	it := r.add("clip.bin", nil)
+	r.m.mu.Lock()
+	it.preferredRoute = r.ids[0]
+	r.m.mu.Unlock()
+	r.m.Start()
+	r.waitDone(60*time.Second, it)
+	r.mu.Lock()
+	asked := r.asked[r.ids[0]]
+	r.mu.Unlock()
+	if asked != 0 {
+		t.Fatalf("the host was asked through the broken route %d times; want none", asked)
+	}
+	if got := r.servedBy("clip.bin"); got[r.ids[1]] == 0 {
+		t.Fatalf("served %v; want the working route", got)
+	}
+	if row := r.pool.Page("keep2share", proxy.Query{Search: r.urls[0]}).Rows; len(row) != 1 || row[0].Status != "cooling" {
+		t.Fatalf("the broken route: %+v; want it shelved", row)
+	}
+	if it.proxyRetries != 0 {
+		t.Fatalf("the broken route cost the file %d retries; want none", it.proxyRetries)
+	}
+}
+
+// With the echo services down for everyone, the normal connection
+// included, nothing is blamed on the routes: downloads go ahead without
+// their exits known.
+func TestAnEchoOutageDoesNotStopDownloads(t *testing.T) {
+	r := newRouteRig(t, 1)
+	r.echoDown.Store(true)
+	it := r.add("clip.bin", nil)
+	r.m.Start()
+	r.waitDone(60*time.Second, it)
+	if row := r.pool.Page("keep2share", proxy.Query{Search: r.urls[0]}).Rows; len(row) != 1 || row[0].Status == "cooling" {
+		t.Fatalf("the route: %+v; want it not blamed for the outage", row)
 	}
 }
 
