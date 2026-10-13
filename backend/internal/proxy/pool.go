@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"slices"
@@ -49,6 +50,9 @@ type entry struct {
 	Exit   string    `json:",omitempty"`
 	ExitAt time.Time `json:",omitzero"`
 	client *httpx.Client
+	// agent is the browser the route presents itself as, drawn once with
+	// its client (config.BrowserUserAgents).
+	agent string
 	// hostname is identity(URL), parsed once: see host. hostID numbers it
 	// within the pool: see Pool.hostID. route is routeID(URL), hashed once:
 	// see id. inMeasured says it is in the index's measured routes.
@@ -285,6 +289,10 @@ type Lease struct {
 	// route's exit while the lease holds it (ClaimExit). Guarded by pool.mu.
 	files int
 	exit  string
+	// agent is the User-Agent the lease's requests send: its route's, for a
+	// per-route service, and the client's own for WAF recovery, where some
+	// hosts sign requests with it.
+	agent string
 	// client is the route's client when the lease was taken, which the
 	// lease's requests go on using whatever becomes of the entry's.
 	client *httpx.Client
@@ -319,7 +327,7 @@ func (l *Lease) Configured() bool {
 }
 
 func (l *Lease) Context(ctx context.Context) context.Context {
-	return httpx.WithRoute(ctx, l.ID(), l.client, l.observe)
+	return httpx.WithRouteAgent(ctx, l.ID(), l.client, l.observe, l.agent)
 }
 
 // ProbeContext is Context for a question put to a third party through the
@@ -329,11 +337,11 @@ func (l *Lease) Context(ctx context.Context) context.Context {
 // back does not count, a refusal or an outage of its own, since that is not
 // the service's host speaking about the route's address.
 func (l *Lease) ProbeContext(ctx context.Context) context.Context {
-	return httpx.WithRoute(ctx, l.ID(), l.client, func(o httpx.RouteObservation) {
+	return httpx.WithRouteAgent(ctx, l.ID(), l.client, func(o httpx.RouteObservation) {
 		if o.Status == 0 || (o.Status >= 200 && o.Status < 300) {
 			l.observe(o)
 		}
-	})
+	}, l.agent)
 }
 
 func (l *Lease) Release() {
@@ -479,6 +487,7 @@ func (p *Pool) lease(chosen *entry, site string) *Lease {
 		if err != nil {
 			return nil
 		}
+		chosen.agent = config.BrowserUserAgents[rand.IntN(len(config.BrowserUserAgents))]
 	}
 	chosen.stat(site).active++
 	p.leaseAddress(chosen, site)
@@ -486,7 +495,11 @@ func (p *Pool) lease(chosen *entry, site string) *Lease {
 		p.leased = make(map[*entry]int)
 	}
 	p.leased[chosen]++
-	return &Lease{pool: p, entry: chosen, site: site, client: chosen.client, started: time.Now()}
+	l := &Lease{pool: p, entry: chosen, site: site, client: chosen.client, started: time.Now()}
+	if site != "cloudflare" {
+		l.agent = chosen.agent
+	}
+	return l
 }
 
 func identity(raw string) string {

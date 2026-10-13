@@ -290,6 +290,13 @@ func TestARefusedAddressRetriesTheFileOnAnotherRoute(t *testing.T) {
 	if pool.Acquire("keep2share", "", 1) != nil {
 		t.Error("the refusing route was not held back")
 	}
+	// For the best part of an hour, not the minute of an ordinary refusal:
+	// asked again soon, it refuses again, after another CAPTCHA.
+	for _, row := range pool.Page("keep2share", proxy.Query{Status: "cooling"}).Rows {
+		if left := time.Until(row.CooldownUntil); left < 50*time.Minute {
+			t.Errorf("the refusing route is held back for %s; want about an hour", left.Round(time.Minute))
+		}
+	}
 }
 
 func TestProxyTransportFailureRetriesOnAnotherRoute(t *testing.T) {

@@ -98,6 +98,9 @@ type requestRoute struct {
 	id      string
 	client  *Client
 	observe func(RouteObservation)
+	// agent, when set, is the User-Agent every request on the route sends
+	// in place of the client's own (WithRouteAgent).
+	agent string
 }
 
 // RouteObservation measures complete response reads, including failed reads.
@@ -113,7 +116,14 @@ type RouteObservation struct {
 // WithRoute pins every request, redirect and retry in ctx to the same client.
 // The ID is opaque; it lets IP-bound resolvers keep tickets with their route.
 func WithRoute(ctx context.Context, id string, client *Client, observe func(RouteObservation)) context.Context {
-	return context.WithValue(ctx, routeContextKey{}, &requestRoute{id, client, observe})
+	return WithRouteAgent(ctx, id, client, observe, "")
+}
+
+// WithRouteAgent is WithRoute for a route that presents a User-Agent of its
+// own on every request, whichever client builds it: one browser behind one
+// address, rather than the same browser behind all of them.
+func WithRouteAgent(ctx context.Context, id string, client *Client, observe func(RouteObservation), agent string) context.Context {
+	return context.WithValue(ctx, routeContextKey{}, &requestRoute{id: id, client: client, observe: observe, agent: agent})
 }
 
 func RouteID(ctx context.Context) string {
@@ -148,6 +158,9 @@ type ProxyRefusedError struct {
 func (e *ProxyRefusedError) Error() string { return "proxy refused the tunnel: " + e.Status }
 
 func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, error) {
+	if r.agent != "" {
+		req.Header.Set(HeaderUserAgent, r.agent)
+	}
 	// Preserve the caller's streaming/header timeout while borrowing only
 	// the selected route's transport and cookies.
 	cp, hc := *original, *r.client.hc

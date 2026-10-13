@@ -88,6 +88,13 @@ const (
 	// ProxyExitTTL is how long a route's exit, once found, is gone by.
 	ProxyExitTTL = time.Hour
 
+	// ProxyAddressRefusedWait is how long a route, and its exit, is held back
+	// after the host refuses free downloads from its address outright. With
+	// the minute-long refusal backoff, a host refusing nearly every address
+	// was asked again by each of them every few minutes, each time after a
+	// CAPTCHA, about a thousand times a minute in all.
+	ProxyAddressRefusedWait = time.Hour
+
 	// ProxyHealthEpoch numbers the rules routes are judged by. A database
 	// written under another number has every route's health forgotten when
 	// it is opened, keeping the inventory. Raise it when a change means the

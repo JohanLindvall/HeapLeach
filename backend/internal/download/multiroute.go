@@ -118,6 +118,7 @@ func (m *Manager) routeSourceLocked(it *Item) func(context.Context) (*streamSour
 					lease.Cooldown(wait.Until)
 				} else if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
 					lease.Failed(err, time.Since(start), false)
+					lease.Cooldown(time.Now().Add(config.ProxyAddressRefusedWait))
 				}
 			}
 			release()

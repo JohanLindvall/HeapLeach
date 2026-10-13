@@ -784,6 +784,24 @@ Host-specific notes:
   claim their routes the same way. `Config.ProxyExitProbes` carries the
   URLs and is empty in a Config built by hand, so tests opt in.
 
+  **Each route of a per-route service is one browser** (`entry.agent`,
+  `httpx.WithRouteAgent`). It draws a User-Agent from
+  `config.BrowserUserAgents`, over thirty real desktop Chrome, Edge,
+  Firefox and Safari strings, when its client is made, and every request
+  it carries sends that one, whichever client built the request: the
+  CAPTCHA, the ticket, the echo and the bytes. Hundreds of addresses all
+  naming one browser to a host counting free downloads per address is a
+  signature of its own. WAF recovery keeps the client's User-Agent, since
+  some hosts sign requests with it (gofile does).
+
+  **An address refused outright waits an hour** (`ProxyAddressRefusedWait`),
+  its exit with it. The host's bare "Download is not available" came to
+  nearly every address at once one day, the direct connection's included,
+  for every file asked, whatever the User-Agent and however long the
+  CAPTCHA took to answer. On the minute-long refusal backoff each address
+  asked again within minutes, after another CAPTCHA, about a thousand times
+  a minute in all.
+
   Ranking never walks the inventory (`index.go`): a public feed's tens of
   thousands of routes, walked on every lease and every upgrade check, were
   most of the service's CPU. The index lists every route, the routes by

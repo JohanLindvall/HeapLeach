@@ -11,10 +11,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -189,5 +191,43 @@ func TestAFileMovesOnFromAProxyThatCannotCarryIt(t *testing.T) {
 	}
 	if row = pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" {
 		t.Fatalf("route status %q, want it held back", row.Status)
+	}
+}
+
+// A route of a per-route service presents one browser of its own, the same
+// on every request it carries; WAF recovery keeps the client's own, which
+// some hosts sign requests with.
+func TestARouteKeepsOneBrowserUserAgent(t *testing.T) {
+	m := busyManager(t)
+	agents := make(chan string, 8)
+	route := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, r *http.Request) {
+		agents <- r.Header.Get(httpx.HeaderUserAgent)
+		_, _ = io.WriteString(w, "ok")
+	}).URL
+	pool := attachPool(t, m, []string{route})
+	id := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].ID
+	ask := func(lease *proxy.Lease) string {
+		t.Helper()
+		if _, err := m.client.WithTimeout(5*time.Second).GetString(lease.Context(t.Context()), "http://service.example.test/api", nil); err != nil {
+			t.Fatal(err)
+		}
+		return <-agents
+	}
+	lease := pool.Acquire("keep2share", id, 1)
+	if lease == nil {
+		t.Fatal("no route")
+	}
+	first, second := ask(lease), ask(lease)
+	lease.Release()
+	if first != second || !slices.Contains(config.BrowserUserAgents, first) {
+		t.Fatalf("the route sent %q, then %q; want one browser from the list", first, second)
+	}
+	waf := pool.Acquire("cloudflare", id, 1)
+	if waf == nil {
+		t.Fatal("no route for WAF recovery")
+	}
+	defer waf.Release()
+	if got := ask(waf); got != m.cfg.UserAgent {
+		t.Fatalf("WAF recovery sent %q; want the client's own %q", got, m.cfg.UserAgent)
 	}
 }

@@ -226,10 +226,11 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			lease.Failed(err, time.Since(start), false)
 		} else if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
 			// The host turned this address away, not the file: hold the
-			// route back from it as for any refusal, and let the file try
+			// route back from it, its exit with it, and let the file try
 			// another. The API's own answer came back as an ordinary
 			// response, so nothing below HTTP has counted it.
 			lease.Failed(err, time.Since(start), false)
+			lease.Cooldown(time.Now().Add(config.ProxyAddressRefusedWait))
 			err = &httpx.RouteError{Err: err}
 		} else if transientRouteFailure(err) {
 			// A deadline, a timeout or a dropped connection says the

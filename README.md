@@ -668,7 +668,9 @@ the same public address: each route is asked which address it leaves by
 before its first CAPTCHA, through an IP-echo service, and a route whose exit
 another download holds, or the host is holding back, is passed over. The same
 question shows whether the proxy works at all: one that answers with anything
-but an address is set aside before it costs a CAPTCHA. When routes would otherwise
+but an address is set aside before it costs a CAPTCHA. Each route presents a
+browser of its own, drawn from over thirty real desktop User-Agents, and an
+address the host refuses outright is left alone for an hour. When routes would otherwise
 go unused, a slow file also reads through extra routes, up to the streams
 setting, each with a free download and a speed cap of its own. That happens
 only while no other file of the service is waiting to start, so it speeds up
