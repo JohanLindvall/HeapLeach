@@ -32,19 +32,15 @@ import (
 //     by the LBRY streaming API, per claim, on request — so "read the page"
 //     resolves nothing and the whole protocol would have to be spoken.
 //   - dailymotion: the manifest answers 403 with x-error-code E003 to any
-//     client whose TLS fingerprint is not a browser's, and nothing is left
-//     behind it to want: the progressive MP4s are gone and a single "auto"
-//     HLS manifest is all that is served, so a pass would still need muxing.
+//     client whose TLS fingerprint is not a browser's, and the progressive
+//     MP4s are gone: a single "auto" HLS manifest is all that is served.
+//     Muxing it was the other half of the wall, which the playlist engine
+//     now does itself (download/mux.go); the fingerprint is untried.
 //   - bilibili: playurl is WBI-signed — a key fetched from
 //     /x/web-interface/nav, permuted through a hardcoded 64-element table,
 //     then md5'd with the filtered and sorted query, and expiring within the
 //     session. Past that signature, fnval=4048 answers DASH with video and
 //     audio apart, so ffmpeg has to mux regardless.
-//   - niconico: its DMS playlist is demuxed, which was the wall when this
-//     was written: hlsVariant.muxed refused every variant, and nothing was
-//     self-contained to fetch. The playlist engine now joins audio kept
-//     apart itself (download/mux.go), so that wall is down; what the rest of
-//     the way asks for has not been tried.
 //   - soundcloud: api-v2 wants a client_id scraped out of a JS bundle that
 //     rotates, and a browser TLS fingerprint alongside it.
 //   - mixcloud: its stream URLs are XOR-obfuscated, and the obfuscation is
@@ -107,11 +103,6 @@ var handoffSites = []handoffSite{
 		why:     "its playback call is signed per session and answers with video and audio apart",
 	},
 	{
-		name:    "niconico",
-		domains: []string{"nicovideo.jp", "nico.ms"},
-		why:     "its stream carries video and audio separately, so they have to be muxed",
-	},
-	{
 		name:    "soundcloud",
 		domains: []string{"soundcloud.com"},
 		why:     "its API needs a client key scraped from a script bundle that rotates",
@@ -128,20 +119,19 @@ var handoffSites = []handoffSite{
 		oembed:  rumbleOEmbed,
 	},
 
-	// Public broadcasters that are DRM-free and perfectly reachable, and
-	// still cannot be fetched natively — every one of them for the same
-	// reason, which is worth stating once here rather than seven times
-	// below: their streams carry video and audio in separate renditions.
+	// Public broadcasters that are DRM-free and perfectly reachable, handed
+	// over for one reason, worth stating once here rather than seven times
+	// below: their streams carry video and audio in separate renditions,
+	// which HeapLeach's playlist engine could only concatenate when they
+	// were added, into a silent video.
 	//
-	// HeapLeach joins HLS parts by concatenating them, so a demuxed
-	// variant produces a silent video that looks like a finished download.
-	// hlsVariant.muxed() refuses exactly that, which is the right answer
-	// and leaves nothing to fetch. yt-dlp has ffmpeg and can mux, so these
-	// go to it. That is not a judgement about the host: several of these
-	// are easier to reach than hosts implemented natively here — Arte's
-	// API answers anyone in six languages — and the sibling broadcasters
-	// that happen to mux their audio in (SVT, NRK, RÚV, VRT and the rest)
-	// are native for that reason alone.
+	// It now fetches such renditions and joins them itself
+	// (download/mux.go), as it does for the sibling broadcasters (SVT, SRF,
+	// ZDF and the rest), so the HLS ones among these are candidates to be
+	// read natively; until they are, yt-dlp fetches them. That was never a
+	// judgement about the host: Arte's API answers anyone in six
+	// languages. Two walls still stand where they say so: DASH, which the
+	// engine does not read, and DR's byte ranges of one file.
 	{
 		name:    "arte",
 		domains: []string{"arte.tv"},

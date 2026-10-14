@@ -26,28 +26,26 @@ import (
 // another lists a series. Four things are its own, and the first is the one
 // the rest are arranged around.
 //
-// SRF's HLS is only half usable, and the reason is worth setting out because
-// it is not the usual one. Every title carrying an audio description
-// publishes a master playlist whose EXT-X-MEDIA AUDIO renditions have URIs of
-// their own, and whose every variant names that group — which by RFC 8216 is
-// a statement that the variant's own segments carry no audio, and is what
-// hlsVariant.muxed() refuses. Measured, those segments do carry AAC beside
-// the H.264: Akamai mixes the default track in *and* publishes it separately
-// so a player can switch to the described one. The manifest is therefore
-// lying in the safe direction for a player and the dangerous one for us, and
-// nothing in it distinguishes this host's non-conformance from vimeo's
-// genuine split, where believing the same declaration yields a silent file.
-// So those masters are refused rather than guessed at — a loud wrong answer
-// over a quiet one.
+// SRF's HLS needed one thing set out, because it is not the usual case.
+// Every title carrying an audio description publishes a master playlist
+// whose EXT-X-MEDIA AUDIO renditions have URIs of their own, and whose every
+// variant names that group — which by RFC 8216 is a statement that the
+// variant's own segments carry no audio, and is what hlsVariant.muxed()
+// refuses. Measured, those segments do carry AAC beside the H.264: Akamai
+// mixes the default track in *and* publishes it separately so a player can
+// switch to the described one. Nothing in the manifest tells this apart
+// from a genuine split, where the video's own segments are silent, and such
+// masters used to be refused for that. Now the renditions come with the
+// video as tracks of their own, and the downloader joins exactly those,
+// leaving out the copy mixed into the video (download/mux.go), so either
+// kind comes out whole.
 //
-// What keeps that from mattering much is that the same document also offers
-// `protocol: "HTTP"` resources — a plain, rangeable MP4 — for most of the
-// catalogue, and that is much the better download anyway: the segmented
-// engine, resume across runs and the skip-what-is-already-there check all
-// apply to a file and none of them apply to a segment list. So the
-// progressive resource is taken first, the playlist is the fallback, and only
-// a title that is both audio-described and published without a file is turned
-// away.
+// The same document also offers `protocol: "HTTP"` resources — a plain,
+// rangeable MP4 — for most of the catalogue, and that is much the better
+// download anyway: the segmented engine, resume across runs and the
+// skip-what-is-already-there check all apply to a file and none of them
+// apply to a segment list. So the progressive resource is taken first, and
+// the playlist is the fallback.
 //
 // The second is a path that has to be wrong to work. SRG documents the
 // endpoint with a business unit in it, and the Play pages call it that way,

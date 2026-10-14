@@ -28,11 +28,12 @@ import (
 // the host it was written for and exactly backwards here, where those
 // variants carry video and audio in the same MPEG-TS segments. What Rai does
 // publish, on the one packaging that genuinely splits the two, is an
-// EXT-X-MEDIA audio group with a URI of its own. So audioElsewhere is the
-// field to read: a variant naming such a group is dropped, and an asset with
-// nothing left after that is refused outright. bestVariant only ranks and
-// never refuses, so leaving this out would hand back the video-only rendition
-// and write a silent file that looks like a finished download.
+// EXT-X-MEDIA audio group with a URI of its own, which is what audioElsewhere
+// reads. Such a variant comes with its audio renditions, the audio
+// description among them, for the downloader to join to it, and bestVariant
+// still prefers one that carries its own. Taken alone it would write a
+// silent file that looks like a finished download, which is why this used
+// to be refused outright.
 //
 // The second is that Rai declines by substitution rather than by an error. An
 // unavailable video answers 200 with "ct" empty and a real, fetchable MP4 in
@@ -161,7 +162,7 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	if len(result.Files) == 0 {
 		return nil, fmt.Errorf("raiplay: none of the %d entries of %s are playable: %s",
 			len(entries), u.Redacted(),
-			util.FirstNonEmpty(refused, "Rai offers no self-contained stream for any of them"))
+			util.FirstNonEmpty(refused, "Rai offers no stream for any of them"))
 	}
 	return result, nil
 }

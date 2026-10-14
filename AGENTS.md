@@ -1132,6 +1132,29 @@ Host-specific notes:
   yt-dlp cannot fetch either, and those are refused in those words. A `view`
   other than 1 is a private or password-protected video. An unlisted link's
   `<hash>` becomes `?h=`.
+- **niconico** is read through the site's own player API. A watch page
+  describes its video in the JSON of a `<meta name="server-response">`: the
+  qualities on offer (`media.domand`, video and audio apart, each marked
+  available or not without an account), a key to ask with
+  (`accessRightKey`), and the player's track id. POSTed one video and one
+  audio quality, the access-rights API mints an HLS master for the pair and
+  sets a `domand_bid` cookie. The segments sit on signed links anyone can
+  fetch, but the AES-128 key answers 403 without that cookie, so it rides in
+  the transfer's headers rather than being left to the jar. The audio is a
+  rendition of its own, and the parts are fragmented MP4 under AES-128 with
+  the initialisation segment in the clear and an explicit IV
+  (`SegmentKey.Clear`). The grant and the cookie last a day, and a queue can
+  wait longer, so `Resolve` mints them when the transfer starts, from a
+  fresh reading of the watch page. The quality taken is the tallest
+  available, then the highest bitrate. An error page, deleted or missing, is
+  a 400 or 404 carrying the same description, read off `StatusError.Body`
+  so the refusal can name its reason. Mylists (`/v2/mylists`), series
+  (`/v2/series`) and a user's uploads (`/v3/users/<id>/videos`) list each
+  video's id and title, so a listing costs a request a page and no watch
+  page until a transfer starts. Entries gone from the site, or paid, are
+  left out and counted in the note apart from what the cap cut. Any other
+  page (tags, rankings, channels) still goes to yt-dlp, through a `Handoff`
+  the extractor keeps for it. It used to go to yt-dlp whole, for the muxing.
 - **yandex** is a redirector rather than a host. Its preview pages are
   search output wrapped around somebody else's video, so the extractor finds
   the source link the page carries and hands that to yt-dlp. Note that

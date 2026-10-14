@@ -387,9 +387,9 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewSVTPlay(client),
 		// Public broadcasters, all the same job as SVT Play: an open
 		// metadata endpoint, a DRM check, and either a plain rangeable file
-		// or a self-contained HLS rendition. The ones whose streams carry
-		// audio apart are on the yt-dlp handoff list instead — see
-		// handoffs.go, where the reason is stated once for all of them.
+		// or an HLS stream, its audio and subtitles joined to it where they
+		// are kept apart. Those still on the yt-dlp handoff list are there
+		// for the reasons handoffs.go states.
 		NewRUV(client),
 		NewARD(client),
 		NewZDF(client),
@@ -405,6 +405,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewBBCSounds(client),
 		NewYouTube(),
 		NewVimeo(client),
+		NewNiconico(client),
 		NewYandex(client),
 		NewBooru(client),
 		NewFourChan(client),

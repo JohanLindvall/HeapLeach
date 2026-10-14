@@ -46,11 +46,11 @@ import (
 // filtered first and the quality decides only afterwards.
 //
 // The second is that those same items publish their master playlist with
-// the audio in EXT-X-MEDIA renditions of its own. Concatenating a variant
-// that names one yields a silent video that looks like a finished download.
-// hlsVariant.muxed() recognises that, but bestVariant still returns the best
-// of a bad set, so the chosen variant is asked outright and an item with
-// nothing self-contained is refused instead.
+// the audio in EXT-X-MEDIA renditions of its own, and concatenating a
+// variant that names one alone yields a silent video that looks like a
+// finished download. The renditions come with the video instead, for the
+// downloader to join to it, and only a variant naming no audio anywhere is
+// refused.
 //
 // Geo-blocking is the last of it, and unlike NRK — which writes a sentence
 // for the viewer — ZDF states it as a code: geoLocation is "none", "de",

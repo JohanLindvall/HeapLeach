@@ -43,8 +43,6 @@ func TestHandoffMatch(t *testing.T) {
 		"https://dai.ly/x000000":                     "dailymotion",
 		"https://www.bilibili.com/video/BV00000000":  "bilibili",
 		"https://b23.tv/aaaaaa":                      "bilibili",
-		"https://www.nicovideo.jp/watch/sm0000000":   "niconico",
-		"https://nico.ms/sm0000000":                  "niconico",
 		"https://soundcloud.com/an-artist/a-track":   "soundcloud",
 		"https://m.soundcloud.com/an-artist/a-track": "soundcloud",
 		"https://www.mixcloud.com/a-user/a-show/":    "mixcloud",
