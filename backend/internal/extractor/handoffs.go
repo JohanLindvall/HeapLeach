@@ -40,10 +40,11 @@ import (
 //     then md5'd with the filtered and sorted query, and expiring within the
 //     session. Past that signature, fnval=4048 answers DASH with video and
 //     audio apart, so ffmpeg has to mux regardless.
-//   - niconico: its DMS playlist is demuxed, so hlsVariant.muxed would
-//     correctly refuse every variant and leave nothing self-contained to
-//     fetch. Taking a variant anyway is the trap muxed() exists to prevent —
-//     a silent file that looks like a finished download.
+//   - niconico: its DMS playlist is demuxed, which was the wall when this
+//     was written: hlsVariant.muxed refused every variant, and nothing was
+//     self-contained to fetch. The playlist engine now joins audio kept
+//     apart itself (download/mux.go), so that wall is down; what the rest of
+//     the way asks for has not been tried.
 //   - soundcloud: api-v2 wants a client_id scraped out of a JS bundle that
 //     rotates, and a browser TLS fingerprint alongside it.
 //   - mixcloud: its stream URLs are XOR-obfuscated, and the obfuscation is

@@ -28,12 +28,12 @@ import (
 //
 // The second is that a vimeo stream arrives demuxed. Its master playlist
 // offers video renditions and names a separate audio group, so concatenating
-// one rendition's segments — which is all the playlist engine here does —
-// would produce a silent video. Modern uploads no longer carry progressive
-// MP4s to fall back on either, so there is nothing this program can fetch
-// directly and end up with a playable file. Joining the two streams needs
-// ffmpeg, which is exactly what the external downloader is for, so the
-// player URL is handed to yt-dlp.
+// one rendition's segments would produce a silent video, and modern uploads
+// no longer carry progressive MP4s to fall back on either. Joining the two
+// streams needs ffmpeg, which only the external downloader had when this was
+// written, so the player URL is handed to yt-dlp. The playlist engine now
+// joins audio kept apart itself (download/mux.go), which would let this be
+// read natively instead.
 type Vimeo struct{ hostSet }
 
 // NewVimeo builds the vimeo extractor.

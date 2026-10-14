@@ -219,11 +219,12 @@ func TestVRTMaxMasterPlaylistIsSelfContained(t *testing.T) {
 	}
 }
 
-// TestVRTMaxRefusesADemuxedPlaylist is the guard for the day VRT repackages.
-// Joining a variant whose audio lives elsewhere produces a file that finishes
-// and then plays without sound, which nothing downstream can notice, so the
-// refusal has to happen here.
-func TestVRTMaxRefusesADemuxedPlaylist(t *testing.T) {
+// TestVRTMaxKnowsAVariantCarryingNoAudio is the guard for the day VRT
+// repackages. A variant whose audio lives elsewhere carries none in its own
+// segments, which joined alone make a file that finishes and then plays
+// without sound. The extractor joins the audio renditions to it, and refuses
+// it only when there are none to join.
+func TestVRTMaxKnowsAVariantCarryingNoAudio(t *testing.T) {
 	base, err := ParseURL("https://cdn.example.test/vod/show.ism/.m3u8")
 	if err != nil {
 		t.Fatal(err)
@@ -234,8 +235,8 @@ func TestVRTMaxRefusesADemuxedPlaylist(t *testing.T) {
 		t.Fatalf("parsed %d variants, want 1", len(variants))
 	}
 	if !vrtSilent(variants[0]) {
-		t.Error("a variant whose audio group has a URI of its own was accepted; " +
-			"downloading it would give a silent video that looks finished")
+		t.Error("a variant whose audio group has a URI of its own was taken to carry audio; " +
+			"downloading it alone would give a silent video that looks finished")
 	}
 
 	// A media playlist reaches the same call with nothing declared, and that

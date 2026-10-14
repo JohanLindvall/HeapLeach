@@ -22,6 +22,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/tools"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
@@ -131,9 +132,19 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 
 	m.mu.Lock()
 	isPlaylist := len(it.Segments) > 0
+	withAudio := isPlaylist && len(it.Audio) > 0
 	external := it.External
 	encrypted := it.cipher != nil
 	m.mu.Unlock()
+
+	// A soundtrack kept apart from the video is joined to it with ffmpeg,
+	// and without ffmpeg the video alone would be silent. Asked before a
+	// byte is fetched rather than once the whole of it has been.
+	if withAudio {
+		if _, ok := tools.Find(tools.FFmpeg); !ok {
+			return errNoFFmpegToJoin()
+		}
+	}
 
 	// Decryption happens in the byte writer, which neither of the paths
 	// below goes through. No host serves an encrypted playlist or hands one
@@ -170,7 +181,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// How far the part file had got before this attempt, so its own
 		// contribution can be told afterwards: an attempt that got the file
 		// further is judged apart from one that got it nowhere, below.
-		before := onDisk(part, len(it.Segments), files)
+		before := m.onDisk(it, part, files)
 		if isPlaylist {
 			final, err = m.transferPlaylist(ctx, it, part, name, files)
 		} else {
@@ -192,7 +203,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			return ctx.Err()
 		}
 		if _, routed := errors.AsType[*httpx.RouteError](err); routed {
-			return &routeTransferError{err: err, moved: onDisk(part, len(it.Segments), files) > before}
+			return &routeTransferError{err: err, moved: m.onDisk(it, part, files) > before}
 		}
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
 			return err
@@ -222,7 +233,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 		}
 		if _, busy := errors.AsType[*busyHostError](err); busy && httpx.RouteID(ctx) != "" {
-			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: onDisk(part, len(it.Segments), files) > before}
+			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: m.onDisk(it, part, files) > before}
 		}
 		if errors.Is(err, errFileChanged) {
 			if err := files.truncate(part); err != nil {
@@ -374,7 +385,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// a server that ignores Range and starts over on every request
 		// delivers plenty and gets nowhere. Received bytes may also be in a
 		// buffer whose flush failed, so re-read the resumable disk state.
-		after := onDisk(part, len(it.Segments), files)
+		after := m.onDisk(it, part, files)
 		moved := after > before
 
 		// A stall is handed straight back rather than retried in place.
@@ -436,15 +447,48 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		}
 	}
 
+	// A video whose audio came apart from it is joined to it first, and the
+	// joined file is what is finished. The parts it was made of go only once
+	// it is in place, so a join that fails leaves them for a retry to join
+	// again without fetching anything.
+	m.mu.Lock()
+	tracks := playlistTracksLocked(it, part)
+	m.mu.Unlock()
+	finished := part
+	if isPlaylist && len(tracks) > 1 {
+		joined, err := m.joinTracks(ctx, it, tracks, files)
+		if err != nil {
+			return err
+		}
+		finished = joined
+		if ext := filepath.Ext(name); !strings.EqualFold(ext, ".mp4") {
+			name = strings.TrimSuffix(name, ext) + ".mp4"
+		}
+	}
+	// Cleared here rather than inside each transfer path, so the resume
+	// sidecar is also removed when an attempt ends early — a 416 for a part
+	// file that is already whole, or a restored table with nothing left.
+	clearParts := func() {
+		clearTransferState(part, files)
+		for _, t := range tracks {
+			if t.part == "" {
+				continue
+			}
+			if t.part != finished {
+				_ = files.remove(t.part)
+			}
+			clearPlaylistState(t.part, files)
+		}
+	}
+
 	// A file whose length was unknown until it arrived, with no size in the
 	// listing and no Content-Length, could not be checked against the
 	// destination before it was fetched. Now that it is whole, an identical
 	// file already under its name is this one, saved before, and reserving
 	// another name would keep it twice.
-	if existing, ok := identicalOnDisk(dir, name, part, files); ok {
-		_ = files.remove(part)
-		clearTransferState(part, files)
-		clearPlaylistState(part, files)
+	if existing, ok := identicalOnDisk(dir, name, finished, files); ok {
+		_ = files.remove(finished)
+		clearParts()
 		m.mu.Lock()
 		it.Skipped = true
 		m.mu.Unlock()
@@ -455,15 +499,11 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	if err != nil {
 		return err
 	}
-	if err := files.rename(part, dest); err != nil {
+	if err := files.rename(finished, dest); err != nil {
 		_ = files.remove(dest)
 		return fmt.Errorf("finalise %s: %w", name, err)
 	}
-	// Cleared here rather than inside each transfer path, so the resume
-	// sidecar is also removed when an attempt ends early — a 416 for a part
-	// file that is already whole, or a restored table with nothing left.
-	clearTransferState(part, files)
-	clearPlaylistState(part, files)
+	clearParts()
 	// Any transport stream is worth rewrapping, however it arrived.
 	dest = m.remuxToMP4(ctx, dest)
 	m.setPath(it, filepath.Join(rel, filepath.Base(dest)))
@@ -776,18 +816,27 @@ func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterA
 
 // onDisk reports how far the part file has got, as the next attempt will
 // find it: the segment sidecar's tally where there is one, the playlist
-// checkpoint's where the file is a playlist, and otherwise the file's own
-// length. Read before an attempt and compared with the position afterwards,
-// it is what separates an attempt that got the file further from one that
-// merely received bytes — a server that restarts from zero on every request
-// does the second without the first, and a retry judged by bytes alone
-// would chase it forever.
-func onDisk(part string, segments int, scopes ...transferFiles) int64 {
-	if segments > 0 {
-		if st := loadPlaylistState(part, segments, scopes...); st != nil {
-			return st.Bytes
+// checkpoints' where the file is a playlist (its own, and each audio
+// track's), and otherwise the file's own length. Read before an attempt and
+// compared with the position afterwards, it is what separates an attempt
+// that got the file further from one that merely received bytes — a server
+// that restarts from zero on every request does the second without the
+// first, and a retry judged by bytes alone would chase it forever.
+func (m *Manager) onDisk(it *Item, part string, scopes ...transferFiles) int64 {
+	m.mu.Lock()
+	tracks := playlistTracksLocked(it, part)
+	m.mu.Unlock()
+	if len(tracks[0].segments) > 0 {
+		var held int64
+		for _, t := range tracks {
+			if t.part == "" {
+				continue
+			}
+			if st := t.state(scopes...); st != nil {
+				held += st.Bytes
+			}
 		}
-		return 0
+		return held
 	}
 	st, offset := resumeTransfer(part, scopes...)
 	if st != nil {
@@ -963,9 +1012,12 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	}
 	// A playlist read again: its segments and key were signed with the
 	// rest, and the stale ones would fail where these will not.
+	// Its audio is read with it, and a reading that has none clears what
+	// an earlier one had.
 	if len(target.Segments) > 0 {
 		it.Segments = target.Segments
 		it.SegmentKey = target.SegmentKey
+		it.Audio = target.Audio
 	}
 	m.mu.Unlock()
 	return nil

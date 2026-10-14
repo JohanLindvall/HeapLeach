@@ -364,33 +364,39 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", fmt.Errorf("srf: %s %s", urn, chapter.refusal())
 	}
 
-	segments, variant, err := resolvePlaylist(ctx, s.client, best.URL, headers)
+	media, err := resolveMediaPlaylist(ctx, s.client, best.URL, headers)
 	if err != nil {
 		return nil, "", fmt.Errorf("srf: %s: %w", urn, err)
 	}
+	variant := media.Variant
 	// bestVariant only *prefers* a self-contained rendition; when a master
 	// offers none it still returns the best of a bad set, so the caller has
 	// to look. The URL comparison is what tells a master from a media
-	// playlist, which resolvePlaylist hands back unchanged: a media playlist
+	// playlist, which the resolver hands back unchanged: a media playlist
 	// declares no codecs, so muxed() is false for one and checking it
 	// unconditionally would refuse a perfectly good stream.
-	if variant.URL != best.URL && !variant.muxed() {
-		return nil, "", fmt.Errorf("srf: %s offers no progressive download, and its playlist declares "+
-			"the audio as a track of its own — which is how SRF publishes anything carrying an audio "+
-			"description. Nothing here can tell that apart from a playlist whose audio is only in that "+
-			"track, and joining the second kind saves video with no sound, so this declines rather "+
-			"than guess. Hand the page to the external downloader (yt-dlp), which has ffmpeg and "+
-			"reads the tracks separately", urn)
+	//
+	// A variant that declares its audio as tracks of its own, as SRF does
+	// for anything carrying an audio description, comes with them
+	// (media.Audio). The downloader joins them to the video, keeping
+	// whatever audio the video's own segments carry as well, so it no longer
+	// matters which of the two kinds of playlist this is. Only a variant with
+	// no sound named anywhere is refused.
+	if variant.URL != best.URL && !variant.muxed() && len(media.Audio) == 0 {
+		return nil, "", fmt.Errorf("srf: %s offers no progressive download, and its playlist names no "+
+			"audio, in the video or beside it: joining it would save video with no sound", urn)
 	}
 
 	return &File{
 		// Named off the segments, not the variant URL: Akamai packages these
 		// out of a stored MP4 and names the path after it — ".mp4.csmil/"
 		// over MPEG-TS parts. See segmentsExtension.
-		Name:     segmentsExtension(segments, variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extension(),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, title, nil
 }
 

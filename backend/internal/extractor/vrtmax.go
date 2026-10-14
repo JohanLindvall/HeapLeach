@@ -443,31 +443,35 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 	}
 
 	headers := httpx.Referer(vrtRoot + "/")
-	segments, variant, err := resolvePlaylist(ctx, v.client, manifest, headers)
+	stream, err := resolveMediaPlaylist(ctx, v.client, manifest, headers)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("vrtmax: %s: %w", streamID, err)
 	}
-	if vrtSilent(variant) {
-		return nil, "", "", fmt.Errorf("vrtmax: %s offers no rendition carrying its own audio, "+
-			"so joining its segments would give a silent video; this host needs an external "+
-			"downloader now that VRT packages it this way", streamID)
+	// A variant keeping its audio apart comes with it (stream.Audio), which
+	// the downloader joins to the video. Only one naming no audio anywhere
+	// would be silent.
+	if vrtSilent(stream.Variant) && len(stream.Audio) == 0 {
+		return nil, "", "", fmt.Errorf("vrtmax: %s names no audio, in its renditions or beside them, "+
+			"so joining its segments would give a silent video", streamID)
 	}
 
 	return &File{
-		Name: playlistExtension(variant),
+		Name: stream.extensionOr(playlistExtension(stream.Variant)),
 		// The media document publishes a duration, not a length: nothing here
 		// knows how many bytes the parts add up to until they arrive, and a
 		// Size that is not exact is worse than none at all.
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Size:       -1,
+		Headers:    headers,
+		Segments:   stream.Segments,
+		SegmentKey: stream.Key,
+		Audio:      stream.Audio,
 	}, media.Title, util.FirstNonEmpty(page.Title, page.Player.Title), nil
 }
 
-// vrtSilent reports a variant whose audio lives in a playlist of its own,
-// which is the one thing that would make this host unservable: the segments
-// are joined by concatenation and there is no muxer on that path, so such a
-// variant downloads to the end and then plays without sound.
+// vrtSilent reports a variant whose own segments carry no audio, which
+// downloaded alone runs to the end and then plays without sound. One whose
+// audio lives in playlists of its own comes with them, joined to the video
+// by the downloader; one naming none anywhere is refused.
 //
 // An empty codec list is not that case. It means the locator answered with a
 // media playlist rather than a master, which says nothing either way and must

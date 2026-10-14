@@ -308,15 +308,19 @@ func (z *ZDF) file(ctx context.Context, doc *zdfDocument, reach *zdfReach) (*Fil
 		return &File{Name: ".mp4", URL: best.URL, Size: -1, Headers: headers}, nil
 	}
 
-	segments, variant, err := resolvePlaylist(ctx, z.client, best.URL, headers)
+	media, err := resolveMediaPlaylist(ctx, z.client, best.URL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("could not be resolved: %w", err)
 	}
-	if !variant.muxed() {
-		return nil, errors.New("keeps its audio in a playlist of its own, which concatenation " +
-			"cannot join, and publishes no progressive file to take instead")
+	// A variant keeping its audio in a playlist of its own comes with it
+	// (media.Audio), which the downloader joins to the video. Only one
+	// naming no audio anywhere would be silent.
+	if !media.Variant.muxed() && len(media.Audio) == 0 {
+		return nil, errors.New("names no audio, in its renditions or beside them, and publishes " +
+			"no progressive file to take instead")
 	}
-	return &File{Name: playlistExtension(variant), Size: -1, Headers: headers, Segments: segments}, nil
+	return &File{Name: media.extensionOr(playlistExtension(media.Variant)), Size: -1, Headers: headers,
+		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio}, nil
 }
 
 // document reads one futura document.

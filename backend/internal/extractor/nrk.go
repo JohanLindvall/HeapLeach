@@ -344,15 +344,17 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 	}
 
 	headers := httpx.Referer(nrkRoot + "/")
-	segments, variant, err := resolvePlaylist(ctx, n.client, stream, headers)
+	media, err := resolveMediaPlaylist(ctx, n.client, stream, headers)
 	if err != nil {
 		return nil, fmt.Errorf("nrk: %s: %w", id, err)
 	}
 	return &File{
-		Name:     playlistExtension(variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extensionOr(playlistExtension(media.Variant)),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, nil
 }
 

@@ -61,6 +61,10 @@ type Item struct {
 	// SegmentKey is the AES-128 key the segments are encrypted under, or
 	// nil for a playlist in the clear. See playlist.go.
 	SegmentKey *extractor.SegmentKey
+	// Audio is the soundtrack of a playlist whose Segments carry video
+	// alone: each track is fetched into a part file of its own, and all of
+	// them are joined to the video when the last lands (mux.go).
+	Audio []extractor.Track
 	// External, when set, is a page handed to the helper script instead of
 	// being fetched over HTTP.
 	External string

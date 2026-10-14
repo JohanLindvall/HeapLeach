@@ -156,7 +156,7 @@ index-f1-v1.m3u8
 index-f0-v1.m3u8
 `
 
-// srfMedia is a finished variant playlist, so resolvePlaylist has something
+// srfMedia is a finished variant playlist, so the resolver has something
 // to reach at the end of a master.
 const srfMedia = `#EXTM3U
 #EXT-X-VERSION:4
@@ -743,10 +743,11 @@ func TestSRFPlaylistExtensionBelievesTheSegments(t *testing.T) {
 	}
 }
 
-// TestSRFExtractRefusesADemuxedPlaylist is the deciding constraint. Nothing
-// on this path can mux, and a master that declares its audio elsewhere has to
-// be taken at its word: the alternative is a silent file that looks finished.
-func TestSRFExtractRefusesADemuxedPlaylist(t *testing.T) {
+// A playlist declaring its audio as tracks of its own, as SRF does for anything
+// carrying an audio description, comes with them, the description named as
+// such. It used to be refused: nothing on this path could mux, and joining the
+// video alone saves no sound.
+func TestSRFExtractCarriesTheAudioDescriptionAsATrack(t *testing.T) {
 	const urn = "urn:srf:video:77777777-7777-7777-7777-777777777777"
 	composition := `{
 	  "chapterUrn": "` + urn + `",
@@ -763,11 +764,15 @@ func TestSRFExtractRefusesADemuxedPlaylist(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err == nil {
-		t.Fatalf("accepted a demuxed master and produced %d files", len(res.Files))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "no sound") || !strings.Contains(err.Error(), "yt-dlp") {
-		t.Errorf("error = %q, want one that says what is wrong and what to do instead", err)
+	f := res.Files[0]
+	if !strings.HasSuffix(f.Name, ".mp4") || len(f.Audio) != 2 {
+		t.Fatalf("file = %+v; want the video joined to both renditions of its audio group", f)
+	}
+	if f.Audio[0].Name != "Deutsch" || f.Audio[1].Name != "Deutsch (audio description)" || f.Audio[1].Language != "de" {
+		t.Errorf("tracks = %q and %q; want the main track first and the description told apart", f.Audio[0].Name, f.Audio[1].Name)
 	}
 }
 

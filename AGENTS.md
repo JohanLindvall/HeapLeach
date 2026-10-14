@@ -1122,8 +1122,9 @@ Host-specific notes:
   `player.vimeo.com/video/<id>` is served to anyone, no session or referer
   needed. The stream is demuxed and carries no progressive MP4, so there is
   nothing to fetch directly that would be playable; the player URL is handed
-  to yt-dlp, which has ffmpeg to mux with. An unlisted link's `<hash>`
-  becomes `?h=`.
+  to yt-dlp, which has ffmpeg to mux with. The playlist engine now joins
+  audio kept apart itself (`mux.go`), so that is no longer a wall, only how
+  this one was done. An unlisted link's `<hash>` becomes `?h=`.
 - **yandex** is a redirector rather than a host. Its preview pages are
   search output wrapped around somebody else's video, so the extractor finds
   the source link the page carries and hands that to yt-dlp. Note that
@@ -1611,13 +1612,66 @@ changes or starts partway, a non-`identity` KEYFORMAT (DRM), and encryption
 over fragmented MP4. The key reaches the transfer as `File.SegmentKey`, and
 a resolver can replace it with the segments (`Target.Segments`,
 `Target.SegmentKey`) for a playlist signed for less than the queue may wait.
-`resolvePlaylist`, which hands back segments alone, still refuses an
-encrypted playlist — its ~18 callers have nowhere to put a key, and joining
-the segments as they are makes a file of ciphertext that looks finished.
-`hlsdirect` and lulustream use `resolveMediaPlaylist` and carry it.
+Every caller of `resolveMediaPlaylist` carries the key, and the audio below,
+onto its File. The segments-only `resolvePlaylist` that refused them is
+gone, so no path is left that joins an encrypted or demuxed playlist as it
+stands: either makes a file that looks finished and is ciphertext or silent.
 
-`remux.go` is a convenience on top, never a dependency — the extractor picks
-a rendition that already carries audio and video together. It converts any
+**Audio kept apart from the video is fetched beside it and joined**
+(`mux.go`). A CMAF master, and anything carrying an audio description,
+names its audio as `EXT-X-MEDIA` renditions with playlists of their own, and
+its variants' segments carry video alone. `resolveMediaPlaylist` follows the
+chosen variant's audio group to every rendition's playlist (`hlsMedia.Audio`,
+then `File.Audio` and `Target.Audio`), in the group's order with its
+default first. A rendition named without a URI is carried in the video's
+own segments and is listed with no segments, which is how a main language
+muxed into the variant sits beside an alternate kept apart.
+
+The tracks are fetched together: segment *i* of every track before *i+1* of
+any, from one pool of connections, each into a part file of its own beside
+the video's (`audioPart`) with a checkpoint of its own. Their links were
+signed together, so none expires while another downloads ahead of it, and
+the item's segment count moves with the time the transfer takes. A
+checkpoint is held to the track that wrote it (`playlistState.Track`): a
+playlist's tracks commonly have the same number of segments, and a part
+resumed from another language's checkpoint would carry both. `onDisk` sums
+every track's checkpoint for the retry budget.
+
+The join is ffmpeg, by stream copy into an MP4 (`joinArgs`), and three
+things in it each looked right first:
+
+- ffmpeg starts every input at zero on its own unless told otherwise, which
+  drops the offset between renditions: half a second in the test fixture,
+  lip sync in a real file. `-copyts` keeps their timestamps, which share the
+  playlist's one timeline, and `-avoid_negative_ts make_zero` moves the
+  output as a whole to start at zero. `TestJoiningKeepsTheOffsetBetweenTracks`
+  holds it.
+- An MP4 keeps a track's language only as three letters, and ffmpeg drops a
+  two-letter `sv` without a word: `mp4Language` maps ISO 639-1 to 639-2/T,
+  taking the primary subtag of a longer tag (`sv-x-tydligaretal` is `swe`).
+  The label goes in `handler_name`, which is what an MP4 keeps and VLC and
+  mpv show; `title` is dropped. And an MP4 enables every audio track
+  flagged default, each in an alternate group of its own, for a player to
+  take as tracks to play together. So exactly one is: the playlist's
+  default.
+- The audio is exactly the renditions the playlist names, each from where it
+  says. Audio in the video's segments that it does not name is left out:
+  Akamai (SRF, ZDF) mixes the default track into the video *and* publishes
+  it apart, and keeping both lists it twice. A rendition named as carried in
+  the video is mapped from it once ffprobe has counted what is there, and
+  one that is not there is left out rather than failing the join.
+
+ffmpeg is a dependency here, not a convenience: without it the video alone
+is silent, so `transfer` refuses such an item before fetching a byte
+(`errNoFFmpegToJoin`), and a retry looks for it again. The joined file is
+written beside the parts (`joinedPart`), checked by `identicalOnDisk`,
+reserved and renamed like any other, and only then are the parts and their
+checkpoints removed: a join that fails leaves them, and the retry joins
+again without fetching anything. Vimeo and niconico were handed to yt-dlp
+for being demuxed; that wall is down, and neither has been ported yet.
+
+`remux.go` is a convenience on top, never a dependency — where a rendition
+carries audio and video together, the extractor picks it. It converts any
 finished `.ts`, always by stream copy, and keeps the `.ts` when a lossless
 copy is impossible. `mediaprobe.go` chooses what to carry over: the best
 video, and the best audio and subtitle track per language. One trap worth
@@ -1885,9 +1939,9 @@ Other behaviours that span files:
   variant's own segments, so a variant that names a separate `AUDIO` group
   advertises audio it does not carry. `hlsVariant.muxed` therefore checks
   the group's renditions for a `URI` of their own rather than trusting
-  `CODECS`; without that a demuxed host yields a silent file that looks like
-  a finished download. A host with no self-contained variant at all belongs
-  on the external downloader.
+  `CODECS`; without that a demuxed host would yield a silent file that looks
+  like a finished download. Such a variant comes with its audio renditions
+  instead, which `mux.go` joins to it.
 - `SafeName`/`SafeRelPath` sanitize remote path components. Native transfers
   and checkpoints use `os.Root` (`files.go`) to confine actual filesystem
   operations too, including symlinks. Finished names are reserved with

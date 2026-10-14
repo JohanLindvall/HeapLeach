@@ -59,6 +59,12 @@ type File struct {
 	// under. The downloader fetches it and decrypts each part as it lands,
 	// so the file on disk is the plain stream.
 	SegmentKey *SegmentKey
+	// Audio, when set, is the soundtrack of a playlist that keeps it apart
+	// from the video, as CMAF does: one Track per rendition, every
+	// language, the default first. The downloader fetches each as it does
+	// the Segments and joins them all into one MP4, by stream copy with
+	// ffmpeg.
+	Audio []Track
 	// External, when set, names a page that an external downloader handles
 	// end to end, because reaching the media at all needs machinery well
 	// beyond fetching a URL.
@@ -179,6 +185,8 @@ type Target struct {
 	// queue longer than the signature would fail partway down.
 	Segments   []string
 	SegmentKey *SegmentKey
+	// Audio replaces the File's when set, for the same reason.
+	Audio []Track
 	// Discard is set by a resolver whose links are bound to the address
 	// that obtained them, and drops what it keeps of this one so that the
 	// next resolve starts afresh. The downloader calls it when the host
@@ -225,6 +233,20 @@ type TransientError struct{ Err error }
 
 func (e *TransientError) Error() string { return e.Err.Error() }
 func (e *TransientError) Unwrap() error { return e.Err }
+
+// Track is one audio rendition of a playlist that keeps its audio apart from
+// its video: its own segments, in order, and what it is. A Track with no
+// Segments is one the playlist names as carried in the video's own segments,
+// which is how the main language and an alternate's playlist can sit side by
+// side: it is listed so that the joined file labels it and keeps the order.
+type Track struct {
+	Segments []string
+	Key      *SegmentKey
+	// Language is the rendition's tag as the playlist gives it ("sv",
+	// "sv-x-tydligaretal"), Name its label ("Svenska", "Tydligare tal").
+	Language string
+	Name     string
+}
 
 // SegmentKey is how a playlist's segments are encrypted: HLS's
 // METHOD=AES-128, which is AES-128 in CBC mode applied to each segment on

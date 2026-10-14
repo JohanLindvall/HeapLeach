@@ -146,8 +146,8 @@ func (k *Knuthing) resolve(ctx context.Context, page string) (*Target, error) {
 		return nil, fmt.Errorf("knuthing: video playlist is still being written: %s", why)
 	}
 	return &Target{
-		URL: link.String(), Name: video.title + segmentsExtension(media.Segments, media.Variant), Size: -1,
-		Headers: headers, Segments: media.Segments, SegmentKey: media.Key,
+		URL: link.String(), Name: video.title + media.extension(), Size: -1,
+		Headers: headers, Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
 	}, nil
 }
 

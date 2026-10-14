@@ -464,15 +464,17 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 	// in it, which outlasts any queue this program will hold, so the
 	// segments are resolved now rather than through File.Resolve.
 	headers := httpx.Referer(npoRoot)
-	segments, variant, err := resolvePlaylist(ctx, n.client, link.Stream.URL, headers)
+	media, err := resolveMediaPlaylist(ctx, n.client, link.Stream.URL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("npo: %s: %w", productID, err)
 	}
 	return &File{
-		Name:     playlistExtension(variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extensionOr(playlistExtension(media.Variant)),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, nil
 }
 

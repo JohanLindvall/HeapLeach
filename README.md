@@ -258,8 +258,8 @@ must be writable only by people you trust to run code as this account.
 | **svtplay** | `/video/<id>/…`, `/<programme>` | Open player API. A programme expands to every episode, grouped into season folders where there is more than one season, read from SVT's GraphQL API rather than the page (which mixes in trailers and recommendations). |
 | **youtube** | videos and playlists | Handed to yt-dlp, which is the only practical way in: YouTube withholds playback URLs behind BotGuard attestation on top of its signature and throttling parameters. Needs `make dependencies`. |
 | **bandcamp** | albums, tracks, a band's discography | Read natively, no yt-dlp. Each track is filed as `<band>/<album>/<NN> - <title>.mp3`; a band's page resolves every release it lists. The MP3 is the 128 kbps stream anyone may play — nothing better is served without a purchase. |
-| **odysee, dailymotion, bilibili, niconico, rumble, soundcloud, mixcloud** | videos and tracks | Also handed to yt-dlp, each for a reason recorded in the code so nobody re-derives it: Bilibili signs its playback URLs and ships demuxed DASH; Niconico's HLS is demuxed too, so there is nothing self-contained to fetch; Dailymotion fingerprints TLS and no longer offers a progressive rendition; SoundCloud needs a client id scraped from a rotating bundle; Mixcloud obfuscates its stream URLs; Rumble puts an interstitial in front of its media endpoint. Needs `make dependencies`. |
-| **vimeo** | `/<id>`, `/<id>/<hash>`, channel and group links, `player.vimeo.com/video/<id>` | Everything goes through the **embed player** rather than the watch page: the watch page answers a non-browser client with a bot check, and yt-dlp's own path through it demands an account, while the player URL an iframe loads is served to anyone. The stream is demuxed — video renditions plus a separate audio group — and carries no progressive MP4, so yt-dlp muxes it. Needs `make dependencies`. |
+| **odysee, dailymotion, bilibili, niconico, rumble, soundcloud, mixcloud** | videos and tracks | Also handed to yt-dlp, each for a reason recorded in the code so nobody re-derives it: Bilibili signs its playback URLs and ships demuxed DASH; Niconico's HLS is demuxed, which the native engine now joins but has not been tried on; Dailymotion fingerprints TLS and no longer offers a progressive rendition; SoundCloud needs a client id scraped from a rotating bundle; Mixcloud obfuscates its stream URLs; Rumble puts an interstitial in front of its media endpoint. Needs `make dependencies`. |
+| **vimeo** | `/<id>`, `/<id>/<hash>`, channel and group links, `player.vimeo.com/video/<id>` | Everything goes through the **embed player** rather than the watch page: the watch page answers a non-browser client with a bot check, and yt-dlp's own path through it demands an account, while the player URL an iframe loads is served to anyone. The stream is demuxed — video renditions plus a separate audio group — and carries no progressive MP4, so yt-dlp muxes it; the native playlist engine now joins such streams too, and could take this over. Needs `make dependencies`. |
 | **booru** | tag searches and posts on 19 image boards, plus the booru.org network | One adapter per API family — Danbooru, e621, Moebooru, Gelbooru 0.2, Philomena — which is how a handful of engines covers a lot of sites. |
 | **4chan** | `/<board>/thread/<id>` | The site's read-only JSON API; every attachment in a thread. |
 | **vids.st** | video and embed pages | The page names the uploaded file itself, which is downloaded as it is, or an HLS playlist, followed natively. The site sends an incomplete certificate chain, which is completed from the certificate's own issuer address the way a browser does. |
@@ -282,10 +282,10 @@ must be writable only by people you trust to run code as this account.
 | **fediverse** (family) | Mastodon, Pleroma, Pixelfed, Lemmy, Misskey | Found through `/.well-known/nodeinfo`, which is a specification rather than a list, so the table cannot go stale. Three API dialects behind one sniff. |
 | **foolfuuka** (family) | `/{board}/thread/<n>` on the 4chan archives | Where threads persist after 4chan drops them, through an API modelled on 4chan's own — and better than it, since each post carries the poster's original filename and an exact size. |
 | **mediawiki** (family) | `Category:`, `File:`, articles, on any wiki | Commons, every Wikipedia, Fandom, any open wiki. A documented, versioned, keyless API returning untouched originals — the least likely thing here ever to break. |
-| **nrk, rúv, ard, zdf, srf, vrt, npo, raiplay, rtve, rtp, pbs, npr, abc listen, bbc sounds** | programmes, series and episodes | svtplay's siblings, thirteen more of them. Each checks the broadcaster's own DRM flag, skips what is protected, and passes the site's own geo-block message through verbatim rather than replacing it with a guess. Whether one of these is here or on the yt-dlp list above is decided by one thing: whether any rendition carries audio and video in the *same* segments. Those that do are fetched directly; those that do not would concatenate into a silent video, so they are muxed by yt-dlp instead. ARD and RTVE hand back plain rangeable files with exact lengths, so they get the whole engine — splitting, resume and the skip check. |
+| **nrk, rúv, ard, zdf, srf, vrt, npo, raiplay, rtve, rtp, pbs, npr, abc listen, bbc sounds** | programmes, series and episodes | svtplay's siblings, thirteen more of them. Each checks the broadcaster's own DRM flag, skips what is protected, and passes the site's own geo-block message through verbatim rather than replacing it with a guess. All of them are fetched directly. A rendition carrying audio and video in the *same* segments is joined as it is; one that keeps its audio apart, as CMAF streams and anything with an audio description do, comes with every audio track, fetched beside the video and joined to it by ffmpeg. ARD and RTVE hand back plain rangeable files with exact lengths, so they get the whole engine — splitting, resume and the skip check. |
 | **vidmoly, streamable, wetransfer** | see above | Vidmoly is the highest-traffic embed host here; three of its four advertised domains are dead, so everything routes through the one that works. |
 | **feeds** | any RSS or Atom feed | One file per `<enclosure>`, oldest first, since an archive wants the beginning. |
-| *a bare `.m3u8`* | any adaptive manifest | Joined into a playable file. A `.mpd` is refused with a reason rather than saved: DASH is usually demuxed, so concatenating it would yield a silent video. |
+| *a bare `.m3u8`* | any adaptive manifest | Joined into a playable file, with every audio track when the playlist keeps its audio apart (needs ffmpeg). A `.mpd` is refused with a reason rather than saved: DASH is usually demuxed, so concatenating it would yield a silent video. |
 | *a directory listing* | Apache, nginx, lighttpd autoindex | Walked recursively, with sizes and structure taken from the listing. Also covers IPFS gateway directories. |
 | *`links:<url>`* | any public page | Reads the page and downloads every link a supported host claims, each into its own folder. Aimed at the forum thread with two hundred links in it. |
 | *an ordinary webpage* | any public HTML page without a dedicated extractor | Automatically reads links to every registered host, including albums and files, without a `links:` prefix. Ordinary HTML links are ignored so navigation cannot recursively crawl the web. Links keep their host's resolver and download settings; source and file caps apply. |
@@ -489,9 +489,16 @@ Where a host offers the same file from more than one place — gofile's
 storage servers, dropbox's two front ends — the alternatives are kept as
 mirrors and a failed attempt lands on a different one.
 
-SVT Play is an adaptive stream, so it has no single file to fetch. The
-extractor picks a rendition carrying **audio and video together**, which
-means the segments join into a playable file with no muxing at all.
+SVT Play is an adaptive stream, so it has no single file to fetch. Where a
+rendition carries **audio and video together**, the extractor picks it, and
+the segments join into a playable file with no muxing at all. Newer
+programmes come as CMAF, every rendition keeping its audio apart. Then the
+video and **every audio track** are fetched side by side, each into a part
+file of its own, and joined into one MP4 by ffmpeg: a stream copy, each
+track labelled with its language and name, the playlist's default first.
+The same goes for any broadcaster or bare `.m3u8` packaged that way. It
+needs ffmpeg, and without it such a download fails before it fetches
+anything rather than finishing without sound.
 
 Any finished `.ts` is rewrapped to `.mp4` when `ffmpeg` is available. The
 rewrap is always a stream copy, so nothing is ever re-encoded: if the
@@ -616,8 +623,9 @@ fetched by `yt-dlp`, which is asked for **every audio language a video
 carries** rather than only the one it ranks first: a dubbed release puts its
 original track at the top, so the English beside it would otherwise be
 dropped. The languages arrive as separate tracks in one file, labelled, for
-the player to choose between. `ffmpeg` rewraps any finished `.ts` as `.mp4` and lets
-yt-dlp merge separate video and audio tracks. `deno` runs the player
+the player to choose between. `ffmpeg` rewraps any finished `.ts` as `.mp4`, joins
+the audio tracks a playlist keeps apart from its video, and lets yt-dlp merge
+separate video and audio tracks. `deno` runs the player
 JavaScript YouTube signs its media URLs with: yt-dlp still extracts without
 a runtime, but warns that doing so is deprecated and that formats may be
 missing. Everything else needs none of them.

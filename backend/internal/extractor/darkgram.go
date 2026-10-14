@@ -99,8 +99,8 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 					return nil, fmt.Errorf("darkgram: video playlist is still being written: %s", why)
 				}
 				return &Target{
-					URL: link, Name: stem + segmentsExtension(media.Segments, media.Variant), Size: -1,
-					Headers: headers, Segments: media.Segments, SegmentKey: media.Key,
+					URL: link, Name: stem + media.extension(), Size: -1,
+					Headers: headers, Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
 				}, nil
 			}
 		}

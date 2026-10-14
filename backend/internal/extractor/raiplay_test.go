@@ -3,9 +3,16 @@
 package extractor
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // raiAkamaiPlaylist is RaiPlay's commonest master playlist, and the reason
@@ -185,20 +192,20 @@ func TestRaiAkamaiPlaylistIsTakenDespiteHavingNoCodecs(t *testing.T) {
 		}
 	}
 
-	best, err := raiUsable(variants)
-	if err != nil {
-		t.Fatalf("refused a playlist whose segments carry their own audio: %v", err)
+	best, ok := bestVariant(variants)
+	if !ok {
+		t.Fatal("chose no rendition of a playlist whose segments carry their own audio")
 	}
 	if best.Resolution != "1280x720" {
 		t.Errorf("chose %s, want the largest rendition", best.Resolution)
 	}
 }
 
-// TestRaiMultiaudioPlaylistIsRefused is the regression this extractor exists
-// to prevent. bestVariant only ranks and never declines, so handing it the
-// multiaudio packaging unfiltered yields a video-only chunklist that
-// downloads to the end and plays silently.
-func TestRaiMultiaudioPlaylistIsRefused(t *testing.T) {
+// TestRaiMultiaudioPlaylistComesWithItsAudio is the regression this
+// extractor once refused: the multiaudio packaging's variants are video only,
+// and joined alone download to the end and play silently. They come with the
+// audio renditions, the default first, for the downloader to join to them.
+func TestRaiMultiaudioPlaylistComesWithItsAudio(t *testing.T) {
 	base, err := ParseURL("https://vod.example.test/podcastcdn/raitre/raitre_multiaudio_nogeo/12345_,1800,2400/playlist.m3u8")
 	if err != nil {
 		t.Fatal(err)
@@ -214,29 +221,41 @@ func TestRaiMultiaudioPlaylistIsRefused(t *testing.T) {
 		}
 	}
 
-	// What would happen without the filter, spelled out so the reason for
-	// having one cannot be optimised away.
-	if unfiltered, ok := bestVariant(variants); !ok || !unfiltered.audioElsewhere {
-		t.Error("bestVariant declined a video-only playlist; it is not supposed to decline anything")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/playlist.m3u8") {
+			fmt.Fprint(w, raiMultiaudioPlaylist)
+			return
+		}
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg-1.ts\n#EXTINF:6,\nseg-2.ts\n#EXT-X-ENDLIST\n")
+	}))
+	defer srv.Close()
+	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/12345_,1800,2400/playlist.m3u8", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	if _, err := raiUsable(variants); !errors.Is(err, errRaiDemuxed) {
-		t.Errorf("raiUsable returned %v, want the demuxed refusal", err)
+	if !strings.Contains(media.Variant.URL, "b2344000_vo") || len(media.Segments) != 2 {
+		t.Errorf("variant %s with %d segments; want the larger video", media.Variant.URL, len(media.Segments))
+	}
+	if len(media.Audio) != 2 || media.Audio[0].Name != "Italiano" || media.Audio[1].Name != "Audiodescrizione" {
+		t.Fatalf("audio = %+v; want both renditions, the default first", media.Audio)
+	}
+	if media.extensionOr(".ts") != ".mp4" {
+		t.Errorf("named %q; want the MP4 the tracks are joined into", media.extensionOr(".ts"))
 	}
 }
 
-// TestRaiUsablePrefersSelfContainedOverBiggerVideoOnly covers a manifest that
-// offers both packagings at once. Filtering before ranking is what keeps the
-// larger video-only rendition from winning; checking the winner afterwards
-// would have refused an asset that had a usable stream all along.
-func TestRaiUsablePrefersSelfContainedOverBiggerVideoOnly(t *testing.T) {
+// TestRaiPrefersSelfContainedOverBiggerVideoOnly covers a manifest that
+// offers both packagings at once. A rendition that carries its own audio
+// needs no joining, and outranks a larger video-only one.
+func TestRaiPrefersSelfContainedOverBiggerVideoOnly(t *testing.T) {
 	variants := []hlsVariant{
 		{URL: "hd_vo.m3u8", Resolution: "1920x1080", Bandwidth: 5000000, audioElsewhere: true},
 		{URL: "sd.m3u8", Resolution: "1024x576", Bandwidth: 1758000},
 	}
-	best, err := raiUsable(variants)
-	if err != nil {
-		t.Fatalf("raiUsable: %v", err)
+	best, ok := bestVariant(variants)
+	if !ok {
+		t.Fatal("chose no rendition")
 	}
 	if best.URL != "sd.m3u8" {
 		t.Errorf("chose %q, want the smaller rendition that carries its own audio", best.URL)
@@ -254,9 +273,9 @@ func TestRaiCsmilPlaylistNamesTheContainerFromItsSegments(t *testing.T) {
 	}
 
 	variants := parseMasterPlaylist(raiCsmilPlaylist, base)
-	best, err := raiUsable(variants)
-	if err != nil {
-		t.Fatalf("raiUsable: %v", err)
+	best, ok := bestVariant(variants)
+	if !ok {
+		t.Fatal("chose no rendition")
 	}
 	if !best.muxed() {
 		t.Error("the .csmil packaging declares CODECS naming both streams, so it should read as muxed")

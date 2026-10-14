@@ -214,8 +214,6 @@ func TestDarkGramVideoContainerAndPlaylistFailures(t *testing.T) {
 		{"live", "#EXTM3U\n#EXTINF:4,\npart.ts\n", "still being written", 200},
 		{"HTML", `<html>Unavailable</html>`, "not an HLS playlist", 200},
 		{"removed", "", "404", 404},
-		{"separate audio", "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",URI=\"audio.m3u8\"\n" +
-			"#EXT-X-STREAM-INF:BANDWIDTH=3000000,AUDIO=\"audio\"\nvideo.m3u8\n", "no rendition that carries its own audio", 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -246,5 +244,36 @@ func TestDarkGramVideoContainerAndPlaylistFailures(t *testing.T) {
 				t.Fatalf("fragmented MP4 was not kept intact: %+v", target)
 			}
 		})
+	}
+}
+
+// A video whose playlist keeps its audio apart comes with the audio as a track
+// of its own, refreshed with the video on each attempt: it used to fail.
+func TestDarkGramCarriesAudioKeptApart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/master.m3u8":
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",LANGUAGE=\"en\",NAME=\"English\",URI=\"audio.m3u8\"\n"+
+				"#EXT-X-STREAM-INF:BANDWIDTH=3000000,AUDIO=\"audio\"\nvideo.m3u8\n")
+		case "/video.m3u8", "/audio.m3u8":
+			fmt.Fprint(w, "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4,\npart.m4s\n#EXT-X-ENDLIST\n")
+		default:
+			t.Errorf("unexpected fetch: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	res, err := darkGramResult(client, mustParse(t, srv.URL+"/post/"), mustParseDoc(t,
+		darkGramTestPage(`{"items":[{"kind":"video","hls_url":"/master.m3u8"}]}`)), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := res.Files[0].Resolve(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(target.Name, ".mp4") || len(target.Audio) != 1 || target.Audio[0].Name != "English" ||
+		len(target.Audio[0].Segments) != 2 {
+		t.Fatalf("target = %+v; want the English audio carried with the video", target)
 	}
 }

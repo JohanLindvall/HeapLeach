@@ -118,15 +118,17 @@ func (v *Vidmoly) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		}}}, nil
 	}
 
-	segments, variant, err := resolvePlaylist(ctx, v.client, link, headers)
+	media, err := resolveMediaPlaylist(ctx, v.client, link, headers)
 	if err != nil {
 		return nil, fmt.Errorf("vidmoly: %s: %w", page, err)
 	}
 	return &Result{Title: title, Files: []File{{
-		Name:     title + playlistExtension(variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       title + media.extensionOr(playlistExtension(media.Variant)),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}}}, nil
 }
 

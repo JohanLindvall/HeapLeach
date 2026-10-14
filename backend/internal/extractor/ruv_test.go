@@ -67,7 +67,7 @@ func TestRUVMasterPlaylistIsSelfContained(t *testing.T) {
 
 	// The document does carry an EXT-X-MEDIA entry with a URI of its own.
 	// That it names no audio group is the whole point.
-	if groups := parseAudioGroups(ruvMasterPlaylist); len(groups) != 0 {
+	if groups := parseAudioRenditions(ruvMasterPlaylist, base); len(groups) != 0 {
 		t.Errorf("a SUBTITLES rendition was read as an audio group: %v", groups)
 	}
 

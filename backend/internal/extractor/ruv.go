@@ -227,7 +227,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 		}, nil
 	}
 
-	segments, variant, err := resolvePlaylist(ctx, s.client, ep.File, headers)
+	media, err := resolveMediaPlaylist(ctx, s.client, ep.File, headers)
 	if err != nil {
 		if domestic && httpx.HasStatus(err, http.StatusForbidden) {
 			s.outsideIceland = true
@@ -236,10 +236,12 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 		return nil, fmt.Errorf("ruv: %s: %w", ep.label(), err)
 	}
 	return &File{
-		Name:     playlistExtension(variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extensionOr(playlistExtension(media.Variant)),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, nil
 }
 

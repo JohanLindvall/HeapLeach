@@ -345,17 +345,19 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 	// and joined, with no ranges and no resume.
 	if playlist := peerTubePlaylistURL(video); playlist != "" {
 		headers := peerTubeFileHeaders(u, playlist, opts.Password)
-		segments, variant, err := resolvePlaylist(ctx, client, playlist, headers)
+		media, err := resolveMediaPlaylist(ctx, client, playlist, headers)
 		if err != nil {
 			return nil, "", fmt.Errorf("%s: %s: %w", label, title, err)
 		}
 		return []File{{
 			// Current instances serve fragmented MP4 and older ones MPEG-TS;
 			// the segments say which. See segmentsExtension.
-			Name:     title + segmentsExtension(segments, variant),
-			Size:     -1,
-			Headers:  headers,
-			Segments: segments,
+			Name:       title + media.extension(),
+			Size:       -1,
+			Headers:    headers,
+			Segments:   media.Segments,
+			SegmentKey: media.Key,
+			Audio:      media.Audio,
 		}}, title, nil
 	}
 

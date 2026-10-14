@@ -64,6 +64,7 @@ func (l *LuluStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 		Headers:    headers,
 		Segments:   first.media.Segments,
 		SegmentKey: first.media.Key,
+		Audio:      first.media.Audio,
 		Resolve: func(ctx context.Context) (*Target, error) {
 			fresh, err := l.read(ctx, page, headers)
 			if err != nil {
@@ -76,6 +77,7 @@ func (l *LuluStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 				Headers:    headers,
 				Segments:   fresh.media.Segments,
 				SegmentKey: fresh.media.Key,
+				Audio:      fresh.media.Audio,
 			}, nil
 		},
 	}}}, nil
@@ -90,7 +92,7 @@ type luluVideo struct {
 
 // name is the file's name: the title and the container the segments are.
 func (v *luluVideo) name() string {
-	return v.title + segmentsExtension(v.media.Segments, v.media.Variant)
+	return v.title + v.media.extension()
 }
 
 // read fetches the page, unpacks the player's setup and follows its

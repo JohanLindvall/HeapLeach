@@ -23,11 +23,13 @@ import (
 // extractor treats any URL as a file — so pasting one saved a few kilobytes
 // of playlist under the video's name and reported a finished download.
 // Nothing about that is visible until the file is opened. The machinery to do
-// it properly was already here in resolvePlaylist and the segment transfer
-// behind it; what was missing was anything to call it for a URL no host
-// extractor claimed.
+// it properly was already here in resolveMediaPlaylist and the segment
+// transfer behind it; what was missing was anything to call it for a URL no
+// host extractor claimed. A master whose every variant keeps its audio in a
+// rendition of its own comes with those renditions, which the downloader
+// joins to the video.
 //
-// Three shapes are refused by name rather than half-handled, because each
+// Two shapes are refused by name rather than half-handled, because each
 // would otherwise produce a file that looks finished and is not:
 //
 //   - MPEG-DASH (.mpd). A DASH representation is usually video with no audio
@@ -36,14 +38,12 @@ import (
 //     be silent. That is the same trap hlsVariant.muxed exists to catch, and
 //     it is matched only so the refusal can say so: left to the fallback it
 //     downloads as a small XML file that looks like a video.
-//   - A master playlist whose every variant keeps its audio in a rendition of
-//     its own, for the same reason.
 //   - A playlist still being written. Without #EXT-X-ENDLIST there is no last
 //     segment, so what would be saved is however much of a live stream had
 //     been produced by the time the queue reached it.
 //
-// Each refusal names the external downloader, which has ffmpeg and can do
-// what this deliberately does not.
+// Each refusal names the external downloader, which can do what this
+// deliberately does not.
 type HLSDirect struct {
 	client *httpx.Client
 }
@@ -88,8 +88,8 @@ func (h *HLSDirect) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 	return hlsPlaylistResult(ctx, h.client, u)
 }
 
-// hlsPlaylistResult resolves a manifest URL, refusing the two playlists that
-// would otherwise finish as an unplayable file.
+// hlsPlaylistResult resolves a manifest URL, refusing a playlist still being
+// written, which would otherwise finish as a fragment named as the whole.
 func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, error) {
 	headers := httpx.Referer(util.Origin(u) + "/")
 
@@ -98,23 +98,10 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 		return nil, fmt.Errorf("hls: %s: %w", u.Redacted(), err)
 	}
 
-	// The resolver reports the variant it settled on, and hands the URL back
-	// unchanged when the document was a media playlist rather than a master.
-	// That is what tells the two apart here, and the distinction matters: a
-	// media playlist declares no codecs at all, so muxed() is false for one
-	// and checking it unconditionally would refuse every bare playlist a
-	// user pastes.
-	variant := media.Variant
-	// Only a variant that points its audio at a separate group is refused.
-	// CODECS is optional, and an audio-only master carries no video codec,
-	// so muxed() is false for both of those while the variant's own
-	// segments are the whole of what the stream has.
-	if variant.URL != u.String() && variant.audioElsewhere {
-		return nil, fmt.Errorf("hls: %s offers no rendition that carries its own audio — every one of them "+
-			"keeps it in a separate track — so joining any single variant would save video with no sound. "+
-			"Queue the page the manifest belongs to instead: that goes to the external downloader (yt-dlp), "+
-			"which has ffmpeg to mux the two back together", u.Redacted())
-	}
+	// A variant that points its audio at a separate group comes with that
+	// group's renditions as tracks of their own (media.Audio), which the
+	// downloader joins to the video. It used to be refused, sent to the
+	// external downloader for the muxing.
 
 	if live, why := hlsLiveEdge(media.Doc); live {
 		return nil, fmt.Errorf("hls: %s is still being written — %s. Downloading it now would save however "+
@@ -125,13 +112,14 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 
 	name := hlsName(u)
 	return &Result{Title: name, Files: []File{{
-		Name: name + segmentsExtension(media.Segments, variant),
+		Name: name + media.extension(),
 		// A playlist has no length until every part has been fetched, and
 		// guessing one from the durations would be a number the skip-what-is-
 		// already-downloaded check could act on.
 		Size:     -1,
 		Headers:  headers,
 		Segments: media.Segments,
+		Audio:    media.Audio,
 		// An AES-128 playlist is decrypted as its segments land.
 		SegmentKey: media.Key,
 	}}}, nil

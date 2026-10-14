@@ -358,14 +358,17 @@ func TestZDFMasterPlaylistIsSelfContained(t *testing.T) {
 	}
 }
 
-// TestZDFDescribedPlaylistIsRefused is the deciding constraint, end to end.
-// Nothing in this playlist can be joined by concatenation, and the failure it
-// guards against is silent: a file of the right length that plays no sound.
-func TestZDFDescribedPlaylistIsRefused(t *testing.T) {
+// A programme with an audio description keeps its audio in renditions of
+// their own, the variants carrying video and nothing else. It comes with both
+// as tracks, the main one first, for the downloader to join to the video; it
+// used to be refused, since joining the video alone saves no sound. A
+// playlist naming no audio anywhere still is.
+func TestZDFDescribedPlaylistComesWithItsAudio(t *testing.T) {
+	master := zdfDescribedMasterPlaylist
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(httpx.HeaderContentType, "application/x-mpegURL")
 		if strings.HasSuffix(r.URL.Path, "/master.m3u8") {
-			_, _ = w.Write([]byte(zdfDescribedMasterPlaylist))
+			_, _ = w.Write([]byte(master))
 			return
 		}
 		_, _ = w.Write([]byte(zdfMediaPlaylist))
@@ -381,18 +384,26 @@ func TestZDFDescribedPlaylistIsRefused(t *testing.T) {
 		}},
 	}
 
-	_, err := (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
-	if err == nil {
-		t.Fatal("accepted a playlist whose audio lives in renditions of its own")
+	file, err := (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "audio in a playlist of its own") {
-		t.Errorf("refused with %q, want the reason named", err)
+	if file.Name != ".mp4" || len(file.Segments) != 2 || len(file.Audio) != 2 {
+		t.Fatalf("file = %+v; want the video's segments with both audio renditions, named for the MP4 they join into", file)
+	}
+	if file.Audio[0].Name != "TV Ton" || file.Audio[1].Name != "Audiodeskription" || file.Audio[1].Language != "de" {
+		t.Errorf("tracks = %+v; want the main track first", file.Audio)
+	}
+
+	master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1609656,CODECS=\"avc1.4d401f\"\nindex-f1-v1.m3u8\n"
+	_, err = (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	if err == nil || !strings.Contains(err.Error(), "names no audio") {
+		t.Errorf("err = %v; want a playlist with no audio anywhere refused, saying so", err)
 	}
 }
 
-// TestZDFPlaylistResolvesToSegments is the same path when the playlist is
-// usable, so the refusal above is known to be about the audio rather than
-// about playlists in general.
+// TestZDFPlaylistResolvesToSegments is the same path when the playlist's
+// variants carry their own audio, which are joined as they are.
 func TestZDFPlaylistResolvesToSegments(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(httpx.HeaderContentType, "application/x-mpegURL")

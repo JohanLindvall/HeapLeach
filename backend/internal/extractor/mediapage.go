@@ -102,12 +102,13 @@ func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root
 	name := mediaPageName(title, found)
 
 	if found.IsHLS {
-		segments, _, err := resolvePlaylist(ctx, client, found.URL, headers)
-		if err != nil || len(segments) == 0 {
+		media, err := resolveMediaPlaylist(ctx, client, found.URL, headers)
+		if err != nil || len(media.Segments) == 0 {
 			return nil, false
 		}
 		return &Result{Title: title, Files: []File{{
-			Name: name, Size: -1, Headers: headers, Segments: segments,
+			Name: title + media.extensionOr(path.Ext(name)), Size: -1, Headers: headers,
+			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
 		}}}, true
 	}
 	return &Result{Title: title, Files: []File{{

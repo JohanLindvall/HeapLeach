@@ -88,12 +88,13 @@ func (p *PornHub) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	headers := httpx.Referer(pornhubRoot + "/")
 
 	if best.IsHLS {
-		segments, _, err := resolvePlaylist(ctx, p.client, best.URL, headers)
+		media, err := resolveMediaPlaylist(ctx, p.client, best.URL, headers)
 		if err != nil {
 			return nil, fmt.Errorf("pornhub: %w", err)
 		}
 		return &Result{Title: title, Files: []File{{
-			Name: title + ".ts", Size: -1, Headers: headers, Segments: segments,
+			Name: title + media.extensionOr(".ts"), Size: -1, Headers: headers,
+			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
 		}}}, nil
 	}
 	return &Result{Title: title, Files: []File{{

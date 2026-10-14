@@ -4,11 +4,11 @@ package extractor
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,16 +110,21 @@ video/360/media.m3u8
 	}
 }
 
-func TestParseAudioGroups(t *testing.T) {
-	groups := parseAudioGroups(demuxedMaster)
-	if !groups["audio-high"] {
+func TestParseAudioRenditions(t *testing.T) {
+	base, _ := url.Parse("https://cdn.example.test/stream/master.m3u8")
+	groups := parseAudioRenditions(demuxedMaster, base)
+	if len(groups["audio-high"]) == 0 {
 		t.Error("an audio group with its own playlist was not recorded")
 	}
-	if groups["subs"] {
+	if len(groups["subs"]) != 0 {
 		t.Error("a subtitle group was taken for an audio one")
 	}
-	if len(parseAudioGroups(muxedMaster)) != 0 {
-		t.Error("an audio rendition with no URI was recorded as living elsewhere")
+	for group, renditions := range parseAudioRenditions(muxedMaster, base) {
+		for _, r := range renditions {
+			if r.separate() {
+				t.Errorf("%s: an audio rendition with no URI was recorded as living elsewhere: %+v", group, r)
+			}
+		}
 	}
 }
 
@@ -166,10 +171,52 @@ func TestMediaPlaylistKey(t *testing.T) {
 	}
 }
 
-// A caller that hands back segments alone has nowhere to carry a key, so an
-// encrypted playlist is refused to it rather than joined as ciphertext —
-// while the full resolver hands the key over.
-func TestEncryptedPlaylistsReachOnlyCallersThatCarryTheKey(t *testing.T) {
+// A master can carry its main audio in the variants' own segments, naming it
+// with no URI, beside an alternate that has a playlist of its own. The
+// alternate is fetched, and the main one listed in the group's order with no
+// segments, so that the joined file labels it and keeps it first.
+func TestAudioCarriedInTheVideoIsListedBesideTheTracksApart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/master.m3u8") {
+			_, _ = io.WriteString(w, "#EXTM3U\n"+
+				`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",LANGUAGE="de",NAME="Deutsch",DEFAULT=NO,URI="german.m3u8"`+"\n"+
+				`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",LANGUAGE="en",NAME="English",DEFAULT=YES`+"\n"+
+				`#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="aac"`+"\nvideo.m3u8\n")
+			return
+		}
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\na.ts\n#EXT-X-ENDLIST\n")
+	}))
+	defer srv.Close()
+	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+
+	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/master.m3u8", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(media.Audio) != 2 {
+		t.Fatalf("audio = %+v; want the main track and the alternate", media.Audio)
+	}
+	if a := media.Audio[0]; a.Name != "English" || a.Language != "en" || len(a.Segments) != 0 {
+		t.Errorf("first = %+v; want the default, carried in the video, with no segments of its own", a)
+	}
+	if a := media.Audio[1]; a.Name != "Deutsch" || len(a.Segments) != 1 || !strings.HasSuffix(a.Segments[0], "/a.ts") {
+		t.Errorf("second = %+v; want the alternate, read from its own playlist", a)
+	}
+
+	// A group whose every rendition is in the variant is the plain muxed
+	// case: nothing apart, nothing to join.
+	base, _ := url.Parse(srv.URL + "/master.m3u8")
+	variants := parseMasterPlaylist("#EXTM3U\n"+`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="English",DEFAULT=YES`+"\n"+
+		`#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="aac"`+"\nvideo.m3u8\n", base)
+	if len(variants) != 1 || variants[0].audioElsewhere || !variants[0].muxed() {
+		t.Errorf("variants = %+v; want one carrying its own audio", variants)
+	}
+}
+
+// The resolver hands an encrypted playlist's key over with its segments,
+// which every caller carries onto its File: joined as they are, they would
+// be ciphertext.
+func TestEncryptedPlaylistsComeWithTheirKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n"+`#EXT-X-KEY:METHOD=AES-128,URI="key"`+
 			"\n#EXTINF:6,\na.ts\n#EXT-X-ENDLIST\n")
@@ -177,9 +224,6 @@ func TestEncryptedPlaylistsReachOnlyCallersThatCarryTheKey(t *testing.T) {
 	defer srv.Close()
 	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
 
-	if _, _, err := resolvePlaylist(context.Background(), client, srv.URL+"/index.m3u8", nil); !errors.Is(err, errEncryptedPlaylist) {
-		t.Errorf("resolvePlaylist: %v, want the encrypted refusal", err)
-	}
 	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/index.m3u8", nil)
 	if err != nil || media.Key == nil || media.Key.URI != srv.URL+"/key" {
 		t.Errorf("resolveMediaPlaylist: %+v, %v", media, err)

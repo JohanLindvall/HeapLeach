@@ -280,15 +280,17 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	segments, variant, err := resolvePlaylist(ctx, b.client, stream, headers)
+	media, err := resolveMediaPlaylist(ctx, b.client, stream, headers)
 	if err != nil {
 		return nil, fmt.Errorf("bbcsounds: %s: %w", item.pid(), err)
 	}
 	return &File{
-		Name:     playlistExtension(variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extensionOr(playlistExtension(media.Variant)),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, nil
 }
 

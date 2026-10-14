@@ -84,12 +84,13 @@ func (v *VidsSt) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 		return nil, fmt.Errorf("vids.st: %s: %w", page, err)
 	}
 	return &Result{Title: title, Files: []File{{
-		Name:       title + segmentsExtension(media.Segments, media.Variant),
+		Name:       title + media.extension(),
 		URL:        link,
 		Size:       -1,
 		Headers:    headers,
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}}}, nil
 }
 

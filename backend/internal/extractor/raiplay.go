@@ -79,12 +79,6 @@ const (
 	raiMaxEpisodes = 500
 )
 
-// errRaiDemuxed is the one packaging this cannot take. It is a value rather
-// than a formatted string because expanding a programme has to recognise it
-// among the reasons an entry produced nothing.
-var errRaiDemuxed = errors.New("the audio of this one is served in a rendition of " +
-	"its own, and joining segments end to end cannot put the two back together")
-
 // NewRaiPlay builds the RaiPlay extractor.
 func NewRaiPlay(client *httpx.Client) *RaiPlay {
 	return &RaiPlay{hostSet: hostSet{"raiplay.it"}, client: client}
@@ -301,11 +295,11 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	if err != nil {
 		return nil, "", err
 	}
-	variant, err := r.variant(ctx, manifest, headers)
-	if err != nil {
-		return nil, "", fmt.Errorf("raiplay: %s: %w", title, err)
-	}
-	segments, _, err := resolvePlaylist(ctx, r.client, variant, headers)
+	// Rai's multiaudio packaging keeps the audio in renditions of its own,
+	// the audio description among them, and those come with the video
+	// (media.Audio) for the downloader to join to it. Any rendition that
+	// carries its own audio is still preferred (bestVariant).
+	media, err := resolveMediaPlaylist(ctx, r.client, manifest, headers)
 	if err != nil {
 		return nil, "", fmt.Errorf("raiplay: %s: %w", title, err)
 	}
@@ -320,10 +314,12 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 		// the path of MPEG-TS streams — about half the catalogue — so the
 		// variant URL is not consulted even as a fallback, and a zero variant
 		// leaves the default at ".ts". See segmentsExtension.
-		Name:     segmentsExtension(segments, hlsVariant{}),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extensionOr(segmentsExtension(media.Segments, hlsVariant{})),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, title, nil
 }
 
@@ -348,51 +344,6 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 			"which this does not read", title, asset.CT)
 	}
 	return link, nil
-}
-
-// variant picks the rendition to fetch out of Rai's master playlist.
-//
-// This is resolvePlaylist's selection done by hand, and only because the
-// refusal has to be explicit: bestVariant ranks the renditions but never
-// declines, so an asset whose every variant is video only would otherwise be
-// downloaded to the end and play silently. Filtering before the ranking rather
-// than checking after it also keeps a demuxed rendition from outranking a
-// usable one, which it would whenever neither declares CODECS.
-func (r *RaiPlay) variant(ctx context.Context, manifest string, headers httpx.Header) (string, error) {
-	base, err := ParseURL(manifest)
-	if err != nil {
-		return "", err
-	}
-	doc, err := r.client.GetString(ctx, manifest, headers)
-	if err != nil {
-		return "", fmt.Errorf("fetch playlist: %w", err)
-	}
-
-	variants := parseMasterPlaylist(doc, base)
-	if len(variants) == 0 {
-		return manifest, nil // already a media playlist; let the caller read it
-	}
-	best, err := raiUsable(variants)
-	if err != nil {
-		return "", err
-	}
-	return best.URL, nil
-}
-
-// raiUsable picks the best rendition that carries its own audio, and refuses
-// when there is none.
-func raiUsable(variants []hlsVariant) (hlsVariant, error) {
-	var selfContained []hlsVariant
-	for _, v := range variants {
-		if !v.audioElsewhere {
-			selfContained = append(selfContained, v)
-		}
-	}
-	best, ok := bestVariant(selfContained)
-	if !ok {
-		return hlsVariant{}, errRaiDemuxed
-	}
-	return best, nil
 }
 
 // raiRefused is Rai declining to serve something, carrying its own words for

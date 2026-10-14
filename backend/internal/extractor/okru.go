@@ -92,12 +92,13 @@ func (o *OKru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, err
 
 	// Live streams, and some ordinary videos, come only as a playlist.
 	if meta.HLSManifestURL != "" {
-		segments, _, err := resolvePlaylist(ctx, o.client, meta.HLSManifestURL, headers)
+		media, err := resolveMediaPlaylist(ctx, o.client, meta.HLSManifestURL, headers)
 		if err != nil {
 			return nil, fmt.Errorf("ok.ru: %w", err)
 		}
 		return &Result{Title: title, Files: []File{{
-			Name: title + ".ts", Size: -1, Headers: headers, Segments: segments,
+			Name: title + media.extensionOr(".ts"), Size: -1, Headers: headers,
+			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
 		}}}, nil
 	}
 

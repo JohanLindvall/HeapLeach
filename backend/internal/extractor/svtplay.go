@@ -19,10 +19,15 @@ import (
 // find a stream — but everything it offers is an adaptive manifest rather
 // than a file. The extractor picks a rendition that carries audio and video
 // together and hands back its segment list, which concatenates into a
-// playable file without needing to be muxed.
+// playable file without needing to be muxed. Newer videos come as CMAF and
+// DASH alone, every rendition keeping its audio apart: those come with each
+// audio rendition as a track of its own, which the downloader joins to the
+// video. They used to fail, saying to use the external downloader.
 type SVTPlay struct {
 	hostSet
 	client *httpx.Client
+	// api is the player API's base, a field so that tests can stand in for it.
+	api string
 }
 
 const (
@@ -53,7 +58,7 @@ var svtVideoLink = regexp.MustCompile(`/video/([A-Za-z0-9_-]{4,})[/"]`)
 
 // NewSVTPlay builds the SVT Play extractor.
 func NewSVTPlay(client *httpx.Client) *SVTPlay {
-	return &SVTPlay{hostSet: hostSet{"svtplay.se"}, client: client}
+	return &SVTPlay{hostSet: hostSet{"svtplay.se"}, client: client, api: svtVideoAPI}
 }
 
 func (s *SVTPlay) Name() string { return "svtplay" }
@@ -217,7 +222,7 @@ func (s *SVTPlay) episodesFromPage(ctx context.Context, u *url.URL) (string, []s
 // which differs between a standalone video and one episode of a series.
 func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, episode string, err error) {
 	var meta svtVideo
-	if err := s.client.GetJSON(ctx, svtVideoAPI+url.PathEscape(id),
+	if err := s.client.GetJSON(ctx, s.api+url.PathEscape(id),
 		httpx.Referer(svtRoot+"/"), &meta); err != nil {
 		return nil, "", "", fmt.Errorf("svtplay: video %s: %w", id, err)
 	}
@@ -234,16 +239,18 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 	}
 
 	headers := httpx.Referer(svtRoot + "/")
-	segments, variant, err := resolvePlaylist(ctx, s.client, manifest, headers)
+	media, err := resolveMediaPlaylist(ctx, s.client, manifest, headers)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("svtplay: %s: %w", id, err)
 	}
 
 	return &File{
-		Name:     playlistExtension(variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       media.extension(),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   media.Segments,
+		SegmentKey: media.Key,
+		Audio:      media.Audio,
 	}, meta.ProgramTitle, meta.EpisodeTitle, nil
 }
 

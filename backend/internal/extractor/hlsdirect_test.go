@@ -252,20 +252,26 @@ func TestHLSDirectAcceptsABareMediaPlaylist(t *testing.T) {
 	}
 }
 
-func TestHLSDirectRefusesAMasterWithNoSelfContainedVariant(t *testing.T) {
+// A master whose every variant keeps its audio in a group of its own comes
+// with that group's renditions as tracks, for the downloader to join to the
+// video: it used to be refused, and sent to the external downloader.
+func TestHLSDirectCarriesAudioKeptApart(t *testing.T) {
 	srv, _ := hlsServer(t, hlsManifestContentType, map[string]string{
 		"/hls/a-clip/master.m3u8":           hlsDemuxedOnlyMaster,
 		"/hls/a-clip/video/1080/index.m3u8": hlsCompleteMedia,
+		"/hls/a-clip/audio/media.m3u8":      hlsCompleteMedia,
 	})
 
-	_, err := hlsExtractFrom(t, srv.URL+"/hls/a-clip/master.m3u8")
-	if err == nil {
-		t.Fatal("a master offering only video-only variants was accepted; the result would be silent")
+	res, err := hlsExtractFrom(t, srv.URL+"/hls/a-clip/master.m3u8")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{"audio", "yt-dlp"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not mention %q: %v", want, err)
-		}
+	f := res.Files[0]
+	if len(f.Segments) == 0 || !strings.HasSuffix(f.Name, ".mp4") {
+		t.Fatalf("file = %+v; want the video's segments, named for the MP4 they will be joined into", f)
+	}
+	if len(f.Audio) != 1 || f.Audio[0].Language != "en" || f.Audio[0].Name != "English" || len(f.Audio[0].Segments) == 0 {
+		t.Fatalf("audio = %+v; want the English rendition as a track of its own", f.Audio)
 	}
 }
 

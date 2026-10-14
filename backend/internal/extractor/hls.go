@@ -40,11 +40,23 @@ type hlsVariant struct {
 	Bandwidth  int
 	Resolution string
 	Codecs     string
-	// audioElsewhere records that the variant named an audio group whose
-	// renditions have playlists of their own, which means the variant's own
-	// segments carry video and nothing else.
+	// audioElsewhere records that the variant named an audio group with a
+	// rendition in a playlist of its own, which means the variant's own
+	// segments are not the whole of its audio, and when every rendition is,
+	// carry video and nothing else. audioGroup is that group.
 	audioElsewhere bool
+	audioGroup     string
 }
+
+// hlsRendition is one audio rendition of a master playlist's EXT-X-MEDIA.
+// URL is empty for one carried in the variant's own segments.
+type hlsRendition struct {
+	URL, Language, Name string
+	Default             bool
+}
+
+// separate reports a rendition with a playlist of its own.
+func (r hlsRendition) separate() bool { return r.URL != "" }
 
 // muxed reports whether this variant carries its own audio, which makes it
 // usable without a separate audio rendition.
@@ -81,7 +93,7 @@ func (v hlsVariant) height() int {
 // parseMasterPlaylist reads the variants out of a master playlist. It
 // returns nil when the document is a media playlist instead.
 func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
-	separate := parseAudioGroups(doc)
+	renditions := parseAudioRenditions(doc, base)
 	var (
 		variants []hlsVariant
 		pending  *hlsVariant
@@ -98,7 +110,8 @@ func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
 				Bandwidth:      bandwidth,
 				Resolution:     attrs["RESOLUTION"],
 				Codecs:         attrs["CODECS"],
-				audioElsewhere: separate[attrs["AUDIO"]],
+				audioElsewhere: slices.ContainsFunc(renditions[attrs["AUDIO"]], hlsRendition.separate),
+				audioGroup:     attrs["AUDIO"],
 			}
 		case strings.HasPrefix(line, "#"):
 			continue
@@ -113,25 +126,35 @@ func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
 	return variants
 }
 
-// parseAudioGroups finds the audio groups whose renditions live in their own
-// playlists, which is what makes the variants naming them video only.
-//
-// An EXT-X-MEDIA entry without a URI describes audio that is already inside
-// the variant's segments, so only the ones that have a URI count.
-func parseAudioGroups(doc string) map[string]bool {
-	groups := make(map[string]bool)
+// parseAudioRenditions lists each audio group's renditions, in the master's
+// order with the default first. One with a URI has a playlist of its own; one
+// without describes audio already inside the segments of the variants that
+// name the group, and has no URL here. A group with any of the first kind is
+// what makes those variants' own segments not the whole of their audio.
+func parseAudioRenditions(doc string, base *url.URL) map[string][]hlsRendition {
+	groups := make(map[string][]hlsRendition)
 	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "#EXT-X-MEDIA:") {
 			continue
 		}
 		attrs := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MEDIA:"))
-		if !strings.EqualFold(attrs["TYPE"], "AUDIO") || attrs["URI"] == "" {
+		if !strings.EqualFold(attrs["TYPE"], "AUDIO") || attrs["GROUP-ID"] == "" {
 			continue
 		}
-		if id := attrs["GROUP-ID"]; id != "" {
-			groups[id] = true
+		// An audio description is told apart only by its characteristics:
+		// SRF names it as it names the main track, but for a trailing space.
+		name := strings.TrimSpace(attrs["NAME"])
+		if strings.Contains(attrs["CHARACTERISTICS"], "public.accessibility.describes-video") {
+			name = strings.TrimSpace(name + " (audio description)")
 		}
+		groups[attrs["GROUP-ID"]] = append(groups[attrs["GROUP-ID"]], hlsRendition{
+			URL: resolveRef(base, attrs["URI"]), Language: attrs["LANGUAGE"], Name: name,
+			Default: strings.EqualFold(attrs["DEFAULT"], "YES"),
+		})
+	}
+	for _, renditions := range groups {
+		slices.SortStableFunc(renditions, func(a, b hlsRendition) int { return cmpBool(b.Default, a.Default) })
 	}
 	return groups
 }
@@ -266,9 +289,24 @@ type hlsMedia struct {
 	// must refuse the playlist: joined as they are, the segments make a
 	// file of ciphertext that looks like a finished download.
 	Key *SegmentKey
+	// Audio is the soundtrack when the variant keeps it apart: every
+	// rendition of the audio group the chosen variant names, in the group's
+	// order (resolveAudio).
+	Audio []Track
 }
 
-// resolveMediaPlaylist follows a master playlist down to its media playlist.
+// errAudioElsewhere is a variant whose audio is said to be kept apart from
+// it, with no playlist named for any of it: the video alone would join into
+// a silent file.
+var errAudioElsewhere = errors.New("the audio is kept apart from the video, and no playlist for it is named: joining the video alone would make a silent file")
+
+// resolveMediaPlaylist follows a master playlist down to its media playlist,
+// and to the audio renditions' when the variant keeps its audio apart.
+//
+// A caller must carry all of what it returns onto its File, the key and the
+// audio as well as the segments: joined as they are, the segments of an
+// encrypted playlist are ciphertext, and those of a variant whose audio is
+// kept apart are silent, and either looks like a finished download.
 func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL string, headers httpx.Header) (*hlsMedia, error) {
 	doc, base, err := fetchPlaylist(ctx, client, manifestURL, headers)
 	if err != nil {
@@ -276,6 +314,7 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 	}
 
 	variant := hlsVariant{URL: manifestURL}
+	var audio []Track
 	if variants := parseMasterPlaylist(doc, base); len(variants) > 0 {
 		best, ok := bestVariant(variants)
 		if !ok {
@@ -283,7 +322,9 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 		}
 		variant = best
 		if best.audioElsewhere {
-			return nil, fmt.Errorf("no rendition that carries its own audio: each keeps its audio in a playlist of its own, so joining video alone would have no sound; use the external downloader (yt-dlp)")
+			if audio, err = resolveAudio(ctx, client, parseAudioRenditions(doc, base)[best.audioGroup], headers); err != nil {
+				return nil, err
+			}
 		}
 		if doc, base, err = fetchPlaylist(ctx, client, best.URL, headers); err != nil {
 			return nil, fmt.Errorf("fetch variant playlist: %w", err)
@@ -298,7 +339,63 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 	if len(segments) == 0 {
 		return nil, fmt.Errorf("playlist lists no segments")
 	}
-	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc, Key: key}, nil
+	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc, Key: key, Audio: audio}, nil
+}
+
+// extension names the container the downloaded file will be in: an MP4 when
+// the audio is joined to the video, which ffmpeg writes, and otherwise
+// whatever the segments are (segmentsExtension).
+func (m *hlsMedia) extension() string {
+	return m.extensionOr(segmentsExtension(m.Segments, m.Variant))
+}
+
+// extensionOr is ext, the container a caller names the segments as, unless
+// the audio is joined to them.
+func (m *hlsMedia) extensionOr(ext string) string {
+	if len(m.Audio) > 0 {
+		return ".mp4"
+	}
+	return ext
+}
+
+// resolveAudio reads each audio rendition's media playlist into a Track, and
+// lists one carried in the video's own segments as a Track with none, in the
+// group's order. A group with no playlist to read leaves the video silent,
+// which is refused as before.
+func resolveAudio(ctx context.Context, client *httpx.Client, renditions []hlsRendition, headers httpx.Header) ([]Track, error) {
+	if !slices.ContainsFunc(renditions, hlsRendition.separate) {
+		return nil, errAudioElsewhere
+	}
+	seen := make(map[string]bool, len(renditions))
+	tracks := make([]Track, 0, len(renditions))
+	for _, r := range renditions {
+		if !r.separate() {
+			tracks = append(tracks, Track{Language: r.Language, Name: r.Name})
+			continue
+		}
+		if seen[r.URL] {
+			continue
+		}
+		seen[r.URL] = true
+		label := r.Name
+		if label == "" {
+			label = r.Language
+		}
+		doc, base, err := fetchPlaylist(ctx, client, r.URL, headers)
+		if err != nil {
+			return nil, fmt.Errorf("fetch the %q audio playlist: %w", label, err)
+		}
+		key, err := mediaPlaylistKey(doc, base)
+		if err != nil {
+			return nil, err
+		}
+		segments := parseMediaPlaylist(doc, base)
+		if len(segments) == 0 {
+			return nil, fmt.Errorf("the %q audio playlist lists no segments", label)
+		}
+		tracks = append(tracks, Track{Segments: segments, Key: key, Language: r.Language, Name: r.Name})
+	}
+	return tracks, nil
 }
 
 // Relative playlist references belong to the response URL after redirects.
@@ -331,10 +428,6 @@ func fetchPlaylist(ctx context.Context, client *httpx.Client, rawURL string, hea
 	}
 	return doc, resp.Request.URL, nil
 }
-
-// errEncryptedPlaylist refuses an encrypted playlist to a caller that has
-// nowhere to carry its key.
-var errEncryptedPlaylist = errors.New("encrypted HLS playlists require the external downloader (yt-dlp)")
 
 // mediaPlaylistKey reads how a media playlist's segments are encrypted, and
 // refuses what the native assembler cannot honour before a byte of it can
@@ -427,18 +520,4 @@ func parseKeyIV(raw string) ([]byte, error) {
 		return nil, fmt.Errorf("HLS key has an unreadable IV %q", raw)
 	}
 	return iv, nil
-}
-
-// resolvePlaylist follows a master playlist down to its segment list, which
-// is all that nearly every caller wants of it.
-func resolvePlaylist(ctx context.Context, client *httpx.Client, manifestURL string, headers httpx.Header) ([]string, hlsVariant, error) {
-	media, err := resolveMediaPlaylist(ctx, client, manifestURL, headers)
-	if err != nil {
-		return nil, hlsVariant{}, err
-	}
-	// These callers hand back segments alone, with nowhere to carry a key.
-	if media.Key != nil {
-		return nil, hlsVariant{}, errEncryptedPlaylist
-	}
-	return media.Segments, media.Variant, nil
 }

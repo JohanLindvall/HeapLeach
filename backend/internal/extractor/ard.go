@@ -381,7 +381,7 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 	if !ok {
 		return nil, "", "", fmt.Errorf("ard: %s offers no stream", id)
 	}
-	segments, variant, err := resolvePlaylist(ctx, a.client, best.URL, headers)
+	stream, err := resolveMediaPlaylist(ctx, a.client, best.URL, headers)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("ard: %s: %w", id, err)
 	}
@@ -389,10 +389,12 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 		// Named off the segments, not the variant URL: ARD's packager builds
 		// manifest paths out of the source file's name, ".mp4.csmil/" over
 		// MPEG-TS parts. See segmentsExtension.
-		Name:     segmentsExtension(segments, variant),
-		Size:     -1,
-		Headers:  headers,
-		Segments: segments,
+		Name:       stream.extension(),
+		Size:       -1,
+		Headers:    headers,
+		Segments:   stream.Segments,
+		SegmentKey: stream.Key,
+		Audio:      stream.Audio,
 	}, show, episode, nil
 }
 
