@@ -6,11 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"net/url"
-	"os/exec"
 	"strconv"
 
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
@@ -179,13 +177,4 @@ func ytdlpTitle(ctx context.Context, ytdlp, target string) (string, error) {
 		return "", nil
 	}
 	return util.FirstNonEmpty(entries[0].Title, entries[0].ID), nil
-}
-
-// ytdlpError surfaces what yt-dlp printed, which is far more useful to the
-// user than a bare exit status.
-func ytdlpError(err error) error {
-	if exit, ok := errors.AsType[*exec.ExitError](err); ok && len(exit.Stderr) > 0 {
-		return fmt.Errorf("%s", util.Truncate(string(exit.Stderr), 300))
-	}
-	return err
 }

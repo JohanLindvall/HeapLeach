@@ -404,7 +404,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewABCListen(client),
 		NewBBCSounds(client),
 		NewYouTube(),
-		NewVimeo(),
+		NewVimeo(client),
 		NewYandex(client),
 		NewBooru(client),
 		NewFourChan(client),

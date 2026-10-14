@@ -1115,16 +1115,23 @@ Host-specific notes:
   mints its own two-hour token per request, which the downloader picks up
   by following the redirect, so the URL is stored directly like any other
   install's rather than resolved at download time.
-- **vimeo** goes through the embed player, and that single choice is what
-  makes it work: `vimeo.com/<id>` answers a non-browser client with a bot
-  check, the player's JSON config endpoint answers 403, and yt-dlp's own
-  route through the watch page demands an account — while
-  `player.vimeo.com/video/<id>` is served to anyone, no session or referer
-  needed. The stream is demuxed and carries no progressive MP4, so there is
-  nothing to fetch directly that would be playable; the player URL is handed
-  to yt-dlp, which has ffmpeg to mux with. The playlist engine now joins
-  audio kept apart itself (`mux.go`), so that is no longer a wall, only how
-  this one was done. An unlisted link's `<hash>` becomes `?h=`.
+- **vimeo** is read from the embed player's own configuration
+  (`window.playerConfig` on `player.vimeo.com/video/<id>`), and that one door
+  is what makes it work: `vimeo.com/<id>` answers a non-browser client with
+  a bot check and the player's JSON config endpoint answers 403, while the
+  player page is served to anyone with a browser's TLS. curl's handshake is
+  turned away from it ("We couldn't verify the security of your
+  connection"), the client's Chrome-shaped one is not. The configuration's
+  HLS master, AVC first and on its default CDN, keeps video, audio and
+  subtitles in playlists of their own, which `mux.go` joins; it used to go to
+  yt-dlp for the muxing. Its links are signed for an hour, so `Resolve` reads
+  the page again, holding to the kind of stream the first reading chose. The
+  tallest progressive MP4 is taken only when the HLS cannot be read: modern
+  uploads mostly have none. Some videos are DRM-protected in every form they
+  are offered in, FairPlay HLS and Widevine DASH (`request.drm`), which
+  yt-dlp cannot fetch either, and those are refused in those words. A `view`
+  other than 1 is a private or password-protected video. An unlisted link's
+  `<hash>` becomes `?h=`.
 - **yandex** is a redirector rather than a host. Its preview pages are
   search output wrapped around somebody else's video, so the extractor finds
   the source link the page carries and hands that to yt-dlp. Note that
