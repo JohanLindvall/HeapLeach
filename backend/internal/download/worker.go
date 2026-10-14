@@ -453,16 +453,29 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// again without fetching anything.
 	m.mu.Lock()
 	tracks := playlistTracksLocked(it, part)
+	subtitles := it.subtitleFiles
 	m.mu.Unlock()
 	finished := part
-	if isPlaylist && len(tracks) > 1 {
-		joined, err := m.joinTracks(ctx, it, tracks, files)
+	if isPlaylist && (len(tracks) > 1 || len(subtitles) > 0) {
+		joined, err := m.joinTracks(ctx, it, tracks, subtitles, files)
+		if err != nil && len(subtitles) > 0 && ctx.Err() == nil {
+			// Subtitles are a bonus to the video: a join they make fail is
+			// made again without them, or not at all where they were all
+			// it was for.
+			m.log.Info("joining the subtitles failed; going on without them", "item", it.ID, "err", err)
+			joined, err = "", nil
+			if len(tracks) > 1 {
+				joined, err = m.joinTracks(ctx, it, tracks, nil, files)
+			}
+		}
 		if err != nil {
 			return err
 		}
-		finished = joined
-		if ext := filepath.Ext(name); !strings.EqualFold(ext, ".mp4") {
-			name = strings.TrimSuffix(name, ext) + ".mp4"
+		if joined != "" {
+			finished = joined
+			if ext := filepath.Ext(name); !strings.EqualFold(ext, ".mp4") {
+				name = strings.TrimSuffix(name, ext) + ".mp4"
+			}
 		}
 	}
 	// Cleared here rather than inside each transfer path, so the resume
@@ -470,6 +483,9 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// file that is already whole, or a restored table with nothing left.
 	clearParts := func() {
 		clearTransferState(part, files)
+		for _, s := range subtitles {
+			_ = files.remove(s.path)
+		}
 		for _, t := range tracks {
 			if t.part == "" {
 				continue
@@ -1012,12 +1028,13 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	}
 	// A playlist read again: its segments and key were signed with the
 	// rest, and the stale ones would fail where these will not.
-	// Its audio is read with it, and a reading that has none clears what
-	// an earlier one had.
+	// Its audio and subtitles are read with it, and a reading that has
+	// none clears what an earlier one had.
 	if len(target.Segments) > 0 {
 		it.Segments = target.Segments
 		it.SegmentKey = target.SegmentKey
 		it.Audio = target.Audio
+		it.Subtitles = target.Subtitles
 	}
 	m.mu.Unlock()
 	return nil

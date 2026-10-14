@@ -29,13 +29,15 @@ import (
 // and only the padding at the end says whether it was the right key.
 var errSegmentPadding = errors.New("decrypted segment has invalid padding (wrong key?)")
 
-// segmentIV is the IV segment index of a playlist is decrypted with.
+// segmentIV is the IV segment index of a playlist is decrypted with. The
+// segments in the clear at the start (key.Clear) have no place in the media
+// sequence, so the count starts after them.
 func segmentIV(key *extractor.SegmentKey, index int) []byte {
 	if len(key.IV) == aes.BlockSize {
 		return key.IV
 	}
 	iv := make([]byte, aes.BlockSize)
-	binary.BigEndian.PutUint64(iv[8:], uint64(key.Sequence)+uint64(index))
+	binary.BigEndian.PutUint64(iv[8:], uint64(key.Sequence)+uint64(index-key.Clear))
 	return iv
 }
 

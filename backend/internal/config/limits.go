@@ -424,6 +424,14 @@ const (
 	// progress, in segments joined.
 	PlaylistStateEvery = 20
 
+	// SubtitleFetchTimeout bounds fetching a playlist's subtitles, all
+	// tracks together, and SubtitleFetchConcurrency how many of a track's
+	// WebVTT files are asked for at once. Subtitles are a bonus to the
+	// video: a host that will not serve them in this time is left without
+	// them rather than holding the video up.
+	SubtitleFetchTimeout     = 2 * time.Minute
+	SubtitleFetchConcurrency = 4
+
 	// RemuxTimeout bounds the lossless rewrap of a finished transport stream.
 	// Copying streams is fast even for a long programme, so a stuck ffmpeg
 	// should not hold a worker indefinitely.

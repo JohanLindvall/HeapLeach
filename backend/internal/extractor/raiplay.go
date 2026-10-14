@@ -320,6 +320,7 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, title, nil
 }
 

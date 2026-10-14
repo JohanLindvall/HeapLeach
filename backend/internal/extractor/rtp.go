@@ -234,6 +234,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, name, nil
 }
 

@@ -91,6 +91,7 @@ func (v *VidsSt) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}}}, nil
 }
 

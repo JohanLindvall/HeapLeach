@@ -355,6 +355,7 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, nil
 }
 

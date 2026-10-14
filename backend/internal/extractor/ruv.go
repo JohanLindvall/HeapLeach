@@ -242,6 +242,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, nil
 }
 

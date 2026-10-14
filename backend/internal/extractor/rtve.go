@@ -438,6 +438,7 @@ func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, nil
 }
 

@@ -147,7 +147,8 @@ func (k *Knuthing) resolve(ctx context.Context, page string) (*Target, error) {
 	}
 	return &Target{
 		URL: link.String(), Name: video.title + media.extension(), Size: -1,
-		Headers: headers, Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
+		Headers: headers, Segments: media.Segments, SegmentKey: media.Key,
+		Audio: media.Audio, Subtitles: media.Subtitles,
 	}, nil
 }
 

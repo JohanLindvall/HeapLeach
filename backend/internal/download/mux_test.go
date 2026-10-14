@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/tools"
 )
 
 // Each audio track a playlist keeps apart from its video is joined into a
@@ -139,43 +138,14 @@ func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 	origin := t.TempDir()
 	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
 	defer srv.Close()
-	// hls packages a rendition the way CMAF does, and lists its segments
-	// as a media playlist reads: the initialisation segment first.
 	hls := func(name string, input ...string) []string {
-		args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}, input...)
-		args = append(args, "-f", "hls", "-hls_time", "1", "-hls_playlist_type", "vod",
-			"-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", name+"-init.mp4",
-			"-hls_segment_filename", name+"-%d.m4s", name+".m3u8")
-		cmd := exec.Command(ffmpeg, args...)
-		cmd.Dir = origin
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("package %s: %v\n%s", name, err, out)
-		}
-		playlist, err := os.ReadFile(filepath.Join(origin, name+".m3u8"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var segments []string
-		for line := range strings.Lines(string(playlist)) {
-			line = strings.TrimSpace(line)
-			if init, ok := strings.CutPrefix(line, `#EXT-X-MAP:URI="`); ok {
-				segments = append([]string{srv.URL + "/" + strings.TrimSuffix(init, `"`)}, segments...)
-			} else if line != "" && !strings.HasPrefix(line, "#") {
-				segments = append(segments, srv.URL+"/"+line)
-			}
-		}
-		return segments
+		return cmafRendition(t, ffmpeg, origin, srv.URL, name, input...)
 	}
-	const (
-		picture = "testsrc=size=160x120:rate=10:duration=3"
-		tone    = "sine=frequency=%d:duration=3"
-	)
-	h264 := []string{"-c:v", "libx264", "-preset", "ultrafast", "-g", "10"}
-	video := hls("video", append([]string{"-f", "lavfi", "-i", picture, "-an"}, h264...)...)
-	muxed := hls("muxed", append([]string{"-f", "lavfi", "-i", picture, "-f", "lavfi", "-i", fmt.Sprintf(tone, 330),
-		"-c:a", "aac"}, h264...)...)
-	swedish := hls("swedish", "-f", "lavfi", "-i", fmt.Sprintf(tone, 440), "-c:a", "aac")
-	clear := hls("clear", "-f", "lavfi", "-i", fmt.Sprintf(tone, 880), "-c:a", "aac")
+	video := hls("video", append([]string{"-f", "lavfi", "-i", testPicture, "-an"}, testH264...)...)
+	muxed := hls("muxed", append([]string{"-f", "lavfi", "-i", testPicture, "-f", "lavfi", "-i", fmt.Sprintf(testTone, 330),
+		"-c:a", "aac"}, testH264...)...)
+	swedish := hls("swedish", "-f", "lavfi", "-i", fmt.Sprintf(testTone, 440), "-c:a", "aac")
+	clear := hls("clear", "-f", "lavfi", "-i", fmt.Sprintf(testTone, 880), "-c:a", "aac")
 
 	const picked = `video und "VideoHandler" default=1`
 	for _, tc := range []struct {
@@ -279,6 +249,45 @@ func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 	}
 }
 
+// The sources the packaged renditions are made from: three seconds of a test
+// picture and of a tone.
+const (
+	testPicture = "testsrc=size=160x120:rate=10:duration=3"
+	testTone    = "sine=frequency=%d:duration=3"
+)
+
+var testH264 = []string{"-c:v", "libx264", "-preset", "ultrafast", "-g", "10"}
+
+// cmafRendition packages a rendition into origin the way CMAF does, and lists
+// its segments as a media playlist reads, from base: the initialisation
+// segment first.
+func cmafRendition(t *testing.T, ffmpeg, origin, base, name string, input ...string) []string {
+	t.Helper()
+	args := append([]string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}, input...)
+	args = append(args, "-f", "hls", "-hls_time", "1", "-hls_playlist_type", "vod",
+		"-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", name+"-init.mp4",
+		"-hls_segment_filename", name+"-%d.m4s", name+".m3u8")
+	cmd := exec.Command(ffmpeg, args...)
+	cmd.Dir = origin
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("package %s: %v\n%s", name, err, out)
+	}
+	playlist, err := os.ReadFile(filepath.Join(origin, name+".m3u8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var segments []string
+	for line := range strings.Lines(string(playlist)) {
+		line = strings.TrimSpace(line)
+		if init, ok := strings.CutPrefix(line, `#EXT-X-MAP:URI="`); ok {
+			segments = append([]string{base + "/" + strings.TrimSuffix(init, `"`)}, segments...)
+		} else if line != "" && !strings.HasPrefix(line, "#") {
+			segments = append(segments, base+"/"+line)
+		}
+	}
+	return segments
+}
+
 // Renditions keep their timestamps on the playlist's one timeline, and the
 // offset between them is what keeps sound and picture together. ffmpeg
 // starts each input at zero on its own unless told not to, which would drop
@@ -321,7 +330,7 @@ func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 		{part: video},
 		{part: audio, audio: &extractor.Track{Language: "en", Name: "English"}},
 	}
-	joined, err := m.joinTracks(context.Background(), it, tracks, transferFiles{})
+	joined, err := m.joinTracks(context.Background(), it, tracks, nil, transferFiles{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,12 +357,7 @@ func TestPlaylistWithAudioKeptApartNeedsFFmpegFirst(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	t.Setenv("PATH", t.TempDir())
-	tools.Reset()
-	t.Cleanup(tools.Reset)
-	if _, ok := tools.Find(tools.FFmpeg); ok {
-		t.Skip("ffmpeg sits beside the test binary, where it cannot be hidden")
-	}
+	hideFFmpeg(t)
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "silent.mp4", URL: srv.URL, Size: -1, Segments: []string{srv.URL + "/v0"},

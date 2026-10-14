@@ -154,7 +154,8 @@ func (b *BitChute) file(ctx context.Context, name string, media bitchuteMedia) (
 			return File{}, fmt.Errorf("bitchute: %w", err)
 		}
 		return File{Name: name + playlist.extension(), Size: -1, Headers: headers,
-			Segments: playlist.Segments, SegmentKey: playlist.Key, Audio: playlist.Audio}, nil
+			Segments: playlist.Segments, SegmentKey: playlist.Key,
+			Audio: playlist.Audio, Subtitles: playlist.Subtitles}, nil
 	}
 
 	return Mirrored(File{

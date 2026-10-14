@@ -475,6 +475,7 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, nil
 }
 

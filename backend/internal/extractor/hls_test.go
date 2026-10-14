@@ -146,6 +146,26 @@ func TestMediaPlaylistKey(t *testing.T) {
 		t.Errorf("key = %+v, want the URI resolved, no IV, sequence 7", key)
 	}
 
+	// Over fragmented MP4, an initialisation segment named before the key is
+	// in the clear, and the sequence an absent IV is counted from starts after
+	// it; one named after the key is encrypted with the key's own IV.
+	for _, tc := range []struct {
+		name, doc string
+		clear     int
+	}{
+		{"init in the clear", head + "#EXT-X-MEDIA-SEQUENCE:1\n" + `#EXT-X-MAP:URI="init.mp4"` + "\n" +
+			`#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n#EXTINF:6,\na.m4s\n", 1},
+		{"init in the clear, IV named", head + `#EXT-X-MAP:URI="init.mp4"` + "\n" +
+			`#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x28CD62225B4E1B736063663FA69385D2` + "\n#EXTINF:6,\na.m4s\n", 1},
+		{"init encrypted, IV named", head + `#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x000102030405060708090a0b0c0d0e0f` + "\n" +
+			`#EXT-X-MAP:URI="init.mp4"` + "\n#EXTINF:6,\na.m4s\n", 0},
+	} {
+		key, err := mediaPlaylistKey(tc.doc, base)
+		if err != nil || key == nil || key.Clear != tc.clear {
+			t.Errorf("%s: key %+v, err %v; want %d segment in the clear", tc.name, key, err, tc.clear)
+		}
+	}
+
 	// The same key repeated before every segment is one key.
 	repeated := head + `#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x000102030405060708090a0b0c0d0e0f` +
 		"\n#EXTINF:6,\na.ts\n" + `#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x000102030405060708090a0b0c0d0e0f` + "\n#EXTINF:6,\nb.ts\n"
@@ -155,15 +175,15 @@ func TestMediaPlaylistKey(t *testing.T) {
 	}
 
 	for name, doc := range map[string]string{
-		"key changes":        head + `#EXT-X-KEY:METHOD=AES-128,URI="k1"` + "\n#EXTINF:6,\na.ts\n" + `#EXT-X-KEY:METHOD=AES-128,URI="k2"` + "\n#EXTINF:6,\nb.ts\n",
-		"clear then key":     head + "#EXTINF:6,\na.ts\n" + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n#EXTINF:6,\nb.ts\n",
-		"key then clear":     head + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n#EXTINF:6,\na.ts\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:6,\nb.ts\n",
-		"sample-aes":         head + `#EXT-X-KEY:METHOD=SAMPLE-AES,URI="k"` + "\n#EXTINF:6,\na.ts\n",
-		"drm key format":     head + `#EXT-X-KEY:METHOD=AES-128,URI="skd://k",KEYFORMAT="com.apple.streamingkeydelivery"` + "\n#EXTINF:6,\na.ts\n",
-		"encrypted fmp4":     head + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n" + `#EXT-X-MAP:URI="init.mp4"` + "\n#EXTINF:6,\na.m4s\n",
-		"unreadable iv":      head + `#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x1234` + "\n#EXTINF:6,\na.ts\n",
-		"key without a uri":  head + "#EXT-X-KEY:METHOD=AES-128\n#EXTINF:6,\na.ts\n",
-		"byte ranges (kept)": head + "#EXT-X-BYTERANGE:100@0\n#EXTINF:6,\na.ts\n",
+		"key changes":           head + `#EXT-X-KEY:METHOD=AES-128,URI="k1"` + "\n#EXTINF:6,\na.ts\n" + `#EXT-X-KEY:METHOD=AES-128,URI="k2"` + "\n#EXTINF:6,\nb.ts\n",
+		"clear then key":        head + "#EXTINF:6,\na.ts\n" + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n#EXTINF:6,\nb.ts\n",
+		"key then clear":        head + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n#EXTINF:6,\na.ts\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:6,\nb.ts\n",
+		"sample-aes":            head + `#EXT-X-KEY:METHOD=SAMPLE-AES,URI="k"` + "\n#EXTINF:6,\na.ts\n",
+		"drm key format":        head + `#EXT-X-KEY:METHOD=AES-128,URI="skd://k",KEYFORMAT="com.apple.streamingkeydelivery"` + "\n#EXTINF:6,\na.ts\n",
+		"encrypted init, no IV": head + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n" + `#EXT-X-MAP:URI="init.mp4"` + "\n#EXTINF:6,\na.m4s\n",
+		"unreadable iv":         head + `#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x1234` + "\n#EXTINF:6,\na.ts\n",
+		"key without a uri":     head + "#EXT-X-KEY:METHOD=AES-128\n#EXTINF:6,\na.ts\n",
+		"byte ranges (kept)":    head + "#EXT-X-BYTERANGE:100@0\n#EXTINF:6,\na.ts\n",
 	} {
 		if _, err := mediaPlaylistKey(doc, base); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -210,6 +230,49 @@ func TestAudioCarriedInTheVideoIsListedBesideTheTracksApart(t *testing.T) {
 		`#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="aac"`+"\nvideo.m3u8\n", base)
 	if len(variants) != 1 || variants[0].audioElsewhere || !variants[0].muxed() {
 		t.Errorf("variants = %+v; want one carrying its own audio", variants)
+	}
+}
+
+// A variant's subtitles come with it: each WebVTT rendition of the group it
+// names, its flags kept. One wrapped in fragmented MP4, which the downloader
+// does not join, and one that cannot be fetched are left out, without
+// failing the video.
+func TestSubtitlesComeWithTheVariantThatNamesThem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/master.m3u8":
+			_, _ = io.WriteString(w, "#EXTM3U\n"+
+				`#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="fr",NAME="Français",URI="wrapped.m3u8"`+"\n"+
+				`#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="de",NAME="Deutsch",URI="missing.m3u8"`+"\n"+
+				`#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="en",NAME="English",DEFAULT=YES,FORCED=YES,URI="english.m3u8"`+"\n"+
+				`#EXT-X-STREAM-INF:BANDWIDTH=2000000,CODECS="avc1.4d401f,mp4a.40.2",SUBTITLES="subs"`+"\nvideo.m3u8\n")
+		case "/english.m3u8":
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:60\n#EXTINF:60,\nenglish.vtt\n#EXT-X-ENDLIST\n")
+		case "/wrapped.m3u8":
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n"+`#EXT-X-MAP:URI="init.mp4"`+
+				"\n#EXTINF:6,\nsub-1.m4s\n#EXT-X-ENDLIST\n")
+		case "/video.m3u8":
+			_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\na.ts\n#EXT-X-ENDLIST\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+
+	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/master.m3u8", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(media.Subtitles) != 1 {
+		t.Fatalf("subtitles = %+v; want the one WebVTT rendition that could be read", media.Subtitles)
+	}
+	if s := media.Subtitles[0]; s.Name != "English" || s.Language != "en" || !s.Default || !s.Forced ||
+		len(s.Segments) != 1 || s.Segments[0] != srv.URL+"/english.vtt" {
+		t.Errorf("subtitle = %+v", s)
+	}
+	if len(media.Audio) != 0 || media.extension() != ".ts" {
+		t.Errorf("audio %+v, extension %s: subtitles alone change neither", media.Audio, media.extension())
 	}
 }
 

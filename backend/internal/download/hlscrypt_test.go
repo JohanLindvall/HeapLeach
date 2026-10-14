@@ -76,6 +76,55 @@ func TestSegmentIV(t *testing.T) {
 	if got := segmentIV(named, 2); !bytes.Equal(got, named.IV) {
 		t.Errorf("named IV ignored: %x", got)
 	}
+	// An initialisation segment in the clear has no place in the sequence.
+	if got := segmentIV(&extractor.SegmentKey{Sequence: 5, Clear: 1}, 3); !bytes.Equal(got, want) {
+		t.Errorf("IV for segment 3 after one in the clear = %x, want %x", got, want)
+	}
+}
+
+// A fragmented MP4's initialisation segment named before the key is in the
+// clear: it is joined as it is, and the media segments after it decrypted,
+// their sequence counted from the first of them.
+func TestEncryptedFragmentedPlaylistLeavesItsInitialisationSegmentAlone(t *testing.T) {
+	const firstSequence = 7
+	key := []byte("0123456789abcdef")
+	init := []byte("an initialisation segment, in the clear")
+	plain, served := [][]byte{init}, [][]byte{init}
+	for i := range 3 {
+		p := bytes.Repeat([]byte{byte(0x60 + i)}, 900+i*13)
+		plain = append(plain, p)
+		served = append(served, encryptSegment(t, p, key, segmentIV(&extractor.SegmentKey{Sequence: firstSequence}, i)))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/key", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(key) })
+	mux.HandleFunc("/seg/", func(w http.ResponseWriter, r *http.Request) {
+		i, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/seg/"))
+		if err != nil || i < 0 || i >= len(served) {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(served[i])
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m := busyManager(t)
+	var segments []string
+	for i := range served {
+		segments = append(segments, fmt.Sprintf("%s/seg/%d", srv.URL, i))
+	}
+	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL, Size: -1, Segments: segments,
+		SegmentKey: &extractor.SegmentKey{URI: srv.URL + "/key", Sequence: firstSequence, Clear: 1}}
+	if err := m.transfer(context.Background(), it); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(m.cfg.DownloadDir, "clip.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := bytes.Join(plain, nil); !bytes.Equal(got, want) {
+		t.Fatalf("joined file is not the plain stream: %d bytes, want %d", len(got), len(want))
+	}
 }
 
 // End to end: an encrypted playlist is fetched, its key once, and joined

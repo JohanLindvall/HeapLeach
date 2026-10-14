@@ -320,7 +320,7 @@ func (z *ZDF) file(ctx context.Context, doc *zdfDocument, reach *zdfReach) (*Fil
 			"no progressive file to take instead")
 	}
 	return &File{Name: media.extensionOr(playlistExtension(media.Variant)), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio}, nil
+		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles}, nil
 }
 
 // document reads one futura document.

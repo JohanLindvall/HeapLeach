@@ -291,6 +291,7 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, nil
 }
 

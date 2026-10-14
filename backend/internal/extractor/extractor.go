@@ -65,6 +65,10 @@ type File struct {
 	// the Segments and joins them all into one MP4, by stream copy with
 	// ffmpeg.
 	Audio []Track
+	// Subtitles are WebVTT tracks of a playlist's video, each a Track whose
+	// Segments are its WebVTT files in order. The downloader joins them
+	// into the MP4 as text tracks, leaving out any it cannot fetch.
+	Subtitles []Track
 	// External, when set, names a page that an external downloader handles
 	// end to end, because reaching the media at all needs machinery well
 	// beyond fetching a URL.
@@ -185,8 +189,9 @@ type Target struct {
 	// queue longer than the signature would fail partway down.
 	Segments   []string
 	SegmentKey *SegmentKey
-	// Audio replaces the File's when set, for the same reason.
-	Audio []Track
+	// Audio and Subtitles replace the File's when set, for the same reason.
+	Audio     []Track
+	Subtitles []Track
 	// Discard is set by a resolver whose links are bound to the address
 	// that obtained them, and drops what it keeps of this one so that the
 	// next resolve starts afresh. The downloader calls it when the host
@@ -246,6 +251,10 @@ type Track struct {
 	// "sv-x-tydligaretal"), Name its label ("Svenska", "Tydligare tal").
 	Language string
 	Name     string
+	// Default and Forced are the playlist's own flags. A subtitle marked
+	// default is meant to show unasked; one forced, only the parts in
+	// another language from the soundtrack.
+	Default, Forced bool
 }
 
 // SegmentKey is how a playlist's segments are encrypted: HLS's
@@ -260,6 +269,10 @@ type SegmentKey struct {
 	// number — Sequence for the first, counting up.
 	IV       []byte
 	Sequence int64
+	// Clear is how many segments at the start are in the clear: 1 for a
+	// fragmented MP4's initialisation segment named before the key. They
+	// are neither decrypted nor counted in the media sequence.
+	Clear int
 }
 
 // Result is everything an extractor found behind one input URL.

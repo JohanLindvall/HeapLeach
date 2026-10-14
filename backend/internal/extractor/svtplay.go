@@ -251,6 +251,7 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, meta.ProgramTitle, meta.EpisodeTitle, nil
 }
 

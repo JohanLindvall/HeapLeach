@@ -184,6 +184,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	for i := range tracks {
 		tracks[i].segments = slices.Clone(tracks[i].segments)
 	}
+	subtitleTracks := slices.Clone(it.Subtitles)
 	headers := maps.Clone(it.Headers)
 	workers := m.streams
 	m.mu.Unlock()
@@ -191,6 +192,14 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 	if len(tracks[0].segments) == 0 {
 		return "", errors.New("playlist has no segments")
 	}
+
+	// Subtitles first, while their links are freshest, and before the stall
+	// watchdog starts: they have a time limit of their own, and a host slow
+	// to serve them has not stalled the video.
+	subtitles := m.fetchSubtitles(ctx, it, part, subtitleTracks, headers, files)
+	m.mu.Lock()
+	it.subtitleFiles = subtitles
+	m.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -293,7 +302,7 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 				go func() {
 					defer wg.Done()
 					data, err := m.fetchSegment(ctx, it.limiter, j.segments[index], headers, &fetched)
-					if err == nil && j.secret != nil {
+					if err == nil && j.secret != nil && index >= j.key.Clear {
 						data, err = decryptSegment(data, j.secret, segmentIV(j.key, index))
 					}
 					select {

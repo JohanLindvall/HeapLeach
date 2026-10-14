@@ -65,6 +65,7 @@ func (l *LuluStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 		Segments:   first.media.Segments,
 		SegmentKey: first.media.Key,
 		Audio:      first.media.Audio,
+		Subtitles:  first.media.Subtitles,
 		Resolve: func(ctx context.Context) (*Target, error) {
 			fresh, err := l.read(ctx, page, headers)
 			if err != nil {
@@ -78,6 +79,7 @@ func (l *LuluStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 				Segments:   fresh.media.Segments,
 				SegmentKey: fresh.media.Key,
 				Audio:      fresh.media.Audio,
+				Subtitles:  fresh.media.Subtitles,
 			}, nil
 		},
 	}}}, nil

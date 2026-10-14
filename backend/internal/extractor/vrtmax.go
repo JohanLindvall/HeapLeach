@@ -465,6 +465,7 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 		Segments:   stream.Segments,
 		SegmentKey: stream.Key,
 		Audio:      stream.Audio,
+		Subtitles:  stream.Subtitles,
 	}, media.Title, util.FirstNonEmpty(page.Title, page.Player.Title), nil
 }
 

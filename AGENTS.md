@@ -1608,8 +1608,12 @@ only in the padding, so a padding error fails the attempt rather than
 writing noise. `mediaPlaylistKey` (`hls.go`) accepts one key over every
 segment — the same key line repeated before each segment counts as one —
 and refuses the rest before a byte is fetched: SAMPLE-AES, a key that
-changes or starts partway, a non-`identity` KEYFORMAT (DRM), and encryption
-over fragmented MP4. The key reaches the transfer as `File.SegmentKey`, and
+changes or starts partway, and a non-`identity` KEYFORMAT (DRM). Over
+fragmented MP4 the initialisation segment is first in the list. Named before
+the key it is in the clear (`SegmentKey.Clear`): not decrypted, and not
+counted in the sequence an absent IV is numbered from. Named after it, it is
+encrypted too, which needs the key's own IV, since it has no sequence number;
+without one it is refused. The key reaches the transfer as `File.SegmentKey`, and
 a resolver can replace it with the segments (`Target.Segments`,
 `Target.SegmentKey`) for a playlist signed for less than the queue may wait.
 Every caller of `resolveMediaPlaylist` carries the key, and the audio below,
@@ -1667,8 +1671,41 @@ is silent, so `transfer` refuses such an item before fetching a byte
 written beside the parts (`joinedPart`), checked by `identicalOnDisk`,
 reserved and renamed like any other, and only then are the parts and their
 checkpoints removed: a join that fails leaves them, and the retry joins
-again without fetching anything. Vimeo and niconico were handed to yt-dlp
-for being demuxed; that wall is down, and neither has been ported yet.
+again without fetching anything.
+
+**Subtitles come along as text tracks** (`subtitles.go`). A variant naming a
+`SUBTITLES` group comes with its WebVTT renditions (`resolveSubtitles`,
+`File.Subtitles`), keeping the playlist's default and forced flags. A
+subtitle is a bonus to the video, never a condition of it, so each step that
+could fail one leaves it out instead: a rendition whose playlist cannot be
+read, or is WebVTT wrapped in fragmented MP4 or encrypted, is not listed; a
+track that cannot be fetched in `SubtitleFetchTimeout` is logged and left
+out; a join that fails with subtitles is made again without them. Nothing is
+fetched without ffmpeg, which they could not be joined without.
+
+They are fetched at the start of each attempt, while their links are
+freshest, and before the stall watchdog starts, since a host slow to serve
+them has not stalled the video. `mergeWebVTT` joins a track's files into
+one: a plain header, every style and region block once, and then the cues.
+The other blocks go, identifiers too, which would repeat across files. A
+segmented track's files each say where their cues sit with an
+`X-TIMESTAMP-MAP`, which can differ from file to file, so the cues are moved
+onto the first mapped file's timeline, counting on across the 90 kHz
+counter's 33-bit wrap. A cue repeated across a boundary, same times and
+text, is kept once. The merged file is written whole, beside the part
+(`subtitlePart`), and a file an attempt could not replace is removed, so
+the join never takes one that may belong to another track.
+
+The join makes each an MP4 text track (`mov_text`). ffmpeg reads no
+`X-TIMESTAMP-MAP` of its own accord, so where its cues sit is given with
+`-itsoffset`: a mapped file's offset puts them on the media's timeline, and
+an unmapped file's cues count from the start of the picture, which ffprobe
+reads off the video's part. The two are not the same: ffmpeg's own CMAF
+starts its picture 23 ms in, after the audio's priming. A playlist that
+names no audio, joined only for its subtitles, carries all its audio in the
+video, and all of it comes along. ffmpeg's MP4 muxer enables the first
+subtitle track when none is default, which is how every tool's MP4
+subtitles behave.
 
 `remux.go` is a convenience on top, never a dependency — where a rendition
 carries audio and video together, the extractor picks it. It converts any

@@ -397,6 +397,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		Segments:   media.Segments,
 		SegmentKey: media.Key,
 		Audio:      media.Audio,
+		Subtitles:  media.Subtitles,
 	}, title, nil
 }
 

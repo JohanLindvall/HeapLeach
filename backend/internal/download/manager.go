@@ -481,6 +481,7 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		Segments:      f.Segments,
 		SegmentKey:    f.SegmentKey,
 		Audio:         f.Audio,
+		Subtitles:     f.Subtitles,
 		External:      f.External,
 		Size:          size,
 		SizeApprox:    f.SizeApprox,

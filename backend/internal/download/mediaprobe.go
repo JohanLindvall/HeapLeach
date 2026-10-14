@@ -26,6 +26,10 @@ type mediaStream struct {
 	Bitrate  int64
 	Pixels   int64
 	Default  bool
+	// Start is the stream's first timestamp in seconds, as the container
+	// has it, and HasStart whether it states one.
+	Start    float64
+	HasStart bool
 }
 
 // probeMedia lists the streams of a file.
@@ -43,6 +47,7 @@ func probeMedia(ctx context.Context, ffprobe, path string) ([]mediaStream, error
 			CodecName string `json:"codec_name"`
 			Channels  int    `json:"channels"`
 			BitRate   string `json:"bit_rate"`
+			StartTime string `json:"start_time"`
 			Width     int    `json:"width"`
 			Height    int    `json:"height"`
 			Tags      struct {
@@ -60,6 +65,7 @@ func probeMedia(ctx context.Context, ffprobe, path string) ([]mediaStream, error
 	streams := make([]mediaStream, 0, len(probe.Streams))
 	for _, s := range probe.Streams {
 		bitrate, _ := strconv.ParseInt(s.BitRate, 10, 64)
+		start, startErr := strconv.ParseFloat(s.StartTime, 64)
 		language := s.Tags.Language
 		if language == "" {
 			language = "und" // untagged streams form their own group
@@ -73,6 +79,8 @@ func probeMedia(ctx context.Context, ffprobe, path string) ([]mediaStream, error
 			Bitrate:  bitrate,
 			Pixels:   int64(s.Width) * int64(s.Height),
 			Default:  s.Disposition.Default == 1,
+			Start:    start,
+			HasStart: startErr == nil,
 		})
 	}
 	return streams, nil

@@ -358,6 +358,7 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 			Segments:   media.Segments,
 			SegmentKey: media.Key,
 			Audio:      media.Audio,
+			Subtitles:  media.Subtitles,
 		}}, title, nil
 	}
 

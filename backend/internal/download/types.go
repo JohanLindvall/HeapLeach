@@ -65,6 +65,11 @@ type Item struct {
 	// alone: each track is fetched into a part file of its own, and all of
 	// them are joined to the video when the last lands (mux.go).
 	Audio []extractor.Track
+	// Subtitles are the playlist's WebVTT tracks, fetched at the start of
+	// each attempt into subtitleFiles and joined with the audio
+	// (subtitles.go).
+	Subtitles     []extractor.Track
+	subtitleFiles []subtitleFile
 	// External, when set, is a page handed to the helper script instead of
 	// being fetched over HTTP.
 	External string

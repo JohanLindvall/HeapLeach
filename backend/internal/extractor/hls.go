@@ -27,12 +27,10 @@ import (
 // Adaptive streams have no single file to fetch, so a playlist-backed file
 // carries its segments instead of a URL and the downloader concatenates
 // them. Variants that carry audio and video together are preferred, because
-// concatenating those alone yields a playable file — separate renditions
-// would have to be muxed back together afterwards.
-//
-// A host whose master playlist offers nothing self-contained cannot be
-// served by this at all: the best variant would still be video only. Such a
-// host belongs on the external downloader, which has ffmpeg to mux with.
+// concatenating those alone yields a playable file. One that keeps its audio
+// apart comes with every audio rendition, and its subtitles with any
+// variant, each a Track the downloader fetches beside the video and joins to
+// it with ffmpeg.
 
 // hlsVariant is one entry of a master playlist.
 type hlsVariant struct {
@@ -46,13 +44,15 @@ type hlsVariant struct {
 	// carry video and nothing else. audioGroup is that group.
 	audioElsewhere bool
 	audioGroup     string
+	// subtitleGroup is the subtitle group the variant names, if any.
+	subtitleGroup string
 }
 
-// hlsRendition is one audio rendition of a master playlist's EXT-X-MEDIA.
-// URL is empty for one carried in the variant's own segments.
+// hlsRendition is one audio or subtitle rendition of a master playlist's
+// EXT-X-MEDIA. URL is empty for one carried in the variant's own segments.
 type hlsRendition struct {
 	URL, Language, Name string
-	Default             bool
+	Default, Forced     bool
 }
 
 // separate reports a rendition with a playlist of its own.
@@ -93,7 +93,7 @@ func (v hlsVariant) height() int {
 // parseMasterPlaylist reads the variants out of a master playlist. It
 // returns nil when the document is a media playlist instead.
 func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
-	renditions := parseAudioRenditions(doc, base)
+	renditions := parseRenditions(doc, base, "AUDIO")
 	var (
 		variants []hlsVariant
 		pending  *hlsVariant
@@ -112,6 +112,7 @@ func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
 				Codecs:         attrs["CODECS"],
 				audioElsewhere: slices.ContainsFunc(renditions[attrs["AUDIO"]], hlsRendition.separate),
 				audioGroup:     attrs["AUDIO"],
+				subtitleGroup:  attrs["SUBTITLES"],
 			}
 		case strings.HasPrefix(line, "#"):
 			continue
@@ -132,6 +133,17 @@ func parseMasterPlaylist(doc string, base *url.URL) []hlsVariant {
 // name the group, and has no URL here. A group with any of the first kind is
 // what makes those variants' own segments not the whole of their audio.
 func parseAudioRenditions(doc string, base *url.URL) map[string][]hlsRendition {
+	return parseRenditions(doc, base, "AUDIO")
+}
+
+// parseSubtitleRenditions lists each subtitle group's renditions the same
+// way.
+func parseSubtitleRenditions(doc string, base *url.URL) map[string][]hlsRendition {
+	return parseRenditions(doc, base, "SUBTITLES")
+}
+
+// parseRenditions lists the renditions of one EXT-X-MEDIA type by group.
+func parseRenditions(doc string, base *url.URL, kind string) map[string][]hlsRendition {
 	groups := make(map[string][]hlsRendition)
 	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
@@ -139,18 +151,19 @@ func parseAudioRenditions(doc string, base *url.URL) map[string][]hlsRendition {
 			continue
 		}
 		attrs := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MEDIA:"))
-		if !strings.EqualFold(attrs["TYPE"], "AUDIO") || attrs["GROUP-ID"] == "" {
+		if !strings.EqualFold(attrs["TYPE"], kind) || attrs["GROUP-ID"] == "" {
 			continue
 		}
 		// An audio description is told apart only by its characteristics:
 		// SRF names it as it names the main track, but for a trailing space.
 		name := strings.TrimSpace(attrs["NAME"])
-		if strings.Contains(attrs["CHARACTERISTICS"], "public.accessibility.describes-video") {
+		if kind == "AUDIO" && strings.Contains(attrs["CHARACTERISTICS"], "public.accessibility.describes-video") {
 			name = strings.TrimSpace(name + " (audio description)")
 		}
 		groups[attrs["GROUP-ID"]] = append(groups[attrs["GROUP-ID"]], hlsRendition{
 			URL: resolveRef(base, attrs["URI"]), Language: attrs["LANGUAGE"], Name: name,
 			Default: strings.EqualFold(attrs["DEFAULT"], "YES"),
+			Forced:  strings.EqualFold(attrs["FORCED"], "YES"),
 		})
 	}
 	for _, renditions := range groups {
@@ -293,6 +306,9 @@ type hlsMedia struct {
 	// rendition of the audio group the chosen variant names, in the group's
 	// order (resolveAudio).
 	Audio []Track
+	// Subtitles are the renditions of the subtitle group the variant names,
+	// those that could be read (resolveSubtitles).
+	Subtitles []Track
 }
 
 // errAudioElsewhere is a variant whose audio is said to be kept apart from
@@ -314,7 +330,7 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 	}
 
 	variant := hlsVariant{URL: manifestURL}
-	var audio []Track
+	var audio, subtitles []Track
 	if variants := parseMasterPlaylist(doc, base); len(variants) > 0 {
 		best, ok := bestVariant(variants)
 		if !ok {
@@ -325,6 +341,9 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 			if audio, err = resolveAudio(ctx, client, parseAudioRenditions(doc, base)[best.audioGroup], headers); err != nil {
 				return nil, err
 			}
+		}
+		if best.subtitleGroup != "" {
+			subtitles = resolveSubtitles(ctx, client, parseSubtitleRenditions(doc, base)[best.subtitleGroup], headers)
 		}
 		if doc, base, err = fetchPlaylist(ctx, client, best.URL, headers); err != nil {
 			return nil, fmt.Errorf("fetch variant playlist: %w", err)
@@ -339,7 +358,38 @@ func resolveMediaPlaylist(ctx context.Context, client *httpx.Client, manifestURL
 	if len(segments) == 0 {
 		return nil, fmt.Errorf("playlist lists no segments")
 	}
-	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc, Key: key, Audio: audio}, nil
+	return &hlsMedia{Segments: segments, Variant: variant, Doc: doc, Key: key, Audio: audio, Subtitles: subtitles}, nil
+}
+
+// resolveSubtitles reads each subtitle rendition's media playlist into a
+// Track. Subtitles are a bonus to the video, never a condition of it, so a
+// rendition that cannot be read is left out rather than failing the video,
+// as is one packaged in a form the downloader does not join: WebVTT wrapped
+// in fragmented MP4, or encrypted.
+func resolveSubtitles(ctx context.Context, client *httpx.Client, renditions []hlsRendition, headers httpx.Header) []Track {
+	var tracks []Track
+	seen := make(map[string]bool, len(renditions))
+	for _, r := range renditions {
+		if !r.separate() || seen[r.URL] {
+			continue
+		}
+		seen[r.URL] = true
+		doc, base, err := fetchPlaylist(ctx, client, r.URL, headers)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
+		}
+		if key, err := mediaPlaylistKey(doc, base); err != nil || key != nil || strings.Contains(doc, "#EXT-X-MAP:") {
+			continue
+		}
+		if segments := parseMediaPlaylist(doc, base); len(segments) > 0 {
+			tracks = append(tracks, Track{Segments: segments, Language: r.Language, Name: r.Name,
+				Default: r.Default, Forced: r.Forced})
+		}
+	}
+	return tracks
 }
 
 // extension names the container the downloaded file will be in: an MP4 when
@@ -436,18 +486,20 @@ func fetchPlaylist(ctx context.Context, client *httpx.Client, rawURL string, hea
 // One AES-128 key over every segment is the common case and is supported:
 // the downloader fetches the key once and decrypts each segment as it
 // lands. A playlist that repeats that same key line before every segment —
-// some packagers do — is the same key. Anything else is refused: SAMPLE-AES
-// and its relatives encrypt inside the stream rather than around each
-// segment; a key that changes partway, or segments in the clear before it,
-// would need a key per segment; a key format other than the plain one is
-// DRM; and encryption over fragmented MP4 puts the initialisation segment
-// ahead of the numbering an absent IV is counted from.
+// some packagers do — is the same key. Over fragmented MP4 the
+// initialisation segment comes first: named before the key, it is in the
+// clear (SegmentKey.Clear); named after it, it is encrypted too, and the key
+// must state its IV, since the initialisation segment has no sequence number
+// to count one from. Anything else is refused: SAMPLE-AES and its relatives
+// encrypt inside the stream rather than around each segment; a key that
+// changes partway, or segments in the clear before it, would need a key per
+// segment; and a key format other than the plain one is DRM.
 func mediaPlaylistKey(doc string, base *url.URL) (*SegmentKey, error) {
 	var (
 		key      *SegmentKey
 		sequence int64
 		segments int
-		mapped   bool
+		mapped   bool // an initialisation segment is named
 	)
 	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
@@ -481,6 +533,10 @@ func mediaPlaylistKey(doc string, base *url.URL) (*SegmentKey, error) {
 					return nil, fmt.Errorf("HLS playlists whose key changes partway are not supported")
 				case key == nil && segments > 0:
 					return nil, fmt.Errorf("HLS playlists that start encrypting partway are not supported")
+				case key == nil && mapped:
+					next.Clear = 1 // the initialisation segment, named before the key
+				case key != nil:
+					next.Clear = key.Clear
 				}
 				key = next
 			default:
@@ -499,8 +555,8 @@ func mediaPlaylistKey(doc string, base *url.URL) (*SegmentKey, error) {
 		}
 	}
 	if key != nil {
-		if mapped {
-			return nil, fmt.Errorf("encrypted fragmented-MP4 HLS is not supported")
+		if mapped && key.Clear == 0 && key.IV == nil {
+			return nil, fmt.Errorf("HLS encrypts its initialisation segment without naming the IV to decrypt it with")
 		}
 		key.Sequence = sequence
 	}

@@ -100,7 +100,8 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 				}
 				return &Target{
 					URL: link, Name: stem + media.extension(), Size: -1,
-					Headers: headers, Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
+					Headers: headers, Segments: media.Segments, SegmentKey: media.Key,
+					Audio: media.Audio, Subtitles: media.Subtitles,
 				}, nil
 			}
 		}

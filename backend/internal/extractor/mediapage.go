@@ -108,7 +108,7 @@ func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root
 		}
 		return &Result{Title: title, Files: []File{{
 			Name: title + media.extensionOr(path.Ext(name)), Size: -1, Headers: headers,
-			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio,
+			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
 		}}}, true
 	}
 	return &Result{Title: title, Files: []File{{

@@ -395,6 +395,7 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 		Segments:   stream.Segments,
 		SegmentKey: stream.Key,
 		Audio:      stream.Audio,
+		Subtitles:  stream.Subtitles,
 	}, show, episode, nil
 }
 
