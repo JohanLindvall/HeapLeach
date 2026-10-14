@@ -781,8 +781,9 @@ Host-specific notes:
   The persistent egress pool is enabled by default (`internal/proxy` adapts
   `github.com/JohanLindvall/proxytron/lease`, backed by bbolt), with
   `-proxies=false` or `HEAPLEACH_PROXIES=0` to disable it. The library owns
-  discovery, scoring, leases, exit claims and their defaults. Application scope
-  policy, health epoch, probe-outage handling and HTTP identity stay here.
+  discovery, scoring, leases, exit probing and claims, and their defaults.
+  Application scope policy, health epoch, cached probe-outage policy and HTTP
+  identity stay here.
   `Pace.PerRoute` marks the service's addressing rule;
   the manager allows the `keep2share`, `fileboom` and `cloudflare` groups to use proxies. The
   dispatcher leases a route before resolving and holds it through the
@@ -848,9 +849,9 @@ Host-specific notes:
   listening addresses can keep two downloads off one exit. Leasing ports of
   untried gateways freely, about a thousand free downloads a minute were
   refused while one to three files moved. Before a routed attempt's first
-  request to the host, `claimExit` asks the route for its exit
-  (`ProxyExitProbeURL`, through the route, bounded by
-  `ProxyExitProbeTimeout`), and `Lease.ClaimExit` claims it: one lease per
+  request to the host, `claimExit` delegates to `proxy.ExitProber`: it asks
+  through the lease's existing client, bounded by `ProxyExitProbeTimeout`,
+  and calls `Lease.ClaimExit` to claim the answer. There is one lease per
   exit per service, as for an address. A route whose exit is taken, or
   cooling for the service, is handed back at no cost to the file
   (`errExitInUse`), and selection passes over a route whose known exit is
@@ -864,16 +865,20 @@ Host-specific notes:
   failed the host's first request. One that answers each echo service in
   turn (`ProxyExitProbeURL`, then `ProxyExitProbeFallbackURL`) with
   something other than an address, a page or a refusal of its own, is not
-  carrying requests as a proxy should (`proxyNotWorkingError`): it is
+  carrying requests as a proxy should (`proxy.ErrExitProbeFailed`): it is
   shelved, and the file goes on at no cost. Unless the echo services are
   down over the normal connection too (`echoReachable`, asked at most once
   a `ProxyEchoRecheck`): then the exit stays unknown and the download goes
   ahead, since their outage must not shelve every route. Their answers are
-  not scored as the host's (`Lease.ProbeContext`): only the route's failure
+  not scored as the host's (`proxy.ExitProber`): only the route's failure
   to carry the request counts against it there, or one rate-limited answer
-  would have put the route on the refusal backoff. Extra streams check and
-  claim their routes the same way. `Config.ProxyExitProbes` carries the
-  URLs and is empty in a Config built by hand, so tests opt in.
+  would have put the route on the refusal backoff. The shared prober retains
+  the lease's client and browser identity, and `proxytron.Detector` parses
+  bounded plain-text or JSON IP answers for both routed and normal checks.
+  Cancellation stops both checks without caching an outage or penalizing
+  the route. Extra streams check and claim their routes the same way.
+  `Config.ProxyExitProbes` carries the URLs and is empty in a Config built
+  by hand, so tests opt in.
 
   **Each route of a per-route service is one browser** (`clientAdapter.agent`,
   `httpx.WithRouteAgent`). It draws a User-Agent from
