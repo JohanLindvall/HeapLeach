@@ -670,7 +670,11 @@ the same public address: each route is asked which address it leaves by
 before its first CAPTCHA, through an IP-echo service, and a route whose exit
 another download holds, or the host is holding back, is passed over. The same
 question shows whether the proxy works at all: one that answers with anything
-but an address is set aside before it costs a CAPTCHA. Each route presents a
+but an address is set aside before it costs a CAPTCHA. If the echo services
+also fail over the normal connection, downloads proceed with an unknown exit
+until those services recover. The shared Proxytron prober accepts plain-text
+and JSON IP answers while retaining the route's client and browser identity.
+Canceling a probe does not penalize the route. Each route presents a
 browser of its own, drawn from over thirty real desktop User-Agents, and an
 address the host refuses outright is left alone for an hour. When routes would otherwise
 go unused, a slow file also reads through extra routes, up to the streams

@@ -27,6 +27,12 @@ type Row = lease.Row
 type Page = lease.Page
 type Summary = lease.Summary
 type SourceView = lease.SourceView
+type ExitProber = lease.ExitProber
+
+var (
+	ErrExitInUse       = lease.ErrExitInUse
+	ErrExitProbeFailed = lease.ErrExitProbeFailed
+)
 
 func Services() []string { return []string{"keep2share", "fileboom", "cloudflare"} }
 
