@@ -1205,6 +1205,37 @@ Host-specific notes:
   listed under, the card's title with its number, so that a listing read
   again finds what was saved: `finishedLocked` keys on the name an item
   finished with, the `.ts`, not the MP4 it was remuxed into.
+- **drtv** reads DR TV (`dr.dk/drtv/...`) through the API its player calls
+  (`production-cdn.dr-massive.com/api`), asked as the anonymous subscriber
+  (`sub=Anonymous`), as yt-dlp asks. The site now asks viewers to sign in
+  before it plays anything, and treats a signed-out browser as another
+  subscriber (`Anonymous2`) that is offered nothing, but the older code is
+  still served what DR offers free. A programme the API offers no files
+  (`8009`, "Ingen filer") is reported as needing a login: that is what every
+  programme would answer if the code were retired. An item says what it is
+  (`type`: episode, program, season, show, channel), so the id after the
+  link's last `_` is dispatched on that; slugs have underscores of their
+  own. A programme's videos are a master per version, and the standard one
+  is taken. Its master is CMAF with video-only variants and the audio apart,
+  every part a byte range of one MP4 per rendition, with no key and no
+  signature.
+
+  Two things in it are not what they say. The audio group holds one track
+  at two or three bitrates (`English` and `English_2`, or a group per
+  variant), so only its default is kept: joined whole, the MP4 carried the
+  same sound twice. And every rendition is tagged English, Danish
+  programmes included. The API's `language` replaces the tag: `da`, or
+  `foreign`, which marks foreign speech in the programme and names no
+  language, so the track is left unnamed. What DR shows in Denmark alone
+  (`IsGeoRestricted`) its CDN refuses from elsewhere with a 403, sent as an
+  HTML page under a playlist's content type; the API does not refuse it.
+  DRM is marked per version (`drm`: `PlayReady`). A show lists its seasons
+  and a season its episodes (`/children`, 200 a page, `paging.total`
+  counting pages). Each entry carries its `contextualTitle`, the episode as
+  its season names it, number and all, and its geo flag, so a listing needs
+  no request per episode. A season whose title is only the show's is filed
+  as "Sæson N". Anything else on dr.dk still goes to yt-dlp through the
+  `Handoff` the extractor keeps.
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked
