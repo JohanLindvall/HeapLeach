@@ -1304,15 +1304,27 @@ Host-specific notes:
   page names its own media in its data layer (`IdsCollection`,
   `MedianetId:<id>`), with its programme beside it (`Emission`, used for
   OHdio's names; for news it is a section's). Every page carries other media
-  ids too, recommendations, so the first id on a page is not its own. The
+  ids too, recommendations, so the first id on a page is not its own. A
+  daily show's episode (`/ohdio/premiere/emissions/...`) names only its
+  `EpisodeId`, and its media is its player's item for that episode
+  (`playlistItemId`, whose `globalId2.id` is the episode, `mediaId`). An
+  article (`NewstoryId`) plays the media of its attachments
+  (`attachment.playableContent.media`): one is named after the article,
+  several each by the API under the article's title. An article with none
+  still goes to yt-dlp. Some media are signed (`hdnea` on the master for
+  two minutes, then an `hdntl` path token and `aka_me_session` on every
+  segment for a day; a segment without them is a 403), so every file
+  resolves again when its transfer starts. The filter is taken off with the
+  token kept, and the full ladder then reaches 1080p. The
   API's link asks the CDN to leave out every rendition above 1.5 Mbps
   (`aws.manifestfilter`). Asked without it, the same CDN serves the whole
-  ladder, so the filter is dropped: a news video comes at 1280x720, where
-  the API's link stops at 852x480. No option of the API's lifts it (every
+  ladder, so the filter is dropped: a news video comes at 1280x720 or
+  1920x1080, where the API's link stops at 852x480. No option of the API's lifts it (every
   `connectionType`, `multibitrate=false`). Where the CDN refuses the
   unfiltered master, the API's own link is taken instead. Video is TS
   with its audio in a rendition of its own, which the packager names
-  `audio1_fr`, so the name is left off and the language kept. OHdio is
+  `audio1_fr`, so the name is left off and the language kept; one ending
+  in `dv` (`audio0_frdv`) is the audio description, named so. OHdio is
   audio-only TS, its transcript a WebVTT rendition (which has been seen with
   no cues at all; the merge leaves such a track out). An OHdio programme's
   page lists its episodes as `EpisodeListItem` entries with their media ids,
@@ -1708,7 +1720,13 @@ and `reserve` kept it beside itself as "(2)", then "(3)": 404 identical copies
 in one evening. Two things now cover it.
 - **The job's own record.** `rereadLocked` records the items the job had
   already saved, by destination (`finishedLocked`, `destinationKey`, the
-  key `separateNames` uses). `resolve` stats them outside `mu`
+  key `separateNames` uses). A file is recorded under the name its listing
+  gave it too (`Item.listed`, saved with the queue as `listed` where it
+  differs). A resolver, a `Content-Disposition` header or yt-dlp can rename
+  an item after listing, and a listing read again names it as before, so
+  under the new name alone every such file was fetched again after a
+  restart. Older broadcasters list `.mp4` and resolve `.ts`. A listed name
+  never displaces another file's own. `resolve` stats them outside `mu`
   (`stillOnDisk`). `applyResultLocked` marks an item done, without
   queueing it, when its destination was saved before and that file is still
   there. The recorded path is the evidence, not the length: a playlist is

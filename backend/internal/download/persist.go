@@ -3,6 +3,7 @@
 package download
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"time"
@@ -69,6 +70,7 @@ func (m *Manager) Restore() (unfinished int, err error) {
 				Size:    si.Size,
 				Err:     si.Err,
 				Skipped: si.Skipped,
+				listed:  cmp.Or(si.Listed, si.Name),
 				limiter: job.limiter,
 			}
 			// A finished file keeps its byte count so the job still reads as
@@ -172,7 +174,7 @@ func (m *Manager) stateLocked() *savedState {
 			if status == StatusRunning || status == StatusResolving {
 				status = StatusQueued
 			}
-			sj.Items = append(sj.Items, savedItem{
+			si := savedItem{
 				ID:      it.ID,
 				Name:    it.Name,
 				Dir:     it.Dir,
@@ -181,7 +183,11 @@ func (m *Manager) stateLocked() *savedState {
 				Size:    it.Size,
 				Err:     it.Err,
 				Skipped: it.Skipped,
-			})
+			}
+			if it.listed != it.Name {
+				si.Listed = it.listed
+			}
+			sj.Items = append(sj.Items, si)
 		}
 		st.Jobs = append(st.Jobs, sj)
 	}

@@ -404,6 +404,7 @@ func (m *Manager) stillOnDisk(finished map[string]finishedFile) map[string]finis
 // destination. Added to rather than replaced, so a job read again before an
 // earlier reading lands keeps the record. Caller holds mu.
 func finishedLocked(job *Job) {
+	var renamed []*Item
 	for _, it := range job.Items {
 		if it.Status != StatusDone || it.Path == "" {
 			continue
@@ -412,6 +413,17 @@ func finishedLocked(job *Job) {
 			job.finished = make(map[string]finishedFile)
 		}
 		job.finished[destinationKey(it.Dir, it.Name)] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+		if it.listed != "" && it.listed != it.Name {
+			renamed = append(renamed, it)
+		}
+	}
+	// The names the listing gave them, after every file's own, so that one
+	// can never stand for a file saved under that very name.
+	for _, it := range renamed {
+		key := destinationKey(it.Dir, it.listed)
+		if _, taken := job.finished[key]; !taken {
+			job.finished[key] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+		}
 	}
 }
 
@@ -445,6 +457,9 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 		items = append(items, m.newItem(job, f, folder, i))
 	}
 	separateNames(items)
+	for _, it := range items {
+		it.listed = it.Name
+	}
 	job.Items = append(job.Items, items...)
 	saved := 0
 	for _, it := range items {

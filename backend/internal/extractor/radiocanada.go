@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -73,6 +74,9 @@ var (
 	radioCanadaConsole   = regexp.MustCompile(`/widgets/mediaconsole/([a-z0-9]+)/([0-9]+)`)
 	radioCanadaMediaPath = regexp.MustCompile(`/media-([0-9]+)(?:/|$)`)
 	radioCanadaOwnMedia  = regexp.MustCompile(`MedianetId:([0-9]+)\|`)
+	radioCanadaEpisodeID = regexp.MustCompile(`\|EpisodeId:([0-9]+)\|`)
+	radioCanadaArticle   = regexp.MustCompile(`\|NewstoryId:[0-9-]+\|`)
+	radioCanadaAttached  = regexp.MustCompile(`"media":\{"__typename":"(?:Video|Audio)","appCode":"([a-z]+)"[^{}]*?"id":([0-9]+)`)
 	radioCanadaEmission  = regexp.MustCompile(`"Emission":"((?:[^"\\]|\\.)*)"`)
 	radioCanadaEpisode   = regexp.MustCompile(`\{"typename":"EpisodeListItem"(?s:.*?)"mediaIds":\[([0-9]+)[^\]]*\](?s:.*?)"title":"((?:[^"\\]|\\.)*)"`)
 	radioCanadaPages     = regexp.MustCompile(`"pagination":\{"pageNumber":[0-9]+,"pageSize":[0-9]+,"totalCount":([0-9]+)\}`)
@@ -97,17 +101,97 @@ func (r *RadioCanada) Extract(ctx context.Context, u *url.URL, opts Options) (*R
 	if m := radioCanadaTitle.FindStringSubmatch(page); m != nil {
 		title = util.TrimTitleSuffix(util.Unescape(m[1]), " | ")
 	}
-	if m := radioCanadaOwnMedia.FindStringSubmatch(page); m != nil {
+	if id := radioCanadaPageMedia(page); id != "" {
 		var emission string
 		if e := radioCanadaEmission.FindStringSubmatch(page); e != nil && strings.Contains(u.Path, "/ohdio/") {
 			emission = radioCanadaText(e[1])
 		}
-		return r.single(ctx, "medianet", m[1], ardJoin(emission, title))
+		return r.single(ctx, "medianet", id, ardJoin(emission, title))
 	}
 	if radioCanadaEpisode.MatchString(page) {
 		return r.programme(ctx, final, title, page, opts)
 	}
+	if radioCanadaArticle.MatchString(page) {
+		if res, err := r.article(ctx, title, page); res != nil || err != nil {
+			return res, err
+		}
+	}
 	return r.handoff.Extract(ctx, u, opts)
+}
+
+// radioCanadaPageMedia is the media a page names as its own in its data
+// layer: a video's or a podcast episode's MedianetId, or for a daily show's
+// episode, which names its EpisodeId alone, the media its player's item
+// for that episode plays.
+func radioCanadaPageMedia(page string) string {
+	if m := radioCanadaOwnMedia.FindStringSubmatch(page); m != nil {
+		return m[1]
+	}
+	if m := radioCanadaEpisodeID.FindStringSubmatch(page); m != nil {
+		item := regexp.MustCompile(`"playlistItemId":\{"globalId2":\{"contentType":\{[^{}]*\},"id":"` + m[1] + `"\}[^{}]*?"mediaId":"([0-9]+)"`)
+		if m := item.FindStringSubmatch(page); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// article reads the media an article's attachments play: one is named
+// after the article, several each by the media API, under the article's
+// title. An article attaching none is nil, for yt-dlp.
+func (r *RadioCanada) article(ctx context.Context, title, page string) (*Result, error) {
+	type attached struct{ app, id string }
+	var media []attached
+	seen := make(map[string]bool)
+	for _, m := range radioCanadaAttached.FindAllStringSubmatch(page, -1) {
+		if !seen[m[2]] {
+			seen[m[2]] = true
+			media = append(media, attached{app: m[1], id: m[2]})
+		}
+	}
+	switch len(media) {
+	case 0:
+		return nil, nil
+	case 1:
+		return r.single(ctx, media[0].app, media[0].id, title)
+	}
+	type found struct {
+		file   *File
+		reason string
+	}
+	results := FanOut(ctx, media, func(ctx context.Context, a attached) ([]found, error) {
+		target, err := r.stream(ctx, a.app, a.id, "")
+		if refused, ok := errors.AsType[*radioCanadaRefused](err); ok {
+			return []found{{reason: refused.reason}}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		file := r.file(a.app, a.id, target)
+		return []found{{file: &file}}, nil
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	res := &Result{Title: cmp.Or(title, "Radio-Canada")}
+	var reasons []string
+	for _, f := range results {
+		if f.file != nil {
+			res.Files = append(res.Files, *f.file)
+		} else {
+			reasons = append(reasons, f.reason)
+		}
+	}
+	if len(res.Files) == 0 {
+		if len(reasons) > 0 {
+			return nil, fmt.Errorf("radio-canada: %s: none of its %d media can be had: %s", res.Title, len(media), reasons[0])
+		}
+		return nil, fmt.Errorf("radio-canada: %s: none of its media could be read", res.Title)
+	}
+	if len(reasons) > 0 {
+		res.Note = fmt.Sprintf("%d left out: %s", len(reasons), reasons[0])
+	}
+	return res, nil
 }
 
 // radioCanadaText is a string written into the page's data, its escapes
@@ -125,10 +209,22 @@ func (r *RadioCanada) single(ctx context.Context, app, id, stem string) (*Result
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: strings.TrimSuffix(target.Name, ".mp4"), Files: []File{{
+	file := r.file(app, id, target)
+	return &Result{Title: strings.TrimSuffix(file.Name, path.Ext(file.Name)), Files: []File{file}}, nil
+}
+
+// file is a resolved media as its file, read again when its transfer
+// starts: some media are signed, their master for two minutes and their
+// segments for a day, which a queue can outwait.
+func (r *RadioCanada) file(app, id string, target *Target) File {
+	stem := strings.TrimSuffix(target.Name, path.Ext(target.Name))
+	return File{
 		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
 		SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-	}}}, nil
+		Resolve: func(ctx context.Context) (*Target, error) {
+			return r.stream(ctx, app, id, stem)
+		},
+	}
 }
 
 // radioCanadaRefused is a media the API names no stream for.
@@ -170,9 +266,13 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 	}
 	audio := media.Audio
 	for i := range audio {
-		// "audio1_fr" is the packager's, not a name; the language says it.
-		if radioCanadaPackagerName.MatchString(audio[i].Name) {
+		// "audio1_fr" is the packager's, not a name, and the language says
+		// it; "audio0_frdv" is the audio description (vidéodescription).
+		if m := radioCanadaPackagerName.FindStringSubmatch(audio[i].Name); m != nil {
 			audio[i].Name = ""
+			if strings.HasSuffix(m[1], "dv") {
+				audio[i].Name = "Vidéodescription"
+			}
 		}
 	}
 	return &Target{
@@ -181,7 +281,7 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 	}, nil
 }
 
-var radioCanadaPackagerName = regexp.MustCompile(`^audio[0-9]+_[a-z]+$`)
+var radioCanadaPackagerName = regexp.MustCompile(`^audio[0-9]+_([a-z]+)$`)
 
 // name is what the API calls a media: its programme and its title, or its
 // id where it says nothing.

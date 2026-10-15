@@ -124,6 +124,13 @@ type Item struct {
 	// in one listing. A later resolver or disposition header must not merge
 	// those entries back into the same destination.
 	fixedName bool
+	// listed is the name the item's listing gave it, before a resolver, a
+	// Content-Disposition header or an external downloader renamed it. A
+	// listing read again names the item so again, so the job's record of
+	// what it saved keeps a finished file under both names
+	// (finishedLocked). Kept under the new name alone, every file a resolver
+	// had renamed was fetched again after a restart.
+	listed string
 	// lastView is what was last broadcast for this item, so the next frame
 	// can carry only the rows that actually changed. Guarded by
 	// Manager.mu, and written only on the broadcast path — a snapshot read

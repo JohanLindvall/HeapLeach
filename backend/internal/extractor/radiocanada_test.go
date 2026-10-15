@@ -32,6 +32,18 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 		switch path := r.URL.Path; {
 		case path == "/info/videos/1-1001/une-video-inventee":
 			page(w, "Une vidéo inventée", recommended+`{"IdsCollection":"|ProgramId:24-1|MedianetId:1001|","Emission":"Vidéos"}`)
+		case path == "/ohdio/premiere/emissions/une-emission-inventee/episodes/4001/un-jour":
+			// The page names its episode alone; its player's item for that
+			// episode names the media, beside another episode's.
+			page(w, "Un jour inventé | OHdio", `{"Emission":"Une émission inventée","IdsCollection":"|ProgramId:4000|EpisodeId:4001|"}`+
+				`{"playlistItemId":{"globalId2":{"contentType":{"id":18,"name":"Épisode"},"id":"4999"},"mediaId":"1004"}}`+
+				`{"playlistItemId":{"globalId2":{"contentType":{"id":18,"name":"Épisode"},"id":"4001"},"hasTranscription":true,"mediaId":"1002","mediaStartPosition":95}}`)
+		case path == "/nouvelle/5001/un-article-invente":
+			page(w, "Un article inventé", `{"IdsCollection":"|NewstoryId:11-5001|"}{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","format":"16x9","id":1001}}}}`)
+		case path == "/nouvelle/5002/un-article-a-deux-videos":
+			page(w, "Un article à deux vidéos", `{"IdsCollection":"|NewstoryId:11-5002|"}`+
+				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1001}}}}`+
+				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1003}}}}`)
 		case path == "/ohdio/balados/2000/un-balado-invente/2001/un-episode":
 			page(w, "Un épisode inventé | OHdio", `{"Emission":"Un balado inventé","IdsCollection":"|ProgramId:2000|EpisodeId:2001|MedianetId:1002|"}`)
 		case path == "/ohdio/balados/2000/un-balado-invente":
@@ -74,6 +86,7 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 			http.Error(w, "refused", http.StatusForbidden)
 		case path == "/out/v1/video/index.m3u8", path == "/out/v1/strict/index.m3u8":
 			master := "#EXTM3U\n" + `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio_0",CHANNELS="2",NAME="audio1_fr",LANGUAGE="fra",DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8"` + "\n" +
+				`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio_0",CHANNELS="2",NAME="audio0_frdv",LANGUAGE="fra",DEFAULT=NO,AUTOSELECT=NO,URI="described.m3u8"` + "\n" +
 				`#EXT-X-STREAM-INF:BANDWIDTH=1503268,RESOLUTION=360x640,CODECS="avc1.64001E,mp4a.40.2",AUDIO="audio_0"` + "\nlow.m3u8\n"
 			if !q.Has("aws.manifestfilter") {
 				master += `#EXT-X-STREAM-INF:BANDWIDTH=5251549,RESOLUTION=576x1024,CODECS="avc1.64001F,mp4a.40.2",AUDIO="audio_0"` + "\nhigh.m3u8\n"
@@ -122,8 +135,11 @@ func TestRadioCanadaReadsThePagesOwnMediaUnfiltered(t *testing.T) {
 	if strings.Contains(f.URL, "manifestfilter") || len(f.Segments) != 1 || !strings.HasSuffix(f.Segments[0], "/high_0.ts") {
 		t.Errorf("url %q, segments %v; want the unfiltered master's top rendition", f.URL, f.Segments)
 	}
-	if len(f.Audio) != 1 || f.Audio[0].Name != "" || f.Audio[0].Language != "fra" {
-		t.Errorf("audio %+v; want the French track, the packager's name left off", f.Audio)
+	if len(f.Audio) != 2 || f.Audio[0].Name != "" || f.Audio[0].Language != "fra" || f.Audio[1].Name != "Vidéodescription" {
+		t.Errorf("audio %+v; want the French track, the packager's name left off, and its audio description named so", f.Audio)
+	}
+	if target, err := f.Resolve(context.Background()); err != nil || target.Name != f.Name || len(target.Segments) != 1 {
+		t.Errorf("target %+v, %v; want the media minted again under its name", target, err)
 	}
 }
 
@@ -219,5 +235,33 @@ func TestRadioCanadaPassesOnTheAPIsRefusal(t *testing.T) {
 	_, err := radioCanadaExtract(t, srv, "/widgets/mediaconsole/medianet/1009")
 	if err == nil || !strings.Contains(err.Error(), "n'est pas disponible dans votre pays") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A daily show's episode names its episode alone, and the media is its
+// player's item for that episode; an article is the media its attachments
+// play, one named after the article, several by the API under its title.
+func TestRadioCanadaReadsDailyEpisodesAndArticles(t *testing.T) {
+	srv := radioCanadaFakeSite(t)
+	res, err := radioCanadaExtract(t, srv, "/ohdio/premiere/emissions/une-emission-inventee/episodes/4001/un-jour")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name := res.Files[0].Name; name != "Une émission inventée - Un jour inventé.ts" {
+		t.Errorf("daily episode named %q", name)
+	}
+	res, err = radioCanadaExtract(t, srv, "/nouvelle/5001/un-article-invente")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Files[0].Name != "Un article inventé.mp4" {
+		t.Errorf("article: %+v", res.Files)
+	}
+	res, err = radioCanadaExtract(t, srv, "/nouvelle/5002/un-article-a-deux-videos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "Un article à deux vidéos" || len(res.Files) != 2 || res.Files[0].Name != "Une émission inventée - Un titre inventé.mp4" {
+		t.Errorf("%q: %+v", res.Title, res.Files)
 	}
 }

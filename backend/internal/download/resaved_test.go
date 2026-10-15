@@ -141,3 +141,72 @@ func TestAnIdenticalFileIsKeptOnceAndADifferentOneBesideIt(t *testing.T) {
 		t.Error("a different file was taken for the one already there")
 	}
 }
+
+// A file its resolver named otherwise than its listing did is still the
+// job's own after a restart: the listing, read again, names it as before,
+// and the record knows it by that name too. Recorded under the resolver's
+// name alone, every such file was fetched again.
+func TestARestartRecognisesAFileItsResolverRenamed(t *testing.T) {
+	photo := []byte("jpeg bytes of a photo its resolver named")
+	var fetched atomic.Int32
+	srv := unsizedServer(t, func() []byte { return photo }, &fetched)
+	m, dir := newTestManager(t)
+	m.SetPaused(true)
+	if err := os.WriteFile(filepath.Join(dir, "A Photo Named By Its Resolver.jpg"), photo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	job := &Job{
+		ID: "restored", Source: srv.URL + "/album/photo.jpg", Title: "photo.jpg", Host: "direct",
+		CreatedAt: time.Now(), restored: true,
+		Items: []*Item{{
+			ID: "saved", Name: "A Photo Named By Its Resolver.jpg", listed: "photo.jpg", Status: StatusDone,
+			Path: "A Photo Named By Its Resolver.jpg", Size: int64(len(photo)),
+		}},
+	}
+	m.jobs[job.ID] = job
+	m.order = append(m.order, job.ID)
+	m.mu.Unlock()
+
+	m.SetPaused(false)
+	if !waitForCond(20*time.Second, func() bool { return itemStatusesOf(m, "restored", StatusDone) == 1 }) {
+		t.Fatal("the re-read job did not finish")
+	}
+	if got := fetched.Load(); got != 0 {
+		t.Errorf("fetched %d times; want the saved file recognised", got)
+	}
+	if got := namesIn(t, dir); len(got) != 1 {
+		t.Errorf("destination holds %q; want the one file", got)
+	}
+}
+
+// The name an item was listed under outlives a restart, where something
+// renamed the item since, and is saved only there.
+func TestTheListedNameIsSavedWithTheQueue(t *testing.T) {
+	m, file := newSavedManager(t)
+	job := &Job{ID: "job", Title: "A listing", Items: []*Item{
+		{ID: "renamed", Status: StatusDone, Name: "Renamed.ts", listed: "Listed.mp4", Path: "Renamed.mp4", Size: 10},
+		{ID: "kept", Status: StatusDone, Name: "Kept.mp4", listed: "Kept.mp4", Path: "Kept.mp4", Size: 10},
+	}}
+	m.jobs[job.ID], m.order = job, []string{job.ID}
+	m.persist()
+	state, _, err := loadState(file, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items := state.Jobs[0].Items; items[0].Listed != "Listed.mp4" || items[1].Listed != "" {
+		t.Errorf("saved %+v; want the listed name where it differs alone", items)
+	}
+
+	restored, _ := newSavedManager(t)
+	restored.stateFile = file
+	if _, err := restored.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	restored.mu.Lock()
+	defer restored.mu.Unlock()
+	got := restored.jobs["job"].Items
+	if got[0].listed != "Listed.mp4" || got[1].listed != "Kept.mp4" {
+		t.Errorf("restored listed names %q and %q", got[0].listed, got[1].listed)
+	}
+}

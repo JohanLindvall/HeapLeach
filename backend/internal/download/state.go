@@ -117,6 +117,9 @@ type savedItem struct {
 	Size    int64  `json:"size"`
 	Err     string `json:"error,omitempty"`
 	Skipped bool   `json:"skipped,omitempty"`
+	// Listed is the name the listing gave the item, where something renamed
+	// it since (Item.listed).
+	Listed string `json:"listed,omitempty"`
 }
 
 // loadState reads the queue left by a previous run, and reports which file
