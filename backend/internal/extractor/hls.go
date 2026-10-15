@@ -53,10 +53,18 @@ type hlsVariant struct {
 type hlsRendition struct {
 	URL, Language, Name string
 	Default, Forced     bool
+	// description marks an audio description.
+	description bool
 }
 
 // separate reports a rendition with a playlist of its own.
 func (r hlsRendition) separate() bool { return r.URL != "" }
+
+// avc reports a variant whose video is H.264.
+func (v hlsVariant) avc() bool {
+	codecs := strings.ToLower(v.Codecs)
+	return strings.Contains(codecs, "avc1") || strings.Contains(codecs, "avc3")
+}
 
 // muxed reports whether this variant carries its own audio, which makes it
 // usable without a separate audio rendition.
@@ -154,17 +162,23 @@ func parseRenditions(doc string, base *url.URL, kind string) map[string][]hlsRen
 		if !strings.EqualFold(attrs["TYPE"], kind) || attrs["GROUP-ID"] == "" {
 			continue
 		}
-		// An audio description is told apart only by its characteristics:
-		// SRF names it as it names the main track, but for a trailing space.
-		name := strings.TrimSpace(attrs["NAME"])
-		if kind == "AUDIO" && strings.Contains(attrs["CHARACTERISTICS"], "public.accessibility.describes-video") {
-			name = strings.TrimSpace(name + " (audio description)")
-		}
 		groups[attrs["GROUP-ID"]] = append(groups[attrs["GROUP-ID"]], hlsRendition{
-			URL: resolveRef(base, attrs["URI"]), Language: attrs["LANGUAGE"], Name: name,
-			Default: strings.EqualFold(attrs["DEFAULT"], "YES"),
-			Forced:  strings.EqualFold(attrs["FORCED"], "YES"),
+			URL: resolveRef(base, attrs["URI"]), Language: attrs["LANGUAGE"], Name: strings.TrimSpace(attrs["NAME"]),
+			Default:     strings.EqualFold(attrs["DEFAULT"], "YES"),
+			Forced:      strings.EqualFold(attrs["FORCED"], "YES"),
+			description: kind == "AUDIO" && strings.Contains(attrs["CHARACTERISTICS"], "public.accessibility.describes-video"),
 		})
+	}
+	// An audio description is told apart only by its characteristics where
+	// its name says nothing: SRF names it as it names the main track, but
+	// for a trailing space. Named so where two would read alike, and only
+	// there, since most hosts name it for what it is.
+	for _, renditions := range groups {
+		for i, r := range renditions {
+			if r.description && slices.ContainsFunc(renditions, func(o hlsRendition) bool { return o != r && o.Name == r.Name }) {
+				renditions[i].Name = strings.TrimSpace(r.Name + " (audio description)")
+			}
+		}
 	}
 	for _, renditions := range groups {
 		slices.SortStableFunc(renditions, func(a, b hlsRendition) int { return cmpBool(b.Default, a.Default) })
@@ -173,7 +187,10 @@ func parseRenditions(doc string, base *url.URL, kind string) map[string][]hlsRen
 }
 
 // bestVariant picks the highest-quality rendition, preferring ones that
-// carry audio so the result needs no muxing.
+// carry audio so the result needs no muxing. At the same height H.264 comes
+// before HEVC and AV1, whatever their bitrates: every player decodes it, and
+// HEVC in an MP4 tagged hev1, as packagers mostly tag it, plays in nothing
+// of Apple's.
 func bestVariant(variants []hlsVariant) (hlsVariant, bool) {
 	if len(variants) == 0 {
 		return hlsVariant{}, false
@@ -184,6 +201,7 @@ func bestVariant(variants []hlsVariant) (hlsVariant, bool) {
 			cmpBool(a.audioElsewhere, b.audioElsewhere),
 			cmpBool(b.muxed(), a.muxed()), // self-contained first
 			cmp.Compare(b.height(), a.height()),
+			cmpBool(b.avc(), a.avc()),
 			cmp.Compare(b.Bandwidth, a.Bandwidth),
 		)
 	})
@@ -192,25 +210,108 @@ func bestVariant(variants []hlsVariant) (hlsVariant, bool) {
 
 // parseMediaPlaylist reads the ordered segment URLs. An initialisation
 // segment, where the playlist declares one, is returned first because it
-// must lead the concatenated output.
+// must lead the concatenated output. A segment that is a byte range of a
+// larger file (EXT-X-BYTERANGE, or a map's BYTERANGE) carries its range
+// (rangeSegment); one whose range names no offset starts where the
+// previous segment of the same file ended.
 func parseMediaPlaylist(doc string, base *url.URL) []string {
-	var segments []string
+	var (
+		segments []string
+		pending  *byteRange
+		lastRef  string
+		lastEnd  int64
+	)
 	for line := range strings.SplitSeq(doc, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
 		case line == "":
 			continue
 		case strings.HasPrefix(line, "#EXT-X-MAP:"):
-			if uri := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MAP:"))["URI"]; uri != "" {
-				segments = append(segments, resolveRef(base, uri))
+			attrs := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MAP:"))
+			if attrs["URI"] == "" {
+				continue
+			}
+			ref := resolveRef(base, attrs["URI"])
+			if r, ok := parseByteRange(attrs["BYTERANGE"]); ok {
+				// A map's range with no offset starts at the beginning.
+				segments = append(segments, rangeSegment(ref, r.offset, r.length))
+			} else {
+				segments = append(segments, ref)
+			}
+		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:"):
+			if r, ok := parseByteRange(strings.TrimPrefix(line, "#EXT-X-BYTERANGE:")); ok {
+				pending = &r
 			}
 		case strings.HasPrefix(line, "#"):
 			continue
 		default:
-			segments = append(segments, resolveRef(base, line))
+			ref := resolveRef(base, line)
+			if pending == nil {
+				segments = append(segments, ref)
+				continue
+			}
+			offset := pending.offset
+			if !pending.stated && ref == lastRef {
+				offset = lastEnd
+			}
+			segments = append(segments, rangeSegment(ref, offset, pending.length))
+			lastRef, lastEnd, pending = ref, offset+pending.length, nil
 		}
 	}
 	return segments
+}
+
+// byteRange is an EXT-X-BYTERANGE: length bytes from offset, and whether the
+// offset was stated.
+type byteRange struct {
+	length, offset int64
+	stated         bool
+}
+
+// parseByteRange reads "<length>[@<offset>]".
+func parseByteRange(text string) (byteRange, bool) {
+	text = strings.Trim(strings.TrimSpace(text), `"`)
+	lengthText, offsetText, stated := strings.Cut(text, "@")
+	length, err := strconv.ParseInt(lengthText, 10, 64)
+	if err != nil || length <= 0 {
+		return byteRange{}, false
+	}
+	var offset int64
+	if stated {
+		if offset, err = strconv.ParseInt(offsetText, 10, 64); err != nil || offset < 0 {
+			return byteRange{}, false
+		}
+	}
+	return byteRange{length: length, offset: offset, stated: stated}, true
+}
+
+// segmentRangeMark opens a byte range carried in a segment's fragment.
+const segmentRangeMark = "#range="
+
+// rangeSegment is a segment that is length bytes of the file at ref from
+// offset: the URL, with the range in its fragment, which no request ever
+// sends. That keeps File.Segments a list of strings for every extractor
+// that never meets a range; the downloader reads it back (SegmentRange).
+func rangeSegment(ref string, offset, length int64) string {
+	ref, _, _ = strings.Cut(ref, "#")
+	return ref + segmentRangeMark + strconv.FormatInt(offset, 10) + "-" + strconv.FormatInt(offset+length-1, 10)
+}
+
+// SegmentRange splits a segment into the URL to ask and the bytes of it to
+// ask for, first and last inclusive, as a Range header counts them. ranged
+// is false for a segment that is a whole file.
+func SegmentRange(segment string) (target string, first, last int64, ranged bool) {
+	i := strings.LastIndex(segment, segmentRangeMark)
+	if i < 0 {
+		return segment, 0, 0, false
+	}
+	firstText, lastText, ok := strings.Cut(segment[i+len(segmentRangeMark):], "-")
+	first, errFirst := strconv.ParseInt(firstText, 10, 64)
+	last, errLast := strconv.ParseInt(lastText, 10, 64)
+	if !ok || errFirst != nil || errLast != nil || first < 0 || last < first {
+		return segment, 0, 0, false
+	}
+	return segment[:i], first, last, true
 }
 
 // parseAttributes reads a comma-separated HLS attribute list, honouring the
@@ -542,12 +643,7 @@ func mediaPlaylistKey(doc string, base *url.URL) (*SegmentKey, error) {
 			default:
 				return nil, fmt.Errorf("HLS segments encrypted with %s cannot be decrypted here", method)
 			}
-		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:"):
-			return nil, fmt.Errorf("HLS byte ranges require the external downloader (yt-dlp)")
 		case strings.HasPrefix(line, "#EXT-X-MAP:"):
-			if _, ok := parseAttributes(strings.TrimPrefix(line, "#EXT-X-MAP:"))["BYTERANGE"]; ok {
-				return nil, fmt.Errorf("HLS initialization byte ranges require the external downloader (yt-dlp)")
-			}
 			mapped = true
 		case strings.HasPrefix(line, "#"):
 		default:

@@ -1132,6 +1132,24 @@ Host-specific notes:
   yt-dlp cannot fetch either, and those are refused in those words. A `view`
   other than 1 is a private or password-protected video. An unlisted link's
   `<hash>` becomes `?h=`.
+- **arte** reads ARTE's player API (`api.arte.tv/api/player/v2`), which
+  answers anyone in each of the six languages the site is published in, the
+  first path segment of every page. A programme's configuration names one
+  HLS master for every version of it: each audio language, clear speech and
+  audio description as renditions of their own, every subtitle set as
+  WebVTT, the video in H.264 and HEVC, its parts byte ranges of one file per
+  rendition, on links that are not signed. So one MP4 carries every version.
+  It used to go to yt-dlp for the muxing. The configuration also says
+  whether the programme is shown where it is asked from
+  (`restriction.geoblocking`, `error`), and a refusal is passed on in
+  ARTE's words. A collection (`RC-…`) is the playlist endpoint, which names
+  each programme and its title. A season nested in a series is read into a
+  folder of its own. ARTE shows some programmes of a collection in fewer
+  countries than others and the listing does not say which, so each
+  programme's configuration is read as the collection is (`FanOut`). One not
+  shown here is left out, the note giving the reason once (`arteRefused`);
+  one that could not be read for another cause is kept, for its transfer to
+  try again. Their streams are resolved when the transfers start.
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked
@@ -1703,6 +1721,18 @@ reserved and renamed like any other, and only then are the parts and their
 checkpoints removed: a join that fails leaves them, and the retry joins
 again without fetching anything.
 
+**Byte ranges of one file are parts like any other.** A playlist that slices
+one file per rendition (`EXT-X-BYTERANGE`, and a map's `BYTERANGE`), as
+ARTE's do, has each part carried as the file's URL with its range in the
+fragment (`#range=FIRST-LAST`, `extractor.SegmentRange`), which no request
+ever sends. `File.Segments` stays a list of strings for the many extractors
+that never meet a range. A range that states no offset starts where the
+previous part of the same file ended, and a map's at the start.
+`fetchSegmentOnce` asks for exactly those bytes, checks `Content-Range` and
+the length, and refuses a host that answers with the whole file
+(`errRangeIgnored`, not retried): read whole, a playlist of a thousand parts
+would fetch it a thousand times.
+
 **Subtitles come along as text tracks** (`subtitles.go`). A variant naming a
 `SUBTITLES` group comes with its WebVTT renditions (`resolveSubtitles`,
 `File.Subtitles`), keeping the playlist's default and forced flags. A
@@ -2008,7 +2038,15 @@ Other behaviours that span files:
   the group's renditions for a `URI` of their own rather than trusting
   `CODECS`; without that a demuxed host would yield a silent file that looks
   like a finished download. Such a variant comes with its audio renditions
-  instead, which `mux.go` joins to it.
+  instead, which `mux.go` joins to it. At the same height `bestVariant`
+  takes H.264 over HEVC and AV1, whatever their bitrates: every player
+  decodes it, and HEVC in an MP4 tagged `hev1`, as packagers mostly tag it,
+  plays in nothing of Apple's. ARTE's 1080p HEVC outbid its H.264 by a few
+  per cent of bandwidth.
+- An audio description is named so (" (audio description)") only where its
+  name would otherwise read like another rendition's: SRF names it as it
+  names the main track, but for a trailing space. ARTE names it
+  "Deutsch (Audiodeskription)", and a suffix there said it twice.
 - `SafeName`/`SafeRelPath` sanitize remote path components. Native transfers
   and checkpoints use `os.Root` (`files.go`) to confine actual filesystem
   operations too, including symlinks. Finished names are reserved with

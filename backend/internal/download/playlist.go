@@ -413,7 +413,8 @@ func (m *Manager) fetchSegment(ctx context.Context, limiter *throttle, rawURL st
 // than through Client.Bytes, whose in-memory cap is sized for pages and
 // would silently truncate a media part larger than it.
 func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawURL string, headers httpx.Header, fetched *atomic.Int64) ([]byte, error) {
-	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	target, first, last, ranged := extractor.SegmentRange(rawURL)
+	req, err := m.client.NewRequest(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -421,13 +422,23 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawUR
 		req.Header.Set(header, value)
 	}
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
+	if ranged {
+		req.Header.Set(httpx.HeaderRange, fmt.Sprintf("bytes=%d-%d", first, last))
+	}
 
 	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case ranged && resp.StatusCode == http.StatusPartialContent:
+		if err := segmentRangeAnswered(resp, first, last); err != nil {
+			return nil, fmt.Errorf("%s: %w", req.URL.Redacted(), err)
+		}
+	case ranged && resp.StatusCode == http.StatusOK:
+		return nil, fmt.Errorf("%s: asked for bytes %d-%d: %w", req.URL.Redacted(), first, last, errRangeIgnored)
+	case resp.StatusCode != http.StatusOK:
 		return nil, statusError(req.URL, resp)
 	}
 	if err := rejectWebPage(resp, "segment.ts"); err != nil {
@@ -450,7 +461,32 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawUR
 		return nil, fmt.Errorf("%s: part exceeds %d bytes, which no real one does",
 			req.URL.Redacted(), int64(config.MaxSegmentBytes))
 	}
+	if ranged && int64(buf.Len()) != last-first+1 {
+		return nil, fmt.Errorf("%s: asked for %d bytes, got %d", req.URL.Redacted(), last-first+1, buf.Len())
+	}
 	return buf.Bytes(), nil
+}
+
+// errRangeIgnored is a host answering a part's range with the whole file.
+// Read, it would be fetched whole once for every part of a playlist, a
+// thousand times over; and asking again gets the same answer.
+var errRangeIgnored = errors.New("the host answered with the whole file")
+
+// segmentRangeAnswered checks that a partial answer is the part asked for:
+// a Content-Range starting elsewhere is some other part of the file.
+func segmentRangeAnswered(resp *http.Response, first, last int64) error {
+	header := resp.Header.Get("Content-Range")
+	if header == "" {
+		return nil // the length is checked once the body is read
+	}
+	var start, end int64
+	if _, err := fmt.Sscanf(header, "bytes %d-%d/", &start, &end); err != nil {
+		return fmt.Errorf("unreadable Content-Range %q", header)
+	}
+	if start != first || end != last {
+		return fmt.Errorf("asked for bytes %d-%d, got %d-%d", first, last, start, end)
+	}
+	return nil
 }
 
 // countInto is a writer that only tallies what passes through it.

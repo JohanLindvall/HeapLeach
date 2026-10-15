@@ -1323,8 +1323,9 @@ func retryableTransfer(err error) bool {
 	if _, ok := errors.AsType[*addressRefusedError](err); ok {
 		return true
 	}
-	// The host said the resource is gone. Asking again gets the same answer.
-	if errors.Is(err, errDeadResource) {
+	// The host said the resource is gone, or answers a range with the whole
+	// file. Asking again gets the same answer.
+	if errors.Is(err, errDeadResource) || errors.Is(err, errRangeIgnored) {
 		return false
 	}
 	if _, ok := errors.AsType[*busyHostError](err); ok {

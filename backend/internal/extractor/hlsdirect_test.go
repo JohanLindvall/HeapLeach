@@ -464,8 +464,7 @@ func hlsSniffFrom(t *testing.T, raw string) (*Result, error) {
 func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {
 	for _, tag := range []string{
 		`#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"`,
-		`#EXT-X-BYTERANGE:10@0`,
-		`#EXT-X-MAP:URI="init.mp4",BYTERANGE="10@0"`,
+		`#EXT-X-KEY:METHOD=AES-128,URI="skd://key",KEYFORMAT="com.apple.streamingkeydelivery"`,
 	} {
 		t.Run(tag, func(t *testing.T) {
 			server, _ := hlsServer(t, "application/vnd.apple.mpegurl", map[string]string{
@@ -476,6 +475,23 @@ func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {
 				t.Fatal("unsupported playlist was accepted")
 			}
 		})
+	}
+}
+
+// Byte ranges of one file are fetched as the parts they are, each carrying
+// its range for the downloader to ask for.
+func TestHLSCarriesByteRangesToTheDownloader(t *testing.T) {
+	server, _ := hlsServer(t, "application/vnd.apple.mpegurl", map[string]string{
+		"/media.m3u8": "#EXTM3U\n" + `#EXT-X-MAP:URI="clip.mp4",BYTERANGE="10@0"` +
+			"\n#EXTINF:6,\n#EXT-X-BYTERANGE:20@10\nclip.mp4\n#EXT-X-ENDLIST\n",
+	})
+	res, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	want := []string{server.URL + "/clip.mp4#range=0-9", server.URL + "/clip.mp4#range=10-29"}
+	if got := res.Files[0].Segments; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("segments %v, want %v", got, want)
 	}
 }
 

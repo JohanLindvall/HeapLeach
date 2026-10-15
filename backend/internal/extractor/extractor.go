@@ -53,7 +53,9 @@ type File struct {
 	Dir string
 	// Segments, when set, is an ordered list of parts to fetch and join
 	// into one file. Adaptive streams (HLS) have no single file to range
-	// over, so they arrive this way instead of as a URL.
+	// over, so they arrive this way instead of as a URL. A part that is a
+	// byte range of a larger file carries the range in its fragment
+	// (SegmentRange).
 	Segments []string
 	// SegmentKey, when set, is the AES-128 key the Segments are encrypted
 	// under. The downloader fetches it and decrypts each part as it lands,
@@ -394,6 +396,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewARD(client),
 		NewZDF(client),
 		NewSRF(client),
+		NewArte(client),
 		NewVRTMax(client),
 		NewNPOStart(client),
 		NewRaiPlay(client),

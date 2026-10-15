@@ -88,6 +88,62 @@ func TestMuxedAcceptsAudioWithNoPlaylistOfItsOwn(t *testing.T) {
 // TestBestVariantPrefersSelfContained covers the ordering the fix restores:
 // a smaller self-contained rendition beats a larger one whose audio is
 // somewhere else, because only the first joins into a playable file.
+// Byte ranges of one file are segments like any other, each carrying its
+// range: the stated offset, or where the previous part of the same file
+// ended, and a map's range from the start of the file when it states none.
+func TestMediaPlaylistByteRanges(t *testing.T) {
+	base, _ := url.Parse("https://cdn.example.test/v/clip/index.m3u8")
+	doc := "#EXTM3U\n#EXT-X-TARGETDURATION:6\n" + `#EXT-X-MAP:URI="clip.mp4",BYTERANGE="700"` + "\n" +
+		"#EXTINF:6,\n#EXT-X-BYTERANGE:1000@700\nclip.mp4\n" +
+		"#EXTINF:6,\n#EXT-X-BYTERANGE:1200\nclip.mp4\n" +
+		"#EXTINF:6,\n#EXT-X-BYTERANGE:300@5000\nother.mp4\n" +
+		"#EXTINF:6,\nwhole.mp4\n#EXT-X-ENDLIST\n"
+	want := []string{
+		"https://cdn.example.test/v/clip/clip.mp4#range=0-699",
+		"https://cdn.example.test/v/clip/clip.mp4#range=700-1699",
+		"https://cdn.example.test/v/clip/clip.mp4#range=1700-2899",
+		"https://cdn.example.test/v/clip/other.mp4#range=5000-5299",
+		"https://cdn.example.test/v/clip/whole.mp4",
+	}
+	if got := parseMediaPlaylist(doc, base); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("segments:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if key, err := mediaPlaylistKey(doc, base); err != nil || key != nil {
+		t.Errorf("a ranged playlist in the clear: key %+v, err %v", key, err)
+	}
+
+	for segment, want := range map[string]struct {
+		target      string
+		first, last int64
+		ranged      bool
+	}{
+		"https://cdn.example.test/a.mp4#range=700-1699": {"https://cdn.example.test/a.mp4", 700, 1699, true},
+		"https://cdn.example.test/a.mp4":                {"https://cdn.example.test/a.mp4", 0, 0, false},
+		"https://cdn.example.test/a.mp4#range=9-3":      {"https://cdn.example.test/a.mp4#range=9-3", 0, 0, false},
+	} {
+		target, first, last, ranged := SegmentRange(segment)
+		if target != want.target || first != want.first || last != want.last || ranged != want.ranged {
+			t.Errorf("SegmentRange(%q) = %q %d-%d %v", segment, target, first, last, ranged)
+		}
+	}
+}
+
+// At the same height H.264 is taken over HEVC, whatever its bitrate; a
+// taller HEVC rendition still wins.
+func TestBestVariantPrefersH264AtTheSameHeight(t *testing.T) {
+	variants := []hlsVariant{
+		{URL: "hevc-1080.m3u8", Resolution: "1920x1080", Codecs: "hev1.1.6.L120.B0,mp4a.40.2", Bandwidth: 4647248},
+		{URL: "avc-1080.m3u8", Resolution: "1920x1080", Codecs: "avc1.640028,mp4a.40.2", Bandwidth: 4581328},
+		{URL: "avc-720.m3u8", Resolution: "1280x720", Codecs: "avc1.64001F,mp4a.40.2", Bandwidth: 2923376},
+	}
+	if best, _ := bestVariant(variants); best.URL != "avc-1080.m3u8" {
+		t.Errorf("chose %s, want the H.264 rendition at 1080p", best.URL)
+	}
+	if best, _ := bestVariant([]hlsVariant{variants[0], variants[2]}); best.URL != "hevc-1080.m3u8" {
+		t.Errorf("chose %s, want the taller rendition", best.URL)
+	}
+}
+
 func TestBestVariantPrefersSelfContained(t *testing.T) {
 	mixed := `#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-high",NAME="English",URI="audio/high/media.m3u8"
@@ -183,7 +239,6 @@ func TestMediaPlaylistKey(t *testing.T) {
 		"encrypted init, no IV": head + `#EXT-X-KEY:METHOD=AES-128,URI="k"` + "\n" + `#EXT-X-MAP:URI="init.mp4"` + "\n#EXTINF:6,\na.m4s\n",
 		"unreadable iv":         head + `#EXT-X-KEY:METHOD=AES-128,URI="k",IV=0x1234` + "\n#EXTINF:6,\na.ts\n",
 		"key without a uri":     head + "#EXT-X-KEY:METHOD=AES-128\n#EXTINF:6,\na.ts\n",
-		"byte ranges (kept)":    head + "#EXT-X-BYTERANGE:100@0\n#EXTINF:6,\na.ts\n",
 	} {
 		if _, err := mediaPlaylistKey(doc, base); err == nil {
 			t.Errorf("%s: accepted", name)

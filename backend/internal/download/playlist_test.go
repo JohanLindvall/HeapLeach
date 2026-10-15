@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // A playlist transfer's whole job is order: parts fetched concurrently must
@@ -196,5 +197,51 @@ func TestFetchSegmentRetriesAndGivesUp(t *testing.T) {
 	// 404 is definitive: asking again gets the same answer.
 	if hits.Load() != 1 {
 		t.Errorf("server saw %d requests for a definitive 404, want 1", hits.Load())
+	}
+}
+
+// A playlist of byte ranges of one file asks for each range and joins what
+// it is given. A host that answers a range with the whole file is refused
+// rather than read whole once per part.
+func TestPlaylistFetchesByteRanges(t *testing.T) {
+	file := make([]byte, 5000)
+	for i := range file {
+		file[i] = byte(i % 251)
+	}
+	honours := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "clip.mp4", time.Time{}, bytes.NewReader(file))
+	}))
+	defer honours.Close()
+	ignores := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(file)
+	}))
+	defer ignores.Close()
+
+	ranges := [][2]int{{0, 699}, {700, 1699}, {1700, 4999}}
+	segments := func(base string) []string {
+		var out []string
+		for _, r := range ranges {
+			out = append(out, fmt.Sprintf("%s/clip.mp4#range=%d-%d", base, r[0], r[1]))
+		}
+		return out
+	}
+
+	m := busyManager(t)
+	m.streams = 2
+	it := &Item{ID: newID(), Name: "clip.mp4", URL: honours.URL, Size: -1, Segments: segments(honours.URL)}
+	if err := m.transfer(context.Background(), it); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(m.cfg.DownloadDir, "clip.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, file) {
+		t.Fatalf("joined %d bytes, want the file's %d", len(got), len(file))
+	}
+
+	it = &Item{ID: newID(), Name: "other.mp4", URL: ignores.URL, Size: -1, Segments: segments(ignores.URL)}
+	if err := m.transfer(context.Background(), it); err == nil || !strings.Contains(err.Error(), "whole file") {
+		t.Errorf("err = %v; want a host ignoring ranges refused", err)
 	}
 }
