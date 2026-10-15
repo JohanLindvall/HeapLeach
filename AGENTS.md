@@ -1266,6 +1266,33 @@ Host-specific notes:
   with each reason counted once. Any other rtbf.be page, an article say, is
   read for the players it embeds (`data-asset-id`, embed links, escaped
   ones in script included).
+- **francetv** reads france.tv through the API its player calls
+  (`k7.ftven.fr/videos/<id>`), asked as Safari (`browser=safari`, with
+  `domain` and `device_type`, which it refuses to answer without). Asked as
+  Chrome it answers with DASH, which is where "most of the catalogue is
+  DASH" came from and why the site went to yt-dlp. Asked as Safari it
+  answers with HLS of the same asset, clear for nearly all of the replays
+  (28 of 30 sampled). What it keeps under DRM it refuses to a player that
+  does not declare DRM (2019), which is the clean signal: declared, it
+  hands over FairPlay. Expired is 2003 and unknown 2012. The master is signed
+  by the token service the answer names (`hdfauth.ftven.fr`), six hours in
+  the path and ten minutes in the query, so it is minted at transfer time.
+  Video is MPEG-TS under AES-128, one static key, and the audio is packed
+  AAC in renditions of its own (see the join's packed audio, below).
+  Subtitles are the answer's whole WebVTT files, which count from the
+  picture's start, rather than the master's segmented ones, whose packager
+  splits a cue at each segment boundary. `qsm` is French for the deaf and
+  hard of hearing. The asset's name says where it is shown: `_monde_`
+  everywhere, `_france-domtom_` in France alone, refused by the CDN with a
+  403 elsewhere. The API answers wherever it is asked from unless told a
+  country, which is not done. A video page names its id as its player's
+  `options` in flight data written into script as a string (`\"`), or in
+  the tracking whose `content_id` is the number the link ends in. A video
+  page's own `<title>` is the site's name alone, so pages are named by
+  `og:title`, less its "en replay". A programme's page and its
+  `toutes-les-videos` pages (`?page=N`) list cards with the video's id and
+  `content_format`; whole programmes (`integrale`) are kept and clips left
+  out where both are listed. Anything else on france.tv goes to yt-dlp.
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked
@@ -1828,6 +1855,26 @@ things in it each looked right first:
   it apart, and keeping both lists it twice. A rendition named as carried in
   the video is mapped from it once ffprobe has counted what is there, and
   one that is not there is left out rather than failing the join.
+
+**Packed audio is placed where its tag says** (`packedaudio.go`). HLS can
+carry audio with no container, ADTS AAC segment after segment, each opening
+with an ID3 tag whose PRIV frame (`com.apple.streaming.transportStreamTimestamp`)
+holds its 33-bit 90 kHz timestamp. ffmpeg's ADTS reader ignores the tag and
+starts the audio at zero, while the TS video beside it keeps its own
+timestamps (France TV's start at ten seconds). Joined as it was, the sound
+ran ten seconds early. The join reads the tag at the head of each audio
+part and gives ffmpeg the start (`-itsoffset`); an fMP4 or TS audio part has
+no such tag and is left alone.
+
+**A video presented before it is decoded is restamped** (`presentedEarly`).
+France TV's packager stamps its B-frames with presentation times earlier than
+their decode times, the first frame decoded at the time it is shown. A TS
+reader copes; copied into an MP4 the frames come out with repeated times,
+which a player shows by dropping some, and a full decode complained about
+hundreds of them. The probe reads the video part's first packets, and where
+any is presented early, the join has ffmpeg work the decode times out from
+the presentation times (`-fflags +igndts`) on that input alone. A sound
+stream's decode times are left as they were.
 
 ffmpeg is a dependency here, not a convenience: without it the video alone
 is silent, so `transfer` refuses such an item before fetching a byte

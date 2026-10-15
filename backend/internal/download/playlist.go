@@ -97,6 +97,9 @@ type playlistTrack struct {
 	key      *extractor.SegmentKey
 	// audio is the track's description, nil for the item's own segments.
 	audio *extractor.Track
+	// start is where a packed audio track's timeline starts, which the join
+	// has to tell ffmpeg (packedAudioStart); zero for any other.
+	start float64
 }
 
 // playlistTracksLocked lists what a playlist transfer fetches: the item's

@@ -73,6 +73,12 @@ func (m *Manager) joinTracks(ctx context.Context, it *Item, tracks []playlistTra
 	m.note(it, "joining "+strings.Join(what, " and ")+" to the video")
 	defer m.note(it, "")
 
+	tracks = slices.Clone(tracks)
+	for i := 1; i < len(tracks); i++ {
+		if tracks[i].part != "" {
+			tracks[i].start = files.packedAudioStart(tracks[i].part)
+		}
+	}
 	run, cancel := context.WithTimeout(ctx, config.RemuxTimeout)
 	defer cancel()
 	cmd := tools.CommandContext(run, ffmpeg, joinArgs(tracks, subtitles, m.probeVideo(run, tracks, subtitles), out)...)
@@ -100,27 +106,34 @@ func (m *Manager) joinTracks(ctx context.Context, it *Item, tracks []playlistTra
 }
 
 // videoProbe is what a join needs to know of the video's own part: how many
-// audio streams its segments carry (-1 for unknown), and when its picture
-// starts.
+// audio streams its segments carry (-1 for unknown), when its picture
+// starts, and whether its frames are stamped to be shown before they are
+// decoded (presentedEarly).
 type videoProbe struct {
-	audio int
-	start float64
+	audio          int
+	start          float64
+	presentedEarly bool
 }
 
-// probeVideo asks ffprobe what the join needs to know, and only when it
-// needs it: how many audio streams the video's own segments carry, when the
-// playlist says they carry any of its renditions, and when the picture
-// starts, when a subtitle track's cues count from it. Unread, the playlist
-// is taken at its word and the picture at zero.
+// probeVideo asks ffprobe what the join needs to know: whether the video's
+// frames are presented early, which takes a look at its first packets, and
+// the rest only when it needs it: how many audio streams the video's own
+// segments carry, when the playlist says they carry any of its renditions,
+// and when the picture starts, when a subtitle track's cues count from it.
+// Unread, the playlist is taken at its word and the picture at zero.
 func (m *Manager) probeVideo(ctx context.Context, tracks []playlistTrack, subtitles []subtitleFile) videoProbe {
 	probe := videoProbe{audio: -1}
+	ffprobe, ok := tools.Find(tools.FFprobe)
+	if !ok {
+		return probe
+	}
+	if packets, err := tools.Probe(ctx, ffprobe, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#60",
+		"-show_entries", "packet=pts,dts", "-of", "csv=p=0", tracks[0].part); err == nil {
+		probe.presentedEarly = presentedEarly(string(packets))
+	}
 	inVideo := slices.ContainsFunc(tracks[1:], func(t playlistTrack) bool { return t.part == "" })
 	unmapped := slices.ContainsFunc(subtitles, func(s subtitleFile) bool { return !s.mapped })
 	if !inVideo && !unmapped {
-		return probe
-	}
-	ffprobe, ok := tools.Find(tools.FFprobe)
-	if !ok {
 		return probe
 	}
 	streams, err := probeMedia(ctx, ffprobe, tracks[0].part)
@@ -142,6 +155,31 @@ func (m *Manager) probeVideo(ctx context.Context, tracks []playlistTrack, subtit
 		probe.audio = audio
 	}
 	return probe
+}
+
+// presentedEarly reports, from ffprobe's packet times (pts,dts a line), a
+// video whose frames are stamped to be shown before they are decoded: a
+// presentation time earlier than the decode time. One broadcaster's packager
+// stamps its B-frames so, with the first frame's decode time at its
+// presentation time and no room left for the reordering. A transport stream
+// reader takes that in its stride; copied into an MP4, the frames come out
+// with times that repeat, which a player shows by dropping some. The join
+// then has ffmpeg work the decode times out from the presentation times
+// (+igndts), as the stream should have stated them. The first packets tell,
+// since a packager stamps every frame alike.
+func presentedEarly(packets string) bool {
+	for line := range strings.Lines(packets) {
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		if len(fields) < 2 {
+			continue
+		}
+		pts, perr := strconv.ParseInt(fields[0], 10, 64)
+		dts, derr := strconv.ParseInt(fields[1], 10, 64)
+		if perr == nil && derr == nil && pts < dts {
+			return true
+		}
+	}
+	return false
 }
 
 // joinArgs is the ffmpeg command line that joins the tracks into out.
@@ -169,13 +207,20 @@ func (m *Manager) probeVideo(ctx context.Context, tracks []playlistTrack, subtit
 // tracks means all at once. So exactly one is: the playlist's own default,
 // which the extractor lists first. A subtitle keeps the playlist's flags.
 func joinArgs(tracks []playlistTrack, subtitles []subtitleFile, probe videoProbe, out string) []string {
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-copyts", "-i", tracks[0].part}
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-copyts"}
+	if probe.presentedEarly {
+		args = append(args, "-fflags", "+igndts")
+	}
+	args = append(args, "-i", tracks[0].part)
 	maps := []string{"-map", "0:v?"}
 	var labels []string
 	input, inVideo, stream := 1, 0, 0
 	for _, t := range tracks[1:] {
 		switch {
 		case t.part != "":
+			if t.start != 0 {
+				args = append(args, "-itsoffset", strconv.FormatFloat(t.start, 'f', 6, 64))
+			}
 			args = append(args, "-i", t.part)
 			maps = append(maps, "-map", strconv.Itoa(input)+":a:0")
 			input++

@@ -127,17 +127,10 @@ var handoffSites = []handoffSite{
 	//
 	// It now fetches such renditions and joins them itself
 	// (download/mux.go), as it does for the sibling broadcasters (SVT, SRF,
-	// ZDF and the rest), and reads parts that are byte ranges of one file,
-	// so the HLS ones among these are candidates to be read natively; until
-	// they are, yt-dlp fetches them. That was never a judgement about the
-	// host: ARTE's, ORF's, Yle's, DR's and RTBF's APIs answer anyone, and are
-	// read natively now. The wall that still stands is DASH, where they say so,
-	// which the engine does not read.
-	{
-		name:    "francetv",
-		domains: []string{"france.tv"},
-		why:     "most of its catalogue is DASH, which needs muxing this cannot do",
-	},
+	// ZDF and the rest), and reads parts that are byte ranges of one file and
+	// audio packed without a container. ARTE, ORF, Yle, DR, RTBF and France TV
+	// were handed over for this and are read natively now; this one is still
+	// to be looked at, and until it is, yt-dlp fetches it.
 	{
 		name:    "radio-canada",
 		domains: []string{"radio-canada.ca", "ici.radio-canada.ca"},
