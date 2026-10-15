@@ -1307,15 +1307,23 @@ Host-specific notes:
   ids too, recommendations, so the first id on a page is not its own. The
   API's link asks the CDN to leave out every rendition above 1.5 Mbps
   (`aws.manifestfilter`). Asked without it, the same CDN serves the whole
-  ladder, up to twice the resolution, so the filter is dropped. Video is TS
+  ladder, so the filter is dropped: a news video comes at 1280x720, where
+  the API's link stops at 852x480. No option of the API's lifts it (every
+  `connectionType`, `multibitrate=false`). Where the CDN refuses the
+  unfiltered master, the API's own link is taken instead. Video is TS
   with its audio in a rendition of its own, which the packager names
   `audio1_fr`, so the name is left off and the language kept. OHdio is
   audio-only TS, its transcript a WebVTT rendition (which has been seen with
   no cues at all; the merge leaves such a track out). An OHdio programme's
   page lists its episodes as `EpisodeListItem` entries with their media ids,
-  fifty a page under a `pagination` whose `totalCount` the note compares.
-  The next page's parameter is not known (`?page=2` is ignored), so only the
-  first is read. Refusals ("n'est pas disponible dans votre pays", premium)
+  fifty a page, newest first. The next pages are `?pageNumber=N`, which the
+  site's own loader reads off the URL (1 to 200; `?page=` is ignored), and
+  `pagination.totalCount` says when to stop. A programme with seasons shows
+  its latest alone; each season is a path of its own (`/saison-N`), linked
+  from the page's season selector, with `numberOfSeasons` in its structured
+  data. So every season is read, every page of it, into a folder named for
+  it (`selectedSeason`), and a season pasted alone is titled with its name
+  and read alone. Refusals ("n'est pas disponible dans votre pays", premium)
   are the API's own words, passed on. Pages with no media of their own still
   go to yt-dlp.
 - **niconico** is read through the site's own player API. A watch page

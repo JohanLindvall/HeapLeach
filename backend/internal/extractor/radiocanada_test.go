@@ -35,10 +35,24 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 		case path == "/ohdio/balados/2000/un-balado-invente/2001/un-episode":
 			page(w, "Un épisode inventé | OHdio", `{"Emission":"Un balado inventé","IdsCollection":"|ProgramId:2000|EpisodeId:2001|MedianetId:1002|"}`)
 		case path == "/ohdio/balados/2000/un-balado-invente":
-			page(w, "Un balado inventé | OHdio", `{"episodes":[`+
-				`{"typename":"EpisodeListItem","isPlayable":true,"mediaIds":[1002],"summary":"<p>Un résumé.</p>","title":"Le premier&nbsp;: inventé","url":"/balados/2000/x/2001/y"},`+
-				`{"typename":"EpisodeListItem","isPlayable":true,"mediaIds":[1004],"summary":"","title":"Le deuxième","url":"/balados/2000/x/2002/z"}`+
-				`],"pagination":{"pageNumber":1,"pageSize":2,"totalCount":30}}`)
+			// Two episodes a page, five in all, the next page asked for by number.
+			episodes := map[string][]string{"": {"1002", "1004"}, "1": {"1002", "1004"}, "2": {"1006", "1008"}, "3": {"1010"}}[q.Get("pageNumber")]
+			var items []string
+			for _, id := range episodes {
+				items = append(items, fmt.Sprintf(`{"typename":"EpisodeListItem","isPlayable":true,"mediaIds":[%s],"summary":"","title":"L\u0027épisode %s&nbsp;: inventé","url":"/balados/2000/x/%s/y"}`, id, id, id))
+			}
+			page(w, "Un balado inventé | OHdio", `{"episodes":[`+strings.Join(items, ",")+`],"pagination":{"pageNumber":1,"pageSize":2,"totalCount":5}}`)
+		case strings.HasPrefix(path, "/ohdio/balados/3000/un-balado-a-saisons"):
+			// The programme's page shows its latest season, and links to each.
+			season := strings.TrimPrefix(path, "/ohdio/balados/3000/un-balado-a-saisons")
+			if season == "" {
+				season = "/saison-2"
+			}
+			id := map[string]string{"/saison-1": "1012", "/saison-2": "1014"}[season]
+			name := map[string]string{"/saison-1": "La première", "/saison-2": "La deuxième"}[season]
+			page(w, "Un balado à saisons | OHdio", `<a href=/ohdio/balados/3000/un-balado-a-saisons/saison-1>Saison 1</a>`+
+				`{"numberOfSeasons":2}{"episodes":[{"typename":"EpisodeListItem","isPlayable":true,"mediaIds":[`+id+`],"title":"Un épisode `+id+`","url":"/x"}],`+
+				`"pagination":{"pageNumber":1,"pageSize":50,"totalCount":1},"selectedSeason":{"fullName":"`+name+`","name":"Saison `+season[len(season)-1:]+`","summary":""}}`)
 		case path == "/media/validation/v2/":
 			if q.Get("appCode") != "medianet" || q.Get("deviceType") == "" || q.Get("connectionType") == "" {
 				http.Error(w, "missing parameters", http.StatusBadRequest)
@@ -47,14 +61,18 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 			switch q.Get("idMedia") {
 			case "1001", "1003":
 				_, _ = fmt.Fprintf(w, `{"url": "%s/out/v1/video/index.m3u8?aws.manifestfilter=video_bitrate:0-1500000", "message": null, "errorCode": 0}`, srv.URL)
-			case "1002", "1004":
+			case "1002", "1004", "1006", "1008", "1010", "1012", "1014":
 				_, _ = fmt.Fprintf(w, `{"url": "%s/audio/master.m3u8", "message": null, "errorCode": 0}`, srv.URL)
+			case "1005":
+				_, _ = fmt.Fprintf(w, `{"url": "%s/out/v1/strict/index.m3u8?aws.manifestfilter=video_bitrate:0-1500000", "message": null, "errorCode": 0}`, srv.URL)
 			default:
 				_, _ = io.WriteString(w, `{"url": null, "message": "Le contenu sélectionné n'est pas disponible dans votre pays", "errorCode": 1}`)
 			}
 		case path == "/media/meta/v1/index.ashx":
 			_, _ = io.WriteString(w, `{"Metas": [{"name": "Title", "text": "Un titre inventé"}, {"name": "Emission", "text": "Une émission inventée"}]}`)
-		case path == "/out/v1/video/index.m3u8":
+		case path == "/out/v1/strict/index.m3u8" && !q.Has("aws.manifestfilter"):
+			http.Error(w, "refused", http.StatusForbidden)
+		case path == "/out/v1/video/index.m3u8", path == "/out/v1/strict/index.m3u8":
 			master := "#EXTM3U\n" + `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio_0",CHANNELS="2",NAME="audio1_fr",LANGUAGE="fra",DEFAULT=YES,AUTOSELECT=YES,URI="audio.m3u8"` + "\n" +
 				`#EXT-X-STREAM-INF:BANDWIDTH=1503268,RESOLUTION=360x640,CODECS="avc1.64001E,mp4a.40.2",AUDIO="audio_0"` + "\nlow.m3u8\n"
 			if !q.Has("aws.manifestfilter") {
@@ -129,9 +147,9 @@ func TestRadioCanadaReadsEpisodesAndOlderLinks(t *testing.T) {
 	}
 }
 
-// An OHdio programme is the episodes its page lists, named as they resolve,
-// and the note says how many more it has.
-func TestRadioCanadaListsAProgrammesEpisodes(t *testing.T) {
+// An OHdio programme is every page of its list, asked for by number as the
+// site's own loader asks, its episodes named as they resolve.
+func TestRadioCanadaListsEveryPageOfAProgramme(t *testing.T) {
 	srv := radioCanadaFakeSite(t)
 	res, err := radioCanadaExtract(t, srv, "/ohdio/balados/2000/un-balado-invente")
 	if err != nil {
@@ -141,13 +159,57 @@ func TestRadioCanadaListsAProgrammesEpisodes(t *testing.T) {
 	for _, f := range res.Files {
 		names = append(names, f.Name)
 	}
-	want := "Un balado inventé - Le premier : inventé.ts|Un balado inventé - Le deuxième.ts"
-	if res.Title != "Un balado inventé" || strings.Join(names, "|") != want || res.Note != "2 of 30 episodes" {
-		t.Errorf("%q: %v, note %q", res.Title, names, res.Note)
+	want := []string{
+		"Un balado inventé - L'épisode 1002 : inventé.ts", "Un balado inventé - L'épisode 1004 : inventé.ts",
+		"Un balado inventé - L'épisode 1006 : inventé.ts", "Un balado inventé - L'épisode 1008 : inventé.ts",
+		"Un balado inventé - L'épisode 1010 : inventé.ts",
 	}
-	target, err := res.Files[1].Resolve(context.Background())
-	if err != nil || target.Name != "Un balado inventé - Le deuxième.ts" {
+	if res.Title != "Un balado inventé" || strings.Join(names, "|") != strings.Join(want, "|") || res.Note != "" {
+		t.Errorf("%q (note %q):\n%s", res.Title, res.Note, strings.Join(names, "\n"))
+	}
+	target, err := res.Files[4].Resolve(context.Background())
+	if err != nil || target.Name != want[4] {
 		t.Errorf("target %+v, %v", target, err)
+	}
+}
+
+// A programme with seasons is each season its page links to, in a folder
+// of its own, though its page shows the latest alone; a season's own link
+// is that season alone.
+func TestRadioCanadaListsEverySeason(t *testing.T) {
+	srv := radioCanadaFakeSite(t)
+	res, err := radioCanadaExtract(t, srv, "/ohdio/balados/3000/un-balado-a-saisons")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range res.Files {
+		got = append(got, f.Dir+"/"+f.Name)
+	}
+	want := "Saison 1 - La première/Un balado à saisons - Un épisode 1012.ts|Saison 2 - La deuxième/Un balado à saisons - Un épisode 1014.ts"
+	if strings.Join(got, "|") != want {
+		t.Errorf("%s\nwant %s", strings.Join(got, "|"), want)
+	}
+	res, err = radioCanadaExtract(t, srv, "/ohdio/balados/3000/un-balado-a-saisons/saison-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "Un balado à saisons - Saison 1 - La première" || len(res.Files) != 1 || res.Files[0].Dir != "" ||
+		!strings.HasSuffix(res.Files[0].Name, "Un épisode 1012.ts") {
+		t.Errorf("%q: %+v; want the first season alone, under its name", res.Title, res.Files)
+	}
+}
+
+// Where the CDN will not serve a master unfiltered, the API's own link is
+// taken, filter and all.
+func TestRadioCanadaFallsBackToTheFilteredMaster(t *testing.T) {
+	srv := radioCanadaFakeSite(t)
+	res, err := radioCanadaExtract(t, srv, "/widgets/mediaconsole/medianet/1005")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := res.Files[0]; !strings.Contains(f.URL, "manifestfilter") || !strings.HasSuffix(f.Segments[0], "/low_0.ts") {
+		t.Errorf("url %q, segments %v; want the filtered master's", f.URL, f.Segments)
 	}
 }
 
