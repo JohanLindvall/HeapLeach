@@ -1169,6 +1169,42 @@ Host-specific notes:
   (`/sendereihe/<id>`, `profile/<id>/episodes`) lists newest first and is
   filed oldest first. Anything else on orf.at, its radio and news pages,
   still goes to yt-dlp through the `Handoff` the extractor keeps.
+- **yle** reads Areena through the player API's preview
+  (`player.api.yle.fi/v1/preview/<id>.json`), asked with the static
+  player's app id and key, the pair Yle's own player script sends (a chunk
+  `player-v2.yle.fi/embed.js` loads). Areena's pages publish another pair
+  (`appIdFrontend`), for its UI API, which the preview refuses with a 403.
+  The preview is in one of the states the player knows (`yleStates`); one
+  that plays names its title and series in both languages, its region, and
+  an HLS master in MPEG-TS with WebVTT subtitle renditions, or for audio one
+  MP3 (`media_url`). Both are signed for some hours and minted again when
+  the transfer starts. Three things here each looked like something else.
+  `is_content_protected` is not DRM: the programmes it marks that are shown
+  worldwide were plain HLS with no key anywhere, and refusing on it dropped
+  21 of the 37 worldwide programmes on the front page. A stream that really
+  is encrypted is the playlist reader's to refuse. What Yle shows in Finland
+  alone (`region` "Finland") is handed a stream like any other, whatever
+  `countryCode` says, and the CDN refuses it from elsewhere with a 403, the
+  MP3s as well as the masters (`refusedHere` asks an MP3 for one byte). The
+  player sends `countryCode` FI until it has located the viewer; since it
+  changes nothing, it is not sent. And a series id asked of the preview
+  answers with one of its episodes, so the item's page says what an id is
+  (`meta.item.type`: `TVSeries`, `RadioSeries`, `TVSeason`).
+
+  A series is its page's first tab's untitled list, read through the UI API
+  (`areena.api.yle.fi/v1/ui/content/list?token=…`, signed per list) with the
+  page's own pair, `v=10` and the UI's spelling of the language, `fi` or
+  `sv`; a two-letter cut of the preview's `swe` is refused. Seasons are the
+  filter's options (`path.season`), read in the site's order, each into a
+  folder. A season's own page carries the same filter with itself as the
+  default, and lists itself alone. A list is followed by the `count` it
+  states and by what each page adds, not by the size asked for. Each episode
+  is asked of the preview as the listing is read (`FanOut`): one Areena does
+  not offer is left out with its reason once, as are the Finland-only ones
+  once one of them has been refused here. An episode keeps the name it is
+  listed under, the card's title with its number, so that a listing read
+  again finds what was saved: `finishedLocked` keys on the name an item
+  finished with, the `.ts`, not the MP4 it was remuxed into.
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked

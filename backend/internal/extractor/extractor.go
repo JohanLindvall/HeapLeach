@@ -398,6 +398,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewSRF(client),
 		NewArte(client),
 		NewORF(client),
+		NewYle(client),
 		NewVRTMax(client),
 		NewNPOStart(client),
 		NewRaiPlay(client),

@@ -120,23 +120,19 @@ var handoffSites = []handoffSite{
 	},
 
 	// Public broadcasters that are DRM-free and perfectly reachable, handed
-	// over for one reason, worth stating once here rather than seven times
+	// over for one reason, worth stating once here rather than for each
 	// below: their streams carry video and audio in separate renditions,
 	// which HeapLeach's playlist engine could only concatenate when they
 	// were added, into a silent video.
 	//
 	// It now fetches such renditions and joins them itself
 	// (download/mux.go), as it does for the sibling broadcasters (SVT, SRF,
-	// ZDF and the rest), so the HLS ones among these are candidates to be
-	// read natively; until they are, yt-dlp fetches them. That was never a
-	// judgement about the host: Arte's API answers anyone in six
-	// languages. Two walls still stand where they say so: DASH, which the
-	// engine does not read, and DR's byte ranges of one file.
-	{
-		name:    "yle",
-		domains: []string{"areena.yle.fi", "arenan.yle.fi"},
-		why:     "no variant it offers is self-contained, so the audio must be muxed back in",
-	},
+	// ZDF and the rest), and reads parts that are byte ranges of one file,
+	// so the HLS ones among these are candidates to be read natively; until
+	// they are, yt-dlp fetches them. That was never a judgement about the
+	// host: ARTE's, ORF's and Yle's APIs answer anyone, and are read
+	// natively now. The wall that still stands is DASH, where they say so,
+	// which the engine does not read.
 	{
 		name:    "drtv",
 		domains: []string{"dr.dk"},
