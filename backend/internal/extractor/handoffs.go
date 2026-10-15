@@ -130,14 +130,9 @@ var handoffSites = []handoffSite{
 	// ZDF and the rest), and reads parts that are byte ranges of one file,
 	// so the HLS ones among these are candidates to be read natively; until
 	// they are, yt-dlp fetches them. That was never a judgement about the
-	// host: ARTE's, ORF's, Yle's and DR's APIs answer anyone, and are read
-	// natively now. The wall that still stands is DASH, where they say so,
+	// host: ARTE's, ORF's, Yle's, DR's and RTBF's APIs answer anyone, and are
+	// read natively now. The wall that still stands is DASH, where they say so,
 	// which the engine does not read.
-	{
-		name:    "rtbf",
-		domains: []string{"rtbf.be", "auvio.rtbf.be"},
-		why:     "its packager offers no self-contained rendition to fetch",
-	},
 	{
 		name:    "francetv",
 		domains: []string{"france.tv"},

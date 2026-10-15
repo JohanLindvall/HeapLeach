@@ -1236,6 +1236,36 @@ Host-specific notes:
   no request per episode. A season whose title is only the show's is filed
   as "Sæson N". Anything else on dr.dk still goes to yt-dlp through the
   `Handoff` the extractor keeps.
+- **rtbf** reads Auvio through the two APIs its pages use. RTBF's own
+  (`bff-service.rtbf.be/auvio/v1.23`) names a media (`embed/media/<id>`)
+  and lists a programme (`pages/emission/<slug>-<id>`, then its widgets).
+  Red Bee Media's Exposure (`exposure.api.redbee.live`) plays it for an
+  anonymous session, which needs no account: POST `auth/anonymous` with a
+  device id of its own, then `entitlement/<id>_6BA97Bb/play`. The play
+  answer is the authority on who may watch, in its own terms. A free
+  account is `LOGIN` (and a future `availableAt` means not yet); Belgium
+  alone is `NOT_ENTITLED` with no action at all; paid is `BUY_WATCH_NOW`;
+  expired is `NOT_PUBLISHED`. RTBF's own `isAnonymousAllowed` is not: it was
+  false on archives that played. Anonymously that is news clips, archives,
+  some programmes and many podcasts. yt-dlp's RTBF extractor no longer
+  works, so the handoff it replaced fetched nothing.
+
+  A video is Unified Streaming HLS: fragmented MP4, the audio apart,
+  WebVTT renditions with no timestamp map that count from the programme's
+  start, nothing encrypted or signed. Some packages declare one recording
+  three times, as the French track, the original version (`qaa`) and an
+  audio description (`qad`). The asset record (`content/asset`, `audio[]`)
+  says how many tracks there really are, and where it says one, only the
+  default rendition is kept. The same packages declare subtitle tracks
+  with no cues, which the merge already leaves out. A podcast is one MP3,
+  served after a redirect that adds a listening session. A programme's
+  episodes are the tabs of its `TAB_LIST` (a season or a year, each a
+  folder), each list paged by its own `links.next`, 50 at most a page. The
+  entries say nothing of who may play them, so each is asked of the play
+  API as the listing is read (`FanOut`), and what cannot be had is left out
+  with each reason counted once. Any other rtbf.be page, an article say, is
+  read for the players it embeds (`data-asset-id`, embed links, escaped
+  ones in script included).
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked

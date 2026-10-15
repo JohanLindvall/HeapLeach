@@ -400,6 +400,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewORF(client),
 		NewYle(client),
 		NewDRTV(client),
+		NewRTBF(client),
 		NewVRTMax(client),
 		NewNPOStart(client),
 		NewRaiPlay(client),
