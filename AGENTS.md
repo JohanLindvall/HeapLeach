@@ -1150,6 +1150,25 @@ Host-specific notes:
   shown here is left out, the note giving the reason once (`arteRefused`);
   one that could not be read for another cause is kept, for its transfer to
   try again. Their streams are resolved when the transfers start.
+- **orf** reads ORF ON's own API (`api-tvthek.orf.at`) with the credentials
+  the site hands every visitor: its runtime configuration
+  (`window.__NUXT__.config`) names the API's base, user and password, and
+  the site's player sends them as Basic authorisation. They are read off the
+  page, never written down here, and read again when the API refuses them
+  (a rotated build). An older public endpoint takes the episode id base64'd
+  behind a fixed prefix; the site's own code uses another prefix for
+  something else, which that endpoint does not take, so it is not used. An
+  episode names one adaptive HLS master among fixed qualities, its DRM
+  flag, the rights it is shown under, and its subtitles as files, WebVTT
+  among them (a one-file `Track`). The master keeps its audio apart, the
+  audio description one rendition. What ORF shows in Austria alone is not
+  refused by the API but by the stream: asked from elsewhere, the master
+  redirects to a notice (`insert_geoprotection`) that would download as a
+  short clip of something else. It is recognised and refused in words, and a
+  series' Austria-only episodes are left out once one has shown it. A series
+  (`/sendereihe/<id>`, `profile/<id>/episodes`) lists newest first and is
+  filed oldest first. Anything else on orf.at, its radio and news pages,
+  still goes to yt-dlp through the `Handoff` the extractor keeps.
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked
@@ -2056,6 +2075,16 @@ Other behaviours that span files:
   `&amp;` in folder and file names on disk. Decoding comes before the
   separator rules, so an encoded slash is treated like a plain one.
   `Registry.Extract` decodes titles and names too, for the UI's sake.
+- **A slash in a title is not a path.** `SafeName` keeps only what follows
+  the last separator, which is right for a name a server hands over (RFC
+  6266 says to strip a `Content-Disposition` name of its path) and wrong for
+  a title: "A Series (1/7)" was saved as "7)", and "AC/DC" as "DC". So
+  `Registry.Extract` and `resolveTarget` turn a title's separators into their
+  lookalikes first (`util.TitleName`, "⧸", as yt-dlp writes them), for job
+  titles and file names alike. `sourceFolder` turns them, and plain slashes,
+  into "_" for the folders a listing's sources are filed under, which is
+  what those folders have always been named: changing it would file every
+  re-read job somewhere new and download it all again.
 
 ### Headless mode
 

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"context"
 	"net/url"
 	"testing"
 
@@ -132,5 +133,20 @@ func TestRegistryFindIsHostOnly(t *testing.T) {
 	}
 	if _, isDirect := reg.Find(u).(*Direct); !isDirect {
 		t.Error("an unregistered host was matched by something other than the fallback")
+	}
+}
+
+// A title with a slash in it is a title, not a path: a series' episode
+// counter, a band's name. It reaches the downloader whole, the slash as its
+// lookalike, where taken as a path it was cut to what followed it.
+func TestRegistryKeepsATitleWithASlashWhole(t *testing.T) {
+	reg := &Registry{fallback: NewDirect(nil)}
+	reg.extractors = []Extractor{stubExtractor{host: "tube.example.test", title: "A Series (1/7)"}}
+	res, _, err := reg.Extract(context.Background(), "https://tube.example.test/v/1", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Title != "A Series (1\u29f87)" || res.Files[0].Name != "A Series (1\u29f87).mp4" {
+		t.Errorf("title %q, name %q", res.Title, res.Files[0].Name)
 	}
 }

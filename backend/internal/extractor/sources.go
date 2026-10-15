@@ -216,10 +216,13 @@ func sourceFiles(res *Result, folder string) []File {
 // happen before the name is handed over: a title carrying a separator would be
 // split by the manager's own SafeRelPath, and "A Creator / An Album" would
 // arrive as two nested folders rather than one. What the name may contain
-// otherwise is the manager's business, not an extractor's.
+// otherwise is the manager's business, not an extractor's. The lookalikes a
+// nested extraction's title arrives with (util.TitleName) go the same way, so
+// that a folder keeps the name everything already downloaded under it has.
 func sourceFolder(title string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '/' || r == '\\' {
+		switch r {
+		case '/', '\\', '\u29f8', '\u29f9':
 			return '_'
 		}
 		return r

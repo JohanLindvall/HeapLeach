@@ -1021,7 +1021,8 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 		it.Headers = target.Headers
 	}
 	if target.Name != "" && !it.fixedName {
-		it.Name = target.Name
+		// A resolver names the file after a title, as an extractor does.
+		it.Name = util.TitleName(util.Unescape(target.Name))
 	}
 	if target.Size > 0 {
 		it.Size = target.Size

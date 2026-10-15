@@ -397,6 +397,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewZDF(client),
 		NewSRF(client),
 		NewArte(client),
+		NewORF(client),
 		NewVRTMax(client),
 		NewNPOStart(client),
 		NewRaiPlay(client),
@@ -574,10 +575,10 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	}
 	// The title names the job and, for a source expanded into folders, the
 	// folder too; see util.Unescape for why it may still carry entities.
-	res.Title = util.Unescape(res.Title)
+	res.Title = util.TitleName(util.Unescape(res.Title))
 	res.Note = util.Unescape(res.Note)
 	for i := range res.Files {
-		res.Files[i].Name = util.Unescape(res.Files[i].Name)
+		res.Files[i].Name = util.TitleName(util.Unescape(res.Files[i].Name))
 		res.Files[i].Dir = util.Unescape(res.Files[i].Dir)
 		if res.Files[i].Refresh == nil {
 			res.Files[i].Refresh = refreshFile(read, res.Files[i], len(res.Files) == 1)

@@ -173,6 +173,15 @@ func DecodeBase64(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(base64Alphabet.Replace(s))
 }
 
+// TitleName keeps a title whole when it becomes a file or folder name. A
+// slash in a title is not a path — "A Series (1/7)", "AC/DC" — but the
+// downloader's SafeName takes everything after the last one, as it must for
+// a name a server hands over, and "A Series (1/7)" would be saved as "7)".
+// So each separator becomes its lookalike, the one yt-dlp writes too.
+func TitleName(s string) string {
+	return strings.NewReplacer("/", "\u29f8", "\\", "\u29f9").Replace(s)
+}
+
 // Unescape decodes HTML character references left in text that should
 // already be plain. Some sites escape a title twice, so one parse leaves
 // "Rafian&#39;s" or "this &amp; that" behind, and names written from it put

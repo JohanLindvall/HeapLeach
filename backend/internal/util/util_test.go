@@ -231,3 +231,17 @@ func TestUnescape(t *testing.T) {
 		}
 	}
 }
+
+// A slash in a title is not a path: it survives as its lookalike.
+func TestTitleName(t *testing.T) {
+	for in, want := range map[string]string{
+		"A Series (1/7)":  "A Series (1\u29f87)",
+		`Up\Down`:         "Up\u29f9Down",
+		"No separators":   "No separators",
+		"Two/Slashes/Too": "Two\u29f8Slashes\u29f8Too",
+	} {
+		if got := TitleName(in); got != want {
+			t.Errorf("TitleName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

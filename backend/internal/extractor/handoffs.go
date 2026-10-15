@@ -133,11 +133,6 @@ var handoffSites = []handoffSite{
 	// languages. Two walls still stand where they say so: DASH, which the
 	// engine does not read, and DR's byte ranges of one file.
 	{
-		name:    "orf",
-		domains: []string{"orf.at", "tvthek.orf.at", "on.orf.at"},
-		why:     "its streams are demuxed, and its API wants a credential published in the page",
-	},
-	{
 		name:    "yle",
 		domains: []string{"areena.yle.fi", "arenan.yle.fi"},
 		why:     "no variant it offers is self-contained, so the audio must be muxed back in",

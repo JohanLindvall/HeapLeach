@@ -35,6 +35,8 @@ func TestSafeName(t *testing.T) {
 		{"entity ampersand", "this &amp; that", "this & that"},
 		{"double escaped", "a &amp;quot;b&amp;quot;", "a _b_"},
 		{"encoded separator cannot climb", "..&#47;..&#47;etc&#47;passwd", "passwd"},
+		// What a title's slash becomes before it gets here (util.TitleName).
+		{"a title's slash, as its lookalike", "A Series (1\u29f87).mp4", "A Series (1\u29f87).mp4"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
