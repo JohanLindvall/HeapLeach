@@ -4,10 +4,12 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -26,8 +28,10 @@ import (
 type SVTPlay struct {
 	hostSet
 	client *httpx.Client
-	// api is the player API's base, a field so that tests can stand in for it.
-	api string
+	// api is the player API's base, and graphql SVT Play's own API, fields
+	// so that tests can stand in for them.
+	api     string
+	graphql string
 }
 
 const (
@@ -53,12 +57,29 @@ const svtSeasonsQuery = `query($slug:String!){
   }
 }`
 
+// svtAvailabilityQuery asks SVT Play's own API what its player API does not
+// say when it offers a video no stream at all: the window the video can be
+// watched in, and whether it is shown in Sweden alone. A video page asks
+// it of its path, and /video/<id> is enough of one.
+const svtAvailabilityQuery = `query($path:String!){
+  detailsPageByPath(path:$path){
+    item{ __typename
+      ... on Single{ name validFrom validTo restrictions{ onlyAvailableInSweden } }
+      ... on Episode{ name validFrom validTo restrictions{ onlyAvailableInSweden } }
+    }
+  }
+}`
+
+// errSVTNoStream is a video the player API offers no stream for at all,
+// which it answers without saying why (svtVideo.HasVodReferences false).
+var errSVTNoStream = errors.New("offers no stream")
+
 // svtVideoLink finds episode ids embedded in a series page.
 var svtVideoLink = regexp.MustCompile(`/video/([A-Za-z0-9_-]{4,})[/"]`)
 
 // NewSVTPlay builds the SVT Play extractor.
 func NewSVTPlay(client *httpx.Client) *SVTPlay {
-	return &SVTPlay{hostSet: hostSet{"svtplay.se"}, client: client, api: svtVideoAPI}
+	return &SVTPlay{hostSet: hostSet{"svtplay.se"}, client: client, api: svtVideoAPI, graphql: svtGraphQL}
 }
 
 func (s *SVTPlay) Name() string { return "svtplay" }
@@ -69,6 +90,9 @@ func (s *SVTPlay) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	segs := util.PathSegments(u)
 	if len(segs) >= 2 && segs[0] == "video" {
 		file, program, episode, err := s.episode(ctx, segs[1])
+		if errors.Is(err, errSVTNoStream) {
+			return nil, s.unavailable(ctx, segs[1], time.Now())
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +191,7 @@ func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []svtEpisod
 			} `json:"listablesBySlug"`
 		} `json:"data"`
 	}
-	if err := s.client.PostJSON(ctx, svtGraphQL, httpx.Referer(svtRoot+"/"), body, &out); err != nil {
+	if err := s.client.PostJSON(ctx, s.graphql, httpx.Referer(svtRoot+"/"), body, &out); err != nil {
 		return "", nil, fmt.Errorf("svtplay: seasons for %s: %w", slug, err)
 	}
 	if len(out.Data.ListablesBySlug) == 0 {
@@ -234,8 +258,11 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 	}
 
 	manifest := meta.bestManifest()
+	if manifest == "" && len(meta.VideoReferences) == 0 {
+		return nil, "", "", fmt.Errorf("svtplay: %s %w", id, errSVTNoStream)
+	}
 	if manifest == "" {
-		return nil, "", "", fmt.Errorf("svtplay: %s offers no usable stream", id)
+		return nil, "", "", fmt.Errorf("svtplay: %s offers no usable stream (only %s)", id, meta.formats())
 	}
 
 	headers := httpx.Referer(svtRoot + "/")
@@ -269,6 +296,16 @@ type svtVideo struct {
 	} `json:"videoReferences"`
 }
 
+// formats lists the kinds of stream the player API offers, for saying
+// which it offered when none of them will do.
+func (v svtVideo) formats() string {
+	var kinds []string
+	for _, ref := range v.VideoReferences {
+		kinds = append(kinds, ref.Format)
+	}
+	return strings.Join(kinds, ", ")
+}
+
 // bestManifest prefers plain MPEG-TS HLS: its renditions carry audio and
 // video together, so the segments join into something playable without any
 // remuxing. Other HLS flavours are taken as a fallback.
@@ -287,4 +324,48 @@ func (v svtVideo) bestManifest() string {
 		}
 	}
 	return ""
+}
+
+// svtAvailability is what SVT Play's page knows of when and where a video
+// can be watched.
+type svtAvailability struct {
+	Name         string `json:"name"`
+	ValidFrom    string `json:"validFrom"`
+	ValidTo      string `json:"validTo"`
+	Restrictions struct {
+		OnlyAvailableInSweden bool `json:"onlyAvailableInSweden"`
+	} `json:"restrictions"`
+}
+
+// unavailable says why the player API offers a video no stream, as far as
+// SVT Play's page knows: its window has closed or not yet opened, or it is
+// shown in Sweden alone. The API answers such a video with an empty list
+// and no reason, which said "offers no usable stream" of a programme that
+// could be watched until two years before.
+func (s *SVTPlay) unavailable(ctx context.Context, id string, now time.Time) error {
+	body := map[string]any{"query": svtAvailabilityQuery, "variables": map[string]string{"path": "/video/" + id}}
+	var out struct {
+		Data struct {
+			DetailsPageByPath *struct {
+				Item *svtAvailability `json:"item"`
+			} `json:"detailsPageByPath"`
+		} `json:"data"`
+	}
+	err := s.client.PostJSON(ctx, s.graphql, httpx.Referer(svtRoot+"/"), body, &out)
+	if err != nil || out.Data.DetailsPageByPath == nil || out.Data.DetailsPageByPath.Item == nil {
+		return fmt.Errorf("svtplay: SVT offers no stream for %s (it may no longer be available, or not be yet)", id)
+	}
+	item := out.Data.DetailsPageByPath.Item
+	name := util.FirstNonEmpty(item.Name, id)
+	from, fromErr := time.Parse(time.RFC3339, item.ValidFrom)
+	to, toErr := time.Parse(time.RFC3339, item.ValidTo)
+	switch {
+	case toErr == nil && now.After(to):
+		return fmt.Errorf("svtplay: %s could be watched until %s and is no longer available", name, to.Format(time.DateOnly))
+	case fromErr == nil && now.Before(from):
+		return fmt.Errorf("svtplay: %s cannot be watched before %s", name, from.Format(time.DateOnly))
+	case item.Restrictions.OnlyAvailableInSweden:
+		return fmt.Errorf("svtplay: SVT offers no stream for %s here: it is shown in Sweden only", name)
+	}
+	return fmt.Errorf("svtplay: SVT offers no stream for %s, and gives no reason", name)
 }

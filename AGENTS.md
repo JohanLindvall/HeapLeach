@@ -1190,6 +1190,16 @@ Host-specific notes:
   (`/sendereihe/<id>`, `profile/<id>/episodes`) lists newest first and is
   filed oldest first. Anything else on orf.at, its radio and news pages,
   still goes to yt-dlp through the `Handoff` the extractor keeps.
+- **svtplay** reads SVT's player API (`api.svt.se/videoplayer-api/video/<id>`).
+  A video it offers no stream for at all is answered with an empty
+  `videoReferences`, `hasVodReferences` false and no reason. It is one whose
+  window has closed or not yet opened, or one shown in Sweden alone, and
+  "offers no usable stream" said none of that of a programme that could be
+  watched until two years before. So `unavailable` asks SVT Play's own
+  GraphQL what its page shows (`detailsPageByPath` on `/video/<id>`:
+  `validFrom`, `validTo`, `restrictions.onlyAvailableInSweden`) and says
+  which. "No usable stream" is left for a video offered only in forms this
+  cannot read, and names them.
 - **yle** reads Areena through the player API's preview
   (`player.api.yle.fi/v1/preview/<id>.json`), asked with the static
   player's app id and key, the pair Yle's own player script sends (a chunk

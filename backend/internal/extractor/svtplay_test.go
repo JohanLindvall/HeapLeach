@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -141,5 +142,61 @@ func TestSVTCarriesAudioKeptApartAsTracksOfItsOwn(t *testing.T) {
 	file, _, _, err := s.episode(context.Background(), "joined")
 	if err != nil || len(file.Audio) != 0 || len(file.Segments) != 2 || file.Name != ".ts" {
 		t.Fatalf("file = %+v, err %v; want the rendition that carries its own audio joined as it is", file, err)
+	}
+}
+
+// A video the player API offers no stream at all is explained from what SVT
+// Play's page knows of it: when it could be watched, and where. The API
+// answers such a video with an empty list and no reason, which read "offers
+// no usable stream" of a programme whose window had closed two years before.
+func TestSVTSaysWhyAVideoOffersNoStream(t *testing.T) {
+	items := map[string]string{
+		"/video/closed1": `{"__typename":"Single","name":"A Closed Film","validFrom":"2001-06-01T06:00:00+02:00","validTo":"2001-09-30T23:59:00+02:00","restrictions":{"onlyAvailableInSweden":true}}`,
+		"/video/later22": `{"__typename":"Episode","name":"A Later Episode","validFrom":"2999-01-01T06:00:00+01:00","validTo":"2999-12-31T23:59:00+01:00","restrictions":{"onlyAvailableInSweden":false}}`,
+		"/video/sweden3": `{"__typename":"Single","name":"A Swedish Film","validFrom":"2001-01-01T00:00:00+01:00","validTo":"2999-12-31T23:59:00+01:00","restrictions":{"onlyAvailableInSweden":true}}`,
+		"/video/open444": `{"__typename":"Single","name":"An Open Film","validFrom":"2001-01-01T00:00:00+01:00","validTo":"2999-12-31T23:59:00+01:00","restrictions":{"onlyAvailableInSweden":false}}`,
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/dashonly") {
+			fmt.Fprint(w, `{"programTitle":"A Programme","videoReferences":[{"format":"dash","url":"https://cdn.example.test/a.mpd"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"svtId":"x","hasVodReferences":false,"rights":null,"videoReferences":[]}`)
+	})
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string            `json:"query"`
+			Variables map[string]string `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !strings.Contains(req.Query, "detailsPageByPath") {
+			http.Error(w, "unexpected query", http.StatusBadRequest)
+			return
+		}
+		item, ok := items[req.Variables["path"]]
+		if !ok {
+			fmt.Fprint(w, `{"data":{"detailsPageByPath":null}}`)
+			return
+		}
+		fmt.Fprintf(w, `{"data":{"detailsPageByPath":{"item":%s}}}`, item)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
+
+	for id, want := range map[string]string{
+		"closed1":  "A Closed Film could be watched until 2001-09-30 and is no longer available",
+		"later22":  "A Later Episode cannot be watched before 2999-01-01",
+		"sweden3":  "SVT offers no stream for A Swedish Film here: it is shown in Sweden only",
+		"open444":  "SVT offers no stream for An Open Film, and gives no reason",
+		"unknown5": "SVT offers no stream for unknown5 (it may no longer be available, or not be yet)",
+		"dashonly": "dashonly offers no usable stream (only dash)",
+	} {
+		page, _ := url.Parse("https://www.svtplay.se/video/" + id + "/an-invented-title")
+		_, err := s.Extract(context.Background(), page, Options{})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", id, err, want)
+		}
 	}
 }
