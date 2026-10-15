@@ -1495,6 +1495,17 @@ Host-specific notes:
   natively, as the player does. A removed video answers 404 with "Video not
   found", which is reported as such. The site's certificate chain is short;
   see the HTTP client section.
+- **sendvid** reads the player's one `<source>` off the watch page (`/<id>`;
+  the embed, `/embed/<id>`, carries the same player). It is signed for four
+  hours (`validfrom`, `validto`) with a `rate=250k` that the media host holds
+  each connection to, about 270 kB/s. The signature covers all three: with
+  the rate changed or left out, the link is a 401. The rate is per
+  connection, though. Four connections at once each got all of it, so the
+  extra connections the engine opens for a slow file multiply it. The link
+  is minted again when the transfer starts (`refetchedVideo`). `og:video`
+  names `/<id>.mp4`, which only redirects back to the page, and the embed's
+  `<title>` is the site's name alone, so the title is `og:title`. A video
+  that is gone is a 404.
 - **knuthing** watch pages frame Bunny Stream. Read only the `bunnyframe`
   embed and its `bunny-stream-video` element's `content-src`; thumbnails and
   sharing embeds are not media. Free-video confirmation follows the page's

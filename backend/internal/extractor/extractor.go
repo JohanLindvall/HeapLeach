@@ -452,6 +452,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewMixDrop(client),
 		NewLuluStream(client),
 		NewVidsSt(client),
+		NewSendvid(client),
 		NewKnuthing(client),
 	}
 	// Platform families: one extractor covering every install of a piece of
