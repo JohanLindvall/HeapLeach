@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -128,7 +129,14 @@ type Config struct {
 	ProxyDB        string
 	ProxyEndpoints []string
 	ProxyFeeds     []string
-	ProxyRetries   int
+	// ProxyType is the protocol every proxy group draws its routes from
+	// unless ProxyTypes names one of its own: "any", "socks" or "http". A
+	// specific protocol leaves the direct connection out as well.
+	ProxyType string
+	// ProxyTypes is a protocol per proxy group (ProxyGroups), overriding
+	// ProxyType for that group alone.
+	ProxyTypes   map[string]string
+	ProxyRetries int
 	// ProxyExitProbes are asked, through each route and in turn, for the
 	// public address the route leaves by (ProxyExitProbeURL). None skips the
 	// question, which is what a Config built by hand, as tests build them,
@@ -166,6 +174,7 @@ func FromEnv() (*Config, error) {
 		ProxyDB:         env("PROXY_DB", ""),
 		ProxyEndpoints:  envList("PROXY_ENDPOINTS"),
 		ProxyFeeds:      []string{DefaultProxyFeed},
+		ProxyType:       env("PROXY_TYPE", ProxyTypeAny),
 		ProxyRetries:    DefaultProxyRetries,
 		ProxyExitProbes: []string{ProxyExitProbeURL, ProxyExitProbeFallbackURL},
 	}
@@ -191,6 +200,9 @@ func FromEnv() (*Config, error) {
 	}
 
 	var err error
+	if c.ProxyTypes, err = ParseProxyTypes(LookupEnv("PROXY_TYPES")); err != nil {
+		return nil, fmt.Errorf("%sPROXY_TYPES: %w", envPrefix, err)
+	}
 	if c.ProxyRetries, err = envInt("PROXY_RETRIES", c.ProxyRetries); err != nil {
 		return nil, err
 	}
@@ -386,6 +398,18 @@ func (c *Config) Prepare() error {
 	if c.Proxies {
 		if strings.TrimSpace(c.ProxyDB) == "" {
 			return errors.New("proxy-db must name a Bolt database")
+		}
+	}
+	c.ProxyType = strings.ToLower(strings.TrimSpace(c.ProxyType))
+	if c.ProxyType == "" {
+		c.ProxyType = ProxyTypeAny
+	}
+	if !ValidProxyType(c.ProxyType) {
+		return fmt.Errorf("proxy type must be any, socks or http, got %q", c.ProxyType)
+	}
+	for group, kind := range c.ProxyTypes {
+		if !slices.Contains(ProxyGroups, group) || !ValidProxyType(kind) {
+			return fmt.Errorf("proxy types: %q=%q is not a proxy group and a protocol", group, kind)
 		}
 	}
 	if c.ProxyDB != "" {
@@ -726,4 +750,48 @@ func envSize(name string, def int64) (int64, error) {
 		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
 	}
 	return n, nil
+}
+
+// The protocols a proxy group can be held to.
+const (
+	ProxyTypeAny   = "any"
+	ProxyTypeSOCKS = "socks"
+	ProxyTypeHTTP  = "http"
+)
+
+// ProxyGroups are the groups that draw on the proxy pool, each a scope of
+// its own: the two free-download services and WAF recovery on any host.
+var ProxyGroups = []string{"keep2share", "fileboom", "cloudflare"}
+
+// ValidProxyType reports a protocol a proxy group can be held to.
+func ValidProxyType(kind string) bool {
+	return kind == ProxyTypeAny || kind == ProxyTypeSOCKS || kind == ProxyTypeHTTP
+}
+
+// ParseProxyTypes reads protocols per proxy group, written
+// "keep2share=socks,cloudflare=any". An empty value is no override.
+func ParseProxyTypes(raw string) (map[string]string, error) {
+	types := make(map[string]string)
+	for _, field := range splitList(raw) {
+		group, kind, ok := strings.Cut(field, "=")
+		group, kind = strings.ToLower(strings.TrimSpace(group)), strings.ToLower(strings.TrimSpace(kind))
+		if !ok || !slices.Contains(ProxyGroups, group) || !ValidProxyType(kind) {
+			return nil, fmt.Errorf("%q is not a proxy group (%s) and a protocol (any, socks or http)",
+				field, strings.Join(ProxyGroups, ", "))
+		}
+		types[group] = kind
+	}
+	return types, nil
+}
+
+// FormatProxyTypes writes protocols per proxy group as ParseProxyTypes reads
+// them, in the groups' order.
+func FormatProxyTypes(types map[string]string) string {
+	var fields []string
+	for _, group := range ProxyGroups {
+		if kind, ok := types[group]; ok {
+			fields = append(fields, group+"="+kind)
+		}
+	}
+	return strings.Join(fields, ",")
 }

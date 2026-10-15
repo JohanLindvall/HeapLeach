@@ -732,6 +732,15 @@ including `direct` if the normal connection should participate, and
 empty feed setting disables discovery; an empty endpoint setting excludes
 the normal connection. Explicit proxies take precedence over `NO_PROXY`.
 
+The routes can be held to one protocol: **SOCKS only** or **HTTP only**
+(HTTP and HTTPS proxies), for every service at once or for Keep2Share,
+FileBoom or WAF recovery alone, under **Proxy protocol** in Settings or with
+`HEAPLEACH_PROXY_TYPE` and `HEAPLEACH_PROXY_TYPES`. Either one leaves the
+normal connection out, and a service with no route of its protocol waits
+for one rather than using another. Each service's list then shows only the
+routes it may use. Choices made in Settings are kept across restarts, until
+the configured value they replaced is changed.
+
 Each transfer attempt keeps its route through the CAPTCHA, ticket, redirects
 and file requests. Keep2Share and FileBoom API calls and CAPTCHA image
 requests have a 20-second timeout. A network timeout penalises and cools the
@@ -878,6 +887,8 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_PROXY_DB` | `proxies.db` beside `HEAPLEACH_STATE`, else `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode: with no queue kept, the default directory is used. Flag: `-proxy-db`. |
 | `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
+| `HEAPLEACH_PROXY_TYPE` | `any` | The protocol every proxy service draws its routes from: `any`, `socks` or `http` (HTTP and HTTPS proxies). `socks` or `http` leaves the normal connection out. Flag: `-proxy-type`. Also settable live in Settings, which is kept across restarts until this value is changed. |
+| `HEAPLEACH_PROXY_TYPES` | none | A protocol per service, overriding `HEAPLEACH_PROXY_TYPE` for it: `keep2share=socks,fileboom=socks,cloudflare=any`, where `cloudflare` is WAF recovery on any host. Flag: `-proxy-types`. Also settable live in Settings, kept as above. |
 | `HEAPLEACH_PROXY_RETRIES` | `20` | Route changes after failures that make no disk progress. A proxy that cannot be reached, drops the connection or has its address refused does not count. A host's free-download cooldown does not spend this budget. |
 | `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI, which is kept across restarts until this value is changed. |

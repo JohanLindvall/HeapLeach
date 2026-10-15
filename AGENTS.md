@@ -1017,6 +1017,27 @@ Host-specific notes:
   Discovery demand shares the global worker budget across both services;
   `SetDemand` publishes their allocations atomically so an obsolete demand
   cannot trigger an early feed reload.
+
+  **Each proxy group can be held to one protocol** (`config.ProxyType`,
+  `ProxyTypes`, `proxy.SetTypes`): any, SOCKS (socks4 to socks5h) or HTTP
+  (http and https), for every group or for one alone, the groups being
+  `config.ProxyGroups`, which are the pool's scopes. The library's own
+  `lease.WithProxyType` is fixed when the pool opens and covers every
+  scope, so this is `Pool.SetScopeProxyType`, a restriction per scope on
+  top of it that can change while the pool runs. A specific protocol leaves
+  the direct connection out, and a group with no route of its protocol gets
+  no lease rather than another protocol's: its files wait in the queue, as
+  for any group without a free route. A change holds from the next lease;
+  one already granted is left to finish, and an upgrade reserved before it
+  is checked again (`Lease.Configured`). The pool's `Page` shows each scope
+  only what it may use, so the list is the answer to what a group can draw
+  on. `applyProxyTypesLocked` is called wherever the answer can change:
+  when the pool opens, when the settings change, and when `Restore` brings
+  back saved ones, since `main` opens the pool before reading the queue.
+  A change to `proxyTypes` names only the groups it changes ("" follows the
+  all-groups protocol again), so two quick changes to two groups from the
+  browser cannot undo each other. Both are kept with the queue like
+  concurrency (see Configuration).
 - **gofile** signs every API call with
   `sha256(userAgent :: language :: accountToken :: floor(unix/14400) :: secret)`
   sent as `X-Website-Token`. The user agent mixed into that hash **must** be
@@ -2460,9 +2481,10 @@ fast enough to need it buffers up to `WriteBufferSize` (1 MiB) before
 writing, so 256 fast files split eight ways can hold about 2 GiB of buffers
 at worst. Slow ones keep the 64 KiB they start with (see the write buffers).
 
-**Parallel downloads and streams chosen in Settings outlive the process.**
-Every release restarts the service, and each restart put them back to the
-configured values. They are saved with the queue (`savedSettings`), written
+**Parallel downloads, streams and proxy protocols chosen in Settings
+outlive the process.** Every release restarts the service, and each restart
+put them back to the configured values. They are saved with the queue
+(`savedSettings`), written
 the moment they change rather than at the next save, and taken back by
 `Restore` before `Start`. Each is stored with the configured value it
 overrode, and is kept only while the configuration still says that. A
@@ -2470,6 +2492,9 @@ configuration changed since is the later word, or a deployment changing it
 would see nothing happen. A queue saved before this has no settings, and the
 configuration stands. A kept concurrency is held under the current ceiling.
 Pause is not kept: resuming stays the user's word, or `HEAPLEACH_RESUME`'s.
+The groups' own protocols are saved even when there are none
+(`proxyTypes: {}`), which is a choice, unlike a queue saved before they
+existed, which has none to restore.
 
 **A job can be held beneath the queue's limits** (`joblimits.go`).
 `JobLimit` sets how many of the job's files download at once, how many
@@ -2560,8 +2585,11 @@ row for every route had taken 230 ms and 74 MB a request in a pool of 63,000,
 every five seconds while the list was open. Scores use the selector's deterministic mean estimate, not a
 fresh random draw when viewed. Source drafts fetch `/api/settings` separately
 and survive failed saves; source credentials never belong in the list or
-queue snapshots. Proxy settings last for the session; parallel downloads and
-streams are kept with the queue (see Configuration).
+queue snapshots. Proxy settings last for the session; parallel downloads,
+streams and proxy protocols are kept with the queue (see Configuration).
+The protocol choices (`ProtocolSelect`) show a choice as made until a
+snapshot agrees, or for a few seconds if none does, as the proxy switch
+does, and each sends only its own group.
 
 `styles.css` is a single design system: one accent gradient, one surface
 ramp, one shadow scale, dark and light via `prefers-color-scheme`. Prefer

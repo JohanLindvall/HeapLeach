@@ -342,6 +342,10 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 			config.DefaultCaptchaConcurrency, config.MaxCaptchaConcurrency))
 	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host")
 	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
+	flags.StringVar(&cfg.ProxyType, "proxy-type", cfg.ProxyType,
+		"protocol download proxies are drawn from: any, socks or http (socks and http leave the direct connection out)")
+	proxyTypes := flags.String("proxy-types", config.FormatProxyTypes(cfg.ProxyTypes),
+		"a protocol per proxy group, overriding -proxy-type: keep2share=socks,fileboom=socks,cloudflare=any")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,
 		fmt.Sprintf("connections to split a slow file across (1-%d)", config.MaxStreams))
@@ -407,6 +411,11 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 			len(dirs), strings.Join(dirs, " "))
 	}
 	cfg.Password = password
+	types, err := config.ParseProxyTypes(*proxyTypes)
+	if err != nil {
+		return nil, fmt.Errorf("-proxy-types: %w", err)
+	}
+	cfg.ProxyTypes = types
 	applyBareDefaults(cfg, args)
 
 	if err := cfg.Prepare(); err != nil {
@@ -508,7 +517,9 @@ Environment:
   HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
   HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME,
   HEAPLEACH_MAX_CONCURRENCY, HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES,
-  HEAPLEACH_PPROF
+  HEAPLEACH_PPROF, HEAPLEACH_PROXIES, HEAPLEACH_PROXY_DB,
+  HEAPLEACH_PROXY_ENDPOINTS, HEAPLEACH_PROXY_FEEDS, HEAPLEACH_PROXY_TYPE,
+  HEAPLEACH_PROXY_TYPES (keep2share=socks,cloudflare=any)
 
 Sizes take a unit: 5MB, 1.5GB, 10GiB, or a plain byte count.
 

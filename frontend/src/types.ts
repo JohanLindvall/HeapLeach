@@ -102,6 +102,12 @@ export interface JobLimit {
   speedLimit?: number;
 }
 
+/** The protocols download proxies can be held to. */
+export type ProxyProtocol = 'any' | 'socks' | 'http';
+
+/** What draws on the proxy pool: two free-download services, and WAF recovery on any host. */
+export type ProxyGroup = 'keep2share' | 'fileboom' | 'cloudflare';
+
 /** Whole-application state, pushed over server-sent events. */
 export interface Snapshot {
   jobs: JobView[];
@@ -112,6 +118,13 @@ export interface Snapshot {
   maxStreams: number;
   /** Proxy routing for free hosts and WAF challenge recovery on any host. */
   proxies: boolean;
+  /**
+   * The protocol every proxy group draws its routes from, and the groups
+   * holding to one of their own. SOCKS or HTTP alone leaves the usual
+   * connection out.
+   */
+  proxyType: ProxyProtocol;
+  proxyTypes: Partial<Record<ProxyGroup, ProxyProtocol>>;
   active: number;
   queued: number;
   speed: number;

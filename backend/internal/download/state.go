@@ -88,6 +88,14 @@ type savedSettings struct {
 	Streams               int `json:"streams"`
 	ConfiguredConcurrency int `json:"configuredConcurrency"`
 	ConfiguredStreams     int `json:"configuredStreams"`
+	// ProxyType and ProxyTypes are the protocols chosen for the proxy groups,
+	// kept as the others are, while the configuration they overrode says
+	// what it said. ProxyTypes is written even when empty, so that a choice
+	// of no group overrides is told from a queue saved before there was one.
+	ProxyType            string            `json:"proxyType,omitempty"`
+	ProxyTypes           map[string]string `json:"proxyTypes"`
+	ConfiguredProxyType  string            `json:"configuredProxyType,omitempty"`
+	ConfiguredProxyTypes map[string]string `json:"configuredProxyTypes,omitempty"`
 }
 
 type savedJob struct {

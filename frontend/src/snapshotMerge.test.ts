@@ -12,6 +12,8 @@ function snapshot(jobs: JobView[]): Snapshot {
     jobs,
     concurrency: 4,
     proxies: false,
+    proxyType: 'any',
+    proxyTypes: {},
     maxConcurrency: 32,
     streams: 8,
     maxStreams: 16,

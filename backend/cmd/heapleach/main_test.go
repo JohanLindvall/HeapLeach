@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -123,6 +124,28 @@ func TestProxyStartupDefaultsAndFlagOverrides(t *testing.T) {
 	}
 }
 
+// Download proxies can be held to one protocol, for every group or for one
+// group, by the environment or by flags, which win.
+func TestProxyTypeFlagsOverrideTheEnvironment(t *testing.T) {
+	t.Setenv("HEAPLEACH_DIR", t.TempDir())
+	t.Setenv("HEAPLEACH_PROXY_TYPE", "http")
+	t.Setenv("HEAPLEACH_PROXY_TYPES", "fileboom=any")
+	cfg, err := loadConfig(nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyType != config.ProxyTypeHTTP || !maps.Equal(cfg.ProxyTypes, map[string]string{"fileboom": config.ProxyTypeAny}) {
+		t.Errorf("from the environment: %q %v", cfg.ProxyType, cfg.ProxyTypes)
+	}
+	cfg, err = loadConfig([]string{"-proxy-type", "SOCKS", "-proxy-types", "keep2share=http"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyType != config.ProxyTypeSOCKS || !maps.Equal(cfg.ProxyTypes, map[string]string{"keep2share": config.ProxyTypeHTTP}) {
+		t.Errorf("from flags: %q %v", cfg.ProxyType, cfg.ProxyTypes)
+	}
+}
+
 // The byte-count flags read units, print their defaults in units, and
 // -min-free exists at all: the floor had been environment-only, which is a
 // strange gap for the one setting that decides whether a run fills a disk.
@@ -154,7 +177,7 @@ func TestSizeFlagsTakeUnits(t *testing.T) {
 	if _, err := loadConfig([]string{"-h"}, &help); err == nil {
 		t.Fatal("-h should exit")
 	}
-	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE", "HEAPLEACH_RESUME", "-resume", "HEAPLEACH_MAX_FILES", "-max-files", "-max-sources", "HEAPLEACH_PPROF", "-pprof"} {
+	for _, want := range []string{"-min-free", "(default 10GiB)", "(default 2MB)", "HEAPLEACH_MIN_FREE", "HEAPLEACH_STATE", "HEAPLEACH_RESUME", "-resume", "HEAPLEACH_MAX_FILES", "-max-files", "-max-sources", "HEAPLEACH_PPROF", "-pprof", "HEAPLEACH_PROXY_TYPES", "-proxy-type"} {
 		if !strings.Contains(help.String(), want) {
 			t.Errorf("help does not mention %q", want)
 		}
@@ -196,6 +219,8 @@ func TestRejectsBadInput(t *testing.T) {
 		{"concurrency zero", []string{"-concurrency", "0", dir}, "between 1 and"},
 		{"negative retries", []string{"-retries", "-1", dir}, "negative"},
 		{"path is a file", []string{notADir}, "not a directory"},
+		{"unknown proxy protocol", []string{"-proxy-type", "tor", dir}, "proxy type"},
+		{"protocol for no proxy group", []string{"-proxy-types", "elsewhere=socks", dir}, "-proxy-types"},
 	}
 
 	for _, tc := range tests {

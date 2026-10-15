@@ -328,8 +328,12 @@ type Snapshot struct {
 	Streams     int       `json:"streams"`
 	MaxStreams  int       `json:"maxStreams"`
 	Proxies     bool      `json:"proxies"`
-	Active      int       `json:"active"`
-	Queued      int       `json:"queued"`
+	// ProxyType is the protocol every proxy group draws its routes from, and
+	// ProxyTypes the groups' own, where they have one.
+	ProxyType  string            `json:"proxyType"`
+	ProxyTypes map[string]string `json:"proxyTypes"`
+	Active     int               `json:"active"`
+	Queued     int               `json:"queued"`
 	// Paused holds the whole queue; SpeedLimit caps total throughput in
 	// bytes per second, where zero means unlimited.
 	Paused      bool    `json:"paused"`

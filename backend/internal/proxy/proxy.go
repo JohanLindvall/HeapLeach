@@ -4,16 +4,20 @@
 package proxy
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/proxytron"
 	"github.com/JohanLindvall/proxytron/lease"
 )
 
@@ -34,7 +38,31 @@ var (
 	ErrExitProbeFailed = lease.ErrExitProbeFailed
 )
 
-func Services() []string { return []string{"keep2share", "fileboom", "cloudflare"} }
+func Services() []string { return slices.Clone(config.ProxyGroups) }
+
+// protocols maps a protocol a group can be held to onto proxytron's.
+var protocols = map[string]proxytron.ProxyType{
+	"": proxytron.ProxyTypeAny, config.ProxyTypeAny: proxytron.ProxyTypeAny,
+	config.ProxyTypeSOCKS: proxytron.ProxyTypeSOCKS, config.ProxyTypeHTTP: proxytron.ProxyTypeHTTP,
+}
+
+// SetTypes holds each group's routes to its protocol: its own where groups
+// names one, otherwise all's. A specific protocol leaves the direct
+// connection out of the group too, and a group with no route of its
+// protocol gets none rather than another protocol's.
+func SetTypes(p *Pool, all string, groups map[string]string) error {
+	for _, group := range config.ProxyGroups {
+		kind := cmp.Or(groups[group], all)
+		t, ok := protocols[kind]
+		if !ok {
+			return fmt.Errorf("proxy type must be any, socks or http, got %q", kind)
+		}
+		if err := p.SetScopeProxyType(group, t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func ParseConfiguration(endpoints, feeds []string) (Configuration, error) {
 	c, err := lease.ParseConfiguration(endpoints, feeds)

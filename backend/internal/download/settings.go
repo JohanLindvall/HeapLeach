@@ -4,7 +4,9 @@ package download
 
 import (
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -21,6 +23,13 @@ type Settings struct {
 	Proxies        *bool     `json:"proxies"`
 	ProxyEndpoints *[]string `json:"proxyEndpoints"`
 	ProxyFeeds     *[]string `json:"proxyFeeds"`
+	// ProxyType is the protocol every proxy group draws its routes from:
+	// "any", "socks" or "http". ProxyTypes changes the groups it names, to
+	// a protocol of their own or, with "", back to ProxyType's; the groups
+	// it leaves out keep what they have, so two changes made at once to two
+	// groups cannot undo each other.
+	ProxyType  *string            `json:"proxyType"`
+	ProxyTypes *map[string]string `json:"proxyTypes"`
 }
 
 // CurrentSettings is fetched explicitly by the editor. Endpoint credentials
@@ -33,9 +42,10 @@ func (m *Manager) CurrentSettings() Settings {
 	enabled := m.proxyEnabled
 	endpoints := append([]string{}, m.proxyConfig.Endpoints...)
 	feeds := append([]string{}, m.proxyConfig.Feeds...)
+	kind, kinds := m.proxyType, m.proxyTypesLocked()
 	return Settings{Concurrency: &concurrency, Streams: &streams, Paused: &paused,
 		SpeedLimit: &limit, DownloadDir: &dir, Proxies: &enabled,
-		ProxyEndpoints: &endpoints, ProxyFeeds: &feeds}
+		ProxyEndpoints: &endpoints, ProxyFeeds: &feeds, ProxyType: &kind, ProxyTypes: &kinds}
 }
 
 // maxConcurrency is the configured ceiling on parallel transfers. A manager
@@ -60,6 +70,19 @@ func (m *Manager) ApplySettings(s Settings) error {
 	}
 	if s.SpeedLimit != nil && *s.SpeedLimit < 0 {
 		return fmt.Errorf("speed limit cannot be negative, got %d", *s.SpeedLimit)
+	}
+	if s.ProxyType != nil && !config.ValidProxyType(*s.ProxyType) {
+		return fmt.Errorf("proxy type must be any, socks or http, got %q", *s.ProxyType)
+	}
+	if s.ProxyTypes != nil {
+		for group, kind := range *s.ProxyTypes {
+			if !slices.Contains(config.ProxyGroups, group) {
+				return fmt.Errorf("%q is not a proxy group (%s)", group, strings.Join(config.ProxyGroups, ", "))
+			}
+			if kind != "" && !config.ValidProxyType(kind) {
+				return fmt.Errorf("proxy type for %s must be any, socks or http, got %q", group, kind)
+			}
+		}
 	}
 	var dir string
 	if s.DownloadDir != nil {
@@ -115,6 +138,7 @@ func (m *Manager) ApplySettings(s Settings) error {
 		if pool != nil {
 			pool.Configure(proxyConfig, enabled)
 		}
+		m.applyProxyTypesLocked()
 		if changed && enabled {
 			// A queued direct-address cooldown must not conceal the newly
 			// available proxies. The host's resolver still remembers that timer
@@ -125,6 +149,25 @@ func (m *Manager) ApplySettings(s Settings) error {
 				}
 			}
 		}
+	}
+	if s.ProxyType != nil && m.proxyType != *s.ProxyType {
+		m.proxyType, changed, kept = *s.ProxyType, true, true
+	}
+	if s.ProxyTypes != nil {
+		kinds := m.proxyTypesLocked()
+		for group, kind := range *s.ProxyTypes {
+			if kind == "" {
+				delete(kinds, group) // the group follows the others again
+			} else {
+				kinds[group] = kind
+			}
+		}
+		if !maps.Equal(m.proxyTypes, kinds) {
+			m.proxyTypes, changed, kept = kinds, true, true
+		}
+	}
+	if s.ProxyType != nil || s.ProxyTypes != nil {
+		m.applyProxyTypesLocked()
 	}
 	if s.Concurrency != nil && m.limit != *s.Concurrency {
 		m.limit, changed, kept = *s.Concurrency, true, true
@@ -167,4 +210,26 @@ func (m *Manager) ApplySettings(s Settings) error {
 		m.persist()
 	}
 	return nil
+}
+
+// proxyTypesLocked is a copy of the groups' own protocols, never nil, so
+// the wire shows an empty object. Caller holds mu.
+func (m *Manager) proxyTypesLocked() map[string]string {
+	kinds := maps.Clone(m.proxyTypes)
+	if kinds == nil {
+		kinds = map[string]string{}
+	}
+	return kinds
+}
+
+// applyProxyTypesLocked holds each proxy group's routes to its protocol, in a
+// pool that is open. A change holds from the group's next lease on; leases
+// granted before are left to finish. Caller holds mu.
+func (m *Manager) applyProxyTypesLocked() {
+	if m.proxies == nil {
+		return
+	}
+	if err := proxy.SetTypes(m.proxies, m.proxyType, m.proxyTypes); err != nil {
+		m.log.Warn("could not hold the proxy groups to their protocols", "error", err)
+	}
 }

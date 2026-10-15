@@ -6,10 +6,12 @@
 package download
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,10 +40,14 @@ type Manager struct {
 	log    *slog.Logger
 	// settingsMu serializes preparation/publication with shutdown. The pool
 	// is opened lazily and owned until Close, even when routing is disabled.
-	settingsMu     sync.Mutex
-	proxies        *proxy.Pool // guarded by mu
-	proxyConfig    proxy.Configuration
-	proxyEnabled   bool
+	settingsMu   sync.Mutex
+	proxies      *proxy.Pool // guarded by mu
+	proxyConfig  proxy.Configuration
+	proxyEnabled bool
+	// proxyType is the protocol every proxy group draws its routes from,
+	// and proxyTypes a group's own where it has one (config.ProxyType).
+	proxyType      string
+	proxyTypes     map[string]string
 	proxyRunning   map[string]int // leased workers per service, including the direct route
 	proxyResolving int            // source extractions waiting for or using proxy recovery
 	// routeWanted remembers, per service, whether a file of it was due to
@@ -181,6 +187,8 @@ func New(cfg *config.Config, reg *extractor.Registry, client *httpx.Client, log 
 	return &Manager{
 		cfg:             cfg,
 		proxyConfig:     proxy.Configuration{Endpoints: slices.Clone(cfg.ProxyEndpoints), Feeds: slices.Clone(cfg.ProxyFeeds)},
+		proxyType:       cmp.Or(cfg.ProxyType, config.ProxyTypeAny),
+		proxyTypes:      maps.Clone(cfg.ProxyTypes),
 		reg:             reg,
 		hostCount:       hostCount,
 		version:         cfg.Version,

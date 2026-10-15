@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, fetchSettings, updateSettings, type Settings } from '../api';
-import type { Snapshot } from '../types';
+import type { ProxyGroup, ProxyProtocol, Snapshot } from '../types';
 import { BoltIcon, SplitIcon } from './Icons';
 import { ProxyList } from './ProxyList';
 import { SettingSlider } from './SettingSlider';
 import { SpeedLimit } from './SpeedLimit';
 
 const SETTLE_TIMEOUT_MS = 4000;
+
+const PROTOCOLS: Record<ProxyProtocol, string> = { any: 'Any protocol', socks: 'SOCKS only', http: 'HTTP only' };
+
+const GROUPS: readonly (readonly [ProxyGroup, string])[] = [
+  ['keep2share', 'Keep2Share'], ['fileboom', 'FileBoom'], ['cloudflare', 'WAF recovery'],
+];
 
 export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
   const [error, setError] = useState('');
@@ -29,13 +35,15 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
     return () => window.clearTimeout(timer);
   }, [proxyChoice, snapshot.proxies, switching]);
 
-  const change = async (patch: Partial<Settings>): Promise<void> => {
+  const change = async (patch: Partial<Settings>): Promise<boolean> => {
     setError('');
     try {
       await updateSettings(patch);
       setRevision((value) => value + 1);
+      return true;
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not update settings.');
+      return false;
     }
   };
 
@@ -88,6 +96,19 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
           {switching ? 'Applying…' : proxies ? 'Enabled' : 'Disabled'}
         </label>
       </div>
+      <fieldset className="proxy-protocols" aria-describedby="proxy-protocols-help">
+        <legend>Proxy protocol</legend>
+        <div className="proxy-protocols__choices">
+          <ProtocolSelect id="proxy-type" label="All services" value={snapshot.proxyType}
+            onCommit={(proxyType) => change({ proxyType: proxyType as ProxyProtocol })} />
+          {GROUPS.map(([group, label]) => (
+            <ProtocolSelect key={group} id={`proxy-type-${group}`} label={label}
+              value={snapshot.proxyTypes[group] ?? ''} follows={snapshot.proxyType}
+              onCommit={(kind) => change({ proxyTypes: { [group]: kind as ProxyProtocol | '' } })} />
+          ))}
+        </div>
+        <small id="proxy-protocols-help">SOCKS or HTTP alone leaves your usual connection out. A service with no route of its protocol waits for one.</small>
+      </fieldset>
       {error && <p className="settings-error" role="alert">{error}</p>}
       <button type="button" className="btn btn--ghost btn--sm" aria-expanded={editing}
         aria-controls="proxy-source-editor" onClick={() => setEditing((value) => !value)}>
@@ -96,6 +117,52 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
       {editing && <ProxySources onSaved={() => { setEditing(false); setRevision((value) => value + 1); }} />}
       <ProxyList enabled={snapshot.proxies} revision={revision} />
     </section>
+  );
+}
+
+/**
+ * One protocol choice, shown as made until a snapshot agrees with it, or
+ * for a few seconds if none does, as the proxy switch is. A group's own
+ * choice offers to follow the protocol the others do, naming it.
+ */
+function ProtocolSelect({ id, label, value, follows, onCommit }: {
+  readonly id: string;
+  readonly label: string;
+  /** The server's choice; '' for a group following the others. */
+  readonly value: string;
+  readonly follows?: ProxyProtocol;
+  readonly onCommit: (value: string) => Promise<boolean>;
+}) {
+  const [choice, setChoice] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (choice === null || pending) return;
+    if (choice === value) {
+      setChoice(null);
+      return;
+    }
+    const timer = window.setTimeout(() => setChoice(null), SETTLE_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [choice, value, pending]);
+
+  const commit = async (next: string): Promise<void> => {
+    setChoice(next);
+    setPending(true);
+    try {
+      if (!await onCommit(next)) setChoice(null);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <label className="proxy-protocol" htmlFor={id}>
+      <span>{label}</span>
+      <select id={id} value={choice ?? value} disabled={pending} onChange={(e) => { void commit(e.target.value); }}>
+        {follows && <option value="">Same as all · {PROTOCOLS[follows]}</option>}
+        {Object.entries(PROTOCOLS).map(([kind, name]) => <option key={kind} value={kind}>{name}</option>)}
+      </select>
+    </label>
   );
 }
 

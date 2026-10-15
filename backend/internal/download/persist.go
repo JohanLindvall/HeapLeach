@@ -5,7 +5,9 @@ package download
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -120,8 +122,23 @@ func (m *Manager) restoreSettingsLocked(s *savedSettings) {
 	if s.Streams >= 1 && s.ConfiguredStreams == m.cfg.Streams {
 		m.streams = min(s.Streams, config.MaxStreams)
 	}
-	if m.limit != m.cfg.Concurrency || m.streams != m.cfg.Streams {
+	if config.ValidProxyType(s.ProxyType) && s.ConfiguredProxyType == m.cfg.ProxyType {
+		m.proxyType = s.ProxyType
+	}
+	if s.ProxyTypes != nil && maps.Equal(s.ConfiguredProxyTypes, m.cfg.ProxyTypes) {
+		kinds := make(map[string]string)
+		for group, kind := range s.ProxyTypes {
+			if slices.Contains(config.ProxyGroups, group) && config.ValidProxyType(kind) {
+				kinds[group] = kind
+			}
+		}
+		m.proxyTypes = kinds
+	}
+	m.applyProxyTypesLocked()
+	if m.limit != m.cfg.Concurrency || m.streams != m.cfg.Streams || m.proxyType != cmp.Or(m.cfg.ProxyType, config.ProxyTypeAny) ||
+		!maps.Equal(m.proxyTypes, m.cfg.ProxyTypes) {
 		m.log.Info("kept the settings chosen before the restart", "concurrency", m.limit, "streams", m.streams,
+			"proxy_type", m.proxyType, "proxy_types", config.FormatProxyTypes(m.proxyTypes),
 			"configured_concurrency", m.cfg.Concurrency, "configured_streams", m.cfg.Streams)
 	}
 }
@@ -147,7 +164,9 @@ func (m *Manager) stateLocked() *savedState {
 	st := &savedState{Version: stateVersion, Jobs: make([]savedJob, 0, len(m.order))}
 	if m.cfg != nil {
 		st.Settings = &savedSettings{Concurrency: m.limit, Streams: m.streams,
-			ConfiguredConcurrency: m.cfg.Concurrency, ConfiguredStreams: m.cfg.Streams}
+			ConfiguredConcurrency: m.cfg.Concurrency, ConfiguredStreams: m.cfg.Streams,
+			ProxyType: m.proxyType, ProxyTypes: m.proxyTypesLocked(),
+			ConfiguredProxyType: m.cfg.ProxyType, ConfiguredProxyTypes: m.cfg.ProxyTypes}
 	}
 	for _, id := range m.order {
 		job, ok := m.jobs[id]

@@ -675,7 +675,13 @@ code {
 .proxy-sources__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-bottom: 0.8rem; }
 .proxy-sources__field { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.8rem; }
 .proxy-sources small { color: var(--text-dim); line-height: 1.5; }
+.proxy-protocols { margin: 0 0 0.9rem; padding: 0; border: 0; min-width: 0; }
+.proxy-protocols legend { padding: 0; margin-bottom: 0.55rem; font-size: 0.8rem; font-weight: 600; }
+.proxy-protocols__choices { display: flex; flex-wrap: wrap; gap: 0.6rem 0.75rem; }
+.proxy-protocol { display: flex; flex: 1 1 9.5rem; flex-direction: column; gap: 0.3rem; min-width: 0; font-size: 0.72rem; color: var(--text-dim); }
+.proxy-protocols small { display: block; margin-top: 0.55rem; color: var(--text-faint); font-size: 0.72rem; line-height: 1.5; }
 .proxy-sources textarea,
+.proxy-protocol select,
 .proxy-list__tools input,
 .proxy-list__tools select {
   border: 1px solid var(--edge-hi);

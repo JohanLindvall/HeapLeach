@@ -361,15 +361,56 @@ func TestInvalidSettingsLeaveEverySettingUnchanged(t *testing.T) {
 		`{"concurrency":8,"proxies":true,"proxyEndpoints":["file:///tmp/proxy"]}`,
 		`{"concurrency":8,"proxies":true,"proxyEndpoints":[],"proxyFeeds":[]}`,
 		`{"concurrency":8,"proxyFeeds":["not-a-feed"]}`,
+		`{"concurrency":8,"proxyType":"tor"}`,
+		`{"concurrency":8,"proxyType":"socks","proxyTypes":{"elsewhere":"socks"}}`,
+		`{"concurrency":8,"proxyType":"socks","proxyTypes":{"fileboom":"ftp"}}`,
 	} {
 		rec := postJSON(t, handler, "/api/settings", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
 		}
 		after := manager.Snapshot()
-		if after.Concurrency != before.Concurrency || after.Streams != before.Streams || after.SpeedLimit != before.SpeedLimit || after.DownloadDir != before.DownloadDir || after.Proxies != before.Proxies {
+		if after.Concurrency != before.Concurrency || after.Streams != before.Streams || after.SpeedLimit != before.SpeedLimit || after.DownloadDir != before.DownloadDir || after.Proxies != before.Proxies ||
+			after.ProxyType != before.ProxyType || len(after.ProxyTypes) != len(before.ProxyTypes) {
 			t.Fatalf("invalid settings partially applied: %s", body)
 		}
+	}
+}
+
+// Download proxies are held to a protocol over the API, every group or one
+// alone, and each group's inventory shows the routes it may use.
+func TestProxyProtocolsOverTheAPI(t *testing.T) {
+	m, handler := newTestServer(t)
+	rec := postJSON(t, handler, "/api/settings", `{"proxies":true,"proxyEndpoints":["direct","http://proxy.example.test:80","socks5h://socks.example.test:1080"],"proxyFeeds":[],"proxyType":"socks","proxyTypes":{"cloudflare":"any"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
+	}
+	var snap download.Snapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.ProxyType != "socks" || len(snap.ProxyTypes) != 1 || snap.ProxyTypes["cloudflare"] != "any" {
+		t.Fatalf("answered with %q %v", snap.ProxyType, snap.ProxyTypes)
+	}
+	if body := get(t, handler, "/api/settings").Body.String(); !strings.Contains(body, `"proxyType":"socks"`) || !strings.Contains(body, `"proxyTypes":{"cloudflare":"any"}`) {
+		t.Fatalf("settings read back as %s", body)
+	}
+	for site, want := range map[string]int{"keep2share": 1, "fileboom": 1, "cloudflare": 3} {
+		var page struct{ Total int }
+		if err := json.Unmarshal(get(t, handler, "/api/proxies?site="+site).Body.Bytes(), &page); err != nil || page.Total != want {
+			t.Errorf("%s inventory lists %d routes (%v); want %d", site, page.Total, err, want)
+		}
+	}
+
+	rec = postJSON(t, handler, "/api/settings", `{"proxyTypes":{"cloudflare":"","fileboom":"http"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
+	}
+	if kinds := m.Snapshot().ProxyTypes; len(kinds) != 1 || kinds["fileboom"] != "http" {
+		t.Errorf("groups hold %v; want fileboom's own alone", kinds)
+	}
+	if rec := postJSON(t, handler, "/api/settings", `{"proxyType":"tor"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "proxy type") {
+		t.Errorf("unknown protocol = %d: %s", rec.Code, rec.Body)
 	}
 }
 

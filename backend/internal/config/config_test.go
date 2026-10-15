@@ -3,6 +3,7 @@
 package config
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,9 @@ func TestPrepareValidates(t *testing.T) {
 		{"negative ceiling", func(c *Config) { c.SpeedLimit = -1 }, "max-speed"},
 		{"no stall timeout", func(c *Config) { c.StallTimeout = 0 }, "stall-timeout"},
 		{"blank directory", func(c *Config) { c.DownloadDir = "   " }, "directory"},
+		{"unknown proxy protocol", func(c *Config) { c.ProxyType = "tor" }, "proxy type"},
+		{"protocol for no proxy group", func(c *Config) { c.ProxyTypes = map[string]string{"elsewhere": ProxyTypeSOCKS} }, "proxy types"},
+		{"unknown protocol for a group", func(c *Config) { c.ProxyTypes = map[string]string{"fileboom": "tor"} }, "proxy types"},
 	}
 	for _, tc := range cases {
 		cfg := base()
@@ -558,5 +562,48 @@ func TestTheCaptchaConcurrencyIsASetting(t *testing.T) {
 	cfg = &Config{DownloadDir: t.TempDir(), Concurrency: 4, Streams: 8, StallTimeout: time.Minute, CaptchaConcurrency: 8}
 	if err := cfg.Prepare(); err != nil || cfg.CaptchaConcurrency != 8 {
 		t.Fatalf("set to 8: %d, err %v", cfg.CaptchaConcurrency, err)
+	}
+}
+
+// Download proxies can be held to one protocol, for every group or for one
+// group alone, and the environment names both.
+func TestProxyTypesFromTheEnvironment(t *testing.T) {
+	cfg, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxyType != ProxyTypeAny || len(cfg.ProxyTypes) != 0 {
+		t.Errorf("defaults: %q %v; want any protocol for every group", cfg.ProxyType, cfg.ProxyTypes)
+	}
+
+	t.Setenv("HEAPLEACH_PROXY_TYPE", "socks")
+	t.Setenv("HEAPLEACH_PROXY_TYPES", "Cloudflare=any,keep2share=HTTP")
+	if cfg, err = FromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"keep2share": ProxyTypeHTTP, "cloudflare": ProxyTypeAny}
+	if cfg.ProxyType != ProxyTypeSOCKS || !maps.Equal(cfg.ProxyTypes, want) {
+		t.Errorf("read %q %v; want socks and %v", cfg.ProxyType, cfg.ProxyTypes, want)
+	}
+	if got := FormatProxyTypes(cfg.ProxyTypes); got != "keep2share=http,cloudflare=any" {
+		t.Errorf("written back as %q", got)
+	}
+
+	for _, bad := range []string{"keep2share=tor", "elsewhere=socks", "keep2share", "fileboom="} {
+		t.Setenv("HEAPLEACH_PROXY_TYPES", bad)
+		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "HEAPLEACH_PROXY_TYPES") {
+			t.Errorf("%q: err = %v, want it refused and named", bad, err)
+		}
+	}
+}
+
+// Prepare spells the protocol one way whatever it was given as, and no
+// protocol at all is any.
+func TestPrepareSpellsTheProxyProtocol(t *testing.T) {
+	for raw, want := range map[string]string{"": ProxyTypeAny, " SOCKS ": ProxyTypeSOCKS, "Http": ProxyTypeHTTP} {
+		cfg := &Config{DownloadDir: t.TempDir(), Concurrency: 4, Streams: 8, StallTimeout: time.Minute, ProxyType: raw}
+		if err := cfg.Prepare(); err != nil || cfg.ProxyType != want {
+			t.Errorf("%q prepared as %q, err %v; want %q", raw, cfg.ProxyType, err, want)
+		}
 	}
 }

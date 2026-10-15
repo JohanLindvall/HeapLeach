@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import type { AddResponse, JobLimit, LogPage, ProxyPage, Snapshot } from './types';
+import type { AddResponse, JobLimit, LogPage, ProxyGroup, ProxyPage, ProxyProtocol, Snapshot } from './types';
 
 /** Error carrying the server's message for a failed API call. */
 export class ApiError extends Error {
@@ -92,6 +92,13 @@ export interface Settings {
   proxies: boolean;
   proxyEndpoints: string[];
   proxyFeeds: string[];
+  /** The protocol every proxy group draws its routes from. */
+  proxyType: ProxyProtocol;
+  /**
+   * The groups' own protocols. A change names only the groups it changes,
+   * and '' has a group follow proxyType again.
+   */
+  proxyTypes: Partial<Record<ProxyGroup, ProxyProtocol | ''>>;
 }
 
 /** The source editor fetches this explicitly; credentials stay out of SSE. */

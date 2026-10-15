@@ -14,7 +14,7 @@ vi.mock('../api', async (original) => ({
 
 const snapshot: Snapshot = {
   jobs: [], concurrency: 4, maxConcurrency: 32, streams: 2, maxStreams: 16,
-  proxies: false, active: 0, queued: 0, speed: 0, paused: false, speedLimit: 0,
+  proxies: false, proxyType: 'any', proxyTypes: {}, active: 0, queued: 0, speed: 0, paused: false, speedLimit: 0,
   downloadDir: '/tmp/downloads', diskFree: 0, diskTotal: 0, diskMinFree: 0, hostCount: 1, held: 0,
 };
 
@@ -37,6 +37,7 @@ beforeEach(() => {
   vi.mocked(fetchSettings).mockReset().mockResolvedValue({
     concurrency: 4, streams: 2, paused: false, speedLimit: 0, downloadDir: '/tmp/downloads',
     proxies: false, proxyEndpoints: ['direct'], proxyFeeds: ['https://feed.example.test/list'],
+    proxyType: 'any', proxyTypes: {},
   });
   vi.mocked(updateSettings).mockReset().mockResolvedValue(snapshot);
   host = document.createElement('div');
@@ -162,4 +163,55 @@ it('ignores obsolete list responses and polls only while the panel is visible', 
   expect(vi.mocked(fetchProxies).mock.calls.at(-1)![1]!.aborted).toBe(true);
   await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
   expect(fetchProxies).toHaveBeenCalledTimes(4);
+});
+
+async function choose(selector: string, value: string) {
+  const select = host.querySelector<HTMLSelectElement>(selector)!;
+  await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+}
+
+function select(selector: string): HTMLSelectElement {
+  return host.querySelector<HTMLSelectElement>(selector)!;
+}
+
+it('holds every proxy group, or one alone, to a protocol', async () => {
+  await render();
+  expect(select('#proxy-type').value).toBe('any');
+  expect(select('#proxy-type').querySelector('option[value=""]')).toBeNull();
+  expect(select('#proxy-type-keep2share').value).toBe('');
+  expect(select('#proxy-type-keep2share').options[0]!.textContent).toBe('Same as all · Any protocol');
+
+  await choose('#proxy-type', 'socks');
+  expect(updateSettings).toHaveBeenLastCalledWith({ proxyType: 'socks' });
+  expect(select('#proxy-type').value).toBe('socks');
+  expect(fetchProxies).toHaveBeenCalledTimes(2); // the list shows what the groups may now use
+  await choose('#proxy-type-keep2share', 'http');
+  expect(updateSettings).toHaveBeenLastCalledWith({ proxyTypes: { keep2share: 'http' } });
+
+  await render({ ...snapshot, proxyType: 'socks', proxyTypes: { keep2share: 'http' } });
+  expect(select('#proxy-type-keep2share').value).toBe('http');
+  expect(select('#proxy-type-fileboom').value).toBe('');
+  expect(select('#proxy-type-fileboom').options[0]!.textContent).toBe('Same as all · SOCKS only');
+  await choose('#proxy-type-keep2share', '');
+  expect(updateSettings).toHaveBeenLastCalledWith({ proxyTypes: { keep2share: '' } });
+});
+
+it('shows a protocol as chosen until the server agrees, and puts back one it refused', async () => {
+  await render();
+  const pending = deferred<Snapshot>();
+  vi.mocked(updateSettings).mockReturnValueOnce(pending.promise);
+  await choose('#proxy-type', 'http');
+  expect(select('#proxy-type').value).toBe('http');
+  expect(select('#proxy-type').disabled).toBe(true);
+  await act(async () => { pending.resolve(snapshot); });
+  expect(select('#proxy-type').disabled).toBe(false);
+  expect(select('#proxy-type').value).toBe('http');
+  await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+  expect(select('#proxy-type').value).toBe('any'); // no snapshot ever said so
+
+  vi.mocked(updateSettings).mockRejectedValueOnce(new ApiError('Proxy database is unavailable.', 400));
+  await choose('#proxy-type-cloudflare', 'socks');
+  expect(select('#proxy-type-cloudflare').value).toBe('');
+  expect(select('#proxy-type-cloudflare').disabled).toBe(false);
+  expect(host.querySelector('[role="alert"]')!.textContent).toBe('Proxy database is unavailable.');
 });
