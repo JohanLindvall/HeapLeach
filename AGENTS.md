@@ -1293,6 +1293,31 @@ Host-specific notes:
   `toutes-les-videos` pages (`?page=N`) list cards with the video's id and
   `content_format`; whole programmes (`integrale`) are kept and clips left
   out where both are listed. Anything else on france.tv goes to yt-dlp.
+- **radio-canada** reads ICI Radio-Canada's videos and ICI OHdio's audio
+  through the media API its players call (`services.radio-canada.ca/media/`),
+  which answers without a key: `validation/v2` names a stream for an
+  application code and a media id (`medianet`, with `connectionType=hd`,
+  `deviceType=ipad`), and `meta/v1` describes one. Other device types are
+  refused ("plate-forme n'est pas supportée"). The yt-dlp extractor it
+  replaced matched only the older link shapes, which are still read: the
+  media console's `/widgets/mediaconsole/<app>/<id>` and `/media-<id>`. A
+  page names its own media in its data layer (`IdsCollection`,
+  `MedianetId:<id>`), with its programme beside it (`Emission`, used for
+  OHdio's names; for news it is a section's). Every page carries other media
+  ids too, recommendations, so the first id on a page is not its own. The
+  API's link asks the CDN to leave out every rendition above 1.5 Mbps
+  (`aws.manifestfilter`). Asked without it, the same CDN serves the whole
+  ladder, up to twice the resolution, so the filter is dropped. Video is TS
+  with its audio in a rendition of its own, which the packager names
+  `audio1_fr`, so the name is left off and the language kept. OHdio is
+  audio-only TS, its transcript a WebVTT rendition (which has been seen with
+  no cues at all; the merge leaves such a track out). An OHdio programme's
+  page lists its episodes as `EpisodeListItem` entries with their media ids,
+  fifty a page under a `pagination` whose `totalCount` the note compares.
+  The next page's parameter is not known (`?page=2` is ignored), so only the
+  first is read. Refusals ("n'est pas disponible dans votre pays", premium)
+  are the API's own words, passed on. Pages with no media of their own still
+  go to yt-dlp.
 - **niconico** is read through the site's own player API. A watch page
   describes its video in the JSON of a `<meta name="server-response">`: the
   qualities on offer (`media.domand`, video and audio apart, each marked

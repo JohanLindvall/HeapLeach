@@ -118,24 +118,6 @@ var handoffSites = []handoffSite{
 		why:     "its media endpoint sits behind a browser challenge",
 		oembed:  rumbleOEmbed,
 	},
-
-	// Public broadcasters that are DRM-free and perfectly reachable, handed
-	// over for one reason, worth stating once here rather than for each
-	// below: their streams carry video and audio in separate renditions,
-	// which HeapLeach's playlist engine could only concatenate when they
-	// were added, into a silent video.
-	//
-	// It now fetches such renditions and joins them itself
-	// (download/mux.go), as it does for the sibling broadcasters (SVT, SRF,
-	// ZDF and the rest), and reads parts that are byte ranges of one file and
-	// audio packed without a container. ARTE, ORF, Yle, DR, RTBF and France TV
-	// were handed over for this and are read natively now; this one is still
-	// to be looked at, and until it is, yt-dlp fetches it.
-	{
-		name:    "radio-canada",
-		domains: []string{"radio-canada.ca", "ici.radio-canada.ca"},
-		why:     "its streams carry video and audio apart, so they have to be muxed",
-	},
 }
 
 // NewHandoffs builds one extractor per host, so each is matched on its own
