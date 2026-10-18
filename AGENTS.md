@@ -507,6 +507,24 @@ parsed offline without contacting their source sites.
 
 Host-specific notes:
 
+- **emload** file shares use `/v2/file/<id>[/<filename>]` or the older
+  `/file/<id>[/<filename>]`. Discovery uses the URL's filename as a hint and
+  defers all requests to `File.Resolve`, after the worker leases an `emload`
+  proxy route. The `.free-downloader` carries a percent-encoded storage
+  origin (`data-srv`) and the `data-dl` token for
+  `download.php?accesstoken=...`; read them afresh on that route, preserving
+  its cookies and the redirected page URL as referer through the transfer.
+  The page supplies the final filename; the transfer supplies the exact size,
+  since `.filesize` is rounded. Require an
+  enabled `.init-free-download` control: premium-only pages also carry
+  plausible storage tokens, including files below the free size limit.
+  `dlsize`, `dlreached` and `serverblocked` are refusal states, not server
+  names. A daily limit returns `WaitError`, using `EmloadDailyWait` since the
+  site states no reset time. The pool cools that route for this service and
+  lets another address take the file. Keep free transfers to one file and
+  one stream per route. The live samples inspected while adding this
+  extractor were restricted, including a check through a working proxy;
+  the successful transfer path is covered by synthetic fixtures only.
 - **filejump** public shares use `/s/<id>`, with `?access=download` on some
   pasted links. The original filename is in the share's `.title`; `.meta`
   rounds the size and includes thousands separators, so strip commas and
@@ -785,7 +803,7 @@ Host-specific notes:
   Application scope policy, health epoch, cached probe-outage policy and HTTP
   identity stay here.
   `Pace.PerRoute` marks the service's addressing rule;
-  the manager allows the `keep2share`, `fileboom` and `cloudflare` groups to use proxies. The
+  the manager allows the `keep2share`, `fileboom`, `emload` and `cloudflare` groups to use proxies. The
   dispatcher leases a route before resolving and holds it through the
   transfer, one file per address per service across aliases and proxy protocols.
   The HTTP context pins CAPTCHA, ticket redemption, redirects and bytes to one
@@ -1014,7 +1032,7 @@ Host-specific notes:
   Queued direct cooldowns are cleared on enable so new routes can run, while
   the resolver retains the address's actual timer. Source edits preserve
   active leases, and late results from removed feeds are discarded.
-  Discovery demand shares the global worker budget across both services;
+  Discovery demand shares the global worker budget across the services;
   `SetDemand` publishes their allocations atomically so an obsolete demand
   cannot trigger an early feed reload.
 
@@ -2595,7 +2613,7 @@ download proxy controls. Each job card's gauge button opens that job's own
 limits (`JobLimits`): number fields that commit on Enter or blur and are held
 to the queue's values, a speed menu offering only speeds beneath the
 queue's, and the server's value shown otherwise. Tags on the card say which
-limits hold while it is closed. `ProxyList` selects Keep2Share, FileBoom or WAF recovery with the
+limits hold while it is closed. `ProxyList` selects Keep2Share, FileBoom, EMLOAD or WAF recovery with the
 `site` query and polls `/api/proxies` only while mounted and the
 tab is visible; the inventory can contain tens of thousands of routes and
 must not be added to SSE snapshots. Filtering, sorting and pagination happen

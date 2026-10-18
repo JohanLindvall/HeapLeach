@@ -382,6 +382,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewKeep2Share(client),
 		NewFileBoom(client),
 		NewFileJump(client),
+		NewEmload(client),
 		NewTurbo(client),
 		NewDropbox(client),
 		NewMediafire(client),

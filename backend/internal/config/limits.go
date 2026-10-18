@@ -543,6 +543,13 @@ const (
 	// users alone fails at once, so only a free one is ever asked twice.
 	Keep2ShareFreeCheck = 10 * time.Minute
 
+	// Emload offers one free download per day without stating a reset time.
+	// Cool the limited route while other addresses may take the file.
+	EmloadDailyWait = 24 * time.Hour
+	// Keep silent download proxies from holding a worker for the general
+	// request timeout. Set it on the client so route scoring sees timeouts.
+	EmloadRequestTimeout = 20 * time.Second
+
 	// MaxFolderDepth bounds recursion into nested remote folders.
 	MaxFolderDepth = 8
 

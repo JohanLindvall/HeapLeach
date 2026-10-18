@@ -51,7 +51,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
 
   return (
     <div className="proxy-list" aria-label="Download proxy inventory">
-      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above for K2S, FileBoom and Cloudflare challenge recovery on any host.</p>}
+      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above for K2S, FileBoom, EMLOAD and Cloudflare challenge recovery on any host.</p>}
       {page && (
         <div className="proxy-list__summary">
           <span><strong>{page.summary.total.toLocaleString()}</strong> routes</span>
@@ -66,6 +66,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
           onChange={(e) => setQuery({ ...query, site: e.target.value, offset: 0 })}>
           <option value="keep2share">Keep2Share</option>
           <option value="fileboom">FileBoom</option>
+          <option value="emload">EMLOAD</option>
           <option value="cloudflare">WAF recovery · all hosts</option>
         </select>
         <input type="search" value={search} placeholder="Find proxy address" aria-label="Find proxy address"

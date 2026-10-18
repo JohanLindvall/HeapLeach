@@ -340,7 +340,7 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.IntVar(&cfg.CaptchaConcurrency, "captcha-concurrency", cfg.CaptchaConcurrency,
 		fmt.Sprintf("CAPTCHAs read at once, each in a model session of its own (0 is the default, %d; at most %d)",
 			config.DefaultCaptchaConcurrency, config.MaxCaptchaConcurrency))
-	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share, FileBoom and WAF challenge recovery on any host")
+	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share, FileBoom, EMLOAD and WAF challenge recovery on any host")
 	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.StringVar(&cfg.ProxyType, "proxy-type", cfg.ProxyType,
 		"protocol download proxies are drawn from: any, socks or http (socks and http leave the direct connection out)")

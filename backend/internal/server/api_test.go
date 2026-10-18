@@ -395,7 +395,7 @@ func TestProxyProtocolsOverTheAPI(t *testing.T) {
 	if body := get(t, handler, "/api/settings").Body.String(); !strings.Contains(body, `"proxyType":"socks"`) || !strings.Contains(body, `"proxyTypes":{"cloudflare":"any"}`) {
 		t.Fatalf("settings read back as %s", body)
 	}
-	for site, want := range map[string]int{"keep2share": 1, "fileboom": 1, "cloudflare": 3} {
+	for site, want := range map[string]int{"keep2share": 1, "fileboom": 1, "emload": 1, "cloudflare": 3} {
 		var page struct{ Total int }
 		if err := json.Unmarshal(get(t, handler, "/api/proxies?site="+site).Body.Bytes(), &page); err != nil || page.Total != want {
 			t.Errorf("%s inventory lists %d routes (%v); want %d", site, page.Total, err, want)

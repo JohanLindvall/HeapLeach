@@ -577,15 +577,15 @@ func TestProxyTypesFromTheEnvironment(t *testing.T) {
 	}
 
 	t.Setenv("HEAPLEACH_PROXY_TYPE", "socks")
-	t.Setenv("HEAPLEACH_PROXY_TYPES", "Cloudflare=any,keep2share=HTTP")
+	t.Setenv("HEAPLEACH_PROXY_TYPES", "Cloudflare=any,keep2share=HTTP,EMLOAD=socks")
 	if cfg, err = FromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"keep2share": ProxyTypeHTTP, "cloudflare": ProxyTypeAny}
+	want := map[string]string{"keep2share": ProxyTypeHTTP, "emload": ProxyTypeSOCKS, "cloudflare": ProxyTypeAny}
 	if cfg.ProxyType != ProxyTypeSOCKS || !maps.Equal(cfg.ProxyTypes, want) {
 		t.Errorf("read %q %v; want socks and %v", cfg.ProxyType, cfg.ProxyTypes, want)
 	}
-	if got := FormatProxyTypes(cfg.ProxyTypes); got != "keep2share=http,cloudflare=any" {
+	if got := FormatProxyTypes(cfg.ProxyTypes); got != "keep2share=http,emload=socks,cloudflare=any" {
 		t.Errorf("written back as %q", got)
 	}
 
