@@ -266,6 +266,10 @@ type StatusError struct {
 	Status string
 	URL    string
 	Body   string
+	// Header is the response's headers, kept where a host may say more in
+	// them than the status does: mega names the time an address's quota has
+	// left in one of its own. Nil where they were not kept.
+	Header http.Header
 }
 
 func (e *StatusError) Error() string {

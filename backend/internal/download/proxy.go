@@ -154,6 +154,9 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	if lease == nil {
 		start := time.Now()
 		err := m.transfer(ctx, it)
+		if ctx.Err() == nil && m.moveOntoRoutes(it, err) {
+			return &extractor.WaitError{Until: time.Now(), Reason: "Going on through a proxy"}
+		}
 		_, challenged := errors.AsType[*httpx.ChallengeError](err)
 		if ctx.Err() != nil || (!challenged && (!it.proxyFallback || !retryRouteFailure(err))) {
 			return err
@@ -294,6 +297,27 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	lease.Release()
 	// runItem clears the route together with its dispatch accounting.
 	return err
+}
+
+// moveOntoRoutes moves a file that starts on the normal connection
+// (extractor.Pace.DirectFirst) onto its group's routes once the host has made
+// that connection wait, and reports whether it did. Only another address can
+// go on before the wait is over. Without proxies the file stays where it is
+// and waits in the queue instead.
+func (m *Manager) moveOntoRoutes(it *Item, err error) bool {
+	wait, ok := errors.AsType[*extractor.WaitError](err)
+	if !ok {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if it.routePace == nil || !m.proxyEnabled || m.proxies == nil {
+		return false
+	}
+	it.pace, it.routePace, it.preferredRoute = it.routePace, nil, ""
+	m.log.Info("the normal connection must wait; going on through proxies", "item", it.ID, "name", it.Name,
+		"service", it.pace.Group, "until", wait.Until.Format(time.DateTime), "reason", wait.Reason)
+	return true
 }
 
 // retryRouteFailure is shared by source recovery and opted-in direct files.

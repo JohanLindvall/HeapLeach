@@ -159,6 +159,15 @@ because each is the host saying *not now* rather than *no*: an overloaded
 host, a limit on open connections, and (above) a web page from a busy server.
 A budget spent in a few seconds is no time at all for a backend to recover in.
 
+Before any of those, a host's own reading of the refusal is asked
+(`File.Refused`, through `refusedByHost`), since only the extractor knows what
+some statuses mean on its host: mega's 509 is an address whose quota is used
+up, with the time left in a header of its own. What it reads is returned as it
+is, never retried in place, since the address would only be refused again: a
+`WaitError` sends the file back to the queue, or to another route. An extra
+connection refused that way gives its range back like any refused extra, and
+the connection that was already reading goes on.
+
 ### Overloaded hosts (503)
 
 **A host that answers 503 is overloaded, not broken**, and the answer is a

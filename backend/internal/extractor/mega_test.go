@@ -4,13 +4,22 @@ package extractor
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // Every value here is synthetic: handles are runs of one letter and keys are
@@ -300,6 +309,149 @@ func TestMegaMatch(t *testing.T) {
 	}
 	if m.Match(&url.URL{Scheme: "https", Host: "notmega.nz"}) {
 		t.Error("a lookalike host was matched")
+	}
+}
+
+// megaTestAPI serves mega's API from answer, which is given each command and
+// returns its result.
+func megaTestAPI(t *testing.T, answer func(megaCommand) any) *Mega {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch []megaCommand
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil || len(batch) != 1 {
+			t.Errorf("not a batch of one command: %v", err)
+			http.Error(w, "bad batch", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_ = json.NewEncoder(w).Encode([]any{answer(batch[0])})
+	}))
+	t.Cleanup(srv.Close)
+	m := NewMega(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	m.endpoint = srv.URL
+	return m
+}
+
+func megaRoute(m *Mega, id string) context.Context {
+	return httpx.WithRoute(context.Background(), id, m.links, nil)
+}
+
+// An address whose quota is used up is told so, and how long is left,
+// where a link would be. That is the address's wait, kept so that it is not
+// asked again before then, and no other address's: a route has a quota of
+// its own. Nor does it keep a file from being added, since what the file is
+// can still be asked.
+func TestMegaQuotaIsAWaitForTheAddressAlone(t *testing.T) {
+	key, _, _, err := megaFileKey(syntheticFileKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs := encryptMegaAttrs(t, "First Clip.mp4", key)
+	var links, infos atomic.Int32
+	m := megaTestAPI(t, func(cmd megaCommand) any {
+		if cmd.G == 0 {
+			infos.Add(1)
+			return map[string]any{"s": 4, "at": attrs}
+		}
+		if links.Add(1) == 1 {
+			return map[string]any{"e": -17, "tl": 600}
+		}
+		return map[string]any{"g": "http://storage.example.test/dl/token", "s": 4, "at": attrs}
+	})
+
+	u, err := ParseURL("https://mega.nz/file/AAAAAAAA#" + megaKeyString(syntheticFileKey()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Extract(context.Background(), u, Options{})
+	if err != nil {
+		t.Fatalf("an address without quota could not add the file: %v", err)
+	}
+	f := res.Files[0]
+	if f.Name != "First Clip.mp4" || f.Size != 4 || f.URL != "" || infos.Load() != 1 {
+		t.Fatalf("added %q of %d bytes at %q after %d descriptions; want the file described once, with no link",
+			f.Name, f.Size, f.URL, infos.Load())
+	}
+	if f.Pace == nil || !f.Pace.DirectFirst || !f.Pace.PerRoute || f.Pace.Group != "mega" || f.Refused == nil {
+		t.Fatalf("pace %+v: the file would not move onto mega's routes", f.Pace)
+	}
+
+	_, err = f.Resolve(context.Background())
+	wait, ok := errors.AsType[*WaitError](err)
+	if !ok || time.Until(wait.Until) < 9*time.Minute || links.Load() != 1 {
+		t.Fatalf("the normal connection resolved to %v after %d link requests; want its wait, kept from the first",
+			err, links.Load())
+	}
+	if _, err := f.Resolve(megaRoute(m, httpx.DirectRoute)); !isWait(err) || links.Load() != 1 {
+		t.Fatalf("the normal connection leased as a route asked again (%v)", err)
+	}
+	target, err := f.Resolve(megaRoute(m, "another"))
+	if err != nil || target.URL != "https://storage.example.test/dl/token" || links.Load() != 2 {
+		t.Fatalf("another address resolved to %+v, %v; want a link of its own", target, err)
+	}
+}
+
+// A storage server refuses a transfer once the address has used up its
+// quota, with the seconds left in a header of its own, and that route is not
+// asked for a link again until then.
+func TestMegaStorageRefusalIsTheRoutesWait(t *testing.T) {
+	var links atomic.Int32
+	m := megaTestAPI(t, func(megaCommand) any {
+		links.Add(1)
+		return map[string]any{"g": "https://storage.example.test/dl/token", "s": 4}
+	})
+	if err := m.refused(megaRoute(m, "a"), http.StatusNotFound, nil); err != nil {
+		t.Errorf("a 404 was read as %v", err)
+	}
+
+	header := http.Header{}
+	header.Set(megaHeaderTimeLeft, "5400")
+	wait, ok := errors.AsType[*WaitError](m.refused(megaRoute(m, "a"), megaStatusOverQuota, header))
+	if !ok || !strings.Contains(wait.Reason, "quota") {
+		t.Fatalf("509 was read as %v; want the route's wait for its quota", wait)
+	}
+	if left := time.Until(wait.Until); left < 89*time.Minute || left > 91*time.Minute {
+		t.Errorf("the route waits %s; want the 90 minutes mega named", left.Round(time.Minute))
+	}
+	wait, ok = errors.AsType[*WaitError](m.refused(megaRoute(m, "b"), megaStatusOverQuota, nil))
+	if !ok || time.Until(wait.Until) < config.MegaQuotaWait-time.Minute {
+		t.Errorf("509 naming no time left was read as %v; want MegaQuotaWait", wait)
+	}
+
+	resolve := m.resolver("", megaCommand{A: "g", G: 1, SSL: 2, P: "AAAAAAAA"}, "First Clip.mp4")
+	if _, err := resolve(megaRoute(m, "a")); !isWait(err) || links.Load() != 0 {
+		t.Fatalf("the refused route resolved to %v after %d link requests; want its wait, unasked", err, links.Load())
+	}
+	if _, err := resolve(megaRoute(m, "c")); err != nil || links.Load() != 1 {
+		t.Fatalf("another route resolved to %v after %d link requests", err, links.Load())
+	}
+}
+
+// The code alone, in place of an answer, says the quota is used up without
+// saying for how long, which waits the default.
+func TestMegaQuotaCodeAloneWaitsTheDefault(t *testing.T) {
+	m := megaTestAPI(t, func(megaCommand) any { return -17 })
+	_, err := m.link(megaRoute(m, "a"), "", megaCommand{A: "g", G: 1, SSL: 2, P: "AAAAAAAA"})
+	wait, ok := errors.AsType[*WaitError](err)
+	if !ok || time.Until(wait.Until) < config.MegaQuotaWait-time.Minute {
+		t.Fatalf("a bare -17 was read as %v; want MegaQuotaWait", err)
+	}
+}
+
+// Congestion and a limit on an address's requests may well not be met by
+// the next request, through another route, so neither fails the file there.
+func TestMegaCongestionIsTransient(t *testing.T) {
+	for _, answer := range []any{map[string]any{"e": -3}, -4} {
+		m := megaTestAPI(t, func(megaCommand) any { return answer })
+		_, err := m.link(megaRoute(m, "a"), "", megaCommand{A: "g", G: 1, SSL: 2, P: "AAAAAAAA"})
+		if _, ok := errors.AsType[*TransientError](err); !ok {
+			t.Errorf("%v was read as %v; want a transient failure", answer, err)
+		}
+	}
+	m := megaTestAPI(t, func(megaCommand) any { return map[string]any{"e": -9} })
+	_, err := m.link(megaRoute(m, "a"), "", megaCommand{A: "g", G: 1, SSL: 2, P: "AAAAAAAA"})
+	if _, ok := errors.AsType[*TransientError](err); ok || err == nil {
+		t.Errorf("a missing file was read as %v; want it to fail", err)
 	}
 }
 

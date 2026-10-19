@@ -407,6 +407,11 @@ func (t *segmentedTransfer) pumpSource(seg *segment, src *streamSource) {
 				}
 				src.lease.Failed(err, 0, false)
 			}
+			// An address that has used up its quota with the host is held
+			// back from it until the quota is back (File.Refused).
+			if wait, ok := errors.AsType[*extractor.WaitError](t.manager.refusedByHost(src.ctx, t.item, err)); ok {
+				src.lease.Cooldown(wait.Until)
+			}
 			t.table.release(seg)
 			if src.ctx.Err() == nil {
 				t.manager.log.Debug("an extra stream's route stopped", "item", t.item.ID, "route", src.lease.ID(), "err", err)

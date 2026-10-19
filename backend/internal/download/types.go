@@ -106,6 +106,10 @@ type Item struct {
 	// pace, when set, holds this item back from a host that punishes
 	// parallelism rather than refusing it. See extractor.Pace.
 	pace *extractor.Pace
+	// routePace is a DirectFirst pace the item has not moved onto yet: it
+	// runs unpaced on the normal connection until the host makes that
+	// connection wait, and then this becomes its pace (moveOntoRoutes).
+	routePace *extractor.Pace
 	// A proxy lease spans one worker's ownership. The preferred route stays
 	// after release so resuming can reuse that address's download ticket.
 	route          *proxy.Lease
@@ -120,6 +124,9 @@ type Item struct {
 	// reject, when set, recognises this host's way of answering a dead
 	// resource with a valid-looking body. See extractor.File.Reject.
 	reject func(string, http.Header) error
+	// refused, when set, is the host's own reading of a refused transfer.
+	// See extractor.File.Refused.
+	refused func(context.Context, int, http.Header) error
 	// fixedName protects a filename allocated to separate same-named entries
 	// in one listing. A later resolver or disposition header must not merge
 	// those entries back into the same destination.

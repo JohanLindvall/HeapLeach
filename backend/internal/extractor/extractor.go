@@ -115,6 +115,13 @@ type File struct {
 	// resource is gone, not that the attempt went badly, so it is never
 	// retried.
 	Reject func(finalURL string, header http.Header) error
+	// Refused, when set, is given the status and headers a transfer was
+	// refused with, and the request's context, which names the route it went
+	// through. It may say what the refusal means in a resolver's terms: a
+	// WaitError for an allowance the address has used up, say, which is how
+	// mega's storage answers once an address's transfer quota is spent. Nil,
+	// or a nil answer, leaves the refusal an ordinary failure.
+	Refused func(ctx context.Context, status int, header http.Header) error
 }
 
 // Pace is how an extractor says "fetch this gently".
@@ -151,6 +158,14 @@ type Pace struct {
 	// address instead of the whole service. Group must name that service;
 	// a route is leased before Resolve and held through the file transfer.
 	PerRoute bool
+	// DirectFirst leaves a PerRoute file on the normal connection, unpaced,
+	// until the host makes that connection wait (a WaitError from Resolve or
+	// from Refused), and only then moves it onto the group's routes, where
+	// the rest of this Pace applies. It is for a host that counts a quota
+	// per address, as mega does: while the normal connection has quota left
+	// it is faster than any proxy, and once it has none only another address
+	// can go on. Without proxies the file waits for the quota instead.
+	DirectFirst bool
 	// WAF applies separate challenge history when choosing a route, while
 	// preserving the service's own per-address file limit.
 	WAF bool

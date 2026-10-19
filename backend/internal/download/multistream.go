@@ -378,16 +378,20 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 				if errors.Is(err, errFileChanged) || ctx.Err() != nil {
 					return err
 				}
+				// The host's own reading of the refusal (File.Refused): an
+				// address that has used up its quota gets nowhere by asking
+				// again, and transfer says what it means.
+				meant := t.manager.refusedByHost(ctx, t.item, err) != nil
 				// The host is turning away extra connections. Give the
 				// range back and settle for the connections we have,
 				// rather than failing a download that is working.
-				if extra && refusedExtraConnection(err) && t.table.retire(seg) {
+				if extra && (meant || refusedExtraConnection(err)) && t.table.retire(seg) {
 					limit := t.manager.hosts.penalise(reserved)
 					t.manager.log.Debug("host refused another connection",
 						"item", t.item.ID, "host", reserved, "limit", limit, "err", err)
 					return nil
 				}
-				if attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
+				if meant || attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
 					return err
 				}
 				if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {

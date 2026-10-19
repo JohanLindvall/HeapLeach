@@ -105,8 +105,8 @@ export interface JobLimit {
 /** The protocols download proxies can be held to. */
 export type ProxyProtocol = 'any' | 'socks' | 'http';
 
-/** What draws on the proxy pool: free-download services, and WAF recovery on any host. */
-export type ProxyGroup = 'keep2share' | 'fileboom' | 'emload' | 'cloudflare';
+/** What draws on the proxy pool: services that count free downloads per address, and WAF recovery on any host. */
+export type ProxyGroup = 'keep2share' | 'fileboom' | 'emload' | 'mega' | 'cloudflare';
 
 /** Whole-application state, pushed over server-sent events. */
 export interface Snapshot {

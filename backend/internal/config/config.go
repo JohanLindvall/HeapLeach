@@ -123,8 +123,9 @@ type Config struct {
 	// Password unlocks protected sources in that mode.
 	Password string
 
-	// Proxies enables extra egress routes for K2S, FileBoom, EMLOAD and WAF recovery
-	// on any host. The inventory and health live independently of the queue.
+	// Proxies enables extra egress routes for K2S, FileBoom, EMLOAD, MEGA once
+	// this address's quota is used up, and WAF recovery on any host. The
+	// inventory and health live independently of the queue.
 	Proxies        bool
 	ProxyDB        string
 	ProxyEndpoints []string
@@ -760,8 +761,9 @@ const (
 )
 
 // ProxyGroups are the groups that draw on the proxy pool, each a scope of
-// its own: free-download services and WAF recovery on any host.
-var ProxyGroups = []string{"keep2share", "fileboom", "emload", "cloudflare"}
+// its own: services that count free downloads per address, and WAF recovery
+// on any host.
+var ProxyGroups = []string{"keep2share", "fileboom", "emload", "mega", "cloudflare"}
 
 // ValidProxyType reports a protocol a proxy group can be held to.
 func ValidProxyType(kind string) bool {

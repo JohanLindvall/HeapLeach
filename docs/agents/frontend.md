@@ -58,8 +58,8 @@ fields that commit on Enter or blur and are held to the queue's values, a
 speed menu offering only speeds beneath the queue's, and the server's value
 shown otherwise. Tags on the card say which limits hold while it is closed.
 
-`ProxyList` selects Keep2Share, FileBoom, EMLOAD or WAF recovery with the
-`site` query and polls `/api/proxies` only while mounted and the tab is
+`ProxyList` selects Keep2Share, FileBoom, EMLOAD, MEGA or WAF recovery with
+the `site` query and polls `/api/proxies` only while mounted and the tab is
 visible. The inventory can contain tens of thousands of routes and must not be
 added to SSE snapshots. Filtering, sorting and pagination happen server-side,
 in `proxytron/lease`'s `Pool.Page`, which builds rows only up to the end of

@@ -80,6 +80,40 @@ is the right one. The per-file MAC is deliberately not verified; see the
 comment on `megaFileKey`. The payload is AES-CTR, set as `File.Cipher` and
 decrypted on the way to disk.
 
+### Transfer quota
+
+mega counts a free transfer quota per address. Once an address has used it up,
+the API answers a request for a link (`g` with `g:1`) with `e: -17` and the
+seconds left in `tl`, and a storage server answers a transfer with 509
+Bandwidth Limit Exceeded and the seconds left in `X-MEGA-Time-Left`. MEGA's
+own SDK reads both, and waits an hour where no time is named
+(`MegaQuotaWait`). Either is that address's wait (`WaitError`), not the file's
+failure: the resolver returns it for the API's answer, and `File.Refused`
+(`refused`) for the storage server's.
+
+The files carry `megaPace`: the `mega` proxy group, one file to an address,
+`PerRoute` and `DirectFirst`. A file starts on the normal connection, unpaced,
+which beats any proxy while its quota lasts, and moves onto mega's routes once
+that connection is made to wait ([proxies.md](../proxies.md)). A route whose
+own quota runs out is held back from mega until it is back, and the file goes
+on through another at no cost to its retries. Without proxies the file waits
+in the queue for the quota. Links are asked for over https (`ssl: 2`), so a
+proxy carries the bytes in a tunnel it cannot read or alter.
+
+The waits are kept by route on the `Mega` value (`spent`), with the normal
+connection under `httpx.DirectRoute` as Keep2Share keeps its cooldowns, so a
+route known to be spent is answered from memory and the rest of the queue
+learns a wait from the first file that met it. Link requests use a client
+capped at `MegaRequestTimeout`, since they go through public proxies, and the
+API's answers for congestion and for too many requests from an address (-3,
+-4) are a `TransientError`, which through a route is tried again on another.
+
+A single-file link asks for its link at extraction, which is where its name
+and size come from. An address whose quota is used up is answered without one,
+so the file is then described by the same command without `g`, which mints
+nothing; its link is minted when the transfer starts, wherever that is. A
+folder listing (`f`) asks for no links at all.
+
 ## emload
 
 emload file shares use `/v2/file/<id>[/<filename>]` or the older

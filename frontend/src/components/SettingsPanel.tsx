@@ -12,7 +12,7 @@ const SETTLE_TIMEOUT_MS = 4000;
 const PROTOCOLS: Record<ProxyProtocol, string> = { any: 'Any protocol', socks: 'SOCKS only', http: 'HTTP only' };
 
 const GROUPS: readonly (readonly [ProxyGroup, string])[] = [
-  ['keep2share', 'Keep2Share'], ['fileboom', 'FileBoom'], ['emload', 'EMLOAD'], ['cloudflare', 'WAF recovery'],
+  ['keep2share', 'Keep2Share'], ['fileboom', 'FileBoom'], ['emload', 'EMLOAD'], ['mega', 'MEGA'], ['cloudflare', 'WAF recovery'],
 ];
 
 export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
@@ -86,9 +86,9 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
       </div>
       <div className="settings-panel__proxy-head">
         <div>
-          <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom · EMLOAD · WAF recovery</span></h3>
+          <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom · EMLOAD · MEGA · WAF recovery</span></h3>
           <p>Use “Files at once” across proxy addresses, with one transfer per address for each service.</p>
-          <p>Other hosts use proxies after a Cloudflare challenge.</p>
+          <p>MEGA uses them once this address’s transfer quota is used up. Other hosts use proxies after a Cloudflare challenge.</p>
         </div>
         <label className="proxy-switch">
           <input type="checkbox" role="switch" checked={proxies} disabled={switching}

@@ -252,7 +252,7 @@ must be writable only by people you trust to run code as this account.
 | **filejump** | `filejump.com/s/<id>`, including `?access=download` | Reads the public share's filename and download button, then uses the native ranged downloader. Keeps the stable download endpoint so each transfer obtains a fresh storage signature. Rounded display sizes are estimates; expired or restricted shares fail before queueing. |
 | **emload** | `/v2/file/<id>[/<filename>]`, `/file/<id>[/<filename>]` | Reads the free-download control when the transfer starts, keeping its page, token and file requests on one proxy route. Uses the shared pool with one file and one connection per address; a daily limit cools that route so another can take the file. Premium-only shares, size limits and unavailable files report their restrictions. A small file or a token in the page does not imply free access. |
 | **turbo** | `/embed/<id>`, `/d/<id>` | `/api/sign` issues a short-lived signed URL. |
-| **mega** | `/file/<id>#<key>`, `/folder/<id>#<key>`, and the older `#!`/`#F!` shapes | Nothing about a mega link is legible to the server: names, sizes and bytes are all encrypted under the key in the fragment. Attributes decrypt with AES-CBC; the payload is AES-CTR, undone as the bytes arrive, so ranges, resume and parallel connections all still apply. A link quoted without its `#` fragment cannot be opened by anyone. |
+| **mega** | `/file/<id>#<key>`, `/folder/<id>#<key>`, and the older `#!`/`#F!` shapes | Nothing about a mega link is legible to the server: names, sizes and bytes are all encrypted under the key in the fragment. Attributes decrypt with AES-CBC; the payload is AES-CTR, undone as the bytes arrive, so ranges, resume and parallel connections all still apply. A link quoted without its `#` fragment cannot be opened by anyone. Downloads use the normal connection until mega says this address's transfer quota is used up; files then go on through proxy routes, one to an address, each route resting until its own quota is back. With proxies off they wait for the quota instead. |
 | **dropbox** | `/s/…`, `/scl/fi/…`, folder shares | Asks for `dl=1`, with the content host kept as a mirror to fail over to. A folder share downloads as the zip dropbox builds for it. |
 | **mediafire** | `/file/<key>/<name>`, `/folder/<key>` | The download link is on the file page, signed per visit, so the page is re-read when the item starts. Folders come from mediafire's own listing API, recursively. |
 | **google drive** | `/file/d/<id>`, `?id=<id>` | Walks past the virus-scan confirmation page — HTML, with a token minted per visit — so the transfer is handed real bytes. Folder links need an API key and are not supported. |
@@ -715,7 +715,7 @@ ones use the new mode, preserving the per-address limit and download tickets.
 
 The proxy list shows the selection score, measured average and current
 throughput, recent success rate, request count, active transfers, cooldowns,
-and last successful request. Choose Keep2Share, FileBoom, EMLOAD or **WAF recovery**
+and last successful request. Choose Keep2Share, FileBoom, EMLOAD, MEGA or **WAF recovery**
 to view the corresponding scores. The WAF view also shows challenge success
 separately from ordinary request success. Search, status filters and sorting work across
 the entire inventory, with 50 rows per page. Scores are estimated useful
@@ -737,7 +737,7 @@ the normal connection. Explicit proxies take precedence over `NO_PROXY`.
 
 The routes can be held to one protocol: **SOCKS only** or **HTTP only**
 (HTTP and HTTPS proxies), for every service at once or for Keep2Share,
-FileBoom, EMLOAD or WAF recovery alone, under **Proxy protocol** in Settings or with
+FileBoom, EMLOAD, MEGA or WAF recovery alone, under **Proxy protocol** in Settings or with
 `HEAPLEACH_PROXY_TYPE` and `HEAPLEACH_PROXY_TYPES`. Either one leaves the
 normal connection out, and a service with no route of its protocol waits
 for one rather than using another. Each service's list then shows only the
@@ -746,7 +746,7 @@ the configured value they replaced is changed.
 
 Each transfer attempt keeps its route through the CAPTCHA, ticket, redirects
 and file requests. Keep2Share and FileBoom API calls and CAPTCHA image
-requests, and EMLOAD share-page requests, have a 20-second timeout. A network timeout penalises and cools the
+requests, EMLOAD share-page requests and MEGA link requests have a 20-second timeout. A network timeout penalises and cools the
 route before another is tried. Status notes show the connection attempt
 number on retries, separately from the CAPTCHA image count.
 A refused or broken route returns the file to the queue to try another;
@@ -754,6 +754,14 @@ other hosts continue downloading while routes are busy or cooling down.
 Keep2Share and FileBoom require the bundled OCR data. A file the site keeps
 for premium users fails at once, saying so, before any CAPTCHA is spent or
 any route is set aside for it.
+
+MEGA counts a transfer quota per address. Its files use the normal
+connection, with the usual files at once and streams, until mega says that
+quota is used up: it names the time left when a link is asked for, or
+refuses a transfer with 509. The files then go on through MEGA's proxy
+routes, one file to an address. A route whose own quota runs out rests until
+it is back, and its file moves on to another at no cost to its retries. With
+proxies off, the files wait in the queue for the quota instead.
 
 Every host using HeapLeach's HTTP client can recover through proxies after
 a Cloudflare WAF challenge, including unregistered pages, direct files and
@@ -785,7 +793,7 @@ WAF refusals affect only the WAF success score and cooldown. They do not
 reduce ordinary service scores, erase speed measurements or mark a proxy
 broken. WAF selection still uses ordinary reliability and measured transfer
 speed, excluding user-throttled samples and free-host caps when estimating
-unrestricted capacity. Keep2Share, FileBoom and EMLOAD retain their per-service
+unrestricted capacity. Keep2Share, FileBoom, EMLOAD and MEGA retain their per-service
 address limits even when WAF recovery is needed.
 
 This tries other addresses; it does not solve interactive challenges.
@@ -841,7 +849,7 @@ small, noisy speed changes from spending time on repeated route switches.
 
 Saved inventory is available immediately after restart. Feed requests,
 including GitHub, are normally 24 hours apart. An earlier top-up requires
-runnable K2S, FileBoom, EMLOAD or WAF recovery work and too few distinct usable addresses for its current concurrency, with
+runnable K2S, FileBoom, EMLOAD, MEGA or WAF recovery work and too few distinct usable addresses for its current concurrency, with
 at least five minutes between attempts. New active transfers count while
 their first speed sample is pending; measured and standby routes must have
 succeeded and score at least as well as an untried route's learned prior.
@@ -886,12 +894,12 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers, from 1 to `HEAPLEACH_MAX_CONCURRENCY`. Flag: `-concurrency`. Also settable live in Settings, which is kept across restarts until this value is changed. |
 | `HEAPLEACH_MAX_CONCURRENCY` | `256` | Ceiling on parallel transfers, for the startup setting and the Settings slider alike. Flag: `-max-concurrency`. |
 | `HEAPLEACH_CAPTCHA_CONCURRENCY` | `4` | Keep2Share and FileBoom CAPTCHAs read at once, from 1 to 64. Each loads its own copy of the 54 MB model and runs two threads. Flag: `-captcha-concurrency`. |
-| `HEAPLEACH_PROXIES` | on | Enable proxy routes for Keep2Share, FileBoom, EMLOAD and WAF challenge recovery on any host. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
+| `HEAPLEACH_PROXIES` | on | Enable proxy routes for Keep2Share, FileBoom, EMLOAD, MEGA once this address's quota is used up, and WAF challenge recovery on any host. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
 | `HEAPLEACH_PROXY_DB` | `proxies.db` beside `HEAPLEACH_STATE`, else `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode: with no queue kept, the default directory is used. Flag: `-proxy-db`. |
 | `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
 | `HEAPLEACH_PROXY_TYPE` | `any` | The protocol every proxy service draws its routes from: `any`, `socks` or `http` (HTTP and HTTPS proxies). `socks` or `http` leaves the normal connection out. Flag: `-proxy-type`. Also settable live in Settings, which is kept across restarts until this value is changed. |
-| `HEAPLEACH_PROXY_TYPES` | none | A protocol per service, overriding `HEAPLEACH_PROXY_TYPE` for it: `keep2share=socks,fileboom=socks,emload=http,cloudflare=any`, where `cloudflare` is WAF recovery on any host. Flag: `-proxy-types`. Also settable live in Settings, kept as above. |
+| `HEAPLEACH_PROXY_TYPES` | none | A protocol per service, overriding `HEAPLEACH_PROXY_TYPE` for it: `keep2share=socks,fileboom=socks,emload=http,mega=any,cloudflare=any`, where `cloudflare` is WAF recovery on any host. Flag: `-proxy-types`. Also settable live in Settings, kept as above. |
 | `HEAPLEACH_PROXY_RETRIES` | `20` | Route changes after failures that make no disk progress. A proxy that cannot be reached, drops the connection or has its address refused does not count. A host's free-download cooldown does not spend this budget. |
 | `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
 | `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI, which is kept across restarts until this value is changed. |
@@ -925,7 +933,7 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
 | `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
 | `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |
-| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `fileboom`, `emload`, or `cloudflare`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
+| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `fileboom`, `emload`, `mega`, or `cloudflare`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `POST` | `/api/jobs/{id}/limits` | `{"fileLimit": n, "streamLimit": n, "speedLimit": n}`, each optional: replaces the job's own limits beneath the queue's; a field left out has none. `fileLimit` 0 holds its new downloads. |

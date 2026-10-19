@@ -16,9 +16,9 @@ discovery, scoring, leases, exit probing and claims, and their defaults.
 Application scope policy, the health epoch, the cached probe-outage policy and
 HTTP identity stay here.
 
-The pool's scopes are `config.ProxyGroups`: `keep2share`, `fileboom`, `emload`
-and `cloudflare` (WAF recovery). An extractor marks a per-address service with
-`Pace.PerRoute` and names it in `Pace.Group`.
+The pool's scopes are `config.ProxyGroups`: `keep2share`, `fileboom`,
+`emload`, `mega` and `cloudflare` (WAF recovery). An extractor marks a
+per-address service with `Pace.PerRoute` and names it in `Pace.Group`.
 
 The inventory lives beside the queue file wherever that is put
 (`defaultProxyDB`), and in the default state directory when no queue is kept,
@@ -169,6 +169,28 @@ minutes, after another CAPTCHA each time.
 A file whose part file already holds bytes goes back to the front of the queue
 after a route failure, not the back ([download.md](download.md)).
 
+## Starting on the normal connection
+
+A per-address service whose quota the normal connection usually has room for
+marks its pace `DirectFirst`; mega does
+([hosts/file-hosts.md](hosts/file-hosts.md)). Its files start on the normal
+connection with no pace at all: `newItem` keeps the pace aside in `routePace`,
+so they take the queue's files at once and streams like any host's, and no
+route is leased for them. When the host makes that connection wait, a
+`WaitError` from `Resolve` or from `File.Refused`, `moveOntoRoutes` gives the
+file its pace and sends it straight back to the queue, to be leased a route of
+the group like any per-address file. Without proxies the file stays on the
+normal connection and waits for the time named; switching proxies on moves a
+file waiting that way at once. Until it moves, a file is no demand on the pool
+and is charged to no group, so it holds back none of the group's routed files
+(`hostFullLocked`).
+
+Nothing is written to the pool's direct route when a file moves. mega's
+resolver keeps the wait it was told by route, the normal connection's under
+`httpx.DirectRoute`, and answers a lease of the direct route with it, which
+cools that route for the group in the ordinary way without asking the host
+again.
+
 ## Route health epochs
 
 **Route health can be forgotten wholesale** (`config.ProxyHealthEpoch`). The
@@ -272,7 +294,9 @@ Two rules keep the streams honest:
   since aborting the attempt would end them too.
 
 An extra that gets nowhere has cost a CAPTCHA, so attempts back off towards
-`RouteExtraBackoffMax`. One whose route goes silent for the stall timeout is
+`RouteExtraBackoffMax`. An extra refused for its route's used-up quota
+(`File.Refused`) holds that route back from the service until the quota is
+back (`pumpSource`). One whose route goes silent for the stall timeout is
 dropped alone, because the transfer's own watchdog waits for every connection
 to go quiet. A range left unread, by a stopped extra or a restored sidecar, is
 claimed by the next connection to finish its own; the main route reads one at

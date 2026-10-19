@@ -202,6 +202,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// The host's own word on its refusal comes before anything general
+		// is made of it: an address that has used up its quota is told to
+		// wait, which no retry here would change. Through a proxy the
+		// refusal arrives as the route's, so this goes first.
+		if meant := m.refusedByHost(ctx, it, err); meant != nil {
+			return meant
+		}
 		if _, routed := errors.AsType[*httpx.RouteError](err); routed {
 			return &routeTransferError{err: err, moved: m.onDisk(it, part, files) > before}
 		}
@@ -1358,7 +1365,22 @@ func statusError(u *url.URL, resp *http.Response) error {
 		Status: resp.Status,
 		URL:    u.Redacted(),
 		Body:   string(body),
+		Header: resp.Header,
 	}
+}
+
+// refusedByHost is the host's own reading of a refused transfer
+// (extractor.File.Refused), or nil where it has none. ctx is the request's,
+// which names the route the refusal came through.
+func (m *Manager) refusedByHost(ctx context.Context, it *Item, err error) error {
+	m.mu.Lock()
+	refused := it.refused
+	m.mu.Unlock()
+	se, ok := errors.AsType[*httpx.StatusError](err)
+	if refused == nil || !ok {
+		return nil
+	}
+	return refused(ctx, se.Code, se.Header)
 }
 
 // errAlreadyComplete reports that the destination already holds this exact

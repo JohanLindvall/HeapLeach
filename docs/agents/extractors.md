@@ -48,9 +48,11 @@ An extractor declares the host's limits with `Pace` (documented field by field
 in `extractor.go`): `Streams` caps connections per file, `Files` caps
 transfers to the host at once, `Group` shares that limit across aliases and
 storage servers, `PerRoute` applies it per egress address through the proxy
-pool ([proxies.md](proxies.md)), and `WAF` adds challenge history to route
-selection. Declare only what the host is known to enforce; anything else the
-downloader learns by being refused ([transfers.md](transfers.md)).
+pool ([proxies.md](proxies.md)), `DirectFirst` keeps a per-address file on the
+normal connection, unpaced, until the host makes that connection wait, and
+`WAF` adds challenge history to route selection. Declare only what the host is
+known to enforce; anything else the downloader learns by being refused
+([transfers.md](transfers.md)).
 
 ## The `File` contract
 
@@ -94,16 +96,25 @@ hosts where that is not enough:
   to write and may refuse it ([transfers.md](transfers.md));
   **`ProxyFallback`** opts the file into proxy recovery after a temporary
   failure ([proxies.md](proxies.md)); **`Pace`** is above.
+- **`Refused`** reads a refused transfer, its status and headers and the route
+  it came through, in the terms of the errors below: mega's storage answers an
+  address whose quota is used up with 509 and the time left, which is that
+  address's `WaitError` ([hosts/file-hosts.md](hosts/file-hosts.md)). The
+  downloader asks it before anything general is made of the refusal, and does
+  not retry in place what it reads (`refusedByHost`).
 
 ### Errors that steer the queue
 
-What a resolver returns tells the manager what to do with the item
-([download.md](download.md)):
+What a resolver returns, or `Refused` makes of a refusal, tells the manager
+what to do with the item ([download.md](download.md)):
 
 - **`WaitError`** means *later*, with the time to come back. The resolver
   returns it and does not sleep it out: sleeping would hold a worker for the
   whole wait while the item reads as downloading. The manager puts the item
-  back in the queue until then.
+  back in the queue until then. Through a proxy route the wait is the route's:
+  the route is held back from the service until then and the file goes on
+  through another. A `DirectFirst` file meeting one on the normal connection
+  moves onto its group's routes.
 - **`RefusedError`** means the host refuses this address, not the file.
   Through a proxy route the route is held back for the service and the file
   tries another, outside its retry budget ([proxies.md](proxies.md)).

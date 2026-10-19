@@ -550,6 +550,15 @@ const (
 	// request timeout. Set it on the client so route scoring sees timeouts.
 	EmloadRequestTimeout = 20 * time.Second
 
+	// MegaQuotaWait is how long an address whose mega transfer quota is used
+	// up waits when mega does not say how long is left. It usually says, in
+	// seconds; MEGA's own client assumes an hour when it does not.
+	MegaQuotaWait = time.Hour
+	// MegaRequestTimeout bounds a request for a mega download link, which
+	// goes through a proxy route once the normal connection's quota is used
+	// up. Set on the client so route scoring sees the timeouts.
+	MegaRequestTimeout = 20 * time.Second
+
 	// MaxFolderDepth bounds recursion into nested remote folders.
 	MaxFolderDepth = 8
 

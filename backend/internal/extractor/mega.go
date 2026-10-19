@@ -5,12 +5,16 @@ package extractor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -36,23 +40,57 @@ import (
 // Download links are minted per request and tied to one storage node, so
 // they are resolved at download time like bunkr's and turbo's rather than at
 // extraction time.
+//
+// Mega counts a free transfer quota per address. Once an address has used
+// its quota, the API answers a request for a link with megaOverQuota and the
+// seconds left, and a storage server answers a transfer with 509 and the
+// same in a header. Either is that address's wait, not the file's failure:
+// it moves a file off the normal connection onto mega's proxy routes
+// (Pace.DirectFirst), and holds a route whose own quota is used up back from
+// mega until it lifts. The waits are kept by route, so the rest of the queue
+// learns one without asking.
 type Mega struct {
 	hostSet
 	client *httpx.Client
+	// links asks for download links, which go through proxy routes once the
+	// normal connection's quota is used up. It is capped like the other
+	// per-address services' requests, so a silent proxy does not hold a
+	// worker for the general timeout.
+	links *httpx.Client
+	// endpoint is where every command goes: megaAPI, or a test's server.
+	endpoint string
 	// seq numbers API requests. Mega uses it to collapse a retried request
 	// with the one before it instead of doing the work twice.
 	seq atomic.Int64
+
+	// spent is when each route's transfer quota is back, by route.
+	mu    sync.Mutex
+	spent map[string]time.Time
 }
 
 const (
 	// megaAPI is the single endpoint every command goes to.
 	megaAPI  = "https://g.api.mega.co.nz/cs"
 	megaRoot = "https://mega.nz"
+
+	// megaStatusOverQuota is a storage server's refusal of an address whose
+	// transfer quota is used up, 509 Bandwidth Limit Exceeded, which
+	// net/http has no name for. The seconds until the quota is back come in
+	// megaHeaderTimeLeft.
+	megaStatusOverQuota = 509
+	megaHeaderTimeLeft  = "X-MEGA-Time-Left"
+	megaQuotaNote       = "mega: this address's transfer quota is used up"
 )
+
+// megaPace starts a file on the normal connection and moves it onto mega's
+// proxy routes, one file to an address, once that connection's quota is used
+// up.
+var megaPace = Pace{Group: "mega", Files: 1, PerRoute: true, DirectFirst: true}
 
 // NewMega builds the mega extractor.
 func NewMega(client *httpx.Client) *Mega {
-	return &Mega{hostSet: hostSet{"mega.nz", "mega.co.nz"}, client: client}
+	return &Mega{hostSet: hostSet{"mega.nz", "mega.co.nz"}, client: client,
+		links: client.WithTimeout(config.MegaRequestTimeout), endpoint: megaAPI}
 }
 
 func (m *Mega) Name() string { return "mega" }
@@ -174,7 +212,14 @@ func (m *Mega) extractFile(ctx context.Context, link *megaLink) (*Result, error)
 		return nil, fmt.Errorf("mega: %w", err)
 	}
 
-	dl, err := m.link(ctx, "", megaCommand{A: "g", G: 1, SSL: 2, P: link.handle})
+	cmd := megaCommand{A: "g", G: 1, SSL: 2, P: link.handle}
+	dl, err := m.link(ctx, "", cmd)
+	if _, spent := errors.AsType[*WaitError](err); spent {
+		// An address whose quota is used up can still be told what the
+		// file is. Its link is minted when the transfer starts, through an
+		// address with quota left.
+		dl, err = m.describe(ctx, link.handle)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +234,24 @@ func (m *Mega) extractFile(ctx context.Context, link *megaLink) (*Result, error)
 		URL:     dl.URL,
 		Size:    dl.Size,
 		Cipher:  &StreamCipher{Key: key, Nonce: nonce},
-		Resolve: m.resolver("", megaCommand{A: "g", G: 1, SSL: 2, P: link.handle}, name),
+		Resolve: m.resolver("", cmd, name),
+		Refused: m.refused,
+		Pace:    &megaPace,
 	}
 	return &Result{Title: name, Files: []File{file}}, nil
+}
+
+// describe asks what a public file is, its size and attributes, without a
+// link: a download command without "g" mints none.
+func (m *Mega) describe(ctx context.Context, handle string) (*megaDownloadLink, error) {
+	var info megaDownloadLink
+	if err := m.api(ctx, m.client, "", megaCommand{A: "g", P: handle}, &info); err != nil {
+		return nil, err
+	}
+	if info.Err != 0 {
+		return nil, fmt.Errorf("mega: %w", megaAPIError(info.Err))
+	}
+	return &info, nil
 }
 
 // ----------------------------------------------------------------- folder
@@ -202,7 +262,7 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 		Nodes []megaNode `json:"f"`
 	}
 	// c:1 asks for the whole tree, r:1 for it recursively.
-	if err := m.api(ctx, link.handle, megaCommand{A: "f", C: 1, R: 1}, &listing); err != nil {
+	if err := m.api(ctx, m.client, link.handle, megaCommand{A: "f", C: 1, R: 1}, &listing); err != nil {
 		return nil, err
 	}
 	if len(listing.Nodes) == 0 {
@@ -239,6 +299,8 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 			Size:    dec.node.Size,
 			Cipher:  &StreamCipher{Key: key, Nonce: nonce},
 			Resolve: m.resolver(link.handle, cmd, name),
+			Refused: m.refused,
+			Pace:    &megaPace,
 		})
 	}
 	if len(res.Files) == 0 {
@@ -382,16 +444,35 @@ type megaDownloadLink struct {
 	Size  int64     `json:"s"`
 	Attrs megaField `json:"at"`
 	Err   int       `json:"e"`
+	// TimeLeft is how many seconds an address whose quota is used up has to
+	// wait, beside megaOverQuota.
+	TimeLeft int64 `json:"tl"`
 }
 
-// link requests a fresh storage link.
+// link requests a fresh storage link. An address whose quota is used up is
+// answered with the time left instead, which is that address's wait, and is
+// not asked again before it is over.
 func (m *Mega) link(ctx context.Context, folder string, cmd megaCommand) (*megaDownloadLink, error) {
-	var dl megaDownloadLink
-	if err := m.api(ctx, folder, cmd, &dl); err != nil {
+	if err := m.waiting(ctx); err != nil {
 		return nil, err
 	}
-	if dl.Err != 0 {
-		return nil, fmt.Errorf("mega: %w", megaAPIError(dl.Err))
+	var dl megaDownloadLink
+	err := m.api(ctx, m.links, folder, cmd, &dl)
+	if err == nil && dl.Err != 0 {
+		err = fmt.Errorf("mega: %w", megaAPIError(dl.Err))
+	}
+	code, coded := errors.AsType[megaAPIError](err)
+	switch {
+	case coded && code == megaOverQuota:
+		// With the time left beside it, or none where the code alone came
+		// back in place of the answer.
+		return nil, m.spend(ctx, time.Duration(dl.TimeLeft)*time.Second)
+	case coded && (code == megaAgain || code == megaRateLimited):
+		// Congestion, or a limit on this address's requests: asked again,
+		// through another route where there is one, it may well answer.
+		return nil, &TransientError{Err: err}
+	case err != nil:
+		return nil, err
 	}
 	if dl.URL == "" {
 		return nil, fmt.Errorf("mega: the api returned no download link")
@@ -416,15 +497,56 @@ func (m *Mega) resolver(folder string, cmd megaCommand, name string) func(contex
 	}
 }
 
+// refused reads a storage server's refusal of a transfer: 509 is mega's word
+// that the address has used up its transfer quota, with the seconds until it
+// is back in megaHeaderTimeLeft.
+func (m *Mega) refused(ctx context.Context, status int, header http.Header) error {
+	if status != megaStatusOverQuota {
+		return nil
+	}
+	left, _ := strconv.ParseInt(strings.TrimSpace(header.Get(megaHeaderTimeLeft)), 10, 64)
+	return m.spend(ctx, time.Duration(left)*time.Second)
+}
+
+// spend records that the address ctx's route leaves by has used up its
+// quota for left, or for MegaQuotaWait when mega does not say, and returns
+// that route's wait.
+func (m *Mega) spend(ctx context.Context, left time.Duration) error {
+	if left <= 0 {
+		left = config.MegaQuotaWait
+	}
+	route := util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.spent == nil {
+		m.spent = make(map[string]time.Time)
+	}
+	if until := time.Now().Add(left); until.After(m.spent[route]) {
+		m.spent[route] = until
+	}
+	return &WaitError{Until: m.spent[route], Reason: megaQuotaNote}
+}
+
+// waiting returns the route's wait while its quota is used up, and nil after.
+func (m *Mega) waiting(ctx context.Context) error {
+	route := util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if until := m.spent[route]; time.Now().Before(until) {
+		return &WaitError{Until: until, Reason: megaQuotaNote}
+	}
+	return nil
+}
+
 // api sends one command and decodes the single result mega answers with.
-func (m *Mega) api(ctx context.Context, folder string, cmd megaCommand, out any) error {
-	endpoint := megaAPI + "?id=" + strconv.FormatInt(m.seq.Add(1), 10)
+func (m *Mega) api(ctx context.Context, client *httpx.Client, folder string, cmd megaCommand, out any) error {
+	endpoint := m.endpoint + "?id=" + strconv.FormatInt(m.seq.Add(1), 10)
 	if folder != "" {
 		endpoint += "&n=" + url.QueryEscape(folder)
 	}
 
 	var raw json.RawMessage
-	err := m.client.PostJSON(ctx, endpoint,
+	err := client.PostJSON(ctx, endpoint,
 		httpx.RefererOrigin(megaRoot+"/", megaRoot), []megaCommand{cmd}, &raw)
 	if err != nil {
 		return fmt.Errorf("mega: api request: %w", err)
@@ -463,6 +585,14 @@ func megaErrorCode(raw json.RawMessage) (int, bool) {
 
 // megaAPIError is one of mega's numeric status codes.
 type megaAPIError int
+
+// The API's codes for congestion, for too many requests from an address, and
+// for an address whose transfer quota is used up.
+const (
+	megaAgain       megaAPIError = -3
+	megaRateLimited megaAPIError = -4
+	megaOverQuota   megaAPIError = -17
+)
 
 func (e megaAPIError) Error() string {
 	switch e {

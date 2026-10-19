@@ -143,8 +143,17 @@ func (m *Manager) ApplySettings(s Settings) error {
 			// A queued direct-address cooldown must not conceal the newly
 			// available proxies. The host's resolver still remembers that timer
 			// if the pool tries the direct address again.
+			now := time.Now()
 			for _, it := range m.queue {
-				if proxyEligible(it) && !it.inFlight {
+				if it.inFlight {
+					continue
+				}
+				// A file the normal connection was made to wait for goes on
+				// through the routes now on offer, as moveOntoRoutes does.
+				if it.routePace != nil && it.notBefore.After(now) {
+					it.pace, it.routePace, it.preferredRoute = it.routePace, nil, ""
+				}
+				if proxyEligible(it) {
 					it.notBefore, it.Note = time.Time{}, ""
 				}
 			}

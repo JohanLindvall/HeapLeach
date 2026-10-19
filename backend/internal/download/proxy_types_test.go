@@ -69,7 +69,7 @@ func TestProxyTypesHoldEachGroupToItsProtocol(t *testing.T) {
 	if err := m.ApplySettings(Settings{ProxyType: &all, ProxyTypes: &own}); err != nil {
 		t.Fatal(err)
 	}
-	for group, want := range map[string]string{"keep2share": typesSOCKSRoute, "fileboom": typesHTTPRoute, "emload": typesHTTPRoute, "cloudflare": typesHTTPRoute} {
+	for group, want := range map[string]string{"keep2share": typesSOCKSRoute, "fileboom": typesHTTPRoute, "emload": typesHTTPRoute, "mega": typesHTTPRoute, "cloudflare": typesHTTPRoute} {
 		if got := leasedRoutes(m, group); !slices.Equal(got, []string{want}) {
 			t.Errorf("%s leased %v, want %s alone", group, got, want)
 		}
@@ -169,7 +169,7 @@ func TestProxyTypesSurviveARestart(t *testing.T) {
 		}
 		return st.Settings
 	}
-	all, own := config.ProxyTypeSOCKS, map[string]string{"cloudflare": config.ProxyTypeAny, "emload": config.ProxyTypeHTTP}
+	all, own := config.ProxyTypeSOCKS, map[string]string{"cloudflare": config.ProxyTypeAny, "emload": config.ProxyTypeHTTP, "mega": config.ProxyTypeSOCKS}
 	if err := first.ApplySettings(Settings{ProxyType: &all}); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestProxyTypesSurviveARestart(t *testing.T) {
 	if s := next.CurrentSettings(); *s.ProxyType != config.ProxyTypeSOCKS || !maps.Equal(*s.ProxyTypes, own) {
 		t.Errorf("after a restart: %q %v; want the protocols chosen", *s.ProxyType, *s.ProxyTypes)
 	}
-	cleared := map[string]string{"cloudflare": "", "emload": ""}
+	cleared := map[string]string{"cloudflare": "", "emload": "", "mega": ""}
 	if err := next.ApplySettings(Settings{ProxyTypes: &cleared}); err != nil {
 		t.Fatal(err)
 	}

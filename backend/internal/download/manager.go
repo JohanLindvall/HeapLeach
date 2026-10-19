@@ -494,6 +494,10 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 	if size == 0 {
 		size = -1
 	}
+	pace, routePace := f.Pace, (*extractor.Pace)(nil)
+	if pace != nil && pace.DirectFirst {
+		pace, routePace = nil, f.Pace
+	}
 	return &Item{
 		ID:            newID(),
 		JobID:         job.ID,
@@ -514,8 +518,10 @@ func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) 
 		check:         f.Check,
 		proxyFallback: f.ProxyFallback,
 		cipher:        f.Cipher,
-		pace:          f.Pace,
+		pace:          pace,
+		routePace:     routePace,
 		reject:        f.Reject,
+		refused:       f.Refused,
 		limiter:       job.limiter,
 	}
 }

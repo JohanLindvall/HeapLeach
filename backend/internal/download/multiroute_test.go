@@ -41,6 +41,7 @@ type routeRig struct {
 	served  map[string]map[string]int64 // file -> route -> bytes
 	asked   map[string]int              // route -> links minted
 	refuse  map[string]bool             // route IDs answering 409
+	spent   map[string]bool             // route IDs whose quota is used up, answering 509
 	hang    map[string]int64            // route ID -> bytes after which it goes silent
 	// abandoned counts responses the client stopped reading before their
 	// end. Short of a cancellation, none should be: a connection that does
@@ -67,7 +68,7 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 	// that a split which ignored what had been asked for would cut into it.
 	r := &routeRig{t: t, m: busyManager(t), payload: randomPayload(t, 32<<20),
 		served: map[string]map[string]int64{}, asked: map[string]int{},
-		refuse: map[string]bool{}, hang: map[string]int64{},
+		refuse: map[string]bool{}, spent: map[string]bool{}, hang: map[string]int64{},
 		exits: map[string]string{}, exitBusy: map[string]int{}, answers: map[string]string{}}
 	r.m.cfg.SlowSpeed = 1 << 40 // always slow, so extra streams are wanted
 	r.m.timings.poll, r.m.timings.probe, r.m.timings.cooldown = 10*time.Millisecond, 40*time.Millisecond, 40*time.Millisecond
@@ -116,7 +117,7 @@ func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string)
 		return
 	}
 	r.mu.Lock()
-	refused, hang, exit, answer := r.refuse[route], r.hang[route], r.exits[route], r.answers[route]
+	refused, spent, hang, exit, answer := r.refuse[route], r.spent[route], r.hang[route], r.exits[route], r.answers[route]
 	r.mu.Unlock()
 	if req.URL.Host == r.echoHost {
 		switch {
@@ -127,6 +128,10 @@ func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string)
 		default:
 			_, _ = fmt.Fprint(w, exit)
 		}
+		return
+	}
+	if spent {
+		overQuota(w, "5400")
 		return
 	}
 	if refused || req.URL.Query().Get("for") != route {
@@ -205,7 +210,8 @@ func (r *routeRig) add(name string, hold func(ctx context.Context, route string)
 			return &extractor.Target{URL: "http://storage.example.test/f?file=" + name + "&for=" + route,
 				Size: int64(len(r.payload))}, nil
 		},
-		Pace: &extractor.Pace{Files: 1, Streams: 1, Group: "keep2share", PerRoute: true}}, "", 0)
+		Refused: quotaRefused,
+		Pace:    &extractor.Pace{Files: 1, Streams: 1, Group: "keep2share", PerRoute: true}}, "", 0)
 	job.Items = append(job.Items, it)
 	r.m.queue = append(r.m.queue, it)
 	r.m.signal()
@@ -357,6 +363,33 @@ func TestAnExtraStreamRefusedGivesItsRangeBack(t *testing.T) {
 	defer r.mu.Unlock()
 	if tries := r.asked[r.ids[1]] + r.asked[r.ids[2]]; tries == 0 || tries > 4 {
 		t.Fatalf("links minted on the refusing routes: %d; want a try or two", tries)
+	}
+}
+
+// An extra stream whose route has used up its quota with the host gives its
+// range back, and the route is held back from the host until the quota is
+// back, not for the minute of an ordinary refusal.
+func TestAnExtraStreamWhoseQuotaIsSpentHoldsItsRouteBack(t *testing.T) {
+	r := newRouteRig(t, 2)
+	r.spent[r.ids[1]] = true
+	it := r.add("clip.bin", nil)
+	r.m.mu.Lock()
+	it.preferredRoute = r.ids[0]
+	r.m.mu.Unlock()
+	r.m.Start()
+	r.waitDone(60*time.Second, it)
+	r.mu.Lock()
+	tries := r.asked[r.ids[1]]
+	r.mu.Unlock()
+	if tries == 0 {
+		t.Fatal("no extra stream tried the route whose quota is used up")
+	}
+	cooling := r.pool.Page("keep2share", proxy.Query{Status: "cooling"}).Rows
+	if len(cooling) != 1 || cooling[0].ID != r.ids[1] {
+		t.Fatalf("cooling %+v; want the route whose quota is used up alone", cooling)
+	}
+	if left := time.Until(cooling[0].CooldownUntil); left < 89*time.Minute {
+		t.Errorf("the route is held back for %s; want the 90 minutes the host named", left.Round(time.Minute))
 	}
 }
 
