@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible problem with downloads, the UI or the CLI.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve HeapLeach. Check the [troubleshooting guide](https://github.com/JohanLindvall/HeapLeach/blob/main/SUPPORT.md) and search existing issues first.
+        Use host names and URL shapes with placeholders, not real content links or hosted filenames. Remove passwords, cookies, tokens and proxy credentials from logs and screenshots.
+        Report vulnerabilities privately through the [security policy](https://github.com/JohanLindvall/HeapLeach/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: HeapLeach version
+      description: Copy the version from the UI or `heapleach -version`. For a source build, include the commit.
+      placeholder: vX.Y.Z or commit hash
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, CPU architecture, release / Docker / source installation, and browser if relevant.
+      placeholder: Linux x86-64, release archive, Firefox
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include relevant settings and a host name or placeholder URL shape if this is a site problem.
+      placeholder: |
+        1. Start HeapLeach with…
+        2. Add a URL shaped like https://example.test/file/<id>
+        3. Observe…
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: What did you expect, and what happened? Include the exact error with private data replaced.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Optional. Copy the relevant lines from the Logs panel or terminal and redact private data.
+      render: text

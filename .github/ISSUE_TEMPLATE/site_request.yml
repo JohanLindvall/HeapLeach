@@ -1,0 +1,37 @@
+name: Site or platform request
+description: Suggest a new host or a link format that HeapLeach could support.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [supported sites](https://github.com/JohanLindvall/HeapLeach#supported-links) and existing requests first.
+        Share only a site root, public API documentation or URL shapes with placeholders. Do not include specific videos, albums, profiles, files, real hosted filenames or credentials.
+        If an already-supported site stopped working, use the bug report form instead.
+  - type: input
+    id: site
+    attributes:
+      label: Site or platform
+      description: The name and site root, or the platform software used by multiple sites.
+      placeholder: Example platform — https://example.test
+    validations:
+      required: true
+  - type: textarea
+    id: formats
+    attributes:
+      label: Link formats and expected result
+      description: Use placeholder IDs and explain whether each shape represents a file, folder, album or playlist.
+      placeholder: https://example.test/album/<id> should expand to the album's files.
+    validations:
+      required: true
+  - type: textarea
+    id: access
+    attributes:
+      label: Access requirements
+      description: Is it public, or does it need an account, payment, CAPTCHA or a particular region? Do not share credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: documentation
+    attributes:
+      label: Technical notes
+      description: Optional. Link public API documentation or describe platform similarities that could help.

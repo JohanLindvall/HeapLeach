@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation and troubleshooting
+    url: https://github.com/JohanLindvall/HeapLeach/blob/main/SUPPORT.md
+    about: Start here for installation, held downloads, missing helpers and other common questions.
+  - name: Report a security vulnerability privately
+    url: https://github.com/JohanLindvall/HeapLeach/security/advisories/new
+    about: Keep exploitable problems out of public issues.

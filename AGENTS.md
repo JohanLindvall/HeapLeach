@@ -13,6 +13,19 @@ parallel worker pool, plus a React + TypeScript UI that is **compiled into the
 Go binary**. Releases also carry an `ocr/` directory with the pinned CAPTCHA
 model, native ONNX Runtime and license notices.
 
+## User and contributor documentation
+
+`README.md` is the project's front page and quick start. Keep detailed user
+reference material in `docs/`, indexed by `docs/README.md`, and contributor
+setup in `CONTRIBUTING.md`. `SUPPORT.md` is the troubleshooting and reporting
+entry point; GitHub issue forms and the pull-request template live in
+`.github/`. Update the relevant user guide when behavior changes.
+
+The generated supported-site inventory stays in README.md inside a collapsed
+section, with its markers intact, so `make hosts` and CI remain its source
+of truth. Preserve the README's existing section anchors when moving detail:
+published links can still point readers to the fuller guide.
+
 ## Commands
 
 All `make` targets run from the repo root; `go` commands run from `backend/`.

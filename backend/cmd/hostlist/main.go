@@ -10,9 +10,9 @@
 // writes the output into README.md between two markers, and CI fails when the
 // file and the code disagree.
 //
-// The prose table in README.md is deliberately NOT generated: it explains how
-// a handful of interesting hosts resolve, which is a judgement about what
-// deserves explaining. Only the inventory is mechanical.
+// The prose table in docs/supported-links.md is deliberately NOT generated:
+// it explains how a handful of interesting hosts resolve, which is a judgement
+// about what deserves explaining. Only the inventory is mechanical.
 package main
 
 import (

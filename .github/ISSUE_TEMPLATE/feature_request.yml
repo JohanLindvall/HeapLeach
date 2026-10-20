@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement to the download workflow or developer experience.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues before adding a suggestion. Explain the task you want to accomplish so we can discuss the best approach.
+        For a new host, use the site request form. Keep examples synthetic and leave out private links and credentials.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe your workflow and what makes it difficult today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested improvement
+      description: Describe the behavior you would like. A small example or sketch can help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Optional. What have you tried, and why does it fall short?

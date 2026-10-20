@@ -1,0 +1,22 @@
+name: Usage question
+description: Ask for help with setup, configuration or the download workflow.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [support guide](https://github.com/JohanLindvall/HeapLeach/blob/main/SUPPORT.md) and search existing issues first.
+        Keep content links, real hosted filenames and credentials out of your question. Use placeholders in commands and logs.
+  - type: textarea
+    id: question
+    attributes:
+      label: What do you need help with?
+      description: Describe what you are trying to accomplish and what you have already tried.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Version and environment
+      description: Include your HeapLeach version, OS and whether you use a release archive, Docker or a source build.
+    validations:
+      required: true

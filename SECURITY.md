@@ -38,5 +38,5 @@ The web UI and API deliberately have no login: HeapLeach is a single-user
 service, and anyone who can reach its port can use it. Running it on an
 untrusted network without an authenticating proxy in front is a deployment
 choice rather than a vulnerability — see
-[Network access and trust](README.md#network-access-and-trust) for how to
+[Network access and trust](docs/usage.md#network-access-and-trust) for how to
 run it safely.

@@ -1,369 +1,169 @@
 # HeapLeach
 
+**Paste a heap of links. Download them together.**
+
+A bulk download manager for **180+ sites**, with a web UI and a command-line
+mode. Expand albums, folders and playlists into a queue, download files in
+parallel, and resume interrupted transfers. Runs on **Linux, macOS, Windows
+and Docker**; the web UI is built into the executable.
+
 [![CI](https://github.com/JohanLindvall/HeapLeach/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JohanLindvall/HeapLeach/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/JohanLindvall/HeapLeach)](https://github.com/JohanLindvall/HeapLeach/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/JohanLindvall/HeapLeach)](LICENSE)
 
-**HeapLeach is a bulk downloader with an embedded web UI.** Paste links from
-180+ sites — file hosts such as gofile, bunkr, MEGA and pixeldrain, image
-galleries, video and broadcaster pages — and it resolves every album, folder
-and playlist behind them, then downloads the files in parallel: resumable
-multi-connection transfers, a per-host throttle for overloaded servers, and
-native decryption of MEGA files and AES-128 HLS streams. The web UI is
-compiled into the binary, the same binary downloads headless in a terminal,
-and every release ships builds for Linux, macOS and Windows and a Docker
-image for amd64 and arm64.
-
-```bash
-./heapleach                                          # the web UI on a free local port, in your browser
-./heapleach https://gofile.io/d/<code> ~/Downloads   # or headless, with progress in the terminal
-docker run -p 8080:8080 -v ~/Downloads:/downloads --user "$(id -u):$(id -g)" ghcr.io/johanlindvall/heapleach
-```
+[**Download**](https://github.com/JohanLindvall/HeapLeach/releases/latest) ·
+[Quick start](#quick-start) · [Documentation](docs/README.md) ·
+[Supported sites](#supported-links) · [Contribute](CONTRIBUTING.md) ·
+[Get help](SUPPORT.md)
 
 <p align="center">
-  <img src="docs/screenshot-dark.png" alt="The queue in dark mode: header totals with a throughput graph, sidebar filters, and per-file progress with stream counts and ETAs." width="900">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshot-light.png">
+    <img src="docs/screenshot-dark.png" alt="HeapLeach download queue with per-file progress, transfer speeds, pause controls and search." width="900">
+  </picture>
 </p>
 
-- **Backend** — Go. Worker pool, per-host extractors, resumable transfers.
-- **Frontend** — TypeScript + React, compiled and **embedded into the Go
-  binary**. No separate frontend files to serve.
-- **Build** — runs entirely in Docker; the binary is exported to your host.
-- **Two ways to run** — serve the UI, or hand it URLs on the command line and
-  watch them download in the terminal.
+## Why HeapLeach?
 
-## Screenshots
-
-Light and dark follow the system by default; the header toggle overrides it,
-and the choice is remembered. The layout collapses to a single column on a
-phone, with the filters becoming a scrolling strip.
-
-<p align="center">
-  <img src="docs/screenshot-light.png" alt="The same queue in light mode." width="440">
-  <img src="docs/screenshot-mobile.png" alt="The queue at phone width, single column with a scrolling filter strip." width="200">
-</p>
-
-Given URLs instead of a directory, it skips the browser entirely and animates
-the same progress on the terminal:
-
-<p align="center">
-  <img src="docs/screenshot-cli.png" alt="Terminal output: each source announced as it resolves, finished files logged above, and a live block of progress bars with percentage, sizes, rate, stream count and ETA." width="860">
-</p>
-
+- **Batch downloads:** paste one link per line; supported albums, folders and
+  playlists expand automatically.
+- **Resumable transfers:** keep partial files, retry failures, and continue
+  after an interruption.
+- **Control your bandwidth:** adjust parallel downloads, connections per file
+  and the native download speed limit while the queue runs.
+- **A queue you can navigate:** search, filter, pause, retry individual files,
+  and inspect logs from the browser. Light, dark and mobile layouts included.
+- **Desktop or automation:** open the local web UI, pass URLs to the CLI,
+  or run the Docker image on your server.
+- **One application:** Go backend and embedded React UI. Releases include
+  local CAPTCHA model data; Docker also includes the media helpers.
 
 ## Quick start
 
-Grab a build from [releases](https://github.com/JohanLindvall/HeapLeach/releases)
-— Linux (x86-64, arm64), macOS (Intel, Apple silicon) and Windows — unpack it
-and run it. The UI is embedded in the executable. Keep the bundled `ocr/`
-directory beside it for local CAPTCHA recognition; the Docker image includes
-the complete model and native runtime too.
+### Download and run
+
+1. Open the [latest release](https://github.com/JohanLindvall/HeapLeach/releases/latest)
+   and choose the archive for your system:
+
+   | System | Archive ending |
+   | --- | --- |
+   | Linux, Intel / AMD 64-bit | `linux_amd64.tar.gz` |
+   | Linux, ARM64 | `linux_arm64.tar.gz` |
+   | macOS, Apple silicon | `darwin_arm64.tar.gz` |
+   | macOS, Intel | `darwin_amd64.tar.gz` |
+   | Windows, Intel / AMD 64-bit | `windows_amd64.zip` |
+
+2. Extract the **whole archive** into a folder. Keep `ocr/` beside the
+   executable. No Go or Node.js installation is needed.
+3. Run `heapleach` (`heapleach.exe` on Windows). It opens your browser and
+   saves to your Downloads folder.
+4. Paste your links, one per line, and click **Add to queue**.
+
+<details>
+<summary>Terminal commands for Linux, macOS and Windows</summary>
+
+Run these from a folder containing only the archive version you want to use.
 
 ```bash
+# Linux x86-64; use linux_arm64 for an ARM64 machine.
 tar -xzf heapleach_*_linux_amd64.tar.gz
 ./heapleach
 ```
 
-That is the whole thing. Run on its own it takes a free port on your own
-machine, opens your browser at it, and saves to your Downloads folder —
-nothing to choose and nothing to collide with, since the kernel picks the
-port and the process is the only thing that could know which one it got.
-
-It also **stops on its own**: once nothing is downloading and no browser has
-been in touch for a minute, it exits. Closing the tab is how you quit, and
-you never accumulate forgotten copies of it in the background. An open tab
-counts as being in touch, so leaving one up keeps it running.
-
-Give it any argument and it stops guessing: the settings under **Usage**
-below apply as written, it binds `:8080`, and it runs until you stop it —
-because that is a way of deploying the program, and outliving the browser may
-be the whole point. `HEAPLEACH_OPEN=0` suppresses the browser if you want the
-rest of the bare behaviour without it.
-
-Or build it yourself:
-
 ```bash
-make build                  # builds in Docker, writes ./bin/heapleach
-./bin/heapleach             # same as above
-./bin/heapleach ~/Videos    # explicit: :8080, no browser, saves there
+# macOS Apple silicon; use darwin_amd64 for an Intel Mac.
+tar -xzf heapleach_*_darwin_arm64.tar.gz
+./heapleach
 ```
 
-No local Go or Node needed — the toolchain lives in the build image, and only
-the finished binary lands on your machine.
+```powershell
+# Windows PowerShell
+Expand-Archive -Path .\heapleach_*_windows_amd64.zip -DestinationPath .\heapleach
+.\heapleach\heapleach.exe
+```
 
-Prefer to run it as a container — every release is published to the GitHub
-container registry for amd64 and arm64, tagged with its version (`v1.2.3`
-and `1.2.3` alike), its minor version (`v1.2`, `1.2`) and `latest`. Pin a
-version to stay on it; `latest` follows each release:
+</details>
+
+An argument-free launch uses a free local port. After you close the browser,
+it exits once downloads are idle and no tab has connected for a minute.
+Unfinished jobs return **held** after a restart; click **Resume** to continue.
+
+See [installation and updates](docs/installation.md) for checksums, Docker
+persistence, source builds and platform notes.
+
+### Docker
+
+On Linux or macOS with Docker, run:
 
 ```bash
-docker run -d -p 8080:8080 -v ~/Downloads:/downloads --user "$(id -u):$(id -g)" \
+mkdir -p "$HOME/Downloads"
+docker run --rm -it --name heapleach \
+  -p 127.0.0.1:8080:8080 \
+  --user "$(id -u):$(id -g)" \
+  -e HEAPLEACH_STATE=/downloads/.heapleach-state/queue.json.zst \
+  -v "$HOME/Downloads:/downloads" \
   ghcr.io/johanlindvall/heapleach:latest
-make run-image                 # or build the image from this checkout and run it
 ```
 
-The container maps a fixed port rather than taking a free one, since a port
-only the container knows about is one nothing outside it can reach. It saves
-to `~/Downloads`; override with `make run-image DOWNLOADS=/mnt/media`, and
-change the mapped port with `PORT=9000`.
+Open **[localhost:8080](http://localhost:8080)**. Downloads and queue state stay
+in your Downloads folder when the container stops. The image supports amd64
+and arm64 and includes yt-dlp, ffmpeg, ffprobe, deno and local OCR.
 
-The image carries yt-dlp, ffmpeg, ffprobe, deno and the local CAPTCHA reader
-beside the binary — the same helpers `make dependencies` installs — so the
-hosts that need them work in the container without further setup. It is based
-on Debian slim because the helpers use glibc. The media helpers are fetched
-as "latest" and cached with the image, so rebuild with `--no-cache` (or after
-`docker builder prune`) to pick up new releases. OCR dependencies are pinned.
+The web UI has no login. The command above publishes it only on your computer;
+see [network access](#network-access-and-trust) for remote deployments.
 
 ## Usage
 
-```
-heapleach                                     serve the UI and open it
-heapleach [options] [download-dir]            serve the web UI
-heapleach [options] <url>... [download-dir]   download and exit
-
-  -addr string          listen address; :0 takes any free port (default ":8080")
-  -concurrency int      parallel transfers, 1 to -max-concurrency (default 4)
-  -max-concurrency int  ceiling on parallel transfers, live setting included (default 256)
-  -captcha-concurrency int
-                        CAPTCHAs read at once, each in a model session of its own (default 4, at most 64)
-  -dir string           directory to download into
-  -password string      password for protected sources (headless downloads)
-  -retries int          retries per request and per transfer (default 3)
-  -streams int          connections to split a slow file across, 1-16 (default 8)
-  -slow-speed size      rate below which extra connections open, per second (default 2MB)
-  -max-speed size       ceiling on the total download rate, per second (0 is unlimited)
-  -min-free size        room to leave at the destination before starting another
-                        transfer (0 turns the check off) (default 10GiB)
-  -stall-timeout dur    abandon and retry a transfer stuck this long (default 1m30s)
-  -debug                verbose logging (default true; -debug=false disables)
-  -open                 open the UI in a browser once it is listening
-  -version              print the version and exit
-```
-
-Sizes take a unit — `5MB`, `1.5GB`, `10GiB` — or a plain byte count.
-
-### On the command line
-
-Hand it URLs and it never opens a socket: the files are downloaded to disk,
-progress is printed on the terminal, and the process exits.
+<a id="on-the-command-line"></a>
 
 ```bash
-heapleach https://example.com/d/abc123 ~/Downloads
-heapleach -streams 8 https://example.com/a/one https://example.com/a/two
-cat urls.txt | heapleach - ~/Downloads          # "-" reads a list from stdin
+# Open the UI on a free local port and choose the destination.
+./heapleach -addr 127.0.0.1:0 -open ~/Downloads
+
+# Download a list of URLs, then exit. Blank lines and # comments are ignored.
+./heapleach - ~/Downloads < urls.txt
+
+# Limit native download speed and parallel transfers.
+./heapleach -addr 127.0.0.1:8080 -concurrency 4 -max-speed 10MB ~/Downloads
+
+# Show every command-line option.
+./heapleach -help
 ```
 
-URLs and the download directory can come in either order — a URL is anything
-with an `http(s)` scheme, so the two can never be confused. Lists read from
-stdin ignore blank lines and `#` comments.
+`urls.txt` contains your own URLs, one per line. On PowerShell, use
+`Get-Content .\urls.txt | .\heapleach.exe -` to feed a list to the CLI.
+To pass URLs directly, quote each one, especially links containing `&` or `#`.
 
-It exits `0` when every source was accepted, resolved and downloaded, and `1`
-when an input was rejected, a source could not be read, or a file failed.
-Failures are named, so it drops straight into a script or a cron job. `Ctrl-C` exits
-`130` and leaves the partial files in place; running the same command again
-continues them rather than starting over.
+The CLI exits `0` on success, `1` if any input or download fails, and `130`
+after Ctrl-C. Partial files remain available for resume. Native transfers
+honor the shared speed limit; external helpers use their own controls.
 
-Everything the server does, this does: the same extractors, the same
-multi-connection transfers, the same resume. Debug logging is enabled by
-default, with plain progress lines so logs and the display never fight over
-the screen. Use `-debug=false` or `HEAPLEACH_DEBUG=0` for quieter output and
-animated progress on a terminal. Pipes, log files and CI always use plain
-progress lines.
-
-The download directory can be given three ways. The most explicit wins:
-
-```bash
-heapleach /mnt/media                    # argument
-heapleach -dir /mnt/media               # flag
-HEAPLEACH_DIR=/mnt/media heapleach           # environment
-heapleach -concurrency 8 -addr :9000 ~/Downloads
-```
-
-It is created if missing, `~` is expanded, and the process refuses to start
-if the directory cannot be written to — so a permission problem surfaces
-once, up front, instead of as a wall of failed transfers.
-
-The queue itself is remembered between runs, in
-`~/.local/state/heapleach/queue.json.zst` (`XDG_STATE_HOME` is honoured, and
-`HEAPLEACH_STATE` overrides both). Restarting brings back the list, and
-anything unfinished comes back **held** rather than running: press resume, or
-retry the one job you want, and it picks up from the part files already on
-disk. Nothing is fetched until you say so, so a machine that reboots at
-3 a.m. does not start saturating the line on its own.
-
-An unfinished job is read from its source again rather than replayed. That is
-not caution but necessity: several hosts sign their media links for twenty
-minutes or so, and the ones that do carry no link at all until it is minted
-per attempt, so a stored URL would be a dead one. Re-reading gives fresh
-links, files already complete are skipped, and part-finished ones resume.
-
-The file is written with mode `0600`, because it lists everything you are
-downloading and carries the password for any source that needed one. Given
-URLs on the command line the whole mechanism is off: that mode downloads and
-exits, and has no queue worth outliving it.
-
-If an existing queue cannot be read, the service logs the reason and disables
-queue saving for that run, preserving the original file. Downloads can still
-run, but their queue changes will not survive a restart. Stop the service,
-back up and repair or move the unreadable file, then restart to enable saving
-again. Automatic migration from `queue.json` is limited to the default state
-location; an explicit `HEAPLEACH_STATE` never adopts a neighbouring file.
-
-A transfer only starts when at least `HEAPLEACH_MIN_FREE` — 10 GiB by
-default — is still free there. Below that the queue **waits** rather than
-failing: nothing new begins, transfers already running finish normally, and
-the moment room is made the queue picks up by itself with nothing to re-add.
-The figure says `downloads held` while that is the case, so a queue sitting
-still is never a mystery. Set it to `0` to turn the check off.
-
-The UI shows what is left on that filesystem beside the path, and says it in
-red once a tenth or less remains: a queue can be larger than the room for it,
-and the useful moment to notice is before the last block goes rather than
-after. A destination that cannot be measured shows nothing at all rather than
-zero, which would read as a disk with no room left.
-
-### Network access and trust
-
-HeapLeach is a single-user service with no login or API authentication.
-Anyone who can reach its API can inspect the queue, submit downloads and
-change the destination to a directory writable by the service account.
-Submitted sources can reach local network addresses as well as public sites.
-Use a trusted network or bind to loopback, for example
-`heapleach -addr 127.0.0.1:8080`. The bare desktop launch uses loopback, while
-the normal `-addr` default and the container port listen on all interfaces.
-For remote access, put an authenticated HTTPS reverse proxy in front and
-restrict direct access to the backend port. Browser cross-origin protection
-and framing restrictions do not authenticate API callers.
-
-Outbound native HTTP requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
-`NO_PROXY`. A proxied request uses Go's standard TLS transport rather than
-the browser-shaped handshake. Helper programs use their own proxy support.
-The destination directory, optional helper executables and script overrides
-must be writable only by people you trust to run code as this account.
+[Full usage guide](docs/usage.md) · [Configuration](#configuration) ·
+[Troubleshooting](SUPPORT.md)
 
 ## Supported links
 
-| Host | Accepts | How it resolves |
-|---|---|---|
-| **gofile** | `/d/<code>` | Mints a guest token, then signs each API call with `sha256(ua :: lang :: token :: 4h-slot :: secret)` in an `X-Website-Token` header. The secret is rotated server-side, so it is read out of gofile's own obfuscated script rather than pinned: its string table is RC4 under a shuffled base64 alphabet, and the one rotation that decodes the whole file is what proves the answer. A signature gofile rejects is not repeated — it blocks addresses that sign badly. Downloads carry the token as a cookie. Walks nested folders. |
-| **bunkr** | `/f/<slug>`, `/a/<slug>`, any `bunkr*` domain | Page → numeric file id → metadata endpoint → separate signing service for the `token`/`ex` pair the CDN demands. |
-| **pixeldrain** | `/l/<id>`, `/u/<id>`, `/f/<id>` | Public JSON API. |
-| **keep2share** | `/file/<id>`, with or without a filename, on `k2s.cc` or `keep2share.cc` | Free downloads through the public API. Reads the image CAPTCHA locally, waits for the host's timer, and reuses the resulting link when resuming. OCR model and runtime included in releases and the container image. Premium-only and private files are reported as restricted. |
-| **fileboom** | `fboom.me/file/<id>`, with or without a filename | Uses FileBoom's own API with the same free-download protocol as Keep2Share, including local OCR and optional proxy routing. Tickets, scores and cooldowns are tracked separately for each service. |
-| **filejump** | `filejump.com/s/<id>`, including `?access=download` | Reads the public share's filename and download button, then uses the native ranged downloader. Keeps the stable download endpoint so each transfer obtains a fresh storage signature. Rounded display sizes are estimates; expired or restricted shares fail before queueing. |
-| **emload** | `/v2/file/<id>[/<filename>]`, `/file/<id>[/<filename>]` | Reads the free-download control when the transfer starts, keeping its page, token and file requests on one proxy route. Uses the shared pool with one file and one connection per address; a daily limit cools that route so another can take the file. Premium-only shares, size limits and unavailable files report their restrictions. A small file or a token in the page does not imply free access. |
-| **turbo** | `/embed/<id>`, `/d/<id>` | `/api/sign` issues a short-lived signed URL. |
-| **mega** | `/file/<id>#<key>`, `/folder/<id>#<key>`, and the older `#!`/`#F!` shapes | Nothing about a mega link is legible to the server: names, sizes and bytes are all encrypted under the key in the fragment. Attributes decrypt with AES-CBC; the payload is AES-CTR, undone as the bytes arrive, so ranges, resume and parallel connections all still apply. A link quoted without its `#` fragment cannot be opened by anyone. Downloads use the normal connection until mega says this address's transfer quota is used up; files then go on through proxy routes, one to an address, each route resting until its own quota is back. With proxies off they wait for the quota instead. |
-| **dropbox** | `/s/…`, `/scl/fi/…`, folder shares | Asks for `dl=1`, with the content host kept as a mirror to fail over to. A folder share downloads as the zip dropbox builds for it. |
-| **mediafire** | `/file/<key>/<name>`, `/folder/<key>` | The download link is on the file page, signed per visit, so the page is re-read when the item starts. Folders come from mediafire's own listing API, recursively. |
-| **google drive** | `/file/d/<id>`, `?id=<id>` | Walks past the virus-scan confirmation page — HTML, with a token minted per visit — so the transfer is handed real bytes. Folder links need an API key and are not supported. |
-| **svtplay** | `/video/<id>/…`, `/<programme>` | Open player API. A programme expands to every episode, grouped into season folders where there is more than one season, read from SVT's GraphQL API rather than the page (which mixes in trailers and recommendations). |
-| **youtube** | videos and playlists | Handed to yt-dlp, which is the only practical way in: YouTube withholds playback URLs behind BotGuard attestation on top of its signature and throttling parameters. Needs `make dependencies`. |
-| **bandcamp** | albums, tracks, a band's discography | Read natively, no yt-dlp. Each track is filed as `<band>/<album>/<NN> - <title>.mp3`; a band's page resolves every release it lists. The MP3 is the 128 kbps stream anyone may play — nothing better is served without a purchase. |
-| **odysee, dailymotion, bilibili, rumble, soundcloud, mixcloud** | videos and tracks | Also handed to yt-dlp, each for a reason recorded in the code so nobody re-derives it: Bilibili signs its playback URLs and ships demuxed DASH; Dailymotion fingerprints TLS and no longer offers a progressive rendition; SoundCloud needs a client id scraped from a rotating bundle; Mixcloud obfuscates its stream URLs; Rumble puts an interstitial in front of its media endpoint. Needs `make dependencies`. |
-| **vimeo** | `/<id>`, `/<id>/<hash>`, channel and group links, `player.vimeo.com/video/<id>` | Read natively from the **embed player**'s configuration: the watch page answers anything but a browser with a bot check, while the player page an iframe loads is served to anyone with a browser's TLS. The stream is demuxed, video renditions with audio and subtitles in tracks of their own, all fetched and joined into one MP4 (needs ffmpeg); a progressive MP4 is taken when the stream cannot be read. Links are signed for an hour, and read again when the transfer starts. A video DRM-protected in every form it is offered in is refused, since nothing can decrypt it. |
-| **niconico** | `/watch/<id>`, `nico.ms/<id>`, mylists, series, a user's uploads | Read natively through the site's own player API, no yt-dlp: the watch page names the qualities offered without an account, and a grant for the best of them mints an HLS stream whose audio is a track of its own and whose parts are AES-128 encrypted fragmented MP4, decrypted and joined into one MP4 (needs ffmpeg). The grant is minted when the transfer starts. Listings are read a page at a time off the API, leaving out what only an account or a payment fetches; any other page on the site is still handed to yt-dlp. |
-| **booru** | tag searches and posts on 19 image boards, plus the booru.org network | One adapter per API family — Danbooru, e621, Moebooru, Gelbooru 0.2, Philomena — which is how a handful of engines covers a lot of sites. |
-| **4chan** | `/<board>/thread/<id>` | The site's read-only JSON API; every attachment in a thread. |
-| **vids.st** | video and embed pages | The page names the uploaded file itself, which is downloaded as it is, or an HLS playlist, followed natively. The site sends an incomplete certificate chain, which is completed from the certificate's own issuer address the way a browser does. |
-| **lulustream** | video, embed and download pages | The player's setup is packed, and names an HLS playlist whose segments are AES-128-encrypted; they are decrypted natively as they arrive, and the playlist is read again when the file's turn comes, since its links are signed for eight hours. |
-| **streamtape, doodstream, mixdrop** | watch and embed pages | Each assembles its link inside the player: two halves joined at an offset the page states, a token endpoint plus a random tail, or a packed script naming the delivery host. Every one of them reads the numbers it needs off the page rather than hard-coding what they were. |
-| **pixhost** | `/gallery/<code>`, `/show/<group>/<file>` | A gallery's thumbnails say where the full images are: the two links differ only by host prefix and one path segment. Deriving them resolves a gallery of fifty in one request instead of fifty, and a mapping that ever changed would fail visibly with a 404 rather than quietly fetching thumbnails. |
-| **suvobox** | `/a/<id>`, `/f/<id>` | The album listing states every file's id, its full name with extension and its size, so a whole album resolves in one request with real names in the queue from the start. The bytes come from the media host's `?raw=1`, which needs no token — the site's own signed `?dl=1` link would only expire while an item waited its turn. |
-| **imagepond** | `/i/<code>`, the title-slug form of the same page, `/a/<code>` albums, and links straight to `media.imagepond.net` | The metadata names the item, but for a video it names the *poster frame*, and it has been seen misreporting a QuickTime file as MP4 — so the player element's own `data-src` is read first and the metadata is the fallback. An album arrives whole in one document, but its cards link only to each item's viewer, so the files behind them are resolved one at a time as they download rather than in a burst of fetches up front. An item the host has aged out answers 200 with an expiry notice rather than a 404, and is reported as expired instead of as a parse failure. A link to the media host is the stored file already, and is taken as given — that host is a subdomain of the site, so this extractor claims it and nothing else would. Profile pages list their items client-side and are still not supported. |
-| **yandex** | `/video/preview/<id>`, on any of its country domains | Yandex hosts none of this: a preview is a viewer wrapped around somebody else's video, and the page links the source beside the player. That link is what is followed, and the video is left to yt-dlp, which knows far more hosts than this program does. Needs `make dependencies`. |
-| **ok.ru** | `/video/<id>`, `/videoembed/<id>` | The watch page carries an empty rendition list for a logged-out caller, and the player's metadata endpoint answers the same way; the embed page, which exists to be framed elsewhere, carries the same structure filled in. Links are signed with an expiry and the requesting address, so they resolve at download time. |
-| **imgur** | `/a/<id>`, `/gallery/<slug>-<id>`, `/<id>`, `/user/<name>`, `/r/<sub>` | The album page carries the same JSON the API returns, so no key is needed — and none is accepted either; the header imgur's own web app sends is not validated. A deleted image redirects to a real 503-byte PNG with a correct length that answers a ranged request, which no general rule can catch, so the extractor recognises that dead end itself. |
-| **cyberdrop** | `/a/<id>`, `/f/<slug>` | bunkr's sibling. The album page states every filename and exact size in one request; the signed link is minted per attempt, which is what lets a file that will not sign fail on its own rather than sinking the album. |
-| **archive.org** | `/details/<id>`, `/download/<id>` | One metadata call lists every file with an exact length and checksum. It is fetched **gently** — one connection, one file at a time — because archive.org answers parallelism with a clean 206 served 300× slower, per address, for minutes afterwards. A collection identifier is refused rather than "succeeding" by fetching five site logos. |
-| **bitchute** | `/video/<id>`, `/channel/<name>` | Two unsigned JSON posts give a permanent MP4. Eleven seed hosts serve each other's paths byte-identically, so they are kept as mirrors — failover onto a set that cannot be wrong. |
-| **civitai** | `/images/<id>`, `/posts/<id>`, `/models/<id>`, `/user/<name>/images` | Documented public JSON, unsigned content-addressed CDN. Collection links are deliberately **not** matched: the API silently ignores that parameter and returns the site's front page instead, which would look like a successful download of the wrong thing. |
-| **pornpics** | `/galleries/<slug>-<id>/`, categories, `/pornstars/`, `/channels/` | A gallery's full-size URLs are in the page, so one request resolves it. Listings take one of two pagination routes, and the wrong one returns the first 20 items forever while looking like it works. |
-| **bandzoogle** (family) | any install | One extractor for the band-website product, which musicians rent and run on their own domains — so unlike the families above it ships with no host list at all, and every site is found by the sniff. The pages label their own player: each track anchor carries the title, the artist and the path the audio comes from, so one fetch yields the lot. Files are named `NN Title.ext` under a folder per album, taking the position the page prints beside each track and padding it so a directory listing sorts the way the album plays — the folder matters because the numbering restarts with each album. A listing shows twenty and says whether more follow, so the rest are fetched too rather than the album arriving quietly short. The audio link is the site's own `/player/…/tracks/….mp3`, which redirects to storage signed for a couple of hours; the player link is what is kept, since the signature is minted per request and a stored one would go stale in the queue. |
-| **chevereto** (family) | imgbb, freeimage, gifyu, and any install | One extractor for the image-host product, recognised by its own `generator` tag, so an unlisted install works without a rebuild. imagepond was one of these once and is not any more — it was rewritten onto software of its own and keeps its own extractor, which is why it is listed separately above. |
-| **peertube** (family) | `/w/<id>`, `/videos/watch/<id>`, channels, accounts | ~1,795 federated instances behind one versioned API, confirmed by a version probe rather than guessed from markup. Unsigned, rangeable, exact lengths. A federated video's file may live on a different instance than the one asked, and the API says which. |
-| **fediverse** (family) | Mastodon, Pleroma, Pixelfed, Lemmy, Misskey | Found through `/.well-known/nodeinfo`, which is a specification rather than a list, so the table cannot go stale. Three API dialects behind one sniff. |
-| **foolfuuka** (family) | `/{board}/thread/<n>` on the 4chan archives | Where threads persist after 4chan drops them, through an API modelled on 4chan's own — and better than it, since each post carries the poster's original filename and an exact size. |
-| **mediawiki** (family) | `Category:`, `File:`, articles, on any wiki | Commons, every Wikipedia, Fandom, any open wiki. A documented, versioned, keyless API returning untouched originals — the least likely thing here ever to break. |
-| **nrk, rúv, ard, zdf, srf, vrt, arte, orf, yle, dr, rtbf, france.tv, radio-canada, npo, raiplay, rtve, rtp, pbs, npr, abc listen, bbc sounds** | programmes, series and episodes | svtplay's siblings, twenty-one more of them. Each skips what is DRM-protected, by the broadcaster's own flag wherever that flag means it, and reports a geo-block as the broadcaster states it rather than replacing it with a guess. All of them are fetched directly. A rendition carrying audio and video in the *same* segments is joined as it is; one that keeps its audio apart, as CMAF streams and anything with an audio description do, comes with every audio track, fetched beside the video and joined to it by ffmpeg. Subtitles the playlist offers are joined in as text tracks. ARD and RTVE hand back plain rangeable files with exact lengths, so they get the whole engine — splitting, resume and the skip check. |
-| **vidmoly, streamable, wetransfer** | see above | Vidmoly is the highest-traffic embed host here; three of its four advertised domains are dead, so everything routes through the one that works. |
-| **feeds** | any RSS or Atom feed | One file per `<enclosure>`, oldest first, since an archive wants the beginning. |
-| *a bare `.m3u8`* | any adaptive manifest | Joined into a playable file, with every audio track when the playlist keeps its audio apart, and its WebVTT subtitles as text tracks (both need ffmpeg). A `.mpd` is refused with a reason rather than saved: DASH is usually demuxed, so concatenating it would yield a silent video. |
-| *a directory listing* | Apache, nginx, lighttpd autoindex | Walked recursively, with sizes and structure taken from the listing. Also covers IPFS gateway directories. |
-| *`links:<url>`* | any public page | Reads the page and downloads every link a supported host claims, each into its own folder. Aimed at the forum thread with two hundred links in it. |
-| *an ordinary webpage* | any public HTML page without a dedicated extractor | Automatically reads links to every registered host, including albums and files, without a `links:` prefix. Ordinary HTML links are ignored so navigation cannot recursively crawl the web. Links keep their host's resolver and download settings; source and file caps apply. |
-| **DarkGram albums** | any HTML page with a DarkGram player | Reads the first embedded album's videos and full-size photos from its `data-album` metadata. HLS playlists are resolved at download time and refreshed on retries; photos use their original links, never thumbnails. Files keep the page title and album order. File caps and unavailable items are reported. |
-| **WordPress categories** | any domain; category permalinks, custom category bases and `?cat=<id>` | Recognises classic and block theme markup without a domain list or version check. Follows the selected category's pagination and reads each post's supported file-host links, embedded albums/players and JPEG images, preferring linked originals and full-size image metadata. File links go through the existing host extractors, including deferred K2S/FileBoom resolution and proxy pacing. Each post gets a folder; player thumbnails, navigation and related-post widgets are excluded. Source/file caps and incomplete results are reported. |
-| **voyeurking** | `voyeurking.com/categories/<name>`, `/collection/<slug>` and `/video/<slug>` | Walks category and collection pages and reads each video's K2S or FileBoom file from its page data. Files use the corresponding downloader, including its per-address waits and proxy pool, enabled by default. Listing results keep each video in its own folder; source and file caps apply. |
-| **balbums** | `balbums.st/?search=<query>` | An index of somebody else's albums rather than a host: a search is walked page by page and every album it lists is handed to the extractor that does host it, each into its own folder. Asking for a hundred results a page is what makes a search of three hundred albums four requests rather than eighteen — ask for more and the site quietly serves twenty, so nothing trusts the parameter. Only searches are taken. The charts are built in the browser and the front page is the same grid over the whole catalogue. |
-| **KVS listings** | `/members/<id>/`, `/search/<query>/`, and any category, model, tag, channel or site-wide list on any KVS install | A member's public videos, everything a search turns up, or every video a category, model, tag or channel lists. Sections are recognised by the page rather than by name, since an install may rename them. The platform pages through its own asynchronous block loader, and which parameter pages a block is the block's own business — a wrong one is not refused, it serves page one again — so the walk sends exactly what the pager's own control carries. The last page says it is the last, and the walk stops there without asking. |
-| *anything else* | any `http(s)` URL | Treated as a direct file link after checking for a known platform, a manifest, a directory index, supported download links or a player. |
+File hosts, image galleries, video sites, broadcasters, image boards and
+compatible platforms are supported, including:
 
-Several of these hand out URLs that expire in minutes, so bunkr, turbo,
-mega, mediafire, ok.ru, cyberdrop, streamable, wetransfer and the three
-streaming hosts are **resolved at download time**, not when the link is
-queued — otherwise a large queue would start failing halfway down.
+| Content | Examples |
+| --- | --- |
+| Files and folders | gofile, bunkr, MEGA, pixeldrain, MediaFire, Dropbox |
+| Video and playlists | YouTube through yt-dlp, Vimeo, PeerTube |
+| Broadcasts | SVT Play and other supported broadcasters |
+| Galleries and collections | Chevereto, image boards, Internet Archive |
+| Direct and embedded media | File URLs, HLS/DASH playlists, open directories, supported links embedded in webpages |
 
-Several entries above are **platform families**: one extractor covering
-sites running the same software. On unregistered hosts, Pixeldrain-compatible
-services, booru boards, FoolFuuka archives, Kemono-compatible services and
-MediaWiki articles are detected through distinctive API responses or platform
-markup. KVS detection also covers member, search and other listing pages
-through its player or asynchronous block controls. Existing PeerTube,
-Chevereto and Bandzoogle detection continues to work the same way.
+<a id="image-boards"></a>
 
-A familiar URL path selects a possible API; it does not establish support.
-Guessed API requests are bounded and do not retry. Recognised platforms
-use their normal extractors, including pagination, deferred resolvers and
-transfer pacing. Unidentified pages continue through the generic fallback.
-Known-host registrations remain useful for discovering embedded download
-links, naming supported sites, and retaining aliases and site-specific settings
-such as booru filters. They are shortcuts, not a requirement for detecting a
-compatible platform from a pasted URL.
-
-Other entries are not hosts at all but **shapes** — an adaptive
-manifest, an open directory, a page carrying supported download links,
-and a page carrying a video in its markup.
-Those cover the sites nobody will ever get round to naming.
-
-Automatic webpage scanning reads anchors, embedded frames and links printed
-as text, then expands only links claimed by registered extractors. A recognised
-WordPress category also follows its own post permalinks and pagination;
-ordinary navigation links are not followed. Exact duplicates are
-removed; K2S aliases and repeated file IDs are also merged within each service.
-Recognised platforms keep their own extraction behavior. Use `links:<url>`
-to explicitly scan a page that would otherwise go to a dedicated extractor.
-
-WordPress category extraction uses the HTML the site serves. It supports
-classic post markup, block query loops, older/newer-post navigation, and
-path or query pagination. A pasted later page starts from the category's
-first page. Posts without supported file-host links use the shared album and
-media-player parsers on their content, with DarkGram playlists still resolved
-at download time. Separate JPEG photos are kept and duplicates removed.
-Login-only content and listings rendered entirely by scripts
-are not exposed by this parser. Domain redirects are followed, and relative
-links use the final page's address.
-
-Debug logs trace WordPress category pages, post counts, pagination and each
-post's linked sources, including player/proxy progress and failures.
-Files reach the queue after source resolution finishes;
-these logs show which post and source are still being resolved during that wait.
-Player diagnostics also record response status, content type, redirects,
-challenge markers and connection route for discovery and token refreshes.
-Debug logging defaults on; use `-debug=false` or `HEAPLEACH_DEBUG=0` to disable it.
-
-Open **Logs** beside Settings to view the service's recent messages without
-opening a terminal. The panel updates while visible, with search, severity
-filters, pause/resume and a download of the filtered messages. Scrolling up
-stops following new messages; **Jump to latest** resumes following. The service
-retains up to 1,000 messages or 4 MiB for the current run, truncating unusually
-large entries. Older messages roll off and a restart clears this history.
-Console logging continues as usual.
+Some workflows need [optional helpers](#optional-helpers). Support depends on
+what a host makes available; see [accepted URL formats and limitations](docs/supported-links.md).
+Sites change, so fixture tests alone cannot guarantee current live support.
 
 ### Every supported site
 
-Generated from the registry by `make hosts`, so it cannot drift from the
-code: adding a host to `NewRegistry` is the only step, and CI fails if this
-section and the binary disagree.
+<details>
+<summary>Expand the complete site inventory, generated from the extractor registry</summary>
 
 <!-- BEGIN HOSTS -->
 <!-- Generated by `make hosts`. Do not edit by hand. -->
@@ -489,679 +289,130 @@ And these match a URL or document shape, so the set of sites they reach is open-
 | `mediawiki` | any wiki with an open `api.php` — Commons, Wikipedia, Fandom |
 <!-- END HOSTS -->
 
-Where a host offers the same file from more than one place — gofile's
-storage servers, dropbox's two front ends — the alternatives are kept as
-mirrors and a failed attempt lands on a different one.
-
-SVT Play is an adaptive stream, so it has no single file to fetch. Where a
-rendition carries **audio and video together**, the extractor picks it, and
-the segments join into a playable file with no muxing at all. Newer
-programmes come as CMAF, every rendition keeping its audio apart. Then the
-video and **every audio track** are fetched side by side, each into a part
-file of its own, and joined into one MP4 by ffmpeg: a stream copy, each
-track labelled with its language and name, the playlist's default first.
-The same goes for any broadcaster or bare `.m3u8` packaged that way. It
-needs ffmpeg, and without it such a download fails before it fetches
-anything rather than finishing without sound. Subtitles come along as text
-tracks in the same MP4, each under its language and name, their cues where
-the playlist puts them; a subtitle track that cannot be fetched is left out
-rather than holding the video up.
-
-Any finished `.ts` is rewrapped to `.mp4` when `ffmpeg` is available. The
-rewrap is always a stream copy, so nothing is ever re-encoded: if the
-streams cannot enter MP4 untouched, the `.ts` is kept instead. What comes
-over is the best video plus the best audio and subtitle track **of each
-language**, so a recording that shipped in several languages stays usable in
-all of them without also carrying the duplicate encodes within each. Without
-ffmpeg the `.ts` is kept and plays fine.
+</details>
 
 ## Features
 
-- **Parallel downloads** with a live worker count you can change while
-  transfers are running.
-- **Multi-connection transfers.** A file that is downloading slowly is split
-  across more connections, up to a configurable ceiling. Ranges are chosen by
-  bisecting whatever is still outstanding — halfway, then the quarters, then
-  the eighths — so the extra connections share the remaining work rather than
-  duplicating it. Throughput is averaged over a window before any decision is
-  made, so one noisy interval never triggers a change.
-- **Host-aware.** Hosts cap how many connections they will accept. Extra
-  connections are budgeted per host across all downloads, and a host that
-  turns one away has its range handed straight back and its budget lowered,
-  so a working download is never failed by trying to go faster.
-- **Patient with busy hosts.** Gofile answers a request for a file on a busy
-  storage server by redirecting to its own web page. That is detected rather
-  than saved to disk, and retried with backoff — rotating through the file's
-  other storage servers where it has them — because a busy host has not
-  failed, it has asked us to come back. Patience is spent only where trying
-  again can change the answer: a URL with nothing to re-resolve, which is
-  usually a page no extractor recognised, is told so after a few attempts
-  instead of retrying forever.
-- **Forgives a dropped connection that was getting somewhere.** A transfer
-  that loses its connection after moving bytes resumes from its part file
-  thirty seconds later, and that attempt is not counted against the
-  retries: the budget counts attempts *in a row* that move nothing, and one
-  that moved anything starts the count over. A stall after progress is
-  treated the same way. So a CDN that drops every few dozen megabytes still
-  finishes a large file instead of failing it three drops in — and since
-  every such attempt leaves more on disk than it found, a finite file
-  cannot cycle forever.
-- **Pause and resume** the queue. Native transfers park inside their reads
-  rather than being torn down, so a short pause costs nothing and a long one
-  falls back on the same resume every other interruption uses. Already-running
-  external helpers continue; pausing prevents new ones from starting.
-- **A ceiling on native download throughput**, set from the header or with `-max-speed`.
-  It is one shared budget across native connections, not a per-file allowance —
-  and the code that opens extra connections knows about it, so a transfer
-  held at the ceiling is not mistaken for a slow one and split eight ways for
-  nothing.
-- **Skips what is already there.** A file whose name and length already match
-  the destination is not downloaded again — checked against the length the
-  server reports, so it works even for hosts that publish no sizes. Sizes
-  read off listing pages are rounded, and are never used to make that call.
-  Entries in one listing that share a sanitized destination get distinct,
-  stable numbered names, including when their lengths match.
-- **Notices a stalled transfer — and steps around it.** A connection that
-  stops delivering without closing is invisible to a read timeout; if the
-  byte counter has not moved for `-stall-timeout`, the attempt is abandoned
-  and the item goes to the **back of the queue** with its partial file
-  intact, so a host that has stopped serving does not pin a worker while
-  everything behind it waits. Its next turn resumes from disk; a host that
-  never resumes still fails the item once the retry budget is spent.
-  Playlist downloads are watched the same way, against the bytes actually
-  arriving rather than against whole parts landing — a large part fetched
-  slowly is progress, a silent connection is not. And a stalled transfer is
-  never "helped" by splitting it further: slow means more room than one
-  connection uses, stalled means the host is serving nothing, and the two
-  get opposite answers.
-- **Live progress** over server-sent events: per-file bytes, rate, ETA, and
-  parts joined for a file that arrives as a playlist and so has no byte total
-  until its last part lands. A transfer waiting on purpose says so, rather
-  than looking like one that has died.
-- **Connection recovery.** If an event stream opens without delivering its
-  first snapshot, the UI retries and polls state in the meantime. A partially
-  accepted submission keeps rejected URLs in the form for correction.
-- **A searchable queue.** Type `/` and filter hundreds of jobs by title,
-  source, host or filename; `Esc` clears. Scrolling is not a retrieval
-  strategy.
-- **The destination is changeable while it runs.** Click the path in the
-  header, type another. It is expanded, created and proved writable exactly as
-  a directory named on the command line is, and it says why if it cannot be
-  used. Transfers already running keep the destination they started with —
-  their path was settled when they began, and a part file that moved
-  mid-flight could not be resumed — so the change takes hold from the next
-  queued file onward.
-- **Cancel and retry** a whole job or a single file.
-- **Resume** — partial files are kept and continued with a `Range` request;
-  a cancelled 100 MB download restarts where it stopped.
-- **Password-protected folders** (gofile).
-- **Safe filenames** — remote names are reduced to one portable path
-  component, so nothing can be written outside the download directory.
-- A light **progression layer**: ranks, session totals and a few badges.
+See the [feature guide](docs/usage.md#features) for transfer behavior, queue
+controls, naming, image-board support and recovery details.
 
-### Image boards
+## Screenshots
 
-Boards sharing an API are covered by one adapter each, in the style
-gallery-dl uses:
+<details>
+<summary>Light theme, mobile layout and terminal mode</summary>
 
-| Family | Boards |
-|---|---|
-| Danbooru | aibooru, booruvar |
-| e621 | e621, e926, e6ai |
-| Moebooru | yande.re, konachan, sakugabooru |
-| Gelbooru 0.2 | safebooru, tbib, hypnohub, xbooru |
-| Philomena | derpibooru, ponybooru, furbooru, twibooru |
-| szurubooru | snootbooru, foalcon |
-| Gelbooru 0.1 | the booru.org network, one board per subdomain, scraped — it has no JSON API |
+<p align="center">
+  <img src="docs/screenshot-light.png" alt="HeapLeach queue in light mode." width="560">
+  <img src="docs/screenshot-mobile.png" alt="HeapLeach at phone width with a single-column queue." width="200">
+</p>
 
-Paste a tag search or a post link. A listing with no tags fetches the
-board's latest posts; a bare domain is rejected, since that is far more
-likely a mis-paste than a request for everything.
+<p align="center">
+  <img src="docs/screenshot-cli.png" alt="Command-line downloads with progress bars, speeds and estimated completion times." width="860">
+</p>
 
-Every board above was checked against its live API. Ones that now demand an
-API key (gelbooru.com), sit behind a challenge (danbooru.donmai.us) or have
-switched their API off (realbooru) are deliberately absent rather than
-listed as supported and quietly broken.
+Use `-debug=false` for animated terminal progress. Debug logs are enabled by
+default; pipes and log files always receive plain progress lines.
 
-## Optional helpers
+</details>
 
-YouTube — and every host marked "Needs `make dependencies`" above — is
-fetched by `yt-dlp`, which is asked for **every audio language a video
-carries** rather than only the one it ranks first: a dubbed release puts its
-original track at the top, so the English beside it would otherwise be
-dropped. The languages arrive as separate tracks in one file, labelled, for
-the player to choose between. `ffmpeg` rewraps any finished `.ts` as `.mp4`, joins
-the audio tracks a playlist keeps apart from its video, and lets yt-dlp merge
-separate video and audio tracks. `deno` runs the player
-JavaScript YouTube signs its media URLs with: yt-dlp still extracts without
-a runtime, but warns that doing so is deprecated and that formats may be
-missing. Everything else needs none of them.
+## Documentation
 
-```bash
-make dependencies    # yt-dlp + ffmpeg + deno + local CAPTCHA reader into ./bin
-```
+Start with the [documentation index](docs/README.md). If you are reading this
+inside a release archive, the full [online documentation](https://github.com/JohanLindvall/HeapLeach/tree/main/docs)
+is available on GitHub.
 
-The service looks for these **next to the heapleach binary first**, then on
-PATH — so the copies in `./bin` are picked up without touching the system.
-That is also why deno is passed to the helper by path: yt-dlp finds one on
-PATH by itself, and `./bin` is the place it would not look.
+### Configuration
 
-Keep2Share and FileBoom free downloads read CAPTCHAs inside the Go process,
-using the [ddddocr](https://github.com/sml2h3/ddddocr) beta recognition model
-and ONNX Runtime's native CPU library. Recognition happens locally, without
-Python, a helper process, an account, API key or paid solver. Release archives
-bundle the model, runtime and license notices in `ocr/` beside the executable.
-The Docker image includes these files and their system libraries; it makes no
-downloads to set up OCR when it starts.
+[Flags and environment variables](docs/configuration.md) cover download
+locations, concurrency, bandwidth, queue state and proxy settings. Flags take
+precedence over environment variables.
 
-For a source build, `make ocr-assets` installs the same pinned, checksum-verified
-files into `bin/ocr`; `make dependencies` includes this step. `make captcha-helper`
-is retained as an alias. `HEAPLEACH_OCR_DIR` can name another asset directory
-and is set by the development commands. See
-[helpers/captcha/README.md](helpers/captcha/README.md) for packaging details.
-At most two sessions read images at once, with two inference threads each and
-spinning disabled. Models are reused and released after five idle minutes.
-Cancellation terminates native inference; waiting for a session is cancelable.
+### Optional helpers
 
-The free flow tries at most three CAPTCHA images, and at most three readings
-of each, ranked by the reader's confidence. It shows the host's waiting
-time, and allows one file and one connection at a time per service, shared
-across its aliases. Unreadable challenges fail with a retryable error; OCR is
-not always correct. A download link is bound to the address that first uses
-it, so when a route's address changes partway through a file, the link is
-replaced and the file resumes from what it has: through another proxy, or
-from the direct address with a new link. A file that has started downloading
-keeps its place in the queue when a route fails it, so it gets the next
-working route before files that have not started. With proxies enabled (the default), the one-file limit
-applies to each proxy address,
-allowing several free downloads at once without a subscription, up to
-`-concurrency` across both services. Each address may carry one K2S transfer
-and one FileBoom transfer simultaneously. The hosts' speed limits and
-cooldowns still apply per address and service. A proxy port that has never
-been tried counts as free whatever the other ports on its address are
-doing, since gateway ports often leave through addresses of their own;
-once tried, it shares its address's limits. Two downloads never leave through
-the same public address: each route is asked which address it leaves by
-before its first CAPTCHA, through an IP-echo service, and a route whose exit
-another download holds, or the host is holding back, is passed over. The same
-question shows whether the proxy works at all: one that answers with anything
-but an address is set aside before it costs a CAPTCHA. If the echo services
-also fail over the normal connection, downloads proceed with an unknown exit
-until those services recover. The shared Proxytron prober accepts plain-text
-and JSON IP answers while retaining the route's client and browser identity.
-Canceling a probe does not penalize the route. Each route presents a
-browser of its own, drawn from over thirty real desktop User-Agents, and an
-address the host refuses outright is left alone for an hour. When routes would otherwise
-go unused, a slow file also reads through extra routes, up to the streams
-setting, each with a free download and a speed cap of its own. That happens
-only while no other file of the service is waiting to start, so it speeds up
-the end of a queue without slowing the rest. A file held
-back by the wait between free downloads goes back to the queue as waiting,
-with the time left, and its download slot goes to other files meanwhile.
-Waiting is cancelable and bounded to two hours per attempt; retrying within
-the same process preserves an accepted ticket and reuses unexpired download
-links.
+[Media helpers, local OCR and proxies](docs/helpers.md) explains which
+workflows need extra tools, how to install them, and their platform limits.
+The Docker image includes them.
 
-Open **Settings** in the UI to change files downloaded at once, streams per
-file, and the speed limit. A job's gauge button sets **limits for that job**
-beneath those: how many of its files download at once, how many streams each
-may use, and how fast it may go. Files set to 0 holds the job's new downloads
-while those running finish. These limits are kept across restarts. The same panel enables or disables **download proxies**
-and edits proxy endpoints and discovery feeds without restarting HeapLeach.
-These settings apply to the current session; flags and environment variables
-set the startup defaults. Active transfers keep their assigned route. When
-switching routing modes, a service's existing transfers finish before new
-ones use the new mode, preserving the per-address limit and download tickets.
+### HTTP API
 
-The proxy list shows the selection score, measured average and current
-throughput, recent success rate, request count, active transfers, cooldowns,
-and last successful request. Choose Keep2Share, FileBoom, EMLOAD, MEGA or **WAF recovery**
-to view the corresponding scores. The WAF view also shows challenge success
-separately from ordinary request success. Search, status filters and sorting work across
-the entire inventory, with 50 rows per page. Scores are estimated useful
-bytes per second using the selector's mean success probability; actual
-selection also explores untried routes. The list refreshes every five seconds
-while open. Discovery status is shown with each feed.
+Use the [HTTP API reference](docs/api.md) to submit downloads, change settings
+or consume the event stream.
 
-Free proxy routes are enabled at startup. Disable them with `-proxies=false`,
-`HEAPLEACH_PROXIES=0`, or the Settings switch. The default pool combines the
-normal outbound connection with
-[Proxifly's free proxy feed](https://github.com/proxifly/free-proxy-list).
-HTTP, HTTPS and SOCKS5 endpoints are supported; SOCKS5 resolves destination
-names through the proxy. Plain `host:port` entries mean HTTP. Set
-`HEAPLEACH_PROXY_ENDPOINTS` to a comma-separated list of explicit endpoints,
-including `direct` if the normal connection should participate, and
-`HEAPLEACH_PROXY_FEEDS` to plain-text or Proxifly JSON feed URLs. An explicitly
-empty feed setting disables discovery; an empty endpoint setting excludes
-the normal connection. Explicit proxies take precedence over `NO_PROXY`.
+### Network access and trust
 
-The routes can be held to one protocol: **SOCKS only** or **HTTP only**
-(HTTP and HTTPS proxies), for every service at once or for Keep2Share,
-FileBoom, EMLOAD, MEGA or WAF recovery alone, under **Proxy protocol** in Settings or with
-`HEAPLEACH_PROXY_TYPE` and `HEAPLEACH_PROXY_TYPES`. Either one leaves the
-normal connection out, and a service with no route of its protocol waits
-for one rather than using another. Each service's list then shows only the
-routes it may use. Choices made in Settings are kept across restarts, until
-the configured value they replaced is changed.
+HeapLeach is a single-user service without authentication. Anyone who can reach
+its API can inspect the queue, submit downloads and change the destination.
+Use a loopback address locally; remote access needs an authenticated HTTPS
+reverse proxy and restricted access to the backend port.
+[Read the network guide](docs/usage.md#network-access-and-trust).
 
-Each transfer attempt keeps its route through the CAPTCHA, ticket, redirects
-and file requests. Keep2Share and FileBoom API calls and CAPTCHA image
-requests, EMLOAD share-page requests and MEGA link requests have a 20-second timeout. A network timeout penalises and cools the
-route before another is tried. Status notes show the connection attempt
-number on retries, separately from the CAPTCHA image count.
-A refused or broken route returns the file to the queue to try another;
-other hosts continue downloading while routes are busy or cooling down.
-Keep2Share and FileBoom require the bundled OCR data. A file the site keeps
-for premium users fails at once, saying so, before any CAPTCHA is spent or
-any route is set aside for it.
+### Architecture
 
-MEGA counts a transfer quota per address. Its files use the normal
-connection, with the usual files at once and streams, until mega says that
-quota is used up: it names the time left when a link is asked for, or
-refuses a transfer with 509. The files then go on through MEGA's proxy
-routes, one file to an address. A route whose own quota runs out rests until
-it is back, and its file moves on to another at no cost to its retries. With
-proxies off, the files wait in the queue for the quota instead.
+<a id="what-happens-to-a-link"></a>
+<a id="what-may-depend-on-what"></a>
 
-Every host using HeapLeach's HTTP client can recover through proxies after
-a Cloudflare WAF challenge, including unregistered pages, direct files and
-Doodstream/Playmogo. Ordinary requests use the normal connection first.
-Challenges during extraction retry the source operation; challenges during
-downloads return the file to the queue. A route change re-reads the source
-to obtain fresh signed links and keeps the resolver, cookies and media on
-the chosen route. Attempts use the configured proxy retry budget, and
-waiting for an extraction route is bounded by the request timeout.
-
-Doodstream also switches to this proxy pool after temporary network/HTTP
-failures or repeated `RELOAD` replies from its token endpoint. It tries the
-normal connection first. Each retry refreshes the player and token together
-on one reserved route, using the same random draw for unmeasured candidates
-as Keep2Share. Source discovery and file downloads both skip dead or dropped
-proxies without spending the file's retry budget, including timeouts waiting
-for a proxy connection, and proxies that answer but cannot carry the request:
-ones that want credentials, refuse to open a tunnel, speak plain HTTP where
-TLS was expected, or present a certificate that does not verify. Response-header timeouts also penalise the proxy and
-retry another route, within the configured retry budget. User cancellation
-does not penalise a route. An address the host refuses the player to (a bare
-"removed or temporarily unavailable" sentence where the player should be,
-which other addresses are not shown) is skipped the same way, and the file
-tries another. Missing videos and parser errors remain final.
-Progress messages show the player/token stage and connection attempt in the
-browser and terminal, including while the source is still being resolved.
-
-WAF refusals affect only the WAF success score and cooldown. They do not
-reduce ordinary service scores, erase speed measurements or mark a proxy
-broken. WAF selection still uses ordinary reliability and measured transfer
-speed, excluding user-throttled samples and free-host caps when estimating
-unrestricted capacity. Keep2Share, FileBoom, EMLOAD and MEGA retain their per-service
-address limits even when WAF recovery is needed.
-
-This tries other addresses; it does not solve interactive challenges.
-With proxies disabled, a challenge remains an error. External downloaders
-such as yt-dlp manage their own HTTP requests and are outside this recovery
-path.
-
-The pool adapts [amzscrape's proxy logic](https://github.com/JohanLindvall/amzscrape)
-and stores inventory, source memberships, request outcomes, measured **bytes
-per second**, and cooldowns in a private bbolt database. Faster, reliable
-routes score higher; bodies under 64 KiB do not train bandwidth, so a quick
-CAPTCHA response cannot stand in for a fast file transfer. Recent measurements
-carry more weight. Refusals cool only that service; connection
-failures cool the endpoint across services. HTTPS proxies may use self-signed
-certificates on the connection to the proxy. Destination certificates are
-still verified inside the tunnel. An explicit proxy never silently falls
-back to a direct connection.
-
-The scheduler maximises **expected useful bytes per second** within the live
-file-concurrency setting and each service's one-file-per-address rule:
-
-1. For each free worker, score available routes for the next file's remaining
-   bytes `B`: `p × B / (setup + B / speed + (1 − p) × recovery)`.
-   `p` is sampled from recent success/failure evidence, `speed` is measured
-   throughput, and `setup` includes CAPTCHA and ticket waits. Unknown setup
-   starts at 30 seconds; unknown speed uses the pool's learned average.
-   A healthy preferred route can reuse the file's existing ticket. The UI
-   shows the deterministic mean score for a 32 MiB transfer; an actual
-   dispatch uses that file's remaining size.
-2. Update speed from useful-byte windows every five seconds once at least
-   64 KiB has arrived. Resumed bytes are excluded. Pause and speed-limit
-   periods do not train throughput or setup estimates. These live samples
-   update both route selection and the proxy list before the file finishes,
-   and the background task saves them to BoltDB.
-3. Give unmeasured routes one shared exploration opportunity, choosing its
-   candidate uniformly at random from the available unmeasured endpoints.
-   Busy and cooling addresses are excluded before the draw; selection and
-   reservation are atomic. While measured routes are free, allow at most
-   one active unmeasured transfer and space exploration starts by 30 seconds.
-   If no measured route is available, use idle workers to discover capacity
-   instead of leaving them unused.
-4. Reassess slow transfers after 20 seconds of samples. A proven alternative
-   must predict at least 25% higher useful throughput, save at least 15 seconds
-   after setup and recovery costs, and win two checks ten seconds apart.
-   Switch only after the server has confirmed range support and at least
-   4 MiB remains. Reserve the new address first, stop and flush the old
-   attempt, then obtain a ticket on the new route and resume the same file.
-   An unknown route never displaces a working transfer just for exploration.
-
-This is an adaptive estimate: public proxy capacity changes and cannot be
-known in advance. Setup costs, confirmation windows and ticket affinity keep
-small, noisy speed changes from spending time on repeated route switches.
-
-Saved inventory is available immediately after restart. Feed requests,
-including GitHub, are normally 24 hours apart. An earlier top-up requires
-runnable K2S, FileBoom, EMLOAD, MEGA or WAF recovery work and too few distinct usable addresses for its current concurrency, with
-at least five minutes between attempts. New active transfers count while
-their first speed sample is pending; measured and standby routes must have
-succeeded and score at least as well as an untried route's learned prior.
-Throughput, reliability and cooldowns therefore matter,
-not the raw list size. An idle or paused queue cannot trigger an early reload.
-The refresh schedule survives restarts. A failed feed
-keeps its last good list and refreshes preserve health. Entries absent from
-feeds are retired after 30 days without success; current feed entries and
-explicit endpoints are retained. Public proxy availability and bandwidth vary,
-so extra parallel downloads depend on finding usable routes. The database
-allows one HeapLeach process at a time; use a separate `-proxy-db` for a second
-instance, and mount its directory on a persistent volume in containers.
-
-The YouTube download itself runs through `yt-download.sh` rather than inline
-Go, so the recipe is in one readable place. A copy of that script placed
-beside the binary overrides the built-in one, so it can be adjusted without
-rebuilding. yt-dlp's pieces (each stream, the merge in progress) are kept in a
-hidden `.heapleach` directory beside the destination, so a media library
-watching that folder sees only the finished file. The directory is removed
-once the download completes, and kept after a failure so the next attempt can
-resume.
-
-Metadata probes have a two-minute deadline and an 8 MiB output limit; helper
-diagnostics are bounded too. YouTube playlist enumeration uses
-`HEAPLEACH_MAX_FILES` at the helper, and a truncated result is labelled partial.
-On Unix, cancellation kills the helper's process group, including children.
-The bundled download script needs a POSIX shell; it is not a native Windows
-helper launcher. External transfers use yt-dlp's own retries and transfer
-controls, so the native speed ceiling, mid-transfer pause and stall watchdog
-do not apply to them.
-
-## Configuration
-
-Every setting has an environment variable; the common ones also have a flag,
-and a flag beats the environment. Sizes and rates take a unit — `5MB`,
-`1.5GB`, `10GiB` — or a plain byte count.
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HEAPLEACH_ADDR` | `:8080` | Listen address. Flag: `-addr`. |
-| `HEAPLEACH_DIR` | your Downloads folder | Where files are written. Defaults to the platform's own download folder — `~/Downloads` on macOS and Windows, and on Linux whatever the desktop's XDG user-dirs file says, which is where a relocated or localised folder is recorded. The container image uses `/downloads` instead, having no home directory to speak of. Flag: `-dir`, or the positional argument. |
-| `HEAPLEACH_CONCURRENCY` | `4` | Parallel transfers, from 1 to `HEAPLEACH_MAX_CONCURRENCY`. Flag: `-concurrency`. Also settable live in Settings, which is kept across restarts until this value is changed. |
-| `HEAPLEACH_MAX_CONCURRENCY` | `256` | Ceiling on parallel transfers, for the startup setting and the Settings slider alike. Flag: `-max-concurrency`. |
-| `HEAPLEACH_CAPTCHA_CONCURRENCY` | `4` | Keep2Share and FileBoom CAPTCHAs read at once, from 1 to 64. Each loads its own copy of the 54 MB model and runs two threads. Flag: `-captcha-concurrency`. |
-| `HEAPLEACH_PROXIES` | on | Enable proxy routes for Keep2Share, FileBoom, EMLOAD, MEGA once this address's quota is used up, and WAF challenge recovery on any host. Set to `0` or use `-proxies=false` to disable. Also settable live in Settings. |
-| `HEAPLEACH_PROXY_DB` | `proxies.db` beside `HEAPLEACH_STATE`, else `~/.local/state/heapleach/proxies.db` | Persistent bbolt inventory and health; honours `XDG_STATE_HOME` on Linux. Independent of queue persistence, including in CLI mode: with no queue kept, the default directory is used. Flag: `-proxy-db`. |
-| `HEAPLEACH_PROXY_ENDPOINTS` | `direct` | Comma- or whitespace-separated HTTP, HTTPS or SOCKS5 proxy URLs; `direct` means the normal outbound connection, including environment proxy settings. Empty excludes that connection. Also editable live in Settings. |
-| `HEAPLEACH_PROXY_FEEDS` | Proxifly's global text feed | Comma- or whitespace-separated feed URLs. Empty disables discovery. Also editable live in Settings. |
-| `HEAPLEACH_PROXY_TYPE` | `any` | The protocol every proxy service draws its routes from: `any`, `socks` or `http` (HTTP and HTTPS proxies). `socks` or `http` leaves the normal connection out. Flag: `-proxy-type`. Also settable live in Settings, which is kept across restarts until this value is changed. |
-| `HEAPLEACH_PROXY_TYPES` | none | A protocol per service, overriding `HEAPLEACH_PROXY_TYPE` for it: `keep2share=socks,fileboom=socks,emload=http,mega=any,cloudflare=any`, where `cloudflare` is WAF recovery on any host. Flag: `-proxy-types`. Also settable live in Settings, kept as above. |
-| `HEAPLEACH_PROXY_RETRIES` | `20` | Route changes after failures that make no disk progress. A proxy that cannot be reached, drops the connection or has its address refused does not count. A host's free-download cooldown does not spend this budget. |
-| `HEAPLEACH_MAX_RETRIES` | `3` | Retries per request and per native transfer, counting attempts in a row that moved nothing: an attempt that downloaded anything before failing resumes after 30s and starts the count over. Flag: `-retries`. Busy responses and rate limits have separate bounded patience; a resolvable busy storage link can be refreshed repeatedly. |
-| `HEAPLEACH_STREAMS` | `8` | Connections one slow file may be split across (1–16). Flag: `-streams`. Also settable live in the UI, which is kept across restarts until this value is changed. |
-| `HEAPLEACH_SLOW_SPEED` | `2MB` | Rate per second below which extra connections are opened. Flag: `-slow-speed`. |
-| `HEAPLEACH_MAX_SPEED` | `0` | Shared ceiling on the native download rate per second; `0` is unlimited. Does not throttle external helpers. Flag: `-max-speed`. Also settable live in the UI. |
-| `HEAPLEACH_STALL_TIMEOUT` | `90s` | How long a transfer may make no progress before the attempt is retried. Flag: `-stall-timeout`. |
-| `HEAPLEACH_MIN_FREE` | `10GiB` | Room that must be left at the destination before another transfer starts. Below it the queue waits rather than filling the disk; `0` turns the check off. Flag: `-min-free`. |
-| `HEAPLEACH_STATE` | `~/.local/state/heapleach/queue.json.zst` (`$XDG_STATE_HOME` when set) | Where the queue is written so a restart can pick it up, as zstd-compressed JSON (`zstdcat` reads it). A plain-JSON file from an earlier version is still read, and a `queue.json` beside the default path is picked up once and retired. Unfinished jobs come back held, and are re-read when retried or when the queue is resumed; nothing is fetched until then. Empty disables it. A run given URLs on the command line never writes one. |
-| `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
-| `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
-| `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |
-| `HEAPLEACH_EXTRA_HOSTS` | unset | Extra hosts for a platform family, as `family:host,host;family:host` — for example `peertube:tube.example;kvs:tube2.example`. Every family here is software many sites run, so a list compiled into a binary can only ever trail them; this adds installs without a rebuild. Families: `kvs`, `peertube`, `chevereto`, `foolfuuka`, `fediverse`, `mediawiki`, `bandzoogle`. |
-| `HEAPLEACH_KVS_HOSTS` | unset | The original KVS-only form of the above, still honoured. |
-| `HEAPLEACH_IA_FORMATS` | unset | Archive.org format labels to keep, overriding the per-mediatype rendition policy — the escape for when an item's interesting rendition is one the policy passes over. |
-| `HEAPLEACH_UTLS` | unset | `HEAPLEACH_UTLS=0` turns the browser-shaped TLS handshake off and uses Go's standard one. A few hosts (wiki.gg) challenge the default fingerprint; a few others require it. |
-| `HEAPLEACH_DEBUG` | `1` | Debug logging. Set `0`, `false`, `no` or `off` to disable it. Flag: `-debug=false`. |
-| `HEAPLEACH_MAX_SOURCES` | `500` | How many of a page's links are followed: the albums of an index search, the links of a harvested thread. Flag: `-max-sources`. |
-| `HEAPLEACH_MAX_FILES` | `20000` | How many files one submitted URL may resolve to. A listing past it stops at a whole album and says so beside the job's name — never in its folder, so raising the cap and adding the URL again files the rest beside what is already downloaded. Flag: `-max-files`. |
-| `HEAPLEACH_PPROF` | unset | Serve Go's runtime profiles at this address, on a listener of their own — `go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30` then shows where the CPU goes. Flag: `-pprof`. Off unless set. Name a loopback address: the profiles describe the process from the inside, and a non-loopback one is logged as a warning. In a container, the container's own 127.0.0.1 is reached with `docker exec`. |
-| `HEAPLEACH_RESUME` | unset | Resume the jobs a previous run left unfinished at startup, instead of holding them for Resume or a retry. Flag: `-resume`. For a service that is redeployed without anyone watching — held would mean stopped until noticed. |
-| `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. A bare run does this anyway, so this is mostly how to say **no**: `HEAPLEACH_OPEN=0` (also `false`, `no`, `off`) suppresses it, for a machine with no desktop or a session over SSH. |
-
-## HTTP API
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/health` | Liveness. |
-| `GET` | `/api/state` | Current snapshot. |
-| `GET` | `/api/events` | Complete initial snapshot, then item patches; missed updates are replaced with a complete snapshot. |
-| `GET` | `/api/logs` | Recent service logs. Pass the returned `session` and `next` as `session` and `after` for new entries; `reset` replaces prior history after a restart or retention gap. |
-| `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
-| `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
-| `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |
-| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `fileboom`, `emload`, `mega`, or `cloudflare`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
-| `POST` | `/api/clear` | Forget finished jobs. |
-| `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
-| `POST` | `/api/jobs/{id}/limits` | `{"fileLimit": n, "streamLimit": n, "speedLimit": n}`, each optional: replaces the job's own limits beneath the queue's; a field left out has none. `fileLimit` 0 holds its new downloads. |
-| `DELETE` | `/api/jobs/{id}` | Cancel and forget. |
-| `POST` | `/api/jobs/{id}/items/{itemId}/cancel` · `/retry` | One file. |
-
-Settings updates are validated together: an invalid field leaves the
-current settings unchanged, including when opening the proxy database fails.
-Proxy inventory is paged separately from queue snapshots; endpoint passwords
-are redacted there and only included when explicitly fetching settings for
-editing. In an SSE job marked `patch`, merge items by
-ID and retain unmentioned items; otherwise replace its item list. Every
-frame contains the complete job list and current aggregates.
-
-Oversized JSON requests return `413`; malformed JSON returns `400`. Unknown
-API routes return `404`, and a known route with an unsupported method returns
-`405`. Ordinary HTTP requests have 30-second read/write deadlines. Event
-streams use their own per-write deadline and remain open while idle.
-
-```bash
-curl -X POST localhost:8080/api/downloads \
-  -H 'Content-Type: application/json' \
-  -d '{"urls":"https://pixeldrain.com/l/<id>"}'
-```
-
-## Architecture
-
-Two diagrams, for the two questions worth answering: what happens to a link,
-and what is allowed to depend on what.
-
-### What happens to a link
-
-The middle of this is the part worth knowing. An extractor downloads nothing —
-it returns one `File` per download, and the **shape of that `File` is what
-decides everything downstream**. A plain `URL` reaches the segmented engine. A
-`Resolve` closure instead of a URL means the host signs its links and they
-expire, so one is minted per attempt rather than while the item sat in a queue.
-`Segments` means the media arrives as an ordered list of parts with no length
-to range over. `External` means reaching it needs more than HTTP. `Cipher`
-means the bytes arrive encrypted and are decrypted on the way in.
-
-Adding a host is choosing among those shapes; nothing below the extractor has
-to be told which host it is talking to.
-
-```mermaid
-%%{init: {"flowchart": {"wrappingWidth": 420}}}%%
-flowchart TD
-    paste(["a link — pasted into the UI, or given on the command line"])
-
-    subgraph resolve["extractor — what is behind it"]
-        claim{"a registered host claims it?"}
-        host["that host's extractor"]
-        direct["Direct — the catch-all, after sniffing for a player, a manifest or a directory index"]
-        res["Result: one File per download<br>URL · Resolve · Segments · External · Cipher"]
-        claim -- yes --> host --> res
-        claim -- no --> direct --> res
-    end
-
-    queue[("the queue — an item starts once a worker is free, the queue is unpaused, and the host's own pace allows")]
-
-    subgraph move["download — how the bytes arrive"]
-        pick{"what does the File carry?"}
-        multi["segmented — the remaining span bisected, one connection per range"]
-        seq["sequential — a single stream"]
-        playlist["playlist — parts fetched several at a time, appended in order"]
-        ytdlp["yt-dlp, through the helper script"]
-        bucket["one shared token bucket — the rate ceiling, and where a pause parks"]
-        part[("a .part file keyed on the job's own URL, with a sidecar recording each range · ciphertext decrypted on the way in")]
-        pick -- "URL, length known,<br>server honours ranges" --> multi --> bucket
-        pick -- "URL, no length" --> seq --> bucket
-        pick -- Segments --> playlist --> bucket
-        pick -- External --> ytdlp
-        bucket --> part
-    end
-
-    fin["renamed into place · any .ts rewrapped to .mp4"]
-
-    paste --> claim
-    res --> queue --> pick
-    part --> fin
-    ytdlp --> fin
-```
-
-Two details in there are load-bearing rather than incidental. The `.part` file
-is named from a hash of **the job's own source URL** rather than from anything
-per-run or per-item, which is what lets an interrupted transfer be recognised
-by the next run instead of restarting from zero — a signed media link would
-change every time and resume nothing. And the token bucket is genuinely one
-object shared by every connection, which is why pausing costs nothing and why
-the code that opens extra connections has to ask whether the ceiling, rather
-than the host, is what is holding a transfer back.
-
-### What may depend on what
-
-Arrows are imports — the layering rather than every edge, since a package may
-reach anything below it. What matters is that nothing points back up. `webui`
-sits outside the stack altogether: it carries the compiled frontend and no
-logic, so only the entry point touches it.
-
-```mermaid
-flowchart TD
-    main["cmd/heapleach<br>flags, signals, and which of the two modes to run"]
-    main --> server
-    main --> cli
-    main --> webui
-
-    server["server<br>JSON API · SSE stream · serves the embedded UI"]
-    cli["cli<br>the animated terminal display"]
-    webui["webui<br>the compiled frontend (go:embed)"]
-
-    server --> download
-    cli --> download
-    download["download<br>worker pool · resumable transfers · progress"]
-    download --> extractor
-    download --> proxy
-    proxy["proxy<br>egress leases · throughput scoring · Bolt inventory"]
-    proxy --> httpx
-    extractor["extractor<br>one file per host, and a fallback that sniffs"]
-    extractor --> httpx
-    httpx["httpx<br>browser-shaped client · redirects · retry and backoff"]
-    httpx --> base
-
-    download --> tools
-    extractor --> tools
-    tools["tools<br>locates yt-dlp, ffmpeg and deno"]
-    base["config · util<br>every tunable, and the dependency-free helpers"]
-```
-
-Both halves of the program drive the same `download.Manager`: the server
-subscribes to it and streams whole state snapshots to the browser, and the
-headless run polls it on a ticker of its own. Nothing about a transfer knows
-which of the two is watching.
+The [architecture guide](docs/architecture.md) follows a URL from extraction
+to disk and explains the package dependency rules.
 
 ## Development
 
-The [2026-10-03 service audit](docs/audit-2026-10-03.md) records the hardening
-changes, validation results and remaining operating limits.
+To try a source build on Linux, install Git, GNU Make and Docker, then:
 
 ```bash
-make run          # build the standalone binary, serve locally and open the browser
-make run-image    # build and run the container image
-make dev          # Go API on :8080 + Vite dev server on :5173 (hot reload)
-make dev-backend  # API only
-make test         # Go unit tests, with the race detector
-make check        # formatting, vet, host inventory, Go, UI, OCR and release tests
-make test-live    # include local, gitignored live extractor tests (when present)
-make frontend     # build the UI into the Go embed directory
-make lock         # regenerate frontend/package-lock.json
-make dist         # package this host into ./dist (native cgo toolchain required)
-make tag V=v0.1.0 # manually choose a release version (main pushes bump the patch)
-make help         # every target
+git clone https://github.com/JohanLindvall/HeapLeach.git
+cd HeapLeach
+make build
+./bin/heapleach
 ```
 
-`make build`, `make run` and `make image` build through Docker. Frontend
-builds and tests use local npm when available and Docker otherwise, with
-locked dependencies installed through `npm ci`. Go tests, vet, host-list
-generation and release cross-compilation need local Go; Go downloads the
-toolchain pinned in `backend/go.mod` automatically. `make dev` needs both
-Go and Node locally.
+Docker produces a Linux executable. On macOS or Windows, use the
+[prebuilt release](https://github.com/JohanLindvall/HeapLeach/releases/latest),
+run the Docker image, or follow the [native development setup](CONTRIBUTING.md#development-setup).
 
-The checked-in tests use synthetic fixtures and local HTTP servers.
-Live extractor tests belong in gitignored `*live_test.go` files behind the
-`live` build tag and take their source URLs and passwords from environment
-variables. A fresh clone has no live-site fixtures.
+For hot reload, install the Go toolchain and Node.js 24, run `npm ci` in
+`frontend/`, then `make dev` from the root. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the complete setup and checks, and
+[the development reference](docs/development.md) for build targets and releases.
 
-### Layout
+<a id="layout"></a>
+<a id="adding-a-host"></a>
+<a id="releases"></a>
 
-```
-backend/
-  cmd/heapleach/        entry point
-  internal/config/  settings and every shared tunable constant
-  internal/util/    shared helpers (no dependencies)
-  internal/httpx/   HTTP client: browser headers, redirects, retry/backoff
-  internal/tools/   locates the optional yt-dlp, ffmpeg and deno
-  internal/captcha/ in-process OCR, image preprocessing and ranked decoding
-  internal/extractor/  one file per host + a direct-link fallback
-  internal/download/   worker pool, resumable transfers, progress
-  internal/server/     JSON API, SSE, embedded-asset serving
-  internal/cli/        the headless run's terminal display
-  internal/webui/dist/ the compiled frontend (go:embed)
-frontend/           React + TypeScript (strict), built by Vite
-```
+Jump to [source layout](docs/development.md#layout),
+[adding a host](docs/development.md#adding-a-host) or
+[release packaging](docs/development.md#releases).
 
-### Adding a host
+## Contributing
 
-Implement `extractor.Extractor` (`Name`, `Match`, `Extract`) and register it
-in `NewRegistry`. Embed a `hostSet` naming the domains it claims: that one
-declaration supplies `Match` and the inventory entry above both, so the two
-cannot disagree, and a `Match` of your own is only for what a host list
-cannot say. Return a `File` per download; set `Resolve` instead of `URL` when
-the host issues links that expire.
+Bug reports, documentation improvements, UI fixes and new extractors are
+welcome. You do not need to know the whole codebase to help.
 
-### Releases
+- [Read the contribution guide](CONTRIBUTING.md) for setup and suggested starting points.
+- [Report a bug or request a feature](https://github.com/JohanLindvall/HeapLeach/issues/new/choose).
+- [Get help](SUPPORT.md) or [report a vulnerability privately](SECURITY.md).
+- Follow the [code of conduct](CODE_OF_CONDUCT.md).
 
-Every push to `main` and pull request runs the tests, `go vet` and a `gofmt` check, with
-the UI compiled first so the binary is built against the real embedded
-frontend rather than the placeholder. Native builds and real-model OCR tests run on all five release platforms
-alongside the main checks; all must pass before a release starts.
+If HeapLeach is useful to you, **star the repository** to help others find it.
+Sharing a clear bug report or a small improvement helps the project too.
 
-After a push to `main` passes CI, it automatically tags the tested commit
-with the next patch version and publishes the archives and container images.
-Versions follow the highest stable `vX.Y.Z` tag. Publishing is queued, and a
-rerun reuses its tag or skips a commit already included in a newer release.
-`make tag V=vX.Y.Z` remains available for choosing a version explicitly;
-pushing that tag uses the same publisher.
+<details>
+<summary>Star history</summary>
 
-Automatic releases reuse the caller's tests after verifying the checked-out
-commit; standalone tags run the Go suite themselves. A separate release cache
-retains compilation output for all five targets between commits. Container
-images use the published Linux binaries after checking their checksums and
-version, so the archives and images carry the same executable and embedded UI.
+<a id="star-history"></a>
 
-Native Linux, macOS and Windows runners build and test these archives with cgo:
+<a href="https://www.star-history.com/#johanlindvall/heapleach&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=johanlindvall/heapleach&type=Date&theme=dark">
+    <img alt="HeapLeach's GitHub stars over time" src="https://api.star-history.com/svg?repos=johanlindvall/heapleach&type=Date">
+  </picture>
+</a>
 
-| Archive | For |
-|---|---|
-| `heapleach_<tag>_linux_amd64.tar.gz` | Linux, x86-64 |
-| `heapleach_<tag>_linux_arm64.tar.gz` | Linux, arm64 |
-| `heapleach_<tag>_darwin_amd64.tar.gz` | macOS, Intel |
-| `heapleach_<tag>_darwin_arm64.tar.gz` | macOS, Apple silicon |
-| `heapleach_<tag>_windows_amd64.zip` | Windows, x86-64 |
-
-Each carries the binary, README, licence and the complete `ocr/` directory.
-`SHA256SUMS` covers the set. `make dist` builds the matching archive for the
-current host. Cross-compiling requires `RELEASE_TARGETS` and a suitable `CC`;
-CI uses native runners and tests OCR from the extracted archive on every target.
+</details>
 
 ## About the name
+
+<details>
+<summary>Why “HeapLeach”?</summary>
 
 Heap leaching is a mining method: crushed ore is piled
 into a heap and irrigated from above, and the solution percolates down
@@ -1171,27 +422,16 @@ through whatever the pages are made of — players, listings, signed
 redirects, encrypted payloads — and what is worth keeping drains out into a
 folder.
 
+</details>
+
 ## Notes
 
-- The queue is written to `HEAPLEACH_STATE` every ten minutes when it has
-  changed, and on every clean shutdown, so a restart finds its unfinished
-  jobs held and re-reads them on retry; finished files stay put. A crash
-  can lose queue changes from the last ten minutes: the part files, not
-  the queue file, are what resume a transfer. A `.part` file carries a `.part.state` sidecar recording
-  per-connection progress, so an interrupted multi-connection transfer
-  resumes rather than starting over. Both can be deleted safely.
-- These sites change their plumbing without warning. `make test-live` is the
-  fastest way to find out which extractor broke when the ignored live test
-  file and its environment-provided sources are present. A fresh clone has
-  fixture tests only; a green suite alone does not verify live host support.
-- Be a good citizen: the defaults are deliberately modest, and the client
-  honours `Retry-After` and backs off on 429s.
+The [operating notes](docs/usage.md#operating-notes) explain queue checkpoints,
+partial files and live-site tests. Use modest concurrency and respect host
+limits.
 
-## Star history
+## License
 
-<a href="https://www.star-history.com/#johanlindvall/heapleach&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=johanlindvall/heapleach&type=Date&theme=dark">
-    <img alt="HeapLeach's GitHub stars over time" src="https://api.star-history.com/svg?repos=johanlindvall/heapleach&type=Date">
-  </picture>
-</a>
+HeapLeach is [MIT licensed](LICENSE). Bundled OCR assets and external media
+helpers retain their own licenses; see the notices in `ocr/` and the
+[OCR packaging guide](helpers/captcha/README.md).

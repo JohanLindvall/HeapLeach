@@ -16,6 +16,9 @@ The supported-site table in README.md is **generated** from the registry by
 `make hosts`, between two markers, and `make hosts-check` fails CI when the
 file and the code disagree — so edit the extractor, never that table. Adding a
 host is one line in `NewRegistry` plus `make hosts` in the same commit.
+The inventory is collapsed on the front page; its markers stay in README.md.
+The explanatory URL-format table lives in `docs/supported-links.md` and is
+maintained separately because it documents behavior, not registry membership.
 `hosts-check` regenerates into a copy and compares it with README.md as it
 stands, so it judges the working tree whatever else is in flight there; in CI
 the tree is the commit, which is what makes a regeneration that was never
