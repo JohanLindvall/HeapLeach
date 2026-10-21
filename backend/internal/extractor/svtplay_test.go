@@ -115,11 +115,12 @@ func TestSVTCarriesAudioKeptApartAsTracksOfItsOwn(t *testing.T) {
 	mux.HandleFunc("/joined/variant.m3u8", serve(func() string {
 		return "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg0.ts\n#EXTINF:4,\nseg1.ts\n#EXT-X-ENDLIST\n"
 	}))
+	mux.HandleFunc("/graphql", serve(func() string { return `{"data":{"listablesBySlug":[]}}` }))
 	srv = httptest.NewServer(mux)
 	defer srv.Close()
 
 	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	s.api = srv.URL + "/api/"
+	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
 	page, _ := url.Parse("https://www.svtplay.se/video/separate/an-invented-title/")
 	res, err := s.Extract(context.Background(), page, Options{})
 	if err != nil {
@@ -197,6 +198,69 @@ func TestSVTSaysWhyAVideoOffersNoStream(t *testing.T) {
 		_, err := s.Extract(context.Background(), page, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %q", id, err, want)
+		}
+	}
+}
+
+// SVT links a programme's card as /video/<id>/<programme>, the episode it
+// would start playing named by the programme alone, and an episode as
+// /video/<id>/<programme>/<episode>. The first means the programme and
+// expands to every episode; the second is the one episode, and a film's card
+// stays the film.
+func TestSVTProgrammeCardExpandsToItsEpisodes(t *testing.T) {
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/api/")
+		fmt.Fprintf(w, `{"programTitle":"A Programme","episodeTitle":"Episode %s",`+
+			`"videoReferences":[{"format":"hls-ts-full","url":"%s/media.m3u8"}]}`, id, srv.URL)
+	})
+	mux.HandleFunc("/media.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nseg0.ts\n#EXT-X-ENDLIST\n")
+	})
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables map[string]string `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Variables["slug"] {
+		case "a-series":
+			fmt.Fprint(w, `{"data":{"listablesBySlug":[{"__typename":"TvSeries","name":"A Series","associatedContent":[`+
+				`{"name":"Season 1","type":"Season","items":[`+
+				`{"item":{"__typename":"Episode","name":"1. First","videoSvtId":"first1"}},`+
+				`{"item":{"__typename":"Episode","name":"2. Second","videoSvtId":"second2"}},`+
+				`{"item":{"__typename":"Episode","name":"3. Third","videoSvtId":"third3"}}]},`+
+				`{"name":"Trailers","type":"Clips","items":[{"item":{"__typename":"Clip","name":"A Trailer"}}]}]}]}}`)
+		case "a-film":
+			fmt.Fprint(w, `{"data":{"listablesBySlug":[{"__typename":"Single","name":"A Film","associatedContent":[]}]}}`)
+		default:
+			http.Error(w, "unexpected slug", http.StatusBadRequest)
+		}
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
+
+	for path, want := range map[string][]string{
+		"/video/card123/a-series":             {"1. First.ts", "2. Second.ts", "3. Third.ts"},
+		"/video/card123/a-series/3-the-third": {"Episode card123.ts"},
+		"/video/film123/a-film":               {"Episode film123.ts"},
+	} {
+		page, _ := url.Parse("https://www.svtplay.se" + path)
+		res, err := s.Extract(context.Background(), page, Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		var names []string
+		for _, f := range res.Files {
+			names = append(names, f.Name)
+		}
+		if strings.Join(names, "|") != strings.Join(want, "|") {
+			t.Errorf("%s: files = %v, want %v", path, names, want)
+		}
+		if len(want) > 1 && res.Title != "A Series" {
+			t.Errorf("%s: title = %q, want the series' name", path, res.Title)
 		}
 	}
 }

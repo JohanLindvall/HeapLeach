@@ -80,6 +80,15 @@ window has closed or not yet opened, or it is shown in Sweden alone, so
 `restrictions.onlyAvailableInSweden`) and says which. "No usable stream" is
 left for a video offered only in forms this cannot read, and names them.
 
+SVT links an episode as `/video/<id>/<programme>/<episode>`, but a
+programme's card (on its own page and in every recommendation row) as
+`/video/<id>/<programme>`, the episode it would start playing named by the
+programme alone. That shorter link means the programme, so its slug is asked
+of the seasons query and a series expands as its page does. A film answers as
+a `Single` with no seasons and stays the one video, as does any slug the
+query cannot answer. The `<id>` in a page link is not the player API's id
+(`videoSvtId`), so the two cannot be matched to tell a card from an episode.
+
 ## yle
 
 yle reads Areena through the player API's preview

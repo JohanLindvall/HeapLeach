@@ -86,8 +86,20 @@ func (s *SVTPlay) Name() string { return "svtplay" }
 
 // Extract handles a single video (/video/<id>/...) or a series page, which
 // expands to every episode listed on it.
+//
+// SVT links an episode as /video/<id>/<programme>/<episode>, but a
+// programme's own card, on its page and in every list of recommendations, as
+// /video/<id>/<programme>: the episode it would start playing, named by the
+// programme alone. That link means the programme, so a series' slug there
+// expands like its page does. A film is listed with no seasons, and stays
+// the one video.
 func (s *SVTPlay) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	segs := util.PathSegments(u)
+	if len(segs) == 3 && segs[0] == "video" {
+		if title, episodes, err := s.seasons(ctx, segs[2]); err == nil && len(episodes) > 0 {
+			return s.expand(ctx, u, segs[2], title, episodes)
+		}
+	}
 	if len(segs) >= 2 && segs[0] == "video" {
 		file, program, episode, err := s.episode(ctx, segs[1])
 		if errors.Is(err, errSVTNoStream) {
@@ -124,6 +136,13 @@ func (s *SVTPlay) series(ctx context.Context, u *url.URL) (*Result, error) {
 			return nil, err
 		}
 	}
+	return s.expand(ctx, u, slug, title, episodes)
+}
+
+// expand resolves a programme's episodes into one file each, filed by season
+// when the programme has more than one. Without a title, the job is named
+// for the programme as the player API gives it, or failing that its slug.
+func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, episodes []svtEpisodeRef) (*Result, error) {
 	if len(episodes) > svtMaxEpisodes {
 		episodes = episodes[:svtMaxEpisodes]
 	}
