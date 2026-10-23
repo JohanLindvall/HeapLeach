@@ -116,6 +116,26 @@ Cards supply queued titles without opening players. Source and file caps and
 incomplete pagination are reported in the job note; recovery reopens the
 individual video rather than walking the listing.
 
+## noodlemagazine
+
+`/video/<query>` is a search, and `/watch/<id>` is one video. Searches
+start at page zero, preserve filters and path escaping, and follow the
+`more` control's `data-page` through `?p=`. GET renders the same results as
+the site's scripted POST. Only cards inside `id=list_videos` belong to the
+search: once it is exhausted the site serves a "Nothing Found" marker and
+unrelated "Watching now" cards in a container with the same class but no id.
+Those are never results. Repeated pages, failed pagination and source or
+file caps are reported in the job note.
+
+Cards supply queued titles without opening each player. The watch page's
+`window.playlist` JSON supplies MP4 and HLS renditions, ranked by resolution
+with MP4 preferred on a tie; previews and advertising URLs elsewhere in the
+page are not sources. Media URLs are signed, so every transfer attempt
+reopens its own watch page and uses the final page URL as referer. HLS
+segments, keys and separate tracks are refreshed together. The shared
+browser-style HTTP client reads these pages; a plain curl request can meet
+a Cloudflare challenge instead.
+
 ## ok.ru
 
 ok.ru reads the embed page rather than the watch page. Served to a logged-out

@@ -323,7 +323,7 @@ Two conventions worth keeping to when writing one:
 | --- | --- |
 | [hosts/file-hosts.md](hosts/file-hosts.md) | bunkr, gofile, pixeldrain, mega, emload, filejump, filester, suvobox, pixhost, imagepond |
 | [hosts/keep2share.md](hosts/keep2share.md) | keep2share, fileboom, voyeurking, and the CAPTCHA reader (`internal/captcha`) |
-| [hosts/video-hosts.md](hosts/video-hosts.md) | doodstream, streamtape, mixdrop, lulustream, vids.st, sendvid, knuthing, ok.ru, pornone, eporner, yandex, Kernel Video Sharing |
+| [hosts/video-hosts.md](hosts/video-hosts.md) | doodstream, streamtape, mixdrop, lulustream, vids.st, sendvid, knuthing, noodlemagazine, ok.ru, pornone, eporner, yandex, Kernel Video Sharing |
 | [hosts/broadcasters.md](hosts/broadcasters.md) | vimeo, arte, orf, svtplay, yle, drtv, rtbf, francetv, radio-canada, niconico |
 | [hosts/collections.md](hosts/collections.md) | balbums, coomerfans, celeb.st, erome, bandcamp, bandzoogle |
 

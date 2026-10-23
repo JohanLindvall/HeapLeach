@@ -470,6 +470,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewVidsSt(client),
 		NewSendvid(client),
 		NewKnuthing(client),
+		NewNoodleMagazine(client),
 	}
 	// Platform families: one extractor covering every install of a piece of
 	// software, named and matched per install where a list is worth having
