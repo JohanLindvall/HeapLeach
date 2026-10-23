@@ -249,8 +249,8 @@ func (e *RefusedError) Unwrap() error { return e.Err }
 // TransientError marks a resolver's failure that the next attempt may well
 // not meet, though nothing below HTTP saw it fail: a run of CAPTCHAs that
 // could not be read in time, say. Through a proxy route the downloader
-// tries the file again, on the best route free; without one it is an
-// ordinary failure, for a retry by hand.
+// tries the file again on the best route free; without one, resolution
+// retries with backoff up to the normal retry budget.
 type TransientError struct{ Err error }
 
 func (e *TransientError) Error() string { return e.Err.Error() }

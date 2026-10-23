@@ -18,6 +18,11 @@ token, not for a new location. To check whether that has changed, POST
 `{"id": <fileID>}` to `<dlHost>/api/_001_v2` and read `mediafiles`: more than
 one server there would be the first sign that rotation had become possible.
 
+Timeouts reaching the metadata or signing service are temporary resolution
+failures, handled by the downloader's bounded `resolveTarget` retries after
+the HTTP request retries are spent. Keep these errors wrapped with `%w`, so
+dial, TLS and request timeouts retain their types through the resolver.
+
 A server that is *down* rather than missing is the case worth knowing, because
 bunkr's three steps disagree about it: the page carries the file id, `_001_v2`
 answers with a real storage path, and the signing service mints a token — only

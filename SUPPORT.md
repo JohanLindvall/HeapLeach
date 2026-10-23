@@ -22,6 +22,18 @@ Free space at the destination or choose an appropriate `-min-free` value.
 Also check whether the queue is paused or a job's file limit is zero.
 Host cooldowns and proxy waits appear beside the affected file.
 
+## A download link times out
+
+TLS handshake, connection and response-header timeouts are usually temporary.
+HeapLeach retries the request and, if needed, obtaining or refreshing the
+download link, with backoff. The file shows a retry note while waiting.
+`-retries` / `HEAPLEACH_MAX_RETRIES` bounds each retry budget (default `3`);
+Cancel stops the wait immediately. Missing files and permanent refusals still
+fail without these extra retries.
+
+If a file remains **Failed** after the retries, use **Retry** once the service
+has recovered. An outage can outlast the automatic retry budget.
+
 ## The browser did not open, or port 8080 is busy
 
 A launch with no arguments opens a free local port. If the browser does not

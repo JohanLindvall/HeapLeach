@@ -123,7 +123,8 @@ what to do with the item ([download.md](download.md)):
   tries another, outside its retry budget ([proxies.md](proxies.md)).
 - **`TransientError`** is a failure the next attempt may well not meet, such
   as a run of unreadable CAPTCHAs; through a proxy route it is retried on
-  another route.
+  another route. On the normal connection, deferred resolution retries it
+  with backoff up to `MaxRetries`, as it does temporary network failures.
 
 ### Progress notes
 

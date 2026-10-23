@@ -1013,10 +1013,41 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	}
 
 	ctx = extractor.WithResolveNote(ctx, func(text string) { m.note(it, text) })
-	target, err := resolve(ctx)
-	m.note(it, "")
-	if err != nil {
-		return err
+	defer m.note(it, "")
+	var target *extractor.Target
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		m.note(it, "")
+		var err error
+		target, err = resolve(ctx)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err == nil {
+			break
+		}
+		// A resolver's HTTP requests have already exhausted their own
+		// retries. Give the whole resolution a bounded chance to recover,
+		// including when refreshing a link before resuming a partial file.
+		// Leased routes and opted-in proxy recovery own their retries.
+		if httpx.RouteID(ctx) != "" || !retryableResolve(err) {
+			return err
+		}
+		m.mu.Lock()
+		fallback := it.proxyFallback && m.proxyEnabled && m.proxies != nil
+		m.mu.Unlock()
+		if fallback || m.cfg == nil || attempt >= m.cfg.MaxRetries {
+			return err
+		}
+		wait := transferRetryDelay(attempt)
+		m.note(it, fmt.Sprintf("could not obtain download link — retrying in %s (%d of %d)",
+			wait.Round(time.Second), attempt+1, m.cfg.MaxRetries))
+		m.log.Info("retrying download link", "item", it.ID, "attempt", attempt+1, "wait", wait, "err", err)
+		if err := util.SleepCtx(ctx, wait); err != nil {
+			return err
+		}
 	}
 	if target == nil || target.URL == "" {
 		return errors.New("resolver returned no download URL")
@@ -1046,6 +1077,33 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 	}
 	m.mu.Unlock()
 	return nil
+}
+
+// retryableResolve admits only temporary failures: parser errors and a
+// host's refusal are final, while queue waits and route recovery belong to
+// their callers. retryableTransfer is deliberately broader for body I/O.
+func retryableResolve(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
+		return false
+	}
+	if _, ok := errors.AsType[*extractor.RefusedError](err); ok {
+		return false
+	}
+	if _, ok := errors.AsType[*httpx.RouteError](err); ok {
+		return false
+	}
+	if _, ok := errors.AsType[*httpx.ChallengeError](err); ok {
+		return false
+	}
+	if _, ok := errors.AsType[*httpx.StatusError](err); ok {
+		return httpx.HasStatus(err, http.StatusRequestTimeout, http.StatusTooManyRequests,
+			http.StatusInternalServerError, http.StatusBadGateway,
+			http.StatusServiceUnavailable, http.StatusGatewayTimeout)
+	}
+	return transientRouteFailure(err) || errors.Is(err, io.EOF)
 }
 
 // note records a short, transient explanation of what an item is waiting

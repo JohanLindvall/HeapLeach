@@ -10,6 +10,20 @@ answers to (`hostgate.go`, `hostlimit.go`), all in
 
 ## Retries and stalls
 
+**Deferred resolution has its own bounded retries** (`resolveTarget`). A
+request can exhaust the HTTP client's retries while obtaining a download link,
+before any transfer starts or while refreshing a link to resume one. Dial,
+TLS and request timeouts, dropped connections, temporary HTTP statuses and
+`extractor.TransientError` repeat the resolution up to `MaxRetries`, using the
+transfer backoff and an item note. Parser errors, missing files, certificate
+failures and permanent refusals stop immediately. Check the caller's context
+separately: an HTTP client deadline is retryable while that context is alive;
+a canceled or expired caller stops the attempt and its backoff. Leased routes,
+challenges, host waits and enabled proxy fallback keep their existing recovery
+paths rather than spending another retry budget on the same route. Tests in
+`resolve_retry_test.go` cover both initial resolution and refresh after a
+partial transfer.
+
 **The retry budget counts attempts in a row that moved nothing.** An attempt
 that received bytes and then lost its connection — a CDN node dropping every
 few dozen megabytes, a NAT forgetting a long connection — is one connection
