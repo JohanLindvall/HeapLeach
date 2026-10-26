@@ -80,6 +80,12 @@ window has closed or not yet opened, or it is shown in Sweden alone, so
 `restrictions.onlyAvailableInSweden`) and says which. "No usable stream" is
 left for a video offered only in forms this cannot read, and names them.
 
+The TS forms are taken first (`hls-ts-full`). Their sound is kept apart as
+packed AC-3 5.1, a rendition per soundtrack (the main mix, clearer speech,
+spoken subtitles) in segments of 3.84 s, of which only the first keeps its
+tag (see packed audio in [media.md](../media.md)): joined with every tag, the
+sound cracks at each segment.
+
 SVT links an episode as `/video/<id>/<programme>/<episode>`, but a
 programme's card (on its own page and in every recommendation row) as
 `/video/<id>/<programme>`, the episode it would start playing named by the

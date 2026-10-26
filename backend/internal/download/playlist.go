@@ -308,6 +308,9 @@ func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name str
 					if err == nil && j.secret != nil && index >= j.key.Clear {
 						data, err = decryptSegment(data, j.secret, segmentIV(j.key, index))
 					}
+					if err == nil && index > 0 {
+						data = withoutPackedAudioTag(data)
+					}
 					select {
 					case results <- fetchedSegment{track: track, index: index, data: data, err: err}:
 					case <-ctx.Done():

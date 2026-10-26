@@ -3,8 +3,12 @@
 package download
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +58,120 @@ func TestPackedAudioTimestamp(t *testing.T) {
 		if _, ok := packedAudioTimestamp(head); ok {
 			t.Errorf("%s read as packed audio", name)
 		}
+	}
+}
+
+func TestWithoutPackedAudioTag(t *testing.T) {
+	frames := []byte{0x0b, 0x77, 0x01, 0x02, 0x03}
+	for _, version := range []byte{3, 4} {
+		if got := withoutPackedAudioTag(append(id3Timestamp(version, 90000), frames...)); !bytes.Equal(got, frames) {
+			t.Errorf("ID3v2.%d: %x; want the frames alone", version, got)
+		}
+	}
+	// ID3v2.4 lets a tag end with a footer, which goes with it.
+	tag := id3Timestamp(4, 90000)
+	tag[5] |= 0x10
+	footed := append(append(tag, append([]byte("3DI"), tag[3:10]...)...), frames...)
+	if got := withoutPackedAudioTag(footed); !bytes.Equal(got, frames) {
+		t.Errorf("with a footer: %x; want the frames alone", got)
+	}
+	for name, segment := range map[string][]byte{
+		"MPEG-TS":         {0x47, 0x40, 0x11, 0x10, 0, 0, 0, 0, 0, 0, 0, 0},
+		"bare AC-3":       frames,
+		"a tag cut short": id3Timestamp(4, 90000)[:40],
+	} {
+		if got := withoutPackedAudioTag(segment); !bytes.Equal(got, segment) {
+			t.Errorf("%s came back as %x", name, got)
+		}
+	}
+}
+
+// A packed audio track keeps its first segment's tag alone. Each later one
+// would sit between two frames, where ffmpeg's AC-3 reader takes it for the
+// end of the frame before, and its decoder then drops that frame whole: the
+// sound would break off for 32 ms at every segment. The first tag stays, as
+// the track's start is read from it.
+func TestPackedAudioKeepsOnlyItsFirstTag(t *testing.T) {
+	ffmpeg := requireFFmpeg(t)
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	origin := t.TempDir()
+	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
+	defer srv.Close()
+	video := cmafRendition(t, ffmpeg, origin, srv.URL, "video",
+		append([]string{"-f", "lavfi", "-i", testPicture, "-an"}, testH264...)...)
+
+	// AC-3 at 192 kbit/s and 48 kHz is frames of 768 bytes; 32 of them make
+	// a segment, each opening with its tag, the first half a second in.
+	const frame, perSegment = 768, 32
+	tone := filepath.Join(t.TempDir(), "tone.ac3")
+	run(t, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", fmt.Sprintf(testTone, 440),
+		"-ar", "48000", "-c:a", "ac3", "-b:a", "192k", "-f", "ac3", tone)
+	frames, err := os.ReadFile(tone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames)%frame != 0 {
+		t.Fatalf("%d bytes of AC-3, not a whole number of %d-byte frames", len(frames), frame)
+	}
+	var sound []string
+	for i := 0; i*frame*perSegment < len(frames); i++ {
+		name := fmt.Sprintf("sound-%d.ac3", i)
+		ticks := uint64(45000 + i*perSegment*1536*90000/48000)
+		body := frames[i*frame*perSegment : min(len(frames), (i+1)*frame*perSegment)]
+		if err := os.WriteFile(filepath.Join(origin, name), append(id3Timestamp(4, ticks), body...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sound = append(sound, srv.URL+"/"+name)
+	}
+
+	m := busyManager(t)
+	m.streams = 4
+	it := &Item{ID: newID(), Name: "Show.mp4", URL: srv.URL + "/master.m3u8", Size: -1, Segments: video,
+		Audio: []extractor.Track{{Segments: sound, Language: "sv", Name: "Svenska"}}}
+	if err := m.transfer(context.Background(), it); err != nil {
+		t.Fatal(err)
+	}
+	joined := filepath.Join(m.cfg.DownloadDir, "Show.mp4")
+
+	if out, err := exec.Command(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", joined,
+		"-map", "0:a", "-f", "null", "-").CombinedOutput(); err != nil || len(out) > 0 {
+		t.Errorf("decoding the joined sound: %v %s", err, out)
+	}
+	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size",
+		"-of", "csv=p=0", joined).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples := strings.Fields(string(out))
+	if len(samples) != len(frames)/frame {
+		t.Errorf("%d samples, want a frame each: %d", len(samples), len(frames)/frame)
+	}
+	for i, size := range samples {
+		if size != strconv.Itoa(frame) {
+			t.Errorf("sample %d holds %s bytes, want one frame's %d", i, size, frame)
+		}
+	}
+
+	out, err = exec.Command(ffprobe, "-v", "error", "-show_entries", "stream=codec_type,start_time", "-of", "csv=p=0", joined).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := map[string]float64{}
+	for line := range strings.Lines(string(out)) {
+		// An AC-3 stream's line ends in an empty field of its own.
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		if len(fields) < 2 {
+			continue
+		}
+		if start, err := strconv.ParseFloat(fields[1], 64); err == nil {
+			starts[fields[0]] = start
+		}
+	}
+	if diff := starts["audio"] - starts["video"]; diff < 0.45 || diff > 0.55 {
+		t.Errorf("audio starts %.3fs after the video (%v); want the 0.5s its first tag says", diff, starts)
 	}
 }
 

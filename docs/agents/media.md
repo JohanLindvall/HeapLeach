@@ -136,14 +136,24 @@ three things in it are easy to get wrong:
   there, and one that is not there is left out rather than failing the join.
 
 **Packed audio is placed where its tag says** (`packedaudio.go`). HLS can
-carry audio with no container, ADTS AAC segment after segment, each opening
-with an ID3 tag whose PRIV frame
+carry audio with no container, ADTS AAC or AC-3 segment after segment, each
+opening with an ID3 tag whose PRIV frame
 (`com.apple.streaming.transportStreamTimestamp`) holds its 33-bit 90 kHz
 timestamp. ffmpeg's ADTS reader ignores the tag and starts the audio at zero,
 while the TS video beside it keeps its own timestamps (France TV's start at
 ten seconds), so joined as it is, the sound would run ten seconds early. The
 join reads the tag at the head of each audio part and gives ffmpeg the start
 (`-itsoffset`); an fMP4 or TS audio part has no such tag and is left alone.
+
+**Only a track's first segment keeps its tag**: every later one is cut off
+as it is fetched (`withoutPackedAudioTag`, after decryption), as in the part
+it would sit between two frames. ffmpeg's ADTS reader skips a tag there, but
+its AC-3 and E-AC-3 readers take it for the end of the frame before, and the
+decoder, finding bytes past that frame which are more than its slack and
+begin no other, drops the frame whole: 32 ms of silence at every segment,
+a crack in the sound every 3.84 s in SVT's 5.1. The first tag stays, as the
+start is read from it and every reader skips a tag at the head of a file.
+`TestPackedAudioKeepsOnlyItsFirstTag` holds both halves.
 
 **A video presented before it is decoded is restamped** (`presentedEarly`).
 France TV's packager stamps its B-frames with presentation times earlier than
