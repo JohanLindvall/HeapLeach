@@ -53,6 +53,24 @@ walk that hits a rate limit it cannot outwait returns what it got, and
 it pass for complete; the mark is a note, not part of the title, so the folder
 stays put.
 
+## rajce
+
+Album pages embed a JSON `settings` object whose `legacy_media` list carries
+the album in order. Decode that object from its script, without collapsing
+whitespace inside filenames or consuming the JavaScript after it. Read only
+that list: `miniplayer_data` and promoted content elsewhere in the settings
+belong to other albums. `image_url` is the full-size photo, with `version`
+carried as `ver` after an edit; `thumb_url` is never a download source.
+
+Videos use the separate `video_url`, an extensionless storage endpoint serving
+rangeable MP4. Their `filename` can name a JPEG poster or just the media id, so
+replace its extension with `.mp4`. Never substitute `image_url` when a video
+is unavailable. Storage links are stable and need no deferred resolver. Keep
+the final album URL as referer after redirects, including legacy `rajce.net`
+links. Deduplicate by media id and URL; file caps, unavailable items and a
+shortfall against `media_count` go in the note, leaving the album title stable.
+An empty, missing or restricted album is an error, not a downloaded HTML page.
+
 ## bandcamp
 
 Every bandcamp endpoint answers a request claiming to be a browser (Chrome and

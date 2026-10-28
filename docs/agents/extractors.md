@@ -325,6 +325,6 @@ Two conventions worth keeping to when writing one:
 | [hosts/keep2share.md](hosts/keep2share.md) | keep2share, fileboom, voyeurking, and the CAPTCHA reader (`internal/captcha`) |
 | [hosts/video-hosts.md](hosts/video-hosts.md) | doodstream, streamtape, mixdrop, lulustream, vids.st, sendvid, knuthing, noodlemagazine, ok.ru, pornone, eporner, yandex, Kernel Video Sharing |
 | [hosts/broadcasters.md](hosts/broadcasters.md) | vimeo, arte, orf, svtplay, yle, drtv, rtbf, francetv, radio-canada, niconico |
-| [hosts/collections.md](hosts/collections.md) | balbums, coomerfans, celeb.st, erome, bandcamp, bandzoogle |
+| [hosts/collections.md](hosts/collections.md) | balbums, coomerfans, celeb.st, erome, rajce, bandcamp, bandzoogle |
 
 A host not listed has no notes beyond its code.

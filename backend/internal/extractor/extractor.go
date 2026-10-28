@@ -393,6 +393,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewMega(client),
 		NewBunkr(client),
 		NewErome(client),
+		NewRajce(client),
 		NewPixeldrain(client),
 		NewKeep2Share(client),
 		NewFileBoom(client),
