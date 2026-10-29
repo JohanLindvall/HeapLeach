@@ -5,6 +5,7 @@ import {
   countPhases,
   filesInPhase,
   isActive,
+  isComplete,
   isRetryable,
   isTerminal,
   matchesFilter,
@@ -47,6 +48,23 @@ describe('status predicates', () => {
 
   it('only allow a retry of something that stopped short', () => {
     expect(ALL.filter(isRetryable)).toEqual(['failed', 'canceled']);
+  });
+});
+
+describe('isComplete', () => {
+  it('only clears completed jobs, keeping failed, canceled and active jobs', () => {
+    const jobs = ALL.map((status) => job(status, { total: 2, done: 2 }));
+    expect(jobs.filter(isComplete).map((j) => j.status)).toEqual(['done']);
+  });
+
+  it('keeps done jobs with canceled files or source errors', () => {
+    expect(isComplete(job('done', { total: 2, done: 1, canceled: 1 }))).toBe(false);
+    expect(isComplete(job('done', { total: 1, done: 1, error: 'Listing incomplete' }))).toBe(false);
+  });
+
+  it('keeps empty jobs', () => {
+    expect(isComplete(job('queued'))).toBe(false);
+    expect(isComplete(job('done'))).toBe(false);
   });
 });
 

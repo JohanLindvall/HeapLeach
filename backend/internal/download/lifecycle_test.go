@@ -115,23 +115,25 @@ func TestCancelingPausedQueueReleasesCanceledWork(t *testing.T) {
 	if m.Busy() {
 		t.Fatal("canceled, paused queue still reports work")
 	}
-	m.ClearFinished()
+	if got := m.ClearFinished(); got != 0 {
+		t.Fatalf("cleared %d canceled jobs", got)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.queue) != 0 {
-		t.Fatal("cleared queue retained canceled items")
+		t.Fatal("queue retained canceled items")
 	}
 }
 
-func TestClearFinishedCancelsPendingRetry(t *testing.T) {
+func TestClearFinishedPreservesPendingRetry(t *testing.T) {
 	item := &Item{ID: "item", Status: StatusCanceled, inFlight: true, retryPending: true}
-	job := &Job{ID: "job", Items: []*Item{item}}
+	job := &Job{ID: "job", Items: []*Item{{ID: "done", Status: StatusDone}, item}}
 	m := &Manager{jobs: map[string]*Job{job.ID: job}, order: []string{job.ID}}
-	if got := m.ClearFinished(); got != 1 {
+	if got := m.ClearFinished(); got != 0 {
 		t.Fatalf("removed %d jobs", got)
 	}
-	if item.retryPending {
-		t.Fatal("removed item can be requeued by its exiting worker")
+	if !item.retryPending || job.canceled {
+		t.Fatal("clearing finished jobs canceled a pending retry")
 	}
 }
 

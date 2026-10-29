@@ -26,7 +26,7 @@ import { DownloadIcon, TrashIcon } from './components/Icons';
 import {
   countPhases,
   filesInPhase,
-  isTerminal,
+  isComplete,
   matchesFileQuery,
   matchesFilter,
   matchesQuery,
@@ -187,7 +187,7 @@ export default function App() {
   const visible = snapshot.jobs.filter(
     (job) => matchesFilter(job, filter) && matchesQuery(job, query),
   );
-  const finishedCount = snapshot.jobs.filter((job) => isTerminal(job.status)).length;
+  const finishedCount = snapshot.jobs.filter(isComplete).length;
 
   return (
     <div className={connection === 'offline' ? 'app app--polling' : 'app'}>

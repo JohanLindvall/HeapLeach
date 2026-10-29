@@ -484,6 +484,13 @@ func (j *Job) tally() itemTally {
 // status derives the job state from its phase and its items.
 func (j *Job) status() Status { return j.statusFrom(j.tally()) }
 
+// complete requires every file to be done and the source to have no error.
+// A done status alone can also include canceled files or a partial listing.
+func (j *Job) complete() bool {
+	t := j.tally()
+	return j.statusFrom(t) == StatusDone && j.Err == "" && t.done == len(j.Items)
+}
+
 // statusFrom derives the job state from its phase and an already counted
 // tally of its items.
 func (j *Job) statusFrom(t itemTally) Status {

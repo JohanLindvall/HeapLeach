@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -57,19 +58,60 @@ func seededManager(t *testing.T) (m *Manager, done, failed, queued string) {
 	return m, add(StatusDone), add(StatusFailed), add(StatusQueued)
 }
 
-func TestClearFinishedForgetsOnlyTheTerminal(t *testing.T) {
-	m, done, failed, queued := seededManager(t)
+func TestClearFinishedForgetsOnlyCompleteJobs(t *testing.T) {
+	m := &Manager{jobs: map[string]*Job{}}
+	cases := []struct {
+		name      string
+		statuses  []Status
+		err       string
+		resolving bool
+		canceled  bool
+		remove    bool
+	}{
+		{name: "failed", statuses: []Status{StatusFailed}},
+		{name: "complete", statuses: []Status{StatusDone}, remove: true},
+		{name: "partly-failed", statuses: []Status{StatusDone, StatusFailed}},
+		{name: "canceled", statuses: []Status{StatusCanceled}},
+		{name: "partly-canceled", statuses: []Status{StatusDone, StatusCanceled}},
+		{name: "queued", statuses: []Status{StatusDone, StatusQueued}},
+		{name: "running", statuses: []Status{StatusDone, StatusRunning}},
+		{name: "empty"},
+		{name: "source-failed", err: "source failed"},
+		{name: "partial-source", statuses: []Status{StatusDone}, err: "listing incomplete"},
+		{name: "resolving", statuses: []Status{StatusDone}, resolving: true},
+		{name: "job-canceled", statuses: []Status{StatusDone}, canceled: true},
+		{name: "all-complete", statuses: []Status{StatusDone, StatusDone}, remove: true},
+	}
+	var wantKept []string
+	var wantRemoved int
+	for _, tc := range cases {
+		job := &Job{ID: tc.name, Err: tc.err, resolving: tc.resolving, canceled: tc.canceled}
+		for i, status := range tc.statuses {
+			job.Items = append(job.Items, &Item{ID: fmt.Sprint(i), JobID: job.ID, Status: status})
+		}
+		m.jobs[job.ID] = job
+		m.order = append(m.order, job.ID)
+		if tc.remove {
+			wantRemoved++
+		} else {
+			wantKept = append(wantKept, job.ID)
+		}
+	}
 
-	if got := m.ClearFinished(); got != 2 {
-		t.Errorf("ClearFinished removed %d jobs, want 2", got)
+	if got := m.ClearFinished(); got != wantRemoved {
+		t.Errorf("ClearFinished removed %d jobs, want %d", got, wantRemoved)
 	}
-	snap := m.Snapshot()
-	if len(snap.Jobs) != 1 || snap.Jobs[0].ID != queued {
-		t.Errorf("left %v, want only the queued job %s", snap.Jobs, queued)
+	var gotKept []string
+	for _, job := range m.Snapshot().Jobs {
+		gotKept = append(gotKept, job.ID)
 	}
-	for _, id := range []string{done, failed} {
-		if err := m.CancelJob(id); err != ErrNotFound {
-			t.Errorf("cleared job %s still answers: %v", id, err)
+	slices.Reverse(wantKept) // Snapshots show the newest jobs first.
+	if !slices.Equal(gotKept, wantKept) {
+		t.Errorf("kept jobs = %v, want %v", gotKept, wantKept)
+	}
+	for _, tc := range cases {
+		if _, exists := m.jobs[tc.name]; exists == tc.remove {
+			t.Errorf("job %s exists = %v, want %v", tc.name, exists, !tc.remove)
 		}
 	}
 	// Nothing left to clear is not an error, and not a change either.

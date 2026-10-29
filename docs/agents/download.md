@@ -24,6 +24,12 @@ that window sets `retryPending`, and the exiting worker re-queues it.
 `enqueueLocked` is the single entry point for queueing; regression tests live
 in `ownership_test.go`.
 
+**Clear finished only forgets successful jobs** (`Job.complete`): the source
+has no error and every item is done. Terminal jobs can still have failures,
+and even a done status can include canceled files or a partial listing, so
+neither status alone is enough. Incomplete jobs and their pending retries
+remain available. The UI's `isComplete` predicate mirrors this rule.
+
 ## Part files
 
 Transfers resume from the `.part` file with a `Range` request.

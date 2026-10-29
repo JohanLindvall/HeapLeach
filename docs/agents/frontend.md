@@ -25,6 +25,11 @@ on them. The sidebar, the cards and the "Clear finished" count all ask it
 rather than keeping lists of literals of their own, and it is where the
 pure-logic tests for that live.
 
+"Clear finished" uses `isComplete`, matching `Job.complete` in the backend:
+the job is done, has no source error, and every file is done. A done job can
+still contain canceled files or a partial listing, so its status alone is
+not enough to include it in the count.
+
 The sidebar's second section, **Files**, is built on the same module:
 `phaseOf` sorts every file across all jobs into Downloading, Queued, Failed
 (cancelled included — both are what a retry is for) or Done, and choosing one

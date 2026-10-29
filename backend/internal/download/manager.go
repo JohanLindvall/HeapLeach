@@ -1293,7 +1293,7 @@ func (m *Manager) RemoveJob(id string) error {
 	return nil
 }
 
-// ClearFinished forgets every job that has nothing left to do.
+// ClearFinished forgets only jobs whose source and every file completed successfully.
 func (m *Manager) ClearFinished() int {
 	// Something the user did, so they see it at once. See nudge.
 	defer m.nudge()
@@ -1302,7 +1302,7 @@ func (m *Manager) ClearFinished() int {
 	kept := m.order[:0]
 	for _, id := range m.order {
 		job := m.jobs[id]
-		if job == nil || !job.status().Terminal() {
+		if job == nil || !job.complete() {
 			kept = append(kept, id)
 			continue
 		}

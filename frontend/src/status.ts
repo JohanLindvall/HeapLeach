@@ -4,11 +4,9 @@ import type { ItemView, JobView, Status } from './types';
 /**
  * The status vocabulary, in one place.
  *
- * Every view asks the same three questions of a status — is it still going
- * to change, can it be tried again, is it over — and each used to answer
- * with its own list of literals. The sidebar's "Active" group, the card's
- * cancel button and the header's "Clear finished" count were three copies of
- * one idea, which is how they come to disagree.
+ * The sidebar filters, card actions and header's "Clear finished" count
+ * share these predicates so their definitions stay together. Clearing a
+ * job requires every file to be complete, beyond merely being terminal.
  */
 
 /** Still moving, or waiting to: a cancel makes sense here. */
@@ -19,6 +17,11 @@ export function isActive(status: Status): boolean {
 /** Over, one way or another: nothing further will happen on its own. */
 export function isTerminal(status: Status): boolean {
   return status === 'done' || status === 'failed' || status === 'canceled';
+}
+
+/** Safe to clear: every file completed, with no source error. Mirrors Job.complete. */
+export function isComplete(job: JobView): boolean {
+  return job.status === 'done' && !job.error && job.total > 0 && job.done === job.total;
 }
 
 /** Stopped short: a retry makes sense here. */
