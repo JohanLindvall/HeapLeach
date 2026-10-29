@@ -565,6 +565,9 @@ const (
 	// FolderPageSize is how many children to request per API page.
 	FolderPageSize = 100
 
+	// CumPageSize matches the creator site's own post-list request size.
+	CumPageSize = 50
+
 	// ThrottleMinWait keeps a rate-limited reader from spinning through
 	// sub-millisecond sleeps when the limit is very low.
 	ThrottleMinWait = 5 * time.Millisecond

@@ -463,6 +463,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewFapello(client),
 		NewCoomerFans(client),
 		NewCeleb(client),
+		NewCum(client),
 		NewOKru(client),
 		NewStreamtape(client),
 		NewDoodStream(client),

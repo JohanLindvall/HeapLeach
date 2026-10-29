@@ -38,6 +38,38 @@ an opaque token. A pasted later gallery page starts from page one; file and
 page caps and repeated pages are reported in `Result.Note`, leaving the
 creator's folder name stable.
 
+## cum.st
+
+Creator pages use `/creators/<service>/<id>` and individual posts append
+`/post/<post>`. The public API resembles Kemono's route names, but its schema
+is different: post listings wrap records with a `total`, and attachments have
+content hashes and variants rather than downloadable `path` fields. Keep its
+dedicated extractor instead of registering it as a Kemono alias.
+
+The page advertises interchangeable media servers in `EDGE_BASE_URLS`. Read
+that list rather than pinning its numbered hosts. Originals are served at
+`/media/<sha256>/<original variant name>`; `Mirrored` rotates the advertised
+servers on retries. Thumbnails and video renditions are separate variants,
+and only `original.*` is accepted. Use that variant's byte count, not the
+attachment's top-level size, and align the filename extension with the bytes
+served. A missing or generic `original` filename uses the content hash.
+
+The creator API's compact posts already list filenames and attachment hashes.
+Queue those directly, then fetch each full post once when its first transfer
+starts, sharing successful metadata between that post's files. Failed fetches
+remain retryable. This preserves source/file caps without opening every post
+up front; sizes are unknown until the original variant is resolved. Post
+folders include their ids so repeated titles and changed caps cannot merge
+them. Individual post input reads full metadata immediately.
+
+Listings start at offset zero, request `config.CumPageSize` records, and
+advance by the count returned, checking both `total` and newly seen post ids.
+The `pp*` search, sort, tag, duration and media filters are carried to the API;
+photo, video and audio filters also select the matching attachments within
+mixed posts. Only the posts tab is supported. Source/file/page limits,
+repeated pages and failed later pages produce an incomplete-result note.
+Posts with no attachments contribute no files.
+
 ## erome
 
 erome paginates a profile, and two details decide whether it comes back
