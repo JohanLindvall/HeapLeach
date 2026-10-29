@@ -144,8 +144,9 @@ for a visible UI change, using invented sample data.
 Maintainers and coding agents with write access work directly on `main`,
 as specified in [AGENTS.md](AGENTS.md). A passing push publishes the Docker
 `latest` image with the latest stable tag and Git SHA as its version.
-Versions and releases use separate [manual workflows](docs/development.md#releases);
-ordinary contributions do not need a version bump or manual tag.
+The [manual Update version workflow](docs/development.md#releases) bumps the
+version and builds its release archives. Ordinary contributions do not need
+a version bump or manual tag.
 
 Keep commit messages generic: describe the behavior, without site names,
 domains, content URLs or real hosted filenames. Update the relevant area

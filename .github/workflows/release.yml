@@ -7,8 +7,14 @@ on:
         description: Existing stable tag to build and publish (vX.Y.Z)
         type: string
         required: true
+  workflow_call:
+    inputs:
+      tag:
+        description: Version selected by the manual Update version workflow
+        type: string
+        required: true
 
-# Manual publications share a queue so retries cannot overlap asset uploads.
+# Version updates and standalone releases share a publication queue.
 concurrency:
   group: heapleach-release
   cancel-in-progress: false

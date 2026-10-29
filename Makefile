@@ -185,16 +185,16 @@ endif
 	else shasum -a 256 "$${archives[@]}"; fi > SHA256SUMS
 	@echo ">> $(DIST_DIR)/SHA256SUMS"
 
-## tag: dispatch the manual version workflow, e.g. `make tag V=v0.1.0` (needs gh)
+## tag: bump the patch and build a release; set V=v0.1.0 to override (needs gh)
 tag: export RELEASE_VERSION = $(V)
 tag:
-	@[[ "$$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$ ]] || \
-	  { echo "usage: make tag V=v0.1.0" >&2; exit 1; }
+	@[[ -z "$$RELEASE_VERSION" || "$$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$ ]] || \
+	  { echo "usage: make tag [V=v0.1.0]" >&2; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "the working tree is dirty" >&2; exit 1; }
 	@test "$$(git rev-parse HEAD)" = "$$(git ls-remote origin refs/heads/main | cut -f1)" || \
 	  { echo "push or update to origin/main before choosing its version" >&2; exit 1; }
 	gh workflow run version.yml --ref main -f version="$$RELEASE_VERSION"
-	@echo ">> version workflow requested; run Release manually after the tag is created"
+	@echo ">> version workflow requested; release archives will be built and published automatically"
 
 ## screenshots: regenerate the pictures in docs/ (needs Chrome or Chromium)
 screenshots: frontend

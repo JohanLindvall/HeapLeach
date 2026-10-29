@@ -29,20 +29,32 @@ manual release images use the verified published archives instead.
 ## Manual versions and releases
 
 Neither pushing a commit nor pushing a tag allocates a version or publishes
-a release. Both workflows below must be explicitly dispatched on `main`:
+a release. **Update version** (`version.yml`) is the manual entry point for
+new releases; dispatch it on `main` after CI passes for that exact commit.
+Its optional `version` input defaults to incrementing the highest stable
+`vX.Y.Z` tag's patch, or `v0.0.1` when no stable tags exist. An explicit
+`version=vX.Y.Z` overrides the default. `make tag` dispatches the default;
+`make tag V=vX.Y.Z` supplies an override. Both require `gh` and a clean
+checkout at remote main.
 
-1. **Update version** (`version.yml`), with `version=vX.Y.Z`, requires
-   successful CI for the dispatch's exact commit and creates an annotated
-   tag there. `.github/scripts/release-tag.sh` validates the explicit version
-   and its ancestry, requires new versions to increase, and refuses to move
-   an existing tag. A retry with the same tag and commit is safe.
-   `make tag V=vX.Y.Z` dispatches this workflow using `gh`; it requires a
-   clean checkout at remote main. It does not build or publish a release.
-2. **Release** (`release.yml`), with `tag=vX.Y.Z`, resolves an existing stable
-   tag on main's history and pins every checkout to its commit. It runs
-   `checks.yml` plus native archive builds and packaged OCR tests on Linux
-   amd64/arm64, macOS Intel/Apple silicon and Windows amd64. All must pass
-   before publication. Creating a version tag alone does not start this work.
+`.github/scripts/release-tag.sh` creates an annotated tag after checking
+its format, ancestry and ordering. It refuses to move an existing tag.
+Each workflow run records its ID in the tag annotation: reruns recover
+their original version from Git even on a fresh runner or after newer tags
+exist. A new dispatch has a new run ID and increments the patch even at
+the same commit. The version workflow is serialized through publication,
+so another update cannot allocate a version while it is building.
+
+After tagging, Update version **always calls Release** (`release.yml`) with
+the selected tag. It calls the reusable workflow directly because tags
+pushed with `GITHUB_TOKEN` do not start another workflow. Release can also
+be dispatched manually with `tag=vX.Y.Z` to rebuild an existing version.
+Both entry points use the same publication queue.
+
+Release resolves the tag on main's history and pins every checkout to its
+commit. It runs `checks.yml` plus native archive builds and packaged OCR
+tests on Linux amd64/arm64, macOS Intel/Apple silicon and Windows amd64.
+All must pass before publication. A tag push alone does not start this work.
 
 The archive cache is keyed by toolchain, dependencies and the selected
 commit, with a fallback to previous compilation output. Native macOS builds
@@ -60,9 +72,9 @@ with `BINARY_STAGE`. It publishes `vX.Y.Z`, `X.Y.Z`, `vX.Y` and `X.Y` image
 tags. Docker metadata's automatic `latest` tag is explicitly disabled:
 only main's image publisher may move `latest`.
 
-`make test-release` exercises read-only image version selection, explicit tag
-creation, retries and invalid requests against a temporary Git remote. It
-never changes this repository's tags.
+`make test-release` exercises read-only image version selection, default
+patch bumps, explicit overrides, retries and invalid requests against
+temporary Git remotes. It never changes this repository's tags.
 
 ## Dependabot
 

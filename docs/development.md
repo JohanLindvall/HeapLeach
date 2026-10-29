@@ -18,7 +18,7 @@ make test-live    # include local, gitignored live extractor tests (when present
 make frontend     # build the UI into the Go embed directory
 make lock         # regenerate frontend/package-lock.json
 make dist         # package this host into ./dist (native cgo toolchain required)
-make tag V=v0.1.0 # dispatch the manual version workflow (requires gh)
+make tag          # bump the patch and build a release; V=v0.1.0 overrides (requires gh)
 make help         # every target
 ```
 
@@ -71,27 +71,36 @@ highest stable tag reachable from that commit plus its Git SHA, for example
 `v1.2.3-g0123456789ab`. This does not increment a version or create a release.
 Without a stable tag, the version starts with `v0.0.0`.
 
-Versions and releases are separate manual workflows in GitHub Actions. Run
-both on the `main` branch:
+Run **Update version** manually on `main` to create a version and build its
+release. Leave `version` blank to increment the highest stable tag's patch
+(for example, `v1.2.3` becomes `v1.2.4`), or enter an explicit version such
+as `v1.3.0`. With no stable tags, the first default is `v0.0.1`.
 
-1. Run **Update version** with the desired `version`, such as `v1.2.3`.
-   It requires successful CI on the selected main commit and creates that
-   exact annotated tag. `make tag V=v1.2.3` is a shortcut using GitHub CLI
-   from a clean checkout matching remote main.
-2. After the tag exists, run **Release** with that `tag`. This runs the
-   shared checks and native builds on all five platforms, tests the OCR
-   model from each archive, and publishes the complete release with checksums.
+The workflow requires successful CI on its selected commit, creates an
+annotated tag, then automatically runs the Release pipeline. That pipeline
+runs shared checks and native builds on all five platforms, tests the OCR
+model from each archive, and publishes the complete release with checksums.
+`make tag` dispatches the default patch update; `make tag V=v1.3.0` chooses
+an explicit version. Both require GitHub CLI and a clean checkout matching
+remote main.
 
 The equivalent commands are:
 
 ```bash
-gh workflow run version.yml --ref main -f version=v1.2.3
-# Wait for Update version to complete before starting the release.
+# Bump the patch and build/publish the release.
+gh workflow run version.yml --ref main
+# Or choose the version explicitly.
+gh workflow run version.yml --ref main -f version=v1.3.0
+# Rebuild an existing tag without creating a new version.
 gh workflow run release.yml --ref main -f tag=v1.2.3
 ```
 
-A tag push alone does not build a release. Version creation and publication
-are serialized separately; retries reuse a matching tag or partial draft.
+A tag push alone does not build a release. Update version calls the release
+workflow directly. Version updates are serialized, and rerunning an update
+reuses its original tag even if another version has since been created.
+A new dispatch with no version specified always increments the patch,
+including at the same commit. **Release** remains available for rebuilding
+an existing tag; publication is serialized across both entry points.
 Manual releases also publish versioned Docker tags (`vX.Y.Z`, `X.Y.Z`,
 `vX.Y`, `X.Y`) using the verified released Linux binaries. They leave
 `latest` with the main image publisher. The native build cache retains
