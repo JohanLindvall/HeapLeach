@@ -84,6 +84,13 @@ does with a challenge is in [proxies.md](proxies.md).
 
 ## Routes on a request
 
+`WithCookieJar` scopes cookies to one source without changing its transport,
+timeouts or route observations. It overrides the jar after route selection,
+so redirects and retries use that source's session without modifying the
+shared client or the leased route. Protected folders use it when a host gives
+every folder the same cookie name; retaining only the shared jar would let
+one job's unlock replace another job's access.
+
 A routed attempt carries its route in the request context (`route.go`):
 
 - `httpx.WithRoute` pins every request, redirect and retry in the context to

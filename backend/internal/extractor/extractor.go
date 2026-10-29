@@ -335,7 +335,7 @@ type ProxyFallback interface {
 
 // Options carries per-request extras supplied by the caller.
 type Options struct {
-	// Password unlocks protected folders (currently gofile only).
+	// Password unlocks protected folders.
 	Password string
 
 	// limits is stamped by Registry.Extract from the configuration, so it

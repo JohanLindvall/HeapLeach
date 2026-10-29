@@ -48,7 +48,7 @@ separate constant; WAF recovery keeps the client's User-Agent for the same
 reason. gofile rotates the secret server-side, so it is configurable via
 `HEAPLEACH_GOFILE_SECRET`.
 
-Folders may be password protected — `Options.Password` exists for this host —
+Folders may be password protected — `Options.Password` supplies the password —
 and the gate refuses with `ErrPasswordRequired` rather than resolving a
 partial listing.
 
@@ -154,15 +154,32 @@ button and reject unavailable shares.
 
 ## filester
 
-filester keeps nothing in the page: its script POSTs the slug to
+filester file shares use `/d/<slug>`. The script POSTs the slug to
 `/v2/api/public/download` and builds the storage link from the answer
 (`server` + `/v2/` + `file` + `?token=`). The token lasts half an hour and
 encodes the requesting address, so it is minted through `Resolve`. The
 `download=true&n=` the page's button adds only sets a disposition name and is
-left off. Only `/d/<slug>` exists anonymously; folders are behind the
-authenticated API. The site moves between top-level domains, all serving one
-API, so `Match` takes `filester.<any TLD>` with the `/d/` shape rather than a
+left off. The site moves between top-level domains, all serving one API, so
+`Match` takes `filester.<any TLD>` with the `/d/` or `/f/` shape rather than a
 `hostSet` that would trail every move.
+
+Folder shares use `/f/<id>`. `filesterfolder.go` reads only `filesGrid` cards:
+their `onclick` names the file page, `data-name` preserves the original name,
+and `data-size` is an exact byte count, unlike the rounded visible size. It
+starts at page one, follows the folder's own next-page links, deduplicates
+files, and walks `subfoldersGrid` links with relative destination directories.
+File, folder, depth and page limits bound the walk; incomplete results add a
+note without changing the folder title. Discovery never signs individual
+files.
+
+The password form requires its nonce and a base64-encoded UTF-8 envelope of
+`password|Unix milliseconds|nonce`. Unlocking sets `folder_access_token`,
+which the signing API also requires. This cookie has one name across folders,
+so each folder retains a separate jar through `httpx.WithCookieJar`, including
+on routed attempts. Missing or rejected passwords return `ErrPasswordRequired`.
+A signing request refused with 403 revisits the folder gate and signs once
+more, so a queue can outlive its access cookie. Storage transfers need only
+the signed media URL.
 
 ## suvobox
 

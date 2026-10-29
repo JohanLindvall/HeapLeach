@@ -216,7 +216,9 @@ must be writable only by people you trust to run code as this account.
   jobs stay available to inspect or retry. Downloaded files stay on disk.
 - **Resume** — partial files are kept and continued with a `Range` request;
   a cancelled 100 MB download restarts where it stopped.
-- **Password-protected folders** (gofile).
+- **Password-protected folders** (gofile and filester). Open **Password
+  protected?** when adding links and enter the folder password; headless runs
+  use `-password`.
 - **Safe filenames** — remote names are reduced to one portable path
   component, so nothing can be written outside the download directory.
 - A light **progression layer**: ranks, session totals and a few badges.

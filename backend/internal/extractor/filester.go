@@ -12,7 +12,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-// Filester resolves single-file shares (/d/<slug>).
+// Filester resolves single-file shares (/d/<slug>) and folders (/f/<id>).
 //
 // The page itself carries nothing worth parsing: its script asks
 // /v2/api/public/download for a token, and the answer names everything —
@@ -22,12 +22,12 @@ import (
 // at once and the queue shows the real name. The storage server takes no
 // referer or cookie and honours ranges.
 //
-// The authenticated API documents folders; nothing anonymous links to one,
-// so only files are handled.
+// Folder pages list filenames and exact sizes. Protected folders grant an
+// access cookie, also needed when signing their files; see filesterfolder.go.
 //
 // The site moves between top-level domains — .si, .me, .gg and .sh have all
 // turned up, each answering the same API — so Match takes filester under any
-// of them rather than a list that trails the next move. The /d/ shape is
+// of them rather than a list that trails the next move. The /d/ or /f/ shape is
 // required as well, since a bare name under an unknown TLD is a weaker claim
 // than a name and the site's own link shape together.
 type Filester struct {
@@ -43,7 +43,7 @@ func NewFilester(client *httpx.Client) *Filester {
 	return &Filester{client: client}
 }
 
-// Match accepts a /d/ link on filester under any top-level domain.
+// Match accepts file and folder links on filester under any top-level domain.
 func (f *Filester) Match(u *url.URL) bool {
 	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 	name, _, ok := strings.Cut(host, ".")
@@ -51,16 +51,19 @@ func (f *Filester) Match(u *url.URL) bool {
 		return false
 	}
 	segs := util.PathSegments(u)
-	return len(segs) >= 2 && segs[0] == "d"
+	return len(segs) >= 2 && (segs[0] == "d" || segs[0] == "f")
 }
 
 func (f *Filester) Name() string { return "filester" }
 
-// Extract produces a single lazily-signed entry.
-func (f *Filester) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+// Extract lists a folder or produces a single lazily-signed entry.
+func (f *Filester) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
-	if len(segs) < 2 || segs[0] != "d" {
-		return nil, fmt.Errorf("filester: %s is not a file link (/d/<id>)", u.Redacted())
+	if len(segs) < 2 || (segs[0] != "d" && segs[0] != "f") {
+		return nil, fmt.Errorf("filester: %s is not a file (/d/<id>) or folder (/f/<id>) link", u.Redacted())
+	}
+	if segs[0] == "f" {
+		return f.folder(ctx, u, opts)
 	}
 	slug, base := segs[1], util.Origin(u)
 

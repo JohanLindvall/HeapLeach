@@ -73,11 +73,15 @@ func TestFilesterMatch(t *testing.T) {
 		"https://filester.gg/d/AbC123x":     true,
 		"https://www.filester.sh/d/AbC123x": true,
 		// The domain has moved before and will again.
-		"https://filester.example/d/AbC123x": true,
-		"https://filester.si/":               false,
-		"https://filester.si/api-docs":       false,
-		"https://notfilester.si/d/AbC123x":   false,
-		"https://filester.si.example/x":      false,
+		"https://filester.example/d/AbC123x":           true,
+		"https://filester.example/f/folder":            true,
+		"https://www.filester.example/f/folder?page=2": true,
+		"https://filester.example/f/":                  false,
+		"https://notfilester.example/f/folder":         false,
+		"https://filester.si/":                         false,
+		"https://filester.si/api-docs":                 false,
+		"https://notfilester.si/d/AbC123x":             false,
+		"https://filester.si.example/x":                false,
 	} {
 		u, _ := url.Parse(raw)
 		if got := f.Match(u); got != want {

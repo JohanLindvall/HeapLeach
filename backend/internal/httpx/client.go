@@ -151,6 +151,12 @@ func (c *Client) do(req *http.Request) (resp *http.Response, err error) {
 }
 
 func (c *Client) doDirect(req *http.Request) (*http.Response, error) {
+	if jar, ok := req.Context().Value(cookieJarContextKey{}).(http.CookieJar); ok {
+		cp, hc := *c, *c.hc
+		hc.Jar = jar
+		cp.hc = &hc
+		c = &cp
+	}
 	if c.headerTimeout <= 0 {
 		return challengeResponse(c.hc.Do(req))
 	}
