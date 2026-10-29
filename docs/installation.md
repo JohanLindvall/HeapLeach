@@ -83,10 +83,12 @@ For separate state storage, mount a writable directory at `/state` and set
 want the proxy inventory somewhere else. Each running instance needs its
 own proxy database.
 
-Published images support Linux amd64 and arm64. `latest` follows releases;
-use a version tag such as `vX.Y.Z`, replacing it with an existing release
-version, to pin an installation. Remote access requires the
-[network precautions](usage.md#network-access-and-trust).
+Published images support Linux amd64 and arm64. `latest` follows successful
+main builds; its version combines the latest stable tag with the built Git
+SHA, such as `v1.2.3-g0123456789ab`. Main builds also publish `sha-<full SHA>`
+tags for pinning a commit. Manually published releases provide version tags
+such as `vX.Y.Z`; use an existing release version to pin that installation.
+Remote access requires the [network precautions](usage.md#network-access-and-trust).
 
 ## Update
 

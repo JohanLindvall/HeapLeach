@@ -1,35 +1,49 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Called after CI, under release.yml's publication lock. Stdout is the tag
-# to publish, or empty when a newer release already contains this commit.
+# Called only by the manual version workflow. Never chooses or increments a
+# version; stdout is the requested tag after it has been pushed successfully.
 set -euo pipefail
 
-commit=$(git rev-parse "${1:?usage: release-tag.sh <tested-commit>}^{commit}")
-git fetch --quiet origin --tags
-mapfile -t tags < <(git tag --sort=-version:refname --list 'v*' |
-  sed -nE '/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/p')
-latest=${tags[0]:-v0.0.0}
-
-if [ "${#tags[@]}" -gt 0 ]; then
-  released=$(git rev-parse "$latest^{commit}")
-  if [ "$commit" = "$released" ]; then
-    printf '%s\n' "$latest"
-    exit 0
-  fi
-  if git merge-base --is-ancestor "$commit" "$released"; then
-    echo "$latest already contains $commit; no new release needed" >&2
-    exit 0
-  fi
-  if ! git merge-base --is-ancestor "$released" "$commit"; then
-    echo "refusing to release a commit that does not descend from $latest" >&2
-    exit 1
-  fi
+tag=${1:?usage: release-tag.sh <vX.Y.Z> <tested-commit>}
+if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo 'version must be a stable tag in vX.Y.Z format' >&2
+  exit 1
+fi
+commit=$(git rev-parse --verify "${2:?usage: release-tag.sh <vX.Y.Z> <tested-commit>}^{commit}")
+git fetch --quiet origin --tags '+refs/heads/main:refs/remotes/origin/main'
+if ! git merge-base --is-ancestor "$commit" origin/main; then
+  echo 'refusing to tag a commit outside main' >&2
+  exit 1
 fi
 
-IFS=. read -r major minor patch <<< "${latest#v}"
-tag="v$major.$minor.$((patch + 1))"
-git -c user.name='github-actions[bot]' \
-    -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-    tag -a "$tag" "$commit" -m "HeapLeach $tag"
+if git show-ref --verify --quiet "refs/tags/$tag"; then
+  if [ "$(git rev-parse "$tag^{commit}")" != "$commit" ]; then
+    echo "refusing to move existing tag $tag to another commit" >&2
+    exit 1
+  fi
+else
+  latest=$(git tag --sort=-version:refname --list 'v*' |
+    sed -nE '/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/p' |
+    sed -n '1p')
+  if [ -n "$latest" ]; then
+    IFS=. read -r major minor patch <<< "${latest#v}"
+    IFS=. read -r next_major next_minor next_patch <<< "${tag#v}"
+    if ! (( next_major > major ||
+            (next_major == major && next_minor > minor) ||
+            (next_major == major && next_minor == minor && next_patch > patch) )); then
+      echo "version must be newer than $latest" >&2
+      exit 1
+    fi
+    if ! git merge-base --is-ancestor "$latest^{commit}" "$commit"; then
+      echo "refusing to tag a commit that does not descend from $latest" >&2
+      exit 1
+    fi
+  fi
+
+  git -c user.name='github-actions[bot]' \
+      -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+      tag -a "$tag" "$commit" -m "HeapLeach $tag"
+fi
+# Also push on retries: the prior attempt may have created only a local tag.
 git push origin "refs/tags/$tag" >&2
 printf '%s\n' "$tag"

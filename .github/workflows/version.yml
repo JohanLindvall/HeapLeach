@@ -1,0 +1,37 @@
+name: Update version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New stable tag (vX.Y.Z); does not build a release
+        type: string
+        required: true
+
+concurrency:
+  group: heapleach-version
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  tag:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require successful CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh run list --workflow ci.yml --branch main --commit "$GITHUB_SHA" \
+            --json conclusion --jq 'any(.[]; .conclusion == "success")')" = true
+      - name: Create the requested tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: bash .github/scripts/release-tag.sh "$VERSION" "$GITHUB_SHA"

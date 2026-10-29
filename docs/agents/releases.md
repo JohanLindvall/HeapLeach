@@ -3,83 +3,98 @@
 The workflows are in `.github/workflows/`, their scripts in
 `.github/scripts/`.
 
-## Automatic releases
+## Main images and checks
 
-Every push to `main` that passes CI calls `.github/workflows/release.yml`,
-which creates an annotated tag for that exact commit by incrementing the
-highest stable tag's patch version. Publication is serialized, retries reuse
-the current tag, and late CI runs for commits already in a newer release skip
-publishing. Pull-request runs perform checks only. The caller invokes the
-publisher directly, because tags pushed with `GITHUB_TOKEN` do not trigger
-another workflow. `.github/scripts/release-tag.sh` selects the version, and
-`make test-release` tests it against a temporary Git remote.
+Every push to `main` runs `.github/workflows/ci.yml`. Its shared
+`checks.yml` workflow builds the UI, runs formatting, vet, inventory and
+license checks, tests Go and the UI, and exercises the real OCR model on
+Linux. Pull requests and manually dispatched CI runs perform those checks
+without publishing. Ordinary CI does not build native release archives.
 
-Native archive builds and OCR model tests run on all five platforms alongside
-the main checks, and all of them gate publication. The caller passes its
-tested SHA, and the publisher verifies its checkout against it before reusing
-those results. A standalone tag push runs the Go suite itself. Release
-compilation has a cache of its own, keyed by toolchain, dependencies and
-commit, which restores the previous commit's output and saves the new one;
-CI's immutable `go.sum` cache would leave every cross-platform build cold.
+Successful main pushes call `image.yml`, which builds the runtime image from
+source for Linux amd64 and arm64 and publishes `latest` and `sha-<full SHA>`
+to `ghcr.io/johanlindvall/heapleach`. It never creates tags or releases.
+`.github/scripts/image-version.sh` stamps the binary and OCI version label
+as `<latest stable tag>-g<12-character SHA>`, including when the commit is
+itself tagged. It selects the highest stable `vX.Y.Z` tag reachable from the
+built commit; with no such tag it uses `v0.0.0`. Full Git history is required.
+
+Image publication is serialized, and a queued run checks that its commit is
+still main's tip before building, so late runs cannot replace a newer image.
+The Dockerfile compiles the UI and Go on the builder's platform and uses a
+target C compiler for cross-builds. QEMU handles the runtime package install;
+local arm64 image builds also need binfmt. Main images compile from source;
+manual release images use the verified published archives instead.
+
+## Manual versions and releases
+
+Neither pushing a commit nor pushing a tag allocates a version or publishes
+a release. Both workflows below must be explicitly dispatched on `main`:
+
+1. **Update version** (`version.yml`), with `version=vX.Y.Z`, requires
+   successful CI for the dispatch's exact commit and creates an annotated
+   tag there. `.github/scripts/release-tag.sh` validates the explicit version
+   and its ancestry, requires new versions to increase, and refuses to move
+   an existing tag. A retry with the same tag and commit is safe.
+   `make tag V=vX.Y.Z` dispatches this workflow using `gh`; it requires a
+   clean checkout at remote main. It does not build or publish a release.
+2. **Release** (`release.yml`), with `tag=vX.Y.Z`, resolves an existing stable
+   tag on main's history and pins every checkout to its commit. It runs
+   `checks.yml` plus native archive builds and packaged OCR tests on Linux
+   amd64/arm64, macOS Intel/Apple silicon and Windows amd64. All must pass
+   before publication. Creating a version tag alone does not start this work.
+
+The archive cache is keyed by toolchain, dependencies and the selected
+commit, with a fallback to previous compilation output. Native macOS builds
+use `macos-15-intel` and `macos-15`, since cgo and the bundled OCR library
+must match the target architecture.
+
+Publication requires all five archives, creates `SHA256SUMS`, and uploads to
+a draft release before verifying the asset count and publishing it. Release
+notes use GitHub's generated changelog. A retry reuses the draft and replaces
+partial uploads.
+
+The release image job downloads the published Linux archives, checks their
+checksums and amd64 version, and selects Docker's `released-binary` stage
+with `BINARY_STAGE`. It publishes `vX.Y.Z`, `X.Y.Z`, `vX.Y` and `X.Y` image
+tags. Docker metadata's automatic `latest` tag is explicitly disabled:
+only main's image publisher may move `latest`.
+
+`make test-release` exercises read-only image version selection, explicit tag
+creation, retries and invalid requests against a temporary Git remote. It
+never changes this repository's tags.
 
 ## Dependabot
 
-Dependabot (`.github/dependabot.yml`) proposes the Go modules' updates every
-Monday at 05:00 Stockholm time, a quiet hour, grouped into one pull request,
-and the pull request lands by itself. Once its CI passes,
-`dependabot-merge.yml` squashes it into main. A merge made with the workflow's
-own token starts no workflow, so the workflow then starts CI on main itself
-(`workflow_dispatch`, which CI's release job accepts as it does a push), and
-that run releases it. Only Dependabot's own pull requests are merged, only at
-the commit CI passed, and nothing from them is checked out or run with that
-token. Each merge is a release and a restart, which is why the updates come as
-one a week rather than one per module. `onnxruntime_go` is left out: it must
-match the native runtime that `helpers/captcha/install.sh` pins, so the two
-move together by hand.
+Dependabot (`.github/dependabot.yml`) proposes grouped Go module updates each
+Monday at 05:00 Stockholm time. Once a Dependabot pull request passes CI,
+`dependabot-merge.yml` squashes only the tested commit into main. Nothing
+from that pull request is checked out or run with the merge token.
 
-## Manual tags and published artifacts
-
-`make tag V=v1.2.3` writes and pushes an explicit annotated tag, and the
-release workflow also runs on `v*` tags. Native runners build the five
-archives, then the publisher uploads them alongside `SHA256SUMS`. The image
-job waits for publication, then pushes the runtime image for amd64 and arm64
-to `ghcr.io/johanlindvall/heapleach` as `vX.Y.Z` and `X.Y.Z` (the git tag's
-spelling and Docker's), `vX.Y` and `X.Y`, and `latest`. The image job
-downloads the published Linux archives, verifies their checksums and amd64
-version, and selects Docker's `released-binary` stage with `BINARY_STAGE`, so
-both release formats carry the same executable and UI.
-
-Local image builds default to the `backend` stage: the UI and Go stages run on
-the builder's platform (`--platform=$BUILDPLATFORM`) and Go uses a target C
-compiler for cross-builds. QEMU emulates the runtime package install, so an
-arm64 image needs binfmt locally; CI's QEMU setup step supplies it.
-
-Release notes are GitHub's auto-generated changelog link; the `tag` target
-authors no body. The tag target refuses a dirty tree, which is what makes step
-3 below necessary rather than tidy.
+A merge made with `GITHUB_TOKEN` starts no push workflow, so the merger
+explicitly dispatches CI on main. CI accepts that bot dispatch as the main
+push's substitute and publishes its image after checks pass. It never
+updates the version or creates a release. Grouping avoids repeated image
+rollouts and conflicts between related dependency updates. `onnxruntime_go`
+is excluded because it must match the runtime pinned in
+`helpers/captcha/install.sh`; those move together by hand.
 
 ## Checklist
 
-For release-related changes and manual tags, do each of these; each catches a
-failure the others miss.
+For release-related changes and manual publication:
 
-1. `gh run list` — CI green on the **exact commit** being tagged, not merely
-   somewhere on the branch. Check who authored anything unfamiliar in
-   `git log <last tag>..main` rather than assuming it is yours. Read the plain
-   list rather than filtering: `gh run list --commit <sha>` prints nothing
-   when it matches nothing, which looks exactly like a commit CI never ran. An
-   empty result is not evidence of a green build. Automatic releases enforce
-   this through the CI job dependency.
-2. `make dist`, then extract the linux/amd64 archive, run `-version` and
-   `sha256sum -c`. This is a rehearsal on the host, so its binaries are
-   stamped `<last tag>-N-g<sha>-dirty` — that is `git describe` before the tag
-   exists, not a fault.
-3. `make frontend-clean && rm -rf dist` — restores the embed placeholder and
-   clears the staging, so `make tag`'s clean-tree check passes honestly
-   instead of being bypassed.
-4. Once the workflow finishes, download the **published** artifact and check
-   its checksum and `-version`. Verifying the local rehearsal proves nothing
-   about what CI actually uploaded. Where a release exists for one
-   identifiable change, grep the binary for it: the embedded UI is not
-   compressed, so `grep -c scrollbar-gutter heapleach` settles whether a fix
-   shipped instead of trusting that the build picked it up.
+1. Read `gh run list` and verify successful CI on the **exact commit** being
+   tagged. An empty filtered result is not evidence of success. Review
+   `git log <last tag>..main`, including the authors of unfamiliar commits.
+   The version workflow enforces the CI requirement, and the release workflow
+   repeats the checks on the selected tag's commit.
+2. Run `make dist`, extract the Linux amd64 archive, check `-version`, and
+   run `sha256sum -c SHA256SUMS` from `dist`. A local rehearsal uses
+   `git describe`, so `<last tag>-N-g<sha>-dirty` is expected before committing.
+3. Run `make frontend-clean` and remove the generated `dist` staging before
+   committing. This restores the tracked embed placeholder.
+4. After publishing, verify what the workflow actually uploaded. For a main
+   image, pull it and check `-version` and the OCI revision/version labels.
+   For a manual release, download its published archive and check the
+   checksum and `-version`. Local rehearsal alone does not prove that the
+   published artifact contains the change.

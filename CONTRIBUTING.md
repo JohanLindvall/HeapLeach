@@ -108,10 +108,11 @@ make check
 ```
 
 This checks Go formatting, vet, the generated inventory, license headers,
-Go and frontend tests, real-model OCR and release-tag logic. If a check
-cannot run on your system, name it and the reason in your contribution;
-do not report it as passing. CI also builds the UI and verifies packaged
-applications on all five release platforms.
+Go and frontend tests, real-model OCR, image versions and manual tag logic.
+If a check cannot run on your system, name it and the reason in your contribution;
+do not report it as passing. CI also builds the UI. The manual Release
+workflow verifies packaged applications on all five release platforms,
+including Intel and Apple silicon macOS.
 
 For documentation-only changes, check relative links, examples, spelling
 and `git diff --check`; run `make hosts-check` if you edit the README.
@@ -141,8 +142,10 @@ problem, the resulting behavior and the checks you ran. Add a screenshot
 for a visible UI change, using invented sample data.
 
 Maintainers and coding agents with write access work directly on `main`,
-as specified in [AGENTS.md](AGENTS.md). A passing push automatically creates
-a release; ordinary contributions do not need a version bump or manual tag.
+as specified in [AGENTS.md](AGENTS.md). A passing push publishes the Docker
+`latest` image with the latest stable tag and Git SHA as its version.
+Versions and releases use separate [manual workflows](docs/development.md#releases);
+ordinary contributions do not need a version bump or manual tag.
 
 Keep commit messages generic: describe the behavior, without site names,
 domains, content URLs or real hosted filenames. Update the relevant area

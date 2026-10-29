@@ -1,65 +1,69 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
-  workflow_call:
+  workflow_dispatch:
     inputs:
-      tested-sha:
-        description: Commit that passed the caller's checks; empty for standalone tags
+      tag:
+        description: Existing stable tag to build and publish (vX.Y.Z)
         type: string
-        default: ''
+        required: true
 
-# Tag allocation and publication share a queue. Another successful main
-# push must neither take the same version nor cancel a half-published one.
+# Manual publications share a queue so retries cannot overlap asset uploads.
 concurrency:
   group: heapleach-release
   cancel-in-progress: false
   queue: max
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   prepare:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      sha: ${{ steps.tag.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: tag
-        name: Select the release tag
+        name: Resolve the requested release tag
         shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            tag=$GITHUB_REF_NAME
-          else
-            tag=$(bash .github/scripts/release-tag.sh "$GITHUB_SHA")
-          fi
-          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          sha=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+          git merge-base --is-ancestor "$sha" origin/main
+          printf 'tag=%s\nsha=%s\n' "$TAG" "$sha" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: prepare
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: ${{ needs.prepare.outputs.sha }}
 
   archives:
     needs: prepare
-    if: needs.prepare.outputs.tag != ''
     uses: ./.github/workflows/archives.yml
     with:
-      ref: ${{ needs.prepare.outputs.tag }}
+      ref: ${{ needs.prepare.outputs.sha }}
       version: ${{ needs.prepare.outputs.tag }}
-      tested-sha: ${{ inputs.tested-sha }}
 
   release:
-    needs: [prepare, archives]
+    needs: [prepare, checks, archives]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
@@ -77,22 +81,15 @@ jobs:
           (cd dist && sha256sum ./* > SHA256SUMS)
 
       # Created as a draft, filled, checked, and only then published.
-      #
-      # `gh release create` with the assets on the same line creates the
-      # release first and uploads second, and v1.2.42 came out of it public,
-      # "successful", and with nothing attached — a release page for a
-      # download that did not exist. So the upload is its own step, the
-      # count is checked against what was built, and nobody sees the release
-      # until it is whole. Every step is safe to repeat: an existing draft is
-      # reused and uploads overwrite, so re-running a failed run finishes the
-      # job instead of tripping over the half it already did.
+      # Uploading separately and checking the count prevents an empty public
+      # release. Retrying reuses a draft and replaces any partial uploads.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --draft \
+            gh release create "$TAG" --verify-tag --draft \
               --title "HeapLeach $TAG" \
               --generate-notes
           fi
@@ -106,7 +103,7 @@ jobs:
           gh release edit "$TAG" --draft=false
 
   # The container image, for every platform the helpers are built for, at
-  # ghcr.io/<owner>/heapleach — tagged with the release and as latest. It
+  # ghcr.io/<owner>/heapleach — tagged with the release. It
   # waits for the release job so a tag that fails its tests publishes no
   # image either.
   image:
@@ -120,7 +117,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.prepare.outputs.sha }}
 
       # Embed the exact binaries and OCR data that were published, including
       # their UI and version stamp. Recompiling here discarded the archive job's
@@ -154,19 +151,23 @@ jobs:
 
       # Registry names must be lower case; the owner may not be.
       #
-      # Every image carries its own version as well as latest, in both
+      # Every release image carries its own version, in both
       # spellings: v1.2.3 matches the git tag and the release, 1.2.3 is the
       # Docker convention. The minor tags (v1.2, 1.2) follow the newest patch.
       - id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/heapleach
+          # Only main's image publisher owns latest.
+          flavor: latest=false
           tags: |
             type=semver,pattern=v{{version}},value=${{ env.TAG }}
             type=semver,pattern={{version}},value=${{ env.TAG }}
             type=semver,pattern=v{{major}}.{{minor}},value=${{ env.TAG }}
             type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }}
-            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.version=${{ env.TAG }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}
 
       - uses: docker/build-push-action@v7
         with:
@@ -177,5 +178,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=release-image
+          cache-to: type=gha,scope=release-image,mode=max

@@ -107,7 +107,9 @@ docker run --rm -it --name heapleach \
 
 Open **[localhost:8080](http://localhost:8080)**. Downloads and queue state stay
 in your Downloads folder when the container stops. The image supports amd64
-and arm64 and includes yt-dlp, ffmpeg, ffprobe, deno and local OCR.
+and arm64 and includes yt-dlp, ffmpeg, ffprobe, deno and local OCR. `latest`
+follows successful main builds; use a [versioned image](docs/installation.md#docker-and-persistent-state)
+to pin a manual release.
 
 The web UI has no login. The command above publishes it only on your computer;
 see [network access](#network-access-and-trust) for remote deployments.

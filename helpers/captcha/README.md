@@ -43,8 +43,9 @@ caller's worker retains its slot until construction ends and frees that session.
 `make test-captcha` runs the Go tests with the actual model and runtime, using
 Docker if Go is absent. Ordinary `go test ./...` exercises preprocessing,
 decoding and session ownership without downloading anything; model integration
-tests require `HEAPLEACH_OCR_DIR`. CI extracts each release archive and runs
-those model tests on its native Linux, macOS or Windows runner.
+tests require `HEAPLEACH_OCR_DIR`. Ordinary CI runs the model tests on Linux.
+The manual Release workflow extracts each archive and runs those tests on
+its native Linux, macOS or Windows runner.
 
 The installation includes ddddocr's MIT license and ONNX Runtime's license and
 third-party notices. The preprocessing reference hashes and ranked readings in

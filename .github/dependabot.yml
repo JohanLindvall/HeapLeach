@@ -1,6 +1,6 @@
 # Dependabot keeps the Go modules in backend/go.mod current. Every change
-# merged to main that passes CI is released and rolled out, so they arrive
-# as one weekly pull request rather than one per module: fewer releases, and
+# merged to main that passes CI publishes a new latest image, so they arrive
+# as one weekly pull request rather than one per module: fewer rollouts, and
 # no go.sum conflicts between updates that move together. Pull requests get
 # CI's checks without publishing anything.
 version: 2

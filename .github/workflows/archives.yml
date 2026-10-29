@@ -5,13 +5,10 @@ on:
     inputs:
       ref:
         type: string
-        default: ''
+        required: true
       version:
         type: string
         required: true
-      tested-sha:
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -47,13 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || github.sha }}
-
-      - name: Verify the tested commit
-        if: inputs.tested-sha != ''
-        env:
-          TESTED_SHA: ${{ inputs.tested-sha }}
-        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-go@v7
         with:
@@ -69,7 +60,7 @@ jobs:
           path: |
             ${{ steps.go-cache.outputs.modules }}
             ${{ steps.go-cache.outputs.build }}
-          key: ${{ runner.os }}-${{ runner.arch }}-archives-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-${{ github.sha }}
+          key: ${{ runner.os }}-${{ runner.arch }}-archives-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-${{ inputs.ref }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-archives-go-${{ hashFiles('backend/go.mod', 'backend/go.sum') }}-
       - uses: actions/setup-node@v7
@@ -81,13 +72,6 @@ jobs:
         with:
           path: ~/.cache/heapleach/ocr
           key: ocr-${{ matrix.name }}-${{ hashFiles('helpers/captcha/install.sh') }}
-
-      # Standalone tags still run the Go suite. Main and PR callers already
-      # run it on the exact checked-out SHA alongside this build matrix.
-      - name: Test standalone tag
-        if: inputs.tested-sha == '' && matrix.name == 'linux-amd64'
-        working-directory: backend
-        run: go test ./... -count=1
 
       - name: Build archive
         env:

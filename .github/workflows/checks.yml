@@ -1,0 +1,102 @@
+name: Checks
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      # The UI is compiled into the binary, so it is built first and the Go
+      # build below embeds the real thing rather than the placeholder. This
+      # also runs tsc, which is where a type error surfaces.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the UI
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Test the UI
+        working-directory: frontend
+        run: npm test
+
+      - name: Test version selection and manual tagging
+        run: make test-release
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Formatting
+        working-directory: backend
+        run: |
+          unformatted=$(gofmt -l ./internal ./cmd)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt would change:"; echo "$unformatted"; exit 1
+          fi
+
+      # The repository's own rule: nothing tracked may link to specific
+      # content — live URLs go stale, and belong in the untracked live tests.
+      # The patterns require real-shaped ids, so the deliberately fake ones
+      # in fixtures (AAAAAAAA, abcd1234, /videos/1/x/) stay out of reach.
+      - name: No live content URLs
+        run: |
+          hits=$(git ls-files -z | xargs -0 grep -nE \
+            'gofile\.io/d/[A-Za-z0-9]{6,}|thisvid\.com/videos/[0-9]{6,}|youtube\.com/watch\?v=[A-Za-z0-9_-]{11}|mega\.nz/(file|folder)/[A-Za-z0-9_-]{8}#[A-Za-z0-9_-]{16,}|imagepond\.net/i/[A-Za-z0-9]{16,}|suvobox\.com/[af]/[a-f0-9]{12,}' \
+            || true)
+          if [ -n "$hits" ]; then
+            echo "tracked files carry live content URLs:"; echo "$hits"; exit 1
+          fi
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      # README.md's supported-site inventory is generated from the registry,
+      # so a new extractor cannot ship undocumented — or, worse, be documented
+      # as something it is not.
+      - name: Host list is current
+        run: make hosts-check
+
+      # Every source file names its license (SPDX), so a dependency review
+      # can scan rather than read; a file added without one fails here.
+      - name: Every source file names its license
+        run: make spdx-check
+
+      # Race detection is worth the time here: the download engine writes one
+      # file from several connections at once.
+      - name: Test
+        working-directory: backend
+        run: go test ./... -race -count=1 -coverprofile=cover.out
+
+      # Advisory, not a gate: the number belongs in the log where a drop is
+      # visible in review, without a threshold that invites gaming it.
+      - name: Coverage
+        working-directory: backend
+        run: go tool cover -func=cover.out | tail -1
+
+      - name: Build
+        working-directory: backend
+        run: CGO_ENABLED=1 go build -trimpath ./cmd/...
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/heapleach/ocr
+          key: ocr-linux-amd64-${{ hashFiles('helpers/captcha/install.sh') }}
+      - name: Test the OCR model
+        run: make test-captcha

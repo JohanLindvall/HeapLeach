@@ -1,10 +1,10 @@
 name: Dependabot merge
 
 # Work here goes straight to main, and so does Dependabot's weekly update once
-# its pull request has passed CI: it is merged, then released and rolled out
+# its pull request has passed CI: it is merged, then its image is published
 # like any push. A merge made with this workflow's own token starts no
-# workflow, so this starts CI on main itself (workflow_dispatch), which is what
-# releases. Nothing from the pull request is checked out or run here.
+# workflow, so this starts CI on main itself (workflow_dispatch) to publish
+# the latest image. Nothing from the pull request is checked out or run here.
 on:
   workflow_run:
     workflows: [CI]
@@ -24,7 +24,7 @@ jobs:
       startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest
     steps:
-      - name: Merge the tested update and release it
+      - name: Merge the tested update and build its image
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

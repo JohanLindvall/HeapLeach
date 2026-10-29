@@ -18,7 +18,7 @@ make test-live    # include local, gitignored live extractor tests (when present
 make frontend     # build the UI into the Go embed directory
 make lock         # regenerate frontend/package-lock.json
 make dist         # package this host into ./dist (native cgo toolchain required)
-make tag V=v0.1.0 # manually choose a release version (main pushes bump the patch)
+make tag V=v0.1.0 # dispatch the manual version workflow (requires gh)
 make help         # every target
 ```
 
@@ -63,23 +63,39 @@ the host issues links that expire.
 
 ## Releases
 
-Every push to `main` and pull request runs the tests, `go vet` and a `gofmt` check, with
-the UI compiled first so the binary is built against the real embedded
-frontend rather than the placeholder. Native builds and real-model OCR tests run on all five release platforms
-alongside the main checks; all must pass before a release starts.
+Every push to `main` and pull request runs the shared checks, including the
+built UI, Go and frontend tests, formatting, vet and the real OCR model on
+Linux. After a main push passes, CI publishes Linux amd64/arm64 Docker images
+as `latest` and `sha-<full SHA>`. The binary and OCI version label use the
+highest stable tag reachable from that commit plus its Git SHA, for example
+`v1.2.3-g0123456789ab`. This does not increment a version or create a release.
+Without a stable tag, the version starts with `v0.0.0`.
 
-After a push to `main` passes CI, it automatically tags the tested commit
-with the next patch version and publishes the archives and container images.
-Versions follow the highest stable `vX.Y.Z` tag. Publishing is queued, and a
-rerun reuses its tag or skips a commit already included in a newer release.
-`make tag V=vX.Y.Z` remains available for choosing a version explicitly;
-pushing that tag uses the same publisher.
+Versions and releases are separate manual workflows in GitHub Actions. Run
+both on the `main` branch:
 
-Automatic releases reuse the caller's tests after verifying the checked-out
-commit; standalone tags run the Go suite themselves. A separate release cache
-retains compilation output for all five targets between commits. Container
-images use the published Linux binaries after checking their checksums and
-version, so the archives and images carry the same executable and embedded UI.
+1. Run **Update version** with the desired `version`, such as `v1.2.3`.
+   It requires successful CI on the selected main commit and creates that
+   exact annotated tag. `make tag V=v1.2.3` is a shortcut using GitHub CLI
+   from a clean checkout matching remote main.
+2. After the tag exists, run **Release** with that `tag`. This runs the
+   shared checks and native builds on all five platforms, tests the OCR
+   model from each archive, and publishes the complete release with checksums.
+
+The equivalent commands are:
+
+```bash
+gh workflow run version.yml --ref main -f version=v1.2.3
+# Wait for Update version to complete before starting the release.
+gh workflow run release.yml --ref main -f tag=v1.2.3
+```
+
+A tag push alone does not build a release. Version creation and publication
+are serialized separately; retries reuse a matching tag or partial draft.
+Manual releases also publish versioned Docker tags (`vX.Y.Z`, `X.Y.Z`,
+`vX.Y`, `X.Y`) using the verified released Linux binaries. They leave
+`latest` with the main image publisher. The native build cache retains
+compilation output between releases.
 
 Native Linux, macOS and Windows runners build and test these archives with cgo:
 

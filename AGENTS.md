@@ -45,7 +45,7 @@ make test-live      # extractor tests against the real sites (docs/agents/extrac
 make dependencies   # install yt-dlp, ffmpeg, deno and local OCR into ./bin
 make ocr-assets     # install the pinned OCR model and native runtime into ./bin/ocr
 make dist           # package this host (RELEASE_TARGETS + CC for cross-compilation)
-make tag            # choose a version manually: make tag V=v1.2.3 (main pushes bump the patch)
+make tag            # dispatch Update version: make tag V=v1.2.3 (requires gh)
 make help           # every target
 ```
 
@@ -89,9 +89,10 @@ settled workflow, not an oversight.
 Keep site names and domains out of commit messages. Describe the changed
 behaviour in generic terms instead.
 
-A push to `main` that passes CI is released automatically. Changes to the
-release machinery, and manual tags, have a checklist in
-[releases.md](docs/agents/releases.md).
+A push to `main` that passes CI publishes only Docker images, stamped with
+the latest stable tag plus the Git SHA. Versions and releases require the
+manual Update version and Release workflows. Release changes and manual
+publication have a checklist in [releases.md](docs/agents/releases.md).
 
 ## No live URLs or real filenames in the repository
 
