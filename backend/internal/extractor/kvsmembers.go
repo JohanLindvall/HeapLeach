@@ -21,9 +21,9 @@ import (
 // makes a profile a profile — which URLs name one, which section of it is
 // the member's own work, and what to call the job.
 //
-// On an unregistered host the direct fallback first identifies KVS through
-// its player or asynchronous block controls. A /members/ path by itself is
-// too ordinary to establish which platform, or whose listing, it addresses.
+// The page is recognised as KVS by its player or its listing blocks before
+// any of this runs. A /members/ path by itself is too ordinary to establish
+// which platform, or whose listing, it addresses.
 
 // kvsMemberSection is the listing this falls back to. A profile has several
 // — favourites, albums, friends — and only a member's own videos are

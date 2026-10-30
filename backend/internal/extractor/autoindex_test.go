@@ -354,28 +354,21 @@ func TestAutoindexSizeSeparatesExactFromRounded(t *testing.T) {
 	}
 }
 
-// TestAutoindexMatchesArchiveOrgItems pins the one host shape claimed by URL
-// alone. A file inside an item must stay with the direct downloader.
-func TestAutoindexMatchesArchiveOrgItems(t *testing.T) {
+// TestAutoindexRecognise: a listing is recognised by what it says it is and
+// by linking inside its own directory, at any path and on any host.
+func TestAutoindexRecognise(t *testing.T) {
 	a := NewAutoindex(nil)
-	tests := map[string]bool{
-		"https://archive.org/download/an-item":          true,
-		"https://archive.org/download/an-item/":         true,
-		"https://archive.org/download/an-item/raw/":     true,
-		"https://archive.org/download/an-item/file.mp4": false,
-		"https://archive.org/details/an-item":           false,
-		"https://archive.org/download":                  false,
-		"https://files.example.test/pub/":               false,
-	}
-	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := a.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
+	listing := autoindexListing("/pub/", autoindexEntryRow("a.bin", "1024"))
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/pub/", listing), true)
+	// Titled as a listing of somewhere else.
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/other/",
+		autoindexListing("/other/", `<a href="/elsewhere/x.bin">x.bin</a>`)), false)
+	// The right title, and no entry inside the directory.
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/pub/",
+		`<html><head><title>Index of /pub/</title></head><body><a href="/">Home</a></body></html>`), false)
+	// An ordinary page of links.
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/notes/", autoindexNotAListing), false)
+	expectShape(t, a, "https://files.example.test/pub/", false)
 }
 
 // ------------------------------------------------------------- crawling
@@ -598,50 +591,45 @@ func TestAutoindexRefusesAPageThatIsNotAListing(t *testing.T) {
 		t.Fatal("an ordinary page of links resolved as a directory")
 	}
 
-	u, err := ParseURL(srv.URL + "/notes/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{}); ok {
-		t.Error("the sniff claimed a page that is not a listing")
+	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	if _, ex, _ := reg.Extract(context.Background(), srv.URL+"/notes/", Options{}); ex != nil && ex.Name() == "autoindex" {
+		t.Error("a page that is not a listing was recognised as one")
 	}
 }
 
-// TestAutoindexSniffLeavesFileURLsAlone: the fallback downloads files, and a
-// URL with no trailing slash is not a directory. Spending a speculative GET
-// on one would be a poor trade — some are only good once.
-func TestAutoindexSniffLeavesFileURLsAlone(t *testing.T) {
+// TestAutoindexLeavesFileURLsAlone: the fallback downloads files, and a URL
+// naming one is not a directory. Spending a speculative GET on it would be a
+// poor trade — some are only good once.
+func TestAutoindexLeavesFileURLsAlone(t *testing.T) {
 	srv, hits := autoindexServer(t, map[string]string{"/pub/": autoindexListing("/pub/", autoindexEntryRow("a.bin", "1024"))})
 
-	u, err := ParseURL(srv.URL + "/pub/a.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{}); ok {
-		t.Error("the sniff claimed a URL that is not a directory")
+	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	if _, ex, _ := reg.Extract(context.Background(), srv.URL+"/pub/a.bin", Options{}); ex == nil || ex.Name() == "autoindex" {
+		t.Errorf("a file URL went to %v", ex)
 	}
 	if n := hits.Load(); n != 0 {
-		t.Errorf("the sniff made %d requests for a file URL, want none", n)
+		t.Errorf("made %d requests for a file URL, want none", n)
 	}
 }
 
-// TestAutoindexSniffResolvesAnOpenDirectory is the shape the whole extractor
-// exists for: a directory on a host nobody has heard of.
-func TestAutoindexSniffResolvesAnOpenDirectory(t *testing.T) {
-	srv, _ := autoindexServer(t, map[string]string{
+// TestAutoindexResolvesAnOpenDirectory is the shape the whole extractor
+// exists for: a directory on a host nobody has heard of, its listing read
+// once for recognition and extraction both.
+func TestAutoindexResolvesAnOpenDirectory(t *testing.T) {
+	srv, hits := autoindexServer(t, map[string]string{
 		"/pub/": autoindexListing("/pub/", autoindexEntryRow("a.bin", "1024"), autoindexEntryRow("b.bin", "2048")),
 	})
 
-	u, err := ParseURL(srv.URL + "/pub/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{})
-	if !ok {
-		t.Fatal("an open directory was not recognised")
+	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/pub/", Options{})
+	if err != nil || ex.Name() != "autoindex" {
+		t.Fatalf("an open directory went to %v: %v", ex, err)
 	}
 	if len(res.Files) != 2 {
 		t.Errorf("found %d files, want 2: %+v", len(res.Files), res.Files)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("made %d requests, want the one listing", n)
 	}
 }
 

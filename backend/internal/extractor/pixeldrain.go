@@ -23,14 +23,14 @@ import (
 // is nothing here to fork. The one thing that differs between them is which
 // host the link named, and that is read off the URL at extraction time rather
 // than compiled in, which is why no request or Referer below mentions a host
-// at all. Another site running this software costs one line in Match.
+// at all, and why another site running this software needs nothing here: it
+// is recognised by the software's viewer, or by its API answering.
 //
 // The label stays "pixeldrain" whichever host answered: it names the software
 // both of them run, and a user who pasted a nova.storage link is better
 // served by an error that says which program is talking than by one that
 // repeats the domain back at them.
 type Pixeldrain struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -71,39 +71,75 @@ const pixeldrainMaxFiles = 5000
 var pixeldrainPace = Pace{Streams: 1}
 
 // NewPixeldrain builds the pixeldrain extractor.
-func NewPixeldrain(client *httpx.Client) *Pixeldrain {
-	return &Pixeldrain{hostSet: hostSet{"pixeldrain.com", "nova.storage"}, client: client}
-}
+func NewPixeldrain(client *httpx.Client) *Pixeldrain { return &Pixeldrain{client: client} }
 
 func (p *Pixeldrain) Name() string { return "pixeldrain" }
 
-// pixeldrainSniff recognises compatible installs by their file, list or
-// filesystem metadata. The short paths alone are common on unrelated sites.
-func pixeldrainSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+// pixeldrainShape is a file (/u/<id>, /f/<id>), a list (/l/<id>) or a
+// shared filesystem path (/d/<id>[/...]).
+var pixeldrainShape = pathShape(`^/[uf]/[A-Za-z0-9]+/?$`, `^/l/[A-Za-z0-9]+/?$`, `^/d/[^/]+(/.*)?$`)
+
+// pixeldrainLinkShape is the narrower form a link alone is followed for: the
+// software's eight-character file and list ids. /f/<id> and /d/<id> are other
+// hosts' forms as well, and are recognised only once fetched.
+var pixeldrainLinkShape = pathShape(`^/[ul]/[A-Za-z0-9]{8}/?$`)
+
+// The viewer's own structure: the bundle path its pages load their viewer
+// from, and the API root the page hands that viewer inline.
+const (
+	pixeldrainViewerPath = "/res/svelte/"
+	pixeldrainAPIGlobal  = "window.api_endpoint"
+)
+
+// Recognises is the inventory's description.
+func (p *Pixeldrain) Recognises() string {
+	return "pixeldrain files, lists and shared directories (`/u/<id>`, `/l/<id>`, `/d/<id>`) " +
+		"served by the software's viewer, which is handed its API root inline, or whose origin's " +
+		"API describes exactly that file, list or directory"
+}
+
+// Shape reports a file or list link by the software's own id form.
+func (p *Pixeldrain) Shape(u *url.URL) bool { return pixeldrainLinkShape(u) }
+
+// Recognise takes a link of those forms served by the software's viewer. A
+// page that cannot say is settled by the metadata the API publishes for the
+// very id the link names; the short paths alone are common on unrelated
+// sites, so a page that does say, and says something else, is not asked.
+func (p *Pixeldrain) Recognise(ctx context.Context, page *Page) bool {
+	if !pixeldrainShape(page.Final) {
+		return false
+	}
+	if page.HTML() != nil && page.Script(pixeldrainViewerPath) && page.Has(pixeldrainAPIGlobal) {
+		return true
+	}
+	return pageSilent(page) && pixeldrainAnswers(ctx, page, p.client, page.Final)
+}
+
+// pixeldrainAnswers recognises a compatible install by its file, list or
+// filesystem metadata for the id the URL names.
+func pixeldrainAnswers(ctx context.Context, page *Page, client *httpx.Client, u *url.URL) bool {
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {
-		return nil, nil
+		return false
 	}
 	origin := util.Origin(u)
 	validFile := func(f pixeldrainFile) bool {
 		return f.ID != "" && f.Name != "" && f.MimeType != ""
 	}
-	recognised := false
 	switch {
 	case len(segs) == 2 && (segs[0] == "u" || segs[0] == "f"):
 		var f pixeldrainFile
-		recognised = platformJSON(ctx, client, origin+pixeldrainAPI+"/file/"+url.PathEscape(segs[1])+"/info", nil, &f) &&
+		return pageJSON(ctx, page, client, origin+pixeldrainAPI+"/file/"+url.PathEscape(segs[1])+"/info", nil, &f) &&
 			f.ID == segs[1] && validFile(f)
 	case len(segs) == 2 && segs[0] == "l":
 		var list struct {
 			Success bool             `json:"success"`
 			Files   []pixeldrainFile `json:"files"`
 		}
-		if platformJSON(ctx, client, origin+pixeldrainAPI+"/list/"+url.PathEscape(segs[1]), nil, &list) && list.Success {
+		if pageJSON(ctx, page, client, origin+pixeldrainAPI+"/list/"+url.PathEscape(segs[1]), nil, &list) && list.Success {
 			for _, f := range list.Files {
 				if validFile(f) {
-					recognised = true
-					break
+					return true
 				}
 			}
 		}
@@ -112,17 +148,13 @@ func pixeldrainSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts
 			Path      []pixeldrainNode `json:"path"`
 			BaseIndex *int             `json:"base_index"`
 		}
-		if platformJSON(ctx, client, pixeldrainFSURL(origin, segs[1:])+"?stat", nil, &stat) &&
+		if pageJSON(ctx, page, client, pixeldrainFSURL(origin, segs[1:])+"?stat", nil, &stat) &&
 			stat.BaseIndex != nil && *stat.BaseIndex >= 0 && *stat.BaseIndex < len(stat.Path) {
 			node := stat.Path[*stat.BaseIndex]
-			recognised = node.Name != "" &&
-				(node.Type == pixeldrainDirNode || node.Type == pixeldrainFileNode)
+			return node.Name != "" && (node.Type == pixeldrainDirNode || node.Type == pixeldrainFileNode)
 		}
 	}
-	if !recognised {
-		return nil, nil
-	}
-	return NewPixeldrain(client).Extract(ctx, u, opts)
+	return false
 }
 
 // Extract lists a whole album, a shared directory, or a single file.

@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -141,24 +140,39 @@ func TestKVSVideoPath(t *testing.T) {
 	}
 }
 
-func TestKVSSitesNameAndMatchTheirHosts(t *testing.T) {
-	sites := NewKVSSites(nil, nil)
-	if len(sites) != len(kvsKnownHosts) {
-		t.Fatalf("got %d extractors for %d hosts", len(sites), len(kvsKnownHosts))
-	}
-	for i, host := range kvsKnownHosts {
-		name, _, _ := strings.Cut(host, ".")
-		if got := sites[i].Name(); got != name {
-			t.Errorf("%s is named %q, want %q", host, got, name)
-		}
-		u := &url.URL{Scheme: "https", Host: "www." + host, Path: "/videos/1/x/"}
-		if !legacyMatch(sites[i], u) {
-			t.Errorf("%s did not match its own host", host)
-		}
-		if legacyMatch(sites[i], &url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
-			t.Errorf("%s matched an unrelated host", host)
-		}
-	}
+// An install is recognised by the platform's own structure — the licensed
+// player, its script, or the asynchronous listing controls — on any host,
+// below its front page.
+func TestKVSRecognise(t *testing.T) {
+	k := NewKVS(nil)
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/videos/1/a-clip/", kvsPage()), true)
+	// Installs rename their sections and lay videos out as they like.
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/a-clip.html", kvsPage()), true)
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/models/someone/",
+		`<html><body><div id="list_videos_common"><a data-action="ajax" data-block-id="list_videos_common"
+		data-parameters="sort_by:post_date">Sort</a></div></body></html>`), true)
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/videos/1/a-clip/",
+		`<html><body><script src="/player/kt_player.js?v=1"></script></body></html>`), true)
+	// A theme without the asynchronous controls still renders a block as
+	// its container and the items list named after it.
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/latest-updates/",
+		`<html><body><div id="list_videos_latest"><div class="items" id="list_videos_latest_items">
+		<a href="/videos/a-clip/">A clip</a></div></div></body></html>`), true)
+	// The front page lists whatever the site promotes.
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/", kvsPage()), false)
+	// The right form and the site's name, and a videos block with nothing of
+	// the platform's controls: any tube site looks like this.
+	expectRecognised(t, k, htmlPage(t, "https://tube.example.test/videos/1/a-clip/",
+		`<html><head><title>A Clip - Example Tube</title><meta name="generator" content="KVS CMS"></head>
+		<body><script>var flashvars = {video_url: 'https://cdn.example.test/a.mp4'};</script>
+		<div id="list_videos_related"></div></body></html>`), false)
+
+	expectShape(t, k, "https://tube.example.test/videos/1/a-clip/", true)
+	expectShape(t, k, "https://tube.example.test/video/a-clip/", true)
+	expectShape(t, k, "https://tube.example.test/members/42/", true)
+	expectShape(t, k, "https://tube.example.test/search/a-query/", false)
+	expectShape(t, k, "https://tube.example.test/categories/a-category/", false)
+	expectShape(t, k, "https://tube.example.test/videos/1/a-clip.mp4", false)
 }
 
 // The installs that have moved from scrambling the media path to signing the

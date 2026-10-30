@@ -35,12 +35,10 @@ import (
 // up front. So that list grows when a new server *implementation* appears,
 // which is rare, and not when a new instance does, which is daily.
 //
-// Match cannot fetch anything, so it is the URL's shape that routes here —
-// /@name, /c/name and the post paths, which are the fediverse's own
-// conventions rather than any one server's — and nodeinfo that decides how to
-// ask. A shape that turns out to belong to something else entirely fails
-// naming the host, which is more use than the alternative: saving somebody's
-// front page to disk under the name of a picture.
+// A page is recognised by its URL's shape — /@name, /c/name and the post
+// paths, which are the fediverse's own conventions rather than any one
+// server's — together with the server's nodeinfo naming its software, and
+// nodeinfo again decides how to ask.
 type Fediverse struct {
 	client *httpx.Client
 
@@ -133,7 +131,55 @@ func NewFediverse(client *httpx.Client) *Fediverse {
 
 func (f *Fediverse) Name() string { return "fediverse" }
 
-func (f *Fediverse) Match(u *url.URL) bool { return fediTargetOf(u) != nil }
+// Recognises is the inventory's description.
+func (f *Fediverse) Recognises() string {
+	return "fediverse accounts, communities and posts (`/@name`, `/users/<name>`, `/u/<name>`, " +
+		"`/c/<name>`, `/notes/<id>`, `/notice/<id>`, `/post/<n>`, `/p/<user>/<id>`) on any server " +
+		"whose nodeinfo names its software"
+}
+
+// Shape reports the fediverse's own path conventions.
+func (f *Fediverse) Shape(u *url.URL) bool { return fediTargetOf(u) != nil }
+
+// Recognise takes a page of one of those forms on a server whose nodeinfo
+// names the software it runs, which is the document this extractor's
+// choice of API depends on and which every fediverse server publishes by
+// specification. The page itself is not read: these are application
+// shells, often behind a challenge, and the specification is the better
+// witness. The answer is kept on the probed page, so the extraction that
+// follows asks nothing again.
+func (f *Fediverse) Recognise(ctx context.Context, p *Page) bool {
+	if fediTargetOf(p.Final) == nil {
+		return false
+	}
+	name, ok := f.nodeInfo(ctx, p, p.Final)
+	return ok && name != ""
+}
+
+// nodeInfo reads software.name through the probed page's memo: the
+// well-known document, then the one it links to, each asked once.
+func (f *Fediverse) nodeInfo(ctx context.Context, p *Page, u *url.URL) (string, bool) {
+	root := util.Origin(u)
+	var index struct {
+		Links []fediNodeLink `json:"links"`
+	}
+	if !pageJSON(ctx, p, f.client, root+fediWellKnown, fediHeaders(root), &index) {
+		return "", false
+	}
+	href := fediNodeInfoHref(index.Links, u)
+	if href == "" {
+		return "", false
+	}
+	var doc struct {
+		Software struct {
+			Name string `json:"name"`
+		} `json:"software"`
+	}
+	if !pageJSON(ctx, p, f.client, href, fediHeaders(root), &doc) {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(doc.Software.Name)), true
+}
 
 // Extract discovers what the instance runs, then asks it in its own dialect.
 func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -145,12 +191,6 @@ func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 
 	software, err := f.softwareName(ctx, u)
 	if err != nil {
-		// /u/<id> also names a Pixeldrain file, and /post/<id> a
-		// szurubooru post. A path match has not identified this platform;
-		// without nodeinfo, let a compatible API establish the other one.
-		if res, probeErr := platformAPIs(ctx, f.client, u, opts); res != nil || probeErr != nil {
-			return res, probeErr
-		}
 		return nil, err
 	}
 	dialect, known := fediDialects[software]
@@ -188,6 +228,13 @@ func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error
 		return cached, nil
 	}
 
+	if p := probedPage(ctx, u); p != nil {
+		if name, ok := f.nodeInfo(ctx, p, u); ok && name != "" {
+			f.remember(host, name)
+			return name, nil
+		}
+	}
+
 	root := util.Origin(u)
 	var index struct {
 		Links []fediNodeLink `json:"links"`
@@ -217,13 +264,18 @@ func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error
 			u.Hostname())
 	}
 
+	f.remember(host, name)
+	return name, nil
+}
+
+// remember keeps what a host's nodeinfo said.
+func (f *Fediverse) remember(host, name string) {
 	f.mu.Lock()
 	if f.software == nil {
 		f.software = make(map[string]string)
 	}
 	f.software[host] = name
 	f.mu.Unlock()
-	return name, nil
 }
 
 // fediNodeLink is one entry of the discovery document.

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -171,15 +170,7 @@ func TestKVSSearchResolvesEveryPageOfResults(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	base, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k := &KVS{
-		hostSet: hostSet{base.Hostname()},
-		client:  httpx.New("test-agent", "en-US", 0, 5*time.Second),
-		host:    "tube.example.test",
-	}
+	k := NewKVS(httpx.New("test-agent", "en-US", 0, 5*time.Second))
 	u, err := ParseURL(srv.URL + "/search/some-query/3/")
 	if err != nil {
 		t.Fatal(err)

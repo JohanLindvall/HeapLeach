@@ -13,25 +13,63 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-func TestPixeldrainMatch(t *testing.T) {
+// pixeldrainViewerPage is a file page as the software serves it: the viewer
+// bundle, and the API root handed to it inline.
+const pixeldrainViewerPage = `<!DOCTYPE html><html><head><title>sample.bin ~ drive</title>
+<script>window.api_endpoint = '/api'; window.viewer_data = {"type":"file"};</script>
+<script src="/res/svelte/file_viewer.js"></script></head><body></body></html>`
+
+func TestPixeldrainRecognise(t *testing.T) {
 	p := NewPixeldrain(nil)
 	for _, raw := range []string{
-		"https://pixeldrain.com/l/abcd1234",
-		"https://pixeldrain.com/u/abcd1234",
-		"https://nova.storage/d/abcd1234",
-		"https://nova.storage/f/abcd1234",
+		"https://drive.example.test/u/abcd1234",
+		"https://drive.example.test/f/abcd1234",
+		"https://drive.example.test/l/abcd1234",
+		"https://drive.example.test/d/abcd1234/sub/dir",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
+		expectRecognised(t, p, htmlPage(t, raw, pixeldrainViewerPage), true)
+	}
+	expectShape(t, p, "https://drive.example.test/u/abcd1234", true)
+	expectShape(t, p, "https://drive.example.test/l/abcd1234", true)
+	// Other hosts' forms too: recognised once fetched, not followed alone.
+	expectShape(t, p, "https://drive.example.test/f/abcd1234", false)
+	expectShape(t, p, "https://drive.example.test/d/abcd1234", false)
+	expectShape(t, p, "https://drive.example.test/u/a-user-name", false)
+	// The right form and the site's name, without the viewer.
+	expectRecognised(t, p, htmlPage(t, "https://drive.example.test/u/abcd1234",
+		`<html><head><title>sample.bin ~ drive</title><meta property="og:site_name" content="drive"></head></html>`), false)
+	// The viewer on a path of no form of its own.
+	expectRecognised(t, p, htmlPage(t, "https://drive.example.test/home", pixeldrainViewerPage), false)
+	expectShape(t, p, "https://drive.example.test/u/abcd1234/extra", false)
+	expectShape(t, p, "https://drive.example.test/about", false)
+}
+
+// A page that cannot say is settled by the API describing the very file the
+// link names, asked once; an ordinary page of the form costs nothing.
+func TestPixeldrainRecogniseAskingTheAPI(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/file/SampleID/info" {
+			http.NotFound(w, r)
+			return
 		}
-		if !p.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
+		calls++
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"id":"SampleID","name":"sample.bin","size":12,"mime_type":"application/octet-stream"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPixeldrain(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	failed := fixturePage(t, srv.URL+"/u/SampleID", http.StatusForbidden, "text/html", "denied")
+	for range 2 {
+		if !p.Recognise(context.Background(), failed) {
+			t.Fatal("a refused page whose API answers was not recognised")
 		}
 	}
-	other, _ := ParseURL("https://pixeldrain.example.test/l/abcd1234")
-	if p.Match(other) {
-		t.Error("matched a lookalike host")
+	if calls != 1 {
+		t.Errorf("the API was asked %d times, want once", calls)
+	}
+	if p.Recognise(context.Background(), htmlPage(t, srv.URL+"/u/SampleID", `<html><title>A user</title></html>`)) || calls != 1 {
+		t.Errorf("an ordinary page of the form was claimed or cost a request (%d)", calls)
 	}
 }
 

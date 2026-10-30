@@ -57,7 +57,7 @@ import (
 // nothing: what the page's own player is pointed at outranks what its sharing
 // metadata advertises, so a real player is never outvoted by a share card.
 //
-// Failure is silent throughout, exactly as kvsSniff's is. Every step that
+// Failure is silent throughout. Every step that
 // cannot answer returns false and the caller carries on to the handling that
 // would have run anyway, so a page this cannot read is no worse off than
 // before.

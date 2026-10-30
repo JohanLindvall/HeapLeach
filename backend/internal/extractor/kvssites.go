@@ -10,9 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Kernel Video Sharing installs.
@@ -21,39 +22,15 @@ import (
 // hosts serve the identical player over the identical page: one flashvars
 // object, with the media URL scrambled by the page's own license code. The
 // arithmetic that undoes that lives in kvs.go and none of it is per-host, so
-// one extractor covers every install and adding a host costs one line.
+// one extractor covers every install, and it knows none of them by name.
 //
-// A host list has two problems, and each is answered here rather than by
-// making the list longer:
-//
-//   - It rots. Sites move platforms, new ones appear, and a list compiled
-//     into a binary cannot follow. HEAPLEACH_KVS_HOSTS extends it at runtime.
-//   - It will never be complete. There are far more KVS installs than anyone
-//     will enumerate — so the direct-link fallback recognises the licensed
-//     player and asynchronous listing controls without naming the host.
-//     See kvsSniff and platformPage.
+// An install is recognised by the software's own page structure, which is
+// what this extractor then reads: the licensed player (its configuration
+// carrying a license code, or the player script), or the asynchronous
+// listing controls every listing renders. A site that moves domain, or one
+// nobody ever listed, is recognised the same way.
 type KVS struct {
-	hostSet
 	client *httpx.Client
-	host   string
-}
-
-// kvsKnownHosts are the installs this build ships knowing about.
-//
-// Only the presence of the player matters, and the live tests are what
-// establish that: a host whose pages stop parsing belongs out of this list
-// rather than patched around, since the sniff will still pick it up if it is
-// only the domain that moved.
-var kvsKnownHosts = []string{
-	"thisvid.com",
-	"pornzog.com",
-	"camwhores.tv",
-	"sexvid.xxx",
-	"porntrex.com",
-	"pornhits.com",
-	"fapster.xyz",
-	"xxthots.com",
-	"moannest.com",
 }
 
 // kvsMaxAlternates bounds the numbered alternate renditions a page is read
@@ -61,61 +38,91 @@ var kvsKnownHosts = []string{
 // page, not against any real one.
 const kvsMaxAlternates = 6
 
-// NewKVSSites builds one extractor per known host, so each is matched on its
-// host alone and named for itself in the UI, exactly as a hand-written host
-// would be.
-func NewKVSSites(cfg *config.Config, client *httpx.Client) []Extractor {
-	hosts := kvsKnownHosts
-	if extra := cfg.ExtraHostsFor(config.FamilyKVS); len(extra) > 0 {
-		hosts = append(append([]string(nil), hosts...), extra...)
-	}
-	out := make([]Extractor, 0, len(hosts))
-	for _, host := range util.Dedupe(hosts) {
-		host = strings.ToLower(host)
-		out = append(out, &KVS{hostSet: hostSet{host}, client: client, host: host})
-	}
-	return out
+// kvsLabel names every install: the software, since the extractor is not
+// any one site's.
+const kvsLabel = "kvs"
+
+// NewKVS builds the Kernel Video Sharing extractor.
+func NewKVS(client *httpx.Client) *KVS { return &KVS{client: client} }
+
+func (k *KVS) Name() string { return kvsLabel }
+
+// Recognises is the inventory's description.
+func (k *KVS) Recognises() string {
+	return "Kernel Video Sharing pages — videos, member profiles, searches and listings — carrying " +
+		"the licensed player's configuration or script, or its `list_videos` blocks (asynchronous " +
+		"controls, or a container and its `_items` list)"
 }
 
-// Name labels the host by its registrable name, matching how the
-// hand-written extractors name themselves.
-func (k *KVS) Name() string {
-	name, _, _ := strings.Cut(k.host, ".")
-	return name
+// Shape reports the URL forms worth a probe: a video page under a /videos/
+// or /video/ segment, and a member profile. Listings and searches are
+// recognised once fetched, but their paths are every site's.
+func (k *KVS) Shape(u *url.URL) bool {
+	if kvsVideoPath(u) {
+		return true
+	}
+	_, member := kvsMemberPath(u)
+	return member
+}
+
+// Recognise takes any page of an install below its root: the structure the
+// extraction reads is the evidence, whatever the path, since installs rename
+// their sections.
+func (k *KVS) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	return root != nil && len(p.Segments()) > 0 && kvsFingerprint(root, p.Body)
+}
+
+// kvsFingerprint reports the platform's own structure. A generic flashvars
+// object or a videos container is insufficient: KVS identifies itself
+// through the licensed player, its asynchronous block controls (which carry
+// both the block id and the platform's parameters), or a block rendered as
+// the platform renders one: its container and the items list named after it.
+func kvsFingerprint(root *html.Node, doc string) bool {
+	if vars, err := parseFlashvars(doc); err == nil && vars["license_code"] != "" {
+		return true
+	}
+	return findFirst(root, func(n *html.Node) bool {
+		if n.DataAtom == atom.Script {
+			return strings.Contains(attr(n, "src"), "/kt_player.") || strings.Contains(textOf(n), "kt_player(")
+		}
+		if id := attr(n, "id"); strings.HasPrefix(id, "list_videos_") {
+			// The platform renders a block as its container and, inside
+			// it, the items list named after it: a theme that drops the
+			// asynchronous controls still keeps the pair.
+			items := id + "_items"
+			return findFirst(n, func(c *html.Node) bool { return c != n && attr(c, "id") == items }) != nil
+		}
+		return attr(n, "data-action") == "ajax" &&
+			strings.HasPrefix(attr(n, "data-block-id"), "list_videos") && attr(n, "data-parameters") != ""
+	}) != nil
 }
 
 // Extract resolves a video page, a member's whole public catalogue,
 // everything a search turns up, or any other listing the install lays out —
 // a category, a model, a tag, a channel, the site's own latest list.
 func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return k.extract(ctx, u, opts, "")
-}
-
-// extract can start from an already identified document on an unknown host.
-// Canonical member/search URLs still take precedence over the pasted page.
-func (k *KVS) extract(ctx context.Context, u *url.URL, opts Options, doc string) (*Result, error) {
 	var l kvsListing
 	if listing, ok := kvsMemberPath(u); ok {
 		l = kvsListingForMember(listing)
 	} else if query, listing, ok := kvsSearchPath(u); ok {
 		l = kvsListingForSearch(query, listing)
 	} else {
-		if doc != "" && len(util.PathSegments(u)) > 0 {
-			return kvsBrowseDocument(ctx, k.client, u, k.Name(), opts.maxFiles(), doc)
-		}
-		return kvsBrowse(ctx, k.client, u, k.Name(), opts.maxFiles())
+		return kvsBrowse(ctx, k.client, u, kvsLabel, opts.maxFiles())
 	}
 	l.limit = opts.maxFiles()
 	if l.url == u.String() {
-		l.first = doc
+		if doc, _, ok := probedDocument(ctx, u); ok {
+			l.first = doc
+		}
 	}
-	return kvsListingResult(ctx, k.client, l, k.Name())
+	return kvsListingResult(ctx, k.client, l, kvsLabel)
 }
 
 // kvsExtract fetches a video page and resolves it. Everything needed is
 // inline in the page, so one request resolves a video.
 func kvsExtract(ctx context.Context, client *httpx.Client, u *url.URL, label string) (*Result, error) {
-	doc, err := client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("%s: fetch %s: %w", label, u.Redacted(), err)
 	}
@@ -261,26 +268,6 @@ func kvsExtension(vars map[string]string, direct string) string {
 		return ext
 	}
 	return ".mp4"
-}
-
-// kvsSniff resolves a URL that is shaped like a KVS video page but whose
-// host nobody registered.
-//
-// The shape is the whole argument for doing this. KVS lays every install out
-// as /videos/<id>/<slug>/, which is specific enough to be worth one GET and
-// cheap to be wrong about: a page that carries no player configuration falls
-// straight through to the direct-link handling that would have run anyway.
-// It is what makes the host list a convenience rather than the boundary of
-// what works.
-func kvsSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, bool) {
-	if !kvsVideoPath(u) {
-		return nil, false
-	}
-	res, err := kvsExtract(ctx, client, u, "kvs")
-	if err != nil || res == nil || len(res.Files) == 0 {
-		return nil, false
-	}
-	return res, true
 }
 
 // kvsVideoPath reports whether a path looks like a KVS video page: a /videos/

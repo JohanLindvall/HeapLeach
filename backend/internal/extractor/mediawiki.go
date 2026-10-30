@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // MediaWiki is not a site but the software a great many sites run, and its
@@ -61,9 +64,6 @@ import (
 // a CDN built to serve them in parallel.
 type MediaWiki struct {
 	client *httpx.Client
-	// extra names wikis whose URLs give nothing away — an install with no
-	// /wiki/ prefix and pages outside the namespaces recognised below.
-	extra []string
 	// interval is how far apart this wiki's API calls are spaced. Zero is
 	// valid and means no spacing at all, which is what the tests build:
 	// nothing but a real host has a courtesy limit to keep to.
@@ -102,24 +102,21 @@ const (
 var mediaWikiAPIPaths = []string{"/w/api.php", "/api.php"}
 
 // mediaWikiWikimedia are the Wikimedia projects. They all serve /w/api.php,
-// so naming them saves the probe, and they are matched by name so that an
-// article URL is understood as a wiki page and not merely a path.
+// so naming them saves the probe, and their full file lists are too large
+// for one job to mean anything. They play no part in recognition: a
+// Wikimedia page is recognised the way any wiki's is.
 var mediaWikiWikimedia = []string{
 	"wikipedia.org", "wikimedia.org", "wiktionary.org", "wikiquote.org",
 	"wikibooks.org", "wikisource.org", "wikinews.org", "wikiversity.org",
 	"wikivoyage.org", "wikidata.org", "wikifunctions.org", "mediawiki.org",
 }
 
-// mediaWikiFarms are the wiki farms, where one domain covers thousands of
-// wikis that all run the same software at the same paths.
-//
-// wiki.gg is listed although its edge currently answers this client with a
-// challenge page rather than with the API — not for anything in the request,
-// which is ordinary, but for the TLS fingerprint httpx presents by default;
-// HEAPLEACH_UTLS=0 goes straight through and everything here then works. That
-// is a property of the shared client rather than of this host, so it is
-// recorded here rather than worked around.
-var mediaWikiFarms = []string{"fandom.com", "wiki.gg", "miraheze.org", "wikitide.org"}
+// mediaWikiRLConf is the ResourceLoader configuration every MediaWiki page
+// is served inline, which its scripts read the page's own title from.
+const mediaWikiRLConf = "RLCONF"
+
+// mediaWikiPageName reads the page's own title out of that configuration.
+var mediaWikiPageName = regexp.MustCompile(`"wgPageName"\s*:\s*"((?:[^"\\]|\\.)*)"`)
 
 // mediaWikiPagePrefixes are the article paths installs are laid out with.
 // The title is everything after one of these, "/" included: page titles have
@@ -172,54 +169,60 @@ var mediaWikiUploadPages = map[string]bool{
 // wiki with a million files.
 var mediaWikiNewestPages = map[string]bool{"newfiles": true, "newimages": true}
 
-// NewMediaWiki builds the MediaWiki extractor. Hosts named in
-// the "mediawiki" family of HEAPLEACH_EXTRA_HOSTS are added to the ones matched by shape, for an
-// install whose URLs look like nothing in particular.
-func NewMediaWiki(cfg *config.Config, client *httpx.Client) *MediaWiki {
-	return &MediaWiki{
-		client:   client,
-		extra:    cfg.ExtraHostsFor(config.FamilyMediaWiki),
-		interval: mediaWikiInterval,
-	}
+// NewMediaWiki builds the MediaWiki extractor.
+func NewMediaWiki(client *httpx.Client) *MediaWiki {
+	return &MediaWiki{client: client, interval: mediaWikiInterval}
 }
 
 func (m *MediaWiki) Name() string { return "mediawiki" }
 
-// Match recognises the shape rather than the host, because the host is the
-// part there is no list of: the software runs on a great many domains and
-// only a handful of them are worth naming.
-//
-// A title in the File, Category or Special namespace is enough on its own —
-// nothing else on the web lays a URL out that way. Everything else needs the
-// host to be a wiki this knows, since /wiki/<anything> would otherwise claim
-// every page of every site that happens to use that prefix. On unregistered
-// hosts the direct fallback probes siteinfo before selecting this extractor.
-func (m *MediaWiki) Match(u *url.URL) bool {
+// Recognises is the inventory's description.
+func (m *MediaWiki) Recognises() string {
+	return "MediaWiki categories, articles, file pages and upload lists: pages naming a title " +
+		"(`/wiki/<title>`, `index.php?title=`) whose generator is MediaWiki and which carry its " +
+		"ResourceLoader configuration, or, behind a challenge, whose origin's `api.php` identifies " +
+		"as MediaWiki"
+}
+
+// Shape reports a title in the File, Category or Special namespace: nothing
+// else on the web lays a URL out that way. An article's /wiki/<title> is
+// every site's that uses the prefix, so it is recognised only once fetched.
+func (m *MediaWiki) Shape(u *url.URL) bool {
 	title, explicit := mediaWikiTitle(u)
-	switch {
-	case title == "":
+	return explicit && title != "" && mediaWikiKindOf(title) != mediaWikiArticle
+}
+
+// Recognise takes a page naming a title that the software made: its
+// generator, and the ResourceLoader configuration or the body class its
+// skins print. A page that cannot say — a challenge in front of a wiki — is
+// asked of the API instead, but only for a form that names a namespace,
+// since an article path alone is too common to probe for.
+func (m *MediaWiki) Recognise(ctx context.Context, p *Page) bool {
+	title, explicit := mediaWikiTitle(p.Final)
+	if title == "" {
 		return false
-	case mediaWikiKindOf(title) != mediaWikiArticle:
+	}
+	if root := p.HTML(); root != nil && strings.HasPrefix(p.Generator(), "mediawiki") &&
+		(p.Has(mediaWikiRLConf) || findFirst(root, func(n *html.Node) bool {
+			return n.DataAtom == atom.Body && hasClass(n, "mediawiki")
+		}) != nil) {
 		return true
-	default:
-		return explicit && m.knownHost(u.Host)
 	}
+	if !explicit || !m.Shape(p.Final) || !pageSilent(p) {
+		return false
+	}
+	for _, api := range mediaWikiCandidates(p.Final, "") {
+		if _, ok := mediaWikiAsk(ctx, p, m.client, api); ok {
+			return true
+		}
+	}
+	return false
 }
 
-// mediaWikiSniff extends article support beyond the known farms. A wiki-like
-// path only warrants a probe: the siteinfo response must name MediaWiki.
-func mediaWikiSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
-	if title, explicit := mediaWikiTitle(u); title == "" || !explicit {
-		return nil, nil
-	}
-	return mediaWikiDetect(ctx, client, u, opts, "")
-}
-
-// An API advertised by the page is tried before the conventional paths, so
-// custom script directories work without registering the domain. Even an
-// index.php URL must prove its API here; resolveSite's shortcut is for hosts
-// already assigned to this extractor.
-func mediaWikiDetect(ctx context.Context, client *httpx.Client, u *url.URL, opts Options, advertised string) (*Result, error) {
+// mediaWikiCandidates are where a wiki may keep api.php, most likely first:
+// where the page itself said, where a URL naming index.php gives away, and
+// the conventional paths.
+func mediaWikiCandidates(u *url.URL, advertised string) []string {
 	var apis []string
 	if advertised != "" {
 		apis = append(apis, advertised)
@@ -230,43 +233,66 @@ func mediaWikiDetect(ctx context.Context, client *httpx.Client, u *url.URL, opts
 	for _, path := range mediaWikiAPIPaths {
 		apis = append(apis, util.Origin(u)+path)
 	}
+	return util.Dedupe(apis)
+}
+
+// mediaWikiAsk asks one candidate endpoint to identify itself, once per
+// probed page. The answer has to name MediaWiki, not merely arrive.
+func mediaWikiAsk(ctx context.Context, p *Page, client *httpx.Client, api string) (mediaWikiSite, bool) {
 	query := mediaWikiQuery()
 	query.Set("meta", "siteinfo")
 	query.Set("siprop", "general")
-	for _, api := range util.Dedupe(apis) {
-		var resp mediaWikiResponse
-		if !platformJSON(ctx, client, api+"?"+query.Encode(), nil, &resp) || resp.Error != nil ||
-			!strings.HasPrefix(resp.Query.General.Generator, "MediaWiki") {
-			continue
-		}
-		m := NewMediaWiki(nil, client)
-		m.api = map[string]mediaWikiSite{strings.ToLower(u.Host): {api: api, name: resp.Query.General.SiteName}}
-		return m.Extract(ctx, u, opts)
+	var resp mediaWikiResponse
+	if !pageJSON(ctx, p, client, api+"?"+query.Encode(), nil, &resp) || resp.Error != nil ||
+		!strings.HasPrefix(resp.Query.General.Generator, "MediaWiki") {
+		return mediaWikiSite{}, false
 	}
-	return nil, ctx.Err()
+	return mediaWikiSite{api: api, name: resp.Query.General.SiteName}, true
 }
 
-// knownHost reports whether a host runs a wiki this build knows about.
-func (m *MediaWiki) knownHost(host string) bool {
-	if m.wikimedia(host) {
-		return true
+// mediaWikiAdvertised is the api.php a page advertises in its EditURI link,
+// which says where the scripts are even when the article URL gives no
+// indication. Only an endpoint on the page's own origin is taken.
+func mediaWikiAdvertised(p *Page) string {
+	root := p.HTML()
+	if root == nil {
+		return ""
 	}
-	for _, domain := range mediaWikiFarms {
-		if util.HostMatches(host, domain) {
-			return true
-		}
+	link := findFirst(root, func(n *html.Node) bool {
+		return n.DataAtom == atom.Link && strings.EqualFold(attr(n, "rel"), "EditURI")
+	})
+	if link == nil {
+		return ""
 	}
-	for _, domain := range m.extra {
-		if util.HostMatches(host, strings.ToLower(strings.TrimSpace(domain))) {
-			return true
-		}
+	ref, err := url.Parse(attr(link, "href"))
+	if err != nil {
+		return ""
 	}
-	return false
+	ref = p.Final.ResolveReference(ref)
+	if util.Origin(ref) != util.Origin(p.Final) {
+		return ""
+	}
+	ref.RawQuery, ref.Fragment = "", ""
+	return ref.String()
 }
 
 // Extract resolves a category, an article, a file page or a wiki's uploads.
 func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	title, _ := mediaWikiTitle(u)
+	title, explicit := mediaWikiTitle(u)
+	if !explicit {
+		// An install with an article path of its own (/w/<title>, or none
+		// at all) cannot be read off the URL, but its page says which
+		// title it is in the configuration it hands its scripts.
+		if p := probedPage(ctx, u); p != nil {
+			if match := mediaWikiPageName.FindStringSubmatch(p.Body); match != nil {
+				if raw, err := strconv.Unquote(`"` + match[1] + `"`); err == nil {
+					if name := mediaWikiClean(raw); name != "" {
+						title = name
+					}
+				}
+			}
+		}
+	}
 	if title == "" {
 		return nil, fmt.Errorf("mediawiki: %s does not name a wiki page — "+
 			"paste a category, an article, or a File: page", u.Redacted())
@@ -642,6 +668,19 @@ func (m *MediaWiki) resolveSite(ctx context.Context, u *url.URL) (mediaWikiSite,
 	// Wikimedia project's is known. Both are worth a request not spent.
 	if script, ok := mediaWikiScriptPath(u.Path); ok {
 		return mediaWikiSite{api: origin + script}, nil
+	}
+	// The probed page may have advertised its API, or a challenge in front
+	// of it may have had the API asked already; either answer is kept on
+	// the page.
+	if p := probedPage(ctx, u); p != nil {
+		for _, api := range mediaWikiCandidates(p.Final, mediaWikiAdvertised(p)) {
+			if site, ok := mediaWikiAsk(ctx, p, m.client, api); ok {
+				return site, nil
+			}
+			if p.OK() {
+				break // only the advertised endpoint is worth asking out of turn
+			}
+		}
 	}
 	if m.wikimedia(u.Host) {
 		return mediaWikiSite{api: origin + mediaWikiAPIPaths[0]}, nil

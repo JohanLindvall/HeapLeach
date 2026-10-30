@@ -59,64 +59,17 @@ const (
 	apiGelbooru01
 )
 
-// booruSite is one supported host.
+// booruSite is the board one URL is on, as recognition established it.
 type booruSite struct {
-	name    string
-	root    string
-	api     booruAPI
-	domains []string
-	// filterID unlocks the default-hidden results on philomena sites.
+	// name is the board's label: its host's first label, or a booru.org
+	// board's own subdomain.
+	name string
+	root string
+	api  booruAPI
+	// filterID unlocks the default-hidden results on philomena sites: the
+	// id of the site's own "everything" filter, which each site numbers
+	// differently and publishes among its system filters.
 	filterID string
-	// multi marks one install serving many boards, where the root and the
-	// label belong to whichever board the link named rather than to this
-	// entry. See forURL.
-	multi bool
-}
-
-// booruSites is the supported set. Each was checked against its live API;
-// hosts that now demand an API key or sit behind a challenge are left out
-// rather than shipped as something that looks supported but is not.
-var booruSites = []booruSite{
-	// Danbooru family. danbooru.donmai.us itself is behind a challenge that
-	// a plain client cannot pass, so only its siblings are listed.
-	{name: "aibooru", root: "https://aibooru.online", api: apiDanbooru, domains: []string{"aibooru.online"}},
-	{name: "booruvar", root: "https://booru.borvar.art", api: apiDanbooru, domains: []string{"booru.borvar.art"}},
-
-	// e621 family: same API, but the file URL is nested.
-	{name: "e621", root: "https://e621.net", api: apiE621, domains: []string{"e621.net"}},
-	{name: "e926", root: "https://e926.net", api: apiE621, domains: []string{"e926.net"}},
-	{name: "e6ai", root: "https://e6ai.net", api: apiE621, domains: []string{"e6ai.net"}},
-
-	// Moebooru family.
-	{name: "yandere", root: "https://yande.re", api: apiMoebooru, domains: []string{"yande.re"}},
-	{name: "konachan", root: "https://konachan.com", api: apiMoebooru, domains: []string{"konachan.com", "konachan.net"}},
-	{name: "sakugabooru", root: "https://www.sakugabooru.com", api: apiMoebooru, domains: []string{"sakugabooru.com"}},
-
-	// Gelbooru 0.2 family. gelbooru.com itself now requires an API key.
-	{name: "safebooru", root: "https://safebooru.org", api: apiGelbooru, domains: []string{"safebooru.org"}},
-	{name: "tbib", root: "https://tbib.org", api: apiGelbooru, domains: []string{"tbib.org"}},
-	{name: "hypnohub", root: "https://hypnohub.net", api: apiGelbooru, domains: []string{"hypnohub.net"}},
-	{name: "xbooru", root: "https://xbooru.com", api: apiGelbooru, domains: []string{"xbooru.com"}},
-
-	// Philomena family. filterID selects the site's "everything" filter, so
-	// a search returns what the site itself would show.
-	{name: "derpibooru", root: "https://derpibooru.org", api: apiPhilomena, domains: []string{"derpibooru.org"}, filterID: "56027"},
-	{name: "ponybooru", root: "https://ponybooru.org", api: apiPhilomena, domains: []string{"ponybooru.org"}, filterID: "3"},
-	{name: "furbooru", root: "https://furbooru.org", api: apiPhilomena, domains: []string{"furbooru.org"}, filterID: "2"},
-	{name: "twibooru", root: "https://twibooru.org", api: apiTwibooru, domains: []string{"twibooru.org"}},
-
-	// szurubooru family. The software is self-hosted, so this is the set of
-	// public instances that answer rather than a canonical list.
-	// booru.bcbnsfw.space runs it too but serves an age-consent page in
-	// place of every API answer, so it is left out for the same reason
-	// danbooru.donmai.us is: shipping it would look like support and behave
-	// like a parse failure.
-	{name: "snootbooru", root: "https://snootbooru.com", api: apiSzurubooru, domains: []string{"snootbooru.com"}},
-	{name: "foalcon", root: "https://booru.foalcon.com", api: apiSzurubooru, domains: []string{"booru.foalcon.com"}},
-
-	// Gelbooru 0.1: booru.org is one install hosting a board per subdomain,
-	// so a single entry covers every one of them. See forURL.
-	{name: "booru.org", api: apiGelbooru01, domains: []string{"booru.org"}, multi: true},
 }
 
 const (
@@ -146,7 +99,20 @@ const (
 	gelbooru01ImageID    = "image"
 )
 
+// philomenaEverything is the name philomena sites give the system filter
+// that hides nothing.
+const philomenaEverything = "Everything"
+
 // Booru resolves tag searches and single posts on image-board sites.
+//
+// No board is known by name. A page is recognised by the form its family
+// lays posts out at, by the markup its software renders — the posts
+// controller and request-forgery token of the Rails boards, the thumbnail
+// anchors of the PHP ones, the post registry of Moebooru, the image
+// containers of Philomena, the app shell of szurubooru — and then by the
+// family's API answering for that very post or listing. Several of these
+// sites answer the page with a challenge while serving their JSON openly,
+// so a page that cannot say is asked of the API alone.
 type Booru struct {
 	client *httpx.Client
 }
@@ -156,46 +122,39 @@ func NewBooru(client *httpx.Client) *Booru { return &Booru{client: client} }
 
 func (b *Booru) Name() string { return "booru" }
 
-func (b *Booru) Match(u *url.URL) bool { return siteFor(u) != nil }
-
-// siteFor finds the entry covering a URL.
-func siteFor(u *url.URL) *booruSite {
-	for i := range booruSites {
-		for _, domain := range booruSites[i].domains {
-			if util.HostMatches(u.Host, domain) {
-				return &booruSites[i]
-			}
-		}
-	}
-	return nil
+// Recognises is the inventory's description.
+func (b *Booru) Recognises() string {
+	return "image-board tag searches and posts on Danbooru, e621, Moebooru, Gelbooru, Philomena, " +
+		"Twibooru and szurubooru boards (`/posts?tags=`, `/posts/<id>`, `/post/show/<id>`, " +
+		"`/index.php?page=post`, `/images/<id>`, `/post/<id>`) whose page carries the software's " +
+		"markup and whose API answers for the same post or listing; Gelbooru 0.1 boards by their " +
+		"listing markup alone"
 }
 
-// forURL fills in the parts of a multi-tenant entry that only the link can
-// supply.
-//
-// booru.org is one install serving a board per subdomain, and there are far
-// more of them than anyone will enumerate — the same argument the KVS host
-// list loses, and the same answer: the board's own subdomain is its root and
-// its label, so both are read off the URL and neither is compiled in.
-func (s *booruSite) forURL(u *url.URL) *booruSite {
-	if !s.multi {
-		return s
-	}
-	board := *s
-	board.root = util.Origin(u)
-	if label, _, _ := strings.Cut(strings.ToLower(u.Hostname()), "."); label != "" {
-		board.name = label
-	}
-	return &board
+// Shape reports the forms the families lay their posts out at.
+func (b *Booru) Shape(u *url.URL) bool { return len(booruCandidates(u)) > 0 }
+
+// Recognise takes a post or listing form whose page is a board's, by its
+// markup, and whose API then answers; or, where the page cannot say, whose
+// API answers alone.
+func (b *Booru) Recognise(ctx context.Context, p *Page) bool {
+	return b.Shape(p.Final) && booruDetect(ctx, p, b.client, p.Final) != nil
 }
 
 // Extract resolves a tag search, or a single post, into files.
 func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	site := siteFor(u)
-	if site == nil {
-		return nil, fmt.Errorf("booru: %s is not a supported board", u.Redacted())
+	p := probedPage(ctx, u)
+	if p == nil {
+		p = probePage(ctx, b.client, u)
 	}
-	return b.extract(ctx, u, site.forURL(u))
+	site := booruDetect(ctx, p, b.client, u)
+	if site == nil {
+		return nil, fmt.Errorf("booru: %s is not a board this can read", u.Redacted())
+	}
+	if site.api == apiPhilomena {
+		site.filterID = b.everythingFilter(ctx, site)
+	}
+	return b.extract(ctx, u, site)
 }
 
 func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Result, error) {
@@ -228,47 +187,120 @@ func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Resu
 	return &Result{Title: title, Files: files}, nil
 }
 
-// booruSniff uses the route to select plausible API dialects, then requires
-// a post id and original-media metadata in the response. Danbooru and e621
-// share an endpoint; the nested file in the answer distinguishes them.
-func booruSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options) (*Result, error) {
-	segs := util.PathSegments(u)
-	var candidates []booruAPI
-	switch {
-	case u.Query().Get("page") == "post" && (u.Path == "/" || u.Path == "/index.php"):
-		candidates = []booruAPI{apiGelbooru}
-	case len(segs) > 0 && segs[0] == "posts":
-		candidates = []booruAPI{apiDanbooru, apiSzurubooru, apiTwibooru, apiPhilomena}
-	case len(segs) > 0 && segs[0] == "post":
-		if len(segs) == 1 || (len(segs) >= 3 && segs[1] == "show") {
-			candidates = []booruAPI{apiMoebooru}
-		} else {
-			candidates = []booruAPI{apiSzurubooru}
-		}
-	case len(segs) > 0 && (segs[0] == "images" || segs[0] == "search"):
-		candidates = []booruAPI{apiPhilomena, apiTwibooru}
-	case len(segs) == 0 && u.Query().Has("tags"):
-		candidates = []booruAPI{apiDanbooru, apiMoebooru, apiGelbooru, apiSzurubooru, apiPhilomena, apiTwibooru}
+// everythingFilter looks up the philomena site's own "everything" filter,
+// or "" to leave the site's default in force.
+func (b *Booru) everythingFilter(ctx context.Context, site *booruSite) string {
+	var resp struct {
+		Filters []struct {
+			ID   json.Number `json:"id"`
+			Name string      `json:"name"`
+		} `json:"filters"`
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
-	defer cancel()
+	if !platformJSON(ctx, b.client, site.root+"/api/v1/json/filters/system", site.apiHeaders(), &resp) {
+		return ""
+	}
+	for _, f := range resp.Filters {
+		if strings.EqualFold(f.Name, philomenaEverything) {
+			return f.ID.String()
+		}
+	}
+	return ""
+}
+
+// booruCandidates are the API families a URL's form could belong to, most
+// likely first; none when the form is no board's.
+func booruCandidates(u *url.URL) []booruAPI {
+	segs := util.PathSegments(u)
+	switch {
+	case u.Query().Get("page") == "post" && (u.Path == "/" || u.Path == "" || u.Path == "/index.php"):
+		return []booruAPI{apiGelbooru, apiGelbooru01}
+	case len(segs) > 0 && segs[0] == "posts" && len(segs) <= 2:
+		return []booruAPI{apiDanbooru, apiSzurubooru, apiTwibooru, apiPhilomena}
+	case len(segs) > 0 && segs[0] == "post" && len(segs) <= 3:
+		if len(segs) == 1 || (len(segs) == 3 && segs[1] == "show") {
+			return []booruAPI{apiMoebooru, apiSzurubooru}
+		}
+		if len(segs) == 2 {
+			return []booruAPI{apiSzurubooru}
+		}
+	case len(segs) == 2 && segs[0] == "images":
+		return []booruAPI{apiPhilomena, apiTwibooru}
+	case len(segs) == 1 && segs[0] == "search" && u.Query().Has("q"):
+		return []booruAPI{apiPhilomena, apiTwibooru}
+	case len(segs) == 0 && u.Query().Has("tags"):
+		return []booruAPI{apiDanbooru, apiMoebooru, apiGelbooru, apiSzurubooru, apiPhilomena, apiTwibooru}
+	}
+	return nil
+}
+
+// booruMarked reports whether a page carries a board's own markup: the
+// structure one of the families renders, which no ordinary page shares.
+func booruMarked(p *Page) bool {
+	root := p.HTML()
+	if root == nil {
+		return false
+	}
+	if p.Has("Post.register") || p.Has(`data-uris`) || strings.HasPrefix(p.Generator(), "booru-on-rails") ||
+		p.Script("js/app.min.js") && p.Script("js/vendor.min.js") {
+		return true
+	}
+	return findFirst(root, func(n *html.Node) bool {
+		switch {
+		case n.DataAtom == atom.Body:
+			// The Rails boards' posts controller.
+			return attr(n, "data-controller") == "posts"
+		case n.DataAtom == atom.Img:
+			return attr(n, "id") == gelbooru01ImageID && p.Has("page=post")
+		case n.DataAtom == atom.A:
+			return strings.HasPrefix(attr(n, "id"), "p") && strings.Contains(attr(n, "href"), "s=view")
+		case n.DataAtom == atom.Div:
+			return attr(n, "id") == "image-container" || hasClass(n, "image-show-container")
+		}
+		return false
+	}) != nil
+}
+
+// booruDetect works out which board family a page belongs to, or nil.
+//
+// The page has to carry a board's markup first, unless it cannot say; the
+// family is then settled by its API answering for this very target with a
+// post id and original-media metadata. Danbooru and e621 share an endpoint;
+// the nested file in the answer distinguishes them. A Gelbooru-shaped page
+// whose API does not answer is a Gelbooru 0.1 board, which publishes none
+// and is scraped — taken only on its markup, never on silence. Every API
+// question goes through the page's memo, so recognising and extracting ask
+// it once.
+func booruDetect(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) *booruSite {
+	candidates := booruCandidates(u)
+	marked := booruMarked(p)
+	if len(candidates) == 0 || (!marked && !pageSilent(p)) {
+		return nil
+	}
+	segs := util.PathSegments(u)
+	name := booruLabel(u.Hostname())
 	for _, api := range candidates {
-		if probeCtx.Err() != nil {
-			return nil, ctx.Err()
+		if ctx.Err() != nil {
+			return nil
 		}
 		if api == apiSzurubooru && len(segs) > 1 && segs[0] == "posts" {
 			continue // szurubooru's single-post route is /post/<id>
 		}
-		site := &booruSite{name: u.Hostname(), root: util.Origin(u), api: api}
+		site := &booruSite{name: name, root: util.Origin(u), api: api}
 		tags, postID, listing := site.parseTarget(u)
 		if !listing && postID == "" {
+			continue
+		}
+		if api == apiGelbooru01 {
+			if marked && p.OK() {
+				return site
+			}
 			continue
 		}
 		if postID != "" {
 			tags = "id:" + postID
 		}
 		var raw json.RawMessage
-		if !platformJSON(probeCtx, client, site.endpoint(tags, 0), site.apiHeaders(), &raw) {
+		if !pageJSON(ctx, p, client, site.endpoint(tags, 0), site.apiHeaders(), &raw) {
 			continue
 		}
 		posts, err := booruDecode(raw)
@@ -282,10 +314,17 @@ func booruSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options
 			if api == apiDanbooru && post.File.URL != "" {
 				site.api = apiE621
 			}
-			return NewBooru(client).extract(ctx, u, site)
+			return site
 		}
 	}
-	return nil, nil
+	return nil
+}
+
+// booruLabel names a board by its host's first label, which for a booru.org
+// board is the board's own subdomain.
+func booruLabel(host string) string {
+	label, _, _ := strings.Cut(strings.TrimPrefix(strings.ToLower(host), "www."), ".")
+	return label
 }
 
 // parseTarget pulls a tag query or a single post id out of a URL, and

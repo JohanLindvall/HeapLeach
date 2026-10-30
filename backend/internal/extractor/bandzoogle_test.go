@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,66 +143,19 @@ func TestBandzoogleReadsEveryTrackOnce(t *testing.T) {
 	}
 }
 
-func TestBandzoogleSniffRecognisesThePlatform(t *testing.T) {
-	server := bandzoogleServer(t, bandzooglePage)
-	client := httpx.New("test/1.0", "en", 0, 10*time.Second)
-
-	res, err := bandzoogleSniff(context.Background(), client, mustURL(t, server.URL+"/"))
-	if err != nil {
-		t.Fatalf("sniff: %v", err)
-	}
-	if res == nil {
-		t.Fatal("the marker was on the page and the sniff passed it by")
-	}
-	if res.Title != "A Band Name" {
-		t.Errorf("title = %q, want the artist the tracks name", res.Title)
-	}
-	if len(res.Files) != 4 {
-		t.Errorf("got %d tracks, want 4", len(res.Files))
-	}
-}
-
-// A page without the marker must fall through untouched, since the cost of a
-// wrong guess here is the direct fallback saving somebody's homepage to disk.
-func TestBandzoogleSniffLeavesOtherPagesAlone(t *testing.T) {
-	server := bandzoogleServer(t, `<!DOCTYPE html><html><head><title>Something else</title></head>
-		<body><a href="/x.mp3">a plain link</a><audio src="/y.mp3"></audio></body></html>`)
-	client := httpx.New("test/1.0", "en", 0, 10*time.Second)
-
-	res, err := bandzoogleSniff(context.Background(), client, mustURL(t, server.URL+"/"))
-	if err != nil {
-		t.Fatalf("sniff: %v", err)
-	}
-	if res != nil {
-		t.Errorf("claimed a page that is not one of these: %+v", res)
-	}
-}
-
-// Every install is on its owner's own domain, so the only ones that can be
-// matched by host are the ones a user names.
-func TestBandzoogleTakesItsHostsFromTheEnvironment(t *testing.T) {
-	client := httpx.New("test/1.0", "en", 0, time.Second)
-
-	if got := NewBandzoogleSites(&config.Config{}, client); len(got) != 0 {
-		t.Errorf("built %d extractors with nothing configured, want 0", len(got))
-	}
-
-	cfg := &config.Config{ExtraHosts: map[string][]string{
-		config.FamilyBandzoogle: {"aband.example.test", "another.example.test"},
-	}}
-	sites := NewBandzoogleSites(cfg, client)
-	if len(sites) != 2 {
-		t.Fatalf("built %d extractors, want 2", len(sites))
-	}
-	if !legacyMatch(sites[0], mustURL(t, "https://aband.example.test/music")) {
-		t.Error("a named install does not match its own host")
-	}
-	if legacyMatch(sites[0], mustURL(t, "https://elsewhere.example.test/music")) {
-		t.Error("an install matched a host nobody named")
-	}
-	if got := sites[0].Name(); got != "aband" {
-		t.Errorf("name = %q, want the host's first label", got)
-	}
+func TestBandzoogleRecognise(t *testing.T) {
+	b := NewBandzoogle(nil)
+	expectRecognised(t, b, htmlPage(t, "https://aband.example.test/", bandzooglePage), true)
+	expectRecognised(t, b, htmlPage(t, "https://aband.example.test/music/albums", bandzooglePage), true)
+	// A page that names the platform but carries no player.
+	expectRecognised(t, b, htmlPage(t, "https://aband.example.test/",
+		`<html><head><title>A Band Name</title><meta name="generator" content="Bandzoogle"></head>
+		<body><p>Built with data-zoogle-track support</p></body></html>`), false)
+	// A page that is not one of these at all.
+	expectRecognised(t, b, htmlPage(t, "https://aband.example.test/",
+		`<!DOCTYPE html><html><head><title>Something else</title></head>
+		<body><a href="/x.mp3">a plain link</a><audio src="/y.mp3"></audio></body></html>`), false)
+	expectShape(t, b, "https://aband.example.test/music", false)
 }
 
 func TestBandzoogleExt(t *testing.T) {
@@ -220,9 +174,18 @@ func TestBandzoogleExt(t *testing.T) {
 	}
 }
 
-// The whole point of the sniff is that a band's own domain is in no list.
-func TestBandzoogleReachedThroughTheDirectFallback(t *testing.T) {
-	server := bandzoogleServer(t, bandzooglePage)
+// A band's own domain is in no list: the page is recognised by its player,
+// and read once for recognition and extraction both.
+func TestBandzoogleRecognisedThroughTheRegistry(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			hits.Add(1)
+		}
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		_, _ = w.Write([]byte(bandzooglePage))
+	}))
+	t.Cleanup(server.Close)
 	cfg := &config.Config{UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage}
 	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, 10*time.Second)
 
@@ -230,8 +193,8 @@ func TestBandzoogleReachedThroughTheDirectFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if ex.Name() != "direct" {
-		t.Logf("routed via %s", ex.Name())
+	if ex.Name() != "bandzoogle" {
+		t.Errorf("routed via %s", ex.Name())
 	}
 	if len(res.Files) != 4 {
 		t.Fatalf("got %d tracks through the registry, want 4", len(res.Files))
@@ -239,13 +202,18 @@ func TestBandzoogleReachedThroughTheDirectFallback(t *testing.T) {
 	if res.Files[0].Name != "01 First Song.mp3" {
 		t.Errorf("first track named %q", res.Files[0].Name)
 	}
+	if res.Title != "A Band Name" {
+		t.Errorf("title = %q, want the artist the tracks name", res.Title)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the page was fetched %d times, want once", n)
+	}
 }
 
-// The sniff runs against every URL the direct fallback sees, so what it does
-// when the answer is "not mine" matters more than what it does when it is.
-// Both of these were wrong at first, and both broke downloads that have
-// nothing to do with this platform.
-func TestBandzoogleSniffKeepsOutOfTheWay(t *testing.T) {
+// Every page on the web is offered to the recogniser, so what happens when
+// the answer is "not mine" matters more than what happens when it is.
+func TestBandzoogleKeepsOutOfTheWay(t *testing.T) {
+	cfg := &config.Config{}
 	t.Run("a URL naming a file is never fetched", func(t *testing.T) {
 		var hits int
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -253,11 +221,10 @@ func TestBandzoogleSniffKeepsOutOfTheWay(t *testing.T) {
 			_, _ = w.Write([]byte(bandzooglePage))
 		}))
 		defer server.Close()
-		client := httpx.New("test/1.0", "en", 0, 10*time.Second)
+		reg := NewRegistry(cfg, httpx.New("test/1.0", "en", 0, 10*time.Second))
 
-		res, err := bandzoogleSniff(context.Background(), client, mustURL(t, server.URL+"/files/archive.zip"))
-		if res != nil || err != nil {
-			t.Errorf("claimed a file link: %v, %v", res, err)
+		if _, ex, _ := reg.Extract(context.Background(), server.URL+"/files/archive.zip", Options{}); ex == nil || ex.Name() == "bandzoogle" {
+			t.Errorf("a file link went to %v", ex)
 		}
 		if hits != 0 {
 			t.Errorf("spent %d requests on a URL that already names a file", hits)
@@ -269,33 +236,29 @@ func TestBandzoogleSniffKeepsOutOfTheWay(t *testing.T) {
 			http.Error(w, "gone", http.StatusNotFound)
 		}))
 		defer server.Close()
-		client := httpx.New("test/1.0", "en", 0, 10*time.Second)
+		reg := NewRegistry(cfg, httpx.New("test/1.0", "en", 0, 10*time.Second))
 
 		// Not having managed to look is not the same as having looked and
-		// recognised it. Reporting an error here would put this platform's
-		// name on somebody else's 404 and stop the fallback chain.
-		res, err := bandzoogleSniff(context.Background(), client, mustURL(t, server.URL+"/nothing"))
-		if res != nil {
-			t.Errorf("returned a result for a page it could not fetch: %+v", res)
-		}
-		if err != nil {
-			t.Errorf("reported %v; a failed fetch must fall through instead", err)
+		// recognised it: this platform's name must not go on somebody
+		// else's 404.
+		if _, ex, _ := reg.Extract(context.Background(), server.URL+"/nothing", Options{}); ex == nil || ex.Name() == "bandzoogle" {
+			t.Errorf("a page that would not load went to %v", ex)
 		}
 	})
 
-	t.Run("a page carrying the marker but no tracks is reported", func(t *testing.T) {
+	t.Run("a page carrying the player but no tracks is reported", func(t *testing.T) {
 		// Committed: falling through here would hand the page to the direct
 		// fallback, which would save the HTML and call it a download.
 		server := bandzoogleServer(t, `<html><body>
 			<a data-zoogle-track="true" href="#">no destination</a></body></html>`)
-		client := httpx.New("test/1.0", "en", 0, 10*time.Second)
+		reg := NewRegistry(cfg, httpx.New("test/1.0", "en", 0, 10*time.Second))
 
-		res, err := bandzoogleSniff(context.Background(), client, mustURL(t, server.URL+"/"))
+		res, ex, err := reg.Extract(context.Background(), server.URL+"/", Options{})
 		if res != nil {
 			t.Errorf("returned %+v for a page with nothing to fetch", res)
 		}
-		if err == nil {
-			t.Error("a page that named a player and offered nothing was passed over silently")
+		if err == nil || ex == nil || ex.Name() != "bandzoogle" {
+			t.Errorf("a page that named a player and offered nothing was passed over: %v, %v", ex, err)
 		}
 	})
 }

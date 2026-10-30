@@ -30,8 +30,8 @@ import (
 // with it, which is the one thing fourchan.go can do nothing about. The
 // archives are where the threads worth keeping persist, and they all run the
 // same software — FoolFuuka, whose JSON API is deliberately modelled on
-// 4chan's own. So one core covers every install and adding one costs a line
-// in a table, exactly as kvssites.go does for a tube platform.
+// 4chan's own. So one core covers every install, and an install is
+// recognised by the software rather than listed.
 //
 // Reading the API rather than the pages is not a preference here, it is the
 // only way in. Desuarchive — the largest of them, and the one most links
@@ -66,76 +66,24 @@ import (
 //     would throw away just as thoroughly. It is walked with a token decoder
 //     instead. See foolFuukaDecode.
 type FoolFuuka struct {
-	hostSet
 	client *httpx.Client
-	site   foolFuukaSite
 }
 
-// foolFuukaSite is one install.
+// foolFuukaSite is the archive one URL is on.
 type foolFuukaSite struct {
-	// name is the UI label and the prefix on every error this raises.
+	// name is the prefix on every error this raises and the start of an
+	// index page's title: the archive's first host label.
 	name string
-	// root is the origin every API call is addressed to, which is not
-	// necessarily the host the user pasted — see the rbt.asia entry.
+	// root is the origin every API call is addressed to.
 	root string
-	// domains are the hosts routed here.
-	domains []string
 }
 
-// foolFuukaSites are the installs this build ships knowing about.
-//
-// The list is short, and it is short for a reason worth stating plainly: on
-// most of the archives that still exist, the endpoint this needs is the one
-// that is shut. Asking whether a host answers is not the same question as
-// asking whether it works, and the two come apart here in three separate
-// ways, so each candidate was taken all the way through — thread listed,
-// file transferred — before it earned a line.
-var foolFuukaSites = []foolFuukaSite{
-	// rbt.asia is no longer an install of its own. Every path on it, the API
-	// included, 302s to desuarchive — so it is listed as another domain of
-	// that install rather than as an archive in its own right. The link
-	// someone saved years ago still resolves, and the job is named after the
-	// archive that actually holds the posts.
-	{name: "desuarchive", root: "https://desuarchive.org", domains: []string{"desuarchive.org", "rbt.asia"}},
-	{name: "palanq", root: "https://archive.palanq.win", domains: []string{"archive.palanq.win"}},
-}
-
-// Deliberately absent. Each is a live host that answers, which is exactly
-// what makes listing one a trap:
-//
-//   - thebarchive.com and archiveofsins.com serve /_/api/chan/index/ to
-//     anyone and answer /_/api/chan/thread/ and /_/api/chan/search/ with a
-//     Cloudflare challenge. So the endpoint that lists a board is open and
-//     the endpoint that opens a thread is not, which is the wrong way round
-//     for a downloader: what a person pastes is a thread. Their HTML thread
-//     pages are still served, so a scraper could reach them — but it would
-//     be reading rounded sizes off a page instead of exact ones out of JSON,
-//     which is most of what this file is for.
-//
-//   - arch.b4k.dev has the opposite shape. Its API is entirely open; it is
-//     the media host, arch-img.b4k.dev, that sits behind a bot rule. A few
-//     files transfer and then every request answers with the challenge page,
-//     and it does not lapse — six requests spaced twenty seconds apart, five
-//     minutes after the last one, were all refused. A queue of a hundred
-//     images would fetch three, which reads as a broken downloader rather
-//     than as a host that turned us away.
-//
-//   - boards.fireden.net is not merely frozen at 2022, which would be fine
-//     for old threads. Of its boards only /sci/ still answers the API at
-//     all; the rest report "No board selected." or 500. And every media_link
-//     on the posts it does return is a 404, because img-lb.fireden.net
-//     serves nothing any more — while the API goes on reporting media_status
-//     "normal" and an exact size for each of them. Nothing short of fetching
-//     one reveals that the file is gone.
-//
-//   - archive.4plebs.org and archived.moe answer 403 to a client that cannot
-//     pass a challenge, on every path. Left out the way booru.go leaves out
-//     danbooru.donmai.us: a name in this list is a promise.
-//
-// The "foolfuuka" family of HEAPLEACH_EXTRA_HOSTS adds any of them back for
-// whoever can reach them, which is the same escape kvssites.go offers and
-// exists for the same reason:
-// what these hosts do is decided by their operators, not by a release.
+// An archive is recognised by the software rather than by a list of
+// installs. Many hosts that run it serve only part of what this needs — a
+// board index open while threads sit behind a challenge, an open API over a
+// media host that refuses downloads, a frozen archive whose media links all
+// 404 — and each fails in its own words at extraction, where the truth is
+// available, rather than being guessed at here.
 
 // FoolFuuka's read-only API. The paths are fixed across installs — that is
 // what makes one core enough — and only the origin changes.
@@ -145,6 +93,10 @@ const (
 	foolFuukaSearchAPI = "/_/api/chan/search/"
 	foolFuukaPostAPI   = "/_/api/chan/post/"
 )
+
+// foolFuukaAssets is the path the software serves its own scripts and
+// themes under, on every install.
+const foolFuukaAssets = "/foolfuuka/"
 
 // foolFuukaNormal is the only media_status worth queueing. A row marked
 // anything else — a banned image, a purged one — has a name and a size in the
@@ -165,72 +117,47 @@ const foolFuukaNormal = "normal"
 // the API as though it named a board.
 const foolFuukaMaxBoardLen = 5
 
-// NewFoolFuukaSites builds one extractor per install, so each is matched on
-// its own hosts and named for itself in the UI, exactly as a hand-written
-// host would be.
-//
-// The "foolfuuka" family of HEAPLEACH_EXTRA_HOSTS appends installs at
-// runtime. An archive named that
-// way is addressed at its own origin and labelled by its first domain label,
-// which is all the table itself carries for the ones compiled in.
-func NewFoolFuukaSites(cfg *config.Config, client *httpx.Client) []Extractor {
-	sites := foolFuukaSites
-	if cfg != nil && len(cfg.ExtraHostsFor(config.FamilyFoolFuuka)) > 0 {
-		sites = append([]foolFuukaSite(nil), sites...)
-		for _, host := range util.Dedupe(cfg.ExtraHostsFor(config.FamilyFoolFuuka)) {
-			host = strings.ToLower(strings.TrimSpace(host))
-			// A host already covered is left alone rather than registered a
-			// second time under a label of its own, which would give two
-			// extractors one name and make a failure impossible to attribute.
-			if host == "" || foolFuukaKnown(sites, host) {
-				continue
-			}
-			sites = append(sites, foolFuukaSite{
-				name:    foolFuukaLabel(host),
-				root:    "https://" + host,
-				domains: []string{host},
-			})
-		}
-	}
+// NewFoolFuuka builds the extractor covering every FoolFuuka archive.
+func NewFoolFuuka(client *httpx.Client) *FoolFuuka { return &FoolFuuka{client: client} }
 
-	out := make([]Extractor, 0, len(sites))
-	for _, site := range sites {
-		out = append(out, &FoolFuuka{hostSet: site.domains, client: client, site: site})
-	}
-	return out
+func (f *FoolFuuka) Name() string { return "foolfuuka" }
+
+// Recognises is the inventory's description.
+func (f *FoolFuuka) Recognises() string {
+	return "FoolFuuka archive threads, posts, searches and board pages (`/<board>/thread/<n>/`, " +
+		"`/<board>/post/<n>/`, `/<board>/search/…`, `/<board>/`) whose page names the software as " +
+		"its generator and loads its `/foolfuuka/` assets, or, behind a challenge, whose origin's " +
+		"`/_/api/chan/` answers the route with archived posts"
 }
 
-// foolFuukaKnown reports whether a host is already covered, so naming one of
-// the compiled-in archives in the environment does not register it twice
-// under a second label.
-func foolFuukaKnown(sites []foolFuukaSite, host string) bool {
-	for _, site := range sites {
-		for _, domain := range site.domains {
-			if util.HostMatches(host, domain) {
-				return true
-			}
-		}
+// Shape reports a thread, post or search. A bare /<board>/ is too common a
+// path to single out, so a board page is recognised only once fetched.
+func (f *FoolFuuka) Shape(u *url.URL) bool {
+	t, err := foolFuukaParse(u)
+	return err == nil && t.kind != foolFuukaIndexTarget
+}
+
+// Recognise takes an archive route served by the software: its generator
+// and its own assets. The largest archives answer their HTML with a
+// challenge while leaving the API open, so a page that cannot say is asked
+// of the API the route corresponds to, for a thread, post or search form.
+func (f *FoolFuuka) Recognise(ctx context.Context, p *Page) bool {
+	if _, err := foolFuukaParse(p.Final); err != nil {
+		return false
 	}
-	return false
+	if strings.HasPrefix(p.Generator(), "foolfuuka") && p.Script(foolFuukaAssets) {
+		return true
+	}
+	return f.Shape(p.Final) && pageSilent(p) && foolFuukaAnswers(ctx, p, f.client, p.Final)
 }
 
-// foolFuukaLabel names a runtime host by its first label, the way kvssites.go
-// names a tube install. It is the part that distinguishes one archive from
-// another, whether the host is a bare domain or a subdomain of one.
-func foolFuukaLabel(host string) string {
-	label, _, _ := strings.Cut(host, ".")
-	return label
-}
-
-func (f *FoolFuuka) Name() string { return f.site.name }
-
-// foolFuukaSniff asks only the API corresponding to the pasted route. A
-// post number and the archive's media record identify the response; generic
-// "posts" objects and empty/error responses do not.
-func foolFuukaSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
+// foolFuukaAnswers asks only the API corresponding to the route. A post
+// number and the archive's media record identify the response; generic
+// "posts" objects and empty or error responses do not.
+func foolFuukaAnswers(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) bool {
 	t, err := foolFuukaParse(u)
 	if err != nil {
-		return nil, nil
+		return false
 	}
 	endpoint := foolFuukaIndexAPI
 	query := url.Values{"board": {t.board}, "page": {strconv.Itoa(t.page)}}
@@ -245,12 +172,10 @@ func foolFuukaSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts 
 		endpoint = foolFuukaSearchAPI
 		maps.Copy(query, t.search)
 	}
-	f := &FoolFuuka{client: client, site: foolFuukaSite{
-		root: util.Origin(u), name: foolFuukaLabel(u.Hostname()),
-	}}
+	root := util.Origin(u)
 	var raw json.RawMessage
-	if !platformJSON(ctx, client, f.site.root+endpoint+"?"+query.Encode(), f.headers(), &raw) {
-		return nil, nil
+	if !pageJSON(ctx, p, client, root+endpoint+"?"+query.Encode(), httpx.Referer(root+"/"), &raw) {
+		return false
 	}
 	var posts []foolFuukaPost
 	if t.kind == foolFuukaPostTarget {
@@ -265,27 +190,48 @@ func foolFuukaSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts 
 	}
 	for _, post := range posts {
 		if post.Num.String() != "" && post.Media != nil && post.Media.Media != "" && post.Media.Status != "" {
-			return f.Extract(ctx, u, opts)
+			return true
 		}
 	}
-	return nil, nil
+	return false
+}
+
+// foolFuukaLabel names an archive by its first host label, the part that
+// distinguishes one archive from another, whether the host is a bare domain
+// or a subdomain of one.
+func foolFuukaLabel(host string) string {
+	label, _, _ := strings.Cut(strings.TrimPrefix(strings.ToLower(host), "www."), ".")
+	return label
 }
 
 // Extract resolves a thread, a single post, a board index page or a search.
-func (f *FoolFuuka) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+// The archive is the one the URL names; the API is asked at its origin.
+func (f *FoolFuuka) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	a := &foolFuukaArchive{client: f.client, site: foolFuukaSite{root: util.Origin(u), name: foolFuukaLabel(u.Hostname())}}
+	return a.Extract(ctx, u, opts)
+}
+
+// foolFuukaArchive is one archive being read.
+type foolFuukaArchive struct {
+	client *httpx.Client
+	site   foolFuukaSite
+}
+
+// Extract resolves a URL against this archive.
+func (a *foolFuukaArchive) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	target, err := foolFuukaParse(u)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", f.site.name, err)
+		return nil, fmt.Errorf("%s: %w", a.site.name, err)
 	}
 	switch target.kind {
 	case foolFuukaThreadTarget:
-		return f.thread(ctx, target)
+		return a.thread(ctx, target)
 	case foolFuukaPostTarget:
-		return f.post(ctx, target)
+		return a.post(ctx, target)
 	case foolFuukaSearchTarget:
-		return f.search(ctx, target)
+		return a.search(ctx, target)
 	default:
-		return f.index(ctx, target)
+		return a.index(ctx, target)
 	}
 }
 
@@ -406,7 +352,7 @@ func foolFuukaPageNumber(seg string) int {
 // ----------------------------------------------------------------- routes
 
 // thread lists every attachment in one thread, in the order it was posted.
-func (f *FoolFuuka) thread(ctx context.Context, t foolFuukaTarget) (*Result, error) {
+func (f *foolFuukaArchive) thread(ctx context.Context, t foolFuukaTarget) (*Result, error) {
 	entries, err := f.call(ctx, foolFuukaThreadAPI, url.Values{
 		"board": {t.board}, "num": {t.num},
 	})
@@ -436,7 +382,7 @@ func (f *FoolFuuka) thread(ctx context.Context, t foolFuukaTarget) (*Result, err
 //
 // The post endpoint answers with the post itself rather than with the
 // keyed object every other endpoint uses, so it is decoded on its own.
-func (f *FoolFuuka) post(ctx context.Context, t foolFuukaTarget) (*Result, error) {
+func (f *foolFuukaArchive) post(ctx context.Context, t foolFuukaTarget) (*Result, error) {
 	link := f.site.root + foolFuukaPostAPI + "?" + url.Values{
 		"board": {t.board}, "num": {t.num},
 	}.Encode()
@@ -468,7 +414,7 @@ func (f *FoolFuuka) post(ctx context.Context, t foolFuukaTarget) (*Result, error
 // page is therefore opened, several at a time, the way coomerfans.go expands
 // a creator's posts and for the same reason: doing it one after another
 // leaves a board resolving for a minute before a byte moves.
-func (f *FoolFuuka) index(ctx context.Context, t foolFuukaTarget) (*Result, error) {
+func (f *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Result, error) {
 	entries, err := f.call(ctx, foolFuukaIndexAPI, url.Values{
 		"board": {t.board}, "page": {strconv.Itoa(t.page)},
 	})
@@ -510,7 +456,7 @@ func (f *FoolFuuka) index(ctx context.Context, t foolFuukaTarget) (*Result, erro
 // skip-on-failure; what it drops is the failure itself, and here the first
 // one is worth keeping for the case where no thread opened at all — see
 // index — so it travels as a value beside the files.
-func (f *FoolFuuka) expand(ctx context.Context, board string, threads []string) ([]File, error) {
+func (f *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, error) {
 	type expanded struct {
 		files []File
 		err   error
@@ -556,7 +502,7 @@ func (f *FoolFuuka) expand(ctx context.Context, board string, threads []string) 
 // to answer with the last page again rather than with nothing, and an archive
 // taking new posts while the walk is in progress shifts everything down a
 // page, which without this would queue the same file twice.
-func (f *FoolFuuka) search(ctx context.Context, t foolFuukaTarget) (*Result, error) {
+func (f *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget) (*Result, error) {
 	query := url.Values{"board": {t.board}}
 	maps.Copy(query, t.search)
 
@@ -601,7 +547,7 @@ func (f *FoolFuuka) search(ctx context.Context, t foolFuukaTarget) (*Result, err
 // ------------------------------------------------------------------- files
 
 // files turns posts into downloadable attachments.
-func (f *FoolFuuka) files(posts []foolFuukaPost, dir string) []File {
+func (f *foolFuukaArchive) files(posts []foolFuukaPost, dir string) []File {
 	out := make([]File, 0, len(posts))
 	for _, post := range posts {
 		media := post.Media
@@ -648,10 +594,10 @@ func (f *FoolFuuka) files(posts []foolFuukaPost, dir string) []File {
 }
 
 // headers are what every request for this install carries.
-func (f *FoolFuuka) headers() httpx.Header { return httpx.Referer(f.site.root + "/") }
+func (f *foolFuukaArchive) headers() httpx.Header { return httpx.Referer(f.site.root + "/") }
 
 // remoteResolver defers a fallback link to the moment its transfer starts.
-func (f *FoolFuuka) remoteResolver(link, name string, size int64) func(context.Context) (*Target, error) {
+func (f *foolFuukaArchive) remoteResolver(link, name string, size int64) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
 		return f.resolveRemote(ctx, link, name, size)
 	}
@@ -677,7 +623,7 @@ func (f *FoolFuuka) remoteResolver(link, name string, size int64) func(context.C
 // request per file and only a small minority of posts need one — paying for
 // them as their turn comes keeps a thread of five hundred from spending the
 // wait in "resolving".
-func (f *FoolFuuka) resolveRemote(ctx context.Context, link, name string, size int64) (*Target, error) {
+func (f *foolFuukaArchive) resolveRemote(ctx context.Context, link, name string, size int64) (*Target, error) {
 	target := &Target{URL: link, Name: name, Size: size, Headers: f.headers()}
 
 	req, err := f.client.NewRequest(ctx, http.MethodHead, link, nil)
@@ -756,7 +702,7 @@ func foolFuukaRefreshTarget(doc, base string) string {
 // ----------------------------------------------------------------- the API
 
 // call fetches one endpoint and decodes it.
-func (f *FoolFuuka) call(ctx context.Context, endpoint string, query url.Values) ([]foolFuukaEntry, error) {
+func (f *foolFuukaArchive) call(ctx context.Context, endpoint string, query url.Values) ([]foolFuukaEntry, error) {
 	link := f.site.root + endpoint + "?" + query.Encode()
 
 	var raw json.RawMessage

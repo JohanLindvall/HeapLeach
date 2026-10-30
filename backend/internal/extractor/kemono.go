@@ -11,6 +11,8 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Kemono covers kemono and coomer, which run the same software and expose
@@ -33,39 +35,51 @@ const (
 	kemonoMaxPages = 40
 )
 
-// kemonoHosts maps each supported domain to the instance root.
-var kemonoHosts = map[string]string{
-	"kemono.cr": "https://kemono.cr", "kemono.su": "https://kemono.su",
-	"kemono.party": "https://kemono.party", "kemono.st": "https://kemono.st",
-	"coomer.st": "https://coomer.st", "coomer.su": "https://coomer.su",
-	"coomer.party": "https://coomer.party",
-}
-
 // NewKemono builds the kemono/coomer extractor.
 func NewKemono(client *httpx.Client) *Kemono { return &Kemono{client: client} }
 
 func (k *Kemono) Name() string { return "kemono" }
 
-func (k *Kemono) Match(u *url.URL) bool { return kemonoRoot(u) != "" }
+// kemonoShape is a creator, /<service>/user/<id>, or one of their posts,
+// /<service>/user/<id>/post/<post>.
+var kemonoShape = pathShape(`^/[a-z0-9_-]+/user/[^/]+/?$`, `^/[a-z0-9_-]+/user/[^/]+/post/[^/]+/?$`)
 
-// kemonoRoot returns the instance root for a URL, or "".
-func kemonoRoot(u *url.URL) string {
-	for domain, root := range kemonoHosts {
-		if util.HostMatches(u.Host, domain) {
-			return root
-		}
-	}
-	return ""
+// kemonoShell is the script the sites' app shell loads first, before its
+// hashed bundle; kemonoNames are what the shell calls the sites.
+const kemonoShell = "/static/js/lazy-styles.js"
+
+var kemonoNames = []string{"Kemono", "Coomer"}
+
+// Recognises is the inventory's description.
+func (k *Kemono) Recognises() string {
+	return "Kemono and Coomer creators and posts (`/<service>/user/<id>`, `…/post/<id>`) served " +
+		"by the sites' app shell, or whose origin's API returns the creator's matching profile"
 }
 
-// kemonoSniff verifies the requested creator's profile, whose service and
-// id must agree with the URL. This also identifies an empty creator without
-// mistaking an arbitrary JSON array for this platform.
-func kemonoSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options) (*Result, error) {
-	segs := util.PathSegments(u)
-	if len(segs) < 3 || segs[1] != "user" || (len(segs) != 3 && (len(segs) != 5 || segs[3] != "post")) {
-		return nil, nil
+// Shape reports a creator or a post.
+func (k *Kemono) Shape(u *url.URL) bool { return kemonoShape(u) }
+
+// Recognise takes a creator or post link served by the sites' app shell:
+// the shell's own loader script, its empty application root and its name.
+// The shell carries nothing else — the app fetches the creator afterwards —
+// so a page that cannot say is settled the way the app would settle it, by
+// the API's profile of exactly this creator.
+func (k *Kemono) Recognise(ctx context.Context, p *Page) bool {
+	if !kemonoShape(p.Final) {
+		return false
 	}
+	if root := p.HTML(); root != nil && p.Script(kemonoShell) && p.Named(kemonoNames...) &&
+		findFirst(root, func(n *html.Node) bool { return isElem(n, atom.Div) && attr(n, "id") == "root" }) != nil {
+		return true
+	}
+	return pageSilent(p) && kemonoProfile(ctx, p, k.client, p.Final)
+}
+
+// kemonoProfile asks for the creator's profile, whose service and id must
+// agree with the URL. This also identifies an empty creator without
+// mistaking an arbitrary JSON array for this platform.
+func kemonoProfile(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) bool {
+	segs := util.PathSegments(u)
 	root := util.Origin(u)
 	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/profile", root, url.PathEscape(segs[0]), url.PathEscape(segs[2]))
 	var profile struct {
@@ -73,17 +87,15 @@ func kemonoSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Option
 		Service string `json:"service"`
 		Name    string `json:"name"`
 	}
-	if !platformJSON(ctx, client, endpoint, httpx.Header{
+	return pageJSON(ctx, p, client, endpoint, httpx.Header{
 		httpx.HeaderAccept: kemonoScrapeAccept, httpx.HeaderReferer: root + "/",
-	}, &profile) || profile.ID != segs[2] || profile.Service != segs[0] || profile.Name == "" {
-		return nil, nil
-	}
-	return NewKemono(client).extract(ctx, u, root)
+	}, &profile) && profile.ID == segs[2] && profile.Service == segs[0] && profile.Name != ""
 }
 
-// Extract handles a creator (/​<service>/user/<id>) or a single post.
+// Extract handles a creator (/​<service>/user/<id>) or a single post, on
+// whichever site the link names.
 func (k *Kemono) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	return k.extract(ctx, u, kemonoRoot(u))
+	return k.extract(ctx, u, util.Origin(u))
 }
 
 func (k *Kemono) extract(ctx context.Context, u *url.URL, root string) (*Result, error) {

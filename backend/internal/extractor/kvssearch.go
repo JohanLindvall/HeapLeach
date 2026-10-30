@@ -25,7 +25,7 @@ import (
 // albums matching the query, in a block with a pager of its own, which is
 // why both are picked by name in the walk rather than by coming first.
 //
-// Like a member's profile this is only offered on the hosts registered as
+// Like a member's profile this is only offered on a page recognised as
 // KVS: /search/ is every site's URL shape, not this platform's.
 
 // kvsSearchPath reports whether a URL is a search on the install, and returns

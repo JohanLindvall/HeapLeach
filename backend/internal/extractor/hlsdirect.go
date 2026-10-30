@@ -5,8 +5,6 @@ package extractor
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"path"
 	"slices"
@@ -61,19 +59,39 @@ func NewHLSDirect(client *httpx.Client) *HLSDirect { return &HLSDirect{client: c
 
 func (h *HLSDirect) Name() string { return "hls" }
 
-// Match claims a manifest by the extension on its path, which is read before
-// the query: these URLs nearly always carry a token or a signature after the
-// '?', and none of that is part of the name.
+// Recognises is the inventory's description.
+func (h *HLSDirect) Recognises() string {
+	return "bare HLS manifests: a response served as a playlist type or opening `#EXTM3U`, at any " +
+		"URL, or a `.m3u8` link; `.mpd` links are taken in order to refuse them with the reason"
+}
+
+// Shape claims a manifest by the extension on its path, which is read
+// before the query: these URLs nearly always carry a token or a signature
+// after the '?', and none of that is part of the name.
 //
 // DASH is matched only in order to be refused. A refusal that explains itself
 // is worth more than the silent handover to the fallback that produced the
 // defect this file exists to fix.
-func (h *HLSDirect) Match(u *url.URL) bool {
+func (h *HLSDirect) Shape(u *url.URL) bool {
 	switch strings.ToLower(path.Ext(u.Path)) {
 	case ".m3u8", ".mpd":
 		return true
 	}
 	return false
+}
+
+// Recognise takes what answered as a playlist — by its declared type, or by
+// its first line — whatever the URL looks like, and a link that names a
+// manifest by its extension even where the probe could not read it: the
+// form is unmistakable, and the fallback would save the manifest as a file.
+func (h *HLSDirect) Recognise(_ context.Context, p *Page) bool {
+	if p.Header != nil && hlsManifestType(p.Header.Get(httpx.HeaderContentType)) {
+		return true
+	}
+	if p.OK() && hlsManifestBody(p.Body[:min(len(p.Body), config.ManifestSniffBytes)]) {
+		return true
+	}
+	return h.Shape(p.URL) || h.Shape(p.Final)
 }
 
 // Extract resolves the manifest into the one file its segments join into.
@@ -180,74 +198,6 @@ func hlsName(u *url.URL) string {
 		}
 	}
 	return u.Hostname()
-}
-
-// hlsSniff resolves a URL that serves a playlist although nothing about the
-// URL says so.
-//
-// The precedent is kvsSniff: a shape worth one request, and nothing lost when
-// the guess is wrong — a nil result and a nil error mean "not a manifest",
-// and the caller carries on exactly as it would have. Here the shape is a
-// path that names no file at all: a URL ending in a filename has said what it
-// is serving and is taken at its word, while one that does not has said
-// nothing, and a manifest handed out from such a path is precisely what would
-// otherwise be saved as a few kilobytes of text. Keeping the guard that
-// narrow matters because some hosts sign a link for a single use, and
-// sniffing every direct download would spend that signature before the
-// transfer got to it.
-//
-// It departs from kvsSniff in one place, and deliberately. Once the response
-// has identified itself as a playlist, a failure to resolve it is reported
-// rather than swallowed: falling through would hand the manifest back to the
-// fallback and save it as a file, which is the very failure this file exists
-// to stop. Only the "is this a manifest at all" question falls through.
-func hlsSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, error) {
-	if !hlsSniffable(u) || !hlsServesManifest(ctx, client, u) {
-		return nil, nil
-	}
-	return hlsPlaylistResult(ctx, client, u)
-}
-
-// hlsSniffable reports whether a URL is worth one bounded request before it
-// is treated as a file: its path names no extension, so the host has not said
-// what is behind it.
-func hlsSniffable(u *url.URL) bool {
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && path.Ext(segs[len(segs)-1]) == ""
-}
-
-// hlsServesManifest asks for the opening bytes of a URL and reports whether
-// what comes back is a playlist.
-//
-// A stated type is believed, and the body is read only when there is none
-// worth believing: origins serving media out of object storage routinely
-// label everything text/plain or application/octet-stream, and a playlist
-// announces itself on its first line anyway. The request asks for a range so
-// that being wrong costs a few hundred bytes rather than the opening of a
-// video, and it never retries — a host that will not answer at once is not
-// worth delaying a download this may have nothing to do with.
-func hlsServesManifest(ctx context.Context, client *httpx.Client, u *url.URL) bool {
-	req, err := client.NewRequest(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return false
-	}
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
-	req.Header.Set(httpx.HeaderReferer, util.Origin(u)+"/")
-	req.Header.Set(httpx.HeaderRange, fmt.Sprintf("bytes=0-%d", config.ManifestSniffBytes-1))
-
-	resp, err := client.DoOnce(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return false
-	}
-	if hlsManifestType(resp.Header.Get(httpx.HeaderContentType)) {
-		return true
-	}
-	prefix, err := io.ReadAll(io.LimitReader(resp.Body, config.ManifestSniffBytes))
-	return err == nil && hlsManifestBody(string(prefix))
 }
 
 // hlsManifestMediaTypes are the spellings a playlist arrives under. The first

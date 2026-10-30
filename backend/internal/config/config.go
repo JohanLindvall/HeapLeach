@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -55,19 +56,9 @@ type Config struct {
 	UserAgent       string
 	Language        string
 	GofileSecret    string
-	// ExtraHosts extends the built-in install list of each platform family,
-	// keyed by family name ("kvs", "peertube", "chevereto", ...).
-	//
-	// Every family this program covers is software sold or given to many
-	// operators, so a list compiled into a binary can only ever trail the
-	// sites running it. One setting rather than one per family, because
-	// there is nothing family-specific about the reasoning and six
-	// near-identical environment variables would be worse than one.
-	ExtraHosts map[string][]string
 	// ArchiveFormats overrides which archive.org renditions are taken. An
 	// item there routinely offers the same film six times, so the extractor
-	// picks per media type; this is the escape for when its taste is wrong,
-	// and exists for the same reason the host lists above do.
+	// picks per media type; this is the escape for when its taste is wrong.
 	ArchiveFormats []string
 	MaxRetries     int
 	Streams        int
@@ -160,7 +151,6 @@ func FromEnv() (*Config, error) {
 		UserAgent:       env("USER_AGENT", DefaultUserAgent),
 		Language:        env("LANGUAGE", DefaultLanguage),
 		GofileSecret:    env("GOFILE_SECRET", FallbackGofileSecret),
-		ExtraHosts:      extraHosts(),
 		ArchiveFormats:  envList("IA_FORMATS"),
 		MaxRetries:      DefaultMaxRetries,
 		Streams:         DefaultStreams,
@@ -182,6 +172,7 @@ func FromEnv() (*Config, error) {
 	if enabled, set := EnvBool("PROXIES"); set {
 		c.Proxies = enabled
 	}
+	warnRetiredSettings()
 	if _, set := os.LookupEnv(envPrefix + "PROXY_ENDPOINTS"); !set {
 		c.ProxyEndpoints = []string{"direct"}
 	}
@@ -656,55 +647,21 @@ func env(name, def string) string {
 	return def
 }
 
-// extraHosts reads the per-family host additions.
-//
-// HEAPLEACH_EXTRA_HOSTS carries them all, as
-// "family:host,host;family:host" — semicolons between families, commas or
-// spaces within one. HEAPLEACH_KVS_HOSTS is still honoured, because it
-// shipped first and someone is relying on it; it simply folds into the "kvs"
-// family.
-func extraHosts() map[string][]string {
-	out := map[string][]string{}
-	add := func(family string, hosts []string) {
-		family = strings.ToLower(strings.TrimSpace(family))
-		if family == "" || len(hosts) == 0 {
-			return
+// retiredHostSettings named installs of each platform family, back when an
+// extractor was chosen by the URL's host. Pages are now recognised by what
+// they serve, so an install nobody named is found like any other and these
+// have nothing left to do; they are still read, so that someone relying on
+// one learns it no longer applies rather than wondering why nothing changed.
+var retiredHostSettings = []string{"EXTRA_HOSTS", "KVS_HOSTS"}
+
+// warnRetiredSettings logs each retired setting that is still set.
+func warnRetiredSettings() {
+	for _, name := range retiredHostSettings {
+		if LookupEnv(name) != "" {
+			slog.Warn("setting is ignored: sites are recognised by their pages, so no host list is needed",
+				"setting", envPrefix+name)
 		}
-		out[family] = append(out[family], hosts...)
 	}
-
-	add(FamilyKVS, envList("KVS_HOSTS"))
-	for group := range strings.SplitSeq(LookupEnv("EXTRA_HOSTS"), ";") {
-		family, list, ok := strings.Cut(group, ":")
-		if !ok {
-			continue
-		}
-		add(family, splitList(list))
-	}
-	return out
-}
-
-// Family names for ExtraHosts, so the extractors and this file cannot drift
-// apart over a spelling.
-const (
-	FamilyKVS       = "kvs"
-	FamilyPeerTube  = "peertube"
-	FamilyChevereto = "chevereto"
-	FamilyFoolFuuka = "foolfuuka"
-	FamilyFediverse = "fediverse"
-	FamilyMediaWiki = "mediawiki"
-	// FamilyBandzoogle names the band-site platform. It ships with no hosts
-	// of its own: every install answers on the band's own domain, so there
-	// is no list to compile in and the sniff is what finds them.
-	FamilyBandzoogle = "bandzoogle"
-)
-
-// ExtraHostsFor returns the additional hosts configured for one family.
-func (c *Config) ExtraHostsFor(family string) []string {
-	if c == nil {
-		return nil
-	}
-	return c.ExtraHosts[family]
 }
 
 // envList reads a comma- or whitespace-separated list, for settings that

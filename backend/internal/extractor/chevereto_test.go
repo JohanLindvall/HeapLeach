@@ -398,16 +398,24 @@ func TestCheveretoFingerprint(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "version 3 states it in the metadata",
-			doc:  `<html><head><meta name="generator" content="Chevereto 3"></head><body></body></html>`,
+			name: "version 3 states it in the metadata, beside its viewer",
+			doc: `<html><head><meta name="generator" content="Chevereto 3"></head>
+			<body><div id="image-viewer"></div></body></html>`,
 			want: true,
 		},
 		{
 			// Version 4 prints no generator meta at all; the credit in its
 			// footer is what is left.
-			name: "version 4 leaves only the footer credit",
-			doc:  `<html><body><a href="https://chevereto.com" rel="generator">Powered by Chevereto</a></body></html>`,
+			name: "version 4 leaves only the footer credit, beside its listing",
+			doc: `<html><body><div data-object="%7B%7D"></div>
+			<a href="https://vendor.example.test/chevereto" rel="generator">Powered by Chevereto</a></body></html>`,
 			want: true,
+		},
+		{
+			// The software naming itself is not the structure this reads.
+			name: "a generator over a page with nothing of the platform's",
+			doc:  `<html><head><meta name="generator" content="Chevereto 3"></head><body></body></html>`,
+			want: false,
 		},
 		{
 			// A licence that removed the credit still ships the scripts.
@@ -467,64 +475,23 @@ func TestCheveretoPagePath(t *testing.T) {
 	}
 }
 
-func TestCheveretoMatch(t *testing.T) {
-	sites := NewCheveretoSites(nil, nil)
-	byName := make(map[string]Extractor, len(sites))
-	for _, site := range sites {
-		byName[site.Name()] = site
-	}
+func TestCheveretoRecognise(t *testing.T) {
+	c := NewChevereto(nil)
+	expectRecognised(t, c, htmlPage(t, "https://pics.example.test/i/holiday.AAA111", cheveretoImageViewer), true)
+	// Renamed routes and short links are recognised by the page alone.
+	expectRecognised(t, c, htmlPage(t, "https://pics.example.test/AAA111", cheveretoImageViewer), true)
+	// The front page names nothing to download.
+	expectRecognised(t, c, htmlPage(t, "https://pics.example.test/", cheveretoImageViewer), false)
+	// The right form and the site's name, without the platform's structure.
+	expectRecognised(t, c, htmlPage(t, "https://pics.example.test/i/holiday.AAA111",
+		`<html><head><title>holiday - Pics</title><meta property="og:site_name" content="Pics"></head>
+		<body><div id="image-viewer"><img src="https://cdn.example.test/x.md.png"></div></body></html>`), false)
 
-	tests := map[string]string{
-		"https://imgbb.com/album/holiday.XYZ":     "imgbb",
-		"https://ibb.co/AAA111":                   "imgbb",
-		"https://freeimage.host/i/holiday.AAA111": "freeimage",
-		"https://gifyu.com/album/x.XYZ":           "gifyu",
-	}
-	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ex, ok := byName[want]
-		if !ok {
-			t.Fatalf("no extractor named %q was built", want)
-		}
-		if !legacyMatch(ex, u) {
-			t.Errorf("%s did not match %q", want, raw)
-		}
-	}
-
-	other, _ := url.Parse("https://nobody.example.test/i/AAA111")
-	for _, site := range sites {
-		if legacyMatch(site, other) {
-			t.Errorf("%s matched an unrelated host", site.Name())
-		}
-	}
-}
-
-// TestCheveretoAcceptsExtraHosts covers the escape hatch for software whose
-// installs outrun any release.
-func TestCheveretoAcceptsExtraHosts(t *testing.T) {
-	cfg := &config.Config{ExtraHosts: map[string][]string{
-		config.FamilyChevereto: {"pics.example.test", "another.example.test"},
-	}}
-
-	u, err := url.Parse("https://pics.example.test/album/holiday.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var matched Extractor
-	for _, site := range NewCheveretoSites(cfg, nil) {
-		if legacyMatch(site, u) {
-			matched = site
-		}
-	}
-	if matched == nil {
-		t.Fatal("a host added through HEAPLEACH_EXTRA_HOSTS was not matched")
-	}
-	if matched.Name() != "pics" {
-		t.Errorf("the extra host is named %q, want its own first label", matched.Name())
-	}
+	expectShape(t, c, "https://pics.example.test/i/holiday.AAA111", true)
+	expectShape(t, c, "https://pics.example.test/album/x.XYZ", true)
+	expectShape(t, c, "https://pics.example.test/someone/albums", true)
+	expectShape(t, c, "https://pics.example.test/AAA111", false)
+	expectShape(t, c, "https://pics.example.test/i/AAA111.png", false)
 }
 
 // --- against a server --------------------------------------------------------
@@ -558,7 +525,7 @@ func TestCheveretoWalksEveryPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{}, false)
+	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +559,7 @@ func TestCheveretoStopsWhenAPageRepeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{}, false)
+	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +606,7 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{}, false)
+	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,11 +665,11 @@ func TestCheveretoPasswordGate(t *testing.T) {
 	}
 	client := cheveretoTestClient()
 
-	if _, err := cheveretoExtract(context.Background(), client, u, "chevereto", Options{}, false); !errors.Is(err, ErrPasswordRequired) {
+	if _, err := cheveretoExtract(context.Background(), client, u, "chevereto", Options{}); !errors.Is(err, ErrPasswordRequired) {
 		t.Fatalf("without a password the error was %v, want ErrPasswordRequired", err)
 	}
 
-	_, err = cheveretoExtract(context.Background(), client, u, "chevereto", Options{Password: "wrong"}, false)
+	_, err = cheveretoExtract(context.Background(), client, u, "chevereto", Options{Password: "wrong"})
 	if err == nil {
 		t.Fatal("a wrong password resolved the album")
 	}
@@ -710,7 +677,7 @@ func TestCheveretoPasswordGate(t *testing.T) {
 		t.Error("a refused password was reported as no password having been given")
 	}
 
-	res, err := cheveretoExtract(context.Background(), client, u, "chevereto", Options{Password: password}, false)
+	res, err := cheveretoExtract(context.Background(), client, u, "chevereto", Options{Password: password})
 	if err != nil {
 		t.Fatalf("the right password did not unlock the album: %v", err)
 	}
@@ -719,14 +686,15 @@ func TestCheveretoPasswordGate(t *testing.T) {
 	}
 }
 
-// TestCheveretoSniffNeedsTheFingerprint is the whole bargain of sniffing an
-// unregistered host: the shape is worth one request, and a page that does not
-// identify itself as Chevereto is left to the handling that would have run
-// anyway.
-func TestCheveretoSniffNeedsTheFingerprint(t *testing.T) {
+// TestCheveretoRecognisedThroughTheRegistry: an install nobody named is
+// recognised by its page, which is then read once for both questions; a
+// page of the same form that carries nothing of the platform's is left to the
+// handling that would have run anyway.
+func TestCheveretoRecognisedThroughTheRegistry(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, "text/html")
 		if strings.Contains(r.URL.Path, "impostor") {
 			_, _ = io.WriteString(w, `<html><head><title>not it</title></head>
 			<body><div id="image-viewer"><img src="https://cdn.example.test/x.md.png"></div></body></html>`)
@@ -735,32 +703,22 @@ func TestCheveretoSniffNeedsTheFingerprint(t *testing.T) {
 		_, _ = io.WriteString(w, cheveretoImageViewer)
 	}))
 	defer srv.Close()
+	reg := NewRegistry(&config.Config{}, cheveretoTestClient())
 
-	client := cheveretoTestClient()
-
-	// A page that is not laid out like one is not even fetched.
-	notShaped, _ := url.Parse(srv.URL + "/some/file.bin")
-	if _, ok := cheveretoSniff(context.Background(), client, notShaped, Options{}); ok {
-		t.Error("a URL of another shape was claimed")
-	}
-	if n := hits.Load(); n != 0 {
-		t.Errorf("made %d requests for a URL of the wrong shape, want none", n)
+	if _, ex, _ := reg.Extract(context.Background(), srv.URL+"/i/impostor.AAA111", Options{}); ex == nil || ex.Name() == "chevereto" {
+		t.Errorf("a page carrying no Chevereto structure went to %v", ex)
 	}
 
-	// One that is, but whose page says nothing about the software, is
-	// fetched once and then declined.
-	impostor, _ := url.Parse(srv.URL + "/i/impostor.AAA111")
-	if _, ok := cheveretoSniff(context.Background(), client, impostor, Options{}); ok {
-		t.Error("a page carrying no Chevereto fingerprint was claimed")
-	}
-
-	real, _ := url.Parse(srv.URL + "/i/holiday.AAA111")
-	res, ok := cheveretoSniff(context.Background(), client, real, Options{})
-	if !ok {
-		t.Fatal("a Chevereto page on an unregistered host was not recognised")
+	hits.Store(0)
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/i/holiday.AAA111", Options{})
+	if err != nil || ex.Name() != "chevereto" {
+		t.Fatalf("a Chevereto page went to %v: %v", ex, err)
 	}
 	if res.Files[0].URL != "https://cdn.example.test/AAA111.png" {
 		t.Errorf("URL = %q, want the original", res.Files[0].URL)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the page was fetched %d times, want once", n)
 	}
 }
 
@@ -777,7 +735,7 @@ func TestCheveretoRefusesABareDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{}, false); err == nil {
+	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{}); err == nil {
 		t.Fatal("a bare domain resolved to something")
 	}
 }

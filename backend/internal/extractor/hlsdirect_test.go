@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -92,12 +93,14 @@ func hlsServer(t *testing.T, contentType string, pages map[string]string) (*http
 	t.Helper()
 	var seen atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen.Add(1)
+		// Only the served documents are counted: other recognisers may ask
+		// the origin about a page, which is not this extractor's cost.
 		doc, ok := pages[r.URL.Path]
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
+		seen.Add(1)
 		w.Header().Set(httpx.HeaderContentType, contentType)
 		_, _ = io.WriteString(w, doc)
 	}))
@@ -107,11 +110,11 @@ func hlsServer(t *testing.T, contentType string, pages map[string]string) (*http
 
 const hlsManifestContentType = "application/vnd.apple.mpegurl"
 
-// TestHLSDirectMatchesManifestsByPath pins what the extractor claims. The
+// TestHLSDirectShapesManifestsByPath pins the forms the extractor claims. The
 // query is where these URLs carry their signature, so it must not take part
 // in the decision; DASH is claimed only so that Extract can refuse it with a
 // reason instead of the fallback saving it as a small XML file.
-func TestHLSDirectMatchesManifestsByPath(t *testing.T) {
+func TestHLSDirectShapesManifestsByPath(t *testing.T) {
 	tests := map[string]bool{
 		"https://cdn.example.test/hls/a-clip/master.m3u8":             true,
 		"https://cdn.example.test/hls/a-clip/master.m3u8?t=1&sig=abc": true,
@@ -123,14 +126,19 @@ func TestHLSDirectMatchesManifestsByPath(t *testing.T) {
 	}
 	h := NewHLSDirect(nil)
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := h.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
+		expectShape(t, h, raw, want)
 	}
+}
+
+// TestHLSDirectRecognise: a playlist by its type or its first line, at any
+// URL; anything else only by a manifest's extension.
+func TestHLSDirectRecognise(t *testing.T) {
+	h := NewHLSDirect(nil)
+	expectRecognised(t, h, fixturePage(t, "https://cdn.example.test/stream/a-clip", http.StatusOK, "text/plain", hlsCompleteMedia), true)
+	expectRecognised(t, h, fixturePage(t, "https://cdn.example.test/stream/a-clip", http.StatusOK, hlsManifestContentType, ""), true)
+	expectRecognised(t, h, fixturePage(t, "https://cdn.example.test/hls/master.m3u8", http.StatusForbidden, "text/html", "denied"), true)
+	expectRecognised(t, h, htmlPage(t, "https://cdn.example.test/watch/a-clip", "<html><body>#EXTM3U</body></html>"), false)
+	expectRecognised(t, h, fixturePage(t, "https://cdn.example.test/notes.txt", http.StatusOK, "text/plain", "notes\n#EXTM3U"), false)
 }
 
 // TestHLSDirectRefusesDASH covers the one thing that must never be joined.
@@ -367,25 +375,6 @@ func TestHLSSniffLeavesNamedFilesAlone(t *testing.T) {
 	}
 }
 
-func TestHLSSniffable(t *testing.T) {
-	tests := map[string]bool{
-		"https://cdn.example.test/stream/a-clip":     true,
-		"https://cdn.example.test/stream/a-clip?t=1": true,
-		"https://cdn.example.test/a-clip.bin":        false,
-		"https://cdn.example.test/":                  false,
-		"https://cdn.example.test":                   false,
-	}
-	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := hlsSniffable(u); got != want {
-			t.Errorf("hlsSniffable(%s) = %v, want %v", raw, got, want)
-		}
-	}
-}
-
 func TestHLSManifestType(t *testing.T) {
 	tests := map[string]bool{
 		"application/vnd.apple.mpegurl":                true,
@@ -451,14 +440,15 @@ func hlsExtractFrom(t *testing.T, raw string) (*Result, error) {
 	return NewHLSDirect(hlsTestClient()).Extract(context.Background(), u, Options{})
 }
 
-// hlsSniffFrom runs the sniff the fallback calls.
+// hlsSniffFrom submits a URL to the registry and reports what the manifest
+// extractor made of it: nil, nil when the page went elsewhere.
 func hlsSniffFrom(t *testing.T, raw string) (*Result, error) {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
+	res, ex, err := NewRegistry(&config.Config{}, hlsTestClient()).Extract(context.Background(), raw, Options{})
+	if ex == nil || ex.Name() != "hls" {
+		return nil, nil
 	}
-	return hlsSniff(context.Background(), hlsTestClient(), u)
+	return res, err
 }
 
 func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {

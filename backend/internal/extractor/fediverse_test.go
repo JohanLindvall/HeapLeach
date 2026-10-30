@@ -396,6 +396,36 @@ func TestFediverseRefusesAHostThatIsNotAnInstance(t *testing.T) {
 	}
 }
 
+// TestFediverseRecognise: a page of the fediverse's forms on a server whose
+// nodeinfo names its software, and nothing else.
+func TestFediverseRecognise(t *testing.T) {
+	srv := fediServer(t, "mastodon", nil)
+	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+
+	page := htmlPage(t, srv.URL+"/@alice", `<html><head><title>Alice</title></head></html>`)
+	for range 2 {
+		if !f.Recognise(context.Background(), page) {
+			t.Fatal("an instance's profile was not recognised")
+		}
+	}
+	// The same form on a server that publishes no nodeinfo, even one that
+	// calls itself by a fediverse name.
+	plain := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(plain.Close)
+	named := htmlPage(t, plain.URL+"/@alice", `<html><head><meta property="og:site_name" content="Mastodon"></head></html>`)
+	if f.Recognise(context.Background(), named) {
+		t.Error("a server with no nodeinfo was recognised")
+	}
+	// An instance's page of another form.
+	if f.Recognise(context.Background(), htmlPage(t, srv.URL+"/about/more", "<html></html>")) {
+		t.Error("a page of no fediverse form was recognised")
+	}
+
+	expectShape(t, f, "https://social.example.test/@alice", true)
+	expectShape(t, f, "https://social.example.test/c/pics", true)
+	expectShape(t, f, "https://social.example.test/about", false)
+}
+
 // ---------------------------------------------------------------- pixelfed
 
 // TestFediverseExtractsAPixelfedPost covers the three things pixelfed does
@@ -794,8 +824,8 @@ func fediExtract(t *testing.T, srv *httptest.Server, path string) (*Result, erro
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.Match(u) {
-		t.Fatalf("%s is not matched by the fediverse extractor", u)
+	if !f.Shape(u) {
+		t.Fatalf("%s is not of a fediverse form", u)
 	}
 	return f.Extract(context.Background(), u, Options{})
 }

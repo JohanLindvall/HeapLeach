@@ -6,11 +6,9 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -21,15 +19,11 @@ import (
 //
 // Bandzoogle is website software a musician rents rather than a site anyone
 // visits, so every install answers on its owner's own domain and no list of
-// hosts could ever name them. That is the same shape Chevereto and Kernel
-// Video Sharing have here, and it gets the same two answers: the
-// "bandzoogle" family of HEAPLEACH_EXTRA_HOSTS names installs at runtime,
-// and a sniff from the direct fallback recognises the software itself.
-//
-// What makes the sniff cheap is that the pages label their own player. Every
-// track is an anchor carrying data-zoogle-track, and beside it the title, the
-// artist and the path the audio is served from — so one page fetch yields
-// names and links together, and there is nothing to guess at.
+// hosts could ever name them. The pages are recognised by the software's own
+// player instead, which is also what this reads: every track is an anchor
+// carrying data-zoogle-track, and beside it the title, the artist and the
+// path the audio is served from — so one page fetch yields names and links
+// together, and there is nothing to guess at.
 //
 // The audio link is the site's own /player/<player>/tracks/<track>.mp3, which
 // answers with a redirect to storage signed for a couple of hours. That
@@ -38,9 +32,7 @@ import (
 // leave a queue failing partway down. The same judgement imagepond's /direct
 // route gets, for the same reason.
 type Bandzoogle struct {
-	hostSet
 	client *httpx.Client
-	name   string
 }
 
 // bandzoogleTrackAttr marks a track anchor, and is the software's own doing
@@ -54,32 +46,37 @@ const bandzoogleIDAttr = "data-id"
 // bandzoogleDestAttr carries the path the audio is served from.
 const bandzoogleDestAttr = "data-dest"
 
-// NewBandzoogleSites builds one extractor per install named at runtime.
-//
-// There is no built-in list, and that is not an omission: a band's site is on
-// the band's domain, so the only installs this can know about are the ones a
-// user names. Everything else arrives through the sniff.
-func NewBandzoogleSites(cfg *config.Config, client *httpx.Client) []Extractor {
-	hosts := util.Dedupe(cfg.ExtraHostsFor(config.FamilyBandzoogle))
-	out := make([]Extractor, 0, len(hosts))
-	for _, host := range hosts {
-		name, _, _ := strings.Cut(host, ".")
-		out = append(out, &Bandzoogle{
-			hostSet: hostSet{strings.ToLower(host)},
-			client:  client,
-			name:    name,
-		})
-	}
-	return out
+// NewBandzoogle builds the extractor covering every Bandzoogle site.
+func NewBandzoogle(client *httpx.Client) *Bandzoogle { return &Bandzoogle{client: client} }
+
+func (b *Bandzoogle) Name() string { return "bandzoogle" }
+
+// Recognises is the inventory's description.
+func (b *Bandzoogle) Recognises() string {
+	return "pages of Bandzoogle band sites, at any path, whose player lists tracks as " +
+		"`data-zoogle-track` anchors"
 }
 
-func (b *Bandzoogle) Name() string { return b.name }
+// Shape is false: a band's pages are laid out like any site's, so there is
+// no form to single a link out by.
+func (b *Bandzoogle) Shape(*url.URL) bool { return false }
 
-// Extract reads every track on the page. The host was named outright, so a
-// page that cannot be fetched or holds no player is an error rather than
-// something to pass over.
+// Recognise takes a page whose player lists at least one track anchor, the
+// element this reads. One with no audio behind it is still the platform's,
+// and is reported by Extract rather than saved as a page.
+func (b *Bandzoogle) Recognise(_ context.Context, p *Page) bool {
+	if !p.Has(bandzoogleTrackAttr) {
+		return false
+	}
+	root := p.HTML()
+	return root != nil && findFirst(root, func(n *html.Node) bool {
+		return isBandzoogleTrack(n)
+	}) != nil
+}
+
+// Extract reads every track on the page.
 func (b *Bandzoogle) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	doc, err := b.client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("bandzoogle: fetch %s: %w", u.Redacted(), err)
 	}
@@ -346,33 +343,4 @@ func bandzoogleExt(link string) string {
 		}
 	}
 	return ".mp3"
-}
-
-// bandzoogleSniff recognises the software on a host nobody listed.
-//
-// Two things it must not do, both of which it did at first and both of which
-// broke downloads that have nothing to do with this platform. It must not
-// fetch a URL that names a file: that URL *is* a file, and reading it as a
-// page spends a request on every direct link anyone pastes. And a fetch that
-// fails is not a claim — it is not having managed to look — so it falls
-// through to whatever would have happened anyway, rather than reporting this
-// software's name over somebody else's 404.
-//
-// Once the marker is seen it commits, because falling through then would
-// hand the page to the direct fallback, which would write the HTML to disk
-// and call it a finished download. See directSniff.
-func bandzoogleSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, error) {
-	if path.Ext(u.Path) != "" {
-		return nil, nil
-	}
-	// Checked for a page before the body is read: an extensionless URL is
-	// as likely a signed media link, which reading here would spend.
-	doc, ok := mediaPageFetch(ctx, client, u)
-	if !ok {
-		return nil, nil
-	}
-	if !strings.Contains(doc, bandzoogleTrackAttr) {
-		return nil, nil
-	}
-	return bandzoogleParse(ctx, client, doc, u)
 }

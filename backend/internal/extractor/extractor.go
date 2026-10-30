@@ -511,13 +511,13 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// software, named and matched per install where a list is worth having
 	// and sniffed by shape where it is not. Registered after the
 	// hand-written hosts, since a named host is always the better answer.
-	extractors = append(extractors, NewMediaWiki(cfg, client))
+	extractors = append(extractors, NewMediaWiki(client))
 	extractors = append(extractors, NewHandoffs(client)...)
-	extractors = append(extractors, NewPeerTubeSites(cfg, client)...)
-	extractors = append(extractors, NewCheveretoSites(cfg, client)...)
-	extractors = append(extractors, NewBandzoogleSites(cfg, client)...)
-	extractors = append(extractors, NewFoolFuukaSites(cfg, client)...)
-	extractors = append(extractors, NewKVSSites(cfg, client)...)
+	extractors = append(extractors, NewPeerTube(client))
+	extractors = append(extractors, NewChevereto(client))
+	extractors = append(extractors, NewBandzoogle(client))
+	extractors = append(extractors, NewFoolFuuka(client))
+	extractors = append(extractors, NewKVS(client))
 	// The fediverse is matched by path alone, on any host, and its /c/<name>
 	// is also Rumble's and PeerTube's channel shape. So it comes after every
 	// family that claims hosts by name, or it takes their URLs from them.

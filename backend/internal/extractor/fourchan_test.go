@@ -70,3 +70,27 @@ func TestFourChanRejectsNonThreadLinks(t *testing.T) {
 		t.Errorf("err = %v, want a message naming the expected shape", err)
 	}
 }
+
+// fourChanThreadPage is a thread as the board renders it: the thread's own
+// numbered container inside the board, and the site's name.
+const fourChanThreadPage = `<!DOCTYPE html><html><head><title>/b/ - A Thread - Random - 4chan</title></head>
+<body><form name="delform"><div class="board"><div class="thread" id="t570368"><div class="postContainer opContainer"></div></div></div></form></body></html>`
+
+func TestFourChanRecognise(t *testing.T) {
+	f := NewFourChan(nil)
+	expectRecognised(t, f, htmlPage(t, "https://boards.example.test/b/thread/570368", fourChanThreadPage), true)
+	expectRecognised(t, f, htmlPage(t, "https://boards.example.test/b/thread/570368/a-thread", fourChanThreadPage), true)
+	// The right form and the name, rendering another thread or none.
+	expectRecognised(t, f, htmlPage(t, "https://boards.example.test/b/thread/1", fourChanThreadPage), false)
+	expectRecognised(t, f, htmlPage(t, "https://boards.example.test/b/thread/570368",
+		`<html><head><title>/b/ - A Thread - Random - 4chan</title></head><body></body></html>`), false)
+	// An archive of the same thread renders it its own way, under its own name.
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/thread/570368",
+		strings.ReplaceAll(fourChanThreadPage, "4chan", "An Archive")), false)
+	// The board's markup on a page of no thread form.
+	expectRecognised(t, f, htmlPage(t, "https://boards.example.test/b/", fourChanThreadPage), false)
+
+	expectShape(t, f, "https://boards.example.test/b/thread/570368", true)
+	expectShape(t, f, "https://boards.example.test/b/", false)
+	expectShape(t, f, "https://boards.example.test/b/catalog", false)
+}

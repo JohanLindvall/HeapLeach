@@ -3,13 +3,16 @@
 package extractor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-
-	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -311,62 +314,61 @@ func TestPeerTubeParseRoute(t *testing.T) {
 	}
 }
 
-// TestPeerTubeLabel pins how an instance is named. Operators put "video" or
-// "tube" in the hostname often enough that taking the first label would give
-// several instances the same name, which the registry cannot allow.
-func TestPeerTubeLabel(t *testing.T) {
-	tests := map[string]string{
-		"framatube.org":            "framatube",
-		"tilvids.com":              "tilvids",
-		"video.blender.org":        "blender",
-		"makertube.net":            "makertube",
-		"tube.tchncs.de":           "tchncs",
-		"kolektiva.media":          "kolektiva",
-		"spectra.video":            "spectra",
-		"videos.pair2jeux.example": "pair2jeux",
-		"www.example.test":         "example",
-		"example.test:8443":        "example",
-		// The site's name is not the leftmost label, so "tube" is skipped.
-		"tube.example.co": "example",
-		// Nothing but generic words: the first label beats no label at all.
-		"peertube.tv":    "peertube",
-		"peertube.co.uk": "peertube",
-		"video.tube":     "video",
-		"":               "peertube",
-	}
-	for host, want := range tests {
-		if got := peerTubeLabel(host); got != want {
-			t.Errorf("peerTubeLabel(%q) = %q, want %q", host, got, want)
-		}
-	}
+// peerTubeClientPage is the shell the web client is served as: its
+// application element and the server configuration handed to it inline.
+const peerTubeClientPage = `<!doctype html><html><head><title>A Video - Example Tube</title>
+<meta property="og:site_name" content="Example Tube"><script type="module" src="main-AAAA.js"></script>
+<script>window.PeerTubeServerConfig = '{"serverVersion":"7.0.0"}'</script></head><body><my-app></my-app></body></html>`
+
+func TestPeerTubeRecognise(t *testing.T) {
+	p := NewPeerTube(nil)
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa", peerTubeClientPage), true)
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/videos/watch/0aa5bf2e-0000-4000-8000-000000000000", peerTubeClientPage), true)
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/c/a_channel/videos", peerTubeClientPage), true)
+	// The client's page on a route that names nothing.
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/about/instance", peerTubeClientPage), false)
+	// The right form and the instance's name, without the client's shell.
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa",
+		`<html><head><title>A Video - Example Tube</title><meta property="og:platform" content="PeerTube"></head><body></body></html>`), false)
+	// A challenge with no client to ask the API through says nothing.
+	challenged := fixturePage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa", http.StatusForbidden, "text/html", "")
+	challenged.Challenged = true
+	expectRecognised(t, p, challenged, false)
+
+	expectShape(t, p, "https://tube.example.test/w/p/aaaaaaaaaaaaaaaaaaaaaa", true)
+	expectShape(t, p, "https://tube.example.test/a/someone", true)
+	expectShape(t, p, "https://tube.example.test/videos/12345/a-clip/", false)
+	expectShape(t, p, "https://tube.example.test/", false)
 }
 
-// TestPeerTubeSitesNameAndMatchTheirHosts guards the compiled-in table: two
-// instances resolving to one label would be indistinguishable in the UI and
-// in every error message.
-func TestPeerTubeSitesNameAndMatchTheirHosts(t *testing.T) {
-	sites := NewPeerTubeSites(nil, nil)
-	if len(sites) != len(peerTubeKnownHosts) {
-		t.Fatalf("got %d extractors for %d hosts", len(sites), len(peerTubeKnownHosts))
+// A challenged instance, or one behind a bot check, is recognised by its API
+// reporting a server version, asked once per page.
+func TestPeerTubeRecogniseAskingTheAPI(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/config" {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"serverVersion":"7.0.0"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPeerTube(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	botCheck := htmlPage(t, srv.URL+"/w/aaaaaaaaaaaaaaaaaaaaaa",
+		`<html><head><title>Making sure you are not a bot</title><script src="/.within.website/x/main.mjs"></script></head></html>`)
+	for range 2 {
+		if !p.Recognise(context.Background(), botCheck) {
+			t.Fatal("an instance behind a bot check was not recognised")
+		}
 	}
-
-	seen := make(map[string]string, len(sites))
-	for i, host := range peerTubeKnownHosts {
-		name := sites[i].Name()
-		if name == "" {
-			t.Errorf("%s produced an empty label", host)
-		}
-		if other, dup := seen[name]; dup {
-			t.Errorf("%s and %s are both labelled %q", other, host, name)
-		}
-		seen[name] = host
-
-		if !legacyMatch(sites[i], &url.URL{Scheme: "https", Host: host, Path: "/w/x"}) {
-			t.Errorf("%s did not match its own host", host)
-		}
-		if legacyMatch(sites[i], &url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
-			t.Errorf("%s matched an unrelated host", host)
-		}
+	if calls != 1 {
+		t.Errorf("the API was asked %d times, want once", calls)
+	}
+	// An ordinary page of the form is not asked about at all.
+	if p.Recognise(context.Background(), htmlPage(t, srv.URL+"/c/a_channel", `<html><title>A channel</title></html>`)) || calls != 1 {
+		t.Errorf("an ordinary page of the form was claimed or cost a request (%d)", calls)
 	}
 }
 
@@ -592,19 +594,20 @@ func TestPeerTubeFileName(t *testing.T) {
 	}
 }
 
-// TestPeerTubeSniffCostsNothingOffTheInstanceRoutes pins the cheap half of
-// the sniff's bargain. A URL shaped like nothing an instance serves must be
-// rejected before any request, which a nil client proves: reaching the
-// network at all would panic here.
-func TestPeerTubeSniffCostsNothingOffTheInstanceRoutes(t *testing.T) {
+// TestPeerTubeRecogniseCostsNothingOffTheInstanceRoutes: a URL shaped like
+// nothing an instance serves is rejected before any request, which a nil
+// client proves.
+func TestPeerTubeRecogniseCostsNothingOffTheInstanceRoutes(t *testing.T) {
+	p := NewPeerTube(nil)
 	for _, raw := range []string{
 		"https://nobody.example.test/files/archive.zip",
 		"https://nobody.example.test/videos/12345/a-clip/",
 		"https://nobody.example.test/",
 	} {
-		res, handled, err := peerTubeSniff(t.Context(), nil, peerTubeURL(t, raw), Options{})
-		if handled || res != nil || err != nil {
-			t.Errorf("%s was taken up by the sniff", raw)
+		page := fixturePage(t, raw, http.StatusForbidden, "text/html", "")
+		page.Challenged = true
+		if p.Recognise(t.Context(), page) {
+			t.Errorf("%s was recognised", raw)
 		}
 	}
 }
@@ -619,29 +622,5 @@ func TestPeerTubeFileForSpellsAnAbsentLengthMinusOne(t *testing.T) {
 	}, "")
 	if file.Size != -1 {
 		t.Errorf("size = %d, want -1 for a record that reported none", file.Size)
-	}
-}
-
-// TestPeerTubeExtraHosts covers the runtime escape, which exists because
-// seven compiled-in instances stand in for some seventeen hundred.
-func TestPeerTubeExtraHosts(t *testing.T) {
-	cfg := &config.Config{ExtraHosts: map[string][]string{
-		config.FamilyPeerTube: {"tube.example.test", "video.example.test", "third.example.test"},
-	}}
-
-	sites := NewPeerTubeSites(cfg, nil)
-	if len(sites) != len(peerTubeKnownHosts)+3 {
-		t.Fatalf("got %d extractors, want the %d built in plus 3", len(sites), len(peerTubeKnownHosts))
-	}
-	u := &url.URL{Scheme: "https", Host: "tube.example.test", Path: "/w/x"}
-
-	matched := false
-	for _, site := range sites {
-		if legacyMatch(site, u) {
-			matched = true
-		}
-	}
-	if !matched {
-		t.Error("a host added through HEAPLEACH_EXTRA_HOSTS was not matched")
 	}
 }

@@ -5,7 +5,6 @@ package extractor
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -14,9 +13,6 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // platformJSON is an optional identification request, not an extraction.
@@ -52,87 +48,46 @@ func platformJSON(ctx context.Context, client *httpx.Client, endpoint string, he
 	return err == nil && len(body) <= config.MaxResponseBytes && json.Unmarshal(body, out) == nil
 }
 
-// Paths select plausible APIs only after the page's own recognised content
-// has had its turn. In particular /post is common on ordinary blogs, and a
-// working embedded album there needs no guessed booru or archive requests.
-// These paths never enter Registry.Known: doing so would turn navigation
-// links into recursive extraction.
-func platformAPIs(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
-	for _, sniff := range []directSniff{pixeldrainSniff, kemonoSniff, foolFuukaSniff, booruSniff, mediaWikiSniff} {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if res, err := sniff(ctx, client, u, opts); res != nil || err != nil {
-			return res, err
-		}
+// pageJSON is platformJSON asked once per probed page: every recogniser,
+// and the extractor after it, that puts the same question to the same
+// endpoint shares one answer, keyed by the endpoint. The raw answer is kept
+// rather than a decoded one, so each caller may read it into its own shape.
+// It reports false when the endpoint gave no JSON.
+func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header, out any) bool {
+	if client == nil || p == nil {
+		return false
 	}
-	return nil, ctx.Err()
+	raw, _ := p.Memo("json "+endpoint, func() any {
+		var raw json.RawMessage
+		if !platformJSON(ctx, client, endpoint, headers, &raw) {
+			return json.RawMessage(nil)
+		}
+		return raw
+	}).(json.RawMessage)
+	return len(raw) > 0 && json.Unmarshal(raw, out) == nil
 }
 
-// platformPage identifies software in the document already fetched by the
-// fallback. This covers arbitrary article and listing paths without claiming
-// those paths in the registry or fetching a guessed listing on another site.
-func platformPage(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node, doc string, opts Options) (*Result, error) {
-	generator := strings.ToLower(metaContent(root, "generator"))
-	if kvsFingerprint(root, doc, generator) {
-		k := &KVS{client: client, host: u.Hostname()}
-		return k.extract(ctx, u, opts, doc)
-	}
-	if strings.HasPrefix(generator, "mediawiki") {
-		var api string
-		// EditURI advertises api.php even when the article URL gives no
-		// indication of the script directory. Keep the probe on this site.
-		if link := findFirst(root, func(n *html.Node) bool {
-			return n.DataAtom == atom.Link && strings.EqualFold(attr(n, "rel"), "EditURI")
-		}); link != nil {
-			if ref, err := url.Parse(attr(link, "href")); err == nil {
-				ref = u.ResolveReference(ref)
-				if util.Origin(ref) == util.Origin(u) {
-					ref.RawQuery, ref.Fragment = "", ""
-					api = ref.String()
-				}
-			}
-		}
-		res, err := mediaWikiDetect(ctx, client, u, opts, api)
-		if res == nil && err == nil {
-			err = fmt.Errorf("mediawiki: %s identifies as MediaWiki but no API answered", u.Hostname())
-		}
-		return res, err
-	}
-	if strings.HasPrefix(generator, "foolfuuka") {
-		f := &FoolFuuka{client: client, site: foolFuukaSite{root: util.Origin(u), name: foolFuukaLabel(u.Hostname())}}
-		return f.Extract(ctx, u, opts)
-	}
-	for _, family := range []struct {
-		name string
-		api  booruAPI
-	}{
-		{"danbooru", apiDanbooru}, {"e621", apiE621}, {"moebooru", apiMoebooru},
-		{"gelbooru 0.1", apiGelbooru01}, {"gelbooru", apiGelbooru},
-		{"philomena", apiPhilomena}, {"twibooru", apiTwibooru}, {"szurubooru", apiSzurubooru},
-	} {
-		if strings.HasPrefix(generator, family.name) {
-			return NewBooru(client).extract(ctx, u, &booruSite{name: u.Hostname(), root: util.Origin(u), api: family.api})
-		}
-	}
-	return nil, nil
+// pageSilent reports a page with nothing of the site's own to read: a WAF
+// challenge stood in for it, it failed or answered with an error, it is no
+// document, or it is a proof-of-work interstitial served with a 200. Only
+// then may a recogniser whose URL form matched ask the origin's own API
+// instead of reading the page.
+func pageSilent(p *Page) bool {
+	return p.Challenged || !p.OK() || p.Body == "" || p.Script(antiBotScriptPath)
 }
 
-// A generic flashvars object or a videos container is insufficient. KVS
-// identifies itself through the licensed player or its asynchronous block
-// controls, which carry both the block id and the platform's parameters.
-func kvsFingerprint(root *html.Node, doc, generator string) bool {
-	if generator == "kvs" || strings.HasPrefix(generator, "kernel video sharing") {
-		return true
+// antiBotScriptPath is where the common proof-of-work bot check serves its
+// script from, on whichever site deploys it.
+const antiBotScriptPath = "/.within.website/"
+
+// probedPage is the page the registry probed for u, carried in ctx, or nil
+// when there is none for this URL. An extractor reads it for what its
+// recogniser already established — an API that answered, a document — so
+// that nothing is asked twice.
+func probedPage(ctx context.Context, u *url.URL) *Page {
+	p, _ := ctx.Value(pageKey{}).(*Page)
+	if p == nil || p.URL == nil || p.URL.String() != u.String() {
+		return nil
 	}
-	if vars, err := parseFlashvars(doc); err == nil && vars["license_code"] != "" {
-		return true
-	}
-	return findFirst(root, func(n *html.Node) bool {
-		if n.DataAtom == atom.Script {
-			return strings.Contains(attr(n, "src"), "/kt_player.") || strings.Contains(textOf(n), "kt_player(")
-		}
-		return attr(n, "data-action") == "ajax" &&
-			strings.HasPrefix(attr(n, "data-block-id"), "list_videos") && attr(n, "data-parameters") != ""
-	}) != nil
+	return p
 }

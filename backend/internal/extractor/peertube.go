@@ -17,6 +17,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // PeerTube instances.
@@ -25,10 +26,10 @@ import (
 // sites, each running the same versioned REST API under /api/v1. That makes
 // this the same bargain as the Kernel Video Sharing sites on far better
 // terms. There is no markup to guess at, because every instance answers the
-// same documented endpoints with the same JSON; and whether an unknown host
-// is one at all is settled by asking /api/v1/config for its serverVersion
-// rather than by recognising a page, which is a question with an answer
-// instead of a heuristic.
+// same documented endpoints with the same JSON. An instance is recognised by
+// its web client, which is served its server configuration inline; where a
+// challenge stands in front of the page, /api/v1/config answering with a
+// serverVersion settles it instead. No instance is known by name.
 //
 // What that JSON hands back is the best case the downloader has: an unsigned
 // link to a plain MP4 with an exact byte length. Nothing expires, so there is
@@ -66,27 +67,7 @@ import (
 // directory as much as a store. The link is followed exactly as given and
 // never rebuilt against the instance.
 type PeerTube struct {
-	hostSet
 	client *httpx.Client
-	host   string
-}
-
-// peerTubeKnownHosts are the instances this build ships knowing about, so
-// each is matched on its host alone and named for itself in the UI.
-//
-// The list is a convenience and not the boundary of what works, which is
-// just as well: no list of seven can stand in for seventeen hundred. Hosts
-// nobody named are reached two other ways — the "peertube" family of
-// HEAPLEACH_EXTRA_HOSTS adds them at runtime, and peerTubeSniff recognises
-// the rest from their own API.
-var peerTubeKnownHosts = []string{
-	"framatube.org",
-	"tilvids.com",
-	"video.blender.org",
-	"makertube.net",
-	"tube.tchncs.de",
-	"kolektiva.media",
-	"spectra.video",
 }
 
 const (
@@ -98,6 +79,13 @@ const (
 	// video's own files, which is what makes such a video downloadable with
 	// no account and no separately minted file token.
 	peerTubeHeaderPassword = "x-peertube-video-password"
+
+	// peerTubeLabel names every instance: the software.
+	peerTubeLabel = "peertube"
+
+	// peerTubeConfigGlobal is the server configuration the web client is
+	// served inline, which no other software prints.
+	peerTubeConfigGlobal = "window.PeerTubeServerConfig"
 )
 
 // Server error codes PeerTube returns in the body of a refusal. They say what
@@ -108,75 +96,40 @@ const (
 	peerTubeErrWrongPassword = "incorrect_video_password"
 )
 
-// peerTubeGenericLabels are the words an instance's hostname uses to say it
-// is a video site rather than to name itself, plus the second-level labels
-// that are really part of a public suffix.
-var peerTubeGenericLabels = map[string]bool{
-	"video": true, "videos": true, "tube": true, "peertube": true,
-	"media": true, "watch": true, "stream": true, "tv": true,
-	"co": true, "com": true, "org": true, "net": true,
+// NewPeerTube builds the extractor covering every PeerTube instance.
+func NewPeerTube(client *httpx.Client) *PeerTube { return &PeerTube{client: client} }
+
+func (p *PeerTube) Name() string { return peerTubeLabel }
+
+// Recognises is the inventory's description.
+func (p *PeerTube) Recognises() string {
+	return "PeerTube videos, playlists, channels and accounts (`/w/<id>`, `/videos/watch/<id>`, " +
+		"`/w/p/<id>`, `/c/<handle>`, `/a/<handle>`) whose page is the PeerTube web client with its " +
+		"inline server configuration, or whose origin's `/api/v1/config` reports a server version"
 }
 
-// NewPeerTubeSites builds one extractor per known instance, exactly as the
-// KVS sites do: matched on its host, named for itself, and indistinguishable
-// in the UI from a hand-written host.
-//
-// The runtime list is read here rather than carried on config.Config, which
-// is the surface the command line and Prepare share. This one is consulted by
-// a single extractor, has no flag to be overridden by and nothing to
-// validate, so the trip through Config would carry it and change nothing;
-// httpx reads a setting of its own the same way.
-func NewPeerTubeSites(cfg *config.Config, client *httpx.Client) []Extractor {
-	hosts := append([]string(nil), peerTubeKnownHosts...)
-	hosts = append(hosts, cfg.ExtraHostsFor(config.FamilyPeerTube)...)
+// Shape reports an instance route.
+func (p *PeerTube) Shape(u *url.URL) bool { return peerTubeParseRoute(u).Kind != peerTubeNothing }
 
-	out := make([]Extractor, 0, len(hosts))
-	for _, host := range util.Dedupe(hosts) {
-		host = strings.ToLower(host)
-		out = append(out, &PeerTube{hostSet: hostSet{host}, client: client, host: host})
+// Recognise takes an instance route served by the PeerTube web client: its
+// application element and the server configuration it is handed inline.
+// A page that cannot say — a challenge or a bot check in front of it — is
+// settled by asking the origin's /api/v1/config for its server version,
+// which every instance answers and nothing else does.
+func (p *PeerTube) Recognise(ctx context.Context, page *Page) bool {
+	if !p.Shape(page.Final) {
+		return false
 	}
-	return out
+	if root := page.HTML(); root != nil && page.Has(peerTubeConfigGlobal) &&
+		findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "my-app" }) != nil {
+		return true
+	}
+	return pageSilent(page) && peerTubeIsInstance(ctx, page, p.client, page.Final)
 }
-
-func (p *PeerTube) Name() string { return peerTubeLabel(p.host) }
 
 // Extract resolves a video, channel, account or playlist page.
 func (p *PeerTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return peerTubeExtract(ctx, p.client, u, p.Name(), opts)
-}
-
-// peerTubeLabel names an instance after the part of its hostname that
-// identifies the site.
-//
-// Operators are strikingly consistent about saying "video" somewhere:
-// video.blender.org, tube.tchncs.de, spectra.video, makertube.net. Taking the
-// first label the way the KVS sites do would call the first of those "video"
-// and the second "tube", and would give the same name to every other instance
-// that starts the same way — which the registry cannot allow, since a label
-// is what the UI lists and what every error message opens with. So the
-// rightmost label that is neither the public suffix nor one of those generic
-// words is what names the site. A hostname made of nothing but generics —
-// peertube.tv — keeps its first label rather than ending up with none.
-func peerTubeLabel(host string) string {
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	if h, _, ok := strings.Cut(host, ":"); ok {
-		host = h
-	}
-	host = strings.TrimPrefix(host, "www.")
-	if host == "" {
-		return "peertube"
-	}
-
-	labels := strings.Split(host, ".")
-	if len(labels) > 1 {
-		labels = labels[:len(labels)-1]
-	}
-	for _, label := range slices.Backward(labels) {
-		if !peerTubeGenericLabels[label] {
-			return label
-		}
-	}
-	return labels[0]
+	return peerTubeExtract(ctx, p.client, u, peerTubeLabel, opts)
 }
 
 // ------------------------------------------------------------------ routes
@@ -651,51 +604,19 @@ func peerTubeExpand(ctx context.Context, client *httpx.Client, u *url.URL,
 	})
 }
 
-// ------------------------------------------------------------------- sniff
+// ------------------------------------------------------------------- probe
 
-// peerTubeSniff resolves an instance URL whose host nobody registered. The
-// second result reports whether this took ownership of the URL, in which case
-// the first two are the answer and the fallback must not go on to treat the
-// page as a file.
-//
-// This is where the platform's economics beat the KVS sniff outright. That
-// one has to fetch a page and decide from its markup whether it is looking at
-// the right player; this one asks /api/v1/config, which either answers with a
-// server version or does not exist. Two things follow from having a real
-// answer rather than a guess:
-//
-//   - A host that is not an instance costs one small request and falls
-//     straight through to the direct-link handling that would have run
-//     anyway. The path shape is checked first, so a URL that looks nothing
-//     like an instance costs nothing at all.
-//   - A host that is one keeps the URL even when extraction then fails.
-//     Falling through there would save the watch page's HTML under the
-//     video's name and call it a finished download, when what happened is
-//     that the video is live, or still transcoding, or gone — all of which
-//     the error says.
-func peerTubeSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, bool, error) {
-	if peerTubeParseRoute(u).Kind == peerTubeNothing {
-		return nil, false, nil
-	}
-	if !peerTubeIsInstance(ctx, client, u) {
-		return nil, false, nil
-	}
-	res, err := peerTubeExtract(ctx, client, u, peerTubeLabel(u.Hostname()), opts)
-	return res, true, err
-}
-
-// peerTubeIsInstance asks a host whether it runs PeerTube. serverVersion is
-// what settles it: the endpoint exists on every instance and on nothing else,
-// and a version string is proof the answer came from the software rather than
-// from a catch-all that returns JSON for any path.
-func peerTubeIsInstance(ctx context.Context, client *httpx.Client, u *url.URL) bool {
+// peerTubeIsInstance asks an origin whether it runs PeerTube. serverVersion
+// is what settles it: the endpoint exists on every instance and on nothing
+// else, and a version string is proof the answer came from the software
+// rather than from a catch-all that returns JSON for any path. The answer is
+// kept on the probed page, so it is asked once however often it is wanted.
+func peerTubeIsInstance(ctx context.Context, page *Page, client *httpx.Client, u *url.URL) bool {
 	var cfg struct {
 		ServerVersion string `json:"serverVersion"`
 	}
-	if err := client.GetJSON(ctx, peerTubeAPI(u)+"/config", httpx.Referer(util.Origin(u)+"/"), &cfg); err != nil {
-		return false
-	}
-	return strings.TrimSpace(cfg.ServerVersion) != ""
+	return pageJSON(ctx, page, client, peerTubeAPI(u)+"/config", httpx.Referer(util.Origin(u)+"/"), &cfg) &&
+		strings.TrimSpace(cfg.ServerVersion) != ""
 }
 
 // -------------------------------------------------------------------- JSON

@@ -123,6 +123,12 @@ func mediaWikiServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	mux.HandleFunc("/w/api.php", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK) // and nothing else, exactly as Fandom does
 	})
+	// The wiki's own pages, as the software renders them, advertising the
+	// API where this one keeps it.
+	mux.HandleFunc("/wiki/", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Replace(mediaWikiRenderedPage, "/custom/api.php", "/api.php", 1))
+	})
 	mux.HandleFunc("/api.php", func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		q := r.URL.Query()
@@ -431,43 +437,84 @@ func TestMediaWikiAsksAboutAnUnknownPrefix(t *testing.T) {
 
 // --- the pieces -----------------------------------------------------------
 
-// TestMediaWikiMatch pins the routing. Match sees only the URL, so it is
-// both the reason a self-hosted wiki works at all and the reason a wiki-
-// shaped path on somebody else's site must not be claimed.
-func TestMediaWikiMatch(t *testing.T) {
-	m := &MediaWiki{extra: []string{"handwritten.example.test"}}
+// mediaWikiRenderedPage is an article as the software renders it: its generator, the
+// ResourceLoader configuration, and the EditURI link naming its API.
+const mediaWikiRenderedPage = `<!DOCTYPE html><html><head><title>A synthetic page - A Wiki</title>
+<meta name="generator" content="MediaWiki 1.43.0">
+<script>RLCONF={"wgPageName":"A_synthetic_page"};</script>
+<link rel="EditURI" type="application/rsd+xml" href="/custom/api.php?action=rsd">
+</head><body class="mediawiki ltr"></body></html>`
 
-	// The titles are invented; what is under test is the shape of the URL
-	// and the domain it sits on, neither of which cares what the page is.
-	tests := map[string]bool{
-		// A namespace nothing else on the web uses, on any host at all.
-		"https://commons.wikimedia.org/wiki/Category:Synthetic_bridges": true,
-		"https://en.wikipedia.org/wiki/File:Synthetic_image.jpg":        true,
-		"https://someone.example.test/wiki/Category:Odds_and_ends":      true,
-		"https://someone.example.test/wiki/File:Thing.png":              true,
-		"https://someone.example.test/index.php?title=File:A.png":       true,
-		// Wikis this build knows: any page of them will do.
-		"https://en.wikipedia.org/wiki/A_synthetic_article": true,
-		"https://awiki.fandom.com/wiki/A_synthetic_page":    true,
-		"https://awiki.wiki.gg/wiki/A_synthetic_page":       true,
-		"https://awiki.miraheze.org/wiki/A_synthetic_page":  true,
-		"https://handwritten.example.test/wiki/A_page":      true,
-		// An ordinary page on an ordinary site, which happens to file its
-		// content under /wiki/. Claiming this would take it from Direct.
-		"https://someone.example.test/wiki/Some_page": false,
-		"https://someone.example.test/some/file.bin":  false,
-		"https://someone.example.test/":               false,
-		// A known wiki, but not a page of it.
-		"https://en.wikipedia.org/": false,
+// TestMediaWikiShape pins what a link alone can claim: a namespace nothing
+// else on the web uses. An article path is every site's that files content
+// under /wiki/, so it waits for the page.
+func TestMediaWikiShape(t *testing.T) {
+	m := NewMediaWiki(nil)
+	for raw, want := range map[string]bool{
+		"https://wiki.example.test/wiki/Category:Odds_and_ends":  true,
+		"https://wiki.example.test/wiki/File:Thing.png":          true,
+		"https://wiki.example.test/index.php?title=File:A.png":   true,
+		"https://wiki.example.test/wiki/Special:NewFiles":        true,
+		"https://wiki.example.test/wiki/A_synthetic_article":     false,
+		"https://wiki.example.test/some/file.bin":                false,
+		"https://wiki.example.test/":                             false,
+		"https://wiki.example.test/w/index.php?title=An_article": false,
+	} {
+		expectShape(t, m, raw, want)
 	}
-	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
+}
+
+// TestMediaWikiRecognise: the software's own page, on any host and at any
+// title, and nothing that only looks like one.
+func TestMediaWikiRecognise(t *testing.T) {
+	m := NewMediaWiki(nil)
+	expectRecognised(t, m, htmlPage(t, "https://wiki.example.test/wiki/A_synthetic_page", mediaWikiRenderedPage), true)
+	expectRecognised(t, m, htmlPage(t, "https://wiki.example.test/wiki/Category:Odds_and_ends", mediaWikiRenderedPage), true)
+	// A missing page is still the wiki's.
+	expectRecognised(t, m, fixturePage(t, "https://wiki.example.test/wiki/Category:Gone", http.StatusNotFound, "text/html", mediaWikiRenderedPage), true)
+	// The generator and the site's name, without the software's structure.
+	expectRecognised(t, m, htmlPage(t, "https://wiki.example.test/wiki/A_synthetic_page",
+		`<html><head><title>A synthetic page - A Wiki</title><meta name="generator" content="MediaWiki 1.43.0"></head><body></body></html>`), false)
+	// An ordinary page filed under /wiki/.
+	expectRecognised(t, m, htmlPage(t, "https://site.example.test/wiki/Some_page", `<html><title>Some page</title></html>`), false)
+	// The software's page at the site root names no title.
+	expectRecognised(t, m, htmlPage(t, "https://wiki.example.test/", mediaWikiRenderedPage), false)
+}
+
+// An install with an article path of its own names the title in the
+// configuration its page carries, which is read in place of the URL.
+func TestMediaWikiTakesTheTitleFromThePage(t *testing.T) {
+	srv, _ := mediaWikiServer(t)
+	m := testMediaWiki(t)
+	raw := srv.URL + "/w/Category:Synthetic_bridges"
+	page := htmlPage(t, raw, strings.Replace(mediaWikiRenderedPage, "A_synthetic_page", `Category:Synthetic_bridges`, 1))
+	res, err := m.Extract(withPage(context.Background(), page), page.URL, Options{})
+	if err != nil || len(res.Files) == 0 {
+		t.Fatalf("a category under a custom article path: %v, %v", res, err)
+	}
+}
+
+// A challenged wiki is asked its API, but only for a form naming a
+// namespace, and only once however often the page is consulted.
+func TestMediaWikiRecogniseChallengedThroughTheAPI(t *testing.T) {
+	srv, calls := mediaWikiServer(t)
+	m := NewMediaWiki(httpx.New("test", "en", 0, time.Second))
+	challenged := func(path string) *Page {
+		p := fixturePage(t, srv.URL+path, http.StatusForbidden, "text/html", "")
+		p.Challenged = true
+		return p
+	}
+	p := challenged("/wiki/Category:Synthetic_bridges")
+	for range 2 {
+		if !m.Recognise(context.Background(), p) {
+			t.Fatal("a challenged category whose API answers was not recognised")
 		}
-		if got := m.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("the API was asked %d times, want once", n)
+	}
+	if m.Recognise(context.Background(), challenged("/wiki/An_article")) {
+		t.Error("a challenged article path was probed and claimed")
 	}
 }
 

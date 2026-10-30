@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -21,13 +20,12 @@ import (
 // how a FoolFuuka response is read, which is the same on every install and
 // cares nothing for whose archive it came from.
 var testFoolFuuka = foolFuukaSite{
-	name:    "example",
-	root:    "https://archive.example.test",
-	domains: []string{"archive.example.test"},
+	name: "example",
+	root: "https://archive.example.test",
 }
 
-func testFoolFuukaExtractor() *FoolFuuka {
-	return &FoolFuuka{site: testFoolFuuka}
+func testFoolFuukaExtractor() *foolFuukaArchive {
+	return &foolFuukaArchive{site: testFoolFuuka}
 }
 
 // foolFuukaThreadJSON is a thread in the shape the API serves one, and every
@@ -497,66 +495,65 @@ func TestFoolFuukaIsBoard(t *testing.T) {
 	}
 }
 
-// TestFoolFuukaSitesNameAndMatchTheirHosts covers the table, including the
-// domain that is an alias rather than an install: a link to it has to resolve
-// against the archive that absorbed it, not against itself.
-func TestFoolFuukaSitesNameAndMatchTheirHosts(t *testing.T) {
-	sites := NewFoolFuukaSites(nil, nil)
-	if len(sites) != len(foolFuukaSites) {
-		t.Fatalf("got %d extractors for %d installs", len(sites), len(foolFuukaSites))
-	}
-	for i, site := range foolFuukaSites {
-		if got := sites[i].Name(); got != site.name {
-			t.Errorf("%s is named %q, want %q", site.root, got, site.name)
-		}
-		for _, domain := range site.domains {
-			u := &url.URL{Scheme: "https", Host: domain, Path: "/a/thread/1/"}
-			if !legacyMatch(sites[i], u) {
-				t.Errorf("%s did not match its own domain %s", site.name, domain)
-			}
-		}
-		if legacyMatch(sites[i], &url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
-			t.Errorf("%s matched an unrelated host", site.name)
-		}
-	}
+// An archive page is recognised by the software's generator and assets,
+// whatever host serves it; a board-shaped path on an ordinary site is not.
+func TestFoolFuukaRecognise(t *testing.T) {
+	f := &FoolFuuka{}
+	page := `<html><head><meta name="generator" content="FoolFuuka 2.2.0"><title>/b/ - Thread</title>
+<script src="/foolfuuka/foolz/theme/assets/board.js"></script></head><body><article class="thread"></article></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/thread/42/", page), true)
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/", page), true)
+	// The right form and the generator, without the software's own assets.
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/thread/42/",
+		`<html><head><meta name="generator" content="FoolFuuka 2.2.0"></head></html>`), false)
+	// The software's page on a path that names no board.
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/_/about/", page), false)
+	// A challenge with no client to ask the API through says nothing.
+	challenged := fixturePage(t, "https://archive.example.test/b/thread/42/", http.StatusForbidden, "text/html", "")
+	challenged.Challenged = true
+	expectRecognised(t, f, challenged, false)
+
+	expectShape(t, f, "https://archive.example.test/b/thread/42/", true)
+	expectShape(t, f, "https://archive.example.test/b/post/42/", true)
+	expectShape(t, f, "https://archive.example.test/b/search/text/thing/", true)
+	expectShape(t, f, "https://archive.example.test/b/", false)
+	expectShape(t, f, "https://archive.example.test/about-us/", false)
 }
 
-// TestFoolFuukaAliasResolvesAgainstItsArchive is the point of listing rbt.asia
-// under desuarchive rather than as an install: everything on it redirects, so
-// a request built against the pasted host would be one hop of guesswork.
-func TestFoolFuukaAliasResolvesAgainstItsArchive(t *testing.T) {
-	sites := NewFoolFuukaSites(nil, nil)
-	u, err := ParseURL("https://rbt.asia/g/thread/1/")
-	if err != nil {
-		t.Fatal(err)
+// A challenged archive is recognised by its API answering for the thread,
+// asked once however many times the page is consulted.
+func TestFoolFuukaRecogniseChallengedThroughTheAPI(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, foolFuukaThreadJSON)
+	}))
+	t.Cleanup(srv.Close)
+	f := NewFoolFuuka(httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 10*time.Second))
+	p := fixturePage(t, srv.URL+"/b/thread/9998/", http.StatusForbidden, "text/html", "")
+	p.Challenged = true
+	for range 2 {
+		if !f.Recognise(context.Background(), p) {
+			t.Fatal("a challenged thread whose API answers was not recognised")
+		}
 	}
-	for _, ex := range sites {
-		if !legacyMatch(ex, u) {
-			continue
-		}
-		ff, ok := ex.(*FoolFuuka)
-		if !ok {
-			t.Fatalf("rbt.asia matched a %T", ex)
-		}
-		if ff.site.root != "https://desuarchive.org" {
-			t.Errorf("rbt.asia is addressed at %s, want the archive it redirects to", ff.site.root)
-		}
-		return
+	if calls != 1 {
+		t.Errorf("the API was asked %d times, want once", calls)
 	}
-	t.Error("no extractor matched rbt.asia")
 }
 
 // foolFuukaFixture stands an install up on a local address serving canned
 // responses. What that buys over the pure-function tests above is the paging:
 // where the walk stops, and what it does with a page it has seen before, are
 // decisions that only exist across several requests.
-func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *FoolFuuka {
+func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *foolFuukaArchive {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return &FoolFuuka{
+	return &foolFuukaArchive{
 		client: httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 10*time.Second),
-		site:   foolFuukaSite{name: "example", root: srv.URL, domains: []string{"example.test"}},
+		site:   foolFuukaSite{name: "example", root: srv.URL},
 	}
 }
 
@@ -722,34 +719,5 @@ func TestFoolFuukaIndexSaysWhyAPageYieldedNothing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "403") {
 		t.Errorf("error %q drops what the archive actually said", err)
-	}
-}
-
-// TestFoolFuukaAcceptsExtraHosts covers the escape hatch for a list of
-// volunteer-run archives that outlives no release intact.
-func TestFoolFuukaAcceptsExtraHosts(t *testing.T) {
-	cfg := &config.Config{ExtraHosts: map[string][]string{
-		config.FamilyFoolFuuka: {"arch.example.test", "desuarchive.org"},
-	}}
-	sites := NewFoolFuukaSites(cfg, nil)
-
-	if len(sites) != len(foolFuukaSites)+1 {
-		t.Fatalf("got %d extractors, want the %d built in plus one — naming an "+
-			"archive that is already covered must not register it twice",
-			len(sites), len(foolFuukaSites))
-	}
-	added, ok := sites[len(sites)-1].(*FoolFuuka)
-	if !ok {
-		t.Fatalf("the added host is a %T", sites[len(sites)-1])
-	}
-	if added.Name() != "arch" {
-		t.Errorf("the added host is named %q, want %q", added.Name(), "arch")
-	}
-	if added.site.root != "https://arch.example.test" {
-		t.Errorf("the added host is addressed at %q", added.site.root)
-	}
-	u := &url.URL{Scheme: "https", Host: "arch.example.test", Path: "/g/thread/1/"}
-	if !added.Match(u) {
-		t.Error("the added host did not match itself")
 	}
 }

@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"net/url"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -74,7 +73,6 @@ func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
 		"https://www.dropbox.com/scl/fi/a/b.zip":                 "dropbox",
 		"https://www.mediafire.com/file/abcdefgh12345/name/file": "mediafire",
 		"https://drive.google.com/file/d/FILEID123456/view":      "drive",
-		"https://thisvid.com/videos/1/x/":                        "thisvid",
 		"https://coomerfans.com/u/onlyfans/1/a-creator":          "coomerfans",
 		"https://coomerfans.com/p/1/2/onlyfans":                  "coomerfans",
 		"https://ok.ru/videoembed/1234567890":                    "ok.ru",
@@ -86,7 +84,7 @@ func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
 		"https://imagepond.net/i/a-title-slug":                   "imagepond",
 		"https://yandex.kz/video/preview/1234567890":             "yandex",
 		"https://nobody.example.test/some/file.bin":              "direct",
-		"https://nobody.example.test/videos/1/some-clip/":        "direct",
+		"https://nobody.example.test/videos/1/some-clip/":        "kvs",
 	}
 	for raw, want := range tests {
 		u, err := ParseURL(raw)
@@ -96,36 +94,6 @@ func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
 		if got := reg.Find(u).Name(); got != want {
 			t.Errorf("%s went to %q, want %q", raw, got, want)
 		}
-	}
-}
-
-// TestRegistryAcceptsExtraKVSHosts covers the escape hatch for a platform
-// whose site list outruns any release.
-func TestRegistryAcceptsExtraKVSHosts(t *testing.T) {
-	reg := testRegistry(t, &config.Config{
-		ExtraHosts: map[string][]string{config.FamilyKVS: {"tube.example.test"}},
-	})
-
-	u, err := ParseURL("https://tube.example.test/videos/1/x/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := reg.Find(u).Name(); got != "tube" {
-		t.Errorf("a host from HEAPLEACH_KVS_HOSTS went to %q, want the kvs extractor", got)
-	}
-}
-
-// TestRegistryFindIsHostOnly documents why the KVS sniff exists at all: Find
-// never fetches anything, so a host nobody named can only be recognised
-// later, by the fallback, from the page itself.
-func TestRegistryFindIsHostOnly(t *testing.T) {
-	reg := testRegistry(t, nil)
-	u, err := url.Parse("https://unknown-tube.example.test/videos/1/a-clip/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, isDirect := reg.Find(u).(*Direct); !isDirect {
-		t.Error("an unregistered host was matched by something other than the fallback")
 	}
 }
 

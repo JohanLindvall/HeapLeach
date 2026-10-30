@@ -23,7 +23,7 @@ import (
 // These are not recognised by path. The platform lets an install rename its
 // sections — one names its models section /onlyfans-models/ — so a list of
 // section names would trail the installs the way a host list does. They are
-// recognised by shape instead: on a registered host, a URL that is neither a
+// recognised by shape instead: on a recognised install, a URL that is neither a
 // profile nor a search is fetched once, and what comes back decides. A page
 // with a player is a video. A page with no player but a videos block is the
 // listing it looks like, and is walked from the document already in hand. A
@@ -48,7 +48,7 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label stri
 		return nil, fmt.Errorf("%s: %s is the front page; paste a video, a category, "+
 			"a model, a tag or a search instead", label, u.Redacted())
 	}
-	doc, err := client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("%s: fetch %s: %w", label, u.Redacted(), err)
 	}

@@ -62,13 +62,14 @@ import (
 //
 // Two other things were expected to come along for free, and only one does.
 // archive.org's /download/<id> is a genuine autoindex — a table of relative
-// links carrying Apache's own abbreviated sizes — so it is claimed on that
-// path shape. An IPFS gateway is not: kubo's directory template writes its
-// links root-relative to whatever base the gateway rewrites to, and puts the
-// size in a sibling of the link rather than beside it, so a gateway that
-// rewrites yields nothing here. One that does not, and titles the page after
-// the directory it is listing, is picked up by the title rule below. Anything
-// beyond that belongs in an extractor of its own.
+// links carrying Apache's own abbreviated sizes, titled as a directory
+// listing — so it is recognised like any other. An IPFS gateway is not:
+// kubo's directory template writes its links root-relative to whatever base
+// the gateway rewrites to, and puts the size in a sibling of the link rather
+// than beside it, so a gateway that rewrites yields nothing here. One that
+// does not, and titles the page after the directory it is listing, is picked
+// up by the title rule below. Anything beyond that belongs in an extractor
+// of its own.
 type Autoindex struct {
 	client *httpx.Client
 }
@@ -78,56 +79,35 @@ func NewAutoindex(client *httpx.Client) *Autoindex { return &Autoindex{client: c
 
 func (a *Autoindex) Name() string { return "autoindex" }
 
-// Match claims the URL shapes that are an autoindex by construction. Nothing
-// else can be settled from a URL alone, which is what autoindexSniff is for.
-func (a *Autoindex) Match(u *url.URL) bool { return autoindexArchiveOrg(u) }
+// Recognises is the inventory's description.
+func (a *Autoindex) Recognises() string {
+	return "generated directory listings at any path: a page titled as an index of its own " +
+		"directory (`Index of /…`, `Directory listing for /…`) that links at least one entry " +
+		"inside it"
+}
+
+// Shape is false: a directory's URL looks like any other page's, and only
+// the listing itself says what it is.
+func (a *Autoindex) Shape(*url.URL) bool { return false }
+
+// Recognise takes a page whose title or heading names it a listing of the
+// directory it was served from, and that links an entry inside that
+// directory, which is what the crawl reads.
+func (a *Autoindex) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	if !p.OK() || root == nil {
+		return false
+	}
+	base := autoindexBase(p.Final)
+	return autoindexIsListing(root, base) && len(autoindexEntries(root, base)) > 0
+}
 
 // Extract crawls the directory the URL names.
 func (a *Autoindex) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	if p := probedPage(ctx, u); p != nil && p.OK() && p.Final.String() != u.String() {
+		u = p.Final // a redirect added the slash, or moved the directory
+	}
 	return a.crawl(ctx, u, opts.maxFiles())
-}
-
-// autoindexArchiveOrg reports whether a URL is an archive.org item listing.
-//
-// An item's /download/<id> is served as an ordinary autoindex, with or
-// without a trailing slash. Deeper than that the shape stops being reliable:
-// /download/<id>/<name> is a file inside the item, and claiming it would
-// replace a working download with a page that is not a listing. So a deeper
-// path is only taken when it ends in a slash and therefore says it is a
-// directory.
-func autoindexArchiveOrg(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "archive.org") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	if len(segs) < 2 || segs[0] != "download" {
-		return false
-	}
-	return len(segs) == 2 || strings.HasSuffix(u.Path, "/")
-}
-
-// autoindexSniff resolves a URL that turns out to be an open directory.
-//
-// It belongs to the fallback for the same reason kvsSniff does: nothing about
-// an open directory says which host it is on, so there is no list to be on
-// and no Match that could recognise one. A page that is not a listing falls
-// straight through to the direct-link handling that would have run anyway, so
-// being wrong costs one GET.
-//
-// Only a path ending in a slash is looked at, and that restraint is
-// deliberate. A trailing slash means a directory everywhere, and a URL
-// without one may well be a signed link that is only good once — spending a
-// speculative GET on it to ask a question the URL already answered would be a
-// poor trade.
-func autoindexSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, bool) {
-	if !strings.HasSuffix(u.Path, "/") && u.Path != "" {
-		return nil, false
-	}
-	res, err := (&Autoindex{client: client}).crawl(ctx, u, opts.maxFiles())
-	if err != nil || res == nil || len(res.Files) == 0 {
-		return nil, false
-	}
-	return res, true
 }
 
 // ------------------------------------------------------------------ crawl
@@ -265,7 +245,7 @@ func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) {
 // read fetches one directory and fills in its files and subdirectories.
 func (a *Autoindex) read(ctx context.Context, node *autoindexNode) error {
 	page := node.base.String()
-	doc, err := a.client.GetString(ctx, page, httpx.Referer(util.Origin(node.base)+"/"))
+	doc, _, err := fetchDocument(ctx, a.client, node.base, httpx.Referer(util.Origin(node.base)+"/"))
 	if err != nil {
 		return fmt.Errorf("autoindex: fetch %s: %w", node.base.Redacted(), err)
 	}

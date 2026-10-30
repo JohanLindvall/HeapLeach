@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -12,12 +13,12 @@ import (
 )
 
 // pageSniff recognises WordPress categories, then gives an ordinary HTML
-// page's file links precedence over an embedded preview. Named hosts and
-// earlier platform sniffs have already had their turn; remaining platforms
-// identify themselves in the fetched page or through a bounded API probe.
-// Outside a recognised category, only registered extractors are expanded:
-// ordinary HTML navigation cannot recurse through this fallback. A page
-// without supported links keeps the existing media fallback.
+// page's file links precedence over an embedded preview. Every platform has
+// already been offered the probed page by its own recogniser, so what
+// reaches this is a page none of them claimed. Outside a recognised
+// category, only registered extractors are expanded: ordinary HTML
+// navigation cannot recurse through this fallback. A page without supported
+// links keeps the existing media fallback.
 func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	ext := strings.ToLower(path.Ext(u.Path))
 	switch ext {
@@ -25,18 +26,13 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	default:
 		return nil, nil
 	}
-	// Header-gated and bounded: a binary response must never be read as a
-	// page, even when its signed URL has no extension.
-	doc, page, ok := mediaPageFetchURL(ctx, d.client, u)
+	doc, page, ok := d.document(ctx, u)
 	if !ok {
-		return platformAPIs(ctx, d.client, u, opts)
+		return nil, nil
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, nil
-	}
-	if res, err := platformPage(ctx, d.client, page, root, doc, opts); res != nil || err != nil {
-		return res, err
 	}
 	if d.registry != nil {
 		if wordPressCategory(root, page) {
@@ -44,11 +40,6 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 		}
 	}
 	album, albumErr := darkGramResult(d.client, page, root, opts)
-	if album == nil && albumErr == nil {
-		if res, err := platformAPIs(ctx, d.client, page, opts); res != nil || err != nil {
-			return res, err
-		}
-	}
 	if d.registry != nil {
 		if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
 			if res, err := expandPageLinks(ctx, d.registry, u, root, sources, opts); res != nil || err != nil {
@@ -64,6 +55,20 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 		return res, nil
 	}
 	return nil, nil
+}
+
+// document is the page as HTML: the registry's probe when it read one, or
+// else a fetch of its own. Either way it is header-gated and bounded, since
+// a binary response must never be read as a page, even when its signed URL
+// has no extension.
+func (d *Direct) document(ctx context.Context, u *url.URL) (string, *url.URL, bool) {
+	if p := probedPage(ctx, u); p != nil && p.Err == nil && p.Status == http.StatusOK && p.Body != "" {
+		if !mediaPageIsHTMLType(p.MediaType()) {
+			return "", nil, false
+		}
+		return p.Body, p.Final, true
+	}
+	return mediaPageFetchURL(ctx, d.client, u)
 }
 
 // fileLinkSources keeps links claimed by registered extractors. The generic

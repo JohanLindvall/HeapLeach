@@ -42,40 +42,17 @@ import (
 //     the item is an image. og:video is therefore read first — the same
 //     ordering, for the same reason, that imagepond needed.
 //
-// The host list has the two problems the Kernel Video Sharing one has, and the
-// same two answers: the "chevereto" family of HEAPLEACH_EXTRA_HOSTS extends it at runtime, and the
-// direct-link fallback sniffs a Chevereto-shaped URL for the software's own
-// fingerprint, which covers the self-hosted tail without naming a host.
+// An install is recognised by the software's own structure rather than by
+// its host: the platform's JavaScript namespace, which its pages cannot work
+// without, or its generator or credit beside the item viewer or the listing
+// metadata this reads. That covers the self-hosted tail without naming a
+// host, and the best-known installs the same way.
 type Chevereto struct {
-	hostSet
 	client *httpx.Client
-	name   string
 }
 
-// cheveretoSite is one install this build ships knowing about.
-type cheveretoSite struct {
-	name    string
-	domains []string
-}
-
-// cheveretoKnownHosts are the installs that answer a plain client.
-//
-// Several of the best-known ones do not, and are left out rather than shipped
-// as something that looks supported and is not: pixl.li and lensdump.com both
-// sit behind Cloudflare and answer 403 without a browser challenge being
-// solved, and img.kiwi gates every page behind a fingerprinting interstitial.
-// The same judgement booru.go makes about gelbooru.com. They still resolve if
-// a user names them in HEAPLEACH_EXTRA_HOSTS behind a proxy that can pass.
-//
-// Note that imagepond.net is *not* here despite having been a Chevereto
-// install: it has since been rewritten onto software of its own and keeps its
-// own extractor. A host that leaves the platform has to leave this list, since
-// nothing about these pages would parse.
-var cheveretoKnownHosts = []cheveretoSite{
-	{name: "imgbb", domains: []string{"imgbb.com", "ibb.co"}},
-	{name: "freeimage", domains: []string{"freeimage.host"}},
-	{name: "gifyu", domains: []string{"gifyu.com"}},
-}
+// cheveretoLabel names every install: the software.
+const cheveretoLabel = "chevereto"
 
 // Markers on the pages this reads. Each is emitted by the platform's own
 // templates rather than by a theme, which is what makes them portable across
@@ -104,42 +81,41 @@ const (
 	// The password gate's two fields.
 	cheveretoPasswordField = "content-password"
 	cheveretoTokenField    = "auth_token"
+	// cheveretoNamespace is the platform's JavaScript namespace.
+	cheveretoNamespace = "CHV.obj."
 )
 
 // cheveretoThumbInfixes are the size markers the platform inserts before the
 // extension: medium, thumbnail, and the frame it takes off a video.
 var cheveretoThumbInfixes = []string{"md", "th", "fr"}
 
-// NewCheveretoSites builds one extractor per known install, so each is matched
-// on its host alone and named for itself in the UI, exactly as a hand-written
-// host would be.
-//
-// The environment is read here rather than through config.Config because this
-// setting names hosts rather than tuning behaviour: the list rots faster than
-// releases do, and nothing else in the process has an opinion about it.
-func NewCheveretoSites(cfg *config.Config, client *httpx.Client) []Extractor {
-	sites := append([]cheveretoSite(nil), cheveretoKnownHosts...)
-	for _, host := range util.Dedupe(cfg.ExtraHostsFor(config.FamilyChevereto)) {
-		name, _, _ := strings.Cut(host, ".")
-		sites = append(sites, cheveretoSite{name: name, domains: []string{host}})
-	}
+// NewChevereto builds the extractor covering every Chevereto install.
+func NewChevereto(client *httpx.Client) *Chevereto { return &Chevereto{client: client} }
 
-	out := make([]Extractor, 0, len(sites))
-	for _, site := range sites {
-		domains := make([]string, 0, len(site.domains))
-		for _, domain := range site.domains {
-			domains = append(domains, strings.ToLower(domain))
-		}
-		out = append(out, &Chevereto{hostSet: domains, client: client, name: site.name})
-	}
-	return out
+func (c *Chevereto) Name() string { return cheveretoLabel }
+
+// Recognises is the inventory's description.
+func (c *Chevereto) Recognises() string {
+	return "Chevereto items, albums and user listings: pages below the site root carrying the " +
+		"platform's `CHV.obj` script namespace, or its generator or credit beside the item viewer, " +
+		"the `data-object` listing metadata or the password gate"
 }
 
-func (c *Chevereto) Name() string { return c.name }
+// Shape reports the routes worth a probe: an item, an album, or a user's
+// albums. The short single-segment links are every site's form.
+func (c *Chevereto) Shape(u *url.URL) bool { return cheveretoPagePath(u) }
+
+// Recognise takes a page below the root that carries the platform's own
+// structure. The routes are renameable, so the path beyond that is not
+// asked; the front page names nothing to download.
+func (c *Chevereto) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	return root != nil && len(p.Segments()) > 0 && cheveretoFingerprint(root, p.Body)
+}
 
 // Extract resolves an album, a user's listing, or a single item.
 func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return cheveretoExtract(ctx, c.client, u, c.name, opts, false)
+	return cheveretoExtract(ctx, c.client, u, cheveretoLabel, opts)
 }
 
 // cheveretoExtract resolves one page, whatever kind it turns out to be.
@@ -148,12 +124,8 @@ func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 // because the routes are renameable — an operator can serve items from /i/,
 // /image/ or /photo/, and the short-link domains use no route segment at all.
 // Reading the page settles it in the fetch that had to happen anyway.
-//
-// requireFingerprint is set only for the sniff, where the host is unknown: a
-// named install is parsed on its own say-so, since an install that has dropped
-// the platform's credit still serves the platform's markup.
 func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
-	label string, opts Options, requireFingerprint bool) (*Result, error) {
+	label string, opts Options) (*Result, error) {
 
 	// A bare domain is the site's front page, which carries a cover image in
 	// its metadata and would otherwise resolve to the operator's own artwork.
@@ -164,12 +136,9 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
 			"paste a link to one rather than to the site", label, u.Redacted())
 	}
 
-	doc, root, err := cheveretoFetch(ctx, client, u, opts)
+	_, root, err := cheveretoFetch(ctx, client, u, opts)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", label, err)
-	}
-	if requireFingerprint && !cheveretoFingerprint(root, doc) {
-		return nil, fmt.Errorf("%s: %s is not a Chevereto page", label, u.Redacted())
 	}
 
 	listing := cheveretoWalk(ctx, client, u, root, opts)
@@ -605,8 +574,7 @@ func cheveretoTitle(root *html.Node, u *url.URL) string {
 // parse together: the gate check has to parse it anyway, and every caller
 // goes on to read the tree.
 func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (string, *html.Node, error) {
-	page := u.String()
-	doc, err := client.GetString(ctx, page, httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return "", nil, fmt.Errorf("fetch %s: %w", u.Redacted(), err)
 	}
@@ -684,48 +652,27 @@ func cheveretoAuthToken(root *html.Node) string {
 	return strings.TrimSpace(attr(n, "value"))
 }
 
-// ------------------------------------------------------------------- sniff
-
-// cheveretoSniff resolves a URL that is shaped like a Chevereto page but whose
-// host nobody registered.
+// cheveretoFingerprint reports whether a page came off a Chevereto install,
+// by structure this extractor reads.
 //
-// The platform is sold rather than run, so the hosts serving it outnumber any
-// list by orders of magnitude, and the routes it lays them out with are
-// distinctive enough to be worth one GET: an item, an album or a user's
-// albums. The page then has to identify itself as Chevereto before anything is
-// read out of it, which is what keeps the guess cheap to be wrong about — a
-// page that is not one falls straight through to the direct-link handling that
-// would have run anyway.
-func cheveretoSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, bool) {
-	if !cheveretoPagePath(u) {
-		return nil, false
-	}
-	res, err := cheveretoExtract(ctx, client, u, "chevereto", opts, true)
-	if err != nil || res == nil || len(res.Files) == 0 {
-		return nil, false
-	}
-	return res, true
-}
-
-// cheveretoFingerprint reports whether a page came off a Chevereto install.
-//
-// Three signals, because no single one survives every install. Version 3
-// prints a generator meta and version 4 does not; version 4 leaves a footer
-// credit, which a paid licence may remove; and an install that has done both
-// still ships the platform's own JavaScript namespace, which its pages cannot
-// work without.
+// The platform's own JavaScript namespace is enough alone: its pages cannot
+// work without it, and nothing else prints it. Otherwise the software has to
+// name itself — version 3 prints a generator meta, version 4 a footer credit,
+// and a paid licence may remove either — and the page must also carry what
+// is parsed here: the item viewer, the listing metadata, or the password
+// gate.
 func cheveretoFingerprint(root *html.Node, doc string) bool {
-	if strings.Contains(strings.ToLower(metaContent(root, "generator")), "chevereto") {
+	if strings.Contains(doc, cheveretoNamespace) {
 		return true
 	}
-	credit := findFirst(root, func(n *html.Node) bool {
-		return isElem(n, atom.A) && attr(n, "rel") == "generator" &&
-			strings.Contains(strings.ToLower(attr(n, "href")), "chevereto.com")
-	})
-	if credit != nil {
-		return true
-	}
-	return strings.Contains(doc, "CHV.obj.")
+	named := strings.Contains(strings.ToLower(metaContent(root, "generator")), "chevereto") ||
+		findFirst(root, func(n *html.Node) bool {
+			return isElem(n, atom.A) && attr(n, "rel") == "generator" &&
+				strings.Contains(strings.ToLower(attr(n, "href")), "chevereto")
+		}) != nil
+	return named && (cheveretoGated(root) || findFirst(root, func(n *html.Node) bool {
+		return n.Type == html.ElementNode && (attr(n, "id") == cheveretoViewerID || attr(n, cheveretoObjectAttr) != "")
+	}) != nil)
 }
 
 // cheveretoRoutes are the path segments the platform's own routes are named

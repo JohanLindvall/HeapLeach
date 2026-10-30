@@ -85,24 +85,6 @@ func (r *Registry) Catalogue() []HostInfo {
 	return out
 }
 
-// Sites lists the boards each API family covers.
-func (b *Booru) Sites() []string {
-	var out []string
-	for _, site := range booruSites {
-		out = append(out, site.domains...)
-	}
-	return out
-}
-
-// Sites lists the instances of the software this covers.
-func (k *Kemono) Sites() []string {
-	out := make([]string, 0, len(kemonoHosts))
-	for domain := range kemonoHosts {
-		out = append(out, domain)
-	}
-	return out
-}
-
 // Sites returns nothing: the harvester claims no host of its own, and reaches
 // whatever the page it is pointed at links to.
 func (l *Links) Sites() []string { return nil }
