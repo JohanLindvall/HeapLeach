@@ -290,11 +290,12 @@ intact. `sources.go` holds what they share:
   broad search can state tens of thousands of pages. Where every entry costs a
   request at listing time, the cap is `listingLimit` (the lower of the source
   and file caps); otherwise the file cap.
-- Entries that need their own page are then read concurrently with `FanOut`
-  (`fanout.go`), bounded by `config.PageFetchConcurrency`, with results
+- Entries that need their own page are then read concurrently through
+  `resolveFiles`/`resolveOutcomes` (`resolve.go`, on `FanOut` in
+  `fanout.go`), bounded by `config.PageFetchConcurrency`, with results
   collected by index so the job lists files in the site's own order however
   the requests interleave. One that will not load is skipped rather than
-  failing a job of hundreds.
+  failing a job of hundreds; when none loads, `noneRead` says why.
 
 ### Caps
 

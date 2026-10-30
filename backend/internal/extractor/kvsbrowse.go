@@ -71,10 +71,15 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, limit int)
 	if listing, ok := kvsPagedListing(u); ok {
 		l := kvsListingForPage(listing)
 		l.limit = limit
-		pages, title, err := kvsListingPages(ctx, client, l)
+		pages, title, note, err := kvsListingWalk(ctx, client, l)
 		switch {
 		case err == nil && len(pages) > 0:
-			return kvsResolvePages(ctx, client, l, pages, title)
+			res, err := kvsResolvePages(ctx, client, l, pages, title)
+			if err != nil {
+				return nil, err
+			}
+			res.Note = note
+			return res, nil
 		case err == nil, httpx.HasStatus(err, http.StatusNotFound, http.StatusGone):
 			// Nothing at the listing's first page, or no such page: the
 			// number was the section's own name.
