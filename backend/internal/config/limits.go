@@ -684,6 +684,13 @@ const (
 	// whether they are refused here.
 	GeoProbesDR = 3
 
+	// VRTTokenLife is how long the Flemish broadcaster's player token is
+	// taken to last when its token service does not say when it expires,
+	// and VRTTokenMargin how long before that moment a fresh one is minted
+	// instead.
+	VRTTokenLife   = 15 * time.Minute
+	VRTTokenMargin = time.Minute
+
 	// MaxResolvedReleases bounds how many releases of a band's discography
 	// are read while it is listed, each a page of its own. A label's
 	// catalogue can run to hundreds; past this the listing says what it

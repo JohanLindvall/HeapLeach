@@ -58,8 +58,10 @@ failure less its site prefix, else the caller's own sentence. rtpplay names
 a capped season in its title instead, so it cuts before and passes the rest.
 A broadcaster whose note names the refusals (arte, the players of an rtbf
 page, a radio-canada article's media) sets `noteRefused`, and one that
-says it in its own words (rtbf's tabs, yle) passes `refused` to be handed
-the reasons. Most callers end there, and `listSeries` is that ending: the
+places them among notes of its own (rtbf's tabs, yle) passes `refused` to
+be handed the reasons. Either way `refusedNote` counts them by reason, in
+the order the reasons came up ("3 left out: <reason>; 1 left out:
+<reason>"), so that one refusal's reason never stands for all of them. Most callers end there, and `listSeries` is that ending: the
 result titled, its note the cap's followed by the caller's own, and the
 context's error rather than a partial result when it ended while the
 episodes resolved; npostart, pbs, svtplay, rtpplay, yle and rtbf's tabs,
@@ -68,6 +70,17 @@ episode whose check failed for any other cause, for its transfer to try
 again, returns the lazy file rather than the error. npostart reads at most
 `config.MaxSeasonsNPO` seasons, each a request against the same budget, and
 its note says when it cut them.
+
+A programme's season lists are read through `readSeasons`, several at a
+time (npostart, vrtmax, rtve) or one after another (ard, arte), into one
+listing in the seasons' order, with whether any went on past its limit and
+the first walk's note. A season that cannot be read is left out rather than
+losing the others, and the note says "partial — unreadable seasons". arte
+fails the collection when its first entry is a season that cannot be read,
+nothing having been read to stand for the rest; ard falls back on the flat
+listing, which is complete, when no season read. yle reads its lists in
+turn sharing one budget and stops at the first that fails, saying "the
+listing broke off partway", so it walks them itself.
 
 The players an rtbf page embeds and the media a radio-canada article
 attaches go through `expandSeries` too (noun "players", "media"), so that
@@ -142,8 +155,9 @@ programme and its title. A season nested in a series is read into a folder of
 its own. ARTE shows some programmes of a collection in fewer countries than
 others and the listing does not say which, so each programme's configuration
 is read as the collection is (`expandSeries`, a season's programmes filed
-under it). One not shown here is left out, the
-note giving the reason once (`broadcastRefusal`); one that could not be read for
+under it). A season that cannot be read is left out, the note saying so,
+unless it is the collection's first entry. One not shown here is left out, the
+note counting the reasons (`broadcastRefusal`); one that could not be read for
 another cause is kept, for its transfer to try again. Their streams are
 resolved when the transfers start.
 
@@ -234,7 +248,7 @@ season's own page carries the same filter with itself as the default, and
 lists itself alone. A list is followed by the `count` it states and by what
 each page adds, not by the size asked for. Each episode is asked of the
 preview as the listing is read (`expandSeries`): one Areena does not offer is
-left out with its reason once, as are the Finland-only ones once one of them
+left out, counted by its reason, as are the Finland-only ones once one of them
 has been refused here. That probe is made after the previews, of the first
 Finland-only episode in the listing's order, so it is asked once and of the
 same episode however the previews were scheduled. An episode keeps the name it is listed under, the card's

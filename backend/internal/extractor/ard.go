@@ -272,21 +272,22 @@ func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string
 	// flat listing above is discarded rather than sorted: the season endpoint
 	// is the only one that names the seasons ("Staffel 2") and the only one
 	// that leaves out the audio-described copies.
-	for _, season := range seasons {
+	// One unreadable season does not lose the others.
+	list, _ := readSeasons(ctx, seasons, true, func(ctx context.Context, season string) (seasonList[ardEpisodeRef], error) {
 		l, err := a.pages(ctx, ref.show, season, limit)
 		if err != nil {
-			continue // one unreadable season should not lose the others
+			return seasonList[ardEpisodeRef]{}, err
 		}
-		more, note = more || l.more, util.FirstNonEmpty(note, l.note)
 		// A season with no name of its own still needs a folder, or its
 		// episodes would be written beside the folders of every other season
 		// rather than into one of their own.
-		refs = append(refs, ardRefs(l.teasers, util.FirstNonEmpty(l.widget.Title, "Staffel "+season))...)
-	}
-	if len(refs) == 0 {
+		listed := ardRefs(l.teasers, util.FirstNonEmpty(l.widget.Title, "Staffel "+season))
+		return seasonList[ardEpisodeRef]{items: listed, more: l.more, note: l.note}, nil
+	})
+	if len(list.items) == 0 {
 		return flat.widget.Title, ardRefs(flat.teasers, ""), flat.more, flat.note, nil
 	}
-	return flat.widget.Title, refs, more, note, nil
+	return flat.widget.Title, list.items, list.more, list.note, nil
 }
 
 // ardListing is one listing read: the first page's widget, which carries

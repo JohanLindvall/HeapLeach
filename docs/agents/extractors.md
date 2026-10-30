@@ -366,8 +366,10 @@ line in the saved queue.
   `listSeries`, which ends a listing with it, beneath it
   `resolveEach` for a listing's episodes resolved concurrently or one at a
   time, in order, `walkEpisodes`, which walks a series through `walkPages`
-  up to the request budget and says whether it went on, `lazyEpisode` and
-  `refreshing` for files re-read at transfer time, the listing notes,
+  up to the request budget and says whether it went on, `readSeasons` for
+  a programme's season lists read at once or in turn, an unreadable season
+  left out and noted, `lazyEpisode` and
+  `refreshing` for files re-read at transfer time, the listing notes (`refusedNote` counting refusals by reason),
   `joinTitle` with its `titleEqual`, `titlePrefixed` and `titleContains`
   for naming an episode by its programme, and `writtenTitle` for a
   page's `<title>` with its spacing kept. A new broadcaster uses these

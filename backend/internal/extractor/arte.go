@@ -211,7 +211,7 @@ type arteCollection struct {
 // Each programme's configuration is read as the collection is, several at
 // a time, because ARTE shows some programmes of a collection in fewer
 // countries than others and the listing does not say which. One it does
-// not show here is left out, the job's note giving ARTE's own reason once;
+// not show here is left out, the job's note counting ARTE's reasons;
 // one whose configuration could not be read for any other cause is kept,
 // for its transfer to try again. Each check is a request, so a collection
 // is checked as far as config.MaxResolvedEpisodes programmes.
@@ -220,23 +220,30 @@ func (a *Arte) collection(ctx context.Context, lang, id string) (*Result, error)
 	if err != nil {
 		return nil, err
 	}
-	var programmes []arteEntry
-	for _, entry := range entries {
+	// A season that cannot be read is left out, the note saying so, unless
+	// it is the first entry: nothing has been read then to stand for the
+	// collection. A programme listed at the top costs no request.
+	list, first := readSeasons(ctx, entries, true, func(ctx context.Context, entry arteEntry) (seasonList[arteEntry], error) {
 		if !arteCollectionID.MatchString(entry.id) {
-			programmes = append(programmes, entry)
-			continue
+			return seasonList[arteEntry]{items: []arteEntry{entry}}, nil
 		}
 		season, listed, err := a.playlist(ctx, lang, entry.id)
 		if err != nil {
-			return nil, err
+			return seasonList[arteEntry]{}, err
 		}
+		var programmes []arteEntry
 		for _, p := range listed {
 			if arteProgrammeID.MatchString(p.id) {
 				p.season = cmp.Or(season, entry.title, entry.id)
 				programmes = append(programmes, p)
 			}
 		}
+		return seasonList[arteEntry]{items: programmes}, nil
+	})
+	if first != nil {
+		return nil, first
 	}
+	programmes := list.items
 	title = cmp.Or(title, id)
 	if len(programmes) == 0 {
 		return nil, fmt.Errorf("arte: %s lists no programmes", title)
@@ -259,7 +266,7 @@ func (a *Arte) collection(ctx context.Context, lang, id string) (*Result, error)
 			return &file, nil
 		},
 		noteRefused: true,
-	})
+	}, list.note)
 }
 
 // arteEntry is one programme or collection a playlist names, and the season
