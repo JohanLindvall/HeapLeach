@@ -485,7 +485,7 @@ func TestVRTMaxReasonKeepsTheCode(t *testing.T) {
 			t.Errorf("vrtReason(%s) said nothing beyond the code itself", code)
 		}
 	}
-	refusal := &vrtRefused{code: "CONTENT_IS_AGE_RESTRICTED"}
+	refusal := &broadcastRefusal{site: "vrtmax", reason: vrtReason("CONTENT_IS_AGE_RESTRICTED")}
 	want := "vrtmax: VRT serves this only to a signed-in account old enough for it (CONTENT_IS_AGE_RESTRICTED)"
 	if got := refusal.Error(); got != want {
 		t.Errorf("Error() = %q, want %q", got, want)

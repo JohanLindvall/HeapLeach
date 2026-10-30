@@ -326,8 +326,8 @@ func TestRaiRefusalIsRecognisedBeforeAnythingIsQueued(t *testing.T) {
 		t.Error("the fixture no longer has the empty licence map that makes this a refusal rather than DRM")
 	}
 
-	refusal := &raiRefused{title: "Un Programma", message: asset.Description}
-	if got := refusal.reason(); got[:len("video non disponibile")] != "video non disponibile" {
+	refusal := &broadcastRefusal{"raiplay", "Un Programma", raiReason(asset.Description)}
+	if got := refusal.reason; got[:len("video non disponibile")] != "video non disponibile" {
 		t.Errorf("reason = %q, want Rai's own sentence first", got)
 	}
 	if got := refusal.Error(); got[:len("raiplay: Un Programma: ")] != "raiplay: Un Programma: " {

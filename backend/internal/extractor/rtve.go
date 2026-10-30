@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -223,59 +224,31 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 	// Only nest by season when there is more than one to tell apart.
 	nest := nestByLabel(episodes, func(ep rtveVideo) string { return ep.Season })
 
-	outcomes := FanOut(ctx, episodes, func(ctx context.Context, ep rtveVideo) ([]rtveOutcome, error) {
+	files, refused, failed := resolveListed(ctx, episodes, func(ctx context.Context, ep rtveVideo) (*File, error) {
 		file, err := r.episode(ctx, ep)
 		if err != nil {
-			// Kept rather than dropped: a whole programme refused is refused
-			// for one reason, and reporting it once beats several hundred
-			// identical failures. FanOut discards an entry whose fetch
-			// errored, so the failure travels as a value instead.
-			return []rtveOutcome{{err: err}}, nil
+			return nil, err
 		}
 		if nest {
 			file.Dir = ep.Season
 		}
-		return []rtveOutcome{{file: file}}, nil
+		return file, nil
 	})
-
-	result := &Result{Title: util.FirstNonEmpty(episodes[0].Program.Title, slug)}
-	var (
-		refused *rtveRefused
-		first   error
-	)
-	for _, outcome := range outcomes {
-		if outcome.file != nil {
-			result.Files = append(result.Files, *outcome.file)
-			continue
-		}
-		if first == nil {
-			first = outcome.err
-		}
-		if refused == nil {
-			refused, _ = errors.AsType[*rtveRefused](outcome.err)
-		}
-	}
-	if len(result.Files) == 0 {
+	if len(files) == 0 {
 		// A territory refusal is preferred over whatever failed first,
 		// because when everything is refused it is refused for that reason
 		// and it is the one the caller can act on.
 		reason := "nothing there offered a file to fetch"
 		switch {
-		case refused != nil:
-			reason = refused.reason()
-		case first != nil:
-			reason = first.Error()
+		case len(refused) > 0:
+			reason = refused[0]
+		case failed != nil:
+			reason = failed.Error()
 		}
 		return nil, fmt.Errorf("rtve: none of the %d videos of %s can be downloaded: %s",
 			len(episodes), u.Redacted(), reason)
 	}
-	return result, nil
-}
-
-// rtveOutcome is one video of a programme resolved, or the reason it was not.
-type rtveOutcome struct {
-	file *File
-	err  error
+	return &Result{Title: util.FirstNonEmpty(episodes[0].Program.Title, slug), Files: files}, nil
 }
 
 // programme reads a programme's numeric id off its page. Nothing in the URL
@@ -401,7 +374,7 @@ func (r *RTVE) metadata(ctx context.Context, id string) (*rtveVideo, error) {
 // file turns a video document into the file to fetch.
 func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if !video.playable() {
-		return nil, &rtveRefused{name: video.name(), country: video.Country}
+		return nil, &broadcastRefusal{"rtve", video.name(), rtveReason(video.Country)}
 	}
 
 	links, err := r.media(ctx, video.ID)
@@ -432,17 +405,9 @@ func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rtve: %s: %w", video.ID, err)
 	}
-	return &File{
-		// Named off the segments, not the variant URL, whose directory naming
-		// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.
-		Name:       video.name() + media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	// Named off the segments, not the variant URL, whose directory naming
+	// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.
+	return new(media.file(video.name()+media.extension(), headers)), nil
 }
 
 // rtveByExtension picks the media list entry whose path ends in ext.
@@ -459,27 +424,14 @@ func rtveByExtension(links []string, ext string) string {
 	return ""
 }
 
-// rtveRefused is RTVE declining to serve something to this caller. It is a
-// type rather than a message so that a whole programme refused can be
-// reported as one reason instead of several hundred failures.
-type rtveRefused struct {
-	name    string
-	country string
-}
-
-func (e *rtveRefused) Error() string { return "rtve: " + e.name + ": " + e.reason() }
-
-// reason says what happened in this extractor's own words, since RTVE
-// supplies none: the origin answers a bare 403 with an empty body, and the
-// document that predicts it carries flags rather than a sentence. The country
-// it names is the one RTVE placed the caller in, which is the fact worth
-// having — it is what the licence was tested against.
-func (e *rtveRefused) reason() string {
-	where := "this country"
-	if e.country != "" {
-		where = e.country
-	}
-	return "RTVE licenses it by territory and does not serve it to " + where
+// rtveReason is RTVE declining to serve something to this caller, in this
+// extractor's own words, since RTVE supplies none: the origin answers a bare
+// 403 with an empty body, and the document that predicts it carries flags
+// rather than a sentence. The country it names is the one RTVE placed the
+// caller in, which is the fact worth having — it is what the licence was
+// tested against.
+func rtveReason(country string) string {
+	return "RTVE licenses it by territory and does not serve it to " + cmp.Or(country, "this country")
 }
 
 // rtvePage is the envelope every catalogue endpoint answers in.

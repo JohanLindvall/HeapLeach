@@ -324,15 +324,7 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 		return nil, "", "", fmt.Errorf("svtplay: %s: %w", id, err)
 	}
 
-	return &File{
-		Name:       media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, meta.ProgramTitle, meta.EpisodeTitle, nil
+	return new(media.file(media.extension(), headers)), meta.ProgramTitle, meta.EpisodeTitle, nil
 }
 
 // svtVideo is the part of the player API response we use.

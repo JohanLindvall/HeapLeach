@@ -168,13 +168,6 @@ func (r *RTBF) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, 
 	return r.embedded(ctx, u, opts)
 }
 
-// rtbfRefused is a media Auvio does not play here: gone, live, protected,
-// or kept for viewers signed in, in Belgium or paying. It is a type so
-// that a listing can leave such entries out, counting each reason once.
-type rtbfRefused struct{ title, reason string }
-
-func (e *rtbfRefused) Error() string { return "rtbf: " + e.title + ": " + e.reason }
-
 // rtbfGone is what RTBF's answer means for an id it has nothing under.
 const rtbfGone = "it is not on Auvio: removed, expired, or not published yet"
 
@@ -206,7 +199,7 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	var doc rtbfMediaDoc
 	if err := r.client.GetJSON(ctx, r.bffURL("embed/media/"+url.PathEscape(id)), rtbfHeaders(), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &rtbfRefused{title: id, reason: rtbfGone}
+			return nil, &broadcastRefusal{"rtbf", id, rtbfGone}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", id, err)
 	}
@@ -217,7 +210,7 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	}
 	stem := cmp.Or(ardJoin(strings.TrimSpace(cmp.Or(programme, data.Title)), strings.TrimSpace(data.Subtitle)), id)
 	if strings.EqualFold(data.PlayerType, "LIVE") {
-		return nil, &rtbfRefused{title: stem, reason: "it is a live stream, which has no end to download to"}
+		return nil, &broadcastRefusal{"rtbf", stem, "it is a live stream, which has no end to download to"}
 	}
 	target, err := r.stream(ctx, cmp.Or(data.AssetID, id+"_6BA97Bb"), stem)
 	if err != nil {
@@ -287,7 +280,7 @@ func (p *rtbfPlay) refusal(title string, now time.Time) error {
 			}
 		}
 	}
-	return &rtbfRefused{title: title, reason: reason}
+	return &broadcastRefusal{"rtbf", title, reason}
 }
 
 // play asks Red Bee to play a media, with the anonymous session, made
@@ -315,7 +308,7 @@ func (r *RTBF) play(ctx context.Context, assetID, title string) (*rtbfPlay, erro
 		case ok && se.Code == http.StatusForbidden && json.Unmarshal([]byte(se.Body), &answer) == nil && answer.Message != "":
 			return nil, answer.refusal(title, time.Now())
 		case ok && se.Code == http.StatusNotFound:
-			return nil, &rtbfRefused{title: title, reason: rtbfGone}
+			return nil, &broadcastRefusal{"rtbf", title, rtbfGone}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", title, err)
 	}
@@ -362,7 +355,7 @@ func (r *RTBF) stream(ctx context.Context, assetID, stem string) (*Target, error
 		return nil, err
 	}
 	if answer.StreamInfo.Live {
-		return nil, &rtbfRefused{title: stem, reason: "it is a live stream, which has no end to download to"}
+		return nil, &broadcastRefusal{"rtbf", stem, "it is a live stream, which has no end to download to"}
 	}
 	headers := rtbfHeaders()
 	hls, file, protected := answer.playable()
@@ -372,20 +365,17 @@ func (r *RTBF) stream(ctx context.Context, assetID, stem string) (*Target, error
 		if err != nil {
 			return nil, fmt.Errorf("rtbf: %s: %w", stem, err)
 		}
-		audio := media.Audio
-		if len(audio) > 1 && r.audioTracks(ctx, assetID) == 1 {
-			audio = audio[:1] // the default, which the group is sorted to begin with
+		target := media.target(hls, stem+media.extension(), headers)
+		if len(target.Audio) > 1 && r.audioTracks(ctx, assetID) == 1 {
+			target.Audio = target.Audio[:1] // the default, which the group is sorted to begin with
 		}
-		return &Target{
-			URL: hls, Name: stem + media.extension(), Size: -1, Headers: headers,
-			Segments: media.Segments, SegmentKey: media.Key, Audio: audio, Subtitles: media.Subtitles,
-		}, nil
+		return target, nil
 	case file != "":
 		return &Target{URL: file, Name: stem + rtbfExtension(file), Size: -1, Headers: headers}, nil
 	case protected:
-		return nil, &rtbfRefused{title: stem, reason: "it is DRM-protected"}
+		return nil, &broadcastRefusal{"rtbf", stem, "it is DRM-protected"}
 	}
-	return nil, &rtbfRefused{title: stem, reason: "Auvio offers no stream of it to download"}
+	return nil, &broadcastRefusal{"rtbf", stem, "Auvio offers no stream of it to download"}
 }
 
 // audioTracks is how many audio tracks the asset itself has, or 0 where
@@ -445,7 +435,7 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 	}
 	if err := r.client.GetJSON(ctx, r.bffURL("pages/emission/"+url.PathEscape(slug)), rtbfHeaders(), &page); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &rtbfRefused{title: slug, reason: "it is not on Auvio"}
+			return nil, &broadcastRefusal{"rtbf", slug, "it is not on Auvio"}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", slug, err)
 	}
@@ -492,8 +482,8 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 	results := FanOut(ctx, entries, func(ctx context.Context, l rtbfListed) ([]checked, error) {
 		c := checked{listed: l}
 		answer, err := r.play(ctx, l.entry.AssetID, l.entry.ID)
-		if refused, ok := errors.AsType[*rtbfRefused](err); ok {
-			c.reason = refused.reason
+		if reason, ok := refusalReason(err); ok {
+			c.reason = reason
 		} else if answer != nil {
 			switch hls, file, protected := answer.playable(); {
 			case answer.StreamInfo.Live:
@@ -536,17 +526,11 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 		}
 		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
 	}
-	var notes []string
-	if listed > len(entries) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(entries), listed))
-	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
-	}
+	notes := []string{cappedNote(len(entries), listed, "episodes"), brokenNote(walkErr)}
 	for _, reason := range reasons {
-		notes = append(notes, fmt.Sprintf("%d left out: %s", counts[reason], reason))
+		notes = append(notes, leftOutNote(counts[reason], ": "+reason))
 	}
-	return &Result{Title: title, Files: files, Note: strings.Join(notes, "; ")}, nil
+	return &Result{Title: title, Files: files, Note: listingNote(notes...)}, nil
 }
 
 // tabs is what a programme's page lists its episodes in: the tabs of its
@@ -634,12 +618,9 @@ func rtbfWithQuery(link string, params url.Values) string {
 func (r *RTBF) lazy(l rtbfListed, ext string) File {
 	stem := cmp.Or(ardJoin(strings.TrimSpace(l.entry.Title), strings.TrimSpace(l.entry.Subtitle)), l.entry.ID)
 	assetID := l.entry.AssetID
-	return File{
-		Name: stem + ext, Size: -1, Dir: l.folder, Headers: rtbfHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			return r.stream(ctx, assetID, stem)
-		},
-	}
+	return lazyEpisode(stem+ext, l.folder, rtbfHeaders(), func(ctx context.Context) (*Target, error) {
+		return r.stream(ctx, assetID, stem)
+	})
 }
 
 var (
@@ -673,19 +654,12 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return r.media(ctx, ids[0])
 	}
 	ids = ids[:min(len(ids), opts.maxFiles())]
-	type found struct {
-		file   *File
-		reason string
-	}
-	results := FanOut(ctx, ids, func(ctx context.Context, id string) ([]found, error) {
+	files, reasons, _ := resolveListed(ctx, ids, func(ctx context.Context, id string) (*File, error) {
 		res, err := r.media(ctx, id)
-		if refused, ok := errors.AsType[*rtbfRefused](err); ok {
-			return []found{{reason: refused.reason}}, nil
-		}
 		if err != nil {
 			return nil, err
 		}
-		return []found{{file: &res.Files[0]}}, nil
+		return &res.Files[0], nil
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -694,23 +668,11 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result,
 	if m := rtbfPageTitle.FindStringSubmatch(html); m != nil {
 		title = cmp.Or(strings.TrimSpace(util.Unescape(m[1])), title)
 	}
-	res := &Result{Title: title}
-	var reasons []string
-	for _, f := range results {
-		if f.file != nil {
-			res.Files = append(res.Files, *f.file)
-		} else {
-			reasons = append(reasons, f.reason)
-		}
-	}
-	if len(res.Files) == 0 {
+	if len(files) == 0 {
 		if len(reasons) > 0 {
 			return nil, fmt.Errorf("rtbf: %s: none of its %d players can be had here: %s", title, len(ids), reasons[0])
 		}
 		return nil, fmt.Errorf("rtbf: %s: none of its players could be read", title)
 	}
-	if len(reasons) > 0 {
-		res.Note = fmt.Sprintf("%d left out: %s", len(reasons), reasons[0])
-	}
-	return res, nil
+	return &Result{Title: title, Files: files, Note: refusedNote(reasons)}, nil
 }

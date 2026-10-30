@@ -261,7 +261,7 @@ func TestNRKRefusalForms(t *testing.T) {
 // leans on: hundreds of episodes refused for one reason should be reported
 // as that one reason, not as hundreds of failures.
 func TestNRKRefusedErrorCarriesTheMessage(t *testing.T) {
-	err := &nrkRefused{id: "ABCD10000101", message: "Ikke tilgjengelig utenfor Norge"}
+	err := &broadcastRefusal{"nrk", "ABCD10000101", "Ikke tilgjengelig utenfor Norge"}
 	if got := err.Error(); got != "nrk: ABCD10000101: Ikke tilgjengelig utenfor Norge" {
 		t.Errorf("Error() = %q", got)
 	}

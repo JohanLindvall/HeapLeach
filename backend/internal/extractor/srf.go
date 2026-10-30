@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -221,46 +220,23 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
 	// before a byte moved.
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep srfEpisodeRef) ([]srfResolved, error) {
+	files, blocked, _ := resolveListed(ctx, episodes, func(ctx context.Context, ep srfEpisodeRef) (*File, error) {
 		file, name, err := s.chapter(ctx, ep.urn)
 		if err != nil {
-			// A refusal comes back as a *result* rather than an error,
-			// because FanOut drops what fails and the reason is the one
-			// thing worth keeping when a whole show is refused for it.
-			if blocked, ok := errors.AsType[*srfBlocked](err); ok {
-				return []srfResolved{{blocked: blocked.reason}}, nil
-			}
 			return nil, err
 		}
 		file.Name = util.FirstNonEmpty(ep.name, name, ep.urn) + file.Name
 		if nest {
 			file.Dir = ep.season
 		}
-		return []srfResolved{{file: *file}}, nil
+		return file, nil
 	})
-
-	result := &Result{Title: util.FirstNonEmpty(title, showURN)}
-	var blocked string
-	for _, got := range resolved {
-		if got.blocked != "" {
-			blocked = util.FirstNonEmpty(blocked, got.blocked)
-			continue
-		}
-		result.Files = append(result.Files, got.file)
-	}
-	if len(result.Files) == 0 {
+	if len(files) == 0 {
 		return nil, fmt.Errorf("srf: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(blocked,
-				"the catalogue lists them but the Integration Layer offers no stream for any of them"))
+			len(episodes), u.Redacted(), util.FirstNonEmpty(append(blocked,
+				"the catalogue lists them but the Integration Layer offers no stream for any of them")...))
 	}
-	return result, nil
-}
-
-// srfResolved is one episode after its composition was read: a file, or the
-// reason there is none.
-type srfResolved struct {
-	file    File
-	blocked string
+	return &Result{Title: util.FirstNonEmpty(title, showURN), Files: files}, nil
 }
 
 // srfEpisodeRef is one episode of a show, with the season it belongs to.
@@ -340,7 +316,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", fmt.Errorf("srf: %s names nothing the Integration Layer knows about", urn)
 	}
 	if chapter.BlockReason != "" {
-		return nil, "", &srfBlocked{urn: urn, reason: srfBlockMessage(chapter.BlockReason)}
+		return nil, "", &broadcastRefusal{"srf", urn, srfBlockMessage(chapter.BlockReason)}
 	}
 
 	title := srfJoin(doc.Show.Title, util.FirstNonEmpty(chapter.Title, doc.Episode.Title))
@@ -387,18 +363,10 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 			"audio, in the video or beside it: joining it would save video with no sound", urn)
 	}
 
-	return &File{
-		// Named off the segments, not the variant URL: Akamai packages these
-		// out of a stored MP4 and names the path after it — ".mp4.csmil/"
-		// over MPEG-TS parts. See segmentsExtension.
-		Name:       media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, title, nil
+	// Named off the segments, not the variant URL: Akamai packages these out
+	// of a stored MP4 and names the path after it — ".mp4.csmil/" over
+	// MPEG-TS parts. See segmentsExtension.
+	return new(media.file(media.extension(), headers)), title, nil
 }
 
 // srfJoin names a programme by its show and its own title.
@@ -437,16 +405,6 @@ func srfExtension(raw string) string {
 	}
 	return ".mp4"
 }
-
-// srfBlocked is the Integration Layer declining to serve a chapter, carrying
-// the reason it gave. It is a type rather than a message so that expanding a
-// whole show can report the reason once instead of several hundred times.
-type srfBlocked struct {
-	urn    string
-	reason string
-}
-
-func (e *srfBlocked) Error() string { return "srf: " + e.urn + ": " + e.reason }
 
 // srfBlockReasons turns the Integration Layer's block tokens into a sentence.
 //

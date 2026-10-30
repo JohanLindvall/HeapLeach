@@ -434,14 +434,14 @@ func TestRTVEListingAnswersAvailabilityForSpain(t *testing.T) {
 // the fact worth carrying is the territory the licence was tested against,
 // which the document does supply.
 func TestRTVERefusedNamesTheCountry(t *testing.T) {
-	err := &rtveRefused{name: "A Programme - Something", country: "SE"}
+	err := &broadcastRefusal{"rtve", "A Programme - Something", rtveReason("SE")}
 	got := err.Error()
 	if !strings.Contains(got, "SE") || !strings.Contains(got, "A Programme - Something") {
 		t.Errorf("Error() = %q", got)
 	}
 	// A document that named no country still has to say something usable.
-	if got := (&rtveRefused{name: "A Programme"}).reason(); !strings.Contains(got, "this country") {
-		t.Errorf("reason() = %q", got)
+	if got := rtveReason(""); !strings.Contains(got, "this country") {
+		t.Errorf("rtveReason() = %q", got)
 	}
 }
 

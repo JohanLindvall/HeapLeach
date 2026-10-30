@@ -305,11 +305,11 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 			// reason is kept, though: when nothing at all is playable it is
 			// for one reason, and NPO's own words for it once are worth more
 			// than several hundred identical failures.
-			refusal, unavailable := errors.AsType[*npoUnavailable](ep.err)
+			reason, unavailable := refusalReason(ep.err)
 			switch {
 			case unavailable:
 				if refused == "" {
-					refused = refusal.reason
+					refused = reason
 				}
 			case errors.Is(ep.err, errNPOThrottled):
 				throttled++
@@ -442,15 +442,14 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 		map[string]string{"profileName": "hls", "referrerUrl": npoRoot}, &link)
 	if err != nil {
 		if reason := npoReason(err); reason != "" {
-			return nil, &npoUnavailable{productID: productID, reason: reason}
+			return nil, &broadcastRefusal{"npo", productID, reason}
 		}
 		return nil, fmt.Errorf("npo: stream for %s: %w", productID, err)
 	}
 
 	if scheme, ok := link.Stream.encrypted(); ok {
-		return nil, &npoUnavailable{productID: productID,
-			reason: "DRM protected — NPO serves it under " + scheme +
-				", and there is no key here to unlock it with"}
+		return nil, &broadcastRefusal{"npo", productID, "DRM protected — NPO serves it under " + scheme +
+			", and there is no key here to unlock it with"}
 	}
 	if link.Stream.URL == "" {
 		return nil, fmt.Errorf("npo: %s offers no stream", productID)
@@ -464,15 +463,7 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 	if err != nil {
 		return nil, fmt.Errorf("npo: %s: %w", productID, err)
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // errNPONotFound is NPO answering a slug it does not know.
@@ -527,18 +518,6 @@ func npoEmpty(raw json.RawMessage) bool {
 	}
 	return false
 }
-
-// npoUnavailable is the player declining to serve something. It is a type
-// rather than a message so that expanding a series can report the reason
-// once instead of several hundred times, which matters more here than on the
-// other broadcasters: a whole-series expansion routinely refuses most of what
-// it lists.
-type npoUnavailable struct {
-	productID string
-	reason    string
-}
-
-func (e *npoUnavailable) Error() string { return "npo: " + e.productID + ": " + e.reason }
 
 // npoReason is the player's own explanation for a refusal, dug out of the
 // body of the response that carried it.

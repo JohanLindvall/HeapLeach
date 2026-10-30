@@ -166,44 +166,21 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 	// selection and two playlists each. Fetched one after another that is
 	// minutes before a byte moves, so they go out several at a time, in the
 	// listing's order.
-	resolved := FanOut(ctx, items, func(ctx context.Context, item bbcItem) ([]bbcResolved, error) {
+	files, refused, failed := resolveListed(ctx, items, func(ctx context.Context, item bbcItem) (*File, error) {
 		file, err := b.file(ctx, item)
 		if err != nil {
-			return []bbcResolved{{refusal: err}}, nil
+			return nil, err
 		}
 		// The folder is named for the container, which is the first level of
 		// every title in it, so the file is named by what lies below it.
 		file.Name = util.FirstNonEmpty(bbcName(item.Titles.within()), item.pid()) + file.Name
-		return []bbcResolved{{file: file}}, nil
+		return file, nil
 	})
-
-	result := &Result{Title: title}
-	var (
-		refused *bbcRefused
-		failed  error
-	)
-	for _, r := range resolved {
-		if r.file != nil {
-			result.Files = append(result.Files, *r.file)
-			continue
-		}
-		// One refused episode must not sink the rest, but its reason is kept:
-		// when every episode is refused it is refused for the same reason,
-		// and that reason is the only thing the caller can act on. A refusal
-		// outranks an ordinary failure, since it is the one that explains a
-		// container that resolves to nothing at all.
-		if refused == nil {
-			refused, _ = errors.AsType[*bbcRefused](r.refusal)
-		}
-		if failed == nil {
-			failed = r.refusal
-		}
-	}
-	if len(result.Files) == 0 {
+	if len(files) == 0 {
 		reason := "the media selector named no stream for any of them"
 		switch {
-		case refused != nil:
-			reason = refused.reason()
+		case len(refused) > 0:
+			reason = refused[0]
 		case failed != nil:
 			// The failure already opens with this extractor's name, and the
 			// sentence it is being folded into does too.
@@ -212,16 +189,7 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 		return nil, fmt.Errorf("bbcsounds: none of the %d episodes of %s are playable: %s",
 			len(items), title, reason)
 	}
-	return result, nil
-}
-
-// bbcResolved is one listing row after resolving: a file, or the reason there
-// is not one. FanOut drops errors, and here the reason is worth keeping — a
-// container refused for one reason should say that reason once rather than a
-// hundred times — so it travels as a value instead.
-type bbcResolved struct {
-	file    *File
-	refusal error
+	return &Result{Title: title, Files: files}, nil
 }
 
 // listing pages a container's episodes.
@@ -293,15 +261,7 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bbcsounds: %s: %w", item.pid(), err)
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // stream asks the media selector for a version's playlist.
@@ -320,7 +280,7 @@ func (b *BBCSounds) stream(ctx context.Context, vpid string) (string, error) {
 		return "", fmt.Errorf("bbcsounds: media selector for %s: %w", vpid, err)
 	}
 	if doc.Result != "" {
-		return "", &bbcRefused{pid: vpid, result: doc.Result}
+		return "", &broadcastRefusal{"bbcsounds", vpid, bbcReason(doc.Result)}
 	}
 	if href := doc.stream(); href != "" {
 		return href, nil
@@ -346,31 +306,22 @@ func bbcRefusal(pid string, err error) error {
 	if json.Unmarshal([]byte(status.Body), &doc) != nil || doc.Result == "" {
 		return nil
 	}
-	return &bbcRefused{pid: pid, result: doc.Result}
+	return &broadcastRefusal{"bbcsounds", pid, bbcReason(doc.Result)}
 }
 
-// bbcRefused is the media selector declining to name a stream.
-//
-// It is a type rather than a message so that expanding a container can report
-// the reason once instead of the same refusal several hundred times. Unlike
-// NRK, which refuses in a sentence written for a viewer and worth passing
-// through untouched, the BBC refuses in a token: "selectionunavailable" is
-// not an answer to give anybody, so it is turned into one here.
-type bbcRefused struct {
-	pid    string
-	result string
-}
-
-func (e *bbcRefused) Error() string { return "bbcsounds: " + e.pid + ": " + e.reason() }
-
-func (e *bbcRefused) reason() string {
-	switch strings.ToLower(e.result) {
+// bbcReason is the media selector's refusal to name a stream, in words.
+// Unlike NRK, which refuses in a sentence written for a viewer and worth
+// passing through untouched, the BBC refuses in a token:
+// "selectionunavailable" is not an answer to give anybody, so it is turned
+// into one here.
+func bbcReason(result string) string {
+	switch strings.ToLower(result) {
 	case "geolocation":
 		return "BBC Sounds offers this inside the United Kingdom only"
 	case "selectionunavailable":
 		return "BBC Sounds holds no stream for this any more — its availability window has closed"
 	}
-	return "the media selector refused it: " + e.result
+	return "the media selector refused it: " + result
 }
 
 // bbcListing is one page of a container's episodes.
