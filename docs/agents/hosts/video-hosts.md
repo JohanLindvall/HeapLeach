@@ -218,9 +218,9 @@ What comes back is signed with an expiry *and* the requesting address, so it
 is minted through `Resolve` at download time; a profile of a hundred videos
 would otherwise start failing partway down its own queue. The media requests
 carry no Referer. Profile tabs page by path rather than by a pager link, and
-end on a 404, so the row's listing reads them with a walk of its own
-(`listing.links`) rather than `walkListing`; each video is queued unread and
-reopened on its own on recovery.
+end on a 404, so the row's listing (`listing.links`) runs a quiet, numbered
+`walkListing` that names each next page itself; each video is queued unread
+and reopened on its own on recovery.
 
 Two traps, both of which look like working code. The listing lives under
 `streamevents`; the `plister` block beside it is the tab's header and holds no
