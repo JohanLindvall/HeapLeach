@@ -37,9 +37,11 @@ What else a row can ask for:
   the engine adds the caps and their notes), or one that pages its own way
   (`links`, eporner's profile tabs). Each entry is queued unread under its
   card's title and read like a peeked video.
-- **`live`.** A media playlist without `#EXT-X-ENDLIST` is refused as still
-  being written, since it would finish as a fragment named as the whole;
-  ok.ru serves live streams and lets them through.
+- **`finished`.** A media playlist without `#EXT-X-ENDLIST` is refused as
+  still being written, since it would finish as a fragment named as the
+  whole. Only sites that publish videos while they are encoded set it
+  (knuthing, noodlemagazine): elsewhere a playlist may be a live stream
+  (ok.ru) or simply leave its end unmarked, and is taken as it is.
 - **`proxyFallback`.** Opts the row's sources and files into proxy recovery
   (doodstream).
 

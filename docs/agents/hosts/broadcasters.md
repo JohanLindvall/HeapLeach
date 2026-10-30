@@ -21,7 +21,8 @@ needs to tell equally named episodes apart by id. A rendition's place in a
 quality ladder is `rankIn` (`rank.go`), each caller saying where an unknown
 name lands. An episode
 resolved at transfer time is `lazyEpisode`, one resolved now and read again
-at transfer time `refreshing`, and a listing's note is assembled from
+at transfer time `refreshing` (`extractor.go`, shared with the signed file
+hosts), and a listing's note is assembled from
 `cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
 files and targets through `hlsMedia.file` and `hlsMedia.target` only.
 

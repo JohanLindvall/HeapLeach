@@ -72,7 +72,6 @@ var okruPlayer = playerSite{
 	referer: siteRoot(okruRoot),
 	read:    okruRead,
 	signed:  true,
-	live:    true,
 }
 
 // okruRead reads the embed page's renditions, asking again when the page
@@ -189,12 +188,8 @@ func okruMetadataFrom(doc string) (*okruMetadata, error) {
 // known one but above nothing at all, so a site that invents a new label
 // still yields a download.
 func okruRank(name string) int {
-	for i, known := range okruQualities {
-		if strings.EqualFold(name, known) {
-			return i
-		}
-	}
-	return -1 // usable, but never preferred over a name that is recognised
+	// An unknown name is usable, but never preferred over one recognised.
+	return rankIn(okruQualities, name, -1)
 }
 
 // okruVideoID reads the numeric id out of the link shapes the site uses.

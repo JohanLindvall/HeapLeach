@@ -848,26 +848,26 @@ func TestPlayerEngineOptions(t *testing.T) {
 	}))
 	defer srv.Close()
 	for _, tc := range []struct {
-		name          string
-		rowReferer    func(string) string
-		readReferer   string
-		link          string
-		live, proxied bool
-		wantReferer   string
-		wantErr       string
+		name              string
+		rowReferer        func(string) string
+		readReferer       string
+		link              string
+		finished, proxied bool
+		wantReferer       string
+		wantErr           string
 	}{
 		{name: "row referer", rowReferer: samePage, link: "/file.mp4", wantReferer: "https://player.example.test/v/1"},
 		{name: "read referer wins", rowReferer: samePage, readReferer: "https://embed.example.test/p", link: "/file.mp4",
 			wantReferer: "https://embed.example.test/p"},
 		{name: "no referer", link: "/file.mp4"},
 		{name: "proxied", link: "/file.mp4", proxied: true},
-		{name: "finished playlist", link: "/closed.m3u8"},
-		{name: "unfinished playlist", link: "/open.m3u8", wantErr: "still being written"},
-		{name: "live playlist", link: "/open.m3u8", live: true},
+		{name: "finished playlist", link: "/closed.m3u8", finished: true},
+		{name: "unfinished playlist refused", link: "/open.m3u8", finished: true, wantErr: "still being written"},
+		{name: "unfinished playlist allowed", link: "/open.m3u8"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			site := &playerSite{
-				name: "synthetic", referer: tc.rowReferer, signed: true, live: tc.live, proxyFallback: tc.proxied,
+				name: "synthetic", referer: tc.rowReferer, signed: true, finished: tc.finished, proxyFallback: tc.proxied,
 				read: func(context.Context, *httpx.Client, string) (*playerVideo, error) {
 					return &playerVideo{title: "First Clip", candidates: playerLink(srv.URL + tc.link), referer: tc.readReferer}, nil
 				},

@@ -31,8 +31,9 @@ var (
 // watch page, including when recovering on another route. The media
 // referer is the watch page as finally served.
 var noodlePlayer = playerSite{
-	name:  "noodlemagazine",
-	shape: func(u *url.URL) bool { return noodleVideoID(u) != "" || noodleListShape(u) },
+	finished: true,
+	name:     "noodlemagazine",
+	shape:    func(u *url.URL) bool { return noodleVideoID(u) != "" || noodleListShape(u) },
 	// A watch page by the playlist read reads, and a listing by the card
 	// list it walks, rendered with the site's search script.
 	recognise: func(p *Page) bool {

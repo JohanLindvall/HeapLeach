@@ -78,10 +78,11 @@ type playerSite struct {
 	ext string
 	// listing, when set, takes a listing of the site's videos.
 	listing *playerListing
-	// live lets a playlist with no end through, for a site that serves
-	// live streams; anywhere else a playlist still being written is
-	// refused, since it would finish as a fragment named as the whole.
-	live bool
+	// finished refuses a playlist still being written, for a site whose
+	// videos are published while they are encoded: joined then, it would
+	// finish as a fragment named as the whole. A site that streams live, or
+	// does not mark its playlists' end, leaves it unset.
+	finished bool
 	// proxyFallback opts the site's sources and files into proxy recovery
 	// after a temporary failure on the normal connection.
 	proxyFallback bool
@@ -232,7 +233,7 @@ func (p *Player) resolve(ctx context.Context, page string) (*Target, string, err
 	if err != nil {
 		return nil, "", fmt.Errorf("%s: %s: %w", name, page, err)
 	}
-	if live, why := hlsLiveEdge(media.Doc); live && !p.site.live {
+	if live, why := hlsLiveEdge(media.Doc); live && p.site.finished {
 		return nil, "", fmt.Errorf("%s: %s: the video's playlist is still being written: %s", name, page, why)
 	}
 	return media.target(best.URL, title+media.extension(), headers), title, nil

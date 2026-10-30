@@ -36,8 +36,9 @@ const knuthingTheme = "/themes/knuthing/"
 // chain is read again on each attempt, so a listing can wait in the queue
 // without spending its signatures. The media referer is the player itself.
 var knuthingPlayer = playerSite{
-	name:  "knuthing",
-	shape: func(u *url.URL) bool { return knuthingVideoShape(u) || knuthingListShape(u) },
+	finished: true,
+	name:     "knuthing",
+	shape:    func(u *url.URL) bool { return knuthingVideoShape(u) || knuthingListShape(u) },
 	// A page rendered by the site's theme, by what the row reads on it: the
 	// player frame, or the player block that stands in for it before a
 	// free video is confirmed, and a listing's video list.

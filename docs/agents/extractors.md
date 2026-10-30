@@ -312,14 +312,18 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
-- The `Player` engine (`players.go`): a single-video player page is a
-  `playerSite` row (its forms, recognition, canonical page and a reader
-  returning the candidate renditions), registered with `NewPlayer` at the
-  position where its form order matters. The engine picks the rendition,
-  follows a playlist and re-reads a signed page at transfer time. Add a new
-  player site as a row, not an extractor.
-- `refetchedVideo` (`tube.go`): a single video whose link is signed per visit,
-  re-read when its transfer starts, for a page the player engine does not fit.
+- The `Player` engine (`players.go`): a video site is a `playerSite` row
+  (its forms, recognition, canonical page and a reader returning the
+  candidate renditions, with a per-read referer when the player needs its
+  own), registered with `NewPlayer` at the position where its form order
+  matters. The engine picks the rendition, follows a playlist and re-reads a
+  signed page at transfer time. A row may `peek` (read only the title now
+  and everything at transfer time), take a `listing` of its videos (through
+  `walkListing`, or a walk of its own), refuse playlists still being written
+  (`finished`), and opt into proxy recovery (`proxyFallback`). Add a new
+  video site as a row, not an extractor.
+- `refreshing` and `signedResult` (`extractor.go`): a file whose link is
+  signed per visit, resolved now and signed again when its transfer starts.
 - `unpackJS` and `jwSource` (`players.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
@@ -383,7 +387,7 @@ Two conventions worth keeping to when writing one:
 | --- | --- |
 | [hosts/file-hosts.md](hosts/file-hosts.md) | bunkr, gofile, pixeldrain, mega, emload, filejump, filester, suvobox, pixhost, imagepond |
 | [hosts/keep2share.md](hosts/keep2share.md) | keep2share (both hosts), voyeurking, and the CAPTCHA reader (`internal/captcha`) |
-| [hosts/video-hosts.md](hosts/video-hosts.md) | the player rows (pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop, lulustream, vids.st, sendvid), doodstream, knuthing, noodlemagazine, ok.ru, eporner, Kernel Video Sharing; pointer pages (yandex, alohatube); the yt-dlp handoffs (youtube, odysee, dailymotion, bilibili, soundcloud, mixcloud, rumble) |
+| [hosts/video-hosts.md](hosts/video-hosts.md) | the player rows (pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop, lulustream, vids.st, sendvid, doodstream, knuthing, noodlemagazine, ok.ru, eporner), Kernel Video Sharing; pointer pages (yandex, alohatube); the yt-dlp handoffs (youtube, odysee, dailymotion, bilibili, soundcloud, mixcloud, rumble) |
 | [hosts/broadcasters.md](hosts/broadcasters.md) | vimeo, arte, orf, svtplay, yle, drtv, rtbf, francetv, radio-canada, niconico |
 | [hosts/collections.md](hosts/collections.md) | balbums, coomerfans, celeb.st, cum.st, erome, rajce, bandcamp, bandzoogle |
 
