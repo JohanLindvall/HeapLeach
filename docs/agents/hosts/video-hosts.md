@@ -4,17 +4,32 @@ Notes on hosts that serve single videos or embeddable players, and on the
 Kernel Video Sharing platform. The shared machinery they use is in
 [extractors.md](../extractors.md).
 
-## Script-reading players: streamtape, doodstream, mixdrop
+## Player pages: one engine, one row per site
 
-These are the most fragile extractors here, because each depends on the shape
-of a script the host can change. Each therefore reads the numbers it needs off
-the page — the substring offset, the packer's base and word list — rather than
-hard-coding them. `unpackJS` reverses the p,a,c,k,e,d packer and is
-host-neutral.
+pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop,
+lulustream, vids.st and sendvid are rows of one table in `players.go`, each
+registered as its own `Player` under its own name, in the registry position
+its hand-written extractor had (form order decides `Known`, so the rows are
+registered one by one rather than as a block). A row states its forms and
+recogniser, the canonical page a pasted link is read as (`page`), the media
+referer, and `read`, which fetches the page and returns its title and
+rendition candidates. The engine takes the best (`bestCandidate`), follows a
+playlist to its segments (named by the segments' container) or hands over a
+plain file, and, for a row marked `signed`, reads the page again when the
+transfer starts. A 404 on the page is reported as the video being gone, for
+every row. New single-video player sites belong in this table.
 
-Their `Extract` bodies, and those of xhamster, tnaflix and pornone, all have
-the same shape: one file, re-read at download time because the link is signed
-per visit. Most share `refetchedVideo` (`tube.go`).
+The script-reading rows (streamtape, mixdrop, lulustream) are the most fragile
+extractors here, because each depends on the shape of a script the host can
+change. Each therefore reads the numbers it needs off the page — the
+substring offset, the packer's base and word list — rather than hard-coding
+them. `unpackJS` reverses the p,a,c,k,e,d packer and is host-neutral.
+`jwSource` reads a JW Player setup's `sources:` list (vidmoly, lulustream):
+only that list is media, since a `file:` key above it can name the seek-bar
+sprite, and a DASH entry is passed over for the HLS beside it.
+
+doodstream stays its own extractor (`doodstream.go`): its token handshake,
+player gate and proxy fallback are not the table's.
 
 ## doodstream
 
@@ -73,7 +88,8 @@ workers use the item's own counter.
 ## lulustream
 
 lulustream (`lulustream.com`, `luluvdo.com`, `luluvido.com`) packs its JW
-Player setup with p,a,c,k,e,d, and `unpackJS` reads the HLS master out of it:
+Player setup with p,a,c,k,e,d, and `jwSource` reads the HLS master out of it
+once `unpackJS` has unpacked it:
 signed for eight hours, one muxed rendition, AES-128 segments under one key.
 The page is read again at transfer time, segments and key with it, through
 `Target.Segments`. Its key server refuses Go's default HTTP client outright
@@ -99,7 +115,7 @@ connection to, about 270 kB/s. The signature covers all three: with the rate
 changed or left out, the link is a 401. The rate is per connection, though:
 each of several connections at once gets all of it, so the extra connections
 the engine opens for a slow file multiply it. The link is minted again when
-the transfer starts (`refetchedVideo`). `og:video` names `/<id>.mp4`, which
+the transfer starts (a `signed` row). `og:video` names `/<id>.mp4`, which
 only redirects back to the page, and the embed's `<title>` is the site's name
 alone, so the title is `og:title`. A video that is gone is a 404.
 

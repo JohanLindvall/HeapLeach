@@ -237,3 +237,17 @@ func TestDoodSaysWhenTheHostHasRemovedTheVideo(t *testing.T) {
 		t.Fatal("a removed video was read as a refused address")
 	}
 }
+
+func TestRandomTokenLength(t *testing.T) {
+	seen := make(map[string]bool)
+	for range 100 {
+		token := randomToken(doodTailLength)
+		if len(token) != doodTailLength {
+			t.Fatalf("token %q is %d characters, want %d", token, len(token), doodTailLength)
+		}
+		seen[token] = true
+	}
+	if len(seen) < 90 {
+		t.Errorf("only %d of 100 tokens were distinct", len(seen))
+	}
+}

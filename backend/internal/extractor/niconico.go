@@ -327,10 +327,7 @@ func (n *Niconico) stream(ctx context.Context, id string) (*Target, error) {
 	if err != nil {
 		return nil, fmt.Errorf("niconico: %s: %w", id, err)
 	}
-	return &Target{
-		URL: master, Name: watch.title + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
-	}, nil
+	return media.target(master, watch.title+media.extension(), headers), nil
 }
 
 // grant asks the access-rights API for an HLS master of the chosen pair of
