@@ -25,15 +25,36 @@ import (
 // attachment; full posts supply the original variants and their exact sizes.
 // Media is content-addressed and served by the page's advertised edge pool.
 type Cum struct {
-	hostSet
 	client *httpx.Client
 }
 
 func NewCum(client *httpx.Client) *Cum {
-	return &Cum{hostSet: hostSet{"cum.st"}, client: client}
+	return &Cum{client: client}
 }
 
 func (c *Cum) Name() string { return "cum" }
+
+// cumShape is a creator, /creators/<service>/<id>, or one of their posts.
+var cumShape = pathShape(`^/creators/[^/]+/[^/]+(?:/post/[^/]+)?/?$`)
+
+// Recognises is the inventory's description.
+func (c *Cum) Recognises() string {
+	return "creators and posts (`/creators/<service>/<id>[/post/<post>]`) whose page advertises its media " +
+		"servers as `EDGE_BASE_URLS` in the app's configuration"
+}
+
+// Shape reports a creator or a post.
+func (c *Cum) Shape(u *url.URL) bool { return cumShape(u) }
+
+// Recognise takes a creator or post page that advertises the edge pool
+// Extract downloads from, which is read from the page before any API call.
+func (c *Cum) Recognise(_ context.Context, p *Page) bool {
+	if !cumShape(p.Final) || !p.Has("EDGE_BASE_URLS") {
+		return false
+	}
+	edges, err := cumEdges(p.Body)
+	return err == nil && len(edges) > 0
+}
 
 type cumPost struct {
 	ID          string          `json:"id"`
@@ -65,7 +86,7 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	}
 	query.Del("pppage")
 	page.RawQuery = query.Encode()
-	doc, final, err := c.client.GetPage(ctx, page.String(), nil, nil)
+	doc, final, err := fetchDocument(ctx, c.client, &page, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cum: fetch page: %w", err)
 	}

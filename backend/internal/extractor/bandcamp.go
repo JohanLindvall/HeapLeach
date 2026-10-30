@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -52,21 +53,60 @@ func NewBandcamp(client *httpx.Client) *Bandcamp { return &Bandcamp{client: clie
 
 func (b *Bandcamp) Name() string { return "bandcamp" }
 
-// Match accepts a band's subdomain: a release, or the band itself.
-func (b *Bandcamp) Match(u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
-	if !strings.HasSuffix(host, ".bandcamp.com") || host == "www.bandcamp.com" {
+// bandcampShape is a release, /album/<slug> or /track/<slug>, or a band's
+// /music listing. A band's own front page is its site root, which is no
+// shape at all, so it is recognised by its page alone.
+var bandcampShape = pathShape(`^/(?:album|track)/[^/.]+/?$`, `^/music/?$`)
+
+// Recognises is the inventory's description.
+func (b *Bandcamp) Recognises() string {
+	return "releases (`/album/<slug>`, `/track/<slug>`), a band's `/music` and its front page, " +
+		"where the page is built from Bandcamp's client bundle and carries `data-tralbum` release data or the music grid"
+}
+
+// Shape reports a release or a band's listing.
+func (b *Bandcamp) Shape(u *url.URL) bool { return bandcampShape(u) }
+
+// Recognise takes a page of the right form, or a band's front page, built
+// from the platform's client bundle and carrying what Extract reads: the
+// data-tralbum release data, or the /music grid of releases. The platform's
+// own front page has the bundle but neither, so it is left alone.
+//
+// A probe says it is a browser, and so may be handed the platform's client
+// challenge instead of the page (see Bandcamp). Then, and only for a page of
+// the right form or a site root, the page is asked for once more as this
+// extractor asks for it, and that answer is judged the same way.
+func (b *Bandcamp) Recognise(ctx context.Context, p *Page) bool {
+	if !bandcampShape(p.Final) && len(p.Segments()) != 0 {
 		return false
 	}
-	segs := util.PathSegments(u)
-	switch {
-	case len(segs) == 0:
+	if bandcampMarked(p) {
 		return true
-	case len(segs) == 1:
-		return segs[0] == "music"
-	default:
-		return segs[0] == "album" || segs[0] == "track"
 	}
+	if b.client == nil || p.Title() != bandcampChallengeTitle || !p.Has(bandcampChallengeAssets) {
+		return false
+	}
+	link := p.Final.String()
+	return p.Memo("bandcamp-agent "+link, func() any {
+		ctx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
+		defer cancel()
+		doc, err := b.client.GetString(ctx, link, bandcampHeaders())
+		return err == nil && bandcampMarked(&Page{URL: p.Final, Final: p.Final, Body: doc})
+	}).(bool)
+}
+
+// The client challenge a browser is shown in place of a page: its title,
+// and the path its assets are served under.
+const (
+	bandcampChallengeTitle  = "Client Challenge"
+	bandcampChallengeAssets = "/_fs-ch-"
+)
+
+// bandcampMarked reports a page built from the platform's client bundle
+// that carries release data or a band's release grid.
+func bandcampMarked(p *Page) bool {
+	return p.Script("/client-bundle/") &&
+		p.HasAny(`data-tralbum="`, `id="music-grid"`, `data-client-items="`)
 }
 
 // Extract resolves a release, or every release a band lists.
@@ -125,7 +165,11 @@ func (b *Bandcamp) release(ctx context.Context, link string) (*bandcampPage, err
 
 // page fetches and parses a page as something other than a browser.
 func (b *Bandcamp) page(ctx context.Context, link string) (*html.Node, error) {
-	doc, err := b.client.GetString(ctx, link, bandcampHeaders())
+	u, err := url.Parse(link)
+	if err != nil {
+		return nil, fmt.Errorf("bandcamp: %w", err)
+	}
+	doc, _, err := fetchDocument(ctx, b.client, u, bandcampHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("bandcamp: fetch %s: %w", link, err)
 	}
@@ -280,7 +324,8 @@ func bandcampReleaseLinks(root *html.Node, u *url.URL) []string {
 	add := func(ref string) {
 		link := resolveRef(u, ref)
 		lu, err := url.Parse(link)
-		if err != nil || !strings.HasSuffix(strings.ToLower(lu.Hostname()), ".bandcamp.com") {
+		// A band on a domain of its own lists releases on that domain.
+		if err != nil || !(strings.EqualFold(lu.Host, u.Host) || strings.HasSuffix(strings.ToLower(lu.Hostname()), ".bandcamp.com")) {
 			return
 		}
 		segs := util.PathSegments(lu)

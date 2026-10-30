@@ -245,32 +245,29 @@ func TestPornPicsIsGallery(t *testing.T) {
 	}
 }
 
-func TestPornPicsMatch(t *testing.T) {
+func TestPornPicsRecognise(t *testing.T) {
 	p := NewPornPics(nil)
-	for _, raw := range []string{
-		"https://www.pornpics.com/galleries/a-gallery-10000001/",
-		"https://pornpics.com/some-category/",
-		"https://www.pornpics.de/some-category/",
+	gallery := strings.Replace(pornpicsGalleryPage, "</head>", `<script>var PP_LANG = "en";</script></head>`, 1)
+	category := fmt.Sprintf(pornpicsCategoryListing, "https://pics.example.test")
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/galleries/a-gallery-name-10000001/", gallery), true)
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/de/galleries/a-gallery-name-10000001/", gallery), true)
+	// A category is a bare /<name>/, recognised by its page alone.
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/some-category/", category), true)
+	// The right form and the site's name, but not the page the pager reads.
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/galleries/a-gallery-name-10000001/", pornpicsGalleryPage), false)
+	// The site's markup on its front page, which is no listing to expand.
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/", category), false)
+
+	for raw, want := range map[string]bool{
+		"https://pics.example.test/galleries/a-gallery-10000001/":    true,
+		"https://pics.example.test/de/galleries/a-gallery-10000001/": true,
+		"https://pics.example.test/tags/a-tag/":                      true,
+		"https://pics.example.test/pornstars/a-name/":                true,
+		"https://pics.example.test/some-category/":                   false,
+		"https://pics.example.test/galleries/":                       false,
+		"https://pics.example.test/":                                 false,
 	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !p.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	// A CDN link is already a file. Claiming it would hand an image to the
-	// listing reader, which would find no galleries in it and refuse what the
-	// direct extractor downloads without a thought.
-	for _, raw := range []string{
-		"https://cdni.pornpics.com/1280/1/200/10000001/10000001_001_aaaa.jpg",
-		"https://example.test/some-category/",
-	} {
-		u, _ := url.Parse(raw)
-		if p.Match(u) {
-			t.Errorf("Match(%q) = true", raw)
-		}
+		expectShape(t, p, raw, want)
 	}
 }
 

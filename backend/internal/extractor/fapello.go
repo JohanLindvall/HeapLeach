@@ -21,7 +21,6 @@ import (
 // being fetched. The thumbnails differ from the full-size file by a "_300px"
 // suffix, which is simply dropped.
 type Fapello struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -37,10 +36,42 @@ var fapelloThumbSuffix = regexp.MustCompile(`_\d+px(\.[A-Za-z0-9]+)$`)
 
 // NewFapello builds the fapello extractor.
 func NewFapello(client *httpx.Client) *Fapello {
-	return &Fapello{hostSet: hostSet{"fapello.com"}, client: client}
+	return &Fapello{client: client}
 }
 
 func (f *Fapello) Name() string { return "fapello" }
+
+// fapelloShape is one of a model's posts, /<model>/<n>/. The model's own
+// page is a bare /<model>/, which is no shape, so it is recognised by its
+// page alone.
+var fapelloShape = pathShape(`^/[A-Za-z0-9_.-]+/\d+/$`)
+
+// Recognises is the inventory's description.
+func (f *Fapello) Recognises() string {
+	return "model pages and their posts (`/<model>/`, `/<model>/<n>/`) whose page links the model's own " +
+		"media under `/content/…/<model>/`"
+}
+
+// Shape reports a model's post.
+func (f *Fapello) Shape(u *url.URL) bool { return fapelloShape(u) }
+
+// Recognise takes a model page, or one of its posts, carrying what Extract
+// collects: media under the content tree in the model's own folder, on a
+// page that names the site.
+func (f *Fapello) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	if len(segs) != 1 && !fapelloShape(p.Final) {
+		return false
+	}
+	return p.Named("Fapello") && fapelloMedia(segs[0]).MatchString(p.Body)
+}
+
+// fapelloMedia matches a link to the model's own media: the content tree
+// files every model's media under a folder of their name.
+func fapelloMedia(model string) *regexp.Regexp {
+	return regexp.MustCompile(`https?://[a-z0-9.-]+/content/[^"'\\ <>]*/` +
+		regexp.QuoteMeta(model) + `/[^"'\\ <>]+`)
+}
 
 // Extract walks a model's pages and collects everything of theirs.
 func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -56,9 +87,7 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	headers := httpx.Referer(base + "/")
 
 	// Media lives on the shared content host and always names the model.
-	ownMedia := regexp.MustCompile(
-		`https?://[a-z0-9.-]*fapello\.com/content/[^"'\\ <>]*/` +
-			regexp.QuoteMeta(model) + `/[^"'\\ <>]+`)
+	ownMedia := fapelloMedia(model)
 
 	seen := make(map[string]bool)
 	var files []File
@@ -69,7 +98,11 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 			target += "page-" + strconv.Itoa(page) + "/"
 		}
 
-		doc, err := f.client.GetString(ctx, target, headers)
+		targetURL, err := url.Parse(target)
+		if err != nil {
+			return nil, fmt.Errorf("fapello: %w", err)
+		}
+		doc, _, err := fetchDocument(ctx, f.client, targetURL, headers)
 		if err != nil {
 			if page == 1 {
 				return nil, fmt.Errorf("fapello: fetch %s: %w", target, err)

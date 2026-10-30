@@ -137,9 +137,14 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 	}
 
 	e := expandSources(ctx, registry, sources, opts)
+	found -= e.unrecognised
+	if len(e.files) == 0 && e.unrecognised == len(sources) {
+		// Every link only looked like a download: the page has none.
+		return nil, nil
+	}
 	if len(e.files) == 0 {
 		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
-			"(they may all have expired)", len(sources), page.Redacted())
+			"(they may all have expired)", len(sources)-e.unrecognised, page.Redacted())
 	}
 
 	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)

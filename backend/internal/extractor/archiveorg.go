@@ -109,20 +109,45 @@ func NewArchiveOrg(cfg *config.Config, client *httpx.Client) *ArchiveOrg {
 
 func (a *ArchiveOrg) Name() string { return "archive.org" }
 
-// Match claims item URLs on the site itself and nothing else.
-//
-// Deliberately not a subdomain match. web.archive.org is the Wayback Machine,
-// where a URL is a snapshot of somebody else's page and has no identifier to
-// look up, and the ia*.us / dn*.ca storage nodes serve one plain file each.
-// Both belong to the direct-link fallback, which handles them correctly
-// already.
-func (a *ArchiveOrg) Match(u *url.URL) bool {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host != "archive.org" && host != "www.archive.org" {
-		return false
-	}
+// Recognises is the inventory's description.
+func (a *ArchiveOrg) Recognises() string {
+	return "items (`/details/<identifier>`, `/download/<identifier>[/<file>]` and the other item routes) " +
+		"whose page is the archive's item page or file listing, or whose metadata API answers for the identifier"
+}
+
+// Shape reports an item route.
+func (a *ArchiveOrg) Shape(u *url.URL) bool {
 	_, _, ok := archiveParse(u)
 	return ok
+}
+
+// Recognise takes an item route whose page is the archive's own: the
+// item page (item-details-metadata) or the download listing
+// (download-directory-listing), both under the archive's ia-topnav. Anything
+// else of the right form — a file inside an item, which redirects to a
+// storage node and is media rather than a page, a metadata document, a
+// challenge — is settled by asking the metadata API this extractor reads,
+// on the submitted URL's own origin, whether the identifier is an item.
+//
+// The Wayback Machine is not an item route, and a storage node's paths are
+// not either, so both stay with the fallback.
+func (a *ArchiveOrg) Recognise(ctx context.Context, p *Page) bool {
+	id, _, ok := archiveParse(p.URL)
+	if !ok {
+		return false
+	}
+	if p.Has("<ia-topnav") && p.HasAny(`item-details-metadata`, `download-directory-listing`) {
+		return true
+	}
+	if a.client == nil || p.IsHTML() && p.OK() {
+		// An ordinary page of the right form that is not the archive's.
+		return false
+	}
+	endpoint := util.Origin(p.URL) + "/metadata/" + url.PathEscape(id)
+	return p.Memo(endpoint, func() any {
+		var doc archiveDoc
+		return platformJSON(ctx, a.client, endpoint, nil, &doc) && doc.Metadata.Identifier != ""
+	}).(bool)
 }
 
 // Extract resolves an item, or one named file within it.

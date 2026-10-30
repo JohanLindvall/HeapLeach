@@ -23,7 +23,6 @@ import (
 // records from the creator API. src is the full-size image, while thumbnail
 // and the creator's avatar are separate fields that must not be collected.
 type Celeb struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -33,10 +32,45 @@ type Celeb struct {
 const celebURLKey = "ilovemyself"
 
 func NewCeleb(client *httpx.Client) *Celeb {
-	return &Celeb{hostSet: hostSet{"celeb.st"}, client: client}
+	return &Celeb{client: client}
 }
 
 func (c *Celeb) Name() string { return "celeb" }
+
+var (
+	// celebGalleryShape is a creator's gallery or one image in it.
+	celebGalleryShape = pathShape(`^/creator/[^/]+/images(?:/\d+)?/?$`)
+	// celebCreatorShape is the creator's own page, which Extract reads as
+	// their gallery.
+	celebCreatorShape = pathShape(`^/creator/[^/]+/?$`)
+)
+
+// Recognises is the inventory's description.
+func (c *Celeb) Recognises() string {
+	return "creator galleries and images (`/creator/<name>/images[/<id>]`, `/creator/<name>`) whose page is the " +
+		"site's Inertia app carrying the gallery's `Creator/Media` props in `data-page`"
+}
+
+// Shape reports a creator's gallery, an image, or the creator's page.
+func (c *Celeb) Shape(u *url.URL) bool { return celebGalleryShape(u) || celebCreatorShape(u) }
+
+// Recognise takes a gallery or image page whose data-page props are the
+// Creator/Media component celebPageData decodes. A bare creator page is
+// not served as a gallery — Extract reads its /images instead — so there the
+// app's data-page shell under the site's own name is what is required.
+func (c *Celeb) Recognise(_ context.Context, p *Page) bool {
+	if !c.Shape(p.Final) || !p.Has("data-page=") {
+		return false
+	}
+	data, err := celebPageData(p.Body)
+	if err != nil {
+		return false
+	}
+	if celebGalleryShape(p.Final) {
+		return strings.HasPrefix(data.Component, "Creator/Media")
+	}
+	return p.Named("Celeb.st")
+}
 
 type celebImage struct {
 	ID  int64  `json:"id"`
@@ -86,7 +120,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	query.Del("page")
 	pageURL.RawQuery = query.Encode()
 	page := pageURL.String()
-	doc, err := c.client.GetString(ctx, page, nil)
+	doc, _, err := fetchDocument(ctx, c.client, &pageURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("celeb: fetch gallery: %w", err)
 	}

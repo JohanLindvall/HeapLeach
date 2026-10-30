@@ -4,10 +4,12 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"strings"
+	"sync/atomic"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -67,6 +69,10 @@ type expansion struct {
 	// fit, when a single source alone held more than the cap. Zero
 	// otherwise: every other source is taken whole or not at all.
 	cut, of int
+	// unrecognised counts links that had a supported form but whose page
+	// no extractor recognised. They were never sources, so they count
+	// neither as resolved nor as failed.
+	unrecognised int
 }
 
 // expandSources resolves the sources in order, several at a time, until
@@ -90,8 +96,13 @@ type expansion struct {
 // job: every thread of any age has dead links in it, and the live ones are
 // still worth having.
 func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) expansion {
+	// Each source was chosen for the form of its link, so a page that turns
+	// out to be no extractor's is navigation and is dropped, never handed to
+	// the fallback to be saved as a page.
+	strict := opts
+	strict.strict = true
 	return expandSourcesWith(ctx, sources, opts, func(ctx context.Context, link string) (*Result, error) {
-		res, _, err := registry.Extract(ctx, link, opts)
+		res, _, err := registry.Extract(ctx, link, strict)
 		return res, err
 	})
 }
@@ -100,8 +111,12 @@ func expandSources(ctx context.Context, registry *Registry, sources []string, op
 // without registering every page on that host as a supported source.
 func expandSourcesWith(ctx context.Context, sources []string, opts Options, extract func(context.Context, string) (*Result, error)) expansion {
 	limit := opts.maxFiles()
+	var unrecognised atomic.Int32
 	fetch := func(ctx context.Context, link string) ([]sourceResult, error) {
 		res, err := extract(ctx, link)
+		if errors.Is(err, errUnrecognised) {
+			unrecognised.Add(1)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -160,6 +175,7 @@ walk:
 		e.files = append(e.files, sourceFiles(r.res, folder)...)
 	}
 	e.used = len(resolved)
+	e.unrecognised = int(unrecognised.Load())
 	return e
 }
 

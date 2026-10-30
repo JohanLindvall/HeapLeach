@@ -73,17 +73,18 @@ func TestAlohaOffsite(t *testing.T) {
 	}
 }
 
-func TestAlohaTubeMatch(t *testing.T) {
+func TestAlohaTubeRecognise(t *testing.T) {
 	a := NewAlohaTube(nil, nil)
-	for _, host := range []string{"alohatube.com", "www.alohatube.com", "m.alohatube.com"} {
-		u := &url.URL{Scheme: "https", Host: host, Path: "/ktm/view.cgi"}
-		if !a.Match(u) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if a.Match(&url.URL{Scheme: "https", Host: "notalohatube.com", Path: "/ktm/view.cgi"}) {
-		t.Error("notalohatube.com was matched")
-	}
+	const view = "https://index.example.test/ktm/view.cgi?gid=1234567&u=https://wrap.example.test/v/AAAA"
+	expectRecognised(t, a, htmlPage(t, view, alohaViewPage), true)
+	// The right form and the name, but no player frame.
+	expectRecognised(t, a, htmlPage(t, view,
+		`<html><head><title>Aloha Tube</title></head><body><p>This video has been removed.</p></body></html>`), false)
+	// A player frame under the name, on a page of another form.
+	expectRecognised(t, a, htmlPage(t, "https://index.example.test/amateur.html", alohaViewPage), false)
+	expectShape(t, a, view, true)
+	expectShape(t, a, "https://index.example.test/ktm/view.cgi", false)
+	expectShape(t, a, "https://index.example.test/top/amateur", false)
 }
 
 // The frame is resolved by the extractor that claims its host, which for the

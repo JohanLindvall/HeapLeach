@@ -49,12 +49,6 @@ type PornPics struct {
 	client *httpx.Client
 }
 
-// pornpicsDomains are the site's own hosts. The German mirror is the same
-// platform down to the endpoints, with an image CDN of its own; the other
-// languages are path prefixes on the main domain rather than domains, and are
-// handled by never assuming where in a path a marker sits.
-var pornpicsDomains = []string{"pornpics.com", "pornpics.de"}
-
 const (
 	// pornpicsSearchPath is the endpoint a search-type listing pages through.
 	pornpicsSearchPath = "/search/srch.php"
@@ -98,19 +92,36 @@ func NewPornPics(client *httpx.Client) *PornPics { return &PornPics{client: clie
 
 func (p *PornPics) Name() string { return "pornpics" }
 
-func (p *PornPics) Match(u *url.URL) bool {
-	// A CDN link is already a file: routing it here would send an image to
-	// the listing reader, which would find no galleries in it and refuse
-	// something the direct extractor downloads happily.
-	if pornpicsIsCDN(u.Host) {
+// pornpicsShape is a gallery, or a tag, pornstar or channel listing, under
+// an optional language prefix. A category is a bare /<name>/, which is no
+// shape, so a category is recognised by its page alone.
+var pornpicsShape = pathShape(
+	`^/(?:[a-z]{2}/)?galleries/[^/.]+/?$`,
+	`^/(?:[a-z]{2}/)?(?:tags|pornstars|channels)/[^/]+/?$`,
+)
+
+// Recognises is the inventory's description.
+func (p *PornPics) Recognises() string {
+	return "galleries (`/galleries/<slug>`) and category, tag, pornstar and channel listings whose page " +
+		"sets the site's `PP_LANG` global and marks its links `rel-link`"
+}
+
+// Shape reports a gallery or a named listing.
+func (p *PornPics) Shape(u *url.URL) bool { return pornpicsShape(u) }
+
+// Recognise takes a page below the root that carries what the extractor
+// reads: the PP_LANG global the pager is chosen by and the rel-link anchors
+// galleries and images are read from.
+func (p *PornPics) Recognise(_ context.Context, pg *Page) bool {
+	if len(pg.Segments()) == 0 || !pg.Has(pornpicsLangGlobal, pornpicsLinkClass) {
 		return false
 	}
-	for _, domain := range pornpicsDomains {
-		if util.HostMatches(u.Host, domain) {
-			return true
-		}
+	root := pg.HTML()
+	if root == nil {
+		return false
 	}
-	return false
+	_, ok := pornpicsGlobals(root)[pornpicsLangGlobal]
+	return ok
 }
 
 // Extract resolves one gallery, or a listing of them.
@@ -126,7 +137,7 @@ func (p *PornPics) Extract(ctx context.Context, u *url.URL, opts Options) (*Resu
 // gallery reads one gallery page into its images.
 func (p *PornPics) gallery(ctx context.Context, u *url.URL) (*Result, error) {
 	// No headers: the pages need none, and neither do the images they name.
-	doc, err := p.client.GetString(ctx, u.String(), nil)
+	doc, _, err := fetchDocument(ctx, p.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: fetch %s: %w", u.Redacted(), err)
 	}
@@ -176,7 +187,7 @@ func pornpicsGallery(doc string, u *url.URL) (*Result, error) {
 // listing expands a category, tag, pornstar or channel page into every
 // gallery it lists, and every gallery into its images.
 func (p *PornPics) listing(ctx context.Context, u *url.URL, limit int) (*Result, error) {
-	doc, err := p.client.GetString(ctx, u.String(), nil)
+	doc, _, err := fetchDocument(ctx, p.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: fetch %s: %w", u.Redacted(), err)
 	}

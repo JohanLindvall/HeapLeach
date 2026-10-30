@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -53,6 +52,7 @@ func voyeurKingIndexHTML(next string, slugs ...string) string {
 		fmt.Fprintf(&out, `<nav><a rel="next" href="%s">Next</a></nav>`, next)
 	}
 	out.WriteString(`</main>`)
+	out.WriteString(voyeurKingStreamHTML(`[{"_1":2},"loaderData",{"_3":4},"routes/collection.$slug",{}]` + "\n"))
 	return out.String()
 }
 
@@ -72,11 +72,8 @@ func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *Keep2Share) (
 	}))
 	t.Cleanup(srv.Close)
 	client := httpx.New("test-agent", "en-US", 0, time.Second)
-	reg := &Registry{fallback: NewDirect(client)}
+	reg := &Registry{client: client, fallback: NewDirect(client)}
 	v := NewVoyeurKing(client, reg)
-	base, _ := url.Parse(srv.URL)
-	v.hostSet = hostSet{base.Hostname()}
-	reg.client = client
 	shell := keep2ShareShell(t, k.label)
 	for path, doc := range pages {
 		pages[path] = strings.ReplaceAll(doc, "https://files.example.test", shell)
@@ -114,6 +111,9 @@ func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 			}
 			// The shared K2S protocol fixture redeems this synthetic file id.
 			pages["/video/first"] = voyeurKingVideoHTML("first", "Example first", "https://files.example.test/file/test-file")
+			// The page pasted is probed as it stands before the listing is
+			// walked from its first page.
+			pages[prefix+"/page/7?sort=mv"] = pages[prefix+"?sort=mv"]
 			reg, _, base, asked := voyeurKingTestIndex(t, pages, k)
 			res, ex, err := reg.Extract(context.Background(), base+prefix+"/page/7?sort=mv#top", Options{})
 			if err != nil {
@@ -144,7 +144,9 @@ func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 					t.Fatalf("duplicate thumbnail/title/page links fetched %s %d times", slug, count)
 				}
 			}
-			if len(requests) != 5 {
+			// Six: the pasted page is probed once before the walk starts
+			// from the first.
+			if len(requests) != 6 {
 				t.Fatalf("followed something outside the listing: %v", requests)
 			}
 			// The propagated resolver still obeys the route selected at dispatch.
@@ -233,13 +235,25 @@ func TestVoyeurKingVideoRejectsWrongOrMissingSource(t *testing.T) {
 		"/video/no-file":    voyeurKingVideoHTML("no-file", "No file", ""),
 		"/video/no-data":    `<main><h1>Empty</h1></main>`,
 	}, k)
-	for _, path := range []string{"/video/wrong-page", "/video/other-host", "/video/no-file", "/video/no-data", "/", "/categories", "/categories/example/page/0", "/collection", "/collection/example/page/0", "/collection/example/page/invalid", "/collections/example"} {
-		if _, _, err := reg.Extract(context.Background(), base+path, Options{}); err == nil {
-			t.Errorf("accepted %s", path)
+	// Followed for the form of the link, as a listing's sources are, so a
+	// page nobody recognises is reported rather than downloaded.
+	strict := Options{strict: true}
+	for _, path := range []string{"/video/wrong-page", "/video/other-host", "/video/no-file"} {
+		if _, ex, err := reg.Extract(context.Background(), base+path, strict); err == nil || ex == nil || ex.Name() != "voyeurking" {
+			t.Errorf("%s: extractor %v, error %v; want the video page refused", path, ex, err)
 		}
 	}
-	if len(asked()) != 4 {
-		t.Fatalf("fetched unsupported listing paths: %v", asked())
+	// Not the site's video or listing pages: nothing here takes them.
+	unsupported := []string{"/video/no-data", "/", "/categories", "/categories/example/page/0", "/collection",
+		"/collection/example/page/0", "/collection/example/page/invalid", "/collections/example"}
+	for _, path := range unsupported {
+		if _, ex, err := reg.Extract(context.Background(), base+path, strict); !errors.Is(err, errUnrecognised) || ex.Name() == "voyeurking" {
+			t.Errorf("%s: extractor %v, error %v; want it unrecognised", path, ex.Name(), err)
+		}
+	}
+	// One probe a page, which the video pages' own read reuses.
+	if got := asked(); len(got) != 3+len(unsupported) {
+		t.Fatalf("fetched %v", got)
 	}
 }
 
@@ -260,5 +274,32 @@ func TestVoyeurKingStreamDecoding(t *testing.T) {
 		if _, err := voyeurKingPageData(doc); err == nil {
 			t.Fatal("accepted malformed page data")
 		}
+	}
+}
+
+func TestVoyeurKingRecognise(t *testing.T) {
+	v := NewVoyeurKing(nil, nil)
+	video := voyeurKingVideoHTML("first", "Example first", "https://files.example.test/file/first")
+	listing := voyeurKingIndexHTML("", "first", "second")
+	named := `<html><head><title>Example - VoyeurKing</title></head><body><main></main></body></html>`
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/video/first", video), true)
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/categories/example", listing), true)
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/collection/example/page/2", listing), true)
+	// The right form and the name, but no router data.
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/video/first", named), false)
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/categories/example", named), false)
+	// Router data for the other route, or on a page of another form.
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/video/first", listing), false)
+	expectRecognised(t, v, htmlPage(t, "https://index.example.test/dmca", video), false)
+
+	for raw, want := range map[string]bool{
+		"https://index.example.test/video/first":               true,
+		"https://index.example.test/categories/example":        true,
+		"https://index.example.test/collection/example/page/3": true,
+		"https://index.example.test/categories":                false,
+		"https://index.example.test/collection/example/page/x": false,
+		"https://index.example.test/":                          false,
+	} {
+		expectShape(t, v, raw, want)
 	}
 }

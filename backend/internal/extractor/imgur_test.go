@@ -5,11 +5,16 @@ package extractor
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
@@ -352,32 +357,67 @@ func TestImgurEntryMedia(t *testing.T) {
 	}
 }
 
-func TestImgurMatch(t *testing.T) {
+func TestImgurRecognise(t *testing.T) {
 	i := NewImgur(nil)
-	for _, raw := range []string{
-		"https://imgur.com/a/pppp111",
-		"https://www.imgur.com/gallery/nans-cats-pppp111",
-		"https://m.imgur.com/aaa1111",
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/gallery/nans-cats-pppp111", imgurPostPage), true)
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/a/pppp111", imgurPostPage), true)
+	// A bare id is no shape, but a page carrying the post data, or a single
+	// file whose card image is the very file the id names, is the site's.
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/pppp111", imgurPostPage), true)
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/aaa1111", imgurMediaPage), true)
+	// The right form and the name, but the card image is the site's logo.
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/aaa1111", imgurListingShell), false)
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/a/aaa1111", imgurListingShell), false)
+	// The post data on a page of another form.
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/about/team/x", imgurPostPage), false)
+	// A listing is only taken once its JSON answers, which needs a client.
+	expectRecognised(t, i, htmlPage(t, "https://pics.example.test/user/someone", imgurListingShell), false)
+
+	for raw, want := range map[string]bool{
+		"https://pics.example.test/a/pppp111":                     true,
+		"https://pics.example.test/gallery/nans-cats-pppp111":     true,
+		"https://pics.example.test/t/cats":                        true,
+		"https://pics.example.test/r/cats/pppp111":                true,
+		"https://pics.example.test/user/someone/favorites":        true,
+		"https://pics.example.test/aaa1111":                       false,
+		"https://pics.example.test/":                              false,
+		"https://pics.example.test/user/someone/favorites/extra/": false,
 	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
+		expectShape(t, i, raw, want)
+	}
+}
+
+// A listing is recognised by the JSON the extractor walks, asked of the
+// page's own origin once however many times the page is offered.
+func TestImgurRecognisesAListingByItsJSON(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/user/someone/submitted/page/0/hit.json" {
+			w.Header().Set(httpx.HeaderContentType, "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"hash":"pppp111","is_album":true}]}`))
+			return
 		}
-		if !i.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		_, _ = w.Write([]byte(imgurListingShell))
+	}))
+	defer srv.Close()
+	i := NewImgur(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	shell := strings.Replace(imgurListingShell, "<title>", `<meta property="og:site_name" content="Imgur"><title>`, 1)
+	p := htmlPage(t, srv.URL+"/user/someone", shell)
+	for range 2 {
+		if !i.Recognise(t.Context(), p) {
+			t.Fatal("a listing whose JSON answers was not recognised")
 		}
 	}
-	// The media host serves the bytes; such a link needs no extractor.
-	for _, raw := range []string{
-		"https://i.imgur.com/aaa1111.jpeg",
-		"https://example.test/a/pppp111",
-	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if i.Match(u) {
-			t.Errorf("Match(%q) = true", raw)
-		}
+	if hits.Load() != 1 {
+		t.Errorf("asked %d times, want once", hits.Load())
+	}
+	if i.Recognise(t.Context(), htmlPage(t, srv.URL+"/t/cats", shell)) {
+		t.Error("a listing whose JSON does not answer was recognised")
+	}
+	before := hits.Load()
+	if i.Recognise(t.Context(), htmlPage(t, srv.URL+"/user/someone", "<html><title>A forum</title></html>")) || hits.Load() != before {
+		t.Error("a page that does not name the site was recognised or cost a request")
 	}
 }

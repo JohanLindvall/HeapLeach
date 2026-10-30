@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -34,7 +35,6 @@ import (
 // deliberately not used: it pointed at a second wrapper rather than at the
 // video, so the frame the page actually plays is the more direct answer.
 type AlohaTube struct {
-	hostSet
 	client   *httpx.Client
 	registry *Registry
 }
@@ -45,35 +45,65 @@ const alohaRoot = "https://www.alohatube.com"
 // through the registry it is part of, so it is handed that registry rather
 // than building one.
 func NewAlohaTube(client *httpx.Client, registry *Registry) *AlohaTube {
-	return &AlohaTube{hostSet: hostSet{"alohatube.com"}, client: client, registry: registry}
+	return &AlohaTube{client: client, registry: registry}
 }
 
 func (a *AlohaTube) Name() string { return "alohatube" }
 
+// alohaShape is a view page, /ktm/view.cgi?gid=<id>.
+func alohaShape(u *url.URL) bool {
+	return u.EscapedPath() == "/ktm/view.cgi" && u.Query().Get("gid") != ""
+}
+
+// Recognises is the inventory's description.
+func (a *AlohaTube) Recognises() string {
+	return "Aloha Tube view pages (`/ktm/view.cgi?gid=<id>`) that frame another site's player " +
+		"(an off-site `<iframe allowfullscreen>`), resolved where the video lives"
+}
+
+// Shape reports a view page.
+func (a *AlohaTube) Shape(u *url.URL) bool { return alohaShape(u) }
+
+// Recognise takes a view page that frames an off-site player, which is what
+// Extract hands on, under the index's own name. A view that redirects
+// straight to the video is never this extractor's: the page probed is the
+// video's own, and whoever recognises that takes it.
+func (a *AlohaTube) Recognise(_ context.Context, p *Page) bool {
+	if !alohaShape(p.Final) || !p.Has("<iframe", "allowfullscreen") || !p.Named("Aloha Tube") {
+		return false
+	}
+	root := p.HTML()
+	return root != nil && findFirst(root, func(n *html.Node) bool {
+		return isElem(n, atom.Iframe) && hasAttr(n, "allowfullscreen") && alohaOffsite(resolveRef(p.Final, attr(n, "src"))) != ""
+	}) != nil
+}
+
 // Extract finds the embedded player and resolves it where it lives.
 func (a *AlohaTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	doc, err := a.client.GetString(ctx, u.String(), httpx.Referer(alohaRoot+"/"))
+	doc, page, err := fetchDocument(ctx, a.client, u, httpx.Referer(alohaRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("alohatube: fetch %s: %w", u.Redacted(), err)
 	}
-	frames := alohaFrames(doc, u)
+	frames := alohaFrames(doc, page)
 	if len(frames) == 0 {
 		return nil, fmt.Errorf("alohatube: %s embeds no player "+
 			"(the video may have been removed, or the page layout changed)", u.Redacted())
 	}
 
-	// A supported host first, wherever it sits in the page: the ordering
-	// below is a guess about which frame is the player, and a frame we can
-	// name is better evidence than a guess.
+	// A frame some extractor here recognises first, wherever it sits in the
+	// page: the ordering below is a guess about which frame is the player,
+	// and a frame we can read is better evidence than a guess. Each is
+	// followed strictly, so a frame nobody recognises — an advert, a player
+	// only yt-dlp knows — is reported as such rather than downloaded as a
+	// page.
 	for _, frame := range frames {
-		parsed, err := url.Parse(frame)
-		if err != nil {
+		strict := opts
+		strict.strict = true
+		res, _, err := a.registry.Extract(ctx, frame, strict)
+		if errors.Is(err, errUnrecognised) {
 			continue
 		}
-		if _, ok := a.registry.Known(parsed); ok {
-			res, _, err := a.registry.Extract(ctx, frame, opts)
-			return res, err
-		}
+		return res, err
 	}
 
 	ytdlp, ok := tools.Find(ytdlpBinary)

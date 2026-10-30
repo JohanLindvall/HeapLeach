@@ -51,7 +51,9 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	}
 	if d.registry != nil {
 		if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
-			return expandPageLinks(ctx, d.registry, u, root, sources, opts)
+			if res, err := expandPageLinks(ctx, d.registry, u, root, sources, opts); res != nil || err != nil {
+				return res, err
+			}
 		}
 	}
 	if album != nil || albumErr != nil {

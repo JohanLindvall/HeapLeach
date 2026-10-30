@@ -22,16 +22,47 @@ import (
 // Keep the host's File intact so its resolver, free-download pacing and
 // proxy route are chosen by the downloader when the transfer starts.
 type VoyeurKing struct {
-	hostSet
 	client   *httpx.Client
 	registry *Registry
 }
 
 func NewVoyeurKing(client *httpx.Client, registry *Registry) *VoyeurKing {
-	return &VoyeurKing{hostSet: hostSet{"voyeurking.com"}, client: client, registry: registry}
+	return &VoyeurKing{client: client, registry: registry}
 }
 
 func (v *VoyeurKing) Name() string { return "voyeurking" }
+
+// voyeurKingVideoShape is a video's page, /video/<slug>.
+var voyeurKingVideoShape = pathShape(`^/video/[^/.]+/?$`)
+
+// voyeurKingRouterContext is the React Router data every page streams.
+const voyeurKingRouterContext = "window.__reactRouterContext.streamController.enqueue("
+
+// Recognises is the inventory's description.
+func (v *VoyeurKing) Recognises() string {
+	return "video pages (`/video/<slug>`) and category and collection listings (`/categories/<name>`, " +
+		"`/collection/<slug>`) whose React Router data names the `routes/video.$slug`, `routes/categories` or " +
+		"`routes/collection` route"
+}
+
+// Shape reports a video or a listing.
+func (v *VoyeurKing) Shape(u *url.URL) bool { return voyeurKingVideoShape(u) || voyeurKingListing(u) }
+
+// Recognise takes a page streaming the React Router data video decodes,
+// for the route that matches its form: the video route for a video, the
+// category or collection route for a listing, whose <main> list walks.
+func (v *VoyeurKing) Recognise(_ context.Context, p *Page) bool {
+	if !p.Has(voyeurKingRouterContext) {
+		return false
+	}
+	switch {
+	case voyeurKingVideoShape(p.Final):
+		return p.Has("routes/video.$slug")
+	case voyeurKingListing(p.Final):
+		return p.Has("<main") && p.HasAny("routes/categories", "routes/collection")
+	}
+	return false
+}
 
 func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
@@ -52,7 +83,12 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	if err != nil {
 		return nil, err
 	}
-	e := expandSources(ctx, v.registry, sources, opts)
+	// Each source is followed for the form of its link, so one whose page
+	// nobody recognises — removed, or never a page of that kind — is
+	// skipped rather than downloaded as a page.
+	followed := opts
+	followed.strict = true
+	e := expandSources(ctx, v.registry, sources, followed)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -97,7 +133,7 @@ func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sourc
 			return sources, title, "partial — repeated page", nil
 		}
 		pages[page.String()] = true
-		doc, fetchErr := v.client.GetString(ctx, page.String(), httpx.Referer(first.String()))
+		doc, _, fetchErr := fetchDocument(ctx, v.client, page, httpx.Referer(first.String()))
 		if fetchErr != nil {
 			if ctx.Err() != nil {
 				return nil, "", "", ctx.Err()
@@ -172,7 +208,7 @@ func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sourc
 }
 
 func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	doc, err := v.client.GetString(ctx, u.String(), nil)
+	doc, _, err := fetchDocument(ctx, v.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("voyeurking: fetch video: %w", err)
 	}
@@ -189,13 +225,11 @@ func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Resu
 	if err != nil {
 		return nil, fmt.Errorf("voyeurking: video has no download file")
 	}
-	ex, known := v.registry.Known(link)
-	if !known || (ex.Name() != "keep2share" && ex.Name() != "fileboom") {
-		return nil, fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
-	}
-	// The link's form is only a candidate: its page says which service, if
-	// either, it is.
-	res, ex, err := v.registry.Extract(ctx, link.String(), opts)
+	// The file host is told by what its page shows, like any other link:
+	// a link only shaped like one of theirs is not good enough.
+	strict := opts
+	strict.strict = true
+	res, ex, err := v.registry.Extract(ctx, link.String(), strict)
 	if err == nil && (ex == nil || (ex.Name() != "keep2share" && ex.Name() != "fileboom")) {
 		err = fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
 	}

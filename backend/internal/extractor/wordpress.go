@@ -420,8 +420,8 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if len(sources) < found {
 		notes = append(notes, "partial — source limit")
 	}
-	if e.used < len(sources) {
-		notes = append(notes, fmt.Sprintf("%d of %d links resolved", e.used, len(sources)))
+	if linked := len(sources) - e.unrecognised; e.used < linked {
+		notes = append(notes, fmt.Sprintf("%d of %d links resolved", e.used, linked))
 	}
 	if e.partial > 0 {
 		notes = append(notes, fmt.Sprintf("%d linked sources are incomplete", e.partial))
