@@ -288,8 +288,8 @@ func TestLinksMatchIsPrefixOnly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := harvester.Match(u); got != want {
-			t.Errorf("Match(%q) = %v, want %v", raw, got, want)
+		if got := harvester.Shape(u); got != want {
+			t.Errorf("Shape(%q) = %v, want %v", raw, got, want)
 		}
 	}
 }

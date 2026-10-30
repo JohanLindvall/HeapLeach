@@ -87,10 +87,19 @@ func NewLinks(client *httpx.Client, registry *Registry) *Links {
 
 func (l *Links) Name() string { return linksScheme }
 
-// Match accepts the harvest prefix and nothing else. ParseURL turns
-// "links:<page>" into a URL with this scheme, so a host is never enough to
-// reach the harvester by accident.
-func (l *Links) Match(u *url.URL) bool { return u.Scheme == linksScheme }
+// Shape accepts the harvest prefix and nothing else. ParseURL turns
+// "links:<page>" into a URL with this scheme, so no page is ever harvested
+// by accident.
+func (l *Links) Shape(u *url.URL) bool { return u.Scheme == linksScheme }
+
+// Recognise is the prefix too: there is no page to read, since the registry
+// does not probe a URL of this scheme.
+func (l *Links) Recognise(_ context.Context, p *Page) bool { return l.Shape(p.URL) }
+
+// Recognises is the inventory's description.
+func (l *Links) Recognises() string {
+	return "a `links:<url>` prefix — every supported link on the page"
+}
 
 // Extract harvests the page and merges what its links resolve to.
 func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
