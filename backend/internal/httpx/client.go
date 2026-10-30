@@ -39,6 +39,8 @@ type Client struct {
 	proxyScheme string
 	// Streaming requests still need a deadline for receiving headers.
 	headerTimeout time.Duration
+	// quiet leaves out the debug line per response (logResponse).
+	quiet bool
 
 	// The intervals a rate limit is waited out with, kept as fields so a
 	// test need not sit through the production values.
@@ -115,12 +117,17 @@ func (c *Client) WithTimeout(limit time.Duration) *Client {
 
 // Streaming returns a shallow copy with no client-level timeout, for response
 // bodies that are read over minutes. Cancellation comes from the context.
+//
+// It logs no line per response either. Its requests are transfers, which
+// for a segmented video number in the thousands, and a transfer reports its
+// own failures; the per-response lines are for extraction.
 func (c *Client) Streaming() *Client {
 	hc := *c.hc
 	headerTimeout := hc.Timeout
 	hc.Timeout = 0
 	cp := *c
 	cp.hc = &hc
+	cp.quiet = true
 	if headerTimeout > 0 {
 		cp.headerTimeout = headerTimeout
 	}
@@ -158,7 +165,7 @@ func (c *Client) doDirect(req *http.Request) (*http.Response, error) {
 		c = &cp
 	}
 	if c.headerTimeout <= 0 {
-		return challengeResponse(c.hc.Do(req))
+		return c.answered(c.hc.Do(req))
 	}
 	ctx, cancel := context.WithCancelCause(req.Context())
 	timedOut := make(chan struct{})
@@ -191,7 +198,15 @@ func (c *Client) doDirect(req *http.Request) (*http.Response, error) {
 		}
 		cancel(nil)
 	}}
-	return challengeResponse(resp, nil)
+	return c.answered(resp, nil)
+}
+
+// answered logs a response and checks it for a challenge.
+func (c *Client) answered(resp *http.Response, err error) (*http.Response, error) {
+	if err == nil && !c.quiet {
+		logResponse(resp)
+	}
+	return challengeResponse(resp, err)
 }
 
 type cancelBody struct {
@@ -274,8 +289,32 @@ type StatusError struct {
 	Body   string
 	// Header is the response's headers, kept where a host may say more in
 	// them than the status does: mega names the time an address's quota has
-	// left in one of its own. Nil where they were not kept.
+	// left in one of its own.
 	Header http.Header
+}
+
+// NewStatusError reports resp's status. It names the address the caller
+// asked for, without a password, rather than one a redirect led to, which is
+// often a signed CDN link; and it keeps the response's headers and the first
+// config.ErrorBodySample bytes of its body, which is where hosts tend to say
+// why. It reads from the body but leaves closing it to the caller.
+func NewStatusError(resp *http.Response) *StatusError {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, config.ErrorBodySample))
+	asked := resp.Request
+	// http.Client links each redirected request to the response that caused it.
+	for asked != nil && asked.Response != nil && asked.Response.Request != nil {
+		asked = asked.Response.Request
+	}
+	return statusError(resp, asked, body)
+}
+
+// statusError reports resp's status as an answer to req.
+func statusError(resp *http.Response, req *http.Request, body []byte) *StatusError {
+	se := &StatusError{Code: resp.StatusCode, Status: resp.Status, Body: string(body), Header: resp.Header}
+	if req != nil {
+		se.URL = req.URL.Redacted()
+	}
+	return se
 }
 
 func (e *StatusError) Error() string {
@@ -341,8 +380,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			// longer than it asked serves nobody. The escalating schedule
 			// below is for the common case of a 429 that names nothing.
 			wait, stated := retryAfter(resp)
+			lastErr = NewStatusError(resp)
 			drain(resp)
-			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
 			if limited >= config.RateLimitRetries {
 				return nil, lastErr
 			}
@@ -357,8 +396,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			continue
 		case retryableStatus(resp.StatusCode):
 			wait, _ := retryAfter(resp)
+			lastErr = NewStatusError(resp)
 			drain(resp)
-			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
 			if attempt < c.maxRetries {
 				if err := util.SleepCtx(req.Context(), max(wait, RetryDelay(attempt))); err != nil {
 					return nil, err
@@ -395,8 +434,9 @@ func (c *Client) DoOnce(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if retryableStatus(resp.StatusCode) {
+		err := NewStatusError(resp)
 		drain(resp)
-		return nil, &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
+		return nil, err
 	}
 	return resp, nil
 }
@@ -437,10 +477,9 @@ func responseBytes(resp *http.Response) ([]byte, error) {
 		return nil, fmt.Errorf("%s: read body: %w", page, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &StatusError{
-			Code: resp.StatusCode, Status: resp.Status,
-			URL: page, Body: string(body),
-		}
+		// The whole of a refusal is kept, not a sample: some hosts answer it
+		// with a JSON document their extractor decodes.
+		return nil, statusError(resp, resp.Request, body)
 	}
 	if len(body) > config.MaxResponseBytes {
 		return nil, fmt.Errorf("%s: response exceeds %d bytes", page, config.MaxResponseBytes)
@@ -466,25 +505,40 @@ func (c *Client) GetString(ctx context.Context, url string, headers Header) (str
 	return body, err
 }
 
-// GetPage retains the URL after redirects for relative links and referrers.
-// An optional host-specific check recognises challenge HTML before retries,
-// challenge capture and route scoring, just like the cf-mitigated header.
+// GetPage fetches a page the way a browser navigating to it would (Navigate,
+// then headers over it), and retains the URL after redirects for relative
+// links and referrers. An optional host-specific check recognises challenge
+// HTML before retries, challenge capture and route scoring, just like the
+// cf-mitigated header.
 func (c *Client) GetPage(ctx context.Context, rawURL string, headers Header, isChallenge func(string) bool) (string, *url.URL, error) {
 	if isChallenge != nil {
 		ctx = context.WithValue(ctx, pageChallengeKey{}, isChallenge)
 	}
-	req, err := c.NewRequest(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
+	body, resp, err := c.Fetch(ctx, rawURL, Navigate.Merge(headers))
+	if resp == nil {
 		return "", nil, err
 	}
-	Navigate.Apply(req)
+	return string(body), resp.Request.URL, err
+}
+
+// Fetch GETs rawURL with the client's defaults and headers over them,
+// retrying as Do does, and reads the whole body. It fails on a non-2xx
+// status (a StatusError) and on a body over config.MaxResponseBytes, rather
+// than handing back a truncated one. The response comes back with its body
+// read and closed, for its headers and for the address that answered after
+// redirects (resp.Request.URL); it is nil only where none arrived.
+func (c *Client) Fetch(ctx context.Context, rawURL string, headers Header) ([]byte, *http.Response, error) {
+	req, err := c.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
 	headers.Apply(req)
 	resp, err := c.Do(req)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
 	body, err := responseBytes(resp)
-	return string(body), resp.Request.URL, err
+	return body, resp, err
 }
 
 // GetJSON fetches and decodes a JSON document.

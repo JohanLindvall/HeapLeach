@@ -354,6 +354,25 @@ func TestGofileEnsureSecretFallsBack(t *testing.T) {
 	}
 }
 
+// TestGofileRefusesAnOversizedScript: a script cut off at the size limit is
+// not the script, and reading a secret out of part of it would be a guess.
+func TestGofileRefusesAnOversizedScript(t *testing.T) {
+	table := []string{
+		"userAgent", "createElement", "application/json", "X-Website-Token",
+		"9c1de4a70b2f83", "getTime", "toString", "substring", "addEventListener", "innerHTML",
+	}
+	keys := []string{"aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff", "gggg", "hhhh", "iiii", "jjjj"}
+	body := buildScript(table, keys, 4, 0x1de) + strings.Repeat(" ", config.MaxResponseBytes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	if secret, _, err := testGofile(t, srv.URL).fetchSecret(context.Background()); err == nil {
+		t.Fatalf("read %q out of a truncated script", secret)
+	}
+}
+
 // TestGofileEnsureSecretRespectsAnOverride covers the escape hatch: a secret
 // the user configured is the answer, and no lookup happens at all.
 func TestGofileEnsureSecretRespectsAnOverride(t *testing.T) {

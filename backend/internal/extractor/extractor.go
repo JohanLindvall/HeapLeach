@@ -408,13 +408,6 @@ type Recogniser interface {
 	Recognise(ctx context.Context, p *Page) bool
 }
 
-// ProxyFallback opts a source into the manager's temporary-failure recovery.
-// It still starts on the normal connection; the manager owns error
-// classification, proxy availability and the shared route retry policy.
-type ProxyFallback interface {
-	ProxyFallback() bool
-}
-
 // Options carries per-request extras supplied by the caller.
 type Options struct {
 	// Password unlocks protected folders.
@@ -782,8 +775,11 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	ex, res, err := read(ctx)
 	recovered := false
 	_, challenged := errors.AsType[*httpx.ChallengeError](err)
-	fallback, optedIn := ex.(ProxyFallback)
-	if err != nil && httpx.RouteID(ctx) == "" && (challenged || (optedIn && fallback.ProxyFallback())) {
+	// A player row may opt its sources into the manager's temporary-failure
+	// recovery. It still starts on the normal connection; the manager owns
+	// error classification, proxy availability and the route retry policy.
+	player, isPlayer := ex.(*Player)
+	if err != nil && httpx.RouteID(ctx) == "" && (challenged || (isPlayer && player.ProxyFallback())) {
 		if recover, ok := ctx.Value(challengeRecoveryKey{}).(ChallengeRecovery); ok {
 			res, err = recover(ctx, func(ctx context.Context) (*Result, error) {
 				got, res, err := read(ctx)

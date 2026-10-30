@@ -47,7 +47,6 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 	if err != nil {
 		return resp, err
 	}
-	logResponse(resp)
 	challenged := strings.EqualFold(strings.TrimSpace(resp.Header.Get(HeaderCFMitigated)), "challenge")
 	// Some hosts put Turnstile in their own player page, which has neither
 	// the interstitial header nor an error status. Only an explicit page
@@ -69,10 +68,10 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 		}
 	}
 	if challenged {
+		// Not NewStatusError: nothing reads a challenge's body, and one
+		// served as a 200 has no deadline on reading it.
 		resp.Body.Close()
-		return nil, &ChallengeError{Err: &StatusError{
-			Code: resp.StatusCode, Status: resp.Status, URL: resp.Request.URL.Redacted(),
-		}}
+		return nil, &ChallengeError{Err: statusError(resp, resp.Request, nil)}
 	}
 	return resp, nil
 }

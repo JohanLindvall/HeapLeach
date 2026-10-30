@@ -638,9 +638,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 			m.setProgress(it, offset)
 			return name, nil
 		}
-		return "", statusError(req.URL, resp)
+		return "", httpx.NewStatusError(resp)
 	default:
-		return "", statusError(req.URL, resp)
+		return "", httpx.NewStatusError(resp)
 	}
 
 	if err := rejectWebPage(resp, name); err != nil {
@@ -1428,19 +1428,6 @@ func (m *Manager) waitThenRefresh(ctx context.Context, it *Item, note string, wa
 	}
 	m.note(it, "")
 	return m.resolveTarget(ctx, it)
-}
-
-// statusError builds an error carrying a short slice of the response body,
-// which is usually where these hosts put the real reason.
-func statusError(u *url.URL, resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, config.ErrorBodySample))
-	return &httpx.StatusError{
-		Code:   resp.StatusCode,
-		Status: resp.Status,
-		URL:    u.Redacted(),
-		Body:   string(body),
-		Header: resp.Header,
-	}
 }
 
 // refusedByHost is the host's own reading of a refused transfer

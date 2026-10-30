@@ -573,7 +573,7 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool, 
 		return nil, errFileChanged
 	default:
 		defer resp.Body.Close()
-		return nil, statusError(req.URL, resp)
+		return nil, httpx.NewStatusError(resp)
 	}
 }
 

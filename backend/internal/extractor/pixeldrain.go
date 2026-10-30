@@ -391,7 +391,6 @@ type pixeldrainNode struct {
 	Type     string `json:"type"`
 	Name     string `json:"name"`
 	FileSize int64  `json:"file_size"`
-	FileType string `json:"file_type"`
 	// AbuseType is present only on a node that has been reported, and such a
 	// node is refused to every caller.
 	AbuseType string `json:"abuse_type"`
