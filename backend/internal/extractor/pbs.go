@@ -418,10 +418,7 @@ func (p *PBS) probe(ctx context.Context, link string) (final *url.URL, mediaType
 		return nil, "", 0, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: link}
 	}
 
-	size = resp.ContentLength
-	if size <= 0 {
-		size = -1
-	}
+	size = knownSize(resp.ContentLength)
 	return resp.Request.URL, resp.Header.Get(httpx.HeaderContentType), size, nil
 }
 

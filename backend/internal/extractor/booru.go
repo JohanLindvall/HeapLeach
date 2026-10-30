@@ -762,14 +762,5 @@ func (p *booruPost) filename(link string) string {
 
 // size reports the byte length when the board included one.
 func (p *booruPost) size() int64 {
-	if p.Size > 0 {
-		return p.Size
-	}
-	if p.File.Size > 0 {
-		return p.File.Size
-	}
-	if p.Bytes > 0 {
-		return p.Bytes
-	}
-	return -1
+	return knownSize(p.Size, p.File.Size, p.Bytes)
 }

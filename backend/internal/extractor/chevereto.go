@@ -307,27 +307,18 @@ type cheveretoObject struct {
 // the length as a JSON string and others as a number, which is what flexValue
 // is for.
 func (o *cheveretoObject) size(link, attrSize string) int64 {
-	if n := cheveretoBytes(o.Size.String()); n > 0 {
+	if n := parsedSize(o.Size.String()); n > 0 {
 		return n
 	}
 	if o.Image.URL != "" && cheveretoOriginal(o.Image.URL) == link {
-		if n := cheveretoBytes(o.Image.Size.String()); n > 0 {
+		if n := parsedSize(o.Image.Size.String()); n > 0 {
 			return n
 		}
 	}
-	if n := cheveretoBytes(attrSize); n > 0 {
+	if n := parsedSize(attrSize); n > 0 {
 		return n
 	}
 	return -1
-}
-
-// cheveretoBytes parses an exact byte count, or reports 0.
-func cheveretoBytes(text string) int64 {
-	n, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
 }
 
 // cheveretoAlbumLinks reads the albums a page lists.
@@ -512,7 +503,7 @@ func cheveretoViewerSize(viewer *html.Node) int64 {
 	if loader == nil {
 		return -1
 	}
-	if n := cheveretoBytes(attr(loader, cheveretoSizeAttr)); n > 0 {
+	if n := parsedSize(attr(loader, cheveretoSizeAttr)); n > 0 {
 		return n
 	}
 	return -1

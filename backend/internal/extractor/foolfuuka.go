@@ -890,9 +890,5 @@ type foolFuukaMedia struct {
 
 // size is the attachment's exact length, or -1 when it cannot be read.
 func (m *foolFuukaMedia) size() int64 {
-	n, err := strconv.ParseInt(strings.TrimSpace(m.Size.String()), 10, 64)
-	if err != nil || n <= 0 {
-		return -1
-	}
-	return n
+	return parsedSize(m.Size.String())
 }

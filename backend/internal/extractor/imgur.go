@@ -316,9 +316,7 @@ func imgurFileOf(link string, size int64) File {
 		// length this transfer can never reach.
 		link, size = mp4, -1
 	}
-	if size <= 0 {
-		size = -1
-	}
+	size = knownSize(size)
 	return File{
 		Name:    util.NameFromURL(link),
 		URL:     link,

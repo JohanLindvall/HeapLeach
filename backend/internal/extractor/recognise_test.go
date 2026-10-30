@@ -263,3 +263,24 @@ func (s stubExtractor) Name() string { return "stub" }
 func (s stubExtractor) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
 	return &Result{Title: s.title, Files: []File{{Name: s.title + ".mp4", URL: u.String(), Size: -1}}}, nil
 }
+
+// A stated length is kept only when it is one: absent, zero, negative and
+// malformed counts all read as unknown, never as an empty file.
+func TestKnownAndParsedSizes(t *testing.T) {
+	for _, tc := range []struct {
+		stated []int64
+		want   int64
+	}{
+		{nil, -1}, {[]int64{0}, -1}, {[]int64{-5}, -1}, {[]int64{7}, 7},
+		{[]int64{0, -1, 9, 4}, 9},
+	} {
+		if got := knownSize(tc.stated...); got != tc.want {
+			t.Errorf("knownSize(%v) = %d, want %d", tc.stated, got, tc.want)
+		}
+	}
+	for text, want := range map[string]int64{"": -1, " 42 ": 42, "0": -1, "-3": -1, "12kB": -1} {
+		if got := parsedSize(text); got != want {
+			t.Errorf("parsedSize(%q) = %d, want %d", text, got, want)
+		}
+	}
+}

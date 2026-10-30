@@ -516,8 +516,8 @@ func (v rtveVideo) name() string {
 // alreadyOnDisk compares for equality and the response's own length replaces
 // this the moment the headers arrive.
 func (v rtveVideo) size() int64 {
-	if best, ok := v.best(); ok && best.Filesize > 0 {
-		return best.Filesize
+	if best, ok := v.best(); ok {
+		return knownSize(best.Filesize)
 	}
 	return -1
 }

@@ -179,10 +179,7 @@ func streamableTarget(video *streamableVideo, id string) (*Target, error) {
 	// Zero here means absent, not empty: videos from the site's early years
 	// list a rendition with no length at all. original_size, one level up,
 	// is no substitute — it measures a different file.
-	size := best.Size
-	if size <= 0 {
-		size = -1
-	}
+	size := knownSize(best.Size)
 	return &Target{
 		URL:  streamableLink(best.URL),
 		Name: streamableTitle(video, id) + streamableExt,

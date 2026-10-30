@@ -329,10 +329,7 @@ func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode,
 	if n.AbuseType != "" {
 		return File{}, false
 	}
-	size := n.FileSize
-	if size <= 0 {
-		size = -1
-	}
+	size := knownSize(n.FileSize)
 	return File{
 		Name: util.FirstNonEmpty(n.Name, segs[len(segs)-1]),
 		// ?attach asks for the bytes; the bare path serves the viewer for

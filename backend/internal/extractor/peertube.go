@@ -317,12 +317,7 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 // downloader may act on it — skipping a file already on disk before it
 // connects at all.
 func peerTubeFileFor(u *url.URL, title string, best peerTubeCandidate, password string) File {
-	size := best.Size
-	if size <= 0 {
-		// A record with no length is not a zero-length file; the contract
-		// spells that absence -1, and 0 would be read as a finished download.
-		size = -1
-	}
+	size := knownSize(best.Size)
 	return File{
 		Name:    peerTubeFileName(title, best),
 		URL:     best.URL,

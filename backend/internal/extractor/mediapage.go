@@ -383,7 +383,7 @@ func jwPlayerBest(feed *jwPlayerFeed) (mediaFinding, bool) {
 		mediaCandidate: best,
 		Title:          util.FirstNonEmpty(item.Title, feed.Title),
 		Type:           mediaPageMediaType(source.Type),
-		Size:           mediaPageSize(source.Filesize),
+		Size:           knownSize(source.Filesize),
 	}, true
 }
 
@@ -710,13 +710,4 @@ func mediaPageIsMediaType(kind string) bool {
 // or by what the page declared it to be.
 func mediaPageIsHLS(link, declared string) bool {
 	return strings.Contains(link, ".m3u8") || mediaPageIsHLSType(declared)
-}
-
-// mediaPageSize normalises a stated byte count to the File convention, where
-// an unknown length is -1 rather than 0.
-func mediaPageSize(stated int64) int64 {
-	if stated > 0 {
-		return stated
-	}
-	return -1
 }

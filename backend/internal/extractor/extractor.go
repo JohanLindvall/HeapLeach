@@ -14,6 +14,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,6 +125,28 @@ type File struct {
 	// mega's storage answers once an address's transfer quota is spent. Nil,
 	// or a nil answer, leaves the refusal an ordinary failure.
 	Refused func(ctx context.Context, status int, header http.Header) error
+}
+
+// knownSize is the first stated length that is a length at all, as
+// File.Size wants it: -1 when none is positive. A host that states no length
+// is not stating a zero-length file, and 0 would read as a finished download.
+func knownSize(stated ...int64) int64 {
+	for _, n := range stated {
+		if n > 0 {
+			return n
+		}
+	}
+	return -1
+}
+
+// parsedSize reads a byte count written out in decimal, as knownSize: -1 when
+// it is absent, malformed or not positive.
+func parsedSize(text string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return knownSize(n)
 }
 
 // Pace is how an extractor says "fetch this gently".

@@ -175,10 +175,7 @@ func (c *Cyberdrop) file(ctx context.Context, slug string) (*Result, error) {
 		return nil, err
 	}
 	name := util.FirstNonEmpty(strings.TrimSpace(info.Name), slug)
-	size := info.Size
-	if size <= 0 {
-		size = -1
-	}
+	size := knownSize(info.Size)
 	return &Result{Title: name, Files: []File{{
 		Name:    name,
 		Size:    size,

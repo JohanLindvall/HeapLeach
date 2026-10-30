@@ -788,10 +788,7 @@ func mediaWikiFileOf(page mediaWikiPage) (File, bool) {
 	info := page.ImageInfo[0]
 
 	link, exact := mediaWikiSource(info.URL)
-	size := info.Size
-	if size <= 0 {
-		size = -1
-	}
+	size := knownSize(info.Size)
 	return File{
 		Name: mediaWikiName(page.Title),
 		URL:  link,
