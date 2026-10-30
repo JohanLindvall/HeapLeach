@@ -211,8 +211,7 @@ func TestABCListenAppOnlyProgrammeSaysSo(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, _ := url.Parse(srv.URL + "/listen/programs/an-audiobook")
-	_, err := testABCListen(t).Extract(context.Background(), u, Options{})
+	_, err := extract(t, testABCListen(t), srv.URL+"/listen/programs/an-audiobook", Options{})
 	if err == nil {
 		t.Fatal("an app-only programme resolved")
 	}
@@ -241,8 +240,7 @@ func TestABCListenPresenterPageIsNotAnEpisode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, _ := url.Parse(srv.URL + "/listen/radionational/a-presenter/11866382")
-	_, err := testABCListen(t).Extract(context.Background(), u, Options{})
+	_, err := extract(t, testABCListen(t), srv.URL+"/listen/radionational/a-presenter/11866382", Options{})
 	if err == nil {
 		t.Fatal("a presenter page resolved to something downloadable")
 	}
@@ -301,11 +299,7 @@ func TestABCListenGeoRefusalIsASentence(t *testing.T) {
 	page = abcListenHTML("A Restricted Episode - ABC listen",
 		abcListenGeoIsland(srv.URL+"/geo-001/audio/02/n5/Z/40.mp3"))
 
-	u, _ := url.Parse(srv.URL + "/listen/programs/abc-rewind/an-episode/106914352")
-	res, err := testABCListen(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, testABCListen(t), srv.URL+"/listen/programs/abc-rewind/an-episode/106914352", Options{})
 	// Extraction must not refuse: whether the caller is in Australia is not
 	// something the page can say, and someone there downloads this fine.
 	file := res.Files[0]
@@ -498,11 +492,7 @@ func abcListenServer(t *testing.T, episodesStatus int) (*httptest.Server, func()
 func TestABCListenProgrammeExpands(t *testing.T) {
 	srv, asked := abcListenServer(t, http.StatusOK)
 
-	u, _ := url.Parse(srv.URL + "/listen/programs/a-programme")
-	res, err := testABCListen(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, testABCListen(t), srv.URL+"/listen/programs/a-programme", Options{})
 
 	// The programme's own name, off the page title with the site's fixed
 	// suffix trimmed. It names the folder every episode lands in.
@@ -565,11 +555,7 @@ func TestABCListenProgrammeExpands(t *testing.T) {
 func TestABCListenProgrammeSurvivesAListingFailure(t *testing.T) {
 	srv, _ := abcListenServer(t, http.StatusNotFound)
 
-	u, _ := url.Parse(srv.URL + "/listen/programs/a-programme")
-	res, err := testABCListen(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, testABCListen(t), srv.URL+"/listen/programs/a-programme", Options{})
 	if len(res.Files) != 2 {
 		t.Fatalf("got %d files, want the 2 the page itself rendered: %v", len(res.Files), res.Files)
 	}

@@ -219,10 +219,7 @@ func TestNPOStreamRefusesEncryptedContent(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var link npoStreamLink
-			if err := json.Unmarshal([]byte(tc.body), &link); err != nil {
-				t.Fatal(err)
-			}
+			link := decode[npoStreamLink](t, tc.body)
 			scheme, got := link.Stream.encrypted()
 			if got != tc.want {
 				t.Fatalf("encrypted() = %v, want %v", got, tc.want)
@@ -237,26 +234,12 @@ func TestNPOStreamRefusesEncryptedContent(t *testing.T) {
 // TestNPOClearStreamIsTakenWhole covers the other side of the same
 // response: nothing else about a clear answer may be misread.
 func TestNPOClearStreamIsTakenWhole(t *testing.T) {
-	var link npoStreamLink
-	if err := json.Unmarshal([]byte(npoClearStream), &link); err != nil {
-		t.Fatal(err)
-	}
+	link := decode[npoStreamLink](t, npoClearStream)
 	if link.Stream.URL == "" {
 		t.Fatal("no stream URL was read")
 	}
 	if link.Stream.Profile != "hls" {
 		t.Errorf("profile = %q, want hls", link.Stream.Profile)
-	}
-}
-
-// TestNPOUnavailableNamesTheProgramme covers what a user is actually told,
-// since for most of the catalogue a refusal is the entire outcome of a
-// paste.
-func TestNPOUnavailableNamesTheProgramme(t *testing.T) {
-	err := &broadcastRefusal{"npo", "YY_000000034", "DRM protected — NPO serves it under fairplay"}
-	want := "npo: YY_000000034: DRM protected — NPO serves it under fairplay"
-	if got := err.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
 
@@ -293,10 +276,7 @@ func TestNPORefusalIsPassedThroughVerbatim(t *testing.T) {
 		`{"status":500,"context":{}}`: "",
 	}
 	for body, want := range tests {
-		var refusal npoRefusal
-		if err := json.Unmarshal([]byte(body), &refusal); err != nil {
-			t.Fatal(err)
-		}
+		refusal := decode[npoRefusal](t, body)
 		if got := refusal.message(); got != want {
 			t.Errorf("message of %s = %q, want %q", body, got, want)
 		}
@@ -444,10 +424,7 @@ func TestNPORouteTreatsATabAsASeasonCandidate(t *testing.T) {
 		t.Fatalf("npoRoute = %+v", target)
 	}
 
-	var seasons []npoSeason
-	if err := json.Unmarshal([]byte(npoSeasonsListing), &seasons); err != nil {
-		t.Fatal(err)
-	}
+	seasons := decode[[]npoSeason](t, npoSeasonsListing)
 	if _, ok := npoPick(seasons, target.season); ok {
 		t.Error("a tab was matched as a season, which would download the wrong list")
 	}
@@ -461,10 +438,7 @@ func TestNPORouteTreatsATabAsASeasonCandidate(t *testing.T) {
 // seasonKey cannot stand in for it: the same document numbers one season
 // "2026" and the next "25".
 func TestNPOSeasonNameFallsBackToTheSlug(t *testing.T) {
-	var seasons []npoSeason
-	if err := json.Unmarshal([]byte(npoSeasonsListing), &seasons); err != nil {
-		t.Fatal(err)
-	}
+	seasons := decode[[]npoSeason](t, npoSeasonsListing)
 	if len(seasons) != 2 {
 		t.Fatalf("got %d seasons, want 2", len(seasons))
 	}
@@ -486,10 +460,7 @@ func TestNPOSeasonNameFallsBackToTheSlug(t *testing.T) {
 // own name, so three episodes here are all called "Het Journaal" — named
 // from the title alone they would be one file written three times.
 func TestNPODailyStrandEpisodesGetDistinctNames(t *testing.T) {
-	var listing []npoProgram
-	if err := json.Unmarshal([]byte(npoDailyStrandSeason), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing := decode[[]npoProgram](t, npoDailyStrandSeason)
 	if len(listing) != 4 {
 		t.Fatalf("got %d entries, want 4", len(listing))
 	}
@@ -520,10 +491,7 @@ func TestNPODailyStrandEpisodesGetDistinctNames(t *testing.T) {
 // the file lands in the download directory with no folder to say what it
 // belongs to and the name has to carry the series itself.
 func TestNPOProgramDetailNamesItsSeries(t *testing.T) {
-	var doc npoProgram
-	if err := json.Unmarshal([]byte(npoProgramDetail), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[npoProgram](t, npoProgramDetail)
 	if doc.ProductID != "XX_000000012" {
 		t.Errorf("productId = %q", doc.ProductID)
 	}

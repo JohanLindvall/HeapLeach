@@ -457,19 +457,11 @@ func (d *DRTV) refusedHere(ctx context.Context, item *drItem) (refused, known bo
 		if s.URL == "" || !strings.Contains(s.Format, "hls") {
 			continue
 		}
-		req, err := d.client.NewRequest(ctx, http.MethodGet, s.URL, nil)
+		status, err := d.client.StatusOnce(ctx, http.MethodGet, s.URL, drHeaders())
 		if err != nil {
 			return false, false
 		}
-		for name, value := range drHeaders() {
-			req.Header.Set(name, value)
-		}
-		resp, err := d.client.DoOnce(req)
-		if err != nil {
-			return false, false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusForbidden, true
+		return status == http.StatusForbidden, true
 	}
 	return false, false
 }

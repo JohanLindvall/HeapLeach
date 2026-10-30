@@ -70,12 +70,6 @@ const (
 	// raiUnavailable is the placeholder clip Rai substitutes for a video it
 	// will not serve.
 	raiUnavailable = "video_no_available"
-
-	// raiMaxEpisodes bounds how many entries one programme URL expands to. A
-	// nightly news strand lists its last few hundred bulletins and its clips
-	// beside them, which is a mistake being carried out efficiently rather
-	// than a download anybody meant to start.
-	raiMaxEpisodes = 500
 )
 
 // NewRaiPlay builds the RaiPlay extractor.
@@ -147,32 +141,32 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("raiplay: %s lists nothing to download", u.Redacted())
 	}
-	if len(entries) > raiMaxEpisodes {
-		entries = entries[:raiMaxEpisodes]
-	}
-	nest := raiNest(entries)
 
 	// Every entry is four requests deep — the page document, the relinker, the
 	// master playlist and the chosen variant — and a programme routinely lists
 	// several hundred, so they are resolved a few at a time rather than one
-	// after another.
-	files, refused, _ := resolveListed(ctx, entries, func(ctx context.Context, entry raiEntry) (*File, error) {
-		file, title, err := r.episode(ctx, entry.page)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(entry.name, title) + file.Name
-		if nest {
-			file.Dir = entry.label
-		}
-		return file, nil
+	// after another. A nightly news strand lists its last few hundred
+	// bulletins and its clips beside them, which the cap cuts short. One
+	// listing needs no folder: a folder every file goes in says nothing, and
+	// two programmes fetched separately would then share it.
+	resolved, note, err := expandSeries(ctx, series[raiEntry]{
+		site: "raiplay", noun: "entries", link: u.Redacted(),
+		items: entries,
+		label: func(entry raiEntry) string { return entry.label },
+		resolve: func(ctx context.Context, entry raiEntry) (*File, error) {
+			file, title, err := r.episode(ctx, entry.page)
+			if err != nil {
+				return nil, err
+			}
+			file.Name = util.FirstNonEmpty(entry.name, title) + file.Name
+			return file, nil
+		},
+		unplayable: "Rai offers no stream for any of them",
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("raiplay: none of the %d entries of %s are playable: %s",
-			len(entries), u.Redacted(),
-			util.FirstNonEmpty(append(refused, "Rai offers no stream for any of them")...))
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/")), Files: files}, nil
+	return &Result{Title: util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/")), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // raiEntry is one video a programme lists, with the folder its listing would
@@ -240,13 +234,6 @@ func raiItems(listing raiSet, label string, seen map[string]bool) []raiEntry {
 		out = append(out, raiEntry{page: item.PathID, name: item.Name, label: label})
 	}
 	return out
-}
-
-// raiNest reports whether a programme's entries want folders. One listing
-// needs none: a folder every file goes in says nothing, and two programmes
-// fetched separately would then share it.
-func raiNest(entries []raiEntry) bool {
-	return nestByLabel(entries, func(entry raiEntry) string { return entry.label })
 }
 
 // episode resolves one video page to a playable segment list. The returned

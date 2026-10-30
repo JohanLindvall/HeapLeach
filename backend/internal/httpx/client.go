@@ -401,6 +401,24 @@ func (c *Client) DoOnce(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// StatusOnce asks url once, with no retrying, and answers with the status
+// alone, the body unread: for a probe of whether a host serves something to
+// this address at all. An error is a request that could not be made or got
+// no usable answer, which says nothing either way.
+func (c *Client) StatusOnce(ctx context.Context, method, url string, h Header) (int, error) {
+	req, err := c.NewRequest(ctx, method, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	applyHeaders(req, h)
+	resp, err := c.DoOnce(req)
+	if err != nil {
+		return 0, err
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
 // Bytes performs the request and reads the whole body, failing on non-2xx.
 func (c *Client) Bytes(req *http.Request) ([]byte, error) {
 	resp, err := c.Do(req)

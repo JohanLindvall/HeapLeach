@@ -314,10 +314,7 @@ func TestRaiExtension(t *testing.T) {
 // finished file — a placeholder clip in the download directory instead of the
 // programme.
 func TestRaiRefusalIsRecognisedBeforeAnythingIsQueued(t *testing.T) {
-	var asset raiAsset
-	if err := json.Unmarshal([]byte(raiRefusedAsset), &asset); err != nil {
-		t.Fatal(err)
-	}
+	asset := decode[raiAsset](t, raiRefusedAsset)
 	if !asset.refused() {
 		t.Fatal("a substituted placeholder clip read as a playable asset")
 	}
@@ -326,22 +323,15 @@ func TestRaiRefusalIsRecognisedBeforeAnythingIsQueued(t *testing.T) {
 		t.Error("the fixture no longer has the empty licence map that makes this a refusal rather than DRM")
 	}
 
-	refusal := &broadcastRefusal{"raiplay", "Un Programma", raiReason(asset.Description)}
-	if got := refusal.reason; got[:len("video non disponibile")] != "video non disponibile" {
+	if got := raiReason(asset.Description); !strings.HasPrefix(got, "video non disponibile") {
 		t.Errorf("reason = %q, want Rai's own sentence first", got)
-	}
-	if got := refusal.Error(); got[:len("raiplay: Un Programma: ")] != "raiplay: Un Programma: " {
-		t.Errorf("Error = %q", got)
 	}
 }
 
 // TestRaiPlayableAssetIsNotMistakenForARefusal is the other half: the checks
 // must not fire on the ordinary case.
 func TestRaiPlayableAssetIsNotMistakenForARefusal(t *testing.T) {
-	var asset raiAsset
-	if err := json.Unmarshal([]byte(raiPlayableAsset), &asset); err != nil {
-		t.Fatal(err)
-	}
+	asset := decode[raiAsset](t, raiPlayableAsset)
 	if asset.refused() {
 		t.Error("a playable asset read as refused")
 	}
@@ -405,10 +395,7 @@ func TestRaiEmptyReadsRaiSFilledInBlanks(t *testing.T) {
 // TestRaiVideoDocumentIsReadForWhatDecides pins the fields the extractor acts
 // on, including the empty DRM object that must not read as protection.
 func TestRaiVideoDocumentIsReadForWhatDecides(t *testing.T) {
-	var doc raiVideo
-	if err := json.Unmarshal([]byte(raiVideoDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[raiVideo](t, raiVideoDocument)
 	if !raiEmpty(doc.RightsManagement.Rights.DRM) {
 		t.Error("an empty drm object read as DRM protection")
 	}
@@ -448,10 +435,7 @@ func TestRaiTitle(t *testing.T) {
 // TestRaiNewsDocumentGetsItsBulletinPrefixed is the other naming case, read
 // off a document rather than asserted about two strings.
 func TestRaiNewsDocumentGetsItsBulletinPrefixed(t *testing.T) {
-	var doc raiVideo
-	if err := json.Unmarshal([]byte(raiNewsDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[raiVideo](t, raiNewsDocument)
 	if got := raiTitle(doc.ProgramInfo.Name, doc.Name); got != "Telegiornale - Una notizia del giorno" {
 		t.Errorf("title = %q", got)
 	}
@@ -462,10 +446,7 @@ func TestRaiNewsDocumentGetsItsBulletinPrefixed(t *testing.T) {
 // folder named after either level alone collides: here it would drop two
 // seasons of "Puntate" into one folder and lose which year each belongs to.
 func TestRaiListingsKeepBothNestingLevels(t *testing.T) {
-	var doc raiProgramme
-	if err := json.Unmarshal([]byte(raiProgrammeDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[raiProgramme](t, raiProgrammeDocument)
 	if doc.Name != "Un Programma" {
 		t.Errorf("programme name = %q", doc.Name)
 	}
@@ -509,10 +490,7 @@ func TestRaiLabel(t *testing.T) {
 // its season and again under the programme's clip reel would otherwise be
 // downloaded twice, into two different folders.
 func TestRaiItemsSkipWhatIsAlreadyTaken(t *testing.T) {
-	var listing raiSet
-	if err := json.Unmarshal([]byte(raiEpisodeSet), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing := decode[raiSet](t, raiEpisodeSet)
 
 	seen := make(map[string]bool)
 	entries := raiItems(listing, "Stagione 2026 - Puntate", seen)
@@ -535,13 +513,13 @@ func TestRaiItemsSkipWhatIsAlreadyTaken(t *testing.T) {
 // both ends: a film, which is a programme with exactly one listing, must land
 // as a bare file rather than inside a folder repeating its own name.
 func TestRaiNestOnlyWhenThereIsSomethingToTellApart(t *testing.T) {
-	var film raiProgramme
-	if err := json.Unmarshal([]byte(raiFilmDocument), &film); err != nil {
-		t.Fatal(err)
-	}
+	film := decode[raiProgramme](t, raiFilmDocument)
 	single := raiListings(film)
 	if len(single) != 1 || single[0].label != "Un Film" {
 		t.Fatalf("film listings = %+v", single)
+	}
+	raiNest := func(entries []raiEntry) bool {
+		return nestByLabel(entries, func(entry raiEntry) string { return entry.label })
 	}
 	if raiNest([]raiEntry{{label: "Un Film"}, {label: "Un Film"}}) {
 		t.Error("one listing was nested; the folder would only repeat the job's own name")

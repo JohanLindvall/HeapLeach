@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -91,31 +93,9 @@ const (
 	npoPlayPath    = "afspelen"
 	npoEpisodesTab = "afleveringen"
 
-	// npoMaxEpisodes bounds how many episodes one series URL expands to, and
-	// it is a good deal lower than the equivalent on the other broadcasters
-	// here. The reason is worth knowing before raising it.
-	//
-	// Every episode costs a player token of its own, so an expansion is that
-	// many requests to npo.nl and there is no way to make it fewer: a
-	// segmented file has to be resolved while extracting, since File.Resolve
-	// hands back a single URL and there is no late binding for a segment
-	// list. And npo.nl is behind an edge that stops answering at around two
-	// hundred requests — measured at one connection and six a second, so it
-	// counts requests rather than punishing parallelism — and then refuses
-	// everything for minutes. Being cut off is far worse than a bounded
-	// answer, because what comes back is an arbitrary fraction of the series
-	// with nothing to mark it as one.
-	//
-	// So this leaves room to be wrong, and room to be asked again: an
-	// expansion that spent the whole budget would succeed and leave the next
-	// thing the user pasted failing. A series with more instalments than
-	// this is offered a season at a time, which is how the site divides it
-	// too.
-	npoMaxEpisodes = 120
-
 	// npoMaxSeasons bounds how many season listings one series URL reads.
 	// Seasons arrive newest first and the episodes behind them are truncated
-	// to the above anyway, so all that reading further buys is spending the
+	// to config.MaxResolvedEpisodesNPO anyway, so all that reading further buys is spending the
 	// same request budget the episodes need. The longest-running strand
 	// looked at here had twenty-three.
 	npoMaxSeasons = 30
@@ -282,9 +262,6 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("npo: %s lists no episodes", target.series)
 	}
-	if len(episodes) > npoMaxEpisodes {
-		episodes = episodes[:npoMaxEpisodes]
-	}
 
 	title := util.FirstNonEmpty(episodes[0].series, target.series)
 	if named {
@@ -295,49 +272,54 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 		title = npoJoin(title, seasons[0].name())
 	}
 
-	result := &Result{Title: title}
-	var refused string
-	var throttled int
-	for _, ep := range n.resolve(ctx, episodes) {
-		if ep.err != nil {
-			// One locked or withdrawn episode must not sink the rest — a
-			// mixed series is the normal case here, not an edge one. The
-			// reason is kept, though: when nothing at all is playable it is
-			// for one reason, and NPO's own words for it once are worth more
-			// than several hundred identical failures.
-			reason, unavailable := refusalReason(ep.err)
-			switch {
-			case unavailable:
-				if refused == "" {
-					refused = reason
+	// One locked or withdrawn episode must not sink the rest — a mixed
+	// series is the normal case here, not an edge one. Every episode costs
+	// a player token, against an edge that bears about two hundred requests
+	// (config.MaxResolvedEpisodesNPO): a segmented file has to be resolved
+	// while extracting, and there is no way to make that fewer.
+	//
+	// Every episode is asked, and there is no shortcut past the ones that
+	// will be refused, tempting as it is when three quarters of the
+	// catalogue is encrypted. DRM here is a property of the asset and not of
+	// the title: one season of a documentary strand answered with seven
+	// clear episodes and three FairPlay ones, the locked ones being the
+	// oldest, as though the rights to serve them in the clear had lapsed
+	// underneath them. So a series judged from one episode would be judged
+	// wrong, and the only honest way to find out which instalments are
+	// downloadable is to ask about each.
+	var throttled atomic.Int32
+	resolved, note, err := expandSeries(ctx, series[npoEpisodeRef]{
+		site: "npo", noun: "episodes", link: target.series,
+		items: episodes, budget: config.MaxResolvedEpisodesNPO,
+		label: func(ep npoEpisodeRef) string { return ep.season },
+		split: len(seasons) > 1,
+		resolve: func(ctx context.Context, ref npoEpisodeRef) (*File, error) {
+			file, err := n.stream(ctx, ref.productID)
+			if err != nil {
+				if errors.Is(err, errNPOThrottled) {
+					throttled.Add(1)
 				}
-			case errors.Is(ep.err, errNPOThrottled):
-				throttled++
+				return nil, err
 			}
-			continue
-		}
-		ep.file.Name = util.FirstNonEmpty(ep.ref.name, ep.ref.productID) + ep.file.Name
-		if len(seasons) > 1 {
-			ep.file.Dir = ep.ref.season
-		}
-		result.Files = append(result.Files, *ep.file)
-	}
+			file.Name = util.FirstNonEmpty(ref.name, ref.productID) + file.Name
+			return file, nil
+		},
+		unplayable: "the catalogue lists them but the player offers no stream",
+	})
 
 	// Being turned away by the edge is not a refusal of anything, and must
 	// never be reported as one. What it produces is a job holding however
 	// many episodes happened to be asked before the shutter came down, with
 	// nothing about it to say the rest exist — so it is an error, and the
 	// one thing the caller can do about it is said outright.
-	if throttled > 0 {
+	if unasked := throttled.Load(); unasked > 0 {
 		return nil, fmt.Errorf("npo: %d of the %d episodes of %s went unasked: %w",
-			throttled, len(episodes), target.series, errNPOThrottled)
+			unasked, min(len(episodes), config.MaxResolvedEpisodesNPO), target.series, errNPOThrottled)
 	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("npo: none of the %d episodes of %s are playable: %s",
-			len(episodes), target.series,
-			util.FirstNonEmpty(refused, "the catalogue lists them but the player offers no stream"))
+	if err != nil {
+		return nil, err
 	}
-	return result, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
 }
 
 // npoEpisodeRef is one episode of a series, with the season it belongs to.
@@ -346,38 +328,6 @@ type npoEpisodeRef struct {
 	name      string
 	series    string
 	season    string
-}
-
-// npoResolved pairs an episode with what resolving it produced. FanOut drops
-// a fetch that returned an error, and a refusal is exactly what must not be
-// dropped here, so the error travels as a value instead.
-type npoResolved struct {
-	ref  npoEpisodeRef
-	file *File
-	err  error
-}
-
-// resolve turns a series' episodes into files, all at once.
-//
-// Where NRK and SVT reach a stream in one request, this needs four — token,
-// stream link, master playlist, variant playlist — so a season resolved
-// strictly in turn would spend minutes before a single byte moved. FanOut
-// collects by index, so the files stay in the order the site listed them
-// however the requests interleave.
-//
-// Every episode is asked, and there is no shortcut past the ones that will
-// be refused, tempting as it is when three quarters of the catalogue is
-// encrypted. DRM here is a property of the asset and not of the title: one
-// season of a documentary strand answered with seven clear episodes and
-// three FairPlay ones, the locked ones being the oldest, as though the
-// rights to serve them in the clear had lapsed underneath them. So a series
-// judged from one episode would be judged wrong, and the only honest way to
-// find out which instalments are downloadable is to ask about each.
-func (n *NPOStart) resolve(ctx context.Context, episodes []npoEpisodeRef) []npoResolved {
-	return FanOut(ctx, episodes, func(ctx context.Context, ref npoEpisodeRef) ([]npoResolved, error) {
-		file, err := n.stream(ctx, ref.productID)
-		return []npoResolved{{ref: ref, file: file, err: err}}, nil
-	})
 }
 
 // seasons lists a series' seasons, newest first.

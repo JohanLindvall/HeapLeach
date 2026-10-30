@@ -34,10 +34,9 @@ type SVTPlay struct {
 }
 
 const (
-	svtRoot        = "https://www.svtplay.se"
-	svtVideoAPI    = "https://api.svt.se/videoplayer-api/video/"
-	svtGraphQL     = "https://api.svt.se/contento/graphql?ua=svtplaywebb-play-render-prod-client"
-	svtMaxEpisodes = 500
+	svtRoot     = "https://www.svtplay.se"
+	svtVideoAPI = "https://api.svt.se/videoplayer-api/video/"
+	svtGraphQL  = "https://api.svt.se/contento/graphql?ua=svtplaywebb-play-render-prod-client"
 )
 
 // svtSeasonsQuery asks for a programme's episodes grouped by season. SVT
@@ -177,44 +176,44 @@ func (s *SVTPlay) series(ctx context.Context, u *url.URL) (*Result, error) {
 // when the programme has more than one. Without a title, the job is named
 // for the programme as the player API gives it, or failing that its slug.
 func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, episodes []svtEpisodeRef) (*Result, error) {
-	if len(episodes) > svtMaxEpisodes {
-		episodes = episodes[:svtMaxEpisodes]
+	// svtListed is an episode with the programme its video names.
+	type svtListed struct {
+		svtEpisodeRef
+		program string
 	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep svtEpisodeRef) string { return ep.season })
+	items := make([]*svtListed, len(episodes))
+	for i, ep := range episodes {
+		items[i] = &svtListed{svtEpisodeRef: ep}
+	}
 
 	// Every episode is its own API call, and a series runs to hundreds;
 	// fetched one after another the job would sit resolving for minutes
-	// before a byte moved. FanOut keeps the listing's own order regardless,
-	// and an expired or geo-blocked episode is dropped rather than sinking
-	// the rest.
-	type svtResolved struct {
-		file    *File
-		program string
-	}
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep svtEpisodeRef) ([]svtResolved, error) {
-		file, program, episodeTitle, err := s.episode(ctx, ep.videoID)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(ep.name, episodeTitle, program, ep.videoID) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return []svtResolved{{file: file, program: program}}, nil
+	// before a byte moved. An expired or geo-blocked episode is dropped
+	// rather than sinking the rest.
+	resolved, note, err := expandSeries(ctx, series[*svtListed]{
+		site: "svtplay", noun: "episodes", link: u.Redacted(),
+		items: items,
+		label: func(ep *svtListed) string { return ep.season },
+		resolve: func(ctx context.Context, ep *svtListed) (*File, error) {
+			file, program, episodeTitle, err := s.episode(ctx, ep.videoID)
+			if err != nil {
+				return nil, err
+			}
+			ep.program = program
+			file.Name = util.FirstNonEmpty(ep.name, episodeTitle, program, ep.videoID) + file.Name
+			return file, nil
+		},
+		unplayable: "they may be outside their availability window, or geo-blocked",
 	})
-
-	result := &Result{Title: util.FirstNonEmpty(title, slug)}
-	for _, r := range resolved {
-		if result.Title == slug && r.program != "" {
-			result.Title = r.program
-		}
-		result.Files = append(result.Files, *r.file)
+	if err != nil {
+		return nil, err
 	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("svtplay: none of the %d episodes of %s are playable "+
-			"(they may be outside their availability window, or geo-blocked)", len(episodes), u.Redacted())
+
+	result := &Result{Title: util.FirstNonEmpty(title, slug), Files: listedFiles(resolved), Note: note}
+	for _, r := range resolved {
+		if result.Title == slug && r.item.program != "" {
+			result.Title = r.item.program
+		}
 	}
 	return result, nil
 }

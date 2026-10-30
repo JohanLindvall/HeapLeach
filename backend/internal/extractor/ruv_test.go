@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -353,10 +352,7 @@ func TestRUVResponseRejectsWhatIsNotAProgramme(t *testing.T) {
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			var out ruvResponse
-			if err := json.Unmarshal([]byte(body), &out); err != nil {
-				t.Fatal(err)
-			}
+			out := decode[ruvResponse](t, body)
 			prog, err := out.program(10001)
 			if err == nil {
 				t.Fatalf("accepted %+v", prog)
@@ -369,10 +365,7 @@ func TestRUVResponseRejectsWhatIsNotAProgramme(t *testing.T) {
 
 	// The message an errors block carries is worth more than anything this
 	// could conclude, so it is passed through.
-	var out ruvResponse
-	if err := json.Unmarshal([]byte(tests["a schema that has moved on"]), &out); err != nil {
-		t.Fatal(err)
-	}
+	out := decode[ruvResponse](t, tests["a schema that has moved on"])
 	if _, err := out.program(1); err == nil || !strings.Contains(err.Error(), "Cannot query field") {
 		t.Errorf("error = %v, want the server's own explanation", err)
 	}
@@ -468,8 +461,8 @@ func TestRUVExtension(t *testing.T) {
 		"https://vod.example.test/opid/1000002T0":                  "",
 	}
 	for raw, want := range tests {
-		if got := ruvExtension(raw); got != want {
-			t.Errorf("ruvExtension(%s) = %q, want %q", raw, got, want)
+		if got := linkExt(raw, ""); got != want {
+			t.Errorf("linkExt(%s) = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -544,10 +537,7 @@ func ruvDomestic(cdn string) string { return fmt.Sprintf(ruvDomesticTemplate, cd
 // ruvDecode unwraps a GraphQL answer the way the extractor does.
 func ruvDecode(t *testing.T, body string) *ruvProgram {
 	t.Helper()
-	var out ruvResponse
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		t.Fatal(err)
-	}
+	out := decode[ruvResponse](t, body)
 	prog, err := out.program(0)
 	if err != nil {
 		t.Fatal(err)

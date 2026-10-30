@@ -659,6 +659,22 @@ const (
 	// with a much smaller natural size — a video is a job on its own.
 	MaxListingVideos = 1000
 
+	// MaxResolvedEpisodes bounds how many episodes of a broadcaster's
+	// series are resolved while it is listed. Each costs a request or
+	// several to the broadcaster's player before a byte moves, and a daily
+	// strand lists thousands. It is not the user's file cap, which the
+	// registry applies to what resolved: a refused episode yields no file,
+	// so asking only as many as files are wanted could come back empty.
+	MaxResolvedEpisodes = 1000
+
+	// MaxResolvedEpisodesNPO is MaxResolvedEpisodes for a broadcaster
+	// whose edge stops answering at around two hundred requests and then
+	// refuses everything for minutes, each episode costing one. It leaves
+	// room to be asked again: an expansion that spent the whole budget
+	// would leave the next link pasted failing. A longer series is offered
+	// a season at a time, which is how the site divides it too.
+	MaxResolvedEpisodesNPO = 120
+
 	// MaxSearchResults bounds a search that pages until it runs out. A
 	// search is an open question rather than a named thing, so unlike an
 	// album it has no natural end and the cap is what supplies one.

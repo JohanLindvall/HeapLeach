@@ -16,10 +16,38 @@ beside them, a refusal being the answer a caller can act on.
 `resolveInTurn` does the same one episode at a time, for nrk, whose player
 is asked for episodes one after another, and ruv, whose session remembers
 the first Iceland-only refusal and turns the rest of that scope away
-without asking; `resolveEach` keeps each file beside its item, which rtpplay
-needs to tell equally named episodes apart by id. A rendition's place in a
-quality ladder is `rankIn` (`rank.go`), each caller saying where an unknown
-name lands. An episode
+without asking; `resolveEach` keeps each file beside its item.
+
+A series resolved while it is listed goes through `expandSeries`, the one
+sequence ard, nrk, svtplay, srf, rtve, vrtmax, pbs, zdf, npostart, raiplay,
+ruv, rtpplay and bbcsounds share. It cuts the episodes to
+`config.MaxResolvedEpisodes`, because each episode costs the broadcaster's
+player a request or several before a byte moves (npostart passes
+`config.MaxResolvedEpisodesNPO`, its edge bearing about two hundred
+requests). The user's file cap is not that budget: a refused episode costs
+a request and yields no file, so asking only as many episodes as files are
+wanted would come back empty from a series whose first ones are refused.
+The registry holds the files to that cap afterwards ("partial — file
+limit"). A walk of the listing stops at the same budget
+and says whether the listing went on (`more`), or the caller passes the count
+the listing stated (`listed`); either way the note says what the cap left
+out ("1000 of 3000 episodes", "first 1000 episodes"), and a listing that ended
+by itself says nothing. Episodes are filed by their season's label through
+`sourceFolder` when more than one label is listed (`nestByLabel`), or always
+when the caller had several seasons (`split`, npostart's rule); the label is
+read after resolving, so pbs and svtplay, which learn a video's season or
+programme only from its player, fill it in as they resolve. When nothing
+resolves the error is `<site>: none of the <n> <noun> of <link> are
+playable: <reason>`, the reason being the first refusal, else the first
+failure less its site prefix, else the caller's own sentence. rtpplay names
+a capped season in its title instead, so it cuts before and passes the rest.
+
+A rendition's place in a quality ladder is `rankIn` (`rank.go`), each caller
+saying where an unknown name lands. A file's extension read off its link is
+`linkExt`, lowercased, with the broadcaster's usual container as fallback. A
+probe of whether a host serves a file to this address at all (abclisten,
+yle, zdf, drtv) is one `httpx.Client.StatusOnce`, each keeping its own
+answer for a probe that could not be made. An episode
 resolved at transfer time is `lazyEpisode`, one resolved now and read again
 at transfer time `refreshing` (`extractor.go`, shared with the signed file
 hosts), and a listing's note is assembled from

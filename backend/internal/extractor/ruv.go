@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -66,9 +66,6 @@ const (
 
 	// ruvGlobalScope is the one scope that is not restricted to Iceland.
 	ruvGlobalScope = "Global"
-
-	// ruvMaxEpisodes bounds how many episodes one programme URL expands to.
-	ruvMaxEpisodes = 500
 
 	// ruvPlaylistExt marks an adaptive manifest. Everything else RÚV names
 	// is a file that can be fetched whole.
@@ -174,14 +171,12 @@ func (s *ruvSession) single(ctx context.Context, prog *ruvProgram, episodeID str
 
 // whole expands a programme into one file per episode.
 func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*Result, error) {
-	episodes := prog.ordered()
-	if len(episodes) > ruvMaxEpisodes {
-		// The cap keeps the head of the list as RÚV orders it, which is what
-		// makes it the right end to keep: the only programmes long enough to
-		// reach it are the daily strands, and those are the ones the player
-		// leaves newest-first.
-		episodes = episodes[:ruvMaxEpisodes]
-	}
+	all := prog.ordered()
+	// The cap keeps the head of the list as RÚV orders it, which is what
+	// makes it the right end to keep: the only programmes long enough to
+	// reach it are the daily strands, and those are the ones the player
+	// leaves newest-first. Names are told apart within what is kept.
+	episodes := all[:min(len(all), config.MaxResolvedEpisodes)]
 	names := ruvNames(episodes)
 
 	type named struct {
@@ -197,20 +192,23 @@ func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*
 	// the same reason, and saying it once is the whole point of recognising
 	// it. They are asked in turn, because the session remembers the first
 	// Iceland-only refusal and turns the rest of that scope away unasked.
-	files, refused, _ := resolveInTurn(ctx, listed, func(ctx context.Context, l named) (*File, error) {
-		file, err := s.file(ctx, l.ep)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = l.name + file.Name
-		return file, nil
+	resolved, note, err := expandSeries(ctx, series[named]{
+		site: "ruv", noun: "episodes", link: u.Redacted(),
+		items: listed, listed: len(all), inTurn: true,
+		resolve: func(ctx context.Context, l named) (*File, error) {
+			file, err := s.file(ctx, l.ep)
+			if err != nil {
+				return nil, err
+			}
+			file.Name = l.name + file.Name
+			return file, nil
+		},
+		unplayable: "the programme lists them but none carries a stream",
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("ruv: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(append(refused,
-				"the programme lists them but none carries a stream")...))
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: prog.name(), Files: files}, nil
+	return &Result{Title: prog.name(), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // file resolves one episode to something downloadable. The returned File
@@ -230,7 +228,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 	}
 
 	headers := httpx.Referer(ruvRoot + "/")
-	if ext := ruvExtension(ep.File); ext != ruvPlaylistExt {
+	if ext := linkExt(ep.File, ""); ext != ruvPlaylistExt {
 		// Radio: a plain file with a length and byte ranges. There is no
 		// size to declare here — the schema publishes duration in seconds
 		// and no byte count anywhere — so the transfer reads Content-Length
@@ -364,15 +362,6 @@ func ruvJoin(programme, episode string) string {
 		return episode
 	}
 	return programme + " - " + episode
-}
-
-// ruvExtension reads the container off an episode's file URL: ".m3u8" for
-// television, ".mp3" for radio.
-func ruvExtension(file string) string {
-	if u, err := ParseURL(file); err == nil {
-		return strings.ToLower(path.Ext(u.Path))
-	}
-	return strings.ToLower(path.Ext(file))
 }
 
 // ruvDomesticRefusal is what a Domestic scope turns into once the CDN has

@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -250,10 +249,7 @@ func TestVRTMaxKnowsAVariantCarryingNoAudio(t *testing.T) {
 // Dutch prose that differs from one programme to the next, so the shape of
 // the tree is what decides, and seasons have to come out before the extras.
 func TestVRTMaxListsWalkEveryTab(t *testing.T) {
-	var page vrtPage
-	if err := json.Unmarshal([]byte(vrtProgramDocument), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[vrtPage](t, vrtProgramDocument)
 
 	lists := vrtLists(&page)
 	want := []vrtList{
@@ -288,18 +284,12 @@ func TestVRTMaxListsWalkEveryTab(t *testing.T) {
 // is for. A "today" tab repeats what the season already listed, and a podcast
 // tab holds tiles that lead to something this cannot download at all.
 func TestVRTMaxRefsDropDuplicatesAndNonEpisodes(t *testing.T) {
-	var page vrtPage
-	if err := json.Unmarshal([]byte(vrtProgramDocument), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[vrtPage](t, vrtProgramDocument)
 
 	// Stand in for the fetch of the lazy season, which is the only part of
 	// the walk that needs the network.
 	lists := vrtLists(&page)
-	var lazy vrtResponse
-	if err := json.Unmarshal([]byte(vrtLazySeasonDocument), &lazy); err != nil {
-		t.Fatal(err)
-	}
+	lazy := decode[vrtResponse](t, vrtLazySeasonDocument)
 	lists[1].tiles = lazy.Data.List.Items
 
 	refs := vrtRefs(lists)
@@ -344,10 +334,7 @@ func TestVRTMaxSeasonLabelDropsTheCount(t *testing.T) {
 // route it does not offer. Reading modes[0] would hand the media service an
 // empty id.
 func TestVRTMaxStreamIDSkipsEmptyModes(t *testing.T) {
-	var page vrtPage
-	if err := json.Unmarshal([]byte(vrtEpisodeDocument), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[vrtPage](t, vrtEpisodeDocument)
 	if page.TypeName != vrtEpisodePage {
 		t.Fatalf("page read as %q", page.TypeName)
 	}
@@ -356,10 +343,7 @@ func TestVRTMaxStreamIDSkipsEmptyModes(t *testing.T) {
 		t.Errorf("streamID = %q, want %q", got, want)
 	}
 
-	var none vrtPage
-	if err := json.Unmarshal([]byte(`{"__typename":"EpisodePage","player":{"modes":[]}}`), &none); err != nil {
-		t.Fatal(err)
-	}
+	none := decode[vrtPage](t, `{"__typename":"EpisodePage","player":{"modes":[]}}`)
 	if got := none.streamID(); got != "" {
 		t.Errorf("a player with no modes named %q", got)
 	}
@@ -370,10 +354,7 @@ func TestVRTMaxStreamIDSkipsEmptyModes(t *testing.T) {
 // query on the HLS one tells the packager which audio codecs to include, so
 // rebuilding the URL without it would change what comes back.
 func TestVRTMaxMediaPicksTheHLSLocatorWhole(t *testing.T) {
-	var media vrtMedia
-	if err := json.Unmarshal([]byte(vrtMediaDocument), &media); err != nil {
-		t.Fatal(err)
-	}
+	media := decode[vrtMedia](t, vrtMediaDocument)
 	want := "https://cdn.example.test/vod/show.ism/.m3u8?filter=%28%21%28type%3D%3D%22audio%22%26%26FourCC%21%3D%22AACL%22%29%29"
 	if got := media.hls(); got != want {
 		t.Errorf("hls() = %q, want %q", got, want)
@@ -382,10 +363,7 @@ func TestVRTMaxMediaPicksTheHLSLocatorWhole(t *testing.T) {
 		t.Errorf("title = %q", media.Title)
 	}
 
-	var noHLS vrtMedia
-	if err := json.Unmarshal([]byte(`{"targetUrls":[{"type":"mpeg_dash","url":"https://cdn.example.test/a.mpd"}]}`), &noHLS); err != nil {
-		t.Fatal(err)
-	}
+	noHLS := decode[vrtMedia](t, `{"targetUrls":[{"type":"mpeg_dash","url":"https://cdn.example.test/a.mpd"}]}`)
 	if got := noHLS.hls(); got != "" {
 		t.Errorf("a DASH-only document offered %q", got)
 	}
@@ -405,10 +383,7 @@ func TestVRTMaxProtectedReadsTheFieldNotTheName(t *testing.T) {
 		`{"drm":{"widevine":{"licenseUrl":"https://drm.example.test/wv"}}}`: true,
 	}
 	for body, want := range tests {
-		var media vrtMedia
-		if err := json.Unmarshal([]byte(body), &media); err != nil {
-			t.Fatal(err)
-		}
+		media := decode[vrtMedia](t, body)
 		if got := media.protected(); got != want {
 			t.Errorf("protected() of %s = %v, want %v", body, got, want)
 		}
@@ -485,10 +460,9 @@ func TestVRTMaxReasonKeepsTheCode(t *testing.T) {
 			t.Errorf("vrtReason(%s) said nothing beyond the code itself", code)
 		}
 	}
-	refusal := &broadcastRefusal{site: "vrtmax", reason: vrtReason("CONTENT_IS_AGE_RESTRICTED")}
-	want := "vrtmax: VRT serves this only to a signed-in account old enough for it (CONTENT_IS_AGE_RESTRICTED)"
-	if got := refusal.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
+	want := "VRT serves this only to a signed-in account old enough for it (CONTENT_IS_AGE_RESTRICTED)"
+	if got := vrtReason("CONTENT_IS_AGE_RESTRICTED"); got != want {
+		t.Errorf("vrtReason = %q, want %q", got, want)
 	}
 }
 

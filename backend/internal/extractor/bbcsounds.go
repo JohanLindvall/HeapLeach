@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -149,7 +148,7 @@ func (b *BBCSounds) episode(ctx context.Context, pid string) (*Result, error) {
 
 // container expands a brand or a series into one file per episode.
 func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) {
-	items, err := b.listing(ctx, pid)
+	items, total, err := b.listing(ctx, pid, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
@@ -166,38 +165,36 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 	// selection and two playlists each. Fetched one after another that is
 	// minutes before a byte moves, so they go out several at a time, in the
 	// listing's order.
-	files, refused, failed := resolveListed(ctx, items, func(ctx context.Context, item bbcItem) (*File, error) {
-		file, err := b.file(ctx, item)
-		if err != nil {
-			return nil, err
-		}
-		// The folder is named for the container, which is the first level of
-		// every title in it, so the file is named by what lies below it.
-		file.Name = util.FirstNonEmpty(bbcName(item.Titles.within()), item.pid()) + file.Name
-		return file, nil
+	resolved, note, err := expandSeries(ctx, series[bbcItem]{
+		site: "bbcsounds", noun: "episodes", link: title,
+		items: items, listed: total,
+		resolve: func(ctx context.Context, item bbcItem) (*File, error) {
+			file, err := b.file(ctx, item)
+			if err != nil {
+				return nil, err
+			}
+			// The folder is named for the container, which is the first
+			// level of every title in it, so the file is named by what lies
+			// below it.
+			file.Name = util.FirstNonEmpty(bbcName(item.Titles.within()), item.pid()) + file.Name
+			return file, nil
+		},
+		unplayable: "the media selector named no stream for any of them",
 	})
-	if len(files) == 0 {
-		reason := "the media selector named no stream for any of them"
-		switch {
-		case len(refused) > 0:
-			reason = refused[0]
-		case failed != nil:
-			// The failure already opens with this extractor's name, and the
-			// sentence it is being folded into does too.
-			reason = strings.TrimPrefix(failed.Error(), "bbcsounds: ")
-		}
-		return nil, fmt.Errorf("bbcsounds: none of the %d episodes of %s are playable: %s",
-			len(items), title, reason)
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
 }
 
-// listing pages a container's episodes.
+// listing pages a container's episodes, up to limit of them, with the
+// count the listing states when it stopped there.
 //
 // The endpoint caps a page at a hundred rows: a larger limit is echoed back
 // and then ignored, which is exactly config.FolderPageSize, so paging is by
-// the count actually returned rather than by the limit asked for.
-func (b *BBCSounds) listing(ctx context.Context, container string) ([]bbcItem, error) {
+// the count actually returned rather than by the limit asked for. A strand
+// like a daily news programme runs to several thousand editions.
+func (b *BBCSounds) listing(ctx context.Context, container string, limit int) ([]bbcItem, int, error) {
 	var items []bbcItem
 	for offset := 0; ; {
 		query := url.Values{
@@ -211,19 +208,18 @@ func (b *BBCSounds) listing(ctx context.Context, container string) ([]bbcItem, e
 		var page bbcListing
 		if err := b.client.GetJSON(ctx, bbcListingAPI+"?"+query.Encode(),
 			httpx.Referer(bbcSoundsRoot+"/"), &page); err != nil {
-			return nil, fmt.Errorf("bbcsounds: episodes of %s: %w", container, err)
+			return nil, 0, fmt.Errorf("bbcsounds: episodes of %s: %w", container, err)
 		}
 		if len(page.Data) == 0 {
-			return items, nil
+			return items, 0, nil
 		}
 		items = append(items, page.Data...)
 		offset += len(page.Data)
-		if offset >= page.Total || len(items) >= config.MaxListingVideos {
-			// A strand like Newshour runs to several thousand editions, which
-			// is a mistake being carried out efficiently rather than a
-			// download. An hour of audio each is the same shape as a channel
-			// of videos, so it is bounded the same way.
-			return items[:min(len(items), config.MaxListingVideos)], nil
+		switch {
+		case offset >= page.Total:
+			return items, 0, nil
+		case len(items) >= limit:
+			return items, page.Total, nil
 		}
 	}
 }
@@ -240,7 +236,7 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	// one.
 	if variant, ok := item.Download.best(); ok {
 		return &File{
-			Name:       bbcDownloadExtension(variant.FileURL),
+			Name:       linkExt(variant.FileURL, ".mp3"),
 			URL:        variant.FileURL,
 			Size:       variant.size(),
 			SizeApprox: variant.size() > 0,
@@ -503,19 +499,6 @@ func bbcJoin(levels ...string) string {
 		out = append(out, level)
 	}
 	return strings.Join(out, " - ")
-}
-
-// bbcDownloadExtension names the container the offline copy arrives in.
-//
-// The URL says so and nothing else in the document does — there is no media
-// type beside it — which is why this reads the URL rather than writing the
-// answer down. MP3 is the only one the BBC has ever served here, and is what
-// a URL carrying no extension is assumed to be.
-func bbcDownloadExtension(fileURL string) string {
-	if ext := path.Ext(util.NameFromURL(fileURL)); ext != "" {
-		return strings.ToLower(ext)
-	}
-	return ".mp3"
 }
 
 // bbcName reduces a title to something that survives as a filename.

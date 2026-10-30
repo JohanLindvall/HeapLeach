@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -244,10 +243,7 @@ func zdfTestClient() *httpx.Client {
 
 func zdfParse(t *testing.T, body string) *zdfResponse {
 	t.Helper()
-	var res zdfResponse
-	if err := json.Unmarshal([]byte(body), &res); err != nil {
-		t.Fatal(err)
-	}
+	res := decode[zdfResponse](t, body)
 	return &res
 }
 
@@ -495,10 +491,7 @@ func TestZDFRegionIsProbedOnceAndNamed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var res zdfResponse
-	if err := json.Unmarshal([]byte(strings.Replace(zdfRegionLocked, "%s", srv.URL, 1)), &res); err != nil {
-		t.Fatal(err)
-	}
+	res := decode[zdfResponse](t, strings.Replace(zdfRegionLocked, "%s", srv.URL, 1))
 
 	z := &ZDF{client: zdfTestClient()}
 	reach := newZDFReach(z.client)
@@ -526,10 +519,7 @@ func TestZDFRegionWithinReachIsNotRefused(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var res zdfResponse
-	if err := json.Unmarshal([]byte(strings.Replace(zdfRegionLocked, "%s", srv.URL, 1)), &res); err != nil {
-		t.Fatal(err)
-	}
+	res := decode[zdfResponse](t, strings.Replace(zdfRegionLocked, "%s", srv.URL, 1))
 
 	z := &ZDF{client: zdfTestClient()}
 	file, err := z.file(context.Background(), &res.Document, newZDFReach(z.client))
