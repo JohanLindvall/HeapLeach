@@ -400,10 +400,11 @@ func (c *Config) Prepare() error {
 		return fmt.Errorf("proxy type must be any, socks or http, got %q", c.ProxyType)
 	}
 	for group, kind := range c.ProxyTypes {
-		if !slices.Contains(ProxyGroups, group) || !ValidProxyType(kind) {
+		if _, known := ProxyGroup(group); !known || !ValidProxyType(kind) {
 			return fmt.Errorf("proxy types: %q=%q is not a proxy group and a protocol", group, kind)
 		}
 	}
+	c.ProxyTypes, _ = CanonicalProxyTypes(c.ProxyTypes)
 	if c.ProxyDB != "" {
 		// A disabled pool can be enabled through the live settings later.
 		var err error
@@ -720,7 +721,44 @@ const (
 // ProxyGroups are the groups that draw on the proxy pool, each a scope of
 // its own: services that count free downloads per address, and WAF recovery
 // on any host.
-var ProxyGroups = []string{"keep2share", "fileboom", "emload", "mega", "cloudflare"}
+var ProxyGroups = []string{"keep2share", "emload", "mega", "cloudflare"}
+
+// proxyGroupAliases are the names groups were once known by. A setting
+// written before two groups became one still names the old one, and is
+// read as the group it is now part of.
+var proxyGroupAliases = map[string]string{"fileboom": "keep2share"}
+
+// ProxyGroup returns the group a name stands for, its own or a former
+// one's, and whether it is a group at all.
+func ProxyGroup(name string) (string, bool) {
+	if group, ok := proxyGroupAliases[name]; ok {
+		return group, true
+	}
+	return name, slices.Contains(ProxyGroups, name)
+}
+
+// CanonicalProxyTypes returns types with each former group's name read as
+// the group it is now part of, and whether every name was a group. A group
+// named both ways keeps the protocol given under its own name.
+func CanonicalProxyTypes(types map[string]string) (map[string]string, bool) {
+	if types == nil {
+		return nil, true
+	}
+	out, valid := make(map[string]string, len(types)), true
+	for name, kind := range types {
+		group, ok := ProxyGroup(name)
+		if !ok {
+			valid = false
+			out[name] = kind
+			continue
+		}
+		if _, own := types[group]; group != name && own {
+			continue
+		}
+		out[group] = kind
+	}
+	return out, valid
+}
 
 // ValidProxyType reports a protocol a proxy group can be held to.
 func ValidProxyType(kind string) bool {
@@ -734,12 +772,13 @@ func ParseProxyTypes(raw string) (map[string]string, error) {
 	for _, field := range splitList(raw) {
 		group, kind, ok := strings.Cut(field, "=")
 		group, kind = strings.ToLower(strings.TrimSpace(group)), strings.ToLower(strings.TrimSpace(kind))
-		if !ok || !slices.Contains(ProxyGroups, group) || !ValidProxyType(kind) {
+		if _, known := ProxyGroup(group); !ok || !known || !ValidProxyType(kind) {
 			return nil, fmt.Errorf("%q is not a proxy group (%s) and a protocol (any, socks or http)",
 				field, strings.Join(ProxyGroups, ", "))
 		}
 		types[group] = kind
 	}
+	types, _ = CanonicalProxyTypes(types)
 	return types, nil
 }
 

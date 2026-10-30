@@ -12,7 +12,7 @@ const SETTLE_TIMEOUT_MS = 4000;
 const PROTOCOLS: Record<ProxyProtocol, string> = { any: 'Any protocol', socks: 'SOCKS only', http: 'HTTP only' };
 
 const GROUPS: readonly (readonly [ProxyGroup, string])[] = [
-  ['keep2share', 'Keep2Share'], ['fileboom', 'FileBoom'], ['emload', 'EMLOAD'], ['mega', 'MEGA'], ['cloudflare', 'WAF recovery'],
+  ['keep2share', 'Keep2Share'], ['emload', 'EMLOAD'], ['mega', 'MEGA'], ['cloudflare', 'WAF recovery'],
 ];
 
 export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
@@ -79,14 +79,14 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
           value={snapshot.concurrency} max={snapshot.maxConcurrency}
           onCommit={(concurrency) => { void change({ concurrency }); }} />
         <SettingSlider id="streams" icon={<SplitIcon />} label="Streams per file"
-          title="Connections a slow file may be split across; K2S, FileBoom and EMLOAD use one"
+          title="Connections a slow file may be split across; K2S and EMLOAD use one"
           value={snapshot.streams} max={snapshot.maxStreams}
           onCommit={(streams) => { void change({ streams }); }} />
         <SpeedLimit value={snapshot.speedLimit} onChange={(speedLimit) => { void change({ speedLimit }); }} />
       </div>
       <div className="settings-panel__proxy-head">
         <div>
-          <h3>Download proxies <span className="settings-panel__scope">K2S · FileBoom · EMLOAD · MEGA · WAF recovery</span></h3>
+          <h3>Download proxies <span className="settings-panel__scope">K2S · EMLOAD · MEGA · WAF recovery</span></h3>
           <p>Use “Files at once” across proxy addresses, with one transfer per address for each service.</p>
           <p>MEGA uses them once this address’s transfer quota is used up. Other hosts use proxies after a Cloudflare challenge.</p>
         </div>

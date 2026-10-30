@@ -53,11 +53,7 @@ func fileLinksTestRegistry(t *testing.T, doc string) (*Registry, string) {
 	doc = keep2ShareShells(t).Replace(doc)
 	client := httpx.New("test-agent", "en-US", 0, 2*time.Second)
 	reg := NewRegistry(&config.Config{}, client)
-	for _, ex := range reg.extractors {
-		if k, ok := ex.(*Keep2Share); ok {
-			k.api, k.files = srv.URL+"/api/"+k.Name(), ""
-		}
-	}
+	keep2ShareAPIs(reg, srv.URL)
 	return reg, srv.URL
 }
 
@@ -84,7 +80,7 @@ func TestPlainPageHarvestsFileLinksBeforePreviewAndKeepsPacing(t *testing.T) {
 				t.Fatalf("plain page did not expand unique file links: ex=%s result=%+v", ex.Name(), res)
 			}
 			for i, want := range []struct{ name, group string }{
-				{"first.bin", "keep2share"}, {"second.bin", "fileboom"},
+				{"first.bin", "keep2share"}, {"second.bin", "keep2share"},
 			} {
 				f := res.Files[i]
 				if f.Name != want.name || f.URL != "" || f.Resolve == nil || f.Dir == "" || f.Size != 1234 ||

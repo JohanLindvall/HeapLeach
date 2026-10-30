@@ -96,7 +96,7 @@ func Open(path string, endpoints, feeds []string, client *httpx.Client, log *slo
 			u, err := url.Parse(endpoint)
 			return err == nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5h")
 		}),
-		lease.WithPolicy(lease.Policy{RecoveryScopes: []string{"cloudflare"}, CappedScopes: []string{"keep2share", "fileboom", "emload"}}),
+		lease.WithPolicy(lease.Policy{RecoveryScopes: []string{"cloudflare"}, CappedScopes: []string{"keep2share", "emload"}}),
 		lease.WithChallengeClassifier(func(err error) bool { var challenge *httpx.ChallengeError; return errors.As(err, &challenge) }))
 }
 

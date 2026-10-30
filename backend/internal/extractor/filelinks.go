@@ -75,10 +75,10 @@ func (d *Direct) document(ctx context.Context, u *url.URL) (string, *url.URL, bo
 // fileLinkSources keeps links claimed by registered extractors. The generic
 // Direct fallback is never followed, even if it could discover more links on
 // that page. Other hosts keep their complete URLs (including Mega's key).
-// K2S and FileBoom links additionally deduplicate by file ID, ignoring the
-// domain, filenames and tracking parameters, and exclude non-file pages: a
-// link's form cannot say which of the two it is before its page is probed,
-// and the two serve one file store, an ID naming the same file on either.
+// Keep2Share file links additionally deduplicate by file ID, ignoring the
+// domain, filenames and tracking parameters: a link's form cannot say which
+// of the service's hosts it is before its page is probed, and they serve
+// one file store, an ID naming the same file on either.
 func fileLinkSources(registry *Registry, candidates []string) []string {
 	var sources []string
 	seen := make(map[string]bool)
@@ -93,11 +93,8 @@ func fileLinkSources(registry *Registry, candidates []string) []string {
 		}
 		key := link
 		if _, ok := ex.(*Keep2Share); ok {
-			parts := util.PathSegments(u)
-			if len(parts) < 2 || parts[0] != "file" {
-				continue
-			}
-			key = "keep2share-file/" + parts[1]
+			// Its form is /file/<id>.
+			key = "keep2share-file/" + util.PathSegments(u)[1]
 		}
 		if seen[key] {
 			continue

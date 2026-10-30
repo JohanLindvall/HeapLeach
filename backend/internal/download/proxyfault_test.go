@@ -254,7 +254,7 @@ func TestATunnelRefusedAtTheProxyHoldsTheRouteBackForThatServiceAlone(t *testing
 	if row := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" || time.Until(row.CooldownUntil) > 5*time.Minute {
 		t.Fatalf("for the service asking: %+v; want it held back briefly, as a refusal", row)
 	}
-	if row := pool.Page("fileboom", proxy.Query{Search: route}).Rows[0]; row.Status == "cooling" {
+	if row := pool.Page("emload", proxy.Query{Search: route}).Rows[0]; row.Status == "cooling" {
 		t.Fatalf("for another service: %+v; want the route still on offer", row)
 	}
 }
@@ -285,7 +285,7 @@ func TestAProxyThatCannotTunnelIsSetAsideForEveryService(t *testing.T) {
 			if _, ok := errors.AsType[*httpx.ProxyRefusedError](err); !ok {
 				t.Fatalf("error = %v; want the proxy's refusal", err)
 			}
-			for _, service := range []string{"keep2share", "fileboom"} {
+			for _, service := range []string{"keep2share", "emload"} {
 				if row := pool.Page(service, proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" {
 					t.Errorf("for %s: %+v; want it set aside", service, row)
 				}

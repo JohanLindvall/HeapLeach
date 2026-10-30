@@ -125,9 +125,13 @@ func (m *Manager) restoreSettingsLocked(s *savedSettings) {
 	if config.ValidProxyType(s.ProxyType) && s.ConfiguredProxyType == m.cfg.ProxyType {
 		m.proxyType = s.ProxyType
 	}
-	if s.ProxyTypes != nil && maps.Equal(s.ConfiguredProxyTypes, m.cfg.ProxyTypes) {
+	// State saved before two groups became one names the former group, in
+	// the choice and in the configuration it was made against alike.
+	saved, _ := config.CanonicalProxyTypes(s.ProxyTypes)
+	configured, _ := config.CanonicalProxyTypes(s.ConfiguredProxyTypes)
+	if saved != nil && maps.Equal(configured, m.cfg.ProxyTypes) {
 		kinds := make(map[string]string)
-		for group, kind := range s.ProxyTypes {
+		for group, kind := range saved {
 			if slices.Contains(config.ProxyGroups, group) && config.ValidProxyType(kind) {
 				kinds[group] = kind
 			}

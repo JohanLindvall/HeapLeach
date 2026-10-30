@@ -75,7 +75,10 @@ func (m *Manager) ApplySettings(s Settings) error {
 		return fmt.Errorf("proxy type must be any, socks or http, got %q", *s.ProxyType)
 	}
 	if s.ProxyTypes != nil {
-		for group, kind := range *s.ProxyTypes {
+		// A group's former name is read as the group it is now part of.
+		kinds, _ := config.CanonicalProxyTypes(*s.ProxyTypes)
+		s.ProxyTypes = &kinds
+		for group, kind := range kinds {
 			if !slices.Contains(config.ProxyGroups, group) {
 				return fmt.Errorf("%q is not a proxy group (%s)", group, strings.Join(config.ProxyGroups, ", "))
 			}

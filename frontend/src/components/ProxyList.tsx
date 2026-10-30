@@ -51,7 +51,7 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
 
   return (
     <div className="proxy-list" aria-label="Download proxy inventory">
-      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above for K2S, FileBoom, EMLOAD, MEGA once this address’s quota is used up, and Cloudflare challenge recovery on any host.</p>}
+      {!enabled && <p className="proxy-list__off">Proxy routing is off. Enable it above for K2S, EMLOAD, MEGA once this address’s quota is used up, and Cloudflare challenge recovery on any host.</p>}
       {page && (
         <div className="proxy-list__summary">
           <span><strong>{page.summary.total.toLocaleString()}</strong> routes</span>
@@ -65,7 +65,6 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
         <select aria-label="Proxy service" value={query.site}
           onChange={(e) => setQuery({ ...query, site: e.target.value, offset: 0 })}>
           <option value="keep2share">Keep2Share</option>
-          <option value="fileboom">FileBoom</option>
           <option value="emload">EMLOAD</option>
           <option value="mega">MEGA</option>
           <option value="cloudflare">WAF recovery · all hosts</option>

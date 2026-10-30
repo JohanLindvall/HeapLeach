@@ -56,7 +56,7 @@ func voyeurKingIndexHTML(next string, slugs ...string) string {
 	return out.String()
 }
 
-func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *Keep2Share) (*Registry, *VoyeurKing, string, func() []string) {
+func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *keep2ShareService) (*Registry, *VoyeurKing, string, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var asked []string
@@ -78,7 +78,7 @@ func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *Keep2Share) (
 	for path, doc := range pages {
 		pages[path] = strings.ReplaceAll(doc, "https://files.example.test", shell)
 	}
-	reg.extractors = []Extractor{v, k}
+	reg.extractors = []Extractor{v, k.ex}
 	return reg, v, srv.URL, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -88,17 +88,13 @@ func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *Keep2Share) (
 
 func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 	for _, tc := range []struct{ section, host string }{
-		{"categories", "keep2share"}, {"collection", "keep2share"},
-		{"categories", "fileboom"}, {"collection", "fileboom"},
+		{"categories", "Keep2Share"}, {"collection", "Keep2Share"},
+		{"categories", "FileBoom"}, {"collection", "FileBoom"},
 	} {
 		t.Run(tc.section+"/"+tc.host, func(t *testing.T) {
 			prefix := "/" + tc.section + "/example"
-			create := NewKeep2Share
-			if tc.host == "fileboom" {
-				create = NewFileBoom
-			}
 			var resolved atomic.Int32
-			k := keep2ShareProtocolTestSite(t, create, func(w http.ResponseWriter, _ map[string]string) {
+			k := keep2ShareProtocolTestSite(t, tc.host, func(w http.ResponseWriter, _ map[string]string) {
 				resolved.Add(1)
 				fmt.Fprint(w, `{"status":"success","url":"https://storage.example.test/first-clip"}`)
 			})
@@ -127,7 +123,7 @@ func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 			}
 			for i, slug := range []string{"first", "second", "third"} {
 				file := res.Files[i]
-				want := Pace{Streams: 1, Files: 1, Group: tc.host, PerRoute: true}
+				want := Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
 				if file.Dir != "Example "+slug || file.Name != "First Clip.mp4" || file.URL != "" || file.Resolve == nil || file.Pace == nil || *file.Pace != want {
 					t.Fatalf("K2S handoff lost ordering, metadata or proxy pacing: %+v", file)
 				}
@@ -150,11 +146,11 @@ func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 				t.Fatalf("followed something outside the listing: %v", requests)
 			}
 			// The propagated resolver still obeys the route selected at dispatch.
-			k.wait(httpx.WithRoute(context.Background(), "cooling", k.client, nil), time.Hour)
-			if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "cooling", k.client, nil)); !isWait(err) {
+			k.wait(httpx.WithRoute(context.Background(), "cooling", k.ex.client, nil), time.Hour)
+			if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "cooling", k.ex.client, nil)); !isWait(err) {
 				t.Fatalf("lost route cooldown: %v", err)
 			}
-			if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "available", k.client, nil)); err != nil {
+			if _, err := res.Files[0].Resolve(httpx.WithRoute(context.Background(), "available", k.ex.client, nil)); err != nil {
 				t.Fatal(err)
 			}
 			if resolved.Load() != 1 {

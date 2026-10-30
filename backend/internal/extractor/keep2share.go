@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,37 +20,51 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-// Keep2Share and FileBoom use the same public download protocol on separate
-// API hosts. File information is available
+// Keep2Share and FileBoom are one service on two hosts: the same web app,
+// the same public download protocol, each on an API base of its own. One
+// extractor serves both, and a file link's page names the service, which
+// is what picks the API its file belongs to. File information is available
 // without a CAPTCHA; the free download requires an image answer followed by
 // a server-specified wait. Both happen at transfer time so a queued file
 // does not spend its download ticket before it can use it.
 type Keep2Share struct {
 	client *httpx.Client
-	api    string
-	// files is the newer API the site's own pages ask whether a file can be
-	// had free (premiumOnly). The older getFileStatus went on calling files
-	// free that the site offers to premium users alone. Empty asks nothing.
-	files string
-	label string
-	pace  Pace
+	// services are the hosts the app is served from, told apart by the name
+	// their pages give.
+	services []*keep2ShareService
 	// The production solver uses local OCR. Keeping the image reader apart
 	// lets protocol tests exercise refusals and waits without loading the OCR model.
 	// It returns at least one reading, most likely first, or an error.
 	solver func(context.Context, []byte) ([]string, error)
+}
+
+// keep2ShareService is one host of the app: its name, its API and the waits
+// it has asked for.
+type keep2ShareService struct {
+	ex    *Keep2Share
+	label string
+	api   string
+	// files is the newer API the site's own pages ask whether a file can be
+	// had free (premiumOnly). The older getFileStatus went on calling files
+	// free that the site offers to premium users alone. Empty asks nothing.
+	files string
 
 	// cooldown is when the host's wait between free downloads runs out. It
 	// holds back every file from this address, not only the one that was
 	// told, so the rest learn it here rather than each solving a CAPTCHA to
-	// be told again.
+	// be told again. Each host keeps its own: one's wait says nothing of
+	// the other's.
 	mu        sync.Mutex
 	cooldowns map[string]time.Time
 }
 
-func (k *Keep2Share) cooldownNote() string { return k.label + ": waiting between free downloads" }
+func (s *keep2ShareService) cooldownNote() string {
+	return s.label + ": waiting between free downloads"
+}
 
-func (k *Keep2Share) errorf(format string, args ...any) error {
-	return fmt.Errorf(k.Name()+": "+format, args...)
+// errorf prefixes an error with the service that answered, in lower case.
+func (s *keep2ShareService) errorf(format string, args ...any) error {
+	return fmt.Errorf(strings.ToLower(s.label)+": "+format, args...)
 }
 
 func keep2ShareRoute(ctx context.Context) string {
@@ -61,50 +76,39 @@ func keep2ShareRoute(ctx context.Context) string {
 
 // wait records the host's wait between free downloads and returns the error
 // that puts a file back in the queue until it is over.
-func (k *Keep2Share) wait(ctx context.Context, delay time.Duration) error {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.cooldowns == nil {
-		k.cooldowns = make(map[string]time.Time)
+func (s *keep2ShareService) wait(ctx context.Context, delay time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cooldowns == nil {
+		s.cooldowns = make(map[string]time.Time)
 	}
 	route := keep2ShareRoute(ctx)
-	if until := time.Now().Add(delay); until.After(k.cooldowns[route]) {
-		k.cooldowns[route] = until
+	if until := time.Now().Add(delay); until.After(s.cooldowns[route]) {
+		s.cooldowns[route] = until
 	}
-	return &WaitError{Until: k.cooldowns[route], Reason: k.cooldownNote()}
+	return &WaitError{Until: s.cooldowns[route], Reason: s.cooldownNote()}
 }
 
 // waiting returns that error while the wait is still on, and nil after.
-func (k *Keep2Share) waiting(ctx context.Context) error {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if until := k.cooldowns[keep2ShareRoute(ctx)]; time.Now().Before(until) {
-		return &WaitError{Until: until, Reason: k.cooldownNote()}
+func (s *keep2ShareService) waiting(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if until := s.cooldowns[keep2ShareRoute(ctx)]; time.Now().Before(until) {
+		return &WaitError{Until: until, Reason: s.cooldownNote()}
 	}
 	return nil
 }
 
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
-	return &Keep2Share{
-		client: client.WithTimeout(config.Keep2ShareRequestTimeout),
-		api:    "https://k2s.cc/api/v2",
-		files:  "https://api.k2s.cc/v1/files",
-		label:  "Keep2Share",
-		pace:   keep2SharePace,
+	k := &Keep2Share{client: client.WithTimeout(config.Keep2ShareRequestTimeout)}
+	k.services = []*keep2ShareService{
+		{ex: k, label: "Keep2Share", api: "https://k2s.cc/api/v2", files: "https://api.k2s.cc/v1/files"},
+		{ex: k, label: "FileBoom", api: "https://fboom.me/api/v2", files: "https://api.fboom.me/v1/files"},
 	}
+	return k
 }
 
-func NewFileBoom(client *httpx.Client) *Keep2Share {
-	return &Keep2Share{
-		client: client.WithTimeout(config.Keep2ShareRequestTimeout),
-		api:    "https://fboom.me/api/v2",
-		files:  "https://api.fboom.me/v1/files",
-		label:  "FileBoom",
-		pace:   fileBoomPace,
-	}
-}
-
-func (k *Keep2Share) Name() string { return k.pace.Group }
+func (k *Keep2Share) Name() string { return keep2SharePace.Group }
 
 // keep2ShareShape is a file link, /file/<id>, with or without the filename
 // the site appends.
@@ -119,55 +123,80 @@ const (
 
 // Recognises is the inventory's description.
 func (k *Keep2Share) Recognises() string {
-	return "file links (`/file/<id>`) whose page is the " + k.label +
-		" web app shell (its `entry-index` bundle and `chunk-client` preload on `#root`), named " + k.label
+	return "file links (`/file/<id>`) whose page is the Keep2Share or FileBoom web app shell " +
+		"(its `entry-index` bundle and `chunk-client` preload on `#root`), named Keep2Share or FileBoom; " +
+		"the name chooses the service's own API"
 }
 
 // Shape reports a file link.
 func (k *Keep2Share) Shape(u *url.URL) bool { return keep2ShareShape(u) }
 
-// Recognise takes a file link served by the service's app shell. The file
-// is described by the API and nothing of it is in the page, deleted or not,
-// so the shell is what is checked — its entry bundle and client chunk — and
-// then the name, which is the one thing that tells the two services apart:
-// they serve the same app.
+// Recognise takes a file link served by the app shell. The file is
+// described by the API and nothing of it is in the page, deleted or not, so
+// the shell is what is checked — its entry bundle and client chunk — and
+// then the name, which is the one thing that tells the two services apart.
 func (k *Keep2Share) Recognise(_ context.Context, p *Page) bool {
 	return keep2ShareShape(p.Final) && p.Script(keep2ShareEntryScript) &&
-		p.Has(keep2ShareClientChunk, `id="root"`) && p.Named(k.label)
+		p.Has(keep2ShareClientChunk, `id="root"`) && k.service(p) != nil
 }
 
-var keep2SharePace = Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
-var fileBoomPace = Pace{Streams: 1, Files: 1, Group: "fileboom", PerRoute: true}
+// service is the host a page names itself as, or nil.
+func (k *Keep2Share) service(p *Page) *keep2ShareService {
+	for _, s := range k.services {
+		if p.Named(s.label) {
+			return s
+		}
+	}
+	return nil
+}
 
+// One free download at a time per address, whichever host serves it.
+var keep2SharePace = Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
+
+// Extract asks the API of the host the link's page names. The registry has
+// already probed the page; a caller that has not is answered by a probe of
+// its own.
 func (k *Keep2Share) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+	p := probed(ctx, u)
+	if p == nil {
+		p = probePage(ctx, k.client, u)
+	}
+	s := k.service(p)
+	if s == nil {
+		return nil, errors.New("keep2share: the page names neither Keep2Share nor FileBoom")
+	}
+	return s.extract(ctx, u)
+}
+
+func (s *keep2ShareService) extract(ctx context.Context, u *url.URL) (*Result, error) {
 	parts := util.PathSegments(u)
 	if len(parts) < 2 || parts[0] != "file" {
-		return nil, k.errorf("expected a file link (/file/<id>)")
+		return nil, s.errorf("expected a file link (/file/<id>)")
 	}
 	id := parts[1]
-	info, err := k.call(ctx, "getFileStatus", map[string]string{"id": id})
+	info, err := s.call(ctx, "getFileStatus", map[string]string{"id": id})
 	if err != nil {
 		return nil, err
 	}
 	if info.IsFolder {
-		return nil, k.errorf("folder links are not supported")
+		return nil, s.errorf("folder links are not supported")
 	}
 	if !info.Available {
-		return nil, k.errorf("file is unavailable or has been removed")
+		return nil, s.errorf("file is unavailable or has been removed")
 	}
 	if info.ForFree != nil && !*info.ForFree {
-		return nil, k.errorf("this file requires a Premium account")
+		return nil, s.errorf("this file requires a Premium account")
 	}
 	if info.Name == "" {
-		return nil, k.errorf("file information contains no name")
+		return nil, s.errorf("file information contains no name")
 	}
 	size := int64(-1)
 	if info.Size != nil && *info.Size >= 0 {
 		size = *info.Size
 	}
-	download := &keep2ShareDownload{host: k, id: id, name: info.Name, size: size}
+	download := &keep2ShareDownload{host: s, id: id, name: info.Name, size: size}
 	return &Result{Title: info.Name, Files: []File{{
-		Name: info.Name, Size: size, Pace: &k.pace, Resolve: download.resolve, Check: download.check,
+		Name: info.Name, Size: size, Pace: &keep2SharePace, Resolve: download.resolve, Check: download.check,
 	}}}, nil
 }
 
@@ -290,13 +319,13 @@ func (r *keep2ShareResponse) retryDelay() time.Duration {
 // The API carries useful errors (including remaining wait time) in HTTP
 // 406 responses. Decode those as well as successes, without losing network
 // errors or treating an unrelated HTML error page as an API answer.
-func (k *Keep2Share) call(ctx context.Context, method string, in map[string]string) (*keep2ShareResponse, error) {
-	out := keep2ShareResponse{host: k.Name()}
-	err := k.client.PostJSON(ctx, k.api+"/"+method, nil, in, &out)
+func (s *keep2ShareService) call(ctx context.Context, method string, in map[string]string) (*keep2ShareResponse, error) {
+	out := keep2ShareResponse{host: strings.ToLower(s.label)}
+	err := s.ex.client.PostJSON(ctx, s.api+"/"+method, nil, in, &out)
 	if err != nil {
 		var status *httpx.StatusError
 		if !errors.As(err, &status) || json.Unmarshal([]byte(status.Body), &out) != nil || out.Status != "error" {
-			return nil, k.errorf("%s: %w", method, err)
+			return nil, s.errorf("%s: %w", method, err)
 		}
 	}
 	if out.Status != "success" {
@@ -306,7 +335,7 @@ func (k *Keep2Share) call(ctx context.Context, method string, in map[string]stri
 }
 
 type keep2ShareDownload struct {
-	host     *Keep2Share
+	host     *keep2ShareService
 	id, name string
 	size     int64
 	// routes holds the file's free download on each route it is fetched
@@ -334,8 +363,8 @@ const keep2SharePremiumOnly = "this file is only for premium users; the site off
 // premiumOnly asks the site whether it offers the file to premium users
 // alone. known is false when no answer could be had, and the free flow then
 // goes on as it did before the question was asked.
-func (k *Keep2Share) premiumOnly(ctx context.Context, id string) (premium, known bool) {
-	if k.files == "" {
+func (s *keep2ShareService) premiumOnly(ctx context.Context, id string) (premium, known bool) {
+	if s.files == "" {
 		return false, false
 	}
 	var out struct {
@@ -344,8 +373,8 @@ func (k *Keep2Share) premiumOnly(ctx context.Context, id string) (premium, known
 	// The answer is the file's, whoever asks, so it goes over the caller's
 	// own connection rather than through a proxy that may be failing: through
 	// one, it timed out and the CAPTCHA was spent before the refusal came.
-	if err := k.client.GetJSON(httpx.WithoutRoute(ctx), k.files+"/"+url.PathEscape(id)+"?referer=", nil, &out); err != nil || out.Free == nil {
-		extractionLogger(ctx).Debug(k.label+": could not ask whether the file is free", "err", err)
+	if err := s.ex.client.GetJSON(httpx.WithoutRoute(ctx), s.files+"/"+url.PathEscape(id)+"?referer=", nil, &out); err != nil || out.Free == nil {
+		extractionLogger(ctx).Debug(s.label+": could not ask whether the file is free", "err", err)
 		return false, false
 	}
 	return !*out.Free, true
@@ -600,7 +629,7 @@ func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (st
 	note := func(stage string) {
 		ResolveNote(ctx, fmt.Sprintf("%s: %s (%d/%d)", d.host.label, stage, attempt, config.Keep2ShareCaptchaAttempts))
 	}
-	solver := d.host.solver
+	solver := d.host.ex.solver
 	if solver == nil {
 		var err error
 		solver, err = keep2ShareOCR()
@@ -624,7 +653,7 @@ func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (st
 	}
 	// The local reader reports waiting for a slot separately from its
 	// bounded run. A supplied solver has no local admission queue.
-	if d.host.solver != nil {
+	if d.host.ex.solver != nil {
 		note("reading CAPTCHA")
 	}
 	readings, err := solver(WithResolveNote(ctx, note), img)
@@ -637,27 +666,27 @@ func (d *keep2ShareDownload) nextChallenge(ctx context.Context, attempt int) (st
 	return captcha.Challenge, readings[:min(len(readings), config.Keep2ShareCaptchaGuesses)], nil
 }
 
-func (k *Keep2Share) captchaImage(ctx context.Context, raw string) ([]byte, error) {
+func (s *keep2ShareService) captchaImage(ctx context.Context, raw string) ([]byte, error) {
 	// The API still advertises its image over HTTP. Request HTTPS on the
 	// public host, as for every other step of the download.
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, k.errorf("invalid CAPTCHA URL")
+		return nil, s.errorf("invalid CAPTCHA URL")
 	}
-	if api, err := url.Parse(k.api); err == nil && u.Scheme == "http" && api.Scheme == "https" &&
+	if api, err := url.Parse(s.api); err == nil && u.Scheme == "http" && api.Scheme == "https" &&
 		util.HostMatches(u.Host, api.Hostname()) {
 		u.Scheme = "https"
 	}
-	req, err := k.client.NewRequest(ctx, http.MethodGet, u.String(), nil)
+	req, err := s.ex.client.NewRequest(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	img, err := k.client.Bytes(req)
+	img, err := s.ex.client.Bytes(req)
 	if err != nil {
-		return nil, k.errorf("read CAPTCHA: %w", err)
+		return nil, s.errorf("read CAPTCHA: %w", err)
 	}
 	if len(img) > config.Keep2ShareCaptchaBytes {
-		return nil, k.errorf("CAPTCHA image is too large")
+		return nil, s.errorf("CAPTCHA image is too large")
 	}
 	return img, nil
 }

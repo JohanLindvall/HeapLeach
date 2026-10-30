@@ -192,8 +192,8 @@ func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 		}
 	}
 	job.Items[0].route.Cooldown(time.Now().Add(time.Hour))
-	if page := m.ProxyPage(proxy.Query{Site: "fileboom"}); !page.Rows[0].CooldownUntil.IsZero() {
-		t.Fatal("K2S cooldown appeared in FileBoom inventory")
+	if page := m.ProxyPage(proxy.Query{Site: "emload"}); !page.Rows[0].CooldownUntil.IsZero() {
+		t.Fatal("K2S cooldown appeared in EMLOAD inventory")
 	}
 }
 

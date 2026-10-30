@@ -91,11 +91,7 @@ func wordPressTestSite(t *testing.T, pages map[string]string) (*Registry, *Direc
 	t.Cleanup(srv.Close)
 	client := httpx.New("test-agent", "en-US", 0, time.Second)
 	reg := NewRegistry(&config.Config{}, client)
-	for _, ex := range reg.extractors {
-		if k, ok := ex.(*Keep2Share); ok {
-			k.api, k.files = srv.URL+"/api/"+k.Name(), ""
-		}
-	}
+	keep2ShareAPIs(reg, srv.URL)
 	return reg, reg.fallback.(*Direct), srv.URL, func() map[string]int {
 		mu.Lock()
 		defer mu.Unlock()
