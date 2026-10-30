@@ -89,7 +89,12 @@ func TestGofileExplain(t *testing.T) {
 
 func TestGofileRecognise(t *testing.T) {
 	g := &Gofile{}
-	shell := `<html><head><title>Gofile — Cloud Storage</title><meta property="og:site_name" content="Gofile"></head><body></body></html>`
+	shell := `<html><head><title>Gofile — Cloud Storage</title><meta property="og:site_name" content="Gofile">` +
+		`<script src="/js/wt.obf.js"></script><script src="/js/app.js"></script></head><body></body></html>`
+	// Named, but not the app: the share link's form and the name alone are
+	// not enough.
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/d/Abc123",
+		`<html><head><title>Gofile</title><meta property="og:site_name" content="Gofile"></head></html>`), false)
 	expectRecognised(t, g, htmlPage(t, "https://share.example.test/d/Abc123", shell), true)
 	expectRecognised(t, g, htmlPage(t, "https://share.example.test/", shell), false)
 	expectRecognised(t, g, htmlPage(t, "https://share.example.test/d/Abc123", `<html><title>A blog</title></html>`), false)

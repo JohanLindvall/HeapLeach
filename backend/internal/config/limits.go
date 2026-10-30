@@ -320,6 +320,14 @@ const (
 	// PlatformProbeTimeout bounds a guessed API endpoint on an unknown host.
 	PlatformProbeTimeout = 5 * time.Second
 
+	// PageCacheTTL is how long a probed page is reused. Long enough for one
+	// submission's identification, extraction and the sources it expands
+	// to share a fetch; short enough that a page re-read later is fetched
+	// again, since a re-read is usually asking because the page changed.
+	PageCacheTTL = time.Minute
+	// PageCacheEntries bounds the pages kept, oldest dropped first.
+	PageCacheEntries = 256
+
 	// MaxSegmentBytes caps one playlist part, which is assembled in memory
 	// before being appended in order. Set far above any real part — those
 	// are seconds of video — so it never truncates a genuine one; it is a

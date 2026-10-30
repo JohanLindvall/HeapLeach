@@ -100,16 +100,20 @@ func (g *Gofile) Name() string { return "gofile" }
 var gofileShape = pathShape(`^/d/[A-Za-z0-9]+/?$`)
 
 // Recognises is the inventory's description.
-func (g *Gofile) Recognises() string { return "share links (`/d/<code>`) on the Gofile app" }
+func (g *Gofile) Recognises() string {
+	return "share links (`/d/<code>`) whose page is the Gofile app shell, loading its signing script"
+}
 
 // Shape reports a share link.
 func (g *Gofile) Shape(u *url.URL) bool { return gofileShape(u) }
 
-// Recognise takes a share link served by the site's app shell, which names
-// itself on every path: the folder is fetched by the app afterwards, so the
-// shell is all a share link ever answers with, deleted or not.
+// Recognise takes a share link served by the site's app shell. The folder
+// is fetched by the app afterwards, so the shell is all a share link ever
+// answers with, deleted or not — and the shell is checked for what this
+// extractor depends on, not only for the form of the link: it loads the
+// script the request signature is read from (gofilewt.go), and names itself.
 func (g *Gofile) Recognise(_ context.Context, p *Page) bool {
-	return gofileShape(p.Final) && p.Named("Gofile")
+	return gofileShape(p.Final) && p.Script(gofileScriptPath) && p.Named("Gofile")
 }
 
 // Extract resolves a share code into its files, walking nested folders.

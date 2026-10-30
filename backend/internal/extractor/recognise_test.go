@@ -8,10 +8,14 @@ import (
 	"go/parser"
 	"go/token"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -131,5 +135,75 @@ func TestEveryRecogniserDescribesItself(t *testing.T) {
 		if d, ok := e.(Describer); !ok || d.Recognises() == "" {
 			t.Errorf("%s recognises pages but does not describe them", e.Name())
 		}
+	}
+}
+
+// TestPageCacheFetchesAPageOnce: however many recognisers, extractors and
+// sources ask for one URL at once, it is fetched once.
+func TestPageCacheFetchesAPageOnce(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		_, _ = w.Write([]byte("<html><title>Page</title></html>"))
+	}))
+	defer srv.Close()
+	client := httpx.New("test", "en", 0, 5*time.Second)
+	u, _ := url.Parse(srv.URL + "/a")
+	var cache pageCache
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if p := cache.get(context.Background(), client, u); p.Title() != "Page" {
+				t.Errorf("title %q", p.Title())
+			}
+		})
+	}
+	wg.Wait()
+	cache.get(context.Background(), client, u)
+	if got := hits.Load(); got != 1 {
+		t.Errorf("fetched %d times, want 1", got)
+	}
+	other, _ := url.Parse(srv.URL + "/b")
+	cache.get(context.Background(), client, other)
+	if got := hits.Load(); got != 2 {
+		t.Errorf("another URL: fetched %d times in all, want 2", got)
+	}
+}
+
+// TestPageCacheKeepsNoFailure: a page that did not load is asked again.
+func TestPageCacheKeepsNoFailure(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	client := httpx.New("test", "en", 0, 5*time.Second)
+	u, _ := url.Parse(srv.URL)
+	var cache pageCache
+	if p := cache.get(context.Background(), client, u); p.Err == nil {
+		t.Fatal("the first probe should have failed")
+	}
+	if p := cache.get(context.Background(), client, u); p.Err != nil || p.Body != "ok" {
+		t.Fatalf("second probe: %+v", p)
+	}
+}
+
+// TestPageMemoComputesOnce shares one origin probe among recognisers.
+func TestPageMemoComputesOnce(t *testing.T) {
+	p := &Page{}
+	var calls atomic.Int32
+	for range 3 {
+		if got := p.Memo("k", func() any { calls.Add(1); return 7 }); got != 7 {
+			t.Fatalf("memo = %v", got)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Errorf("computed %d times, want 1", calls.Load())
 	}
 }

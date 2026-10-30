@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -46,6 +47,93 @@ type Page struct {
 
 	once sync.Once
 	root *html.Node
+
+	memoMu sync.Mutex
+	memo   map[string]*memoEntry
+}
+
+type memoEntry struct {
+	once  sync.Once
+	value any
+}
+
+// Memo runs compute once per page and key, however many recognisers ask:
+// a bounded probe of the page's origin (platformJSON) that several
+// extractors would make is made once, and its answer shared. Concurrent
+// callers wait for the first.
+func (p *Page) Memo(key string, compute func() any) any {
+	p.memoMu.Lock()
+	if p.memo == nil {
+		p.memo = map[string]*memoEntry{}
+	}
+	e := p.memo[key]
+	if e == nil {
+		e = &memoEntry{}
+		p.memo[key] = e
+	}
+	p.memoMu.Unlock()
+	e.once.Do(func() { e.value = compute() })
+	return e.value
+}
+
+// pageCache keeps recently probed pages so that one URL is fetched once:
+// identification, the extractor that then reads the document, a refresh
+// at transfer time and a link several sources share all ask the same
+// question. Entries are keyed by route as well as URL, since a page fetched
+// through one egress address says nothing about what another is served,
+// and a probe that failed or met a challenge is never kept.
+type pageCache struct {
+	mu      sync.Mutex
+	entries map[string]*pageCacheEntry
+	order   []string
+}
+
+type pageCacheEntry struct {
+	ready   chan struct{}
+	page    *Page
+	fetched time.Time
+}
+
+// get returns the page for u through ctx's route, probing it at most once
+// at a time and reusing a good answer for config.PageCacheTTL.
+func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
+	key := httpx.RouteID(ctx) + " " + u.String()
+	c.mu.Lock()
+	if c.entries == nil {
+		c.entries = map[string]*pageCacheEntry{}
+	}
+	if e := c.entries[key]; e != nil {
+		c.mu.Unlock()
+		select {
+		case <-e.ready:
+		case <-ctx.Done():
+			return &Page{URL: u, Final: u, Err: ctx.Err()}
+		}
+		if e.page != nil && time.Since(e.fetched) < config.PageCacheTTL {
+			return e.page
+		}
+		c.mu.Lock()
+		if c.entries[key] == e {
+			delete(c.entries, key)
+		}
+		c.mu.Unlock()
+		return c.get(ctx, client, u)
+	}
+	e := &pageCacheEntry{ready: make(chan struct{})}
+	c.entries[key] = e
+	c.order = append(c.order, key)
+	for len(c.order) > config.PageCacheEntries {
+		delete(c.entries, c.order[0])
+		c.order = c.order[1:]
+	}
+	c.mu.Unlock()
+
+	p := probePage(ctx, client, u)
+	if p.Err == nil && !p.Challenged {
+		e.page, e.fetched = p, time.Now()
+	}
+	close(e.ready)
+	return p
 }
 
 // probePage fetches a URL as a browser navigating to it would, reading the
@@ -114,6 +202,17 @@ func probedDocument(ctx context.Context, u *url.URL) (doc string, final *url.URL
 		return "", nil, false
 	}
 	return p.Body, p.Final, true
+}
+
+// fetchDocument is GetPage for the submitted URL that reuses the registry's
+// probe when it already holds the document, so a page an extractor reads
+// whole is fetched once rather than once to recognise and again to read.
+// Any other URL, or a probe that did not get the page, is fetched as usual.
+func fetchDocument(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (string, *url.URL, error) {
+	if doc, final, ok := probedDocument(ctx, u); ok {
+		return doc, final, nil
+	}
+	return client.GetPage(ctx, u.String(), headers, nil)
 }
 
 // OK reports whether the page answered with content of its own.

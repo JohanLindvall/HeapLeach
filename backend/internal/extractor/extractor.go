@@ -412,8 +412,9 @@ var ErrPasswordRequired = errors.New("this link is password protected: supply th
 type Registry struct {
 	extractors []Extractor
 	fallback   Extractor
-	// client probes pages for identification.
+	// client probes pages for identification, and pages keeps what it got.
 	client *httpx.Client
+	pages  pageCache
 	// limits is what every extraction through this registry is bounded by.
 	limits Limits
 }
@@ -601,7 +602,7 @@ func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) 
 			if r.client == nil {
 				p = &Page{URL: u, Final: u, Err: errors.New("no client to probe with")}
 			} else {
-				p = probePage(ctx, r.client, u)
+				p = r.pages.get(ctx, r.client, u)
 			}
 		}
 		return p
