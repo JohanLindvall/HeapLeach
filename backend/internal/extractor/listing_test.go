@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,9 @@ func TestWalkListing(t *testing.T) {
 		items  int
 		note   string
 		failed string
+		// quiet walks the listing as one that ends where it stops, with a
+		// failed hook naming a rate limit.
+		quiet bool
 	}{
 		{name: "complete", items: 3, body: func(n int) string {
 			if n == 1 {
@@ -116,6 +120,48 @@ func TestWalkListing(t *testing.T) {
 		{name: "exact cap at the end", limit: 2, items: 2, body: func(int) string {
 			return listPage("", "a", "b")
 		}},
+		{name: "quiet end at a missing page", quiet: true, items: 1, body: func(n int) string {
+			if n == 1 {
+				return listPage("?page=2", "a")
+			}
+			return ""
+		}},
+		{name: "quiet rate limit", quiet: true, items: 1, note: "partial — rate limited", body: func(n int) string {
+			if n == 1 {
+				return listPage("?page=2", "a")
+			}
+			return "429"
+		}},
+		{name: "quiet repeated page", quiet: true, items: 2, body: func(n int) string {
+			if n == 1 {
+				return listPage("?page=2", "a")
+			}
+			return listPage("/list", "b")
+		}},
+		{name: "quiet page adding nothing", quiet: true, items: 3, body: func(n int) string {
+			if n == 1 {
+				return listPage("?page=2", "a", "b")
+			}
+			return listPage("?page=3", "b", "c")
+		}},
+		{name: "quiet page limit", quiet: true, items: config.MaxAlbumPages, body: func(n int) string {
+			return listPage("?page="+strconv.Itoa(n+1), strconv.Itoa(n))
+		}},
+		{name: "quiet missing", quiet: true, items: 1, body: func(n int) string {
+			if n == 1 {
+				return listPage("?page=2", "a")
+			}
+			return "<p>gone</p>"
+		}},
+		{name: "quiet redirected", quiet: true, items: 1, body: func(n int) string {
+			if n == 1 {
+				return listPage("?page=2", "a")
+			}
+			return "redirect"
+		}},
+		{name: "quiet cap keeps its note", quiet: true, limit: 2, items: 2, note: "partial — source limit", body: func(int) string {
+			return listPage("?page=2", "a", "b", "c")
+		}},
 		{name: "first page missing", failed: "test: no video listing on this page", body: func(int) string {
 			return "<p>gone</p>"
 		}},
@@ -137,6 +183,9 @@ func TestWalkListing(t *testing.T) {
 				switch body := tc.body(max(n, 1)); body {
 				case "":
 					http.NotFound(w, r)
+				case "429":
+					w.Header().Set(httpx.HeaderRetryAfter, "0")
+					w.WriteHeader(http.StatusTooManyRequests)
 				case "redirect":
 					http.Redirect(w, r, "/elsewhere", http.StatusFound)
 				default:
@@ -148,9 +197,19 @@ func TestWalkListing(t *testing.T) {
 			if limit == 0 {
 				limit = 1000
 			}
-			links, title, note, err := walkListing(context.Background(), httpx.New("test", "en", 0, time.Second), mustParse(t, srv.URL+"/list"), listingWalk{
+			walk := listingWalk{
 				name: "test", title: "fallback", none: "nothing here", limit: limit, limitNote: "partial — source limit", read: testListingPage,
-			})
+			}
+			if tc.quiet {
+				walk.quiet = true
+				walk.failed = func(err error) string {
+					if httpx.HasStatus(err, http.StatusTooManyRequests) {
+						return "partial — rate limited"
+					}
+					return ""
+				}
+			}
+			links, title, note, err := walkListing(context.Background(), httpx.New("test", "en", 0, time.Second), mustParse(t, srv.URL+"/list"), walk)
 			if tc.failed != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.failed) {
 					t.Fatalf("err = %v, want %q", err, tc.failed)
@@ -186,5 +245,71 @@ func TestWebLink(t *testing.T) {
 		if got != want {
 			t.Errorf("webLink(%q) = %q, want %q", ref, got, want)
 		}
+	}
+}
+
+func TestListingNotes(t *testing.T) {
+	for _, tc := range []struct {
+		walk   string
+		e      expansion
+		listed int
+		want   string
+	}{
+		{"", expansion{used: 3}, 3, ""},
+		{"partial — source limit", expansion{used: 3}, 3, "partial — source limit"},
+		{"", expansion{used: 2, full: true}, 3, "partial — file limit; 2 of 3 videos resolved"},
+		{"partial — repeated page", expansion{used: 1}, 3, "partial — repeated page; 1 of 3 videos resolved"},
+	} {
+		if got := strings.Join(listingNotes(tc.walk, tc.e, tc.listed, "videos"), "; "); got != tc.want {
+			t.Errorf("listingNotes(%q, %+v, %d) = %q, want %q", tc.walk, tc.e, tc.listed, got, tc.want)
+		}
+	}
+}
+
+// A caller that has already read the first page hands it over rather than
+// have it fetched again, and a listing whose key folds tracking parameters
+// spots a page it has read under another spelling. An empty listing without
+// a none error is the caller's to judge.
+func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
+	var mu sync.Mutex
+	asked := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked[r.URL.RequestURI()]++
+		mu.Unlock()
+		if r.URL.Query().Get("page") != "2" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `<div id="list"><a href="/item/b">b</a></div><a rel="next" href="/list?utm_source=x">Next</a>`)
+	}))
+	defer srv.Close()
+	client := httpx.New("test", "en", 0, time.Second)
+	root, _ := parseHTML(`<h1>Owned</h1><div id="list"><a href="/item/a">a</a></div><a rel="next" href="/list?page=2">Next</a>`)
+	key := func(u *url.URL) string {
+		k := *u
+		q := k.Query()
+		q.Del("utm_source")
+		k.RawQuery = q.Encode()
+		return k.String()
+	}
+	links, title, note, err := walkListing(context.Background(), client, mustParse(t, srv.URL+"/list"), listingWalk{
+		name: "test", limit: -1, read: testListingPage, root: root, key: key,
+	})
+	if err != nil || len(links) != 2 || title != "Owned" || note != "partial — repeated page" {
+		t.Fatalf("links=%d title=%q note=%q err=%v", len(links), title, note, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if asked["/list"] != 0 || asked["/list?utm_source=x"] != 0 || asked["/list?page=2"] != 1 {
+		t.Fatalf("asked %v", asked)
+	}
+
+	empty, _ := parseHTML(`<h1>Nothing</h1><div id="list"></div>`)
+	links, title, note, err = walkListing(context.Background(), client, mustParse(t, srv.URL+"/list"), listingWalk{
+		name: "test", limit: -1, quiet: true, read: testListingPage, root: empty,
+	})
+	if err != nil || len(links) != 0 || title != "Nothing" || note != "" {
+		t.Fatalf("empty listing: links=%d title=%q note=%q err=%v", len(links), title, note, err)
 	}
 }

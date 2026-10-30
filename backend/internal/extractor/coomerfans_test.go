@@ -3,8 +3,15 @@
 package extractor
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // coomerFansPostPage is a post carrying one image and one video, in the shape
@@ -143,6 +150,75 @@ func TestCoomerFansNextPage(t *testing.T) {
 	}
 	if got := coomerFansNextPage(last, base); got != "" {
 		t.Errorf("the last page offered %q, want nothing to follow", got)
+	}
+}
+
+// A creator's pages are walked through their next links, and the listing
+// ends quietly where it does: at a page that is not there, or at one that
+// only repeats what was already listed.
+func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
+	page := func(next string, posts ...string) string {
+		var b strings.Builder
+		b.WriteString(`<h1>a-creator</h1><a href="/u/onlyfans/1/someone-else">Other</a>`)
+		for _, post := range posts {
+			b.WriteString(`<a href="https://coomerfans.com/p/` + post + `/1/onlyfans">` + post + `</a>`)
+		}
+		if next != "" {
+			b.WriteString(`<a class="next" href="` + next + `">next</a>`)
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		name  string
+		pages map[string]string
+		want  []string
+		never string
+	}{
+		{"missing page", map[string]string{
+			"":  page("?page=2", "11", "12"),
+			"2": page("?page=3", "12", "13"),
+		}, []string{"11", "12", "13"}, ""},
+		{"nothing new", map[string]string{
+			"":  page("?page=2", "11", "12"),
+			"2": page("?page=3", "12", "11"),
+			"3": page("", "14"),
+		}, []string{"11", "12"}, "3"},
+		{"no next link", map[string]string{
+			"": page("", "11"),
+		}, []string{"11"}, "2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			asked := map[string]int{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := r.URL.Query().Get("page")
+				mu.Lock()
+				asked[n]++
+				mu.Unlock()
+				if doc, ok := tc.pages[n]; ok {
+					_, _ = w.Write([]byte(doc))
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer srv.Close()
+			c := NewCoomerFans(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+			u, _ := ParseURL(srv.URL + "/u/onlyfans/1/a-creator")
+			links, title, err := c.postLinks(context.Background(), u)
+			if err != nil || title != "a-creator" || len(links) != len(tc.want) {
+				t.Fatalf("links=%v title=%q err=%v", links, title, err)
+			}
+			for i, post := range tc.want {
+				if links[i] != "https://coomerfans.com/p/"+post+"/1/onlyfans" {
+					t.Errorf("link %d = %s, want post %s", i, links[i], post)
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if tc.never != "" && asked[tc.never] != 0 {
+				t.Errorf("asked past the end: %v", asked)
+			}
+		})
 	}
 }
 

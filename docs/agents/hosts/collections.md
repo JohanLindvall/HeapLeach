@@ -16,14 +16,19 @@ same answer. And `per=100` is the most the site honours: asking for five
 hundred is not refused, it is served as twenty under a page count for twenty,
 so the walk trusts the stated page count and a page that adds nothing, never
 the parameter. Without the shared self-exclusion, the site's own navigation
-would turn one search into a walk of the whole catalogue.
+would turn one search into a walk of the whole catalogue. The pages go through
+the shared `walkListing` as a quiet, numbered listing: its reader names the
+next page by number and stops at the stated last page or the cap, and a page
+that is missing or adds nothing is where the results end, not a partial job.
 
 ## coomerfans
 
 A creator's page on coomerfans lists posts but keeps the media on each post's
 own page, and the listing cannot be worked from instead: a post holding a
 video shows no thumbnail there at all. So every post is opened, through
-`FanOut`.
+`FanOut`. The creator's pages are walked by `walkListing` as a quiet listing:
+the listing states no length, so a later page that fails or adds nothing ends
+it without a note.
 
 ## celeb.st
 
@@ -83,7 +88,8 @@ only to titles that actually repeat, so the ordinary case keeps clean names. A
 walk that hits a rate limit it cannot outwait returns what it got, and
 `eromeProfileNote` marks the job "partial — rate limited" rather than letting
 it pass for complete; the mark is a note, not part of the title, so the folder
-stays put.
+stays put. The profile is a quiet, numbered `walkListing`: any other failed
+page is the end of the profile, and the album cap is checked a page at a time.
 
 ## rajce
 

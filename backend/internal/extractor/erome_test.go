@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -317,6 +318,31 @@ func TestEromeProfileAlbumsReportsARateLimit(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("a rate limit was read as the end of the listing")
+	}
+}
+
+// A page that adds nothing is the end of the listing too, which the host
+// tends to answer past its last page with the last page again: the walk
+// stops there without asking for another, and nothing about it is partial.
+func TestEromeProfileAlbumsStopsAtAPageAddingNothing(t *testing.T) {
+	var mu sync.Mutex
+	asked := map[string]int{}
+	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked[r.URL.Query().Get("page")]++
+		mu.Unlock()
+		_, _ = w.Write([]byte(eromeWalkPage))
+	})
+	u, _ := ParseURL(base + "/creator?t=posts")
+
+	albums, title, limited, err := e.profileAlbums(context.Background(), u)
+	if err != nil || len(albums) != 3 || title != "creator" || limited {
+		t.Fatalf("albums=%d title=%q limited=%v err=%v", len(albums), title, limited, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if asked[""] != 1 || asked["2"] != 1 || asked["3"] != 0 {
+		t.Errorf("asked %v, want page one and two once each", asked)
 	}
 }
 

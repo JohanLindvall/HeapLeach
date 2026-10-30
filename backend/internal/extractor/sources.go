@@ -265,3 +265,21 @@ func partialNote(noun string, e expansion, found int, capped bool) string {
 	}
 	return strings.Join(notes, ", ")
 }
+
+// listingNotes are a walked listing's notes once its entries are expanded:
+// the walk's own, the file cap when it cut the expansion short, and how
+// many of the listed entries resolved when some did not, in the caller's
+// noun. The caller joins them, after any of its own.
+func listingNotes(walk string, e expansion, listed int, noun string) []string {
+	var notes []string
+	if walk != "" {
+		notes = append(notes, walk)
+	}
+	if e.full {
+		notes = append(notes, "partial — file limit")
+	}
+	if e.used < listed {
+		notes = append(notes, fmt.Sprintf("%d of %d %s resolved", e.used, listed, noun))
+	}
+	return notes
+}

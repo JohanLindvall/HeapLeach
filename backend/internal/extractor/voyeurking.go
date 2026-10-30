@@ -89,17 +89,7 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	if len(e.files) == 0 {
 		return nil, fmt.Errorf("voyeurking: no accessible files in %d videos", len(sources))
 	}
-	var notes []string
-	if note != "" {
-		notes = append(notes, note)
-	}
-	if e.full {
-		notes = append(notes, "partial — file limit")
-	}
-	if e.used < len(sources) {
-		notes = append(notes, fmt.Sprintf("%d of %d videos resolved", e.used, len(sources)))
-	}
-	return &Result{Title: title, Note: strings.Join(notes, "; "), Files: e.files}, nil
+	return &Result{Title: title, Note: strings.Join(listingNotes(note, e, len(sources), "videos"), "; "), Files: e.files}, nil
 }
 
 func voyeurKingListing(u *url.URL) bool {

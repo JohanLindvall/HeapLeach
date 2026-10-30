@@ -151,43 +151,53 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 // the expansion fetches an album apiece, which a test of the walk has no
 // business doing.
 func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string, title string, limited bool, err error) {
+	headers := httpx.Referer(eromeReferer + "/")
+	first := eromeProfilePage(u, 1)
+	doc, _, err := fetchDocument(ctx, e.client, &first, headers)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("erome: fetch profile: %w", err)
+	}
+	root, err := parseHTML(doc)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("erome: %w", err)
+	}
+
+	// The pages are numbered rather than linked, and the walk asks for one
+	// more until a page adds nothing, the page cap or the album cap; the
+	// album cap is checked a page at a time, as it always has been.
 	seen := make(map[string]bool)
-
-	for page := 1; page <= eromeMaxProfilePages && len(albums) < eromeMaxAlbums; page++ {
-		pageURL := eromeProfilePage(u, page)
-
-		doc, _, err := fetchDocument(ctx, e.client, &pageURL, httpx.Referer(eromeReferer+"/"))
-		if err != nil {
-			if page == 1 {
-				return nil, "", false, fmt.Errorf("erome: fetch profile: %w", err)
-			}
-			// A page that will not load is ordinarily the end of the
-			// listing: asking past the last one is how the walk learns
-			// where to stop. A rate limit is not that. The host has said
-			// come back, the client has already waited it out as far as it
-			// will go, and reading it as the end would hand back part of a
-			// profile as though it were the whole of it.
+	page := 1
+	found, title, _, err := walkListing(ctx, e.client, &first, listingWalk{
+		name: "erome", title: strings.Join(util.PathSegments(u), "-"), limit: -1, quiet: true, root: root,
+		// A page that will not load is ordinarily the end of the listing:
+		// asking past the last one is how the walk learns where to stop. A
+		// rate limit is not that. The host has said come back, the client
+		// has already waited it out as far as it will go, and reading it as
+		// the end would hand back part of a profile as though it were the
+		// whole of it.
+		failed: func(err error) string {
 			limited = httpx.HasStatus(err, http.StatusTooManyRequests)
-			break
-		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, "", false, fmt.Errorf("erome: %w", err)
-		}
-		if title == "" {
-			title = util.FirstNonEmpty(
-				firstText(root, atom.H1),
-				trimSiteSuffix(firstText(root, atomTitle)),
-				strings.Join(util.PathSegments(u), "-"),
-			)
-		}
-
-		found := eromeAlbumLinks(root, &pageURL, seen)
-		albums = append(albums, found...)
-		// Nothing new on this page means there are no further pages.
-		if len(found) == 0 {
-			break
-		}
+			return eromeProfileNote(limited)
+		},
+		fetch: fetchAsAsked(e.client, headers),
+		read: func(root *html.Node, base, _ *url.URL) listingPage {
+			p := listingPage{title: util.FirstNonEmpty(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle)))}
+			for _, link := range eromeAlbumLinks(root, base, seen) {
+				p.links = append(p.links, listingLink{key: link, url: link})
+			}
+			if page < eromeMaxProfilePages && len(seen) < eromeMaxAlbums {
+				page++
+				next := eromeProfilePage(u, page)
+				p.next = &next
+			}
+			return p
+		},
+	})
+	if err != nil {
+		return nil, "", false, err
+	}
+	for _, link := range found {
+		albums = append(albums, link.url)
 	}
 	return albums, title, limited, nil
 }

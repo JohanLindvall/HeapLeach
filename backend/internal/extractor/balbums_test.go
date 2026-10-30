@@ -372,3 +372,45 @@ func TestBalbumsFollowsAsManyAlbumsAsConfigured(t *testing.T) {
 		t.Errorf("got %d files, note %q; want all 800 and nothing to admit", len(res.Files), res.Note)
 	}
 }
+
+// A search ends where its results do, with nothing to admit: at a page that
+// is not there, at one with nothing new on it, or at the last page the
+// search states, however short that page is.
+func TestBalbumsEndsWhereTheResultsDo(t *testing.T) {
+	const albumHost = "albums.example.test"
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
+	for _, tc := range []struct {
+		name  string
+		pages map[int]string
+		want  int
+		asked int
+	}{
+		{"missing page", map[int]string{
+			1: balbumsPageHTML(albumHost, 1, 3, "AAAA", "BBBB"),
+		}, 2, 2},
+		{"nothing new", map[int]string{
+			1: balbumsPageHTML(albumHost, 1, 3, "AAAA", "BBBB"),
+			2: balbumsPageHTML(albumHost, 2, 3, "AAAA"),
+			3: balbumsPageHTML(albumHost, 3, 3, "CCCC"),
+		}, 2, 2},
+		{"short last page", map[int]string{
+			1: balbumsPageHTML(albumHost, 1, 2, "AAAA", "BBBB"),
+			2: balbumsPageHTML(albumHost, 2, 2, "CCCC"),
+			3: balbumsPageHTML(albumHost, 3, 2, "DDDD"),
+		}, 3, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index, root, asked := balbumsIndex(t, stub, tc.pages)
+			res, err := balbumsExtract(t, index, root+"/?search=Driftwood")
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if len(res.Files) != tc.want || res.Note != "" || res.Title != "Driftwood" {
+				t.Errorf("got %d files, title %q, note %q; want %d and no note", len(res.Files), res.Title, res.Note, tc.want)
+			}
+			if got := asked(); len(got) != tc.asked {
+				t.Errorf("asked for %d pages, want %d: %v", len(got), tc.asked, got)
+			}
+		})
+	}
+}
