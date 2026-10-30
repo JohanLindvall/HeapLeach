@@ -349,7 +349,7 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 		var next []string
 		for _, category := range queue {
 			if visited++; visited > opts.maxSources() {
-				note = joinNotes(note, "partial — source limit")
+				note = joinNotes(note, sourceLimitNote)
 				break
 			}
 			batch, listNote, err := m.list(ctx, site, mediaWikiCategoryQuery(category), limit-len(files), listed)
@@ -529,7 +529,7 @@ func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Val
 	}
 	pages, note, err := walkPages(ctx, pageWalk[mediaWikiPage]{
 		key:   func(p mediaWikiPage) string { return p.Title },
-		limit: budget, limitNote: "partial — file limit",
+		limit: budget, limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, _ int) (pageOf[mediaWikiPage], error) {
 			resp, err := m.call(ctx, site.api, query)
 			if err != nil {

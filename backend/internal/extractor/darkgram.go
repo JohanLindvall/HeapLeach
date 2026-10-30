@@ -57,13 +57,11 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 		}
 		// A thumbnail is never a substitute for a missing original. Keep
 		// only fetchable URLs, resolving relatives after any page redirect.
-		u, err := page.Parse(strings.TrimSpace(ref))
-		if strings.TrimSpace(ref) == "" || err != nil || u.Hostname() == "" || u.User != nil ||
-			(u.Scheme != "https" && u.Scheme != "http") {
+		u := webLink(page, ref)
+		if u == nil {
 			unavailable++
 			continue
 		}
-		u.Fragment = ""
 		link := u.String()
 		key := item.Kind + "/" + cmp.Or(item.ID, link)
 		if seen[key] {
@@ -71,7 +69,7 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 		}
 		seen[key] = true
 		if len(res.Files) == opts.maxFiles() {
-			res.Note = "partial — file limit"
+			res.Note = fileLimitNote
 			break
 		}
 		// Use the original position so a missing item or a file cap never
@@ -107,8 +105,6 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("darkgram: album has no downloadable media")
 	}
-	if unavailable > 0 {
-		res.Note = joinNotes(res.Note, fmt.Sprintf("%d album items unavailable", unavailable))
-	}
+	res.Note = joinNotes(res.Note, countNote(unavailable, "album items unavailable"))
 	return res, nil
 }

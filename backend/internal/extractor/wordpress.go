@@ -85,9 +85,7 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 		return nil, noneRead("wordpress", len(sources), "posts", page.Redacted(), e.refusals, e.failed)
 	}
 	note = expansionNote(note, e, len(sources), "posts")
-	if e.partial > 0 {
-		note = joinNotes(note, fmt.Sprintf("%d posts have incomplete downloads", e.partial))
-	}
+	note = joinNotes(note, countNote(e.partial, "posts have incomplete downloads"))
 	return &Result{Title: title, Note: note, Files: e.files}, nil
 }
 
@@ -121,7 +119,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 	links, title, note, err := walkListing(ctx, client, page, listingWalk{
 		name: "wordpress", title: cmp.Or(util.NameFromURL(first.String()), "WordPress category"),
 		none: "category has no post permalinks", missing: "category page is missing",
-		limit: limit, limitNote: "partial — source limit",
+		limit: limit, limitNote: sourceLimitNote,
 		root: root, key: wordPressPageKey, anyRedirect: true,
 		fetch: func(ctx context.Context, next, _ *url.URL) (*html.Node, *url.URL, error) {
 			number++
@@ -172,10 +170,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 			return p
 		},
 	})
-	for _, link := range links {
-		sources = append(sources, link.url)
-	}
-	return sources, title, note, err
+	return listingURLs(links), title, note, err
 }
 
 func wordPressFetch(ctx context.Context, client *httpx.Client, page *url.URL) (*html.Node, *url.URL, error) {
@@ -297,16 +292,16 @@ func wordPressNext(root *html.Node) (string, bool) {
 	return attr(link, "href"), true
 }
 
+// wordPressLocalLink is ref as a web link on base's own site, other than a
+// bare "#..." anchor into the page itself.
 func wordPressLocalLink(base *url.URL, ref string) *url.URL {
-	if strings.TrimSpace(ref) == "" || strings.HasPrefix(strings.TrimSpace(ref), "#") {
+	if strings.HasPrefix(strings.TrimSpace(ref), "#") {
 		return nil
 	}
-	u, err := base.Parse(strings.TrimSpace(ref))
-	if err != nil || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || !strings.EqualFold(u.Host, base.Host) {
-		return nil
+	if u := webLink(base, ref); u != nil && strings.EqualFold(u.Host, base.Host) {
+		return u
 	}
-	u.Fragment = ""
-	return u
+	return nil
 }
 
 func wordPressPagingQuery(key string) bool {
@@ -399,12 +394,10 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	}
 	var notes []string
 	if len(sources) < found {
-		notes = append(notes, "partial — source limit")
+		notes = append(notes, sourceLimitNote)
 	}
 	notes = append(notes, resolvedNote(e.used, len(sources)-e.unrecognised, "links"))
-	if e.partial > 0 {
-		notes = append(notes, fmt.Sprintf("%d linked sources are incomplete", e.partial))
-	}
+	notes = append(notes, countNote(e.partial, "linked sources are incomplete"))
 	// A supported download link takes precedence over an embedded preview,
 	// just as it does on an ordinary page. Without one, use the same album
 	// and player parsers, scoped to this post rather than its sidebar/head.
@@ -435,7 +428,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	images = unique
 	room := opts.maxFiles() - len(e.files)
 	if e.full || len(images) > room {
-		notes = append(notes, "partial — file limit")
+		notes = append(notes, fileLimitNote)
 	}
 	for _, link := range images[:min(len(images), room)] {
 		e.files = append(e.files, File{Name: util.NameFromURL(link), URL: link, Size: -1, Headers: httpx.Referer(page.String())})
@@ -489,17 +482,11 @@ func wordPressMedia(ctx context.Context, client *httpx.Client, page *url.URL, co
 }
 
 func wordPressJPEGURL(base *url.URL, ref string) string {
-	if strings.TrimSpace(ref) == "" {
-		return ""
-	}
-	u, err := base.Parse(strings.TrimSpace(ref))
-	if err != nil || u.User != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return ""
-	}
-	switch strings.ToLower(path.Ext(u.Path)) {
-	case ".jpg", ".jpeg":
-		u.Fragment = ""
-		return u.String()
+	if u := webLink(base, ref); u != nil {
+		switch strings.ToLower(path.Ext(u.Path)) {
+		case ".jpg", ".jpeg":
+			return u.String()
+		}
 	}
 	return ""
 }

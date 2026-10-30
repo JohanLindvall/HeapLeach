@@ -283,7 +283,7 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([
 			p := listingPage{title: coomerFansTitle(cmp.Or(firstText(root, atom.H1), firstText(root, atomTitle)))}
 			for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
 				if link := resolveRef(u, attr(a, "href")); coomerFansIsPost(link) {
-					p.links = append(p.links, listingLink{key: link, url: link})
+					p.links = append(p.links, listingLink{url: link})
 				}
 			}
 			if next := coomerFansNextPage(root, u); next != "" {
@@ -295,11 +295,7 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([
 	if err != nil {
 		return nil, "", "", err
 	}
-	links := make([]string, 0, len(found))
-	for _, link := range found {
-		links = append(links, link.url)
-	}
-	return links, title, note, nil
+	return listingURLs(found), title, note, nil
 }
 
 // coomerFansNextPage follows the listing's own next link.

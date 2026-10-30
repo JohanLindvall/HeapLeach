@@ -478,7 +478,7 @@ func (h *Handoff) list(ctx context.Context, ytdlp, target string, limit int) (*R
 		return nil, fmt.Errorf("%s: %s lists no videos", h.site.name, target)
 	}
 	if len(entries) > limit {
-		res.Note = "partial — playlist limit reached"
+		res.Note = fileLimitNote
 	}
 	return res, nil
 }

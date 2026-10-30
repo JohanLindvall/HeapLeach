@@ -566,7 +566,7 @@ func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint stri
 					ids = append(ids, id)
 				}
 			}
-			return pageOf[string]{items: ids, next: true, end: len(page.Data) == 0 || (page.Total > 0 && start >= page.Total)}, nil
+			return pageOf[string]{items: ids, next: true, end: len(page.Data) == 0, total: page.Total}, nil
 		},
 	})
 }

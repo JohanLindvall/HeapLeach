@@ -483,7 +483,7 @@ func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget, opts O
 			}
 			return post.Num.String()
 		},
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		// Most matching posts may be text, so the cap counts attachments.
 		weigh: func(posts []foolFuukaPost) int { return len(a.files(posts, "")) },
 		fetch: func(ctx context.Context, n int) (pageOf[foolFuukaPost], error) {

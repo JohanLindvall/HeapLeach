@@ -112,15 +112,12 @@ func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sourc
 	section := util.PathSegments(first)
 	links, title, note, err := walkListing(ctx, v.client, first, listingWalk{
 		name: "voyeurking", title: section[1], none: "listing has no videos",
-		limit: limit, limitNote: "partial — source limit",
+		limit: limit, limitNote: sourceLimitNote,
 		read: func(root *html.Node, page, first *url.URL) listingPage {
 			return voyeurKingCards(root, page, first, section)
 		},
 	})
-	for _, link := range links {
-		sources = append(sources, link.url)
-	}
-	return sources, title, note, err
+	return listingURLs(links), title, note, err
 }
 
 // voyeurKingCards reads a listing page's <main>: its video links, and its
@@ -154,7 +151,7 @@ func voyeurKingCards(root *html.Node, page, first *url.URL, section []string) li
 		// queries and fragments do not make them different videos.
 		link.Path = strings.TrimRight(link.Path, "/")
 		link.RawPath, link.RawQuery = "", ""
-		p.links = append(p.links, listingLink{key: link.String(), url: link.String()})
+		p.links = append(p.links, listingLink{url: link.String()})
 	}
 	p.badNext = p.next == nil && invalid
 	return p

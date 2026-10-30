@@ -118,7 +118,7 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, noneRead("erome", len(albums), "albums", "profile "+u.Redacted(), expanded.refusals, expanded.failed)
 	}
 	if expanded.full {
-		note = joinNotes(note, "partial — file limit")
+		note = joinNotes(note, fileLimitNote)
 	}
 	return &Result{Title: title, Files: expanded.files, Note: note}, nil
 }
@@ -166,7 +166,7 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (al
 		read: func(root *html.Node, base, _ *url.URL) listingPage {
 			p := listingPage{title: cmp.Or(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle)))}
 			for _, link := range eromeAlbumLinks(root, base, seen) {
-				p.links = append(p.links, listingLink{key: link, url: link})
+				p.links = append(p.links, listingLink{url: link})
 			}
 			page++
 			next := eromeProfilePage(u, page)
@@ -177,10 +177,7 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (al
 	if err != nil {
 		return nil, "", "", err
 	}
-	for _, link := range found {
-		albums = append(albums, link.url)
-	}
-	return albums, title, note, nil
+	return listingURLs(found), title, note, nil
 }
 
 // eromeFolders names the folder each album's files are filed under.

@@ -203,7 +203,7 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 			}
 			next, invalid := filesterNextPage(root, page, n+1)
 			if invalid {
-				p.note = "partial — invalid next page"
+				p.note = invalidNextNote
 			}
 			// A first page without a usable next link is the whole folder,
 			// and an empty one is a folder of only subfolders, not a repeat.
@@ -211,7 +211,7 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 			if p.next && len(seenFiles) >= room {
 				// Files enough to fill the walk, and more pages: none of
 				// theirs could be taken, so the walk says the limit cut it.
-				p.next, p.note = false, "partial — file limit"
+				p.next, p.note = false, fileLimitNote
 			}
 			page = next
 			return p, nil

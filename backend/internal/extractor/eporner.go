@@ -346,7 +346,10 @@ type epornerVideo struct {
 
 // epornerProfile walks a profile tab for the videos it lists, up to the
 // listing cap. A walk the cap cut short says so; one that came back short
-// of the tab's own count otherwise says that.
+// of the tab's own count otherwise says that ("4 of 9"), for a listing that
+// stops early otherwise looks exactly like a complete one. It is a note
+// rather than part of the title, which names the folder, so a later
+// complete run files into the same one.
 func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) ([]listingLink, string, string, error) {
 	user, tab, _ := epornerProfileOf(util.PathSegments(u))
 	links, declared, note, err := epornerProfileVideos(ctx, client, u, user, tab, opts)
@@ -356,7 +359,7 @@ func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL, opts 
 	if len(links) == 0 {
 		return nil, "", "", fmt.Errorf("%s lists no videos under %s", user, tab)
 	}
-	return links, epornerProfileTitle(user, tab), cmp.Or(note, epornerProfileNote(len(links), declared)), nil
+	return links, epornerProfileTitle(user, tab), cmp.Or(note, cappedNote(len(links), declared, "")), nil
 }
 
 // epornerProfileVideos pages through a profile tab by number, collecting
@@ -383,10 +386,7 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 	links, _, note, err := walkListing(ctx, client, first, listingWalk{
 		name: "eporner", quiet: true, anyRedirect: true, root: root,
 		limit: limit, limitNote: limitNote,
-		fetch: func(ctx context.Context, next, _ *url.URL) (*html.Node, *url.URL, error) {
-			root, err := fetchPageRoot(ctx, client, next.String(), headers)
-			return root, next, err
-		},
+		fetch: fetchAsAsked(client, headers),
 		read: func(root *html.Node, at, _ *url.URL) listingPage {
 			found := epornerListing(root, at.String(), seen)
 			if len(found) == 0 {
@@ -394,7 +394,7 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 			}
 			var lp listingPage
 			for _, v := range found {
-				lp.links = append(lp.links, listingLink{key: v.Page, url: v.Page, title: v.Title})
+				lp.links = append(lp.links, listingLink{url: v.Page, title: v.Title})
 			}
 			page++
 			lp.next, _ = url.Parse(epornerProfilePage(u, user, tab, page))
@@ -502,12 +502,4 @@ func epornerDeclaredCount(root *html.Node, tab string) int {
 // epornerProfileTitle names the job after the profile and its tab.
 func epornerProfileTitle(user, tab string) string {
 	return user + " (" + strings.ReplaceAll(tab, "-", " ") + ")"
-}
-
-// epornerProfileNote says so when the walk came back short of what the tab
-// claims to hold, for the job's Note: a listing that stops early otherwise
-// looks exactly like a complete one. A note rather than part of the title,
-// which names the folder, so a later complete run files into the same one.
-func epornerProfileNote(got, declared int) string {
-	return partial(cappedNote(got, declared, ""))
 }

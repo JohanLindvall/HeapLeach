@@ -792,7 +792,7 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	// applies the cap a source at a time and counts what it cut.
 	if limit := opts.maxFiles(); submitted && len(res.Files) > limit {
 		res.Files = res.Files[:limit]
-		res.Note = joinNotes(res.Note, "partial — file limit")
+		res.Note = joinNotes(res.Note, fileLimitNote)
 	}
 	// The title names the job and, for a source expanded into folders, the
 	// folder too; see util.Unescape for why it may still carry entities.

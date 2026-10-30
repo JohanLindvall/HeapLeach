@@ -336,13 +336,19 @@ line in the saved queue.
   reads alike.** `joinNotes` is the one joiner: "; " between parts, empty
   parts dropped, a part the note already holds not repeated (a joined note's
   parts count one by one), and "partial — " said once, at the note's start —
-  "partial — invalid next page; file limit". The parts: `partial` marks one
+  "partial — invalid next page; file limit". The reasons a walk stops on
+  most are constants — `fileLimitNote`, `sourceLimitNote`, `invalidNextNote`,
+  `couldNotFetchNote`, and bare `fileLimit` and `sourceLimit` for a tree
+  walk's `note` — so they cannot drift apart. The parts: `partial` marks one
   as a cut, `cappedNote` says "N of M <unit>" (bare "N of M" with no unit),
-  `resolvedNote` "N of M <noun> resolved", `leftOutNote` "N left out…",
-  `refusedNote` counts refusals per reason ("3 left out: gone; 1 left out:
-  live", on `tally`), and `brokenNote` a walk that broke off. A hand-built
-  "partial — " + count, or a join of its own, is what these replace; a new
-  note uses them rather than a `Sprintf` that only nearly matches.
+  `resolvedNote` "N of M <noun> resolved", `countNote` "N <words>" in the
+  caller's words, `leftOutNote` "N left out…" on it, `refusedNote` counts
+  refusals per reason ("3 left out: gone; 1 left out: live", on `tally`),
+  and `brokenNote` a walk that broke off. An "N of M" is never prefixed with
+  "partial — ": the count already says the answer is short, and a cut it
+  stands beside carries its own "partial — " reason. A hand-built count, or
+  a join of its own, is what these replace; a new note uses them rather than
+  a `Sprintf` that only nearly matches.
 - **A slash in a title is not a path.** `SafeName` keeps only what follows the
   last separator, which is right for a name a server hands over (RFC 6266 says
   to strip a `Content-Disposition` name of its path) and wrong for a title:
@@ -421,7 +427,12 @@ line in the saved queue.
   and repeated-page checks on top of the engine. A new paged listing supplies
   only the reader for one page, which also names the next page for a listing
   paged by number, and sets `badNext` when the pager offers a next page that
-  cannot be followed ("partial — invalid next page"). Options cover the rest:
+  cannot be followed ("partial — invalid next page"). A `listingLink` is
+  told from its repeats by its URL unless it names a `key`, and
+  `listingURLs` turns the walk's links into the page URLs a caller expands.
+  `webLink` is the one check that a scraped href is a web link worth
+  following; a host's own rule (same site, a file extension) goes on top of
+  it rather than beside a copy of it. Options cover the rest:
   a first page the caller already read (`root`), a fetch of its own (`fetch`,
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
   (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook

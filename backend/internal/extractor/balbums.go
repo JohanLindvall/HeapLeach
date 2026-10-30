@@ -149,7 +149,7 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 			page++
 			var p listingPage
 			for _, link := range supportedSources(b.registry, balbumsLinks(root, first), b) {
-				p.links = append(p.links, listingLink{key: link, url: link})
+				p.links = append(p.links, listingLink{url: link})
 				seen[link] = true
 			}
 			switch {
@@ -168,9 +168,7 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 	if err != nil {
 		return nil, 0, err
 	}
-	for _, link := range links {
-		albums = append(albums, link.url)
-	}
+	albums = listingURLs(links)
 	if capped {
 		return albums[:limit], found, nil
 	}

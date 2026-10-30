@@ -26,8 +26,13 @@ func TestJoinNotes(t *testing.T) {
 			"partial — invalid posts; file limit; 2 left out: gone"},
 		{joinNotes("3 of 5 releases", "partial — file limit"), "3 of 5 releases; partial — file limit"},
 		{joinNotes("1 left out: gone", "11 left out: gone"), "1 left out: gone; 11 left out: gone"},
-		{partial(cappedNote(3, 5, "")), "partial — 3 of 5"},
-		{partial(cappedNote(5, 5, "posts")), ""},
+		{cappedNote(3, 5, ""), "3 of 5"},
+		// No stated total is nothing to be short of.
+		{cappedNote(3, 0, ""), ""},
+		{countNote(2, "album items unavailable"), "2 album items unavailable"},
+		{countNote(1, "posts have incomplete downloads"), "1 posts have incomplete downloads"},
+		{countNote(0, "album items unavailable"), ""},
+		{cappedNote(5, 5, "posts"), ""},
 		{resolvedNote(2, 3, "links"), "2 of 3 links resolved"},
 		{resolvedNote(3, 3, "links"), ""},
 	}

@@ -104,7 +104,7 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	// the walk is a quiet one.
 	files, note, err := walkPages(ctx, pageWalk[File]{
 		key:   func(f File) string { return f.URL },
-		limit: opts.maxFiles(), limitNote: "partial — file limit", quiet: true,
+		limit: opts.maxFiles(), limitNote: fileLimitNote, quiet: true,
 		fetch: func(ctx context.Context, n int) (pageOf[File], error) {
 			target := base + "/" + url.PathEscape(model) + "/"
 			if n > 0 {
