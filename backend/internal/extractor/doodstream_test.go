@@ -52,9 +52,9 @@ func TestDoodChallengeAtPageOrToken(t *testing.T) {
 					http.Redirect(w, r, srv.URL+r.URL.Path, http.StatusFound)
 				}))
 				defer alias.Close()
-				client := httpx.New("test", "en", 0, time.Second)
+				client := testClient()
 				defer client.CloseIdleConnections()
-				_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, alias.URL+"/e/synthetic"), Options{})
+				_, err := extract(t, NewDoodStream(client), alias.URL+"/e/synthetic", Options{})
 				challenge, ok := errors.AsType[*httpx.ChallengeError](err)
 				path := "/e/synthetic"
 				if stage == "token" {
@@ -98,7 +98,7 @@ func TestDoodChallengeNeedsABlockedPlayer(t *testing.T) {
 }
 
 func TestDoodRedirectKeepsTokensCookiesAndMediaOnTheCurrentHost(t *testing.T) {
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	defer client.CloseIdleConnections()
 	var current atomic.Int32
 	var tokenRequests atomic.Int32
@@ -147,7 +147,7 @@ func TestDoodRedirectKeepsTokensCookiesAndMediaOnTheCurrentHost(t *testing.T) {
 		http.Redirect(w, r, pages[current.Load()], http.StatusFound)
 	}))
 	defer alias.Close()
-	res, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, alias.URL+"/d/synthetic"), Options{})
+	res, err := extract(t, NewDoodStream(client), alias.URL+"/d/synthetic", Options{})
 	if err != nil || len(res.Files) != 1 || res.Files[0].Resolve == nil {
 		t.Fatalf("result=%+v err=%v", res, err)
 	}
@@ -171,9 +171,7 @@ func TestDoodRedirectKeepsTokensCookiesAndMediaOnTheCurrentHost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for key, value := range target.Headers {
-			req.Header.Set(key, value)
-		}
+		target.Headers.Apply(req)
 		req.Header.Set(httpx.HeaderRange, "bytes=0-7")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -208,9 +206,9 @@ func TestDoodRefusalIsTheAddressesNotTheVideos(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
-			client := httpx.New("test", "en", 0, time.Second)
+			client := testClient()
 			defer client.CloseIdleConnections()
-			_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, srv.URL+"/e/synthetic"), Options{})
+			_, err := extract(t, NewDoodStream(client), srv.URL+"/e/synthetic", Options{})
 			_, refused := errors.AsType[*RefusedError](err)
 			if err == nil || refused != tc.refused {
 				t.Fatalf("refused=%v, want %v: %v", refused, tc.refused, err)
@@ -228,8 +226,8 @@ func TestDoodSaysWhenTheHostHasRemovedTheVideo(t *testing.T) {
 		fmt.Fprint(w, `<!doctype html><html><head><title>Video not found</title></head><body><div class="error">Not found</div></body></html>`)
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, time.Second)
-	_, err := NewDoodStream(client).Extract(context.Background(), mustParse(t, srv.URL+"/e/synthetic"), Options{})
+	client := testClient()
+	_, err := extract(t, NewDoodStream(client), srv.URL+"/e/synthetic", Options{})
 	if err == nil || !strings.Contains(err.Error(), "video not found") || strings.Contains(err.Error(), "layout") {
 		t.Fatalf("error = %v; want it to say the host removed the video", err)
 	}

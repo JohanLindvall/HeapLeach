@@ -10,10 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // The fixtures below are hand-written in the shape the metadata API answers
@@ -561,7 +559,7 @@ func TestArchiveRecognisesAFileByItsMetadata(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	a := NewArchiveOrg(nil, httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	a := NewArchiveOrg(nil, testClient())
 	media := fixturePage(t, srv.URL+"/download/a-film/A%20Film.mp4", http.StatusOK, "video/mp4", "")
 	for range 2 {
 		if !a.Recognise(t.Context(), media) {

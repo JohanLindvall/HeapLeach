@@ -12,8 +12,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // A category page in the theme's shape: a heading naming the category and
@@ -57,10 +55,7 @@ const kvsCategoryLastPage = `<div id="list_videos_common_videos_list">
 // names, the parameters it carries, each name of a "a+b" key given the
 // value, on top of whatever query the listing already had.
 func TestKVSAsyncNextSendsWhatTheControlCarries(t *testing.T) {
-	category, err := parseHTML(kvsCategoryListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	category := mustParseDoc(t, kvsCategoryListing)
 	got := kvsAsyncNext(category, "https://tube.example.test/categories/some-category/?foo=bar")
 	q := queryOf(t, got)
 	for key, want := range map[string]string{
@@ -75,10 +70,7 @@ func TestKVSAsyncNextSendsWhatTheControlCarries(t *testing.T) {
 		t.Errorf("category: sent from_videos, which this block ignores: %s", got)
 	}
 
-	search, err := parseHTML(kvsScriptedListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	search := mustParseDoc(t, kvsScriptedListing)
 	got = kvsAsyncNext(search, "https://tube.example.test/search/some-query/")
 	q = queryOf(t, got)
 	if q.Get("from_videos") != "2" || q.Get("from_albums") != "2" || q.Get("q") != "some-query" {
@@ -90,10 +82,7 @@ func TestKVSAsyncNextSendsWhatTheControlCarries(t *testing.T) {
 
 	// A control with a real href and no parameters gives nothing here; it is
 	// followed as a page instead.
-	member, err := parseHTML(kvsMemberListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	member := mustParseDoc(t, kvsMemberListing)
 	if got := kvsAsyncNext(member, "https://tube.example.test/members/4242/public_videos/"); got != "" {
 		t.Errorf("a control with no parameters built %q, want nothing", got)
 	}
@@ -143,10 +132,7 @@ func TestKVSListingTitle(t *testing.T) {
 		{"", "https://tube.example.test/channels/some-channel/", "some-channel"},
 	}
 	for _, tc := range cases {
-		root, err := parseHTML(`<html><body><h1>` + tc.heading + `</h1></body></html>`)
-		if err != nil {
-			t.Fatal(err)
-		}
+		root := mustParseDoc(t, `<html><body><h1>`+tc.heading+`</h1></body></html>`)
 		if got := kvsListingTitle(root, tc.listing); got != tc.want {
 			t.Errorf("title of %q at %s = %q, want %q", tc.heading, tc.listing, got, tc.want)
 		}
@@ -160,10 +146,7 @@ func TestKVSHasListing(t *testing.T) {
 		`<html><body><div id="list_videos_latest_videos_list"></div></body></html>`: true,
 		`<html><body><h1>Terms of service</h1><p>...</p></body></html>`:             false,
 	} {
-		root, err := parseHTML(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
+		root := mustParseDoc(t, doc)
 		if got := kvsHasListing(root); got != want {
 			t.Errorf("kvsHasListing = %v, want %v for %.60q", got, want, doc)
 		}
@@ -230,16 +213,13 @@ func TestKVSBrowse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	k := NewKVS(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	k := NewKVS(testClient())
 	extract := func(t *testing.T, path string) (*Result, error) {
 		t.Helper()
 		mu.Lock()
 		asked = nil
 		mu.Unlock()
-		u, err := ParseURL(srv.URL + path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, srv.URL+path)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return k.Extract(ctx, u, Options{})

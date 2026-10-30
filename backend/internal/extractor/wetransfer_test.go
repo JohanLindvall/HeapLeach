@@ -11,7 +11,6 @@ import (
 	"path"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -51,7 +50,7 @@ func wetransferServer(t *testing.T, handle func(id string, body map[string]any) 
 	t.Cleanup(srv.Close)
 
 	return &WeTransfer{
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
+		client: testClient(),
 		api:    srv.URL,
 	}
 }
@@ -109,7 +108,7 @@ func TestWeTransferRecognise(t *testing.T) {
 	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/rcpt3333/hash2222", app), true)
 	// A short link is recognised where its redirect lands.
 	short := htmlPage(t, "https://short.example.test/t-abcdef1234", app)
-	short.Final = mustURL(t, "https://transfer.example.test/downloads/aaaa1111/hash2222")
+	short.Final = mustParse(t, "https://transfer.example.test/downloads/aaaa1111/hash2222")
 	expectRecognised(t, w, short, true)
 	// The form and the name, without the page data.
 	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/hash2222",
@@ -363,7 +362,7 @@ func TestWeTransferFollowTakesTheRedirectDestination(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &WeTransfer{client: httpx.New("test-agent", "en-US", 0, 5*time.Second), api: srv.URL}
+	w := &WeTransfer{client: testClient(), api: srv.URL}
 	short, err := url.Parse(srv.URL + "/t-abcdef1234")
 	if err != nil {
 		t.Fatal(err)
@@ -395,7 +394,7 @@ func TestWeTransferFollowLandsOnAnErrorPageForADeadCode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &WeTransfer{client: httpx.New("test-agent", "en-US", 0, 5*time.Second), api: srv.URL}
+	w := &WeTransfer{client: testClient(), api: srv.URL}
 	short, _ := url.Parse(srv.URL + "/t-0000000000")
 
 	landed, err := w.follow(context.Background(), short)

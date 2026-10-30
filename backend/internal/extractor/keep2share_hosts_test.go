@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -35,7 +36,7 @@ func TestKeep2ShareSecondHostKeepsItsAPIAndRoute(t *testing.T) {
 	})
 	u, _ := url.Parse("https://files.example.test/file/test-file")
 	res, err := k.ex.Extract(keep2SharePageContext(t, u, k.label), u, Options{})
-	if err != nil || k.ex.Name() != "keep2share" || len(res.Files) != 1 || *res.Files[0].Pace != (Pace{Files: 1, Streams: 1, Group: "keep2share", PerRoute: true}) {
+	if err != nil || k.ex.Name() != "keep2share" || len(res.Files) != 1 || *res.Files[0].Pace != (Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}) {
 		t.Fatalf("metadata and pacing: result=%+v error=%v", res, err)
 	}
 	if calls.Load() != 0 {

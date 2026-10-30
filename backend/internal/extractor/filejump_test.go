@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -33,7 +32,7 @@ func TestFileJumpKeepsStableDownloadEndpointAndRoundedSize(t *testing.T) {
 		<a class="btn" href="/s/test-share/download">Download</a>`)
 	}))
 	defer srv.Close()
-	f := NewFileJump(httpx.New("test-agent", "en-US", 0, time.Second))
+	f := NewFileJump(testClient())
 	for _, suffix := range []string{"", "/", "/download", "/content"} {
 		res := extractOK(t, f, srv.URL+"/s/test-share"+suffix+"?access=download#preview", Options{})
 		if res.Title != "First & Second.mp4" || len(res.Files) != 1 {
@@ -56,7 +55,7 @@ func TestFileJumpRejectsUnavailableDownloads(t *testing.T) {
 		`<a href="https://unrelated.example.test/s/test-share/download">Download</a>`,
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, doc) }))
-		f := NewFileJump(httpx.New("test-agent", "en-US", 0, time.Second))
+		f := NewFileJump(testClient())
 		u, _ := url.Parse(srv.URL + "/s/test-share")
 		_, err := f.Extract(context.Background(), u, Options{})
 		srv.Close()
@@ -83,7 +82,7 @@ func TestPlainPageFindsRegisteredFileJumpShares(t *testing.T) {
 		fmt.Fprintf(w, `<a href="%s/s/test-share?access=download">FileJump share</a>`, files.URL)
 	}))
 	defer page.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
+	reg := NewRegistry(&config.Config{}, testClient())
 	res, _, err := reg.Extract(context.Background(), strings.Replace(page.URL, "127.0.0.1", "localhost", 1)+"/post.html", Options{})
 	if err != nil {
 		t.Fatal(err)

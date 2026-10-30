@@ -327,10 +327,7 @@ func TestZDFPickFallsBackToThePlaylist(t *testing.T) {
 // TestZDFMasterPlaylistIsSelfContained is the ordinary case, and the reason
 // the playlist fallback is worth having at all.
 func TestZDFMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://vod.example.test/i/mp4/none/a.csmil/master.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://vod.example.test/i/mp4/none/a.csmil/master.m3u8")
 
 	variants := parseMasterPlaylist(zdfMasterPlaylist, base)
 	if len(variants) != 2 {

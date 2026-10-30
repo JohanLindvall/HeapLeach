@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -44,7 +43,7 @@ func TestTurboExtractSignsAndDefersResolution(t *testing.T) {
 			`"original_filename":"a clip.mp4","filename":"abc123.mp4"}`
 	})
 
-	turbo := NewTurbo(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	turbo := NewTurbo(testClient())
 	u, _ := ParseURL(srv.URL + "/e/abc123")
 	res, err := turbo.Extract(context.Background(), u, Options{})
 	if err != nil {
@@ -80,7 +79,7 @@ func TestTurboExtractReportsARefusal(t *testing.T) {
 		return http.StatusOK, `{"success":false,"message":"file deleted"}`
 	})
 
-	turbo := NewTurbo(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	turbo := NewTurbo(testClient())
 	u, _ := ParseURL(srv.URL + "/d/gone99")
 	_, err := turbo.Extract(context.Background(), u, Options{})
 	if err == nil || !strings.Contains(err.Error(), "file deleted") {

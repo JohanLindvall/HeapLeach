@@ -9,9 +9,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestFilesterSignsAtDownloadTime(t *testing.T) {
@@ -38,7 +35,7 @@ func TestFilesterSignsAtDownloadTime(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := NewFilester(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFilester(testClient())
 	u, _ := url.Parse(srv.URL + "/d/AbC123x")
 	res, err := f.Extract(context.Background(), u, Options{})
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -344,7 +343,7 @@ func TestRumbleRecognisedByItsOEmbed(t *testing.T) {
 		_, _ = w.Write([]byte(`{"type":"video","provider_name":"Rumble.com","html":"<iframe></iframe>"}`))
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, 5*time.Second)
+	client := testClient()
 	var rumble *Handoff
 	for _, e := range NewHandoffs(client) {
 		if e.Name() == "rumble" {

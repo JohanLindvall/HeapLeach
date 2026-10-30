@@ -11,14 +11,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func testBooru(t *testing.T) *Booru {
 	t.Helper()
-	return &Booru{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return &Booru{client: testClient()}
 }
 
 // ------------------------------------------------------------- szurubooru

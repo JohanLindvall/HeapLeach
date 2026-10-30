@@ -185,7 +185,7 @@ func TestPageCacheFetchesAPageOnce(t *testing.T) {
 		_, _ = w.Write([]byte("<html><title>Page</title></html>"))
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, 5*time.Second)
+	client := testClient()
 	u, _ := url.Parse(srv.URL + "/a")
 	var cache pageCache
 	var wg sync.WaitGroup
@@ -219,7 +219,7 @@ func TestPageCacheKeepsNoFailure(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, 5*time.Second)
+	client := testClient()
 	u, _ := url.Parse(srv.URL)
 	var cache pageCache
 	if p := cache.get(context.Background(), client, u); p.Err == nil {

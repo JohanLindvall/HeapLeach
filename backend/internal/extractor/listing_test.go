@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -220,7 +219,7 @@ func TestWalkListing(t *testing.T) {
 					return ""
 				}
 			}
-			links, title, note, err := walkListing(ctx, httpx.New("test", "en", 0, time.Second), mustParse(t, srv.URL+"/list"), walk)
+			links, title, note, err := walkListing(ctx, testClient(), mustParse(t, srv.URL+"/list"), walk)
 			if tc.failed != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.failed) {
 					t.Fatalf("err = %v, want %q", err, tc.failed)
@@ -356,7 +355,7 @@ func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
 		fmt.Fprint(w, `<div id="list"><a href="/item/b">b</a></div><a rel="next" href="/list?utm_source=x">Next</a>`)
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	root := mustParseDoc(t, `<h1>Owned</h1><div id="list"><a href="/item/a">a</a></div><a rel="next" href="/list?page=2">Next</a>`)
 	key := func(u *url.URL) string {
 		k := *u

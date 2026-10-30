@@ -36,10 +36,7 @@ func TestVimeoVideoID(t *testing.T) {
 		{raw: "https://vimeo.com/"},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		id, hash := vimeoVideoID(u)
 		if id != tc.wantID || hash != tc.wantHash {
 			t.Errorf("vimeoVideoID(%s) = %q, %q; want %q, %q", tc.raw, id, hash, tc.wantID, tc.wantHash)

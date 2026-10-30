@@ -62,14 +62,14 @@ func TestEmloadRefreshesTokensCookiesAndRedirectedReferer(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	client := testClient()
 	res := extractOK(t, NewEmload(client), srv.URL+"/file/test-id#ignored", Options{})
 	if res.Title != "test-id" || len(res.Files) != 1 || pages.Load() != 0 {
 		t.Fatalf("discovery fetched a page before leasing a route: %+v pages=%d", res, pages.Load())
 	}
 	f := res.Files[0]
 	if f.URL != "" || f.Resolve == nil || f.External != "" || f.Name != res.Title || f.Size != -1 || f.SizeApprox ||
-		f.Pace == nil || f.Pace.Group != "emload" || f.Pace.Files != 1 || f.Pace.Streams != 1 || !f.Pace.PerRoute || transfers.Load() != 0 {
+		f.Pace == nil || f.Pace.Group != config.GroupEmload || f.Pace.Files != 1 || f.Pace.Streams != 1 || !f.Pace.PerRoute || transfers.Load() != 0 {
 		t.Fatalf("metadata, deferred resolution or pacing: %+v", f)
 	}
 	for range 2 {
@@ -81,9 +81,7 @@ func TestEmloadRefreshesTokensCookiesAndRedirectedReferer(t *testing.T) {
 			t.Fatalf("rounded size became exact or filename changed: %+v", target)
 		}
 		req, _ := client.NewRequest(context.Background(), http.MethodGet, target.URL, nil)
-		for k, v := range target.Headers {
-			req.Header.Set(k, v)
-		}
+		target.Headers.Apply(req)
 		req.Header.Set(httpx.HeaderRange, "bytes=0-1023")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -130,7 +128,7 @@ func TestEmloadRejectsRestrictedAndMalformedPages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, tc.doc) }))
 			defer srv.Close()
-			res := extractOK(t, NewEmload(httpx.New("test-agent", "en-US", 0, time.Second)), srv.URL+"/v2/file/test-id/First.mp4", Options{})
+			res := extractOK(t, NewEmload(testClient()), srv.URL+"/v2/file/test-id/First.mp4", Options{})
 			target, err := res.Files[0].Resolve(context.Background())
 			if err == nil || target != nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("target=%+v error=%v; want %q", target, err, tc.want)
@@ -155,7 +153,7 @@ func TestEmloadRechecksAvailabilityBeforeTransfer(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	res := extractOK(t, NewEmload(httpx.New("test-agent", "en-US", 0, time.Second)), srv.URL+"/v2/file/test-id", Options{})
+	res := extractOK(t, NewEmload(testClient()), srv.URL+"/v2/file/test-id", Options{})
 	if _, err := res.Files[0].Resolve(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +174,7 @@ func TestEmloadDailyLimitWaitsWithoutHoldingAWorker(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	res := extractOK(t, NewEmload(httpx.New("test-agent", "en-US", 0, time.Second)), srv.URL+"/v2/file/test-id/First.mp4", Options{})
+	res := extractOK(t, NewEmload(testClient()), srv.URL+"/v2/file/test-id/First.mp4", Options{})
 	if len(res.Files) != 1 || res.Files[0].Name != "First.mp4" || res.Files[0].Size != -1 || res.Files[0].SizeApprox {
 		t.Fatalf("limited file was not queued with its metadata: %+v", res)
 	}
@@ -204,7 +202,7 @@ func TestPlainPageFindsRegisteredEmloadShare(t *testing.T) {
 		fmt.Fprintf(w, `<a href="%s/v2/file/test-id/First.mp4">Shared file</a>`, files.URL)
 	}))
 	defer page.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
+	reg := NewRegistry(&config.Config{}, testClient())
 	res, _, err := reg.Extract(context.Background(), strings.Replace(page.URL, "127.0.0.1", "localhost", 1)+"/post.html", Options{})
 	if err != nil {
 		t.Fatal(err)

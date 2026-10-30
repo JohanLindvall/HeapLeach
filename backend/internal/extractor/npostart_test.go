@@ -168,10 +168,7 @@ XX_000000012_v1-audio=128000.m3u8
 // a finished download, and this host would belong on the external
 // downloader instead.
 func TestNPOMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/token/vod/npo/usp/npoplus/hls_unencrypted/XX_000000012/XX_000000012_v1.ism/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/token/vod/npo/usp/npoplus/hls_unencrypted/XX_000000012/XX_000000012_v1.ism/playlist.m3u8")
 
 	variants := parseMasterPlaylist(npoMasterPlaylist, base)
 	if len(variants) != 4 {
@@ -400,10 +397,7 @@ func TestNPORouteReadsEveryURLShape(t *testing.T) {
 		"https://npo.nl/start/afspelen":                    {},
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := npoRoute(u); got != want {
 			t.Errorf("npoRoute(%s) = %+v, want %+v", raw, got, want)
 		}
@@ -415,10 +409,7 @@ func TestNPORouteReadsEveryURLShape(t *testing.T) {
 // cannot tell them apart and does not try. npoPick settles it against the
 // season list, which is fetched anyway.
 func TestNPORouteTreatsATabAsASeasonCandidate(t *testing.T) {
-	u, err := ParseURL("https://npo.nl/start/serie/een-serie/fragmenten")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://npo.nl/start/serie/een-serie/fragmenten")
 	target := npoRoute(u)
 	if target.series != "een-serie" || target.season != "fragmenten" {
 		t.Fatalf("npoRoute = %+v", target)

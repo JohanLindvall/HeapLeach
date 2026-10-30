@@ -185,10 +185,7 @@ const vrtMediaDocument = `{
 // on: VRT's variants carry their own audio, so concatenating one yields
 // something that plays.
 func TestVRTMaxMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/vod/show.ism/.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/vod/show.ism/.m3u8")
 
 	variants := parseMasterPlaylist(vrtMasterPlaylist, base)
 	if len(variants) != 3 {
@@ -224,10 +221,7 @@ func TestVRTMaxMasterPlaylistIsSelfContained(t *testing.T) {
 // without sound. The extractor joins the audio renditions to it, and refuses
 // it only when there are none to join.
 func TestVRTMaxKnowsAVariantCarryingNoAudio(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/vod/show.ism/.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/vod/show.ism/.m3u8")
 
 	variants := parseMasterPlaylist(vrtDemuxedPlaylist, base)
 	if len(variants) != 1 {
@@ -489,10 +483,7 @@ func TestVRTMaxPageID(t *testing.T) {
 		"https://sporza.be/nl/matches/":                    "",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := vrtPageID(u); got != want {
 			t.Errorf("vrtPageID(%s) = %q, want %q", raw, got, want)
 		}

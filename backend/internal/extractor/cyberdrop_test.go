@@ -67,10 +67,7 @@ func TestCyberdropAlbumListsEveryFileOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(cyberdropAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, cyberdropAlbumPage)
 
 	res, err := NewCyberdrop(nil).albumFrom(root, u)
 	if err != nil {
@@ -108,10 +105,7 @@ func TestCyberdropAlbumListsEveryFileOnce(t *testing.T) {
 // one, or puts something else between the two, must not shift the columns.
 func TestCyberdropAlbumSizesStayWithTheirOwnFile(t *testing.T) {
 	u, _ := url.Parse("https://cyberdrop.cr/a/abcd1234")
-	root, err := parseHTML(cyberdropAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, cyberdropAlbumPage)
 
 	entries := cyberdropEntries(root, u)
 	want := []cyberdropEntry{

@@ -72,9 +72,7 @@ func (s *filesterSession) page(ctx context.Context, u *url.URL) (*html.Node, err
 		return nil, err
 	}
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeForm)
-	for key, value := range httpx.RefererOrigin(final.String(), util.Origin(final)) {
-		req.Header.Set(key, value)
-	}
+	httpx.RefererOrigin(final.String(), util.Origin(final)).Apply(req)
 	body, err := s.f.client.Bytes(req)
 	if err != nil {
 		return nil, err

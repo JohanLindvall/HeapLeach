@@ -96,10 +96,7 @@ func TestKVSMemberPathRejectsEverythingElse(t *testing.T) {
 // The listing is full of links that are not videos, and one that is a video
 // on a different site entirely. Only the tiles count.
 func TestKVSListingVideosIgnoresTheFurniture(t *testing.T) {
-	root, err := parseHTML(kvsMemberListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, kvsMemberListing)
 	got := kvsListingVideos(root, "https://tube.example.test/members/4242/public_videos/")
 
 	want := []string{
@@ -118,10 +115,7 @@ func TestKVSListingVideosIgnoresTheFurniture(t *testing.T) {
 }
 
 func TestKVSMemberTitleIsTheMemberNotTheSection(t *testing.T) {
-	root, err := parseHTML(kvsMemberListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, kvsMemberListing)
 	// "Someone's Public Videos" names a section as much as a person, and it
 	// is the person a folder should be called after.
 	if got := kvsMemberTitle(root); got != "Someone" {
@@ -131,10 +125,7 @@ func TestKVSMemberTitleIsTheMemberNotTheSection(t *testing.T) {
 
 func TestKVSMemberTitleFallsBackToTheHeading(t *testing.T) {
 	doc := `<html><head><title>A Tube</title></head><body><h2>Latest Videos</h2></body></html>`
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, doc)
 	if got := kvsMemberTitle(root); got != "Latest Videos" {
 		t.Errorf("title = %q, want the heading as it stands", got)
 	}
@@ -145,10 +136,7 @@ func TestKVSMemberTitleFallsBackToTheHeading(t *testing.T) {
 func TestKVSNextPageFollowsThePaginationControl(t *testing.T) {
 	const base = "https://tube.example.test/members/4242/public_videos/"
 
-	root, err := parseHTML(kvsMemberListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, kvsMemberListing)
 	want := "https://tube.example.test/members/4242/public_videos/2/"
 	if got := kvsNextPage(root, base); got != want {
 		t.Errorf("next page = %q, want %q", got, want)
@@ -157,10 +145,7 @@ func TestKVSNextPageFollowsThePaginationControl(t *testing.T) {
 	// The last page carries a pagination list but no next control, and that
 	// absence is the whole stop condition — a walk that missed it would ask
 	// for a page that does not exist.
-	last, err := parseHTML(kvsMemberLastPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	last := mustParseDoc(t, kvsMemberLastPage)
 	if got := kvsNextPage(last, base); got != "" {
 		t.Errorf("next page on the last page = %q, want none", got)
 	}
@@ -235,10 +220,7 @@ func TestKVSListingBlock(t *testing.T) {
 	if got, want := kvsListingBlock(root), "list_videos_uploaded_videos"; got != want {
 		t.Errorf("kvsListingBlock = %q, want %q", got, want)
 	}
-	bare, err := parseHTML(`<html><body><div class="list"></div></body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bare := mustParseDoc(t, `<html><body><div class="list"></div></body></html>`)
 	if got := kvsListingBlock(bare); got != "" {
 		t.Errorf("kvsListingBlock on a page with no block = %q, want empty", got)
 	}

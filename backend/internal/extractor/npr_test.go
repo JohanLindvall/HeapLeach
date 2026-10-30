@@ -76,10 +76,7 @@ const nprWithheldPage = `<!doctype html><html><head>
 
 func nprTestURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return u
 }
 
@@ -87,10 +84,7 @@ func nprTestURL(t *testing.T, raw string) *url.URL {
 // block for every control it draws for the same audio, and each repeat would
 // otherwise be a second copy of the same download.
 func TestNPRPageListsEveryPieceOfAudioOnce(t *testing.T) {
-	root, err := parseHTML(nprListingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, nprListingPage)
 
 	entries := nprAudioFrom(root)
 	if len(entries) != 8 {
@@ -119,10 +113,7 @@ func TestNPRPageListsEveryPieceOfAudioOnce(t *testing.T) {
 // strings with unencoded ampersands, and half of what follows one reads as
 // the opening of a character reference.
 func TestNPRAudioURLSurvivesTheParser(t *testing.T) {
-	root, err := parseHTML(nprListingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, nprListingPage)
 
 	entries := nprAudioFrom(root)
 	const want = "https://ondemand.npr.org/anon.npr-mp3/npr/example/00000000_ex_one.mp3" +
@@ -389,10 +380,7 @@ func TestNPRPageTitle(t *testing.T) {
 		`<html><head></head><body></body></html>`:                                              "",
 	}
 	for doc, want := range tests {
-		root, err := parseHTML(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
+		root := mustParseDoc(t, doc)
 		if got := nprPageTitle(root); got != want {
 			t.Errorf("nprPageTitle = %q, want %q", got, want)
 		}

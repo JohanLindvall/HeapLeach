@@ -102,7 +102,7 @@ func bandzoogleServer(t *testing.T, body string) *httptest.Server {
 }
 
 func TestBandzoogleReadsEveryTrackOnce(t *testing.T) {
-	base := mustURL(t, "https://aband.example.test/")
+	base := mustParse(t, "https://aband.example.test/")
 	root := mustParseDoc(t, bandzooglePage)
 
 	files, artist := bandzoogleTracks(root, base)
@@ -218,7 +218,7 @@ func TestBandzoogleKeepsOutOfTheWay(t *testing.T) {
 			_, _ = w.Write([]byte(bandzooglePage))
 		}))
 		defer server.Close()
-		reg := NewRegistry(cfg, httpx.New("test/1.0", "en", 0, 10*time.Second))
+		reg := NewRegistry(cfg, testClient())
 
 		if _, ex, _ := reg.Extract(context.Background(), server.URL+"/files/archive.zip", Options{}); ex == nil || ex.Name() == "bandzoogle" {
 			t.Errorf("a file link went to %v", ex)
@@ -233,7 +233,7 @@ func TestBandzoogleKeepsOutOfTheWay(t *testing.T) {
 			http.Error(w, "gone", http.StatusNotFound)
 		}))
 		defer server.Close()
-		reg := NewRegistry(cfg, httpx.New("test/1.0", "en", 0, 10*time.Second))
+		reg := NewRegistry(cfg, testClient())
 
 		// Not having managed to look is not the same as having looked and
 		// recognised it: this platform's name must not go on somebody
@@ -248,7 +248,7 @@ func TestBandzoogleKeepsOutOfTheWay(t *testing.T) {
 		// fallback, which would save the HTML and call it a download.
 		server := bandzoogleServer(t, `<html><body>
 			<a data-zoogle-track="true" href="#">no destination</a></body></html>`)
-		reg := NewRegistry(cfg, httpx.New("test/1.0", "en", 0, 10*time.Second))
+		reg := NewRegistry(cfg, testClient())
 
 		res, ex, err := reg.Extract(context.Background(), server.URL+"/", Options{})
 		if res != nil {
@@ -320,7 +320,7 @@ func TestBandzoogleNumber(t *testing.T) {
 // what this page does, and what the destination directory showed when it
 // was not done: an "01" from each album sitting side by side.
 func TestBandzoogleFoldersTracksByAlbum(t *testing.T) {
-	base := mustURL(t, "https://aband.example.test/")
+	base := mustParse(t, "https://aband.example.test/")
 	root := mustParseDoc(t, bandzooglePage)
 	files, _ := bandzoogleTracks(root, base)
 

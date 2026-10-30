@@ -71,7 +71,7 @@ func TestDoodReloadRefreshesThePageSessionAndToken(t *testing.T) {
 			}))
 			defer srv.Close()
 			origin = srv.URL
-			client := httpx.New("test", "en", 0, time.Second)
+			client := testClient()
 			defer client.CloseIdleConnections()
 			ctx := context.Background()
 			var notes []string
@@ -102,9 +102,7 @@ func TestDoodReloadRefreshesThePageSessionAndToken(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for name, value := range target.Headers {
-					req.Header.Set(name, value)
-				}
+				target.Headers.Apply(req)
 				req.Header.Set(httpx.HeaderRange, "bytes=0-8")
 				resp, err := client.DoOnce(req)
 				if err != nil {
@@ -162,7 +160,7 @@ func TestDoodReloadStopsAndPreservesOtherErrors(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			client := httpx.New("test", "en", 0, time.Second)
+			client := testClient()
 			defer client.CloseIdleConnections()
 			res, err := NewDoodStream(client).Extract(ctx, mustParse(t, srv.URL+"/e/synthetic"), Options{})
 			if res != nil || err == nil {

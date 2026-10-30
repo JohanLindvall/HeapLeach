@@ -276,10 +276,7 @@ func streamableServer(t *testing.T, status int, body string) (*Streamable, *atom
 // file already on disk be skipped before a connection is opened.
 func TestStreamableExtractDefersTheLinkButNotTheSize(t *testing.T) {
 	s, hits := streamableServer(t, http.StatusOK, streamableReadyDoc)
-	u, err := ParseURL("https://streamable.com/abcd12")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://streamable.com/abcd12")
 
 	res, err := s.Extract(context.Background(), u, Options{})
 	if err != nil {
@@ -328,11 +325,8 @@ func TestStreamableExtractDefersTheLinkButNotTheSize(t *testing.T) {
 // error would name a JSON decode failure at an endpoint the user never typed.
 func TestStreamableExtractReportsAMissingVideoPlainly(t *testing.T) {
 	s, _ := streamableServer(t, http.StatusNotFound, "")
-	u, err := ParseURL("https://streamable.com/abcd12")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://streamable.com/abcd12")
+	_, err := s.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a missing video extracted successfully")
 	}
@@ -352,10 +346,7 @@ func TestStreamableID(t *testing.T) {
 		"https://streamable.com/":              "",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := streamableID(u); got != want {
 			t.Errorf("streamableID(%s) = %q, want %q", raw, got, want)
 		}

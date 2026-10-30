@@ -13,14 +13,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func noodleTestClient(t *testing.T) *httpx.Client {
 	t.Helper()
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	t.Cleanup(client.CloseIdleConnections)
 	return client
 }
@@ -28,7 +27,7 @@ func noodleTestClient(t *testing.T) *httpx.Client {
 func TestNoodleMagazineRouting(t *testing.T) {
 	n := NewPlayer(nil, &noodlePlayer)
 	for _, path := range []string{"/", "/video/", "/watch/", "/watch/not-an-id", "/other/search"} {
-		if _, err := n.Extract(context.Background(), mustParse(t, "https://example.test"+path), Options{}); err == nil {
+		if _, err := extract(t, n, "https://example.test"+path, Options{}); err == nil {
 			t.Errorf("accepted unsupported path %s", path)
 		}
 	}
@@ -56,10 +55,7 @@ func TestNoodleMagazineRefreshesBestSourceAndFinalReferer(t *testing.T) {
 	}))
 	defer srv.Close()
 	n := NewPlayer(noodleTestClient(t), &noodlePlayer)
-	res, err := n.Extract(context.Background(), mustParse(t, srv.URL+"/watch/-1_1"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, n, srv.URL+"/watch/-1_1", Options{})
 	if res.Title != "Harbour Walk - Part 2 & Friends" || len(res.Files) != 1 {
 		t.Fatalf("metadata: %+v", res)
 	}
@@ -119,10 +115,7 @@ func TestNoodleMagazineRefreshesHLSWithKeysAndTracks(t *testing.T) {
 	defer srv.Close()
 	origin = srv.URL
 	n := NewPlayer(noodleTestClient(t), &noodlePlayer)
-	res, err := n.Extract(context.Background(), mustParse(t, origin+"/watch/1_2"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, n, origin+"/watch/1_2", Options{})
 	if playlists.Load() != 0 {
 		t.Fatal("discovery spent a playlist signature")
 	}
@@ -154,7 +147,7 @@ func TestNoodleMagazineRefusesUnavailablePlayers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.doc) }))
 			defer srv.Close()
-			_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(context.Background(), mustParse(t, srv.URL+"/watch/1_2"), Options{})
+			_, err := extract(t, NewPlayer(noodleTestClient(t), &noodlePlayer), srv.URL+"/watch/1_2", Options{})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %s", err, tc.want)
 			}
@@ -199,10 +192,7 @@ func TestNoodleListingWalksOnlySearchCardsAndDefersPlayers(t *testing.T) {
 	}))
 	defer srv.Close()
 	n := NewPlayer(noodleTestClient(t), &noodlePlayer)
-	res, err := n.Extract(context.Background(), mustParse(t, srv.URL+"/video/harbour%2Blights?p=8&sort=0&hd=1&len=long#results"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, n, srv.URL+"/video/harbour%2Blights?p=8&sort=0&hd=1&len=long#results", Options{})
 	var names []string
 	for _, f := range res.Files {
 		names = append(names, f.Name)
@@ -252,10 +242,7 @@ func TestNoodleListingCapsAndNextPages(t *testing.T) {
 			}))
 			defer srv.Close()
 			n := NewPlayer(noodleTestClient(t), &noodlePlayer)
-			res, err := n.Extract(context.Background(), mustParse(t, srv.URL+"/video/synthetic"), Options{limits: tc.limits})
-			if err != nil {
-				t.Fatal(err)
-			}
+			res := extractOK(t, n, srv.URL+"/video/synthetic", Options{limits: tc.limits})
 			if len(res.Files) != tc.files || int(calls.Load()) != tc.pages || !strings.Contains(res.Note, tc.note) || (tc.note == "" && res.Note != "") || res.Title != "Harbour Videos" {
 				t.Fatalf("result=%+v, calls=%d", res, calls.Load())
 			}
@@ -268,7 +255,7 @@ func TestNoodleListingNeverUsesRecommendationsForEmptySearch(t *testing.T) {
 		fmt.Fprint(w, `<span data-i18n="nothing_found">Nothing Found</span><div class="list_videos">`+noodleCard("/watch/9_9", "Unrelated")+`</div>`)
 	}))
 	defer srv.Close()
-	_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(context.Background(), mustParse(t, srv.URL+"/video/synthetic"), Options{})
+	_, err := extract(t, NewPlayer(noodleTestClient(t), &noodlePlayer), srv.URL+"/video/synthetic", Options{})
 	if err == nil || !strings.Contains(err.Error(), "no videos found") {
 		t.Fatalf("empty search became recommendations: %v", err)
 	}

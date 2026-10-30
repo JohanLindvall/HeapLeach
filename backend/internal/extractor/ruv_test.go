@@ -57,10 +57,7 @@ segment2.ts
 // declares subtitles as a separate rendition and audio not at all, so the
 // best variant simply wins and its segments join into a playable file.
 func TestRUVMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/opid/1234A0/1234A0.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/opid/1234A0/1234A0.m3u8")
 
 	// The document does carry an EXT-X-MEDIA entry with a URI of its own.
 	// That it names no audio group is the whole point.
@@ -398,10 +395,7 @@ func TestRUVTarget(t *testing.T) {
 		"https://www.ruv.is/sjonvarp/spila/a-programme/10001/eeee01/": {10001, "eeee01", true},
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		programme, episode, ok := ruvTarget(u)
 		got := target{programme, episode, ok}
 		if got != want {
@@ -415,10 +409,7 @@ func TestRUVTarget(t *testing.T) {
 // all digits would otherwise supply the id and push the real one into the
 // episode.
 func TestRUVTargetIgnoresANumericSlug(t *testing.T) {
-	u, err := ParseURL("https://www.ruv.is/sjonvarp/spila/112/10001/eeee01")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.ruv.is/sjonvarp/spila/112/10001/eeee01")
 	programme, episode, ok := ruvTarget(u)
 	if !ok || programme != 10001 || episode != "eeee01" {
 		t.Errorf("ruvTarget = (%d, %q, %v), want the segment after the slug", programme, episode, ok)

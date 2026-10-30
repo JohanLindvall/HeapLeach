@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -47,7 +46,7 @@ func TestDarkGramPageQueuesAlbumWithoutFetchingMedia(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	client := testClient()
 	reg := NewRegistry(&config.Config{}, client)
 	for _, page := range []string{"/post.html", "/post/"} {
 		for _, direct := range []*Direct{reg.fallback.(*Direct), NewDirect(client)} {
@@ -144,8 +143,8 @@ func TestDarkGramRecognitionAndErrors(t *testing.T) {
 		fmt.Fprint(w, darkGramTestPage(`{broken`))
 	}))
 	defer srv.Close()
-	direct := NewDirect(httpx.New("test-agent", "en-US", 0, time.Second))
-	if res, err := direct.Extract(context.Background(), mustParse(t, srv.URL+"/post.html"), Options{}); res != nil || err == nil {
+	direct := NewDirect(testClient())
+	if res, err := extract(t, direct, srv.URL+"/post.html", Options{}); res != nil || err == nil {
 		t.Fatalf("broken player fell through: %+v, %v", res, err)
 	}
 }
@@ -172,7 +171,7 @@ func TestDarkGramVideoRefreshesTheBestPlaylistAtEachAttempt(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	client := testClient()
 	res, err := darkGramResult(client, mustParse(t, srv.URL+"/post/"), mustParseDoc(t, darkGramTestPage(darkGramTestAlbum)), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +220,7 @@ func TestDarkGramVideoContainerAndPlaylistFailures(t *testing.T) {
 				fmt.Fprint(w, tc.playlist)
 			}))
 			defer srv.Close()
-			client := httpx.New("test-agent", "en-US", 0, time.Second)
+			client := testClient()
 			res, err := darkGramResult(client, mustParse(t, srv.URL+"/post/"), mustParseDoc(t,
 				darkGramTestPage(`{"items":[{"kind":"video","hls_url":"/master.m3u8"}]}`)), Options{})
 			if err != nil {
@@ -259,7 +258,7 @@ func TestDarkGramCarriesAudioKeptApart(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	client := testClient()
 	res, err := darkGramResult(client, mustParse(t, srv.URL+"/post/"), mustParseDoc(t,
 		darkGramTestPage(`{"items":[{"kind":"video","hls_url":"/master.m3u8"}]}`)), Options{})
 	if err != nil {

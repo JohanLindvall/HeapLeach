@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -33,7 +32,7 @@ func fileLinksTestRegistry(t *testing.T, doc string) (*Registry, string) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	doc = keep2ShareShells(t).Replace(doc)
-	client := httpx.New("test-agent", "en-US", 0, 2*time.Second)
+	client := testClient()
 	reg := NewRegistry(&config.Config{}, client)
 	keep2ShareAPIs(reg, srv.URL)
 	return reg, srv.URL
@@ -124,7 +123,7 @@ func TestPlainPageScansOtherRegisteredHostsWithoutCrawlingHTML(t *testing.T) {
 		<p>https://encrypted.example.test/file/second#decryption-key</p>`)
 	}))
 	defer srv.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
+	reg := NewRegistry(&config.Config{}, testClient())
 	albums := &linksStub{hostClaim: "albums.example.test", files: 2, title: "Album"}
 	encrypted := &linksStub{hostClaim: "encrypted.example.test", files: 1, title: "Encrypted"}
 	reg.extractors = append(reg.extractors, albums, encrypted)
@@ -176,7 +175,7 @@ func TestPlainPageSniffDoesNotHarvestBinaryResponses(t *testing.T) {
 		fmt.Fprint(w, `<a href="https://fileboom.example.test/file/first">not a page</a>`)
 	}))
 	defer srv.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
+	reg := NewRegistry(&config.Config{}, testClient())
 	u, _ := ParseURL(srv.URL + "/signed")
 	res, err := reg.fallback.(*Direct).pageSniff(context.Background(), u, Options{})
 	if res != nil || err != nil {

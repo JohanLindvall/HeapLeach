@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -490,15 +489,11 @@ func mediaPageServer(t *testing.T, pages map[string]sitePage) (*httptest.Server,
 	return srv, &hits.asked
 }
 
-func mediaPageClient() *httpx.Client {
-	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
-}
-
 // sniffMediaPage is the generic fallback's reading of a page no extractor
 // claimed, with no registry behind it: only the media sniff can answer.
 func sniffMediaPage(t *testing.T, link string) (*Result, bool) {
 	t.Helper()
-	res, err := NewDirect(mediaPageClient()).pageSniff(context.Background(), mustParse(t, link), Options{})
+	res, err := NewDirect(testClient()).pageSniff(context.Background(), mustParse(t, link), Options{})
 	if err != nil {
 		t.Fatalf("%s: %v", link, err)
 	}
@@ -671,7 +666,7 @@ func TestDirectExtractSniffsAPage(t *testing.T) {
 		"/watch/an-interview": {kind: "text/html; charset=utf-8", body: mediaPagePlayerHTML},
 	})
 
-	res := extractOK(t, NewDirect(mediaPageClient()), srv.URL+"/watch/an-interview", Options{})
+	res := extractOK(t, NewDirect(testClient()), srv.URL+"/watch/an-interview", Options{})
 	if got := res.Files[0].URL; got != srv.URL+"/media/clip_1920x1080_4000k.mp4" {
 		t.Errorf("the fallback resolved to %q, want the page's own rendition", got)
 	}
@@ -681,7 +676,7 @@ func TestDirectExtractSniffsAPage(t *testing.T) {
 // the sniff declines has to come out exactly as it did before, since every
 // ordinary direct link goes through the same path.
 func TestDirectExtractStillWrapsAFile(t *testing.T) {
-	res := extractOK(t, NewDirect(mediaPageClient()), "https://cdn.example.test/files/archive.zip", Options{})
+	res := extractOK(t, NewDirect(testClient()), "https://cdn.example.test/files/archive.zip", Options{})
 	if len(res.Files) != 1 || res.Files[0].URL != "https://cdn.example.test/files/archive.zip" {
 		t.Fatalf("a plain file came out as %+v", res.Files)
 	}

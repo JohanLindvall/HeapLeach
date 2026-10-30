@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	stdhtml "html"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -59,36 +57,24 @@ func wordPressTestSite(t *testing.T, pages map[string]string) (*Registry, *Direc
 	}
 	var mu sync.Mutex
 	requests := make(map[string]int)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		requests[r.URL.RequestURI()]++
-		mu.Unlock()
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/getFileStatus") {
-				t.Errorf("extraction attempted a download ticket: %s", r.URL.Path)
-				http.Error(w, "unexpected API call", http.StatusBadRequest)
-				return
-			}
-			var in map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				t.Error(err)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "success", "name": in["id"] + ".bin", "size": 1234,
-				"is_available": in["id"] != "removed", "isAvailableForFree": true,
-			})
-			return
-		}
+	mux := http.NewServeMux()
+	keep2ShareStatusAPI(t, mux)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if doc, ok := pages[r.URL.RequestURI()]; ok {
 			w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
 			fmt.Fprint(w, doc)
 			return
 		}
 		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests[r.URL.RequestURI()]++
+		mu.Unlock()
+		mux.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	client := testClient()
 	reg := NewRegistry(&config.Config{}, client)
 	keep2ShareAPIs(reg, srv.URL)
 	return reg, reg.fallback.(*Direct), srv.URL, func() map[string]int {
@@ -123,7 +109,7 @@ func TestWordPressCategoryCollectsPostDownloadsAndOriginalJPEGs(t *testing.T) {
 	if res.Title != "Example Category" || res.Note != "" || len(res.Files) != 6 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
-	for i, service := range []string{"keep2share"} {
+	for i, service := range []string{config.GroupKeep2Share} {
 		f := res.Files[i]
 		if f.Name != "first.bin" || f.URL != "" || f.Resolve == nil || f.Size != 1234 || f.Pace == nil ||
 			*f.Pace != (Pace{Streams: 1, Files: 1, Group: service, PerRoute: true}) {

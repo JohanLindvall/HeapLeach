@@ -136,10 +136,7 @@ sc-abcdef/m21_index.m3u8?adap=small
 // declared, every variant is usable on its own and the segments join into
 // something that plays.
 func TestNRKMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/open/a/muxed.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/open/a/muxed.m3u8")
 
 	variants := parseMasterPlaylist(nrkMasterPlaylist, base)
 	if len(variants) != 3 {
@@ -424,10 +421,7 @@ func TestNRKTarget(t *testing.T) {
 		"https://tv.nrk.no/direkte/nrk1":                      {},
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := nrkTarget(u); got != want {
 			t.Errorf("nrkTarget(%s) = %+v, want %+v", raw, got, want)
 		}

@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"golang.org/x/net/html"
@@ -210,7 +209,7 @@ func imagePondServer(t *testing.T, page string) (*ImagePond, string) {
 		_, _ = w.Write([]byte(page))
 	}))
 	t.Cleanup(srv.Close)
-	return NewImagePond(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL
+	return NewImagePond(testClient()), srv.URL
 }
 
 // End to end over the newer page shape: the item resolves to the site's own
@@ -335,7 +334,7 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
 </body></html>`
 
 func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
-	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
+	base := mustParse(t, "https://www.imagepond.net/a/AXxfH2Fp")
 	root := mustParseDoc(t, imagePondAlbumPage)
 
 	files := imagePondAlbumFiles(root, base, func(page, code string) func(context.Context) (*Target, error) {
@@ -373,7 +372,7 @@ func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
 }
 
 func TestImagePondCardLinkReadsTheAlpineExpression(t *testing.T) {
-	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
+	base := mustParse(t, "https://www.imagepond.net/a/AXxfH2Fp")
 	cases := []struct {
 		name, markup, want string
 	}{
@@ -441,11 +440,8 @@ func TestImagePondAlbumEndToEnd(t *testing.T) {
 	// The fixture names the real host, so the album is fetched from the test
 	// server while its cards still point at imagepond.net; only the listing
 	// hop is under test here.
-	ip := NewImagePond(httpx.New("test/1.0", "en", 0, 10*time.Second))
-	res, err := ip.Extract(context.Background(), mustURL(t, server.URL+"/a/AXxfH2Fp"), Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	ip := NewImagePond(testClient())
+	res := extractOK(t, ip, server.URL+"/a/AXxfH2Fp", Options{})
 	if res.Title != "Holiday pictures" {
 		t.Errorf("title = %q, want the album's h1", res.Title)
 	}
@@ -459,8 +455,8 @@ func TestImagePondAlbumEndToEnd(t *testing.T) {
 }
 
 func TestImagePondRejectsAProfilePage(t *testing.T) {
-	ip := NewImagePond(httpx.New("test/1.0", "en", 0, time.Second))
-	_, err := ip.Extract(context.Background(), mustURL(t, "https://www.imagepond.net/someone"), Options{})
+	ip := NewImagePond(testClient())
+	_, err := extract(t, ip, "https://www.imagepond.net/someone", Options{})
 	if err == nil {
 		t.Fatal("a profile page resolved")
 	}
@@ -469,28 +465,15 @@ func TestImagePondRejectsAProfilePage(t *testing.T) {
 	}
 }
 
-// mustURL parses a test URL or fails the test.
-func mustURL(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse %q: %v", raw, err)
-	}
-	return u
-}
-
 // A link straight to the media host is the file itself. Match claims that
 // host along with the site — one is a subdomain of the other — so if this
 // route did not exist nothing else would handle it, and the URL would be
 // refused for not being a page.
 func TestImagePondTakesAMediaHostLinkAsTheFile(t *testing.T) {
-	ip := NewImagePond(httpx.New("test/1.0", "en", 0, time.Second))
+	ip := NewImagePond(testClient())
 	raw := "https://media.imagepond.net/media/videos/SomeClip_abc123.mp4"
 
-	res, err := ip.Extract(context.Background(), mustURL(t, raw), Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, ip, raw, Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -530,7 +513,7 @@ func TestImagePondMediaFile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := imagePondMediaFile(mustURL(t, tc.in)); got != tc.want {
+			if got := imagePondMediaFile(mustParse(t, tc.in)); got != tc.want {
 				t.Errorf("imagePondMediaFile(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})

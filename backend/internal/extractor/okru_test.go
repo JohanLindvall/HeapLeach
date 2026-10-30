@@ -127,10 +127,7 @@ func TestOKruVideoID(t *testing.T) {
 		"https://ok.ru/":                            "",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := okruVideoID(u); got != want {
 			t.Errorf("okruVideoID(%s) = %q, want %q", raw, got, want)
 		}

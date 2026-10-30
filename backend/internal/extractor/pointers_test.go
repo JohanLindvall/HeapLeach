@@ -106,14 +106,8 @@ func TestPointerLinks(t *testing.T) {
 			doc: `<html><body><p>This video has been removed.</p></body></html>`,
 		},
 	} {
-		root, err := parseHTML(tc.doc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		page, err := ParseURL(tc.page)
-		if err != nil {
-			t.Fatal(err)
-		}
+		root := mustParseDoc(t, tc.doc)
+		page := mustParse(t, tc.page)
 		if got := pointerNamed(t, tc.site).site.links(root, page); !slices.Equal(got, tc.want) {
 			t.Errorf("%s links = %v, want %v", tc.site, got, tc.want)
 		}

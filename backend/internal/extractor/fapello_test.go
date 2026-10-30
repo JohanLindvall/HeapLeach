@@ -7,9 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestFapelloFullSize(t *testing.T) {
@@ -45,7 +42,7 @@ func TestFapelloExtractWalksAndDeduplicates(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res := extractOK(t, NewFapello(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL+"/model-one/", Options{})
+	res := extractOK(t, NewFapello(testClient()), srv.URL+"/model-one/", Options{})
 	if res.Title != "model-one" {
 		t.Errorf("title = %q, want the model's name", res.Title)
 	}

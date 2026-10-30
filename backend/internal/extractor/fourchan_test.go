@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -34,7 +33,7 @@ func TestFourChanExtract(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	f := NewFourChan(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFourChan(testClient())
 	f.api = srv.URL
 	f.files = "https://files.example.test"
 

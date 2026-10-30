@@ -53,10 +53,7 @@ func TestRegistryGuessNeverComesBackEmpty(t *testing.T) {
 		"https://nobody.example.test/some/file.bin",
 		"http://192.0.2.1/",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := reg.Guess(u); got == "" {
 			t.Errorf("Guess(%s) is empty", raw)
 		}
@@ -89,10 +86,7 @@ func TestRegistryKnowsLinksByTheirForm(t *testing.T) {
 	}
 	for _, host := range []string{"one.example.test", "another.example.test"} {
 		for path, want := range tests {
-			u, err := ParseURL("https://" + host + path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			u := mustParse(t, "https://"+host+path)
 			if got := reg.Guess(u); got != want {
 				t.Errorf("%s went to %q, want %q", u, got, want)
 			}

@@ -41,10 +41,7 @@ video/360/media.m3u8
 // group advertises audio it does not itself carry; taking that at face value
 // produced a silent file that looked like a finished download.
 func TestMuxedIgnoresCodecsWhenAudioIsElsewhere(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/master.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/master.m3u8")
 
 	variants := parseMasterPlaylist(demuxedMaster, base)
 	if len(variants) != 2 {
@@ -58,10 +55,7 @@ func TestMuxedIgnoresCodecsWhenAudioIsElsewhere(t *testing.T) {
 }
 
 func TestMuxedAcceptsAudioWithNoPlaylistOfItsOwn(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/master.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/master.m3u8")
 
 	variants := parseMasterPlaylist(muxedMaster, base)
 	if len(variants) != 2 {
@@ -149,10 +143,7 @@ video/1080/media.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=921925,RESOLUTION=640x360,CODECS="avc1.64001F,mp4a.40.2"
 video/360/media.m3u8
 `
-	base, err := ParseURL("https://cdn.example.test/master.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/master.m3u8")
 	best, ok := bestVariant(parseMasterPlaylist(mixed, base))
 	if !ok {
 		t.Fatal("no variant was chosen")

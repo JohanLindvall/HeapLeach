@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -52,7 +51,7 @@ func TestDoodDiagnosticsDistinguishBlockedAndMissingPlayers(t *testing.T) {
 					fmt.Fprint(w, tc.body)
 				}))
 				defer srv.Close()
-				client := httpx.New("test", "en", 0, time.Second)
+				client := testClient()
 				defer client.CloseIdleConnections()
 				var output bytes.Buffer
 				log := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: level})).With("job", "test-job")

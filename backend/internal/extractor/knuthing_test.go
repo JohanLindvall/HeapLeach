@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -66,13 +65,10 @@ func TestKnuthingRefreshesPlayerPlaylistAndKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	origin = srv.URL
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	defer client.CloseIdleConnections()
 	k := NewPlayer(client, &knuthingPlayer)
-	res, err := k.Extract(context.Background(), mustParse(t, origin+"/watch/start.html"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, k, origin+"/watch/start.html", Options{})
 	if res.Title != "First Clip - Part 2 & Friends" || len(res.Files) != 1 {
 		t.Fatalf("metadata: %+v", res)
 	}
@@ -135,8 +131,8 @@ func TestKnuthingUnavailablePlayersFail(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
-			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+"/watch/test.html"), Options{})
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			res, err := extract(t, k, srv.URL+"/watch/test.html", Options{})
 			if err == nil {
 				_, err = res.Files[0].Resolve(context.Background())
 			}
@@ -159,7 +155,7 @@ func TestKnuthingPreservesChallenges(t *testing.T) {
 				w.WriteHeader(http.StatusForbidden)
 			}))
 			defer srv.Close()
-			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
+			k := NewPlayer(testClient(), &knuthingPlayer)
 			_, _, err := k.resolve(context.Background(), srv.URL+"/watch/test.html")
 			if _, ok := errors.AsType[*httpx.ChallengeError](err); !ok {
 				t.Fatalf("challenge lost: %v", err)
@@ -223,11 +219,8 @@ func TestKnuthingListingWalksOnlyItsCardsAndPages(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
-			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+section+"?page_id=8&last_page=1&sort=top"), Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			res := extractOK(t, k, srv.URL+section+"?page_id=8&last_page=1&sort=top", Options{})
 			var names []string
 			for _, f := range res.Files {
 				names = append(names, f.Name)
@@ -278,11 +271,8 @@ func TestKnuthingListingCapsAndInvalidNextPages(t *testing.T) {
 				fmt.Fprint(w, knuthingListingPage(knuthingCard("1", "First", "/watch/first.html")+knuthingCard("2", "Second", "/watch/second.html"), `<a title="Next Page" href="`+html.EscapeString(next)+`">Next</a>`))
 			}))
 			defer srv.Close()
-			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
-			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+"/videos/free?sort=top"), Options{limits: tc.limits})
-			if err != nil {
-				t.Fatal(err)
-			}
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			res := extractOK(t, k, srv.URL+"/videos/free?sort=top", Options{limits: tc.limits})
 			if len(res.Files) != tc.files || int(calls.Load()) != tc.pages || !strings.Contains(res.Note, tc.note) || res.Title != "Test Collection" {
 				t.Fatalf("result=%+v, pages=%d", res, calls.Load())
 			}

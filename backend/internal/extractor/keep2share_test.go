@@ -108,7 +108,7 @@ func TestKeep2ShareRejectsRestrictedOrMissingFilesBeforeRequestingCaptcha(t *tes
 				_, _ = fmt.Fprint(w, tc.info)
 			}))
 			defer srv.Close()
-			k := NewKeep2Share(httpx.New("test-agent", "en-US", 0, time.Second))
+			k := NewKeep2Share(testClient())
 			k.services[0].api = srv.URL
 			u, _ := url.Parse("https://example.test/file/test-file")
 			if _, err := k.Extract(keep2SharePageContext(t, u, "Keep2Share"), u, Options{}); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -245,7 +245,7 @@ func keep2ShareProtocolTestSite(t *testing.T, label string, getURL func(http.Res
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	ex := NewKeep2Share(httpx.New("test-agent", "en-US", 0, time.Second))
+	ex := NewKeep2Share(testClient())
 	ex.services = slices.DeleteFunc(ex.services, func(s *keep2ShareService) bool { return s.label != label })
 	k := ex.services[0]
 	k.api = srv.URL + "/api/v2"
@@ -372,7 +372,7 @@ func TestKeep2ShareChecksAFileOverTheCallersOwnConnection(t *testing.T) {
 		if f.Check == nil {
 			t.Fatal("no check offered for the file")
 		}
-		dead, err := httpx.New("test-agent", "en-US", 0, time.Second).ThroughProxy("http://127.0.0.1:1")
+		dead, err := testClient().ThroughProxy("http://127.0.0.1:1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -417,7 +417,7 @@ func keep2ShareTestExtract(t *testing.T, k *keep2ShareService) File {
 	if f.Name != "First Clip.mp4" || f.Size != 1234 || f.SizeApprox || f.URL != "" || f.Resolve == nil {
 		t.Fatalf("file = %+v; want exact metadata with the download deferred", f)
 	}
-	if f.Pace == nil || f.Pace.Streams != 1 || f.Pace.Files != 1 || f.Pace.Group != "keep2share" {
+	if f.Pace == nil || f.Pace.Streams != 1 || f.Pace.Files != 1 || f.Pace.Group != config.GroupKeep2Share {
 		t.Fatalf("pace = %+v; free downloads must use one connection", f.Pace)
 	}
 	return f
@@ -868,7 +868,7 @@ func TestKeep2ShareKeepsAFreeDownloadPerRoute(t *testing.T) {
 			"url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d&for=%s", expires, in["free_download_key"])})
 	})
 	f := keep2ShareTestExtract(t, k)
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	on := func(route string) context.Context {
 		return httpx.WithRoute(context.Background(), route, client, nil)
 	}

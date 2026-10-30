@@ -190,10 +190,7 @@ func TestHandoffName(t *testing.T) {
 		// Nothing in the path to name it after.
 		"https://soundcloud.com/": "soundcloud.com",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := handoffName(u); got != want {
 			t.Errorf("handoffName(%s) = %q, want %q", raw, got, want)
 		}
@@ -260,10 +257,7 @@ func TestOEmbedTitle(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, err := ParseURL("https://example.test/v000000-a-clip.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://example.test/v000000-a-clip.html")
 	title, err := testHandoff(t, srv.URL).oembedTitle(context.Background(), u)
 	if err != nil {
 		t.Fatalf("oembedTitle: %v", err)

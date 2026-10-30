@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -58,7 +57,7 @@ func TestPixeldrainRecogniseAskingTheAPI(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"SampleID","name":"sample.bin","size":12,"mime_type":"application/octet-stream"}`)
 	}))
 	t.Cleanup(srv.Close)
-	p := NewPixeldrain(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	p := NewPixeldrain(testClient())
 	failed := fixturePage(t, srv.URL+"/u/SampleID", http.StatusForbidden, "text/html", "denied")
 	for range 2 {
 		if !p.Recognise(context.Background(), failed) {
@@ -143,7 +142,7 @@ func testPixeldrain(t *testing.T) *Pixeldrain {
 	t.Helper()
 	// No retries: a subtree that will not answer should be given up on at
 	// once, and the test should not wait out a backoff to see it.
-	return &Pixeldrain{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return &Pixeldrain{client: testClient()}
 }
 
 // This host counts connections rather than files: an anonymous caller is

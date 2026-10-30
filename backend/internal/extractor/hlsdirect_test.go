@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -79,12 +78,6 @@ video/1080/index.m3u8
 video/720/index.m3u8
 `
 
-// hlsTestClient is a client with no retries, so a test that expects a refusal
-// gets one at once.
-func hlsTestClient() *httpx.Client {
-	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
-}
-
 // hlsServer serves a fixed set of documents by path, so a master and the
 // variant it points at can be laid out the way a host lays them out. The
 // count is the number of documents it served, which is what the sniff guard
@@ -133,11 +126,8 @@ func TestHLSDirectRecognise(t *testing.T) {
 // The nil client is part of the test: the refusal is reached before anything
 // is fetched, so a DASH URL costs no request at all.
 func TestHLSDirectRefusesDASH(t *testing.T) {
-	u, err := ParseURL("https://cdn.example.test/dash/a-clip/manifest.mpd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = NewHLSDirect(nil).Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://cdn.example.test/dash/a-clip/manifest.mpd")
+	_, err := NewHLSDirect(nil).Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a DASH manifest was accepted; joining one would give a silent file")
 	}
@@ -408,10 +398,7 @@ func TestHLSName(t *testing.T) {
 		"https://cdn.example.test/hls/index.m3u8":             "cdn.example.test",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := hlsName(u); got != want {
 			t.Errorf("hlsName(%s) = %q, want %q", raw, got, want)
 		}
@@ -421,18 +408,15 @@ func TestHLSName(t *testing.T) {
 // hlsExtractFrom runs the extractor against a served manifest.
 func hlsExtractFrom(t *testing.T, raw string) (*Result, error) {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return NewHLSDirect(hlsTestClient()).Extract(context.Background(), u, Options{})
+	u := mustParse(t, raw)
+	return NewHLSDirect(testClient()).Extract(context.Background(), u, Options{})
 }
 
 // hlsSniffFrom submits a URL to the registry and reports what the manifest
 // extractor made of it: nil, nil when the page went elsewhere.
 func hlsSniffFrom(t *testing.T, raw string) (*Result, error) {
 	t.Helper()
-	res, ex, err := NewRegistry(&config.Config{}, hlsTestClient()).Extract(context.Background(), raw, Options{})
+	res, ex, err := NewRegistry(&config.Config{}, testClient()).Extract(context.Background(), raw, Options{})
 	if ex == nil || ex.Name() != "hls" {
 		return nil, nil
 	}
@@ -448,7 +432,7 @@ func TestHLSRefusesUnsupportedPayloadsBeforeDownloading(t *testing.T) {
 			server, _ := hlsServer(t, "application/vnd.apple.mpegurl", map[string]string{
 				"/media.m3u8": "#EXTM3U\n" + tag + "\n#EXTINF:6,\npart.ts\n#EXT-X-ENDLIST\n",
 			})
-			_, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
+			_, err := extract(t, NewHLSDirect(testClient()), server.URL+"/media.m3u8", Options{})
 			if err == nil {
 				t.Fatal("unsupported playlist was accepted")
 			}
@@ -463,7 +447,7 @@ func TestHLSCarriesByteRangesToTheDownloader(t *testing.T) {
 		"/media.m3u8": "#EXTM3U\n" + `#EXT-X-MAP:URI="clip.mp4",BYTERANGE="10@0"` +
 			"\n#EXTINF:6,\n#EXT-X-BYTERANGE:20@10\nclip.mp4\n#EXT-X-ENDLIST\n",
 	})
-	res := extractOK(t, NewHLSDirect(hlsTestClient()), server.URL+"/media.m3u8", Options{})
+	res := extractOK(t, NewHLSDirect(testClient()), server.URL+"/media.m3u8", Options{})
 	want := []string{server.URL + "/clip.mp4#range=0-9", server.URL + "/clip.mp4#range=10-29"}
 	if got := res.Files[0].Segments; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("segments %v, want %v", got, want)
@@ -477,7 +461,7 @@ func TestHLSCarriesAnAES128KeyToTheDownloader(t *testing.T) {
 		"/media.m3u8": "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:3\n" + `#EXT-X-KEY:METHOD=AES-128,URI="key.bin"` +
 			"\n#EXTINF:6,\npart.ts\n#EXT-X-ENDLIST\n",
 	})
-	res := extractOK(t, NewHLSDirect(hlsTestClient()), server.URL+"/media.m3u8", Options{})
+	res := extractOK(t, NewHLSDirect(testClient()), server.URL+"/media.m3u8", Options{})
 	key := res.Files[0].SegmentKey
 	if key == nil || key.URI != server.URL+"/key.bin" || key.Sequence != 3 {
 		t.Errorf("key = %+v, want the playlist's own, resolved against it", key)
@@ -500,7 +484,7 @@ func TestHLSResolvesReferencesAgainstRedirectDestination(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	media, err := resolveMediaPlaylist(context.Background(), hlsTestClient(), server.URL+"/start.m3u8", nil)
+	media, err := resolveMediaPlaylist(context.Background(), testClient(), server.URL+"/start.m3u8", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +496,7 @@ func TestHLSResolvesReferencesAgainstRedirectDestination(t *testing.T) {
 func TestHLSRejectsHTMLAndInvalidHeaders(t *testing.T) {
 	for _, body := range []string{"<html>not a playlist</html>", "#EXTM3UX\npart.ts\n#EXT-X-ENDLIST"} {
 		server, _ := hlsServer(t, "text/plain", map[string]string{"/media.m3u8": body})
-		if _, err := resolveMediaPlaylist(context.Background(), hlsTestClient(), server.URL+"/media.m3u8", nil); err == nil {
+		if _, err := resolveMediaPlaylist(context.Background(), testClient(), server.URL+"/media.m3u8", nil); err == nil {
 			t.Errorf("accepted non-playlist %q", body)
 		}
 	}

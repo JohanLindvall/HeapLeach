@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -46,7 +45,7 @@ func TestDoodProxyRecoveryIncludesTokensAndRefreshesOnTheNewRoute(t *testing.T) 
 				w.WriteHeader(http.StatusForbidden)
 			}))
 			defer origin.Close()
-			client := httpx.New("test", "en", 0, time.Second)
+			client := testClient()
 			defer client.CloseIdleConnections()
 			route := func(id string) context.Context {
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

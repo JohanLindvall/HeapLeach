@@ -170,10 +170,7 @@ const raiEpisodeSet = `{
 // the same segments. audioElsewhere is what tells the two packagings apart,
 // and it is false here.
 func TestRaiAkamaiPlaylistIsTakenDespiteHavingNoCodecs(t *testing.T) {
-	base, err := ParseURL("https://vod.example.test/podcastcdn/Rai/A/12345_,1800,2400/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://vod.example.test/podcastcdn/Rai/A/12345_,1800,2400/playlist.m3u8")
 
 	variants := parseMasterPlaylist(raiAkamaiPlaylist, base)
 	if len(variants) != 2 {
@@ -203,10 +200,7 @@ func TestRaiAkamaiPlaylistIsTakenDespiteHavingNoCodecs(t *testing.T) {
 // and joined alone download to the end and play silently. They come with the
 // audio renditions, the default first, for the downloader to join to them.
 func TestRaiMultiaudioPlaylistComesWithItsAudio(t *testing.T) {
-	base, err := ParseURL("https://vod.example.test/podcastcdn/raitre/raitre_multiaudio_nogeo/12345_,1800,2400/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://vod.example.test/podcastcdn/raitre/raitre_multiaudio_nogeo/12345_,1800,2400/playlist.m3u8")
 
 	variants := parseMasterPlaylist(raiMultiaudioPlaylist, base)
 	if len(variants) != 2 {
@@ -264,10 +258,7 @@ func TestRaiPrefersSelfContainedOverBiggerVideoOnly(t *testing.T) {
 // under it contains ".mp4" and playlistExtension calls the joined file an MP4.
 // The segments say otherwise, and they are the ones being joined.
 func TestRaiCsmilPlaylistNamesTheContainerFromItsSegments(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/dom4/podcastcdn/Rai/prod_nogeo/12345_,1800,2400,.mp4.csmil/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/dom4/podcastcdn/Rai/prod_nogeo/12345_,1800,2400,.mp4.csmil/playlist.m3u8")
 
 	variants := parseMasterPlaylist(raiCsmilPlaylist, base)
 	best, ok := bestVariant(variants)

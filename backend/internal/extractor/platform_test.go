@@ -24,7 +24,7 @@ import (
 // platformRegistry is the whole registry over a client that does not retry,
 // for a test extracting from its own server.
 func platformRegistry() *Registry {
-	return NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+	return NewRegistry(&config.Config{}, testClient())
 }
 
 func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
@@ -370,7 +370,7 @@ func TestAskedJSONReusesOnlyWhatWasAsked(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":7}`)
 	}))
 	t.Cleanup(srv.Close)
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 	p := htmlPage(t, srv.URL+"/item/7", "<html></html>")
 
 	var out struct{ ID int }

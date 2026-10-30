@@ -154,10 +154,8 @@ func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (s
 	}
 	// Asking as a browser navigating to the page, which is what the sniff is
 	// pretending to be and what some hosts serve their real markup to.
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
-	req.Header.Set(httpx.HeaderSecFetchDest, "document")
-	req.Header.Set(httpx.HeaderSecFetchMode, "navigate")
-	req.Header.Set(httpx.HeaderReferer, util.Origin(u)+"/")
+	httpx.Navigate.Apply(req)
+	httpx.Referer(util.Origin(u) + "/").Apply(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
