@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -145,69 +144,68 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 	}
 
 	res := &Result{Title: root.Name}
-	if err := g.collect(ctx, root, token, opts.Password, "", 0, opts.maxFiles(), res); err != nil {
+	if err := walkTree(ctx, opts, res, root.ID, root, g.lister(token, opts.Password)); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// collect appends c's files to res, recursing into subfolders.
-func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password, dir string, depth, limit int, res *Result) error {
-	// The shared listing ceiling, for a share that is really somebody's whole
-	// drive: past it the queue has stopped being something anyone meant.
-	if len(res.Files) >= limit {
-		return nil
-	}
-	if c.Type == "file" {
-		if c.Link == "" {
-			return nil
-		}
-		file := File{
-			Name:    util.FirstNonEmpty(c.Name, util.NameFromURL(c.Link)),
-			URL:     c.Link,
-			Size:    c.Size,
-			Dir:     dir,
-			Headers: g.downloadHeaders(token),
-		}
-		// A gofile file often lives on several storage servers, and a busy
-		// one answers with a redirect to the web page instead of bytes.
-		// Rotating on each attempt gives a retry a real chance of landing
-		// somewhere that will serve it.
-		if len(c.Servers) > 1 {
-			hosts := make([]string, 0, len(c.Servers))
-			for _, server := range c.Servers {
-				hosts = append(hosts, server+"."+gofileStorageDomain)
+// lister reads one folder for walkTree. The root arrives already fetched,
+// since reading it is where a stale token shows; a subfolder arrives as its
+// listing entry and is fetched here.
+func (g *Gofile) lister(token, password string) treeList[*gofileContent] {
+	return func(ctx context.Context, _ *treeWalk, c *gofileContent, depth int) ([]treeItem[*gofileContent], error) {
+		if depth > 0 {
+			var err error
+			if c, err = g.fetchContent(ctx, c.ID, token, password); err != nil {
+				return nil, err
 			}
-			file = Mirrored(file, MirrorHosts(c.Link, hosts))
 		}
-		res.Files = append(res.Files, file)
-		return nil
+		var items []treeItem[*gofileContent]
+		if c.Type == "file" { // a share of one file
+			if c.Link != "" {
+				items = append(items, treeItem[*gofileContent]{File: g.file(c, token)})
+			}
+			return items, nil
+		}
+		// Children arrive keyed by id; they are taken in the order gofile
+		// listed them, so the queue matches the website.
+		for _, child := range c.orderedChildren() {
+			switch child.Type {
+			case "file":
+				if child.Link != "" {
+					items = append(items, treeItem[*gofileContent]{File: g.file(child, token)})
+				}
+			case "folder":
+				items = append(items, treeItem[*gofileContent]{
+					Folder: child, Key: child.ID, Name: child.Name, Fallback: child.ID,
+				})
+			}
+		}
+		return items, nil
 	}
-	if depth >= config.MaxFolderDepth {
-		return nil
-	}
+}
 
-	// Children arrive keyed by id; sort by the order gofile listed them so
-	// the UI matches the website.
-	for _, child := range c.orderedChildren() {
-		switch child.Type {
-		case "file":
-			if err := g.collect(ctx, child, token, password, dir, depth+1, limit, res); err != nil {
-				return err
-			}
-		case "folder":
-			sub, err := g.fetchContent(ctx, child.ID, token, password)
-			if err != nil {
-				// One unreadable subfolder should not sink the whole job.
-				continue
-			}
-			next := path.Join(dir, util.FirstNonEmpty(child.Name, child.ID))
-			if err := g.collect(ctx, sub, token, password, next, depth+1, limit, res); err != nil {
-				return err
-			}
-		}
+// file is one listed file as a download.
+func (g *Gofile) file(c *gofileContent, token string) *File {
+	file := File{
+		Name:    util.FirstNonEmpty(c.Name, util.NameFromURL(c.Link)),
+		URL:     c.Link,
+		Size:    c.Size,
+		Headers: g.downloadHeaders(token),
 	}
-	return nil
+	// A gofile file often lives on several storage servers, and a busy
+	// one answers with a redirect to the web page instead of bytes.
+	// Rotating on each attempt gives a retry a real chance of landing
+	// somewhere that will serve it.
+	if len(c.Servers) > 1 {
+		hosts := make([]string, 0, len(c.Servers))
+		for _, server := range c.Servers {
+			hosts = append(hosts, server+"."+gofileStorageDomain)
+		}
+		file = Mirrored(file, MirrorHosts(c.Link, hosts))
+	}
+	return &file
 }
 
 // downloadHeaders are what the CDN needs to serve the file to us.

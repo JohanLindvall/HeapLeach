@@ -51,10 +51,7 @@ func TestDarkGramPageQueuesAlbumWithoutFetchingMedia(t *testing.T) {
 	reg := NewRegistry(&config.Config{}, client)
 	for _, page := range []string{"/post.html", "/post/"} {
 		for _, direct := range []*Direct{reg.fallback.(*Direct), NewDirect(client)} {
-			res, err := direct.Extract(context.Background(), mustParse(t, srv.URL+page), Options{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			res := extractOK(t, direct, srv.URL+page, Options{})
 			if res.Title != "Morning Walk & Field Notes" || len(res.Files) != 3 || res.Note != "" {
 				t.Fatalf("did not resolve the embedded album: %+v", res)
 			}

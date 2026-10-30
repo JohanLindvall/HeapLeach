@@ -127,17 +127,13 @@ const (
 // rather than parsing a file's contents as JSON.
 func pixeldrainServer(t *testing.T, answers map[string]string) *httptest.Server {
 	t.Helper()
+	site := fakeSiteHandler(sitePages("", answers), &siteHits{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, ok := answers[r.URL.Path]
-		if !ok {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
 		if _, stat := r.URL.Query()["stat"]; !stat {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		_, _ = io.WriteString(w, body)
+		site.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -159,7 +155,7 @@ func TestPixeldrainAsksForOneConnectionPerFile(t *testing.T) {
 
 	listed := p.toFile("https://pixeldrain.com", pixeldrainFile{ID: "AAAA", Name: "clip.mp4", Size: 10})
 	shared, ok := p.toNodeFile("https://pixeldrain.com", []string{"abcd1234", "clip.mp4"},
-		&pixeldrainNode{Type: pixeldrainFileNode, Name: "clip.mp4", FileSize: 10}, "")
+		&pixeldrainNode{Type: pixeldrainFileNode, Name: "clip.mp4", FileSize: 10})
 	if !ok {
 		t.Fatal("a plain file node was refused")
 	}
@@ -186,14 +182,7 @@ func TestPixeldrainSharedDirectory(t *testing.T) {
 		"/api/filesystem/abcd1234/photos": pixeldrainSharePhotos,
 	})
 
-	u, err := ParseURL(srv.URL + "/d/abcd1234")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/d/abcd1234", Options{})
 
 	if res.Title != "shared drive" {
 		t.Errorf("title = %q, want the shared directory's own name", res.Title)
@@ -201,6 +190,9 @@ func TestPixeldrainSharedDirectory(t *testing.T) {
 	if len(res.Files) != 2 {
 		t.Fatalf("resolved %d files, want 2 (the reported node and the unreadable subtree are not files)",
 			len(res.Files))
+	}
+	if res.Note != "partial — unreadable folders" {
+		t.Errorf("note = %q, want the unreadable subtree admitted", res.Note)
 	}
 
 	first := res.Files[0]
@@ -236,11 +228,7 @@ func TestPixeldrainSharedSubdirectory(t *testing.T) {
 		"/api/filesystem/abcd1234/photos": pixeldrainSharePhotos,
 	})
 
-	u, _ := ParseURL(srv.URL + "/d/abcd1234/photos")
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/d/abcd1234/photos", Options{})
 	if res.Title != "photos" {
 		t.Errorf("title = %q, want the directory that was asked for", res.Title)
 	}
@@ -256,11 +244,7 @@ func TestPixeldrainSharedFile(t *testing.T) {
 		"/api/filesystem/abcd1234": pixeldrainShareFile,
 	})
 
-	u, _ := ParseURL(srv.URL + "/d/abcd1234")
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/d/abcd1234", Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("resolved %d files, want 1", len(res.Files))
 	}
@@ -284,11 +268,7 @@ func TestPixeldrainOriginIsTheLinksOwn(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, _ := ParseURL(srv.URL + "/l/abcd1234")
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/l/abcd1234", Options{})
 	if want := "/api/list/abcd1234"; asked != want {
 		t.Errorf("asked for %q, want %q", asked, want)
 	}

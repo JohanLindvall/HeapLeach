@@ -274,10 +274,7 @@ func kvsExtension(vars map[string]string, direct string) string {
 	if postfix := vars["postfix"]; strings.HasPrefix(postfix, ".") {
 		return postfix
 	}
-	if ext := path.Ext(util.NameFromURL(direct)); ext != "" {
-		return ext
-	}
-	return ".mp4"
+	return linkExt(direct, ".mp4")
 }
 
 // kvsVideoPath reports whether a path looks like a KVS video page: a /videos/

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -120,6 +121,41 @@ func TestKeep2ShareRejectsRestrictedOrMissingFilesBeforeRequestingCaptcha(t *tes
 func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[string]string)) *keep2ShareService {
 	t.Helper()
 	return keep2ShareProtocolTestSite(t, "Keep2Share", getURL)
+}
+
+// keep2ShareStatusAPI answers file status under /api/ on mux, the one call
+// discovery may make: each file is named after its id and available unless
+// its id is "removed". Any other API call — a ticket, a CAPTCHA — fails the
+// test. It returns how often each file was asked about, keyed by API path
+// and id.
+func keep2ShareStatusAPI(t *testing.T, mux *http.ServeMux) func() map[string]int {
+	t.Helper()
+	var mu sync.Mutex
+	asked := make(map[string]int)
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/getFileStatus") {
+			t.Errorf("discovery asked for more than file status: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected API call", http.StatusBadRequest)
+			return
+		}
+		var in map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		asked[r.URL.Path+"/"+in["id"]]++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success", "name": in["id"] + ".bin", "size": 1234,
+			"is_available": in["id"] != "removed", "isAvailableForFree": true,
+		})
+	})
+	return func() map[string]int {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(asked)
+	}
 }
 
 // keep2ShareAPIs points the registry's services at base/api/<service>, with
@@ -663,10 +699,7 @@ func TestKeep2ShareRefreshesExpiredLinksWithTheAcceptedTicket(t *testing.T) {
 }
 
 func TestKeep2ShareReadsTheHostsCooldown(t *testing.T) {
-	var response keep2ShareResponse
-	if err := json.Unmarshal([]byte(`{"status":"error","errorCode":42,"errors":[{"code":5,"timeRemaining":"123.500000"}]}`), &response); err != nil {
-		t.Fatal(err)
-	}
+	response := decode[keep2ShareResponse](t, `{"status":"error","errorCode":42,"errors":[{"code":5,"timeRemaining":"123.500000"}]}`)
 	if got := response.retryDelay(); got != 124*time.Second {
 		t.Fatalf("delay=%s, want to wait through the stated cooldown", got)
 	}
@@ -901,4 +934,12 @@ func TestKeep2ShareRecognise(t *testing.T) {
 	expectShape(t, k2s, link, true)
 	expectShape(t, k2s, "https://share.example.test/file/", false)
 	expectShape(t, k2s, "https://share.example.test/folder/0a1b2c3d4e5f6", false)
+}
+
+func TestKeep2ShareOCRChecksInstallationBeforeRequestingAChallenge(t *testing.T) {
+	t.Setenv("HEAPLEACH_OCR_DIR", t.TempDir())
+	solver, err := keep2ShareOCR()
+	if solver != nil || err == nil || !strings.Contains(err.Error(), "OCR") {
+		t.Fatalf("solver=%v, error=%v; want an installation error before requesting a CAPTCHA", solver != nil, err)
+	}
 }

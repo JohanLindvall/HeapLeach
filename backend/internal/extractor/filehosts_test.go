@@ -39,14 +39,7 @@ func TestDropboxAsksForTheBytes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			u, err := ParseURL(tc.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			res, err := NewDropbox(nil).Extract(context.Background(), u, Options{})
-			if err != nil {
-				t.Fatalf("extract: %v", err)
-			}
+			res := extractOK(t, NewDropbox(nil), tc.raw, Options{})
 			if len(res.Files) != 1 {
 				t.Fatalf("got %d files, want 1", len(res.Files))
 			}

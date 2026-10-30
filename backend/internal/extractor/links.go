@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 
@@ -296,4 +297,13 @@ func linksCandidates(root *html.Node, base *url.URL) []string {
 		}
 	})
 	return out
+}
+
+// linkExt is the extension a media link's filename carries, or fallback
+// where it carries none: what a player that names no container is serving.
+func linkExt(link, fallback string) string {
+	if ext := path.Ext(util.NameFromURL(link)); ext != "" {
+		return ext
+	}
+	return fallback
 }

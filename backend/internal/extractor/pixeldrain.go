@@ -6,10 +6,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -42,11 +40,6 @@ const (
 	pixeldrainDirNode  = "dir"
 	pixeldrainFileNode = "file"
 )
-
-// pixeldrainMaxFiles bounds what one shared link resolves to. A shared
-// directory can be somebody's whole drive, and a job of tens of thousands of
-// items is not what anyone pasting a link meant.
-const pixeldrainMaxFiles = 5000
 
 // pixeldrainPace asks for one connection per file, because this host counts
 // connections rather than files.
@@ -158,7 +151,7 @@ func pixeldrainAnswers(ctx context.Context, page *Page, client *httpx.Client) bo
 }
 
 // Extract lists a whole album, a shared directory, or a single file.
-func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	origin := util.Origin(u)
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {
@@ -171,7 +164,7 @@ func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	case "d":
 		// A share link may point into the tree rather than at its root, and
 		// everything after the id is part of the address.
-		return p.shared(ctx, origin, segs[1:])
+		return p.shared(ctx, origin, segs[1:], opts)
 	}
 	return p.file(ctx, origin, segs[1])
 }
@@ -215,14 +208,10 @@ func (p *Pixeldrain) file(ctx context.Context, origin, id string) (*Result, erro
 
 // toFile converts API metadata into a downloadable entry.
 func (p *Pixeldrain) toFile(origin string, f pixeldrainFile) File {
-	size := f.Size
-	if size == 0 {
-		size = -1
-	}
 	return File{
 		Name:    util.FirstNonEmpty(f.Name, f.ID),
 		URL:     origin + pixeldrainAPI + "/file/" + url.PathEscape(f.ID) + "?download",
-		Size:    size,
+		Size:    knownSize(f.Size),
 		Headers: httpx.Referer(origin + "/"),
 		Pace:    &pixeldrainPace,
 	}
@@ -246,7 +235,7 @@ type pixeldrainFile struct {
 // file, since a stat lists its children in full — which is why it is done
 // here rather than by asking for the bulk-download archive: that arrives as
 // one opaque item, cannot resume per file, and has to be unpacked afterwards.
-func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string) (*Result, error) {
+func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string, opts Options) (*Result, error) {
 	node, children, err := p.stat(ctx, origin, segs)
 	if err != nil {
 		return nil, err
@@ -254,7 +243,7 @@ func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string) (
 
 	// A share can name a single file just as well as a directory.
 	if node.Type == pixeldrainFileNode {
-		file, ok := p.toNodeFile(origin, segs, node, "")
+		file, ok := p.toNodeFile(origin, segs, node)
 		if !ok {
 			return nil, fmt.Errorf("pixeldrain: %s cannot be downloaded (%s)",
 				pixeldrainPath(segs), pixeldrainWhyNot(node))
@@ -263,47 +252,56 @@ func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string) (
 	}
 
 	res := &Result{Title: util.FirstNonEmpty(node.Name, segs[0])}
-	p.collect(ctx, origin, segs, children, "", 0, res)
+	root := pixeldrainDir{segs: segs, children: children}
+	if err := walkTree(ctx, opts, res, pixeldrainPath(segs), root, p.lister(origin)); err != nil {
+		return nil, err
+	}
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("pixeldrain: %s holds no downloadable files", pixeldrainPath(segs))
 	}
 	return res, nil
 }
 
-// collect appends a directory's files to res and recurses into its
-// subdirectories, preserving the tree in File.Dir.
+// pixeldrainDir is one directory of a shared filesystem, as walkTree carries
+// it: its path, and its children once they have been read.
+type pixeldrainDir struct {
+	segs     []string
+	children []pixeldrainNode
+}
+
+// lister reads one directory for walkTree. The root's children arrive with
+// it, since its stat is what said it was a directory.
 //
 // A child is addressed by appending its name to the path this listing was
 // asked for, rather than by the path the node itself carries: the request
 // path is the one just proved to address this directory, while a node's own
 // path is written relative to the filesystem it lives in — which is not
 // necessarily the one the share id opened onto.
-func (p *Pixeldrain) collect(ctx context.Context, origin string, base []string,
-	children []pixeldrainNode, dir string, depth int, res *Result) {
-
-	for _, child := range children {
-		if len(res.Files) >= pixeldrainMaxFiles {
-			return
+func (p *Pixeldrain) lister(origin string) treeList[pixeldrainDir] {
+	return func(ctx context.Context, _ *treeWalk, d pixeldrainDir, depth int) ([]treeItem[pixeldrainDir], error) {
+		if depth > 0 {
+			var err error
+			if _, d.children, err = p.stat(ctx, origin, d.segs); err != nil {
+				return nil, err
+			}
 		}
-		if child.Name == "" {
-			continue
-		}
-		segs := append(append([]string(nil), base...), child.Name)
-
-		if child.Type == pixeldrainDirNode {
-			if depth >= config.MaxFolderDepth {
+		var items []treeItem[pixeldrainDir]
+		for _, child := range d.children {
+			if child.Name == "" {
 				continue
 			}
-			_, grandchildren, err := p.stat(ctx, origin, segs)
-			if err != nil {
-				continue // one unreadable subdirectory must not sink the job
+			segs := append(append([]string(nil), d.segs...), child.Name)
+			if child.Type == pixeldrainDirNode {
+				items = append(items, treeItem[pixeldrainDir]{
+					Folder: pixeldrainDir{segs: segs}, Key: pixeldrainPath(segs), Name: child.Name,
+				})
+				continue
 			}
-			p.collect(ctx, origin, segs, grandchildren, path.Join(dir, child.Name), depth+1, res)
-			continue
+			if file, ok := p.toNodeFile(origin, segs, &child); ok {
+				items = append(items, treeItem[pixeldrainDir]{File: &file})
+			}
 		}
-		if file, ok := p.toNodeFile(origin, segs, &child, dir); ok {
-			res.Files = append(res.Files, file)
-		}
+		return items, nil
 	}
 }
 
@@ -323,20 +321,18 @@ func (p *Pixeldrain) stat(ctx context.Context, origin string, segs []string) (*p
 }
 
 // toNodeFile turns one file node into a downloadable entry.
-func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode, dir string) (File, bool) {
+func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode) (File, bool) {
 	// A reported node is refused by the API itself, so it is left out rather
 	// than queued to fail.
 	if n.AbuseType != "" {
 		return File{}, false
 	}
-	size := knownSize(n.FileSize)
 	return File{
 		Name: util.FirstNonEmpty(n.Name, segs[len(segs)-1]),
 		// ?attach asks for the bytes; the bare path serves the viewer for
 		// anything the site can render.
 		URL:     pixeldrainFSURL(origin, segs) + "?attach",
-		Size:    size,
-		Dir:     dir,
+		Size:    knownSize(n.FileSize),
 		Headers: httpx.Referer(origin + "/"),
 		Pace:    &pixeldrainPace,
 	}, true

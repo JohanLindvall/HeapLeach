@@ -4,12 +4,10 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,36 +17,20 @@ import (
 
 func fileLinksTestRegistry(t *testing.T, doc string) (*Registry, string) {
 	t.Helper()
-	var mu sync.Mutex
-	calls := make(map[string]int)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/getFileStatus") {
-				t.Errorf("scraping requested a ticket or unsupported endpoint: %s %s", r.Method, r.URL.Path)
-				http.Error(w, "unexpected API call", http.StatusBadRequest)
-				return
-			}
-			var in map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				t.Error(err)
-				return
-			}
-			mu.Lock()
-			key := r.URL.Path + "/" + in["id"]
-			calls[key]++
-			if calls[key] > 1 {
+	mux := http.NewServeMux()
+	asked := keep2ShareStatusAPI(t, mux)
+	t.Cleanup(func() {
+		for key, n := range asked() {
+			if n > 1 {
 				t.Errorf("duplicate file metadata request: %s", key)
 			}
-			mu.Unlock()
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "success", "name": in["id"] + ".bin", "size": 1234,
-				"is_available": in["id"] != "removed", "isAvailableForFree": true,
-			})
-			return
 		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
 		fmt.Fprint(w, doc)
-	}))
+	})
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	doc = keep2ShareShells(t).Replace(doc)
 	client := httpx.New("test-agent", "en-US", 0, 2*time.Second)

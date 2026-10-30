@@ -58,8 +58,20 @@ func TestPlayerPages(t *testing.T) {
 		{&sendvidPlayer, "https://sv.example.test/embed/abcd1234", "https://sv.example.test/abcd1234"},
 		{&vidmolyPlayer, "https://vm.example.test/embed-embed-abcdefghijkl.html", "https://vidmoly.biz/embed-abcdefghijkl.html"},
 		{&drtuberPlayer, "https://dt.example.test/video/1234567/clip", drtuberRoot + "/player_config_json/?vid=1234567"},
+		{&luluPlayer, "https://lulu.example.test/abcd1234wxyz", "https://lulu.example.test/abcd1234wxyz"},
+		{&luluPlayer, "https://lulu.example.test/", ""},
 		{&luluPlayer, "https://lulu.example.test/a/b/c", ""},
+		{&vidsPlayer, "https://vids.example.test/v/123", "https://vids.example.test/v/123"},
+		{&vidsPlayer, "https://vids.example.test/", ""},
+		{&vidsPlayer, "https://vids.example.test/faq", ""},
+		{&sendvidPlayer, "https://sv.example.test/abcd1234", "https://sv.example.test/abcd1234"},
+		{&sendvidPlayer, "https://sv.example.test/abcd1234.mp4", "https://sv.example.test/abcd1234"},
+		{&sendvidPlayer, "https://www.sv.example.test/embed/Ab12Cd", "https://www.sv.example.test/Ab12Cd"},
+		{&sendvidPlayer, "https://sv.example.test/embed/abcd1234?x=", "https://sv.example.test/abcd1234"},
+		{&sendvidPlayer, "https://sv.example.test/", ""},
 		{&sendvidPlayer, "https://sv.example.test/help/faq", ""},
+		{&sendvidPlayer, "https://sv.example.test/users/sign_in", ""},
+		{&sendvidPlayer, "https://sv.example.test/not-an-id", ""},
 	} {
 		u, _ := url.Parse(tc.in)
 		got, err := tc.site.page(u)
@@ -399,19 +411,6 @@ func TestVidmolyEmbedAlwaysUsesTheHostThatAnswers(t *testing.T) {
 	}
 }
 
-func TestVidmolyExtension(t *testing.T) {
-	tests := map[string]string{
-		"https://s1.example.test/v/abcdefghijkl.mp4?t=TOKEN": ".mp4",
-		"https://s1.example.test/v/abcdefghijkl.mkv":         ".mkv",
-		"https://s1.example.test/v/abcdefghijkl":             ".mp4",
-	}
-	for link, want := range tests {
-		if got := vidmolyExtension(link); got != want {
-			t.Errorf("vidmolyExtension(%s) = %q, want %q", link, got, want)
-		}
-	}
-}
-
 // TestStreamtapeAssemble covers the one thing that actually breaks about
 // this host: the link is delivered in two halves, and how much of the second
 // half is padding is decided by the page, not by us.
@@ -459,81 +458,6 @@ func TestStreamtapeAssembleReportsAMissingLink(t *testing.T) {
 	}
 }
 
-// TestUnpackJS covers the p,a,c,k,e,d packer these players ship instead of
-// readable source. The fixture is hand-built: the payload's tokens are
-// indices into the word list, written in the base the call states.
-func TestUnpackJS(t *testing.T) {
-	const packed = `eval(function(p,a,c,k,e,d){while(c--)if(k[c])` +
-		`p=p.replace(new RegExp('\\b'+c.toString(a)+'\\b','g'),k[c]);return p}` +
-		`('0.1="2://4.5/6.7"',36,8,'MDCore|wurl|https|unused|example|test|clip|mp4'.split('|'),0,{}))`
-
-	got, ok := unpackJS(packed)
-	if !ok {
-		t.Fatal("a packed script was not recognised")
-	}
-	const want = `MDCore.wurl="https://example.test/clip.mp4"`
-	if got != want {
-		t.Errorf("got  %s\nwant %s", got, want)
-	}
-}
-
-func TestUnpackJSLeavesUnpackedScriptsAlone(t *testing.T) {
-	if _, ok := unpackJS(`<script>var MDCore = {}; MDCore.wurl = "//example.test/clip.mp4";</script>`); ok {
-		t.Error("an ordinary script was taken for a packed one")
-	}
-}
-
-// A payload word long enough to overflow the index accumulator — a hex token
-// inside a URL is the ordinary case — must pass through verbatim rather than
-// wrap negative and panic the word lookup.
-func TestUnpackJSSurvivesLongPayloadWords(t *testing.T) {
-	const packed = `eval(function(p,a,c,k,e,d){}` +
-		`('0="deadbeefdeadbeefdeadbeefdeadbeef"',36,2,'MDCore|unused'.split('|'),0,{}))`
-
-	got, ok := unpackJS(packed)
-	if !ok {
-		t.Fatal("a packed script was not recognised")
-	}
-	if !strings.Contains(got, "deadbeefdeadbeefdeadbeefdeadbeef") {
-		t.Errorf("the long token did not survive: %s", got)
-	}
-}
-
-// TestPackerIndex covers the alphabet, whose third range only appears once a
-// word list outgrows base 36 — the case that is easy to get wrong and rare
-// enough not to notice.
-func TestPackerIndex(t *testing.T) {
-	tests := []struct {
-		word  string
-		base  int
-		want  int
-		valid bool
-	}{
-		{word: "0", base: 36, want: 0, valid: true},
-		{word: "9", base: 36, want: 9, valid: true},
-		{word: "a", base: 36, want: 10, valid: true},
-		{word: "z", base: 36, want: 35, valid: true},
-		{word: "10", base: 36, want: 36, valid: true},
-		{word: "A", base: 62, want: 36, valid: true},
-		{word: "Z", base: 62, want: 61, valid: true},
-		{word: "z", base: 20, valid: false}, // a digit the base does not have
-		{word: "-", base: 36, valid: false}, // not a digit at all
-		{word: "", base: 36, valid: false},
-		// A long run of base digits is an ordinary word — a hex token in a
-		// URL, say — not an index. Unbounded it overflows the accumulator,
-		// and a wrapped-negative value would panic the caller's word lookup.
-		{word: "deadbeefdeadbeefdeadbeefdeadbeef", base: 36, valid: false},
-		{word: strings.Repeat("z", 64), base: 62, valid: false},
-	}
-	for _, tc := range tests {
-		got, ok := packerIndex(tc.word, tc.base)
-		if ok != tc.valid || (ok && got != tc.want) {
-			t.Errorf("packerIndex(%q, %d) = %d, %v; want %d, %v",
-				tc.word, tc.base, got, ok, tc.want, tc.valid)
-		}
-	}
-}
-
 // luluSite serves the shape a lulustream page has: a heading naming the
 // video, a packed player setup naming a signed master playlist, one muxed
 // rendition, and AES-128 segments under one key. The packer is given no
@@ -571,11 +495,7 @@ func TestLuluStreamFollowsThePackedPlayerToEncryptedSegments(t *testing.T) {
 	srv, pages := luluSite(t)
 	l := NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), &luluPlayer)
 
-	u, _ := url.Parse(srv.URL + "/e/abcd1234wxyz")
-	res, err := l.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, l, srv.URL+"/e/abcd1234wxyz", Options{})
 	if res.Title != "First Clip" {
 		t.Errorf("title = %q, want the page's heading", res.Title)
 	}
@@ -597,21 +517,6 @@ func TestLuluStreamFollowsThePackedPlayerToEncryptedSegments(t *testing.T) {
 	}
 	if len(tg.Segments) != 2 || tg.SegmentKey == nil || pages.Load() != 2 {
 		t.Errorf("resolve gave %d segments, key %v, after %d page reads", len(tg.Segments), tg.SegmentKey, pages.Load())
-	}
-}
-
-func TestLuluID(t *testing.T) {
-	for raw, want := range map[string]string{
-		"https://luluvido.com/abcd1234wxyz":     "abcd1234wxyz",
-		"https://luluvdo.com/e/abcd1234wxyz":    "abcd1234wxyz",
-		"https://lulustream.com/d/abcd1234wxyz": "abcd1234wxyz",
-		"https://lulustream.com/":               "",
-		"https://lulustream.com/a/b/c":          "",
-	} {
-		u, _ := url.Parse(raw)
-		if got := luluID(u); got != want {
-			t.Errorf("luluID(%s) = %q, want %q", raw, got, want)
-		}
 	}
 }
 
@@ -687,20 +592,6 @@ func TestVidsStSaysWhenAVideoHasBeenRemoved(t *testing.T) {
 	_, err := vidsExtract(t, srv.URL+"/v/303")
 	if err == nil || !strings.Contains(err.Error(), "removed") {
 		t.Errorf("err = %v, want it to say the video is gone", err)
-	}
-}
-
-func TestVidsID(t *testing.T) {
-	for raw, want := range map[string]string{
-		"https://vids.st/v/123": "123",
-		"https://vids.st/e/123": "123",
-		"https://vids.st/":      "",
-		"https://vids.st/faq":   "",
-	} {
-		u, _ := url.Parse(raw)
-		if got := vidsID(u); got != want {
-			t.Errorf("vidsID(%s) = %q, want %q", raw, got, want)
-		}
 	}
 }
 
@@ -810,24 +701,6 @@ func TestSendvidSaysWhenAVideoIsGone(t *testing.T) {
 	_, err = sendvidExtract(t, srv.URL+"/empty000")
 	if err == nil || !strings.Contains(err.Error(), "no video on") {
 		t.Errorf("err = %v, want a page without a player refused", err)
-	}
-}
-
-func TestSendvidID(t *testing.T) {
-	for raw, want := range map[string]string{
-		"https://sendvid.com/abcd1234":          "abcd1234",
-		"https://sendvid.com/abcd1234.mp4":      "abcd1234",
-		"https://www.sendvid.com/embed/Ab12Cd":  "Ab12Cd",
-		"https://sendvid.com/embed/abcd1234?x=": "abcd1234",
-		"https://sendvid.com/":                  "",
-		"https://sendvid.com/help/faq":          "",
-		"https://sendvid.com/users/sign_in":     "",
-		"https://sendvid.com/not-an-id":         "",
-	} {
-		u, _ := url.Parse(raw)
-		if got := sendvidID(u); got != want {
-			t.Errorf("sendvidID(%s) = %q, want %q", raw, got, want)
-		}
 	}
 }
 

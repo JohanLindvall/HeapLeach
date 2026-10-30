@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -177,10 +176,7 @@ const archiveOddlyTypedItem = `{
 
 func archiveDocOf(t *testing.T, body string) *archiveDoc {
 	t.Helper()
-	var doc archiveDoc
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	doc := decode[archiveDoc](t, body)
 	return &doc
 }
 
@@ -195,21 +191,9 @@ func archiveResolve(t *testing.T, body, id string) *Result {
 	return res
 }
 
-func archiveNamesOf(files []File) []string {
-	names := make([]string, 0, len(files))
-	for _, f := range files {
-		if f.Dir != "" {
-			names = append(names, f.Dir+"/"+f.Name)
-			continue
-		}
-		names = append(names, f.Name)
-	}
-	return names
-}
-
 func archiveWantNames(t *testing.T, files []File, want ...string) {
 	t.Helper()
-	got := archiveNamesOf(files)
+	got := filePaths(files)
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("files = %v, want %v", got, want)
 	}
@@ -450,11 +434,7 @@ func TestArchiveFileSizeIsExactOrUnknown(t *testing.T) {
 		`{"size": "-7"}`:        -1,
 	}
 	for body, want := range cases {
-		var f archiveFile
-		if err := json.Unmarshal([]byte(body), &f); err != nil {
-			t.Fatalf("%s: %v", body, err)
-		}
-		if got := f.size(); got != want {
+		if got := decode[archiveFile](t, body).size(); got != want {
 			t.Errorf("%s: size = %d, want %d", body, got, want)
 		}
 	}

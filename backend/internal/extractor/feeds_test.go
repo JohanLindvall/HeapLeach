@@ -366,22 +366,6 @@ func TestFeedExtension(t *testing.T) {
 	}
 }
 
-func TestFeedLength(t *testing.T) {
-	cases := map[string]int64{
-		"12345678": 12345678,
-		" 42 ":     42,
-		"0":        -1,
-		"":         -1,
-		"unknown":  -1,
-		"-3":       -1,
-	}
-	for raw, want := range cases {
-		if got := feedLength(raw); got != want {
-			t.Errorf("feedLength(%q) = %d, want %d", raw, got, want)
-		}
-	}
-}
-
 func TestFeedIsEnclosure(t *testing.T) {
 	cases := map[string]bool{
 		"enclosure":   true,

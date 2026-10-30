@@ -87,25 +87,13 @@ func hlsTestClient() *httpx.Client {
 
 // hlsServer serves a fixed set of documents by path, so a master and the
 // variant it points at can be laid out the way a host lays them out. The
-// count is the number of requests it saw, which is what the sniff guard is
-// measured with.
-func hlsServer(t *testing.T, contentType string, pages map[string]string) (*httptest.Server, *atomic.Int64) {
+// count is the number of documents it served, which is what the sniff guard
+// is measured with: other recognisers may ask the origin about a page, which
+// is not this extractor's cost.
+func hlsServer(t *testing.T, contentType string, pages map[string]string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var seen atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only the served documents are counted: other recognisers may ask
-		// the origin about a page, which is not this extractor's cost.
-		doc, ok := pages[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		seen.Add(1)
-		w.Header().Set(httpx.HeaderContentType, contentType)
-		_, _ = io.WriteString(w, doc)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &seen
+	srv, hits := fakeSite(t, sitePages(contentType, pages))
+	return srv, &hits.served
 }
 
 const hlsManifestContentType = "application/vnd.apple.mpegurl"
@@ -475,10 +463,7 @@ func TestHLSCarriesByteRangesToTheDownloader(t *testing.T) {
 		"/media.m3u8": "#EXTM3U\n" + `#EXT-X-MAP:URI="clip.mp4",BYTERANGE="10@0"` +
 			"\n#EXTINF:6,\n#EXT-X-BYTERANGE:20@10\nclip.mp4\n#EXT-X-ENDLIST\n",
 	})
-	res, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, NewHLSDirect(hlsTestClient()), server.URL+"/media.m3u8", Options{})
 	want := []string{server.URL + "/clip.mp4#range=0-9", server.URL + "/clip.mp4#range=10-29"}
 	if got := res.Files[0].Segments; strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("segments %v, want %v", got, want)
@@ -492,10 +477,7 @@ func TestHLSCarriesAnAES128KeyToTheDownloader(t *testing.T) {
 		"/media.m3u8": "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:3\n" + `#EXT-X-KEY:METHOD=AES-128,URI="key.bin"` +
 			"\n#EXTINF:6,\npart.ts\n#EXT-X-ENDLIST\n",
 	})
-	res, err := NewHLSDirect(hlsTestClient()).Extract(context.Background(), mustParse(t, server.URL+"/media.m3u8"), Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, NewHLSDirect(hlsTestClient()), server.URL+"/media.m3u8", Options{})
 	key := res.Files[0].SegmentKey
 	if key == nil || key.URI != server.URL+"/key.bin" || key.Sequence != 3 {
 		t.Errorf("key = %+v, want the playlist's own, resolved against it", key)

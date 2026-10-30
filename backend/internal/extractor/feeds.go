@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -276,7 +275,13 @@ func feedFiles(doc *feedDocument, u *url.URL, limit int) []File {
 		files = append(files, File{
 			Name: feedFileName(enc.title, enc.url, enc.media, used),
 			URL:  enc.url,
-			Size: feedLength(enc.length),
+			// The enclosure's length is exact, which is what makes it worth
+			// carrying: an episode already on disk at that length is skipped
+			// without connecting. A feed that omits it, writes 0 or writes no
+			// number at all is saying the same thing three ways — whole
+			// hosting platforms write length="0" on every episode — so an
+			// unknown length is the ordinary case rather than the broken one.
+			Size: parsedSize(enc.length),
 			// No headers: an enclosure is published to be fetched by any
 			// podcast client in the world, and the analytics redirectors in
 			// front of one care about nothing but the user agent, which the
@@ -284,24 +289,6 @@ func feedFiles(doc *feedDocument, u *url.URL, limit int) []File {
 		})
 	}
 	return files
-}
-
-// feedLength reads the enclosure's byte count.
-//
-// Unlike the sizes scraped off a listing page elsewhere in this package it is
-// exact, which is what makes it worth carrying: the downloader can see that
-// an episode is already on disk at that exact length and skip it without
-// connecting. A feed that omits the attribute, writes 0, or writes something
-// that is not a number at all is saying the same thing in three ways — and
-// whole hosting platforms say it, megaphone writing length="0" on every
-// episode it serves, so an unknown length is the ordinary case rather than
-// the broken one.
-func feedLength(raw string) int64 {
-	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || n <= 0 {
-		return -1
-	}
-	return n
 }
 
 // feedSlashes folds the separators out of an episode title.
