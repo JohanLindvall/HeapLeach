@@ -223,7 +223,7 @@ func nprFiles(entries []nprAudio) []File {
 			// read nothing but the user agent, which the client already sends.
 		}
 		if nest {
-			file.Dir = entry.program()
+			file.Dir = sourceFolder(entry.program())
 		}
 		files = append(files, file)
 	}

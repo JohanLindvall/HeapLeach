@@ -121,7 +121,11 @@ signed for a day, minted through `Resolve`. Tracks are filed
 A band's front page answers 403 whatever the agent, so a discography is read
 from `/music` — which also carries a `data-tralbum`, empty and of no
 `item_type`, so the kind is what separates it from a band whose `/music` is
-its one release.
+its one release. Each release of a discography is a page to read, so a
+catalogue is read as far as `config.MaxResolvedReleases` releases, the note
+saying what that left out, and the registry holds the tracks to the user's
+file cap. The releases are read through `resolveFiles` (`resolve.go`); when
+none can be, `noneRead` gives the first reason.
 
 ## bandzoogle
 

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -215,7 +214,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	if link := rtpPlainMediaURL(doc); link != "" {
 		name := util.FirstNonEmpty(title, util.NameFromURL(link), program)
 		return &File{
-			Name:    name + strings.ToLower(path.Ext(util.NameFromURL(link))),
+			Name:    name + linkExt(link, ""),
 			URL:     link,
 			Size:    -1,
 			Headers: headers,

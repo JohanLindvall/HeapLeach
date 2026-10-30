@@ -20,7 +20,7 @@ without asking; `resolveEach` keeps each file beside its item.
 
 A series resolved while it is listed goes through `expandSeries`, the one
 sequence ard, nrk, svtplay, srf, rtve, vrtmax, pbs, zdf, npostart, raiplay,
-ruv, rtpplay and bbcsounds share. It cuts the episodes to
+ruv, rtpplay, bbcsounds, arte, abclisten, rtbf and yle share. It cuts the episodes to
 `config.MaxResolvedEpisodes`, because each episode costs the broadcaster's
 player a request or several before a byte moves (npostart passes
 `config.MaxResolvedEpisodesNPO`, its edge bearing about two hundred
@@ -41,10 +41,23 @@ resolves the error is `<site>: none of the <n> <noun> of <link> are
 playable: <reason>`, the reason being the first refusal, else the first
 failure less its site prefix, else the caller's own sentence. rtpplay names
 a capped season in its title instead, so it cuts before and passes the rest.
+A broadcaster whose note says what it left out (arte, rtbf, yle) passes
+`refused` to be handed the refusals' reasons. A resolve that keeps an
+episode whose check failed for any other cause, for its transfer to try
+again, returns the lazy file rather than the error. npostart reads at most
+`config.MaxSeasonsNPO` seasons, each a request against the same budget, and
+its note says when it cut them.
+
+A listing resolved without `expandSeries` — the players an rtbf page
+embeds, the media a radio-canada article attaches — cuts what it asks to
+`config.MaxResolvedEpisodes` with a `cappedNote`, and leaves the user's file
+cap to the registry. A listing of lazy episodes that costs only its pages
+(radio-canada's programmes) cuts nothing itself.
 
 A rendition's place in a quality ladder is `rankIn` (`rank.go`), each caller
 saying where an unknown name lands. A file's extension read off its link is
-`linkExt`, lowercased, with the broadcaster's usual container as fallback. A
+`linkExt` (`html.go`), read off the link's last path element, lowercased,
+with the broadcaster's usual container as fallback. A
 probe of whether a host serves a file to this address at all (abclisten,
 yle, zdf, drtv) is one `httpx.Client.StatusOnce`, each keeping its own
 answer for a probe that could not be made. An episode
@@ -90,7 +103,8 @@ ARTE's words. A collection (`RC-…`) is the playlist endpoint, which names each
 programme and its title. A season nested in a series is read into a folder of
 its own. ARTE shows some programmes of a collection in fewer countries than
 others and the listing does not say which, so each programme's configuration
-is read as the collection is (`FanOut`). One not shown here is left out, the
+is read as the collection is (`expandSeries`, a season's programmes filed
+under it). One not shown here is left out, the
 note giving the reason once (`broadcastRefusal`); one that could not be read for
 another cause is kept, for its transfer to try again. Their streams are
 resolved when the transfers start.
@@ -180,9 +194,11 @@ options (`path.season`), read in the site's order, each into a folder. A
 season's own page carries the same filter with itself as the default, and
 lists itself alone. A list is followed by the `count` it states and by what
 each page adds, not by the size asked for. Each episode is asked of the
-preview as the listing is read (`FanOut`): one Areena does not offer is left
-out with its reason once, as are the Finland-only ones once one of them has
-been refused here. An episode keeps the name it is listed under, the card's
+preview as the listing is read (`expandSeries`): one Areena does not offer is
+left out with its reason once, as are the Finland-only ones once one of them
+has been refused here. That probe is made after the previews, of the first
+Finland-only episode in the listing's order, so it is asked once and of the
+same episode however the previews were scheduled. An episode keeps the name it is listed under, the card's
 title with its number, so that a listing read again finds what was saved:
 `finishedLocked` keys on the name an item finished with, the `.ts`, not the
 MP4 it was remuxed into.
@@ -251,8 +267,8 @@ session.
 A programme's episodes are the tabs of its `TAB_LIST` (a season or a year,
 each a folder), each list paged by its own `links.next`, 50 at most a page.
 The entries say nothing of who may play them, so each is asked of the play API
-as the listing is read (`FanOut`), and what cannot be had is left out with
-each reason counted once. Any other rtbf.be page, an article say, is read for
+as the listing is read (`expandSeries`, labelled by tab), and what cannot be
+had is left out with each reason counted once. Any other rtbf.be page, an article say, is read for
 the players it embeds (`data-asset-id`, embed links, escaped ones in script
 included).
 
@@ -330,8 +346,9 @@ leaves such a track out).
 
 An OHdio programme's page lists its episodes as `EpisodeListItem` entries with
 their media ids, fifty a page, newest first. The next pages are
-`?pageNumber=N`, which the site's own loader reads off the URL (1 to 200;
-`?page=` is ignored), and `pagination.totalCount` says when to stop. A
+`?pageNumber=N`, which the site's own loader reads off the URL (1 to 200,
+`config.MaxPagesRadioCanada`; `?page=` is ignored), and
+`pagination.totalCount` says when to stop. A
 programme with seasons shows its latest alone; each season is a path of its
 own (`/saison-N`), linked from the page's season selector, with
 `numberOfSeasons` in its structured data. So every season is read, every page

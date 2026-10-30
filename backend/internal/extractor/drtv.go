@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -391,18 +392,13 @@ func (d *DRTV) season(ctx context.Context, season *drItem, opts Options) (*Resul
 	return d.listing(ctx, ardJoin(show, drSeasonLabel(show, season)), show, entries, walkErr, opts)
 }
 
-// drGeoProbes is how many of a listing's Denmark-only programmes are asked
-// for before it is taken that this address cannot tell whether they are
-// refused here.
-const drGeoProbes = 3
-
 // listing makes a listing's programmes into files, each resolved when its
 // transfer starts. What DR shows in Denmark alone is left out, the note
 // saying so, once one of them has been refused here.
 func (d *DRTV) listing(ctx context.Context, title, show string, entries []drListed, walkErr error, opts Options) (*Result, error) {
 	blocked, probes := false, 0
 	for i := range entries {
-		if probes == drGeoProbes {
+		if probes == config.GeoProbesDR {
 			break
 		}
 		if !entries[i].item.geoRestricted() {

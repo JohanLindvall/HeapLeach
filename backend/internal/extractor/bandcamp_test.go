@@ -212,3 +212,36 @@ func TestBandcampRecognisesThroughTheClientChallenge(t *testing.T) {
 		t.Error("a challenged page of another form was recognised or cost a request")
 	}
 }
+
+// A band's discography reads each release, keeping their tracks in the
+// grid's order; one release that cannot be read is left out, and when none
+// can the error says why.
+func TestBandcampDiscographyReadsEachRelease(t *testing.T) {
+	grid := `<html><head><meta property="og:site_name" content="A Band"></head><body>
+<ol id="music-grid"><li><a href="/album/first">First</a></li><li><a href="/album/gone">Gone</a></li></ol></body></html>`
+	var album atomic.Bool
+	album.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/music":
+			_, _ = w.Write([]byte(grid))
+		case r.URL.Path == "/album/first" && album.Load():
+			_, _ = w.Write([]byte(bandcampPageFixture(bandcampAlbumData, "")))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	b := NewBandcamp(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+
+	res := extractOK(t, b, srv.URL+"/", Options{})
+	if len(res.Files) != 3 || res.Title != "A Band" || res.Note != "" {
+		t.Errorf("%d files, title %q, note %q", len(res.Files), res.Title, res.Note)
+	}
+
+	album.Store(false)
+	_, err := extract(t, b, srv.URL+"/", Options{})
+	if err == nil || !strings.HasPrefix(err.Error(), "bandcamp: none of the 2 releases on "+srv.URL+"/ could be read: fetch ") {
+		t.Errorf("err = %v", err)
+	}
+}

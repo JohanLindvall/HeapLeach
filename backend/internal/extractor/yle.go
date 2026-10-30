@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -122,7 +123,7 @@ func yleLink(u *url.URL) (lang, id string) {
 
 // Extract reads a programme into its file, or a series or season into one
 // file an episode.
-func (y *Yle) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+func (y *Yle) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	lang, id := yleLink(u)
 	if id == "" {
 		return nil, fmt.Errorf("yle: %s names no programme or series", u.Redacted())
@@ -132,7 +133,7 @@ func (y *Yle) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 		return nil, err
 	}
 	if page.listing() {
-		return y.series(ctx, lang, id, page, opts)
+		return y.series(ctx, lang, id, page)
 	}
 	target, title, err := y.programme(ctx, lang, id)
 	if err != nil {
@@ -471,7 +472,7 @@ type yleEpisode struct{ id, title, folder string }
 // once; so, once one of them has been refused here, is every episode Yle
 // shows in Finland alone. One whose preview could not be read is kept, for
 // its transfer to try again.
-func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage, opts Options) (*Result, error) {
+func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Result, error) {
 	props := page.doc.Props.PageProps
 	name := cmp.Or(strings.TrimSpace(props.View.Title), strings.TrimSpace(props.Meta.Title), id)
 	title := name
@@ -485,37 +486,60 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage, opts O
 	if page.appID == "" || page.key == "" {
 		return nil, fmt.Errorf("yle: %s: the page names no key for its listings", title)
 	}
-	episodes, listed, walkErr := y.walk(ctx, lang, page, lists, !page.season(), opts.maxFiles())
-
-	type checked struct {
-		episode yleEpisode
-		preview *yleOndemand
-		refusal string
+	listing, listed, walkErr := y.walk(ctx, lang, page, lists, !page.season(), config.MaxResolvedEpisodes)
+	if len(listing) == 0 {
+		if walkErr != nil {
+			return nil, fmt.Errorf("yle: %s: %w", title, walkErr)
+		}
+		return nil, fmt.Errorf("yle: %s lists no episodes", title)
 	}
-	results := FanOut(ctx, episodes, func(ctx context.Context, ep yleEpisode) ([]checked, error) {
-		od, err := y.preview(ctx, lang, ep.id)
-		refusal, _ := refusalReason(err)
-		return []checked{{episode: ep, preview: od, refusal: refusal}}, nil
+	episodes := make([]*yleChecked, len(listing))
+	for i, ep := range listing {
+		episodes[i] = &yleChecked{episode: ep}
+	}
+
+	audio := strings.HasPrefix(props.Meta.Item.Type, "Radio")
+	var refused []string
+	resolved, note, err := expandSeries(ctx, series[*yleChecked]{
+		site: "yle", noun: "episodes", link: title,
+		items: episodes, listed: listed,
+		refused: &refused,
+		resolve: func(ctx context.Context, c *yleChecked) (*File, error) {
+			od, err := y.preview(ctx, lang, c.episode.id)
+			if _, refused := refusalReason(err); refused {
+				return nil, err
+			}
+			c.preview = od
+			ext := ".ts"
+			switch {
+			case od != nil:
+				ext = od.extension()
+			case audio:
+				ext = ".mp3"
+			}
+			file := y.lazy(lang, ardJoin(name, cmp.Or(c.episode.title, c.episode.id)), ext, c.episode)
+			return &file, nil
+		},
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err != nil {
+		return nil, err
+	}
 
-	audio := strings.HasPrefix(props.Meta.Item.Type, "Radio")
+	// Whether what Yle shows in Finland alone is refused here is asked
+	// once, of the first such episode in the listing's order, and holds for
+	// the rest.
 	var (
 		files   []File
-		refused []string
 		finland int
-		blocked *bool // whether what Yle shows in Finland alone is refused here, once one has said
+		blocked *bool
 	)
-	for _, r := range results {
-		switch {
-		case r.refusal != "":
-			refused = append(refused, r.refusal)
-			continue
-		case r.preview != nil && r.preview.finlandOnly():
+	for _, r := range resolved {
+		if r.item.preview != nil && r.item.preview.finlandOnly() {
 			if blocked == nil {
-				_, _, err := y.programme(ctx, lang, r.episode.id)
+				_, _, err := y.programme(ctx, lang, r.item.episode.id)
 				refusedHere := errors.Is(err, errYleFinlandOnly)
 				blocked = &refusedHere
 			}
@@ -524,30 +548,21 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage, opts O
 				continue
 			}
 		}
-		ext := ".ts"
-		switch {
-		case r.preview != nil:
-			ext = r.preview.extension()
-		case audio:
-			ext = ".mp3"
-		}
-		stem := ardJoin(name, cmp.Or(r.episode.title, r.episode.id))
-		files = append(files, y.lazy(lang, stem, ext, r.episode))
+		files = append(files, r.file)
 	}
 	if len(files) == 0 {
-		switch {
-		case finland > 0:
-			return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
-		case len(refused) > 0:
-			return nil, fmt.Errorf("yle: %s: none of its %d episodes can be had: %s", title, len(refused), refused[0])
-		case walkErr != nil:
-			return nil, fmt.Errorf("yle: %s: %w", title, walkErr)
-		}
-		return nil, fmt.Errorf("yle: %s lists no episodes", title)
+		return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 	}
-	note := listingNote(cappedNote(len(episodes), listed, "episodes"), brokenNote(walkErr),
+	note = listingNote(note, brokenNote(walkErr),
 		leftOutNote(finland, " that Yle shows in Finland only"), refusedNote(refused))
 	return &Result{Title: title, Files: files, Note: note}, nil
+}
+
+// yleChecked is a listed episode and what its preview said of it, once
+// asked.
+type yleChecked struct {
+	episode yleEpisode
+	preview *yleOndemand
 }
 
 // walk reads each list a page at a time, keeping its episodes up to limit

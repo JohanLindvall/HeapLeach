@@ -675,6 +675,29 @@ const (
 	// a season at a time, which is how the site divides it too.
 	MaxResolvedEpisodesNPO = 120
 
+	// MaxSeasonsNPO bounds how many season listings of that broadcaster one
+	// series URL reads, each a request against the same budget. Seasons
+	// arrive newest first and the episodes behind them are cut to
+	// MaxResolvedEpisodesNPO anyway, so all reading further buys is spending
+	// the requests the episodes need. The longest-running strand looked at
+	// had twenty-three.
+	MaxSeasonsNPO = 30
+
+	// GeoProbesDR is how many of a listing's programmes shown in Denmark
+	// alone are asked for before it is taken that this address cannot tell
+	// whether they are refused here.
+	GeoProbesDR = 3
+
+	// MaxPagesRadioCanada is the most pages of a list, or seasons of a
+	// programme, that broadcaster's own loader asks for.
+	MaxPagesRadioCanada = 200
+
+	// MaxResolvedReleases bounds how many releases of a band's discography
+	// are read while it is listed, each a page of its own. A label's
+	// catalogue can run to hundreds; past this the listing says what it
+	// left out.
+	MaxResolvedReleases = 1000
+
 	// MaxSearchResults bounds a search that pages until it runs out. A
 	// search is an open question rather than a named thing, so unlike an
 	// album it has no natural end and the cap is what supplies one.

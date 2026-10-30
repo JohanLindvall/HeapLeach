@@ -460,19 +460,17 @@ func (n *Niconico) list(ctx context.Context, opts Options, label string,
 		}
 		return nil, fmt.Errorf("niconico: %s lists no videos it still has", label)
 	}
-	res := &Result{Title: cmp.Or(title, label), Files: files}
-	var notes []string
+	// The total counts what was left out too, so only what is left over
+	// after those is what the cap cut.
+	capped, goneNote := "", ""
 	if total > len(files)+skipped+gone {
-		notes = append(notes, fmt.Sprintf("%d of %d videos", len(files), total))
-	}
-	if skipped > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that need an account or a payment", skipped))
+		capped = cappedNote(len(files), total, "videos")
 	}
 	if gone > 0 {
-		notes = append(notes, fmt.Sprintf("%d no longer on the site", gone))
+		goneNote = fmt.Sprintf("%d no longer on the site", gone)
 	}
-	res.Note = strings.Join(notes, "; ")
-	return res, nil
+	note := listingNote(capped, leftOutNote(skipped, " that need an account or a payment"), goneNote)
+	return &Result{Title: cmp.Or(title, label), Files: files, Note: note}, nil
 }
 
 // apiGet fetches one API document, saying what a 403 or 404 there means.

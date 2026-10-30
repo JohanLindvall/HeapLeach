@@ -285,12 +285,22 @@ func TestYleLeavesOutWhatASeriesCannotHave(t *testing.T) {
 	}
 }
 
-// A cap keeps the first episodes, and the note counts the rest by what the
-// list states rather than by reading it.
+// A cap keeps the first episodes, and the walk counts the rest by what the
+// list states rather than by reading it. The user's file cap is the
+// registry's: the series lists every episode it can have.
 func TestYleCountsWhatACapLeavesOut(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-3000", Options{limits: Limits{Files: 2}})
-	if len(res.Files) != 2 || res.Note != "2 of 5 episodes" {
+	y := yleWith(srv)
+	page, err := y.page(context.Background(), "fin", "1-3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	episodes, listed, err := y.walk(context.Background(), "fin", page, page.lists("1-3000"), !page.season(), 2)
+	if err != nil || len(episodes) != 2 || listed != 5 {
+		t.Errorf("%d episodes of %d listed, err %v", len(episodes), listed, err)
+	}
+	res := extractOK(t, y, "https://areena.yle.fi/1-3000", Options{limits: Limits{Files: 2}})
+	if len(res.Files) != 3 {
 		t.Errorf("%d files, note %q", len(res.Files), res.Note)
 	}
 }

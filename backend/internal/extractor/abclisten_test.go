@@ -564,6 +564,28 @@ func TestABCListenProgrammeSurvivesAListingFailure(t *testing.T) {
 	}
 }
 
+// TestABCListenProgrammeOfAppOnlyEpisodesSaysWhy pins that a programme
+// whose every episode the ABC keeps to its app says so, rather than that
+// its episodes carry nothing.
+func TestABCListenProgrammeOfAppOnlyEpisodesSaysWhy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, abcListenEpisodesPath):
+			w.WriteHeader(http.StatusNotFound)
+		case r.URL.Path == "/listen/programs/a-programme":
+			_, _ = io.WriteString(w, abcListenHTML("A Programme - ABC listen", abcListenProgrammeIsland()))
+		default:
+			_, _ = io.WriteString(w, abcListenHTML("An Episode - ABC listen", abcListenAppOnlyIsland))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := extract(t, testABCListen(t), srv.URL+"/listen/programs/a-programme", Options{})
+	if err == nil || !strings.Contains(err.Error(), "none of the 2 episodes") || !strings.Contains(err.Error(), "through its listen app only") {
+		t.Errorf("error = %v, want the app restriction as the reason", err)
+	}
+}
+
 // --------------------------------------------------------------- matching
 
 // TestABCListenNameKeepsTheId is the naming rule on its own, including what
