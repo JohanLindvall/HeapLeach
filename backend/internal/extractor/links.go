@@ -144,8 +144,7 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 		return nil, nil
 	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
-			"(they may all have expired)", len(sources)-e.unrecognised, page.Redacted())
+		return nil, noneRead("links", len(sources)-e.unrecognised, "supported links", page.Redacted(), e.refusals, e.failed)
 	}
 
 	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)

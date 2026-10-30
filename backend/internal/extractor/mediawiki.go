@@ -357,10 +357,12 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 			batch, listNote, err := m.list(ctx, site, mediaWikiCategoryQuery(category), limit-len(files), listed)
 			if err != nil {
 				// The category the user named is the job; a subcategory
-				// that will not answer is one branch of many.
-				if category == title {
+				// that will not answer is one branch of many, left out
+				// and said so.
+				if category == title || ctx.Err() != nil {
 					return nil, err
 				}
+				note = joinNotes(note, mediaWikiSkipped)
 				continue
 			}
 			files, note = append(files, batch...), joinNotes(note, listNote)
@@ -370,6 +372,10 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 			if level < depth {
 				subs, err := m.subcategories(ctx, site, category, opts)
 				if err != nil {
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					note = joinNotes(note, mediaWikiSkipped)
 					continue
 				}
 				for _, sub := range subs {
@@ -392,6 +398,10 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 	}
 	return &Result{Title: mediaWikiName(title), Files: mediaWikiOrdered(files), Note: note}, nil
 }
+
+// mediaWikiSkipped notes a category walk that left out subcategories it
+// could not read.
+const mediaWikiSkipped = "partial — unreadable subcategories"
 
 // subcategories lists one category's child categories, as many as the walk
 // may still visit.

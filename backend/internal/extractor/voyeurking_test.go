@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -123,7 +124,7 @@ func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 			}
 			for i, slug := range []string{"first", "second", "third"} {
 				file := res.Files[i]
-				want := Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
+				want := Pace{Streams: 1, Files: 1, Group: config.GroupKeep2Share, PerRoute: true}
 				if file.Dir != "Example "+slug || file.Name != "First Clip.mp4" || file.URL != "" || file.Resolve == nil || file.Pace == nil || *file.Pace != want {
 					t.Fatalf("K2S handoff lost ordering, metadata or proxy pacing: %+v", file)
 				}

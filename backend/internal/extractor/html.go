@@ -13,6 +13,7 @@ import (
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
@@ -165,8 +166,8 @@ func trimSiteSuffix(title string) string {
 // existing downloads are filed under.
 func folderName(title string) string {
 	title = sourceFolder(title)
-	if runes := []rune(title); len(runes) > 80 {
-		return strings.TrimSpace(string(runes[:80]))
+	if runes := []rune(title); len(runes) > config.MaxFolderNameRunes {
+		return strings.TrimSpace(string(runes[:config.MaxFolderNameRunes]))
 	}
 	return title
 }

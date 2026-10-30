@@ -53,9 +53,15 @@ type pageWalk[T any] struct {
 	// own; the pages' notes and limitNote still stand.
 	quiet bool
 	// failed is the note for a later page that could not be fetched, in
-	// place of the walk's own, or of none when quiet.
+	// place of the walk's own, or of none when quiet; "" is no note, and
+	// pageFailed the walk's own after all.
 	failed func(error) string
 }
+
+// pageFailed, returned by a pageWalk's failed hook, leaves the note to the
+// walk, as if there were no hook: a hook that singles out one failure need
+// not spell out the note for the rest.
+const pageFailed = "\x00page failed"
 
 // walkPages follows a paged listing from its first page and returns its
 // entries in order without repeats, and the note for a walk that stopped
@@ -93,9 +99,11 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 			if n == 0 {
 				return nil, "", err
 			}
+			note = pageFailed
 			if w.failed != nil {
 				note = w.failed(err)
-			} else {
+			}
+			if note == pageFailed {
 				note = own("partial — could not fetch next page")
 			}
 			break

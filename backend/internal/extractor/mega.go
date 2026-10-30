@@ -157,6 +157,9 @@ type megaLink struct {
 	key []byte
 	// node names one file inside a folder share, when the link selects one.
 	node string
+	// sub names a subfolder of a folder share, when the link selects one:
+	// only the files under it are taken, filed from it down.
+	sub string
 }
 
 // parseMegaLink reads both link shapes mega has used.
@@ -176,8 +179,12 @@ func parseMegaLink(u *url.URL) (*megaLink, error) {
 		case "file", "embed":
 			return newMegaLink(false, segs[1], frag, "")
 		case "folder":
-			key, node := splitMegaFolderFragment(frag)
-			return newMegaLink(true, segs[1], key, node)
+			key, node, sub := splitMegaFolderFragment(frag)
+			link, err := newMegaLink(true, segs[1], key, node)
+			if link != nil {
+				link.sub = sub
+			}
+			return link, err
 		}
 	}
 
@@ -200,22 +207,26 @@ func parseMegaLink(u *url.URL) (*megaLink, error) {
 	return nil, fmt.Errorf("mega: %s is not a file or folder link", u.Redacted())
 }
 
-// splitMegaFolderFragment separates a folder key from the node a link may
-// select after it: "<key>/file/<node>".
+// splitMegaFolderFragment separates a folder key from what a link may
+// select after it: a file, "<key>/file/<node>", or a subfolder,
+// "<key>/folder/<sub>".
 //
-// Only a file selection is honoured. The same shape with "folder" selects a
-// subtree, which there is no way to name to the API separately — taking it
-// for a file handle would find nothing and report the folder as empty,
-// where ignoring it downloads the whole share.
-func splitMegaFolderFragment(frag string) (key, node string) {
+// The API lists the whole share either way, so a subfolder is picked out of
+// that listing rather than asked for; one the listing does not hold leaves
+// the whole share, as a selection nothing can be found for is no reason to
+// download nothing.
+func splitMegaFolderFragment(frag string) (key, node, sub string) {
 	key, rest, ok := strings.Cut(frag, "/")
 	if !ok {
-		return key, ""
+		return key, "", ""
 	}
-	if kind, handle, ok := strings.Cut(rest, "/"); ok && kind == "file" {
-		return key, handle
+	switch kind, handle, _ := strings.Cut(rest, "/"); kind {
+	case "file":
+		return key, handle, ""
+	case "folder":
+		return key, "", handle
 	}
-	return key, ""
+	return key, "", ""
 }
 
 // newMegaLink validates the parts and decodes the key.
@@ -318,11 +329,21 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 	}
 
 	res := &Result{Title: megaFolderTitle(nodes, order)}
+	// top is the subfolder the link selects, when the listing holds it; its
+	// files are filed from it down, under its name.
+	top := ""
+	if sub := nodes[link.sub]; link.sub != "" && sub != nil && sub.node.Type == megaTypeFolder {
+		top = link.sub
+		res.Title = util.FirstNonEmpty(sub.name, res.Title)
+	}
 	for _, dec := range order {
 		if dec.node.Type != megaTypeFile || dec.key == nil {
 			continue
 		}
 		if link.node != "" && dec.node.Handle != link.node {
+			continue
+		}
+		if top != "" && !megaUnder(nodes, dec, top) {
 			continue
 		}
 		key, nonce, _, err := megaFileKey(dec.key)
@@ -333,7 +354,7 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 		cmd := megaCommand{A: "g", G: 1, SSL: 2, N: dec.node.Handle}
 		res.Files = append(res.Files, File{
 			Name:    name,
-			Dir:     megaDir(nodes, dec),
+			Dir:     megaDir(nodes, dec, top),
 			Size:    dec.node.Size,
 			Cipher:  &StreamCipher{Key: key, Nonce: nonce},
 			Resolve: m.resolver(link.handle, cmd, name),
@@ -412,7 +433,7 @@ func (d *megaDecrypted) decrypt(share []byte) {
 }
 
 // megaDir builds the relative directory a file sits in, walking up towards
-// the share root.
+// the share root, or towards top, the subfolder a link selects, when set.
 //
 // The root itself is left out, because the manager already files a
 // multi-file job under the job title and that is the same name. It is
@@ -420,24 +441,38 @@ func (d *megaDecrypted) decrypt(share []byte) {
 // own parent is not in the listing — so the two cannot disagree and produce
 // the folder name twice. The depth bound doubles as a guard against a
 // listing whose parents form a cycle.
-func megaDir(nodes map[string]*megaDecrypted, file *megaDecrypted) string {
+func megaDir(nodes map[string]*megaDecrypted, file *megaDecrypted, top string) string {
 	var parts []string
-	for handle := file.node.Parent; len(parts) < config.MaxFolderDepth; {
+	for handle := file.node.Parent; len(parts) < config.MaxFolderDepth && (top == "" || handle != top); {
 		parent := nodes[handle]
 		if parent == nil || parent.node.Type == megaTypeRoot || nodes[parent.node.Parent] == nil {
 			break // the share root, or a parent outside the listing
 		}
-		// A folder whose name would not decrypt still has a place in the
-		// tree. Dropping it and everything above would fold two deep
-		// branches into one shallower folder, where their files collide.
-		name := parent.name
-		if name == "" {
-			name = handle
-		}
-		parts = append([]string{name}, parts...)
+		// Each name is one component: a slash in one is no folder of its
+		// own. A folder whose name would not decrypt still has a place in
+		// the tree, by its handle. Dropping it and everything above would
+		// fold two deep branches into one shallower folder, where their
+		// files collide.
+		parts = append([]string{treeDir(parent.name, handle)}, parts...)
 		handle = parent.node.Parent
 	}
 	return path.Join(parts...)
+}
+
+// megaUnder reports whether file sits somewhere under the folder top.
+func megaUnder(nodes map[string]*megaDecrypted, file *megaDecrypted, top string) bool {
+	handle := file.node.Parent
+	for range config.MaxFolderDepth {
+		if handle == top {
+			return true
+		}
+		parent := nodes[handle]
+		if parent == nil {
+			return false
+		}
+		handle = parent.node.Parent
+	}
+	return false
 }
 
 // megaFolderTitle names the job after the shared folder itself, which is the

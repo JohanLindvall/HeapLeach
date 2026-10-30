@@ -4,8 +4,12 @@ package extractor
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -186,4 +190,76 @@ func TestGoogleDriveRecognise(t *testing.T) {
 	expectShape(t, g, "https://share.example.test/uc?export=download&id=FILEID123456", true)
 	expectShape(t, g, "https://share.example.test/uc", false)
 	expectShape(t, g, "https://share.example.test/drive/folders/FOLDERID123", false)
+}
+
+// mediafireFolderServer serves folder listings by "<key> <kind> <chunk>",
+// each the JSON of one chunk; anything else fails.
+func mediafireFolderServer(t *testing.T, chunks map[string]string) (*Mediafire, *atomic.Int32) {
+	t.Helper()
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/folder/get_content.php" {
+			http.NotFound(w, r)
+			return
+		}
+		asked.Add(1)
+		body, ok := chunks[q.Get("folder_key")+" "+q.Get("content_type")+" "+q.Get("chunk")]
+		if !ok {
+			http.Error(w, "unavailable", http.StatusForbidden)
+			return
+		}
+		fmt.Fprintf(w, `{"response":{"result":"Success","folder_content":%s}}`, body)
+	}))
+	t.Cleanup(srv.Close)
+	return &Mediafire{client: testClient(), api: srv.URL}, &asked
+}
+
+// TestMediafireFolderPages covers a folder share's chunks: a repeated chunk
+// ends the files with a note, a subfolder whose own subfolders will not list
+// keeps its files and says so, and the file limit stops the reading.
+func TestMediafireFolderPages(t *testing.T) {
+	m, _ := mediafireFolderServer(t, map[string]string{
+		"root files 1":    `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"yes"}`,
+		"root files 2":    `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"yes"}`,
+		"root folders 1":  `{"folders":[{"folderkey":"sub","name":"Sub / Folder"}],"more_chunks":"no"}`,
+		"sub files 1":     `{"files":[{"quickkey":"qb","filename":"b.bin"}],"more_chunks":"no"}`,
+		"nothing files 1": `{"files":[],"more_chunks":"no"}`,
+	})
+	res, err := m.extractFolder(context.Background(), "root", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(filePaths(res.Files), ","); got != "a.bin,Sub _ Folder/b.bin" {
+		t.Errorf("files = %s", got)
+	}
+	if res.Note != "partial — repeated or empty page; unreadable folders" {
+		t.Errorf("note = %q", res.Note)
+	}
+
+	// An empty last chunk is the end of the listing, nothing to note.
+	leaf, _ := mediafireFolderServer(t, map[string]string{
+		"leaf files 1":   `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"no"}`,
+		"leaf folders 1": `{"folders":[],"more_chunks":"no"}`,
+	})
+	if res, err := leaf.extractFolder(context.Background(), "leaf", Options{}); err != nil || len(res.Files) != 1 || res.Note != "" {
+		t.Errorf("a folder of one file: %+v, %v", res, err)
+	}
+
+	// A folder whose subfolders will not list and that holds no files of
+	// its own is a folder that could not be read.
+	if _, err := m.extractFolder(context.Background(), "nothing", Options{}); err == nil {
+		t.Error("an unreadable folder resolved")
+	}
+
+	full, asked := mediafireFolderServer(t, map[string]string{
+		"root files 1": `{"files":[{"quickkey":"qa","filename":"a.bin"},{"quickkey":"qb","filename":"b.bin"}],"more_chunks":"yes"}`,
+	})
+	res, err = full.extractFolder(context.Background(), "root", Options{limits: Limits{Files: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Note != "partial — file limit" || asked.Load() != 1 {
+		t.Errorf("files = %d, note = %q, asked %d; want 1, the file limit, one chunk", len(res.Files), res.Note, asked.Load())
+	}
 }

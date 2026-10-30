@@ -17,8 +17,18 @@ back to the folder's id where the label makes no name. A subfolder that cannot
 be read is left out rather than failing the share, and every cut — a limit or
 an unreadable folder — is a "partial — …" note. An error reading the root, or
 one the reader wraps in `treeStop` (filester's password gate), fails the job.
+
+A folder that is itself paged — gofile's pages, mediafire's chunks — is read
+through `walkPages`, and a listing that stopped short (the page cap, a later
+page that failed, a page that added nothing) is put on the walk's note with
+`treeWalk.partial`. The reader stops reading once the folder's files exceed
+`treeWalk.room()`: none past it could be taken, and the walk says the file
+limit cut the share. The root of a gofile share is read before the walk,
+against the file limit itself, and its note seeds the result's.
+
 mega builds its tree from one listing and autoindex crawls a server's own
-pages, so neither goes through it.
+pages, so neither goes through it; their bounds and notes are their own,
+below.
 
 ## bunkr
 
@@ -78,6 +88,7 @@ agrees, which `rejectWebPage` catches ([transfers.md](../transfers.md)).
 The root folder is read in `Extract`, where a stale account token is renewed;
 subfolders are read by the tree walk ([above](#nested-folders)) with the same
 token and password, so a subfolder that refuses either is noted and left out.
+A folder's pages end where `hasNextPage` says, or at a page without children.
 
 ## pixeldrain
 
@@ -111,6 +122,14 @@ found — every candidate is tried and the one whose attributes carry the prefix
 is the right one. The per-file MAC is deliberately not verified; see the
 comment on `megaFileKey`. The payload is AES-CTR, set as `File.Cipher` and
 decrypted on the way to disk.
+
+A folder share is listed whole in one request, and `megaDir` files each file
+under its decrypted folder names, each one directory through `treeDir`: a
+slash in a name is no folder of its own, and a name that makes none (empty,
+undecryptable, `.` or `..`) is the folder's handle. A link may select one
+file (`#<key>/file/<node>`) or one subfolder (`#<key>/folder/<sub>`); a
+subfolder is picked out of the listing, its files filed from it down under
+its name, and one the listing does not hold leaves the whole share.
 
 ### Transfer quota
 
@@ -249,3 +268,26 @@ all; for those, `/i/<slug>/direct` redirects to the media host.
 `imagePondDirect`, and both are needed, since pages of both kinds are served.
 The fallback needs one guard: `util.NameFromURL` on a `/direct` URL yields the
 literal "direct", which is not a filename.
+
+## mediafire
+
+A folder is listed through the API, files first and then subfolders, each in
+chunks (`get_content.php`). `more_chunks` is the API saying whether another
+chunk follows, so its absence ends the listing however empty the last chunk
+is: a folder of only subfolders answers an empty file chunk. The files'
+first chunk failing is the folder failing; once some files are read, the
+subfolders failing leaves them standing with "unreadable folders". Past the
+walk's room the subfolders are not asked for, since they come after the
+files and could not fit either.
+
+## Open directories (autoindex)
+
+autoindex crawls a server's generated listings a level at a time, so a
+level's directories are read concurrently and the bounds apply between
+levels, where the counts are settled. It is bounded like a folder share: no
+more directories than the user's source limit, no more files than their file
+limit, and no deeper than `config.MaxDirectoryDepth`, the guard against a
+symlink loop whose every traversal has a longer URL. Its notes are the tree
+walk's words — "partial — folder limit", "file limit", "unreadable folders" —
+for a bound that left a named directory unread, a cut file list, or a
+subdirectory that would not load (which is skipped, not fatal).

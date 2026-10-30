@@ -92,7 +92,7 @@ func TestPlainPageFileLinksRespectCapsAndReportUnavailableSources(t *testing.T) 
 			<a href="https://fileboom.example.test/file/second">second</a></html>`)
 			res, _, err := reg.Extract(context.Background(), base+"/thread.html", Options{limits: tc.limits})
 			if tc.err {
-				if err == nil || !strings.Contains(err.Error(), "resolved to a file") {
+				if err == nil || !strings.Contains(err.Error(), "could be read: fileboom: file is unavailable") {
 					t.Fatalf("unavailable links fell back to downloading the HTML: %v", err)
 				}
 				return

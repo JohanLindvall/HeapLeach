@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -45,6 +44,8 @@ type Gofile struct {
 	// which matters here, since the way to test a secret against gofile is
 	// to sign badly with it.
 	scriptURL string
+	// api is the content API's base, a field so a test can serve it.
+	api string
 
 	mu       sync.Mutex
 	token    string
@@ -90,6 +91,7 @@ func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 		fallback:  cfg.GofileSecret,
 		lang:      cfg.Language,
 		scriptURL: gofileRoot + gofileScriptPath,
+		api:       gofileAPI,
 	}
 }
 
@@ -132,18 +134,19 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		return nil, err
 	}
 
-	root, err := g.fetchContent(ctx, code, token, opts.Password)
+	root, note, err := g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	if errors.Is(err, errGofileStaleToken) {
 		if token, err = g.ensureToken(ctx, true); err != nil {
 			return nil, err
 		}
-		root, err = g.fetchContent(ctx, code, token, opts.Password)
+		root, note, err = g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	res := &Result{Title: root.Name}
+	// A root listing cut short is noted before the walk adds its own.
+	res := &Result{Title: root.Name, Note: note}
 	if err := walkTree(ctx, opts, res, root.ID, root, g.lister(token, opts.Password)); err != nil {
 		return nil, err
 	}
@@ -154,12 +157,16 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 // since reading it is where a stale token shows; a subfolder arrives as its
 // listing entry and is fetched here.
 func (g *Gofile) lister(token, password string) treeList[*gofileContent] {
-	return func(ctx context.Context, _ *treeWalk, c *gofileContent, depth int) ([]treeItem[*gofileContent], error) {
+	return func(ctx context.Context, w *treeWalk, c *gofileContent, depth int) ([]treeItem[*gofileContent], error) {
 		if depth > 0 {
-			var err error
-			if c, err = g.fetchContent(ctx, c.ID, token, password); err != nil {
+			var (
+				note string
+				err  error
+			)
+			if c, note, err = g.fetchContent(ctx, c.ID, token, password, w.room()); err != nil {
 				return nil, err
 			}
+			w.partial(note)
 		}
 		var items []treeItem[*gofileContent]
 		if c.Type == "file" { // a share of one file
@@ -218,63 +225,83 @@ func (g *Gofile) downloadHeaders(token string) httpx.Header {
 
 var errGofileStaleToken = errors.New("gofile: account token rejected")
 
-// fetchContent GETs one content id, following pagination and merging pages.
-func (g *Gofile) fetchContent(ctx context.Context, id, token, password string) (*gofileContent, error) {
+// fetchContent GETs one content id, following its pages and merging them,
+// with the note for a listing that stopped short of its end. room is how
+// many files the caller can still take: once a page brings the folder's
+// files past it the rest are not read, since none of them would fit, and
+// the tree walk says the file limit cut the share.
+func (g *Gofile) fetchContent(ctx context.Context, id, token, password string, room int) (*gofileContent, string, error) {
 	secret, err := g.ensureSecret(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	var merged *gofileContent
+	var (
+		head  *gofileContent
+		files = make(map[string]bool)
+	)
+	children, note, err := walkPages(ctx, pageWalk[*gofileContent]{
+		key:   func(c *gofileContent) string { return c.ID },
+		limit: -1,
+		fetch: func(ctx context.Context, n int) (pageOf[*gofileContent], error) {
+			q := url.Values{
+				"page":          {strconv.Itoa(n + 1)},
+				"pageSize":      {strconv.Itoa(config.FolderPageSize)},
+				"sortField":     {"createTime"},
+				"sortDirection": {"-1"},
+			}
+			if password != "" {
+				sum := sha256.Sum256([]byte(password))
+				q.Set("password", hex.EncodeToString(sum[:]))
+			}
+			endpoint := g.api + "/contents/" + url.PathEscape(id) + "?" + q.Encode()
 
-	// Bounded the way every paginated listing here is: the API says when the
-	// pages end, and the cap is the backstop against one that keeps saying
-	// there is more. MaxAlbumPages of FolderPageSize children per folder sits
-	// at the same order as MaxListingFiles, which bounds the job as a whole.
-	for page := 1; page <= config.MaxAlbumPages; page++ {
-		q := url.Values{
-			"page":          {strconv.Itoa(page)},
-			"pageSize":      {strconv.Itoa(config.FolderPageSize)},
-			"sortField":     {"createTime"},
-			"sortDirection": {"-1"},
-		}
-		if password != "" {
-			sum := sha256.Sum256([]byte(password))
-			q.Set("password", hex.EncodeToString(sum[:]))
-		}
-		endpoint := gofileAPI + "/contents/" + url.PathEscape(id) + "?" + q.Encode()
-
-		var env gofileEnvelope
-		err = g.client.GetJSON(ctx, endpoint, httpx.Header{
-			httpx.HeaderAuthorization: "Bearer " + token,
-			gofileHeaderWebsiteToken:  g.websiteToken(token, secret, time.Now()),
-			gofileHeaderLanguage:      g.lang,
-			httpx.HeaderOrigin:        gofileRoot,
-			httpx.HeaderReferer:       gofileRoot + "/",
-		}, &env)
-		if err != nil {
-			return nil, g.explain(err)
-		}
-		if env.Status != "ok" {
-			return nil, g.statusError(env.Status)
-		}
-		if env.Data.CanAccess != nil && !*env.Data.CanAccess {
-			return nil, env.Data.accessError()
-		}
-
-		if merged == nil {
-			merged = &env.Data
-		} else {
-			maps.Copy(merged.Children, env.Data.Children)
-			merged.ChildrenIDs = append(merged.ChildrenIDs, env.Data.ChildrenIDs...)
-		}
-		if !env.Metadata.HasNextPage || len(env.Data.Children) == 0 {
-			return merged, nil
-		}
+			var env gofileEnvelope
+			err := g.client.GetJSON(ctx, endpoint, httpx.Header{
+				httpx.HeaderAuthorization: "Bearer " + token,
+				gofileHeaderWebsiteToken:  g.websiteToken(token, secret, time.Now()),
+				gofileHeaderLanguage:      g.lang,
+				httpx.HeaderOrigin:        gofileRoot,
+				httpx.HeaderReferer:       gofileRoot + "/",
+			}, &env)
+			if err != nil {
+				return pageOf[*gofileContent]{}, g.explain(err)
+			}
+			if env.Status != "ok" {
+				return pageOf[*gofileContent]{}, g.statusError(env.Status)
+			}
+			if env.Data.CanAccess != nil && !*env.Data.CanAccess {
+				return pageOf[*gofileContent]{}, env.Data.accessError()
+			}
+			if head == nil {
+				head = &env.Data
+			}
+			// The API says which page is the last; a page without
+			// children ends the listing too, whatever its metadata says.
+			p := pageOf[*gofileContent]{items: env.Data.orderedChildren(), next: env.Metadata.HasNextPage}
+			p.end = !p.next || len(p.items) == 0
+			for _, c := range p.items {
+				if c.Type == "file" && c.Link != "" {
+					files[c.ID] = true
+				}
+			}
+			if len(files) > room {
+				p.end = true
+			}
+			return p, nil
+		},
+	})
+	if err != nil {
+		return nil, "", err
 	}
-	// The cap bit before the API said it was done; what is in hand is a
-	// truncated listing, which is still worth more than an error.
-	return merged, nil
+	merged := *head
+	merged.Children = make(map[string]gofileContent, len(children))
+	merged.ChildrenIDs = make([]string, 0, len(children))
+	for _, c := range children {
+		merged.Children[c.ID] = *c
+		merged.ChildrenIDs = append(merged.ChildrenIDs, c.ID)
+	}
+	return &merged, note, nil
 }
 
 // websiteToken reproduces gofile's client-side request signature.

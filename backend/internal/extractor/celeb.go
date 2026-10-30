@@ -180,11 +180,8 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("celeb: no images found")
 	}
-	// A gallery that came up short says by how much, whatever stopped it.
-	res.Note = note
-	if p.Creator.ImageCount > len(res.Files) {
-		res.Note = fmt.Sprintf("%d of %d images", len(res.Files), p.Creator.ImageCount)
-	}
+	// A gallery that came up short says by how much, beside what stopped it.
+	res.Note = listingNote(note, cappedNote(len(res.Files), p.Creator.ImageCount, "images"))
 	return res, nil
 }
 

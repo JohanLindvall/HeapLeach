@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"path"
 	"strings"
-	"sync/atomic"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -73,6 +72,11 @@ type expansion struct {
 	// no extractor recognised. They were never sources, so they count
 	// neither as resolved nor as failed.
 	unrecognised int
+	// refusals and failed are why sources did not resolve: the reasons of
+	// those refused, in order, and the first other failure, for a caller
+	// whose sources all failed to say why (noneRead).
+	refusals []string
+	failed   error
 }
 
 // expandSources resolves the sources in order, several at a time, until
@@ -108,17 +112,6 @@ func expandSources(ctx context.Context, registry *Registry, sources []string, op
 // without registering every page on that host as a supported source.
 func expandSourcesWith(ctx context.Context, sources []string, opts Options, extract func(context.Context, string) (*Result, error)) expansion {
 	limit := opts.maxFiles()
-	var unrecognised atomic.Int32
-	fetch := func(ctx context.Context, link string) ([]sourceResult, error) {
-		res, err := extract(ctx, link)
-		if errors.Is(err, errUnrecognised) {
-			unrecognised.Add(1)
-		}
-		if err != nil {
-			return nil, err
-		}
-		return []sourceResult{{link: link, res: res}}, nil
-	}
 
 	// A few rounds of slots at a time: enough that a slow source holds up
 	// little, few enough that the cap overshoots by a handful of requests.
@@ -127,10 +120,24 @@ func expandSourcesWith(ctx context.Context, sources []string, opts Options, extr
 		resolved []sourceResult
 		e        expansion
 		total    int
+		// failures are the sources that did not resolve, less those no
+		// extractor recognised, which were never sources.
+		failures []outcome[string, *Result]
 	)
 walk:
 	for start := 0; start < len(sources); start += batch {
-		for _, r := range FanOut(ctx, sources[start:min(start+batch, len(sources))], fetch) {
+		var batchResolved []sourceResult
+		for _, out := range resolveOutcomes(ctx, sources[start:min(start+batch, len(sources))], false, extract) {
+			switch {
+			case errors.Is(out.err, errUnrecognised):
+				e.unrecognised++
+			case out.err != nil:
+				failures = append(failures, out)
+			case out.got != nil:
+				batchResolved = append(batchResolved, sourceResult{link: out.item, res: out.got})
+			}
+		}
+		for _, r := range batchResolved {
 			n := len(r.res.Files)
 			if total+n > limit {
 				e.full = true
@@ -172,7 +179,7 @@ walk:
 		e.files = append(e.files, sourceFiles(r.res, folder)...)
 	}
 	e.used = len(resolved)
-	e.unrecognised = int(unrecognised.Load())
+	e.refusals, e.failed = sortOutcomes(failures)
 	return e
 }
 

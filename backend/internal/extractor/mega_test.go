@@ -53,20 +53,21 @@ func TestParseMegaLink(t *testing.T) {
 		wantFolder bool
 		wantHandle string
 		wantNode   string
+		wantSub    string
 	}{
 		{
 			name:       "file",
-			raw:        "https://mega.nz/file/AAAAAAAA#" + fileKey,
+			raw:        "https://mega.example.test/file/AAAAAAAA#" + fileKey,
 			wantHandle: "AAAAAAAA",
 		},
 		{
 			name:       "embed",
-			raw:        "https://mega.nz/embed/AAAAAAAA#" + fileKey,
+			raw:        "https://mega.example.test/embed/AAAAAAAA#" + fileKey,
 			wantHandle: "AAAAAAAA",
 		},
 		{
 			name:       "legacy file",
-			raw:        "https://mega.nz/#!AAAAAAAA!" + fileKey,
+			raw:        "https://mega.example.test/#!AAAAAAAA!" + fileKey,
 			wantHandle: "AAAAAAAA",
 		},
 		{
@@ -76,26 +77,33 @@ func TestParseMegaLink(t *testing.T) {
 		},
 		{
 			name:       "folder",
-			raw:        "https://mega.nz/folder/BBBBBBBB#" + folderKey,
+			raw:        "https://mega.example.test/folder/BBBBBBBB#" + folderKey,
 			wantFolder: true,
 			wantHandle: "BBBBBBBB",
 		},
 		{
 			name:       "file inside a folder",
-			raw:        "https://mega.nz/folder/BBBBBBBB#" + folderKey + "/file/CCCCCCCC",
+			raw:        "https://mega.example.test/folder/BBBBBBBB#" + folderKey + "/file/CCCCCCCC",
 			wantFolder: true,
 			wantHandle: "BBBBBBBB",
 			wantNode:   "CCCCCCCC",
 		},
 		{
+			name:       "folder inside a folder",
+			raw:        "https://mega.example.test/folder/BBBBBBBB#" + folderKey + "/folder/DDDDDDDD",
+			wantFolder: true,
+			wantHandle: "BBBBBBBB",
+			wantSub:    "DDDDDDDD",
+		},
+		{
 			name:       "legacy folder",
-			raw:        "https://mega.nz/#F!BBBBBBBB!" + folderKey,
+			raw:        "https://mega.example.test/#F!BBBBBBBB!" + folderKey,
 			wantFolder: true,
 			wantHandle: "BBBBBBBB",
 		},
 		{
 			name:       "legacy folder with a node",
-			raw:        "https://mega.nz/#F!BBBBBBBB!" + folderKey + "!CCCCCCCC",
+			raw:        "https://mega.example.test/#F!BBBBBBBB!" + folderKey + "!CCCCCCCC",
 			wantFolder: true,
 			wantHandle: "BBBBBBBB",
 			wantNode:   "CCCCCCCC",
@@ -121,6 +129,9 @@ func TestParseMegaLink(t *testing.T) {
 			if link.node != tc.wantNode {
 				t.Errorf("node = %q, want %q", link.node, tc.wantNode)
 			}
+			if link.sub != tc.wantSub {
+				t.Errorf("sub = %q, want %q", link.sub, tc.wantSub)
+			}
 			want := megaFileKeyLen
 			if tc.wantFolder {
 				want = megaFolderKeyLen
@@ -129,6 +140,37 @@ func TestParseMegaLink(t *testing.T) {
 				t.Errorf("key is %d bytes, want %d", len(link.key), want)
 			}
 		})
+	}
+}
+
+// TestMegaDir files a file under its folders, each name one component —
+// a slash in one is no folder of its own, and a name that makes none is
+// the folder's handle — from the share root or from the subfolder a link
+// selects.
+func TestMegaDir(t *testing.T) {
+	node := func(handle, parent string, kind int, name string) *megaDecrypted {
+		return &megaDecrypted{node: &megaNode{Handle: handle, Parent: parent, Type: kind}, name: name}
+	}
+	nodes := map[string]*megaDecrypted{}
+	for _, n := range []*megaDecrypted{
+		node("RRRR", "OUTSIDE", megaTypeFolder, "Share"),
+		node("AAAA", "RRRR", megaTypeFolder, "Left/Right"),
+		node("BBBB", "AAAA", megaTypeFolder, ""),
+		node("CCCC", "BBBB", megaTypeFolder, ".."),
+		node("FFFF", "CCCC", megaTypeFile, "clip.mp4"),
+		node("GGGG", "RRRR", megaTypeFile, "top.mp4"),
+	} {
+		nodes[n.node.Handle] = n
+	}
+	file, top := nodes["FFFF"], nodes["GGGG"]
+	if got := megaDir(nodes, file, ""); got != "Left_Right/BBBB/CCCC" {
+		t.Errorf("dir = %q", got)
+	}
+	if got := megaDir(nodes, file, "AAAA"); got != "BBBB/CCCC" {
+		t.Errorf("dir under the selected folder = %q", got)
+	}
+	if !megaUnder(nodes, file, "AAAA") || megaUnder(nodes, top, "AAAA") {
+		t.Error("megaUnder misplaced a file")
 	}
 }
 
@@ -142,11 +184,11 @@ func TestParseMegaLinkRejectsUnusableLinks(t *testing.T) {
 		// which of these it was.
 		hint string
 	}{
-		{name: "no key at all", raw: "https://mega.nz/file/AAAAAAAA", hint: "key"},
-		{name: "folder key on a file link", raw: "https://mega.nz/file/AAAAAAAA#" + megaKeyString(syntheticFolderKey()), hint: "bytes"},
-		{name: "not a share link", raw: "https://mega.nz/register", hint: "not a file or folder"},
-		{name: "malformed key", raw: "https://mega.nz/file/AAAAAAAA#not valid base64!!", hint: "key"},
-		{name: "no handle", raw: "https://mega.nz/file/#" + fileKey, hint: "not a file or folder"},
+		{name: "no key at all", raw: "https://mega.example.test/file/AAAAAAAA", hint: "key"},
+		{name: "folder key on a file link", raw: "https://mega.example.test/file/AAAAAAAA#" + megaKeyString(syntheticFolderKey()), hint: "bytes"},
+		{name: "not a share link", raw: "https://mega.example.test/register", hint: "not a file or folder"},
+		{name: "malformed key", raw: "https://mega.example.test/file/AAAAAAAA#not valid base64!!", hint: "key"},
+		{name: "no handle", raw: "https://mega.example.test/file/#" + fileKey, hint: "not a file or folder"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -335,7 +377,7 @@ func megaTestAPI(t *testing.T, answer func(megaCommand) any) *Mega {
 		_ = json.NewEncoder(w).Encode([]any{answer(batch[0])})
 	}))
 	t.Cleanup(srv.Close)
-	m := NewMega(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	m := NewMega(testClient())
 	m.endpoint = srv.URL
 	return m
 }
@@ -367,7 +409,7 @@ func TestMegaQuotaIsAWaitForTheAddressAlone(t *testing.T) {
 		return map[string]any{"g": "http://storage.example.test/dl/token", "s": 4, "at": attrs}
 	})
 
-	u, err := ParseURL("https://mega.nz/file/AAAAAAAA#" + megaKeyString(syntheticFileKey()))
+	u, err := ParseURL("https://mega.example.test/file/AAAAAAAA#" + megaKeyString(syntheticFileKey()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +422,7 @@ func TestMegaQuotaIsAWaitForTheAddressAlone(t *testing.T) {
 		t.Fatalf("added %q of %d bytes at %q after %d descriptions; want the file described once, with no link",
 			f.Name, f.Size, f.URL, infos.Load())
 	}
-	if f.Pace == nil || !f.Pace.DirectFirst || !f.Pace.PerRoute || f.Pace.Group != "mega" || f.Refused == nil {
+	if f.Pace == nil || !f.Pace.DirectFirst || !f.Pace.PerRoute || f.Pace.Group != config.GroupMega || f.Refused == nil {
 		t.Fatalf("pace %+v: the file would not move onto mega's routes", f.Pace)
 	}
 

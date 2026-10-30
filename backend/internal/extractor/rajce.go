@@ -105,13 +105,11 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("rajce: album has no downloadable photos or videos (it may be empty or restricted)")
 	}
-	if album.Count > len(res.Files) {
-		notes = append(notes, fmt.Sprintf("%d of %d files", len(res.Files), album.Count))
-	}
+	notes = append(notes, cappedNote(len(res.Files), album.Count, "files"))
 	if unavailable > 0 {
 		notes = append(notes, fmt.Sprintf("%d album items unavailable", unavailable))
 	}
-	res.Note = strings.Join(notes, "; ")
+	res.Note = listingNote(notes...)
 	return res, nil
 }
 

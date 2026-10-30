@@ -107,7 +107,7 @@ func (a *Autoindex) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 	if p := probed(ctx, u); p != nil && p.OK() && p.Final.String() != u.String() {
 		u = p.Final // a redirect added the slash, or moved the directory
 	}
-	return a.crawl(ctx, u, opts.maxFiles())
+	return a.crawl(ctx, u, opts)
 }
 
 // ------------------------------------------------------------------ crawl
@@ -144,7 +144,10 @@ type autoindexEntry struct {
 // several at a time; and the budget is then applied between levels, where
 // the counts are settled, so which files a truncated crawl returns does not
 // depend on how the requests happened to interleave.
-func (a *Autoindex) crawl(ctx context.Context, u *url.URL, maxFiles int) (*Result, error) {
+//
+// Where a bound cut the tree, or a subdirectory could not be read, the
+// result says so in the words a folder share's walk uses (treeWalk).
+func (a *Autoindex) crawl(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	root := &autoindexNode{base: autoindexBase(u)}
 	if err := a.read(ctx, root); err != nil {
 		return nil, err
@@ -155,65 +158,80 @@ func (a *Autoindex) crawl(ctx context.Context, u *url.URL, maxFiles int) (*Resul
 	// see is a symlinked loop, whose every traversal has a longer URL than
 	// the last; the depth cap is what ends that one.
 	visited := map[string]bool{root.base.String(): true}
-	budget := autoindexBudget{dirs: 1, files: len(root.files), maxFiles: maxFiles}
+	budget := autoindexBudget{dirs: 1, files: len(root.files), maxFiles: opts.maxFiles(), maxDirs: opts.maxSources()}
+	res := &Result{Title: autoindexTitle(root.base)}
+	w := &treeWalk{res: res}
 
 	level := []*autoindexNode{root}
-	for depth := 1; depth <= config.MaxAutoindexDepth; depth++ {
-		next := autoindexDescend(level, visited, &budget)
+	for depth := 1; ; depth++ {
+		if depth > config.MaxDirectoryDepth {
+			if autoindexPending(level, visited) {
+				w.note("folder limit")
+			}
+			break
+		}
+		next, cut := autoindexDescend(level, visited, &budget)
+		if cut != "" {
+			w.note(cut)
+		}
 		if len(next) == 0 {
 			break
 		}
-		a.readAll(ctx, next)
+		if a.readAll(ctx, next) {
+			w.note("unreadable folders")
+		}
 		for _, node := range next {
 			budget.files += len(node.files)
 		}
 		level = next
 	}
-
-	files := autoindexFlatten(root, nil)
-	if limit := budget.fileCap(); len(files) > limit {
-		files = files[:limit]
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if len(files) == 0 {
+
+	res.Files = autoindexFlatten(root, nil)
+	if len(res.Files) > budget.maxFiles {
+		res.Files = res.Files[:budget.maxFiles]
+		w.note("file limit")
+	}
+	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("autoindex: %s lists no files", root.base.Redacted())
 	}
-	return &Result{Title: autoindexTitle(root.base), Files: files}, nil
+	return res, nil
 }
 
-// autoindexBudget is what stops a crawl that would not stop on its own.
+// autoindexBudget is what stops a crawl that would not stop on its own: the
+// user's file limit, and their source limit on the directories read, as on
+// any folder share.
 type autoindexBudget struct {
-	dirs  int
-	files int
-	// maxFiles is the listing cap in force; zero means the default.
-	maxFiles int
+	dirs, maxDirs   int
+	files, maxFiles int
 }
 
-// fileCap is how many files the crawl may return.
-func (b *autoindexBudget) fileCap() int {
-	if b.maxFiles > 0 {
-		return b.maxFiles
+// spent is why the crawl may read no more, or "" while it may.
+func (b *autoindexBudget) spent() string {
+	switch {
+	case b.files >= b.maxFiles:
+		return "file limit"
+	case b.dirs >= b.maxDirs:
+		return "folder limit"
 	}
-	return config.MaxListingFiles
-}
-
-// spent reports whether the crawl has read as much as it is allowed to.
-func (b *autoindexBudget) spent() bool {
-	return b.dirs >= config.MaxAutoindexDirs || b.files >= b.fileCap()
+	return ""
 }
 
 // autoindexDescend turns the subdirectories a level named into the next
 // level, in listing order, and is the only place the budget and the cycle
-// guard are consulted.
-func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *autoindexBudget) []*autoindexNode {
-	var next []*autoindexNode
+// guard are consulted. cut is why it stopped short of a directory the
+// level named, if it did.
+func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *autoindexBudget) (next []*autoindexNode, cut string) {
 	for _, node := range level {
 		for _, entry := range node.pending {
-			if budget.spent() {
-				return next
-			}
 			key := entry.url.String()
 			if visited[key] {
 				continue
+			}
+			if cut = budget.spent(); cut != "" {
+				return next, cut
 			}
 			visited[key] = true
 			budget.dirs++
@@ -224,22 +242,39 @@ func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *a
 		}
 		node.pending = nil
 	}
-	return next
+	return next, ""
 }
 
-// readAll reads a level's directories several at a time.
+// autoindexPending reports whether a level named a directory not yet read.
+func autoindexPending(level []*autoindexNode, visited map[string]bool) bool {
+	for _, node := range level {
+		for _, entry := range node.pending {
+			if !visited[entry.url.String()] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readAll reads a level's directories several at a time, and reports
+// whether any could not be read.
 //
 // A subdirectory that will not load, or that answers with something that is
 // not a listing, is skipped rather than failing the crawl: on a tree of
 // hundreds the rest is still worth having, and the root — the only page the
 // user actually named — was already read on its own, where its failure is
 // reported.
-func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) {
+func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) (failed bool) {
 	// The nodes are filled in place; FanOut is used for its bounded, ordered
-	// scheduling and nothing is collected from it.
-	FanOut(ctx, nodes, func(ctx context.Context, node *autoindexNode) ([]struct{}, error) {
-		return nil, a.read(ctx, node)
+	// scheduling, and collects only the failures.
+	failures := FanOut(ctx, nodes, func(ctx context.Context, node *autoindexNode) ([]bool, error) {
+		if err := a.read(ctx, node); err != nil && ctx.Err() == nil {
+			return []bool{true}, nil
+		}
+		return nil, nil
 	})
+	return len(failures) > 0
 }
 
 // read fetches one directory and fills in its files and subdirectories.

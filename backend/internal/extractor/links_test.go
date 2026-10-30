@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -39,10 +38,10 @@ const linksThreadPage = `<html><head><title>A thread with things in it | Board</
 <nav><a href="/forums/">Forums</a> <a href="/threads/another-thread">Another thread</a></nav>
 <article class="post">
   <img class="avatar" src="https://media.imagepond.net/media/avatar-1.png">
-  <p>Here you go: <a href="https://gofile.io/d/AAAA" rel="nofollow">gofile.io/d/AAAA</a></p>
+  <p>Here you go: <a href="https://share.example.test/d/AAAA" rel="nofollow">share.example.test/d/AAAA</a></p>
   <p>Mirror: <a href="/goto/link?url=https%3A%2F%2Fpixhost.to%2Fgallery%2Fabc123">https://pixhost.to/gallery/abc123</a></p>
-  <p>And the big one, https://mega.nz/file/AAAAAAAA#SECRETKEY. Enjoy.</p>
-  <p>Reposting <a href="https://gofile.io/d/AAAA">the first one</a> for visibility</p>
+  <p>And the big one, https://mega.example.test/file/AAAAAAAA#SECRETKEY. Enjoy.</p>
+  <p>Reposting <a href="https://share.example.test/d/AAAA">the first one</a> for visibility</p>
   <p>Clip: <iframe src="https://ok.ru/videoembed/1234567890"></iframe></p>
 </article>
 <footer><a href="mailto:staff@example.test">Contact</a>
@@ -73,7 +72,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"https://gofile.io/d/AAAA",
+		"https://share.example.test/d/AAAA",
 		"https://pixhost.to/gallery/abc123",
 		// The player is framed in, and is in no anchor on the page.
 		"https://ok.ru/videoembed/1234567890",
@@ -100,7 +99,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 
 	// The mega key lives in the fragment, and the full stop after it in the
 	// sentence does not belong to the link.
-	const mega = "https://mega.nz/file/AAAAAAAA#SECRETKEY"
+	const mega = "https://mega.example.test/file/AAAAAAAA#SECRETKEY"
 	if _, ok := index[mega]; !ok {
 		t.Errorf("the mega link lost its key or kept the sentence's full stop: %v", got)
 	}
@@ -114,7 +113,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 	}
 
 	// Order is the page's own, which is what the job's file order is built on.
-	if index["https://gofile.io/d/AAAA"] > index["https://ok.ru/videoembed/1234567890"] {
+	if index["https://share.example.test/d/AAAA"] > index["https://ok.ru/videoembed/1234567890"] {
 		t.Error("candidates came back out of page order")
 	}
 }
@@ -131,9 +130,9 @@ func TestLinksSweepIgnoresAPagesOwnFurniture(t *testing.T) {
 
 	got := supportedSources(harvester.registry, linksSweep(t, linksThreadPage), harvester)
 	want := []string{
-		"https://gofile.io/d/AAAA",
+		"https://share.example.test/d/AAAA",
 		"https://pixhost.to/gallery/abc123",
-		"https://mega.nz/file/AAAAAAAA#SECRETKEY",
+		"https://mega.example.test/file/AAAAAAAA#SECRETKEY",
 		"https://ok.ru/videoembed/1234567890",
 	}
 	if len(got) != len(want) {
@@ -169,15 +168,15 @@ func TestLinksSupportedKeepsOnlyRealExtractors(t *testing.T) {
 	harvester := &Links{registry: reg}
 
 	got := supportedSources(harvester.registry, []string{
-		"https://gofile.io/d/AAAA",
+		"https://share.example.test/d/AAAA",
 		"https://board.example.test/threads/another-thread",
 		"https://static.example.test/board.css",
-		"https://mega.nz/file/AAAAAAAA#SECRETKEY",
+		"https://mega.example.test/file/AAAAAAAA#SECRETKEY",
 		// A harvest inside a harvest, which is where the recursion would be.
 		"links:https://board.example.test/threads/a-thread",
 	}, harvester)
 
-	want := []string{"https://gofile.io/d/AAAA", "https://mega.nz/file/AAAAAAAA#SECRETKEY"}
+	want := []string{"https://share.example.test/d/AAAA", "https://mega.example.test/file/AAAAAAAA#SECRETKEY"}
 	if len(got) != len(want) {
 		t.Fatalf("kept %v, want %v", got, want)
 	}
@@ -279,7 +278,7 @@ func TestLinksMatchIsPrefixOnly(t *testing.T) {
 	for raw, want := range map[string]bool{
 		"links:https://board.example.test/t": true,
 		"https://board.example.test/t":       false,
-		"https://gofile.io/d/AAAA":           false,
+		"https://share.example.test/d/AAAA":  false,
 	} {
 		u, err := ParseURL(raw)
 		if err != nil {
@@ -348,7 +347,7 @@ func linksHarvester(t *testing.T, page string, stub Extractor) (*Links, string) 
 	t.Cleanup(srv.Close)
 
 	reg := &Registry{fallback: NewDirect(nil)}
-	harvester := NewLinks(httpx.New("test-agent", "en-US", 0, 5*time.Second), reg)
+	harvester := NewLinks(testClient(), reg)
 	// Harvester first, as NewRegistry orders it.
 	reg.extractors = []Extractor{harvester, stub}
 	return harvester, "links:" + srv.URL + "/threads/a-thread"

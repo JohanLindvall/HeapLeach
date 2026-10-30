@@ -247,7 +247,7 @@ func (c *Civitai) walk(ctx context.Context, next string, opts Options) ([]civita
 			if httpx.HasStatus(err, http.StatusServiceUnavailable) {
 				return "partial — the image search stayed overloaded"
 			}
-			return "partial — could not fetch next page"
+			return pageFailed
 		},
 		fetch: func(ctx context.Context, _ int) (pageOf[civitaiImage], error) {
 			payload, err := c.page(ctx, next)

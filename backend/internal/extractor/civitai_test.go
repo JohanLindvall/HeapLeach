@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -135,7 +134,7 @@ func TestCivitaiRecognise(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := NewCivitai(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	c := NewCivitai(testClient())
 	challenged := func(raw string) *Page {
 		p := fixturePage(t, raw, 0, "", "")
 		p.Challenged = true
@@ -261,7 +260,7 @@ type civitaiResponse struct {
 // extractor's own handling of an overloaded search rather than the shared
 // client's.
 func civitaiTestClient() *Civitai {
-	return &Civitai{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return &Civitai{client: testClient()}
 }
 
 // civitaiCursorPage is a page that points at the next one, carrying the cursor and

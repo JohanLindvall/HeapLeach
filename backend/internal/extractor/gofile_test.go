@@ -3,11 +3,17 @@
 package extractor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -101,4 +107,78 @@ func TestGofileRecognise(t *testing.T) {
 	expectShape(t, g, "https://share.example.test/d/Abc123", true)
 	expectShape(t, g, "https://share.example.test/d/Abc123/extra", false)
 	expectShape(t, g, "https://share.example.test/about", false)
+}
+
+// gofileContentServer serves a folder's pages: page n (from 1) holds the
+// files pages[n-1] names, with another page said to follow while hasNext
+// does; a page past the list fails.
+func gofileContentServer(t *testing.T, pages [][]string, hasNext func(n int) bool) (*Gofile, *atomic.Int32) {
+	t.Helper()
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		n, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if r.URL.Path != "/contents/root" || n < 1 || n > len(pages) {
+			http.Error(w, "no such page", http.StatusNotFound)
+			return
+		}
+		children := map[string]any{}
+		for _, id := range pages[n-1] {
+			children[id] = map[string]any{"id": id, "type": "file", "name": id + ".bin", "link": "https://cdn.example.test/" + id}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":   "ok",
+			"data":     map[string]any{"id": "root", "type": "folder", "name": "Root", "childrenIds": pages[n-1], "children": children},
+			"metadata": map[string]any{"hasNextPage": hasNext(n)},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return &Gofile{client: testClient(), fallback: "a-configured-secret", lang: "en-US", api: srv.URL}, &asked
+}
+
+// TestGofileFetchContentPages covers a folder's pages: merged in order, cut
+// short with a note where they stop early, and no further than the files
+// that can still be taken.
+func TestGofileFetchContentPages(t *testing.T) {
+	always := func(int) bool { return true }
+	for _, tc := range []struct {
+		name    string
+		pages   [][]string
+		hasNext func(int) bool
+		room    int
+		ids     string
+		note    string
+		asked   int32
+	}{
+		{"whole", [][]string{{"a", "b"}, {"c"}}, func(n int) bool { return n < 2 }, 10, "a,b,c", "", 2},
+		{"empty page ends it", [][]string{{"a"}, {}}, always, 10, "a", "", 2},
+		{"later page fails", [][]string{{"a"}}, always, 10, "a", "partial — could not fetch next page", 2},
+		{"repeated page", [][]string{{"a"}, {"a"}}, always, 10, "a", "partial — repeated or empty page", 2},
+		{"no room for more", [][]string{{"a", "b"}, {"c"}}, always, 1, "a,b", "", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, asked := gofileContentServer(t, tc.pages, tc.hasNext)
+			c, note, err := g.fetchContent(context.Background(), "root", "token", "", tc.room)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(c.ChildrenIDs, ","); got != tc.ids || note != tc.note || asked.Load() != tc.asked {
+				t.Errorf("children = %s, note = %q, asked %d; want %s, %q, %d", got, note, asked.Load(), tc.ids, tc.note, tc.asked)
+			}
+			if c.Name != "Root" || len(c.Children) != len(c.ChildrenIDs) {
+				t.Errorf("merged folder = %q with %d children for %d ids", c.Name, len(c.Children), len(c.ChildrenIDs))
+			}
+		})
+	}
+
+	// A page cap reached while the API still says there is more is noted.
+	pages := make([][]string, config.MaxAlbumPages+1)
+	for i := range pages {
+		pages[i] = []string{strconv.Itoa(i)}
+	}
+	g, _ := gofileContentServer(t, pages, always)
+	c, note, err := g.fetchContent(context.Background(), "root", "token", "", 1<<20)
+	if err != nil || len(c.ChildrenIDs) != config.MaxAlbumPages || note != "partial — page limit" {
+		t.Fatalf("children = %d, note = %q, err = %v", len(c.ChildrenIDs), note, err)
+	}
 }

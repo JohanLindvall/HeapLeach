@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -114,6 +113,8 @@ func dropboxIsFolder(u *url.URL) bool {
 // Mediafire resolves file pages and folder shares.
 type Mediafire struct {
 	client *httpx.Client
+	// api is the API's base, a field so a test can serve it.
+	api string
 }
 
 const (
@@ -129,7 +130,7 @@ const (
 
 // NewMediafire builds the mediafire extractor.
 func NewMediafire(client *httpx.Client) *Mediafire {
-	return &Mediafire{client: client}
+	return &Mediafire{client: client, api: mediafireAPI}
 }
 
 func (m *Mediafire) Name() string { return "mediafire" }
@@ -265,8 +266,8 @@ func (m *Mediafire) extractFolder(ctx context.Context, key string, opts Options)
 }
 
 // listFolder reads one folder's files and subfolders for walkTree.
-func (m *Mediafire) listFolder(ctx context.Context, _ *treeWalk, key string, _ int) ([]treeItem[string], error) {
-	files, folders, err := m.folderContent(ctx, key)
+func (m *Mediafire) listFolder(ctx context.Context, w *treeWalk, key string, _ int) ([]treeItem[string], error) {
+	files, folders, err := m.folderContent(ctx, w, key)
 	if err != nil {
 		return nil, err
 	}
@@ -310,47 +311,87 @@ type mediafireFolder struct {
 	Name      string `json:"name"`
 }
 
-// folderContent pages through one folder's files and subfolders.
-func (m *Mediafire) folderContent(ctx context.Context, key string) ([]mediafireFile, []mediafireFolder, error) {
-	var (
-		files   []mediafireFile
-		folders []mediafireFolder
-	)
-	for _, kind := range []string{"files", "folders"} {
-		for chunk := 1; chunk <= config.MaxAlbumPages; chunk++ {
-			q := url.Values{
-				"content_type":    {kind},
-				"folder_key":      {key},
-				"chunk":           {strconv.Itoa(chunk)},
-				"response_format": {"json"},
-			}
-			var env struct {
-				Response struct {
-					Result        string `json:"result"`
-					Message       string `json:"message"`
-					FolderContent struct {
-						Files      []mediafireFile   `json:"files"`
-						Folders    []mediafireFolder `json:"folders"`
-						MoreChunks string            `json:"more_chunks"`
-					} `json:"folder_content"`
-				} `json:"response"`
-			}
-			endpoint := mediafireAPI + "/folder/get_content.php?" + q.Encode()
-			if err := m.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
-				return nil, nil, fmt.Errorf("mediafire: list folder: %w", err)
-			}
-			if env.Response.Result != "" && !strings.EqualFold(env.Response.Result, "Success") {
-				return nil, nil, fmt.Errorf("mediafire: list folder: %s",
-					util.FirstNonEmpty(env.Response.Message, env.Response.Result))
-			}
-			files = append(files, env.Response.FolderContent.Files...)
-			folders = append(folders, env.Response.FolderContent.Folders...)
-			if !strings.EqualFold(env.Response.FolderContent.MoreChunks, "yes") {
-				break
-			}
-		}
+// folderContent pages through one folder's files, then its subfolders,
+// noting on the walk a listing that stopped short. Once the files outnumber
+// the walk's room the rest are not read, nor the subfolders, which come
+// after them and could not fit either: the walk says the file limit cut the
+// share. The files' first chunk failing is the folder failing; once some
+// are read, the subfolders failing leaves them standing, said so.
+func (m *Mediafire) folderContent(ctx context.Context, w *treeWalk, key string) ([]mediafireFile, []mediafireFolder, error) {
+	room := w.room()
+	files, note, err := walkPages(ctx, pageWalk[mediafireFile]{
+		key: func(f mediafireFile) string {
+			return util.FirstNonEmpty(f.QuickKey, f.Links.NormalDownload, f.Filename)
+		},
+		limit: room + 1,
+		fetch: func(ctx context.Context, n int) (pageOf[mediafireFile], error) {
+			c, err := m.contentChunk(ctx, key, "files", n+1)
+			return pageOf[mediafireFile]{items: c.Files, next: c.more(), end: !c.more()}, err
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	w.partial(note)
+	if len(files) > room {
+		return files, nil, nil
+	}
+	folders, note, err := walkPages(ctx, pageWalk[mediafireFolder]{
+		key:   func(f mediafireFolder) string { return f.FolderKey },
+		limit: -1,
+		fetch: func(ctx context.Context, n int) (pageOf[mediafireFolder], error) {
+			c, err := m.contentChunk(ctx, key, "folders", n+1)
+			return pageOf[mediafireFolder]{items: c.Folders, next: c.more(), end: !c.more()}, err
+		},
+	})
+	switch {
+	case err == nil:
+		w.partial(note)
+	case ctx.Err() != nil || len(files) == 0:
+		return nil, nil, err
+	default:
+		w.note("unreadable folders")
 	}
 	return files, folders, nil
+}
+
+// mediafireChunk is one chunk of a folder's content.
+type mediafireChunk struct {
+	Files      []mediafireFile   `json:"files"`
+	Folders    []mediafireFolder `json:"folders"`
+	MoreChunks string            `json:"more_chunks"`
+}
+
+// more says another chunk follows. Its absence is the API saying this chunk
+// is the last, so an empty one — a folder of only subfolders, or none — is
+// the end, not a page that added nothing.
+func (c mediafireChunk) more() bool { return strings.EqualFold(c.MoreChunks, "yes") }
+
+// contentChunk reads one chunk, counted from 1, of a folder's files or
+// subfolders (kind).
+func (m *Mediafire) contentChunk(ctx context.Context, key, kind string, chunk int) (mediafireChunk, error) {
+	q := url.Values{
+		"content_type":    {kind},
+		"folder_key":      {key},
+		"chunk":           {strconv.Itoa(chunk)},
+		"response_format": {"json"},
+	}
+	var env struct {
+		Response struct {
+			Result        string         `json:"result"`
+			Message       string         `json:"message"`
+			FolderContent mediafireChunk `json:"folder_content"`
+		} `json:"response"`
+	}
+	endpoint := m.api + "/folder/get_content.php?" + q.Encode()
+	if err := m.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
+		return mediafireChunk{}, fmt.Errorf("mediafire: list folder: %w", err)
+	}
+	if env.Response.Result != "" && !strings.EqualFold(env.Response.Result, "Success") {
+		return mediafireChunk{}, fmt.Errorf("mediafire: list folder: %s",
+			util.FirstNonEmpty(env.Response.Message, env.Response.Result))
+	}
+	return env.Response.FolderContent, nil
 }
 
 // folderInfo reads a folder's own name, for the job title.
@@ -363,7 +404,7 @@ func (m *Mediafire) folderInfo(ctx context.Context, key string) (string, error) 
 			} `json:"folder_info"`
 		} `json:"response"`
 	}
-	endpoint := mediafireAPI + "/folder/get_info.php?" + q.Encode()
+	endpoint := m.api + "/folder/get_info.php?" + q.Encode()
 	if err := m.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
 		return "", err
 	}

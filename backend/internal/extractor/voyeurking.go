@@ -87,7 +87,7 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 		return nil, err
 	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("voyeurking: no accessible files in %d videos", len(sources))
+		return nil, noneRead("voyeurking", len(sources), "videos", first.Redacted(), e.refusals, e.failed)
 	}
 	return &Result{Title: title, Note: strings.Join(listingNotes(note, e, len(sources), "videos"), "; "), Files: e.files}, nil
 }

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -402,7 +401,7 @@ func feedServer(t *testing.T, contentType, body string) (*httptest.Server, *stri
 
 func testFeeds(t *testing.T) *Feeds {
 	t.Helper()
-	return NewFeeds(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	return NewFeeds(testClient())
 }
 
 func TestFeedsExtract(t *testing.T) {
@@ -496,7 +495,7 @@ func TestFeedsReadOnceThroughTheRegistry(t *testing.T) {
 		_, _ = io.WriteString(w, feedRSSFixture)
 	}))
 	t.Cleanup(srv.Close)
-	res, ex, err := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, 5*time.Second)).
+	res, ex, err := NewRegistry(&config.Config{}, testClient()).
 		Extract(context.Background(), srv.URL+"/shows/one", Options{})
 	if err != nil || ex.Name() != "feed" || len(res.Files) != 5 {
 		t.Fatalf("got %v from %v: %v", res, ex, err)

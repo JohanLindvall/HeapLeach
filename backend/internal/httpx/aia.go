@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // Completing a certificate chain the server left short.
@@ -34,16 +36,7 @@ import (
 // want of an issuer, a few hops at most, from http or https addresses only,
 // and kept for the life of the process.
 
-const (
-	// aiaMaxHops bounds how many missing issuers are fetched for one chain.
-	// One is the ordinary case: the server sent its certificate and nothing
-	// else, and the intermediate it left out leads straight to a root.
-	aiaMaxHops = 3
-	// aiaMaxBytes bounds one fetched certificate; real ones are a couple of
-	// kilobytes.
-	aiaMaxBytes = 64 << 10
-	aiaTimeout  = 10 * time.Second
-)
+const aiaTimeout = 10 * time.Second
 
 // chainCompleter verifies presented chains, completing them from AIA.
 type chainCompleter struct {
@@ -78,7 +71,7 @@ func (c *chainCompleter) verify(serverName string, presented []*x509.Certificate
 	// Only a chain that stops short is completed. Any other failure — the
 	// wrong name, an expired certificate — is the answer as it stands.
 	next := leaf
-	for hop := 0; err != nil && hop < aiaMaxHops; hop++ {
+	for hop := 0; err != nil && hop < config.AIAMaxHops; hop++ {
 		var unknown x509.UnknownAuthorityError
 		if !errors.As(err, &unknown) {
 			break
@@ -158,11 +151,11 @@ func fetchIssuer(ctx context.Context, link string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("issuer %s: %s", link, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, aiaMaxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, config.AIAMaxBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > aiaMaxBytes {
+	if len(body) > config.AIAMaxBytes {
 		return nil, fmt.Errorf("issuer %s is larger than a certificate", link)
 	}
 	return body, nil
