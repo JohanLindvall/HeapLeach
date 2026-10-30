@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -155,16 +156,16 @@ func rtbfLink(u *url.URL) (kind int, id string) {
 }
 
 // Extract reads a media, a programme, or the players a page embeds.
-func (r *RTBF) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+func (r *RTBF) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	switch kind, id := rtbfLink(u); kind {
 	case rtbfMedia:
 		return r.media(ctx, id)
 	case rtbfProgramme:
-		return r.programme(ctx, id, opts)
+		return r.programme(ctx, id)
 	case rtbfLive:
 		return nil, fmt.Errorf("rtbf: %s is a live stream, which has no end to download to", u.Redacted())
 	}
-	return r.embedded(ctx, u, opts)
+	return r.embedded(ctx, u)
 }
 
 // rtbfGone is what RTBF's answer means for an id it has nothing under.
@@ -405,15 +406,15 @@ type rtbfEntry struct {
 	Subtitle     string `json:"subtitle"`
 }
 
-// rtbfListed is an entry and the folder it goes into.
+// rtbfListed is an entry and the tab it was listed under.
 type rtbfListed struct {
-	entry  rtbfEntry
-	folder string
+	entry rtbfEntry
+	tab   string
 }
 
 // programme reads a programme's episodes: each tab of its episodes widget,
 // a season or a year, into a folder of its own when there are several.
-func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Result, error) {
+func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 	var page struct {
 		Data struct {
 			Content struct {
@@ -437,7 +438,9 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
 	}
 
-	limit := opts.maxFiles()
+	// Each episode kept is asked of the player as it is listed, so only as
+	// many as config.MaxResolvedEpisodes are kept; the walk goes on to
+	// count the rest.
 	var (
 		entries []rtbfListed
 		listed  int
@@ -445,48 +448,42 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 		seen    = make(map[string]bool)
 	)
 	for _, tab := range tabs {
-		folder := ""
-		if len(tabs) > 1 {
-			folder = sourceFolder(tab.Title)
-		}
 		err := r.walk(ctx, tab.ContentPath, func(e rtbfEntry) bool {
 			if e.AssetID == "" || seen[e.AssetID] || e.ResourceType != "" && e.ResourceType != "MEDIA" {
 				return false
 			}
 			seen[e.AssetID] = true
 			listed++
-			if len(entries) < limit {
-				entries = append(entries, rtbfListed{entry: e, folder: folder})
+			if len(entries) < config.MaxResolvedEpisodes {
+				entries = append(entries, rtbfListed{entry: e, tab: tab.Title})
 			}
 			return true
 		})
 		walkErr = cmp.Or(walkErr, err)
 	}
+	if len(entries) == 0 {
+		if walkErr != nil {
+			return nil, fmt.Errorf("rtbf: %s: %w", title, walkErr)
+		}
+		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
+	}
 
 	// An episode whose answer did not arrive, or names nothing this knows,
 	// is still listed: its transfer asks again, and says why if it fails.
-	files, refusals, _ := resolveListed(ctx, entries, func(ctx context.Context, l rtbfListed) (*File, error) {
-		answer, err := r.play(ctx, l.entry.AssetID, l.entry.ID)
-		if _, ok := refusalReason(err); ok {
-			return nil, err
-		}
-		ext := ""
-		if answer != nil {
-			switch hls, file, protected := answer.playable(); {
-			case answer.StreamInfo.Live:
-				return nil, &broadcastRefusal{site: "rtbf", reason: "it is a live stream"}
-			case hls != "":
-				ext = ".mp4"
-			case file != "":
-				ext = linkExt(file, ".mp3")
-			case protected:
-				return nil, &broadcastRefusal{site: "rtbf", reason: "it is DRM-protected"}
-			}
-		}
-		file := r.lazy(l, cmp.Or(ext, ".mp4"))
-		return &file, nil
+	var refusals []string
+	resolved, note, err := expandSeries(ctx, series[rtbfListed]{
+		site: "rtbf", noun: "episodes", link: title,
+		items: entries, listed: listed,
+		// Each tab of several, a season or a year, is a folder of its own.
+		label:   func(l rtbfListed) string { return l.tab },
+		split:   len(tabs) > 1,
+		refused: &refusals,
+		resolve: r.listedFile,
 	})
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err != nil {
 		return nil, err
 	}
 
@@ -498,20 +495,35 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 		}
 		counts[reason]++
 	}
-	if len(files) == 0 {
-		switch {
-		case len(reasons) > 0:
-			return nil, fmt.Errorf("rtbf: %s: none of its %d episodes can be had here: %s", title, len(entries), reasons[0])
-		case walkErr != nil:
-			return nil, fmt.Errorf("rtbf: %s: %w", title, walkErr)
-		}
-		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
-	}
-	notes := []string{cappedNote(len(entries), listed, "episodes"), brokenNote(walkErr)}
+	notes := []string{note, brokenNote(walkErr)}
 	for _, reason := range reasons {
 		notes = append(notes, leftOutNote(counts[reason], ": "+reason))
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(notes...)}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(notes...)}, nil
+}
+
+// listedFile is a listed episode's file, its stream resolved when its
+// transfer starts, or the reason the player gave for refusing it.
+func (r *RTBF) listedFile(ctx context.Context, l rtbfListed) (*File, error) {
+	answer, err := r.play(ctx, l.entry.AssetID, l.entry.ID)
+	if _, ok := refusalReason(err); ok {
+		return nil, err
+	}
+	ext := ""
+	if answer != nil {
+		switch hls, file, protected := answer.playable(); {
+		case answer.StreamInfo.Live:
+			return nil, &broadcastRefusal{site: "rtbf", reason: "it is a live stream"}
+		case hls != "":
+			ext = ".mp4"
+		case file != "":
+			ext = linkExt(file, ".mp3")
+		case protected:
+			return nil, &broadcastRefusal{site: "rtbf", reason: "it is DRM-protected"}
+		}
+	}
+	file := r.lazy(l, cmp.Or(ext, ".mp4"))
+	return &file, nil
 }
 
 // tabs is what a programme's page lists its episodes in: the tabs of its
@@ -599,7 +611,7 @@ func rtbfWithQuery(link string, params url.Values) string {
 func (r *RTBF) lazy(l rtbfListed, ext string) File {
 	stem := cmp.Or(ardJoin(strings.TrimSpace(l.entry.Title), strings.TrimSpace(l.entry.Subtitle)), l.entry.ID)
 	assetID := l.entry.AssetID
-	return lazyEpisode(stem+ext, l.folder, rtbfHeaders(), func(ctx context.Context) (*Target, error) {
+	return lazyEpisode(stem+ext, "", rtbfHeaders(), func(ctx context.Context) (*Target, error) {
 		return r.stream(ctx, assetID, stem)
 	})
 }
@@ -612,7 +624,7 @@ var (
 
 // embedded reads the Auvio players a page embeds, an article's say, each
 // into its file.
-func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+func (r *RTBF) embedded(ctx context.Context, u *url.URL) (*Result, error) {
 	html, _, err := fetchDocument(ctx, r.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rtbf: %s: %w", u.Redacted(), err)
@@ -634,7 +646,10 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result,
 	case 1:
 		return r.media(ctx, ids[0])
 	}
-	ids = ids[:min(len(ids), opts.maxFiles())]
+	// Each player is a request to resolve; the registry holds the files to
+	// the user's cap.
+	embedded := len(ids)
+	ids = ids[:min(len(ids), config.MaxResolvedEpisodes)]
 	files, reasons, _ := resolveListed(ctx, ids, func(ctx context.Context, id string) (*File, error) {
 		res, err := r.media(ctx, id)
 		if err != nil {
@@ -655,5 +670,5 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result,
 		}
 		return nil, fmt.Errorf("rtbf: %s: none of its players could be read", title)
 	}
-	return &Result{Title: title, Files: files, Note: refusedNote(reasons)}, nil
+	return &Result{Title: title, Files: files, Note: listingNote(cappedNote(len(ids), embedded, "players"), refusedNote(reasons))}, nil
 }

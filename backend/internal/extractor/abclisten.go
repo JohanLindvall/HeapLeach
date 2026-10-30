@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
@@ -191,25 +190,28 @@ func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPa
 		return nil, fmt.Errorf("abclisten: no episodes listed on %s", u.Redacted())
 	}
 
-	files := FanOut(ctx, episodes, func(ctx context.Context, ep abcListenItem) ([]File, error) {
-		return a.listed(ctx, u, ep)
+	resolved, note, err := expandSeries(ctx, series[abcListenItem]{
+		site: "abclisten", noun: "episodes", link: u.Redacted(),
+		items: episodes, listed: listed,
+		resolve: func(ctx context.Context, ep abcListenItem) (*File, error) {
+			return a.listed(ctx, u, ep)
+		},
+		unplayable: "none carries media",
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("abclisten: none of the %d episodes of %s carry media",
-			len(episodes), u.Redacted())
+	if err != nil {
+		return nil, err
 	}
-
 	return &Result{
 		Title: util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)),
-		Files: files,
-		Note:  cappedNote(len(episodes), listed, "episodes"),
+		Files: listedFiles(resolved),
+		Note:  note,
 	}, nil
 }
 
 // listed resolves one entry of a programme listing. The episode goes in a
 // folder named after the programme, so unlike a lone episode its filename
 // says nothing about which programme it belongs to.
-func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem) ([]File, error) {
+func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem) (*File, error) {
 	link := resolveRef(base, ep.ArticleLink)
 	page, err := a.page(ctx, link)
 	if err != nil {
@@ -231,7 +233,7 @@ func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem)
 	file.Name = abcListenName(
 		util.FirstNonEmpty(doc.ID, ep.CardID),
 		util.FirstNonEmpty(doc.Title, ep.CardTitle)) + file.Name
-	return []File{file}, nil
+	return &file, nil
 }
 
 // episodes lists a programme's episodes, up to limit of them, with the
@@ -375,7 +377,7 @@ func (a *ABCListen) file(doc abcListenDoc) (File, bool) {
 	// type.
 	headers := httpx.Referer(abcListenRoot + "/")
 	file := File{
-		Name:    path.Ext(util.NameFromURL(best.URL)),
+		Name:    linkExt(best.URL, ""),
 		URL:     best.URL,
 		Size:    -1,
 		Headers: headers,
@@ -492,10 +494,12 @@ func abcListenName(id, title string) string {
 // webDistributionRestricted is the field, and a page it is set on carries
 // neither media nor an episode list — the audiobooks are the case in point.
 // The payload says nothing to a listener about why, so unlike nrk there is no
-// sentence to pass through and these words are ours.
+// sentence to pass through and these words are ours. It is a refusal, so
+// that a programme whose every episode is withheld says so rather than that
+// its episodes failed.
 func abcListenAppOnly(link string) error {
-	return fmt.Errorf("abclisten: the ABC publishes %s through its listen app only, "+
-		"so the web page carries nothing to fetch", link)
+	return &broadcastRefusal{site: "abclisten", reason: "the ABC publishes " + link +
+		" through its listen app only, so the web page carries nothing to fetch"}
 }
 
 // abcListenPageProps is what a page was rendered from. An episode page fills

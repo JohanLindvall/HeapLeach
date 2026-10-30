@@ -92,13 +92,13 @@ func arteLink(u *url.URL) (lang, id string) {
 
 // Extract reads a programme into its one file, or a collection into one
 // file a programme.
-func (a *Arte) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+func (a *Arte) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	lang, id := arteLink(u)
 	if id == "" {
 		return nil, fmt.Errorf("arte: %s names no programme or collection", u.Redacted())
 	}
 	if arteCollectionID.MatchString(id) {
-		return a.collection(ctx, lang, id, opts)
+		return a.collection(ctx, lang, id)
 	}
 	target, title, err := a.programme(ctx, lang, id)
 	if err != nil {
@@ -213,8 +213,9 @@ type arteCollection struct {
 // countries than others and the listing does not say which. One it does
 // not show here is left out, the job's note giving ARTE's own reason once;
 // one whose configuration could not be read for any other cause is kept,
-// for its transfer to try again.
-func (a *Arte) collection(ctx context.Context, lang, id string, opts Options) (*Result, error) {
+// for its transfer to try again. Each check is a request, so a collection
+// is checked as far as config.MaxResolvedEpisodes programmes.
+func (a *Arte) collection(ctx context.Context, lang, id string) (*Result, error) {
 	title, entries, err := a.playlist(ctx, lang, id)
 	if err != nil {
 		return nil, err
@@ -231,52 +232,47 @@ func (a *Arte) collection(ctx context.Context, lang, id string, opts Options) (*
 		}
 		for _, p := range listed {
 			if arteProgrammeID.MatchString(p.id) {
-				p.dir = sourceFolder(cmp.Or(season, entry.title, entry.id))
+				p.season = cmp.Or(season, entry.title, entry.id)
 				programmes = append(programmes, p)
 			}
 		}
 	}
-
-	type checked struct {
-		entry   arteEntry
-		refusal string
+	title = cmp.Or(title, id)
+	if len(programmes) == 0 {
+		return nil, fmt.Errorf("arte: %s lists no programmes", title)
 	}
-	results := FanOut(ctx, programmes, func(ctx context.Context, entry arteEntry) ([]checked, error) {
-		_, _, err := a.config(ctx, lang, entry.id)
-		refusal, _ := refusalReason(err)
-		return []checked{{entry: entry, refusal: refusal}}, nil
+
+	var refused []string
+	resolved, note, err := expandSeries(ctx, series[arteEntry]{
+		site: "arte", noun: "programmes", link: title,
+		items: programmes,
+		// A season of a collection is a folder of its own even when it is
+		// the only one, beside the programmes listed at the top.
+		label: func(entry arteEntry) string { return entry.season },
+		split: true,
+		resolve: func(ctx context.Context, entry arteEntry) (*File, error) {
+			if _, _, err := a.config(ctx, lang, entry.id); err != nil {
+				if _, refused := refusalReason(err); refused {
+					return nil, err
+				}
+			}
+			file := a.lazy(lang, entry)
+			return &file, nil
+		},
+		refused: &refused,
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	res := &Result{Title: cmp.Or(title, id)}
-	limit := opts.maxFiles()
-	var refused []string
-	shown := 0
-	for _, r := range results {
-		if r.refusal != "" {
-			refused = append(refused, r.refusal)
-			continue
-		}
-		shown++
-		if len(res.Files) < limit {
-			res.Files = append(res.Files, a.lazy(lang, r.entry))
-		}
+	if err != nil {
+		return nil, err
 	}
-	if len(res.Files) == 0 {
-		if len(refused) > 0 {
-			return nil, fmt.Errorf("arte: %s: none of its %d programmes can be had: %s", res.Title, len(refused), refused[0])
-		}
-		return nil, fmt.Errorf("arte: %s lists no programmes", res.Title)
-	}
-	res.Note = listingNote(cappedNote(len(res.Files), shown, "programmes"), refusedNote(refused))
-	return res, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, refusedNote(refused))}, nil
 }
 
-// arteEntry is one programme or collection a playlist names, and the folder
-// a programme of a season goes into.
-type arteEntry struct{ id, title, dir string }
+// arteEntry is one programme or collection a playlist names, and the season
+// of the collection a programme of a season is listed under.
+type arteEntry struct{ id, title, season string }
 
 // playlist reads a collection's title and the entries it lists.
 func (a *Arte) playlist(ctx context.Context, lang, id string) (string, []arteEntry, error) {
@@ -303,7 +299,7 @@ func (a *Arte) playlist(ctx context.Context, lang, id string) (string, []arteEnt
 // starts: a collection can run to dozens, each a configuration, a master
 // and a playlist for every version.
 func (a *Arte) lazy(lang string, entry arteEntry) File {
-	return lazyEpisode(entry.title+".mp4", entry.dir, arteHeaders(), func(ctx context.Context) (*Target, error) {
+	return lazyEpisode(entry.title+".mp4", "", arteHeaders(), func(ctx context.Context) (*Target, error) {
 		target, _, err := a.programme(ctx, lang, entry.id)
 		return target, err
 	})

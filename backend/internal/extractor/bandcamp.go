@@ -151,7 +151,12 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 	if len(links) == 0 {
 		return nil, fmt.Errorf("bandcamp: %s lists no releases", u.Redacted())
 	}
-	files := FanOut(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+	// Each release is a page to read, so a catalogue is read as far as
+	// config.MaxResolvedReleases of them; the registry holds the files to
+	// the user's cap.
+	listed := len(links)
+	links = links[:min(len(links), config.MaxResolvedReleases)]
+	files, refusals, failed := resolveFiles(ctx, links, func(ctx context.Context, link string) ([]File, error) {
 		release, err := b.release(ctx, link)
 		if err != nil {
 			return nil, err
@@ -159,10 +164,13 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 		return release.files(b), nil
 	})
 	if len(files) == 0 {
-		return nil, fmt.Errorf("bandcamp: none of the %d releases on %s could be read", len(links), u.Redacted())
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, noneRead("bandcamp", len(links), "releases", u.Redacted(), refusals, failed)
 	}
 	band := util.FirstNonEmpty(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
-	return &Result{Title: band, Files: files}, nil
+	return &Result{Title: band, Files: files, Note: cappedNote(len(links), listed, "releases")}, nil
 }
 
 // release reads one album or track page.

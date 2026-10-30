@@ -332,9 +332,17 @@ line in the saved queue.
   where cut, filed by season, one error when nothing plays), beneath it
   `resolveListed`, `resolveInTurn` and `resolveEach` for a listing's
   episodes resolved concurrently or one at a time, in order, `lazyEpisode`
-  and `refreshing` for files re-read at transfer time, `linkExt` for an
-  extension read off a link, and the listing notes. A new broadcaster uses
-  these rather than types of its own.
+  and `refreshing` for files re-read at transfer time, and the listing
+  notes. A new broadcaster uses these rather than types of its own.
+- `resolveFiles` and `noneRead` (`resolve.go`): a listing whose items each
+  open into several files (a band's releases), resolved concurrently with
+  the files kept in order and the refusals and first failure beside them,
+  and the one error, `<site>: none of the <n> <noun> on <where> could be
+  read: <reason>`, for when none could. `resolveEach` and `expandSeries`
+  share its outcome handling.
+- `linkExt` (`html.go`): the extension a link's file name carries,
+  lowercased, read off the path's last element (so a trailing slash still
+  names it), with a fallback where it names none.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
 - `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its

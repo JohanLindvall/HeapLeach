@@ -92,13 +92,6 @@ const (
 	npoSeriesPath  = "serie"
 	npoPlayPath    = "afspelen"
 	npoEpisodesTab = "afleveringen"
-
-	// npoMaxSeasons bounds how many season listings one series URL reads.
-	// Seasons arrive newest first and the episodes behind them are truncated
-	// to config.MaxResolvedEpisodesNPO anyway, so all that reading further buys is spending the
-	// same request budget the episodes need. The longest-running strand
-	// looked at here had twenty-three.
-	npoMaxSeasons = 30
 )
 
 // NewNPOStart builds the NPO Start extractor.
@@ -254,8 +247,10 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 			seasons = []npoSeason{only}
 		}
 	}
-	if len(seasons) > npoMaxSeasons {
-		seasons = seasons[:npoMaxSeasons]
+	// Seasons past config.MaxSeasonsNPO are not read, and the note says so.
+	seasonsNote := cappedNote(config.MaxSeasonsNPO, len(seasons), "seasons")
+	if len(seasons) > config.MaxSeasonsNPO {
+		seasons = seasons[:config.MaxSeasonsNPO]
 	}
 
 	episodes := n.listings(ctx, seasons)
@@ -319,7 +314,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(seasonsNote, note)}, nil
 }
 
 // npoEpisodeRef is one episode of a series, with the season it belongs to.

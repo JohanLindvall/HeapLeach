@@ -5,6 +5,7 @@ package extractor
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -168,6 +169,19 @@ func folderName(title string) string {
 		return strings.TrimSpace(string(runes[:80]))
 	}
 	return title
+}
+
+// linkExt is the extension the name a link ends in carries, lowercased, or
+// fallback where it names none a container would have — a dot and one to
+// four characters. Many a host's file says what it is in its link and
+// nowhere else, so this reads the link rather than writing the answer down;
+// the fallback is what the host has always served there. The name is the
+// path's last element, so a link ending in a slash still names its file.
+func linkExt(link, fallback string) string {
+	if ext := strings.ToLower(path.Ext(util.NameFromURL(link))); len(ext) > 1 && len(ext) <= 5 {
+		return ext
+	}
+	return fallback
 }
 
 // humanSize matches the "57.80 MB" shape listings print next to a file.

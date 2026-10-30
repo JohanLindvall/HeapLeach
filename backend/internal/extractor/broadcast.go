@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"path"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -72,33 +70,11 @@ type listedItem[T any] struct {
 // caller that still needs the item afterwards; inTurn resolves one at a
 // time.
 func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) (resolved []listedItem[T], refusals []string, failed error) {
-	type outcome struct {
-		item T
-		file *File
-		err  error
-	}
-	var outcomes []outcome
-	if inTurn {
-		for _, item := range items {
-			file, err := resolve(ctx, item)
-			outcomes = append(outcomes, outcome{item: item, file: file, err: err})
-		}
-	} else {
-		// FanOut drops an item whose fetch errored, so the error travels as
-		// a value instead.
-		outcomes = FanOut(ctx, items, func(ctx context.Context, item T) ([]outcome, error) {
-			file, err := resolve(ctx, item)
-			return []outcome{{item: item, file: file, err: err}}, nil
-		})
-	}
+	outcomes := resolveOutcomes(ctx, items, inTurn, resolve)
+	refusals, failed = sortOutcomes(outcomes)
 	for _, out := range outcomes {
-		switch reason, refused := refusalReason(out.err); {
-		case out.err == nil && out.file != nil:
-			resolved = append(resolved, listedItem[T]{item: out.item, file: *out.file})
-		case refused:
-			refusals = append(refusals, reason)
-		case failed == nil:
-			failed = out.err
+		if out.err == nil && out.got != nil {
+			resolved = append(resolved, listedItem[T]{item: out.item, file: *out.got})
 		}
 	}
 	return resolved, refusals, failed
@@ -129,6 +105,10 @@ type series[T any] struct {
 	resolve func(context.Context, T) (*File, error)
 	// unplayable is the reason given when nothing was refused or failed.
 	unplayable string
+	// refused, when set, is given the reasons of the items left out as
+	// refused, in the listing's order, for a broadcaster whose note says
+	// what it left out.
+	refused *[]string
 }
 
 // expandSeries is the sequence the public broadcasters repeat once a
@@ -153,19 +133,12 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 	}
 
 	resolved, refusals, failed := resolveEach(ctx, items, s.inTurn, s.resolve)
+	if s.refused != nil {
+		*s.refused = refusals
+	}
 	if len(resolved) == 0 {
-		// A refusal outranks a failure, being the one the caller can act
-		// on; a failure opens with the site's name, as the sentence it is
-		// folded into does.
-		reason := s.unplayable
-		switch {
-		case len(refusals) > 0:
-			reason = refusals[0]
-		case failed != nil:
-			reason = strings.TrimPrefix(failed.Error(), s.site+": ")
-		}
 		return nil, "", fmt.Errorf("%s: none of the %d %s of %s are playable: %s",
-			s.site, len(items), s.noun, s.link, reason)
+			s.site, len(items), s.noun, s.link, firstReason(s.site, refusals, failed, s.unplayable))
 	}
 	if s.label != nil && (s.split || nestByLabel(items, s.label)) {
 		for i := range resolved {
@@ -196,22 +169,6 @@ func listedFiles[T any](resolved []listedItem[T]) []File {
 		files = append(files, r.file)
 	}
 	return files
-}
-
-// linkExt is the extension a link's path ends in, lowercased, or fallback
-// where it names none a container would have — a dot and one to four
-// characters. A broadcaster's file says what it is in its link and nowhere
-// else, so this reads the link rather than writing the answer down; the
-// fallback is what the broadcaster has always served there.
-func linkExt(link, fallback string) string {
-	u, err := url.Parse(strings.TrimSpace(link))
-	if err != nil {
-		return fallback
-	}
-	if ext := strings.ToLower(path.Ext(u.Path)); len(ext) > 1 && len(ext) <= 5 {
-		return ext
-	}
-	return fallback
 }
 
 // lazyEpisode is a listed episode resolved when its transfer starts: a

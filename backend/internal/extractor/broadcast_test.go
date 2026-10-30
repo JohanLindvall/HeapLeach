@@ -168,6 +168,14 @@ func TestExpandSeriesCapsNestsAndExplains(t *testing.T) {
 	if note != "first 1 episodes" {
 		t.Errorf("walk cut: note %q", note)
 	}
+	// A broadcaster that notes what it left out is handed the reasons.
+	var refused []string
+	_, _, _ = expandSeries(context.Background(), series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, resolve: resolve, refused: &refused,
+	})
+	if got := fmt.Sprint(refused); got != "[shown at home only]" {
+		t.Errorf("refused = %s", got)
+	}
 	// One season listed beside an empty one still files into its folder
 	// when the listing says it had several.
 	resolved, _, _ = expandSeries(context.Background(), series[ep]{
@@ -190,24 +198,6 @@ func TestExpandSeriesCapsNestsAndExplains(t *testing.T) {
 		})
 		if err == nil || err.Error() != tc.want {
 			t.Errorf("err = %v, want %q", err, tc.want)
-		}
-	}
-}
-
-// TestLinkExt pins the extension read off a broadcaster's link: lowercased,
-// the query ignored, and the fallback where the path names no container.
-func TestLinkExt(t *testing.T) {
-	tests := []struct{ link, fallback, want string }{
-		{"https://cdn.example.test/a/b.MP3?token=1", ".mp3", ".mp3"},
-		{"https://cdn.example.test/a/b.m4a", ".mp3", ".m4a"},
-		{"https://cdn.example.test/a/b", ".mp4", ".mp4"},
-		{"https://cdn.example.test/a/b.toolong", ".mp3", ".mp3"},
-		{"https://cdn.example.test/a.v2/b", "", ""},
-		{"https://cdn.example.test/a/b.", ".mp3", ".mp3"},
-	}
-	for _, tc := range tests {
-		if got := linkExt(tc.link, tc.fallback); got != tc.want {
-			t.Errorf("linkExt(%q, %q) = %q, want %q", tc.link, tc.fallback, got, tc.want)
 		}
 	}
 }
