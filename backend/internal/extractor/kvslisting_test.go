@@ -199,8 +199,8 @@ func TestKVSSearchResolvesEveryPageOfResults(t *testing.T) {
 }
 
 // The walk's own end conditions, where the listing itself says it ends: the
-// stated total and the last page. The stated total is checked ahead of the
-// cap, so a page that reaches the total keeps every tile it has.
+// stated total and the last page, which end it quietly; and the cap, which
+// ends it with a note.
 func TestKVSListingPagesEnds(t *testing.T) {
 	page := func(showing, next string, slugs ...string) string {
 		var b strings.Builder
@@ -220,25 +220,28 @@ func TestKVSListingPagesEnds(t *testing.T) {
 		limit int
 		want  int
 		never string
+		note  string
 	}{
 		{"stated total reached", map[string]string{
 			"/list/":   page("Showing 1 - 2 of 3", "/list/2/", "a", "b"),
 			"/list/2/": page("", "/list/3/", "c"),
 			"/list/3/": page("", "", "d"),
-		}, 0, 3, "/list/3/"},
+		}, 0, 3, "/list/3/", ""},
 		{"last page says so", map[string]string{
 			"/list/":   page("", "/list/2/", "a", "b"),
 			"/list/2/": page("", "", "c") + `<div class="pagination"><ul><li class="next"><span>Next</span></li></ul></div>`,
-		}, 0, 3, ""},
+		}, 0, 3, "", ""},
 		{"cap truncates", map[string]string{
 			"/list/":   page("", "/list/2/", "a", "b"),
 			"/list/2/": page("", "/list/3/", "c", "d"),
 			"/list/3/": page("", "", "e"),
-		}, 3, 3, "/list/3/"},
+		}, 3, 3, "/list/3/", "partial — file limit"},
+		// Every video is a page to read, so the cap holds even where the
+		// stated total would have ended the walk a little later.
 		{"total ahead of the cap", map[string]string{
 			"/list/":   page("Showing 1 - 2 of 4", "/list/2/", "a", "b"),
 			"/list/2/": page("", "/list/3/", "c", "d"),
-		}, 3, 4, "/list/3/"},
+		}, 3, 3, "/list/3/", "partial — file limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var (
@@ -258,9 +261,9 @@ func TestKVSListingPagesEnds(t *testing.T) {
 			defer srv.Close()
 			l := kvsListingForPage(srv.URL + "/list/")
 			l.limit = tc.limit
-			pages, title, err := kvsListingPages(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), l)
-			if err != nil || len(pages) != tc.want || title != "Example" {
-				t.Fatalf("pages=%d title=%q err=%v, want %d", len(pages), title, err, tc.want)
+			pages, title, note, err := kvsListingWalk(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), l)
+			if err != nil || len(pages) != tc.want || title != "Example" || note != tc.note {
+				t.Fatalf("pages=%d title=%q note=%q err=%v, want %d, %q", len(pages), title, note, err, tc.want, tc.note)
 			}
 			mu.Lock()
 			defer mu.Unlock()

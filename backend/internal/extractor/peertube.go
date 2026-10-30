@@ -368,15 +368,18 @@ func peerTubeExplain(err error, id string) error {
 }
 
 // peerTubeNoMedia explains a video record that carries nothing to fetch.
+// It is the instance's reason rather than a failure, so a listing none of
+// whose videos could be read says it (peerTubeListingResult).
 func peerTubeNoMedia(video *peerTubeVideo) error {
 	name := util.FirstNonEmpty(strings.TrimSpace(video.Name), "this video")
+	reason := fmt.Sprintf("%q lists no media file (the instance may still be transcoding it)", name)
 	switch {
 	case video.IsLive:
-		return fmt.Errorf("%s: %q is a live stream, which has no finished file to fetch", peerTubeLabel, name)
+		reason = fmt.Sprintf("%q is a live stream, which has no finished file to fetch", name)
 	case video.State.Label != "" && !strings.EqualFold(video.State.Label, "Published"):
-		return fmt.Errorf("%s: %q is not ready yet (%s)", peerTubeLabel, name, video.State.Label)
+		reason = fmt.Sprintf("%q is not ready yet (%s)", name, video.State.Label)
 	}
-	return fmt.Errorf("%s: %q lists no media file (the instance may still be transcoding it)", peerTubeLabel, name)
+	return &broadcastRefusal{site: peerTubeLabel, reason: reason}
 }
 
 // peerTubeCandidate is one rendition, from either of the two lists a video
@@ -503,13 +506,16 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 		title = strings.Trim(u.Path, "/")
 	}
 
-	files := peerTubeExpand(ctx, client, u, ids, opts)
+	files, refusals, failed := peerTubeExpand(ctx, client, u, ids, opts)
 	// Expansion skips a video it cannot read, which is right for one bad
 	// entry and wrong for a cancelled run: every remaining video would be
 	// "skipped" and the job would look like a complete, much shorter
 	// channel. A cancellation is reported as one.
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, noneRead(peerTubeLabel, len(ids), "videos", u.Redacted(), refusals, failed)
 	}
 	return &Result{Title: title, Files: files, Note: note}, nil
 }
@@ -573,11 +579,12 @@ func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint stri
 //
 // One video that will not load is skipped rather than failing the job: on a
 // channel of hundreds — where a single entry may be a live stream, or still
-// transcoding — the rest are still worth having.
+// transcoding — the rest are still worth having. Why each was skipped comes
+// back beside the files, for when none could be read.
 func peerTubeExpand(ctx context.Context, client *httpx.Client, u *url.URL,
-	ids []string, opts Options) []File {
+	ids []string, opts Options) (files []File, refusals []string, failed error) {
 
-	return FanOut(ctx, ids, func(ctx context.Context, id string) ([]File, error) {
+	return resolveFiles(ctx, ids, func(ctx context.Context, id string) ([]File, error) {
 		files, _, err := peerTubeVideoFiles(ctx, client, u, id, opts)
 		return files, err
 	})

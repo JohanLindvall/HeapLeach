@@ -421,6 +421,9 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 
 	files, firstErr := a.expand(ctx, t.board, threads)
 	if len(files) == 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// Which of these it was matters: a board whose threads are all text
 		// is a fact about the board, while a board none of whose threads
 		// would open is a fact about the archive, and only one of them is
@@ -438,43 +441,24 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 	}, nil
 }
 
-// expand reads every thread on an index page, several at a time. FanOut
-// supplies the bounded concurrency, the board's own ordering and the
-// skip-on-failure; what it drops is the failure itself, and here the first
-// one is worth keeping for the case where no thread opened at all — see
-// index — so it travels as a value beside the files.
+// expand reads every thread on an index page, several at a time, in the
+// board's own order (resolveFiles). One thread that will not open leaves the
+// rest; the first failure comes back beside the files for the case where no
+// thread opened at all — see index.
 func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, error) {
-	type expanded struct {
-		files []File
-		err   error
-	}
-	outcomes := FanOut(ctx, threads, func(ctx context.Context, num string) ([]expanded, error) {
+	files, _, failed := resolveFiles(ctx, threads, func(ctx context.Context, num string) ([]File, error) {
 		entries, err := a.call(ctx, foolFuukaThreadAPI, url.Values{
 			"board": {board}, "num": {num},
 		})
-		if err != nil {
-			return []expanded{{err: err}}, nil
-		}
-		if len(entries) == 0 {
-			return nil, nil
+		if err != nil || len(entries) == 0 {
+			return nil, err
 		}
 		// A folder per thread, because a board page is fifteen
 		// conversations rather than one and several hundred files in a
 		// single directory lose which was which.
-		return []expanded{{files: a.files(entries[0].posts(), num)}}, nil
+		return a.files(entries[0].posts(), num), nil
 	})
-
-	var (
-		files    []File
-		firstErr error
-	)
-	for _, outcome := range outcomes {
-		files = append(files, outcome.files...)
-		if firstErr == nil {
-			firstErr = outcome.err
-		}
-	}
-	return files, firstErr
+	return files, failed
 }
 
 // search walks a board's search results, up to the file cap.

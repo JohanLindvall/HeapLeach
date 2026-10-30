@@ -365,10 +365,12 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, op
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("imgur: %s%s lists no posts", imgurRoot, target.Listing)
 	}
-	files := i.expand(ctx, entries)
+	files, refusals, failed := i.expand(ctx, entries)
 	if len(files) == 0 {
-		return nil, fmt.Errorf("imgur: none of the %d posts on %s%s could be read",
-			len(entries), imgurRoot, target.Listing)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, noneRead("imgur", len(entries), "posts", imgurRoot+target.Listing, refusals, failed)
 	}
 	return &Result{Title: target.Title, Files: files, Note: note}, nil
 }
@@ -427,13 +429,13 @@ func imgurListingPage(origin, base string, page int) string {
 // expand turns listing rows into files.
 //
 // A row that is itself the media costs nothing and is built here. A row naming
-// a post needs that post's page, so those are fetched several at a time, with
-// the results collected by index rather than appended as they arrive: the job
-// then lists its files in the listing's own order however the requests
-// interleave. One post that will not load is skipped, because on a listing of
-// hundreds the rest are still worth having.
-func (i *Imgur) expand(ctx context.Context, entries []imgurEntry) []File {
-	return FanOut(ctx, entries, func(ctx context.Context, entry imgurEntry) ([]File, error) {
+// a post needs that post's page, so those are fetched several at a time, the
+// job listing its files in the listing's own order however the requests
+// interleave (resolveFiles). One post that will not load is skipped, because
+// on a listing of hundreds the rest are still worth having; why comes back
+// beside the files for when none could be read.
+func (i *Imgur) expand(ctx context.Context, entries []imgurEntry) ([]File, []string, error) {
+	return resolveFiles(ctx, entries, func(ctx context.Context, entry imgurEntry) ([]File, error) {
 		if file, ok := entry.media(); ok {
 			return []File{file}, nil
 		}

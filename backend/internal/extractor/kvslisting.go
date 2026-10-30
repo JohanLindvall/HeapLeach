@@ -75,25 +75,31 @@ func (l kvsListing) fileCap() int {
 // a listing states how far it goes when it states it at all.
 var kvsShowingTotal = regexp.MustCompile(`Showing\s+\d+\s*-\s*\d+\s+of\s+(\d+)`)
 
-// kvsListingResult resolves a listing into one file per video.
+// kvsListingResult resolves a listing into one file per video, with the
+// note for a listing the cap cut short.
 func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (*Result, error) {
-	pages, title, err := kvsListingPages(ctx, client, l)
+	pages, title, note, err := kvsListingWalk(ctx, client, l)
 	if err != nil {
 		return nil, err
 	}
 	if len(pages) == 0 {
 		return nil, fmt.Errorf("%s: %s", kvsLabel, l.empty)
 	}
-	return kvsResolvePages(ctx, client, l, pages, title)
+	res, err := kvsResolvePages(ctx, client, l, pages, title)
+	if err != nil {
+		return nil, err
+	}
+	res.Note = note
+	return res, nil
 }
 
 // kvsResolvePages turns the video pages a walk collected into files.
 //
 // Every video needs its own page read for a media URL, so they are fetched
 // several at a time and a video that will not load is skipped rather than
-// failing a listing of hundreds.
+// failing a listing of hundreds; when none loads, the first reason says why.
 func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pages []string, title string) (*Result, error) {
-	files := FanOut(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
+	files, refusals, failed := resolveFiles(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
 		u, err := ParseURL(page)
 		if err != nil {
 			return nil, err
@@ -105,34 +111,43 @@ func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pa
 		return res.Files, nil
 	})
 	if len(files) == 0 {
-		return nil, fmt.Errorf("%s: none of the %d videos on %s could be resolved",
-			kvsLabel, len(pages), l.url)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, noneRead(kvsLabel, len(pages), "videos", l.url, refusals, failed)
 	}
 	return &Result{Title: title, Files: files}, nil
 }
 
-// kvsListingPages walks the listing and collects every video page it names.
+// kvsListingPages is kvsListingWalk without its note.
+func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, error) {
+	pages, title, _, err := kvsListingWalk(ctx, client, l)
+	return pages, title, err
+}
+
+// kvsListingWalk walks the listing and collects every video page it names,
+// up to the cap, each being a page to read, with the note for a walk the cap
+// cut short.
 //
 // The listing's own end is the walk's: a page that adds nothing, one asked
 // for twice, a later page that will not load or parse. The stated total
-// ends it as well, ahead of the cap, so a last page that runs past the cap
-// is kept whole.
-func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, error) {
+// ends it as well, ahead of the cap.
+func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, string, error) {
 	headers := httpx.Referer(l.url)
 	doc := l.first
 	if doc == "" {
 		var err error
 		if doc, err = client.GetString(ctx, l.url, headers); err != nil {
-			return nil, "", fmt.Errorf("%s: fetch %s: %w", kvsLabel, l.url, err)
+			return nil, "", "", fmt.Errorf("%s: fetch %s: %w", kvsLabel, l.url, err)
 		}
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
-		return nil, "", nil
+		return nil, "", "", nil
 	}
 	first, err := url.Parse(l.url)
 	if err != nil {
-		return nil, "", nil
+		return nil, "", "", nil
 	}
 	total := 0
 	if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
@@ -140,13 +155,13 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([
 	}
 
 	var (
-		seen   = make(map[string]bool)
-		page   = 0
-		block  string
-		capped bool
+		seen  = make(map[string]bool)
+		page  = 0
+		block string
 	)
-	links, title, _, err := walkListing(ctx, client, first, listingWalk{
-		name: kvsLabel, title: l.title(root), limit: -1, quiet: true, root: root,
+	links, title, note, err := walkListing(ctx, client, first, listingWalk{
+		name: kvsLabel, title: l.title(root), quiet: true, root: root,
+		limit: l.fileCap(), limitNote: "partial — file limit",
 		fetch: fetchAsAsked(client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {
 			page++
@@ -157,9 +172,6 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([
 			}
 			switch {
 			case total > 0 && len(seen) >= total:
-				return p
-			case len(seen) >= l.fileCap():
-				capped = true
 				return p
 			case kvsListingEnds(root):
 				// The listing says where the next page is, and on the last
@@ -185,16 +197,13 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([
 		},
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	pages := make([]string, 0, len(links))
 	for _, link := range links {
 		pages = append(pages, link.url)
 	}
-	if capped {
-		pages = pages[:l.fileCap()]
-	}
-	return pages, title, nil
+	return pages, title, note, nil
 }
 
 // kvsAsyncNext builds the request the site's own script would send for the

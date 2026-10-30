@@ -870,3 +870,30 @@ func endlessMastodonPage(page int) string {
 	}
 	return "[" + strings.Join(items, ",") + "]"
 }
+
+// TestFediverseTimelineStopsAtTheFileCap: a timeline is walked only as far
+// as the files it carries pass the user's file cap, and says it was cut.
+func TestFediverseTimelineStopsAtTheFileCap(t *testing.T) {
+	var requests int
+	srv := fediServer(t, "mastodon", func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.URL.Path {
+		case "/api/v1/accounts/lookup":
+			writeJSON(w, `{"id":"42","username":"alice","acct":"alice"}`)
+		case "/api/v1/accounts/42/statuses":
+			requests++
+			writeJSON(w, endlessMastodonPage(requests))
+		default:
+			return false
+		}
+		return true
+	})
+	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	opts := Options{limits: Limits{Files: fediMastodonPageSize + 10}}
+	res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/@alice"), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || res.Note != "partial — file limit" {
+		t.Errorf("made %d requests with note %q, want 2 and the file cap's", requests, res.Note)
+	}
+}

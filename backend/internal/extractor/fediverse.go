@@ -198,11 +198,11 @@ func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 	var res *Result
 	switch dialect {
 	case fediLemmy:
-		res, err = f.lemmy(ctx, u, target)
+		res, err = f.lemmy(ctx, u, target, opts)
 	case fediMisskey:
-		res, err = f.misskey(ctx, u, target)
+		res, err = f.misskey(ctx, u, target, opts)
 	default:
-		res, err = f.mastodon(ctx, u, target, dialect == fediPixelfed)
+		res, err = f.mastodon(ctx, u, target, dialect == fediPixelfed, opts)
 	}
 	if err != nil && !known {
 		// The dialect was an assumption, so a failure has two possible
@@ -476,6 +476,40 @@ func fediHandle(handle, host string) string {
 		return handle
 	}
 	return handle + "@" + host
+}
+
+// fediTimeline counts the files a timeline's pages carry, so that its walk
+// stops once they pass the user's file cap rather than walking on to the
+// timeline page cap for files the registry would cut. The posts themselves
+// are no measure: one may carry several files, or, on lemmy, none.
+type fediTimeline[T any] struct {
+	limit int
+	key   func(T) string
+	files func([]T) []File
+	seen  map[string]bool
+	count int
+}
+
+func newFediTimeline[T any](opts Options, key func(T) string, files func([]T) []File) *fediTimeline[T] {
+	return &fediTimeline[T]{limit: opts.maxFiles(), key: key, files: files, seen: make(map[string]bool)}
+}
+
+// page is a page of posts for walkPages, ending the walk with the file
+// cap's note once the files counted so far are more than it allows: some
+// of them are then left out, which is when the note is owed.
+func (c *fediTimeline[T]) page(items []T, next bool) pageOf[T] {
+	var fresh []T
+	for _, item := range items {
+		if k := c.key(item); !c.seen[k] {
+			c.seen[k] = true
+			fresh = append(fresh, item)
+		}
+	}
+	c.count += len(c.files(fresh))
+	if c.count > c.limit {
+		return pageOf[T]{items: items, end: true, note: "partial — file limit"}
+	}
+	return pageOf[T]{items: items, next: next}
 }
 
 // fediHeaders are what every request in this file carries.

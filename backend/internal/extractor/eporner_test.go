@@ -504,3 +504,14 @@ func TestEpornerTitlesInASeriesStayDistinct(t *testing.T) {
 		t.Errorf("got %d distinct titles, want 5", len(seen))
 	}
 }
+
+// A profile is walked only as far as the listing cap, and says so in place
+// of the shortfall against the tab's own count.
+func TestEpornerProfileStopsAtTheListingCap(t *testing.T) {
+	srv, _ := epornerServer(t, 4)
+	e := epornerUnderTest(t)
+	res := extractOK(t, e, srv.URL+"/profile/Someone/uploaded-videos/", Options{limits: Limits{Sources: 2}})
+	if len(res.Files) != 2 || res.Note != "partial — source limit" {
+		t.Errorf("got %d files with note %q, want 2 and the source cap's", len(res.Files), res.Note)
+	}
+}

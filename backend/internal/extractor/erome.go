@@ -100,26 +100,33 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 
 	// Every album needs its own page read for the media it holds, and a
 	// profile runs to hundreds; one after another leaves the job resolving
-	// for minutes before a byte moves. FanOut keeps the profile's own order
-	// however the requests interleave, and an unavailable album is skipped
-	// rather than sinking the rest.
-	resolved := FanOut(ctx, albums, func(ctx context.Context, link string) ([]eromeAlbum, error) {
+	// for minutes before a byte moves. resolveOutcomes keeps the profile's
+	// own order however the requests interleave, and an unavailable album
+	// is skipped rather than sinking the rest, its reason kept for when no
+	// album held anything.
+	outcomes := resolveOutcomes(ctx, albums, false, func(ctx context.Context, link string) (eromeAlbum, error) {
 		albumURL, err := ParseURL(link)
 		if err != nil {
-			return nil, err
+			return eromeAlbum{}, err
 		}
 		album, err := e.album(ctx, albumURL)
 		if err != nil {
-			return nil, err
+			return eromeAlbum{}, err
 		}
 		// isEromeAlbum has already established the /a/<id> shape, so the
 		// id is there to be read.
-		return []eromeAlbum{{
+		return eromeAlbum{
 			title: album.Title,
 			id:    util.PathSegments(albumURL)[1],
 			files: album.Files,
-		}}, nil
+		}, nil
 	})
+	var resolved []eromeAlbum
+	for _, out := range outcomes {
+		if out.err == nil {
+			resolved = append(resolved, out.got)
+		}
+	}
 
 	result := &Result{Title: title, Note: note}
 	folders := eromeFolders(resolved)
@@ -130,8 +137,11 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 		}
 	}
 	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("erome: profile %s had %d albums but no downloadable media",
-			u.Redacted(), len(albums))
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		refusals, failed := sortOutcomes(outcomes)
+		return nil, noneRead("erome", len(albums), "albums", "profile "+u.Redacted(), refusals, failed)
 	}
 	return result, nil
 }

@@ -584,6 +584,15 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 		t.Errorf("directories are %q and %q, want each album's own name in the page's order",
 			res.Files[0].Dir, res.Files[1].Dir)
 	}
+
+	// Every album is a page to read, so the listing cap bounds them.
+	res, err = cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{limits: Limits{Sources: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Files[0].Dir != "Summer" || res.Note != "partial — source limit" {
+		t.Errorf("capped: %d files, note %q, want Summer's alone and the source cap's", len(res.Files), res.Note)
+	}
 }
 
 // TestCheveretoPasswordGate covers a protected album: nothing is guessed at,

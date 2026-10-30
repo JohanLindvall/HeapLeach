@@ -27,9 +27,11 @@ a partial job.
 A creator's page on coomerfans lists posts but keeps the media on each post's
 own page, and the listing cannot be worked from instead: a post holding a
 video shows no thumbnail there at all. So every post is opened, through
-`FanOut`. The creator's pages are walked by `walkListing` as a quiet listing
-following its next links: the listing states no length, so a later page that
-fails or adds nothing ends it without a note.
+`resolveFiles`, and a profile none of whose posts could be read says why
+(`noneRead`). The creator's pages are walked by `walkListing` as a quiet
+listing following its next links: the listing states no length, so a later
+page that fails or adds nothing ends it without a note. Every post costs a
+request, so the walk is held to `listingLimit` and says so when it cuts.
 
 ## celeb.st
 
@@ -95,7 +97,9 @@ walk that hits a rate limit it cannot outwait returns what it got, and its
 pass for complete; the mark is a note, not part of the title, so the folder
 stays put. The profile is a quiet, numbered `walkListing`: any other failed
 page is the end of the profile. Every album costs a request of its own, so
-the albums are held to `listingLimit`.
+the albums are held to `listingLimit`. They are read through
+`resolveOutcomes`, which keeps a failed album's reason, so a profile none of
+whose albums holds anything says why (`noneRead`).
 
 ## rajce
 

@@ -343,17 +343,19 @@ type epornerVideo struct {
 	Title string
 }
 
-// epornerProfile walks a profile tab for the videos it lists.
-func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL) ([]listingLink, string, string, error) {
+// epornerProfile walks a profile tab for the videos it lists, up to the
+// listing cap. A walk the cap cut short says so; one that came back short
+// of the tab's own count otherwise says that.
+func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) ([]listingLink, string, string, error) {
 	user, tab, _ := epornerProfileOf(util.PathSegments(u))
-	links, declared, err := epornerProfileVideos(ctx, client, u, user, tab)
+	links, declared, note, err := epornerProfileVideos(ctx, client, u, user, tab, opts)
 	if err != nil {
 		return nil, "", "", err
 	}
 	if len(links) == 0 {
 		return nil, "", "", fmt.Errorf("%s lists no videos under %s", user, tab)
 	}
-	return links, epornerProfileTitle(user, tab), epornerProfileNote(len(links), declared), nil
+	return links, epornerProfileTitle(user, tab), util.FirstNonEmpty(note, epornerProfileNote(len(links), declared)), nil
 }
 
 // epornerProfileVideos pages through a profile tab by number, collecting
@@ -361,22 +363,25 @@ func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL) ([]li
 // page is how the walk finds its end — the listing answers 404 rather than
 // an empty page — so the walk is quiet: a short one is caught by the
 // declared count, not by trusting how it stopped. Its videos are read only
-// when their transfers start, so the file cap is what bounds it.
-func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL, user, tab string) ([]listingLink, int, error) {
+// when their transfers start, so the listing cap is what bounds it, and
+// the note is the cap's when it cut the walk short.
+func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL, user, tab string, opts Options) ([]listingLink, int, string, error) {
 	headers := httpx.Referer(epornerRoot + "/")
 	first, err := url.Parse(epornerProfilePage(u, user, tab, 1))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	root, err := fetchPageRoot(ctx, client, first.String(), headers)
 	if err != nil {
-		return nil, 0, fmt.Errorf("fetch profile: %w", err)
+		return nil, 0, "", fmt.Errorf("fetch profile: %w", err)
 	}
 	declared := epornerDeclaredCount(root, tab)
 	seen := make(map[string]bool)
 	page := 1
-	links, _, _, err := walkListing(ctx, client, first, listingWalk{
-		name: "eporner", limit: -1, quiet: true, anyRedirect: true, root: root,
+	limit, limitNote := listingLimit(opts)
+	links, _, note, err := walkListing(ctx, client, first, listingWalk{
+		name: "eporner", quiet: true, anyRedirect: true, root: root,
+		limit: limit, limitNote: limitNote,
 		fetch: func(ctx context.Context, next, _ *url.URL) (*html.Node, *url.URL, error) {
 			root, err := fetchPageRoot(ctx, client, next.String(), headers)
 			return root, next, err
@@ -395,7 +400,7 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 			return lp
 		},
 	})
-	return links, declared, err
+	return links, declared, note, err
 }
 
 // epornerListingClass marks the profile's own list. The page also carries a

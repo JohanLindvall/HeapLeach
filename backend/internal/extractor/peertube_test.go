@@ -631,3 +631,28 @@ func TestPeerTubeFileForSpellsAnAbsentLengthMinusOne(t *testing.T) {
 		t.Errorf("size = %d, want -1 for a record that reported none", file.Size)
 	}
 }
+
+// TestPeerTubeListingSaysWhyNoVideoCouldBeRead: a channel none of whose
+// videos has a file is refused with the instance's reason, not a bare
+// count.
+func TestPeerTubeListingSaysWhyNoVideoCouldBeRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/video-channels/someone/videos":
+			_, _ = io.WriteString(w, `{"total":2,"data":[{"uuid":"a"},{"uuid":"b"}]}`)
+		case "/api/v1/videos/a", "/api/v1/videos/b":
+			_, _ = io.WriteString(w, `{"name":"Live Now","isLive":true,"state":{"id":4,"label":"Waiting for livestream"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client := httpx.New("test", "en", 0, time.Second)
+	u, _ := url.Parse(srv.URL + "/c/someone")
+
+	_, err := peerTubeListingResult(context.Background(), client, u, "/video-channels/someone", "channel", Options{})
+	if err == nil || !strings.Contains(err.Error(), "none of the 2 videos") ||
+		!strings.Contains(err.Error(), `"Live Now" is a live stream`) {
+		t.Fatalf("err = %v, want the live stream named as the reason", err)
+	}
+}

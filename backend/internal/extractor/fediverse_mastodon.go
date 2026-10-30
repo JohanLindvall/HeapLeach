@@ -61,7 +61,7 @@ type mastodonMedia struct {
 // answers an anonymous caller 422 "This method requires an authenticated
 // user". The per-account statuses route is the one that stayed open, and it
 // is what a pasted profile is asking about anyway.
-func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pixelfed bool) (*Result, error) {
+func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pixelfed bool, opts Options) (*Result, error) {
 	if t.kind == fediCommunity {
 		return nil, fmt.Errorf("fediverse: communities are a lemmy thing, and %s does not run "+
 			"it (%s)", u.Hostname(), u.Redacted())
@@ -87,7 +87,7 @@ func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pix
 	}
 	title := "@" + fediHandle(util.FirstNonEmpty(account.Acct, account.Username, t.handle), u.Hostname())
 
-	statuses, note, err := f.mastodonTimeline(ctx, root, account.ID, pixelfed)
+	statuses, note, err := f.mastodonTimeline(ctx, root, account.ID, pixelfed, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -153,10 +153,13 @@ func (f *Fediverse) mastodonLookup(ctx context.Context, root, handle string) (*m
 // is what keeps that cap spent on posts there is something to fetch from
 // rather than on a year of conversation. A page after the first that fails
 // is not fatal: what has already been collected is still worth queueing.
-func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string, pixelfed bool) ([]mastodonStatus, string, error) {
+// The walk stops sooner at the user's file cap (fediTimeline).
+func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string, pixelfed bool, opts Options) ([]mastodonStatus, string, error) {
 	until := ""
+	key := func(status mastodonStatus) string { return status.ID }
+	timeline := newFediTimeline(opts, key, mastodonFiles)
 	return walkPages(ctx, pageWalk[mastodonStatus]{
-		key:   func(status mastodonStatus) string { return status.ID },
+		key:   key,
 		limit: -1, pages: config.MaxTimelinePages,
 		fetch: func(ctx context.Context, _ int) (pageOf[mastodonStatus], error) {
 			batch, err := f.mastodonStatuses(ctx, root, accountID, until, pixelfed)
@@ -167,7 +170,7 @@ func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string
 				return pageOf[mastodonStatus]{end: true}, nil
 			}
 			until = batch[len(batch)-1].ID
-			return pageOf[mastodonStatus]{items: batch, next: until != ""}, nil
+			return timeline.page(batch, until != ""), nil
 		},
 	})
 }

@@ -143,12 +143,19 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 	case len(listing.files) > 0:
 		return &Result{Title: listing.title, Files: listing.files, Note: listing.note}, nil
 	case len(listing.albums) > 0:
-		files := cheveretoExpand(ctx, client, listing.albums, opts)
-		if len(files) == 0 {
-			return nil, fmt.Errorf("%s: none of the %d albums on %s could be read",
-				cheveretoLabel, len(listing.albums), u.Redacted())
+		// Every album is a page to read, so the listing cap bounds them.
+		albums, note := listing.albums, listing.note
+		if limit, limitNote := listingLimit(opts); len(albums) > limit {
+			albums, note = albums[:limit], joinNotes(note, limitNote)
 		}
-		return &Result{Title: listing.title, Files: files, Note: listing.note}, nil
+		files, refusals, failed := cheveretoExpand(ctx, client, albums, opts)
+		if len(files) == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, noneRead(cheveretoLabel, len(albums), "albums", u.Redacted(), refusals, failed)
+		}
+		return &Result{Title: listing.title, Files: files, Note: note}, nil
 	}
 	return cheveretoSingle(root, u, listing.title)
 }
@@ -363,18 +370,18 @@ func cheveretoAlbumLinks(root *html.Node, base *url.URL) []cheveretoAlbum {
 
 // cheveretoExpand reads every album a listing pointed at, several at a time.
 //
-// Results are collected by index rather than appended as they arrive, so the
-// job lists its files in the order the page did however the requests
-// interleave; an album that will not load is skipped rather than failing a
-// profile of dozens. Each album's files go in a folder of their own, since two
+// The job lists its files in the order the page did however the requests
+// interleave (resolveFiles); an album that will not load is skipped rather
+// than failing a profile of dozens, and why comes back beside the files for
+// when none could be read. Each album's files go in a folder of their own, since two
 // albums by one uploader may well hold the same filenames.
 //
 // Nesting is followed one level only. An album inside an album is rare, and
 // recursion here would be unbounded in a way nothing on the page bounds.
 func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []cheveretoAlbum,
-	opts Options) []File {
+	opts Options) ([]File, []string, error) {
 
-	return FanOut(ctx, albums, func(ctx context.Context, album cheveretoAlbum) ([]File, error) {
+	return resolveFiles(ctx, albums, func(ctx context.Context, album cheveretoAlbum) ([]File, error) {
 		u, err := ParseURL(album.URL)
 		if err != nil {
 			return nil, err
@@ -602,8 +609,7 @@ func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
 	}
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeForm)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
-	req.Header.Set(httpx.HeaderReferer, u.String())
-	req.Header.Set(httpx.HeaderOrigin, util.Origin(u))
+	httpx.RefererOrigin(u.String(), util.Origin(u)).Apply(req)
 
 	body, err := client.Bytes(req)
 	if err != nil {

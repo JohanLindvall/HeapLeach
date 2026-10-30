@@ -215,13 +215,15 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 			return pageOf[string]{items: links, next: true, end: len(links) == 0}, err
 		},
 	})
-	files := p.expand(ctx, links)
+	files, refusals, failed := p.expand(ctx, links)
 	if len(files) > opts.maxFiles() {
 		files, note = pornpicsTrim(files, opts.maxFiles()), joinNotes(note, "partial — file limit")
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("pornpics: none of the galleries listed on %s could be read",
-			u.Redacted())
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, noneRead("pornpics", len(links), "galleries", u.Redacted(), refusals, failed)
 	}
 	return &Result{Title: pornpicsTitle(root, u), Files: files, Note: note}, nil
 }
@@ -252,9 +254,10 @@ func pornpicsTrim(files []File, ceiling int) []File {
 // Each gallery's own title becomes the subdirectory rather than a prefix on
 // each name: one category resolves to hundreds of galleries and thousands of
 // images, and the CDN's filenames carry the gallery's id but nothing a person
-// would recognise it by.
-func (p *PornPics) expand(ctx context.Context, links []string) []File {
-	return FanOut(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+// would recognise it by. A gallery that will not open leaves the rest
+// (resolveFiles), and why comes back beside the files for when none did.
+func (p *PornPics) expand(ctx context.Context, links []string) ([]File, []string, error) {
+	return resolveFiles(ctx, links, func(ctx context.Context, link string) ([]File, error) {
 		u, err := ParseURL(link)
 		if err != nil {
 			return nil, err
