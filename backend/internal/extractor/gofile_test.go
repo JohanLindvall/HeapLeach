@@ -90,10 +90,10 @@ func TestGofileExplain(t *testing.T) {
 func TestGofileRecognise(t *testing.T) {
 	g := &Gofile{}
 	shell := `<html><head><title>Gofile — Cloud Storage</title><meta property="og:site_name" content="Gofile"></head><body></body></html>`
-	expectRecognised(t, g, htmlPage(t, "https://gofile.io/d/Abc123", shell), true)
-	expectRecognised(t, g, htmlPage(t, "https://gofile.io/", shell), false)
-	expectRecognised(t, g, htmlPage(t, "https://gofile.io/d/Abc123", `<html><title>A blog</title></html>`), false)
-	expectShape(t, g, "https://gofile.io/d/Abc123", true)
-	expectShape(t, g, "https://gofile.io/d/Abc123/extra", false)
-	expectShape(t, g, "https://gofile.io/about", false)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/d/Abc123", shell), true)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/", shell), false)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/d/Abc123", `<html><title>A blog</title></html>`), false)
+	expectShape(t, g, "https://share.example.test/d/Abc123", true)
+	expectShape(t, g, "https://share.example.test/d/Abc123/extra", false)
+	expectShape(t, g, "https://share.example.test/about", false)
 }
