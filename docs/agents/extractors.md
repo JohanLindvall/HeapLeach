@@ -265,7 +265,7 @@ intact. `sources.go` holds what they share:
 
 ### Walking pages
 
-- Every paged listing that is not a broadcaster's series or a folder tree
+- Every paged listing that is not a folder tree (broadcaster series included, through `walkEpisodes`)
   walks through `walkPages` (`pages.go`). The caller's `fetch` reads page *n*
   and keeps the cursor, offset or page number in its own closure; the engine
   owns the rest, once: a first page that fails is the caller's error as it
