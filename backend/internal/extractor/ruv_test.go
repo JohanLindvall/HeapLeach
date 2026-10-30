@@ -434,8 +434,8 @@ func TestRUVJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := ruvJoin(tc.programme, tc.episode); got != tc.want {
-			t.Errorf("ruvJoin(%q, %q) = %q, want %q", tc.programme, tc.episode, got, tc.want)
+		if got := joinTitle(tc.programme, strings.TrimSpace(tc.episode), titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q) = %q, want %q", tc.programme, tc.episode, got, tc.want)
 		}
 	}
 }

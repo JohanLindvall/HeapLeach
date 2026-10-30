@@ -150,7 +150,6 @@ type orfEpisodeDoc struct {
 	Sources        struct {
 		HLS []struct {
 			Src              string `json:"src"`
-			QualityKey       string `json:"quality_key"`
 			IsAdaptiveStream bool   `json:"is_adaptive_stream"`
 			IsDRMProtected   bool   `json:"is_drm_protected"`
 		} `json:"hls"`
@@ -165,7 +164,7 @@ type orfEpisodeDoc struct {
 // name is what an episode is filed as: its series and its title, the
 // series left out where the title already says it.
 func (e *orfEpisodeDoc) name() string {
-	return cmp.Or(ardJoin(strings.TrimSpace(e.ProfileTitle), strings.TrimSpace(e.Title)), strconv.FormatInt(e.ID, 10))
+	return cmp.Or(joinTitle(strings.TrimSpace(e.ProfileTitle), strings.TrimSpace(e.Title), titleContains), strconv.FormatInt(e.ID, 10))
 }
 
 // errORFAustriaOnly is an episode the stream refuses outside Austria.

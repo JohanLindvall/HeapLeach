@@ -164,7 +164,7 @@ func (s *ruvSession) single(ctx context.Context, prog *ruvProgram, episodeID str
 	// A lone file lands in the download directory with no folder to say what
 	// it belongs to, so its name carries the programme as well: RÚV episode
 	// titles are routinely no more than "Þáttur 1 af 6".
-	title := ruvJoin(prog.name(), prog.Episodes[i].Title)
+	title := joinTitle(prog.name(), strings.TrimSpace(prog.Episodes[i].Title), titleEqual)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -192,7 +192,7 @@ func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*
 	// the same reason, and saying it once is the whole point of recognising
 	// it. They are asked in turn, because the session remembers the first
 	// Iceland-only refusal and turns the rest of that scope away unasked.
-	resolved, note, err := expandSeries(ctx, series[named]{
+	return listSeries(ctx, prog.name(), series[named]{
 		site: "ruv", noun: "episodes", link: u.Redacted(),
 		items: listed, listed: len(all), inTurn: true,
 		resolve: func(ctx context.Context, l named) (*File, error) {
@@ -205,10 +205,6 @@ func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*
 		},
 		unplayable: "the programme lists them but none carries a stream",
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: prog.name(), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // file resolves one episode to something downloadable. The returned File
@@ -344,24 +340,6 @@ func ruvNames(episodes []ruvEpisode) []string {
 		}
 	}
 	return names
-}
-
-// ruvJoin names one episode by its programme and its own title together.
-//
-// RÚV writes that pair as "Programme: Episode" throughout its own site, and
-// this does not: a colon is one of the characters a filename cannot keep, so
-// it would arrive on disk as an underscore. The equality case is not
-// hypothetical either — a one-off programme is routinely given a single
-// episode named after itself.
-func ruvJoin(programme, episode string) string {
-	episode = strings.TrimSpace(episode)
-	switch {
-	case episode == "":
-		return programme
-	case programme == "" || strings.EqualFold(programme, episode):
-		return episode
-	}
-	return programme + " - " + episode
 }
 
 // ruvDomesticRefusal is what a Domestic scope turns into once the CDN has

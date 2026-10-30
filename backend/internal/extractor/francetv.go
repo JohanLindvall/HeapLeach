@@ -198,7 +198,7 @@ func (a *francetvAnswer) name() string {
 			episode = append(episode, part)
 		}
 	}
-	return ardJoin(strings.TrimSpace(a.Meta.Title), strings.Join(episode, " - "))
+	return joinTitle(strings.TrimSpace(a.Meta.Title), strings.Join(episode, " - "), titleContains)
 }
 
 // protected reports an answer that declares DRM: false, absent, or an

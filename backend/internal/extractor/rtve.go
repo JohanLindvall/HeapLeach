@@ -219,17 +219,13 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 		return nil, fmt.Errorf("rtve: programme %s lists no videos", program)
 	}
 
-	resolved, note, err := expandSeries(ctx, series[rtveVideo]{
+	return listSeries(ctx, util.FirstNonEmpty(episodes[0].Program.Title, slug), series[rtveVideo]{
 		site: "rtve", noun: "videos", link: u.Redacted(),
 		items: episodes, more: more,
 		label:      func(ep rtveVideo) string { return ep.Season },
 		resolve:    r.episode,
 		unplayable: "nothing there offered a file to fetch",
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: util.FirstNonEmpty(episodes[0].Program.Title, slug), Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
+	}, walkNote)
 }
 
 // programme reads a programme's numeric id off its page. Nothing in the URL

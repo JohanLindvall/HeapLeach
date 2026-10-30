@@ -149,7 +149,7 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	// bulletins and its clips beside them, which the cap cuts short. One
 	// listing needs no folder: a folder every file goes in says nothing, and
 	// two programmes fetched separately would then share it.
-	resolved, note, err := expandSeries(ctx, series[raiEntry]{
+	return listSeries(ctx, util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/")), series[raiEntry]{
 		site: "raiplay", noun: "entries", link: u.Redacted(),
 		items: entries,
 		label: func(entry raiEntry) string { return entry.label },
@@ -163,10 +163,6 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 		},
 		unplayable: "Rai offers no stream for any of them",
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/")), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // raiEntry is one video a programme lists, with the folder its listing would
@@ -246,7 +242,7 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	if err := r.client.GetJSON(ctx, raiDocument(page), headers, &doc); err != nil {
 		return nil, "", fmt.Errorf("raiplay: video %s: %w", page, err)
 	}
-	title := util.FirstNonEmpty(raiTitle(doc.ProgramInfo.Name, doc.Name),
+	title := util.FirstNonEmpty(joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed),
 		strings.TrimSuffix(util.NameFromURL(page), ".json"))
 
 	switch {
@@ -350,23 +346,6 @@ func raiRelinker(contentURL string) string {
 		return contentURL + "&" + raiOutput
 	}
 	return contentURL + "?" + raiOutput
-}
-
-// raiTitle names a video by its programme and its own name together.
-//
-// Rai is inconsistent about whether the two overlap: a drama's episode is
-// called "Trauma S1E1 - Episodio 1" and already says which series it belongs
-// to, while a news clip's name says nothing about the bulletin it came from.
-// So the programme is prefixed only where the name does not already open with
-// it.
-func raiTitle(program, name string) string {
-	switch {
-	case name == "":
-		return program
-	case program == "" || strings.HasPrefix(strings.ToLower(name), strings.ToLower(program)):
-		return name
-	}
-	return program + " - " + name
 }
 
 // raiLabel names the folder one listing's videos go in, from the block and the

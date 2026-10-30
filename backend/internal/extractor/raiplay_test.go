@@ -395,7 +395,7 @@ func TestRaiVideoDocumentIsReadForWhatDecides(t *testing.T) {
 	}
 	// The episode's own name already says which programme it belongs to, so
 	// nothing is prefixed to it.
-	if got := raiTitle(doc.ProgramInfo.Name, doc.Name); got != "Un Programma S1E1 - Episodio 1" {
+	if got := joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed); got != "Un Programma S1E1 - Episodio 1" {
 		t.Errorf("title = %q", got)
 	}
 }
@@ -414,8 +414,8 @@ func TestRaiTitle(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := raiTitle(tc.program, tc.name); got != tc.want {
-			t.Errorf("raiTitle(%q, %q) = %q, want %q", tc.program, tc.name, got, tc.want)
+		if got := joinTitle(tc.program, tc.name, titlePrefixed); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titlePrefixed) = %q, want %q", tc.program, tc.name, got, tc.want)
 		}
 	}
 }
@@ -424,7 +424,7 @@ func TestRaiTitle(t *testing.T) {
 // off a document rather than asserted about two strings.
 func TestRaiNewsDocumentGetsItsBulletinPrefixed(t *testing.T) {
 	doc := decode[raiVideo](t, raiNewsDocument)
-	if got := raiTitle(doc.ProgramInfo.Name, doc.Name); got != "Telegiornale - Una notizia del giorno" {
+	if got := joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed); got != "Telegiornale - Una notizia del giorno" {
 		t.Errorf("title = %q", got)
 	}
 }

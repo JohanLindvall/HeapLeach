@@ -56,8 +56,14 @@ resolves the error is `<site>: none of the <n> <noun> of <link> are
 playable: <reason>`, the reason being the first refusal, else the first
 failure less its site prefix, else the caller's own sentence. rtpplay names
 a capped season in its title instead, so it cuts before and passes the rest.
-A broadcaster whose note says what it left out (arte, rtbf, yle) passes
-`refused` to be handed the refusals' reasons. A resolve that keeps an
+A broadcaster whose note names the refusals (arte, the players of an rtbf
+page, a radio-canada article's media) sets `noteRefused`, and one that
+says it in its own words (rtbf's tabs, yle) passes `refused` to be handed
+the reasons. Most callers end there, and `listSeries` is that ending: the
+result titled, its note the cap's followed by the caller's own, and the
+context's error rather than a partial result when it ended while the
+episodes resolved; npostart, pbs, svtplay, rtpplay, yle and rtbf's tabs,
+which do more with what resolved, call `expandSeries` themselves. A resolve that keeps an
 episode whose check failed for any other cause, for its transfer to try
 again, returns the lazy file rather than the error. npostart reads at most
 `config.MaxSeasonsNPO` seasons, each a request against the same budget, and
@@ -68,6 +74,23 @@ attaches go through `expandSeries` too (noun "players", "media"), so that
 when none plays the error gives the first reason one was refused for. A
 listing of lazy episodes that costs only its pages (radio-canada's
 programmes) cuts nothing itself.
+
+A lone episode lands with no folder above it, so its name carries the
+programme as well: `joinTitle(series, episode, says)`, which leaves the
+programme out where the episode's title already says it, and each
+broadcaster keeps its own test of that. nrk, npostart, pbs, ruv, vrtmax,
+abclisten and arte use `titleEqual`, a one-off programme being named after
+itself (vrtmax keeps the programme's spelling where the two differ only in
+case; ruv trims the episode's title first, and writes no colon between
+the two as its site does, a colon not surviving a filename); srf and
+raiplay use `titlePrefixed`, a daily strand's instalment or a drama's
+episode opening with the programme's name; ard, drtv, francetv,
+radio-canada, orf, rtbf and yle use `titleContains`, ard's episode titles
+spelling the series out anywhere in them. Changing a broadcaster's test
+renames its files, so a listing read again would no longer find what it
+saved. A page title read by radio-canada and for rtbf's embedded players
+is `writtenTitle`, the `<title>` as written, rather than `firstTitleOf`,
+which folds the no-break spaces of French typography into plain ones.
 
 A rendition's place in a quality ladder is `rankIn` (`renditions.go`), each caller
 saying where an unknown name lands. A file's extension read off its link is

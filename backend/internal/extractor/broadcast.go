@@ -7,10 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // Helpers the public broadcasters share. Their APIs have nothing in common,
@@ -93,8 +95,9 @@ type series[T any] struct {
 	unplayable string
 	// refused, when set, is given the reasons of the items left out as
 	// refused, in the listing's order, for a broadcaster whose note says
-	// what it left out.
-	refused *[]string
+	// what it left out. noteRefused says it in the note, as refusedNote.
+	refused     *[]string
+	noteRefused bool
 }
 
 // expandSeries is the sequence the public broadcasters repeat once a
@@ -131,7 +134,67 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 			resolved[i].file.Dir = sourceFolder(s.label(resolved[i].item))
 		}
 	}
+	if s.noteRefused {
+		note = listingNote(note, refusedNote(refusals))
+	}
 	return resolved, note, nil
+}
+
+// listSeries is expandSeries ending a listing: the job titled title, its
+// note the cap's followed by notes. A listing whose context ended while it
+// was resolved returns that rather than whatever had resolved by then.
+func listSeries[T any](ctx context.Context, title string, s series[T], notes ...string) (*Result, error) {
+	resolved, note, err := expandSeries(ctx, s)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(append([]string{note}, notes...)...)}, nil
+}
+
+// joinTitle names something by its series and its episode together, coping
+// with either half missing. says reports whether the episode's title
+// already says the series, so prefixing it would say it twice; each
+// broadcaster keeps its own, since their titles repeat the series in
+// different ways (titleEqual, titlePrefixed, titleContains).
+func joinTitle(series, episode string, says func(episode, series string) bool) string {
+	switch {
+	case episode == "":
+		return series
+	case series == "" || says(episode, series):
+		return episode
+	}
+	return series + " - " + episode
+}
+
+// writtenTitle is a page's <title> as written, its entities decoded, or ""
+// when it has none. Unlike firstTitleOf it keeps the title's own spacing —
+// the no-break space French typography puts before a colon, a doubled
+// space — which a page's job and file names already carry.
+func writtenTitle(doc string) string {
+	if m := titleElement.FindStringSubmatch(doc); m != nil {
+		return util.Unescape(m[1])
+	}
+	return ""
+}
+
+var titleElement = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+// titleEqual is a one-off programme, its episode named after it.
+func titleEqual(episode, series string) bool { return strings.EqualFold(series, episode) }
+
+// titlePrefixed is an episode whose title opens with the series' name: a
+// daily strand's "10 vor 10 vom 21.08.2026", a drama's "A Drama S1E1 - …".
+func titlePrefixed(episode, series string) bool {
+	return strings.HasPrefix(strings.ToLower(episode), strings.ToLower(series))
+}
+
+// titleContains is an episode whose title spells the series out anywhere,
+// as in "Folge 12 · Staffel 4 | A Drama (S04/E12)".
+func titleContains(episode, series string) bool {
+	return strings.Contains(strings.ToLower(episode), strings.ToLower(series))
 }
 
 // walkCut is the limit note walkEpisodes hands walkPages, to learn that

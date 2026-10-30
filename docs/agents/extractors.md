@@ -349,12 +349,16 @@ line in the saved queue.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
   for DRM and geo refusals in the broadcaster's own words, `expandSeries`
   for a series resolved while it is listed (capped by a request budget, noted
-  where cut, filed by season, one error when nothing plays), beneath it
+  where cut, filed by season, one error when nothing plays) and
+  `listSeries`, which ends a listing with it, beneath it
   `resolveEach` for a listing's episodes resolved concurrently or one at a
   time, in order, `walkEpisodes`, which walks a series through `walkPages`
   up to the request budget and says whether it went on, `lazyEpisode` and
-  `refreshing` for files re-read at transfer time, and the listing notes. A
-  new broadcaster uses these rather than types of its own.
+  `refreshing` for files re-read at transfer time, the listing notes,
+  `joinTitle` with its `titleEqual`, `titlePrefixed` and `titleContains`
+  for naming an episode by its programme, and `writtenTitle` for a
+  page's `<title>` with its spacing kept. A new broadcaster uses these
+  rather than types of its own.
 - `resolveFiles` and `noneRead` (`resolve.go`): a listing whose items each
   open into files (a band's releases, a board's threads, a channel's
   videos, a profile's posts, albums or galleries), resolved concurrently

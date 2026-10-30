@@ -201,7 +201,7 @@ func (a *ARD) video(ctx context.Context, id string) (*Result, error) {
 	// A lone file is written straight into the download directory with no
 	// folder to say what it belongs to, so the name carries the programme as
 	// well — unless, as is usual here, the episode title already repeats it.
-	title := ardJoin(show, util.FirstNonEmpty(episode, id))
+	title := joinTitle(show, util.FirstNonEmpty(episode, id), titleContains)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -220,7 +220,7 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
 	// minutes before a byte moved.
-	resolved, note, err := expandSeries(ctx, series[ardEpisodeRef]{
+	return listSeries(ctx, util.FirstNonEmpty(title, ref.show), series[ardEpisodeRef]{
 		site: "ard", noun: "entries", link: u.Redacted(),
 		items: episodes, more: more,
 		label: func(ep ardEpisodeRef) string { return ep.season },
@@ -233,11 +233,7 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 			return file, nil
 		},
 		unplayable: "the listing names them but no stream is offered",
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: util.FirstNonEmpty(title, ref.show), Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
+	}, walkNote)
 }
 
 // ardEpisodeRef is one entry of a programme's listing.
@@ -260,7 +256,7 @@ func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string
 		if err != nil {
 			return "", nil, false, "", err
 		}
-		return ardJoin(ardShowTitle(l.teasers), l.widget.Title), ardRefs(l.teasers, ""), l.more, l.note, nil
+		return joinTitle(ardShowTitle(l.teasers), l.widget.Title, titleContains), ardRefs(l.teasers, ""), l.more, l.note, nil
 	}
 
 	flat, err := a.pages(ctx, ref.show, "", limit)
@@ -402,21 +398,6 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 	return new(stream.file(stream.extension(), headers)), show, episode, nil
 }
 
-// ardJoin names something by its programme and its episode together.
-//
-// Containment rather than equality, unlike nrkJoin: ARD writes an episode
-// title that spells the series out in full — "Folge 12 · Staffel 4 | A Drama
-// (S04/E12)" — so prefixing the programme as well would say it twice.
-func ardJoin(show, episode string) string {
-	switch {
-	case episode == "":
-		return show
-	case show == "" || strings.Contains(strings.ToLower(episode), strings.ToLower(show)):
-		return episode
-	}
-	return show + " - " + episode
-}
-
 // ardItem is the item document, which describes one video.
 type ardItem struct {
 	Widgets []ardItemWidget `json:"widgets"`
@@ -488,10 +469,8 @@ type ardMedia struct {
 	Streams []ardStream `json:"streams"`
 }
 
-// ardLive marks a live relay and says how far back its window reaches.
-type ardLive struct {
-	DVRWindowSeconds int `json:"dvrWindowSeconds"`
-}
+// ardLive marks a live relay; only its presence is read.
+type ardLive struct{}
 
 // ardStream is one presentation of a video.
 type ardStream struct {

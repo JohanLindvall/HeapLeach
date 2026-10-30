@@ -294,8 +294,8 @@ func TestPBSJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := pbsJoin(tc.program, tc.title); got != tc.want {
-			t.Errorf("pbsJoin(%q, %q) = %q, want %q", tc.program, tc.title, got, tc.want)
+		if got := joinTitle(tc.program, tc.title, titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titleEqual) = %q, want %q", tc.program, tc.title, got, tc.want)
 		}
 	}
 }

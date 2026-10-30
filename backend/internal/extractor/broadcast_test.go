@@ -176,6 +176,23 @@ func TestExpandSeriesCapsNestsAndExplains(t *testing.T) {
 	if got := fmt.Sprint(refused); got != "[shown at home only]" {
 		t.Errorf("refused = %s", got)
 	}
+	// listSeries ends the listing: the cap's note, the refusals' and the
+	// caller's, in that order.
+	res, err := listSeries(context.Background(), "A Series", series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, budget: 3, resolve: resolve, noteRefused: true,
+	}, "", "the listing broke off partway")
+	if err != nil || res.Title != "A Series" || len(res.Files) != 2 ||
+		res.Note != "3 of 4 episodes; 1 left out: shown at home only; the listing broke off partway" {
+		t.Errorf("listSeries = %+v, %v", res, err)
+	}
+	// A listing whose context ended returns that, not what had resolved.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if res, err := listSeries(ctx, "A Series", series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, resolve: resolve,
+	}); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled listSeries = %+v, %v", res, err)
+	}
 	// One season listed beside an empty one still files into its folder
 	// when the listing says it had several.
 	resolved, _, _ = expandSeries(context.Background(), series[ep]{

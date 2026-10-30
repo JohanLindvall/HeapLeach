@@ -307,7 +307,7 @@ func TestNRKStandardCatalogueFallsBackToTheDisplayedSeason(t *testing.T) {
 // series name lives in a link rather than in the body.
 func TestNRKSeasonDocumentNamesItsSeries(t *testing.T) {
 	doc := decode[nrkSeason](t, nrkSeasonDocument)
-	if got := nrkJoin(doc.Links.Series.Title, doc.Titles.Title); got != "A Drama - Sesong 2" {
+	if got := joinTitle(doc.Links.Series.Title, doc.Titles.Title, titleEqual); got != "A Drama - Sesong 2" {
 		t.Errorf("title = %q, want the season named in it", got)
 	}
 	if got := len(nrkRefs(doc, "", make(map[string]bool))); got != 2 {
@@ -355,8 +355,8 @@ func TestNRKJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := nrkJoin(tc.series, tc.episode); got != tc.want {
-			t.Errorf("nrkJoin(%q, %q) = %q, want %q", tc.series, tc.episode, got, tc.want)
+		if got := joinTitle(tc.series, tc.episode, titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titleEqual) = %q, want %q", tc.series, tc.episode, got, tc.want)
 		}
 	}
 }
@@ -389,7 +389,7 @@ func TestNRKProgramTitles(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := decode[nrkProgram](t, tc.body)
-			got := nrkJoin(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title))
+			got := joinTitle(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title), titleEqual)
 			if got != tc.want {
 				t.Errorf("title = %q, want %q", got, tc.want)
 			}

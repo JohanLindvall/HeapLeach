@@ -235,8 +235,8 @@ func TestNPOClearStreamIsTakenWhole(t *testing.T) {
 	if link.Stream.URL == "" {
 		t.Fatal("no stream URL was read")
 	}
-	if link.Stream.Profile != "hls" {
-		t.Errorf("profile = %q, want hls", link.Stream.Profile)
+	if scheme, encrypted := link.Stream.encrypted(); encrypted {
+		t.Errorf("read as encrypted (%s)", scheme)
 	}
 }
 
@@ -527,8 +527,8 @@ func TestNPOJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := npoJoin(tc.series, tc.part); got != tc.want {
-			t.Errorf("npoJoin(%q, %q) = %q, want %q", tc.series, tc.part, got, tc.want)
+		if got := joinTitle(tc.series, tc.part, titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titleEqual) = %q, want %q", tc.series, tc.part, got, tc.want)
 		}
 	}
 }

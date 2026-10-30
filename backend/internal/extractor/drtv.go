@@ -181,7 +181,7 @@ func (it *drItem) show() string {
 // ("1. A title"); otherwise DR's own title.
 func (it *drItem) name(show string) string {
 	if title := strings.TrimSpace(it.ContextualTitle); title != "" {
-		return ardJoin(show, title)
+		return joinTitle(show, title, titleContains)
 	}
 	return cmp.Or(strings.TrimSpace(it.Title), it.ID)
 }
@@ -390,7 +390,7 @@ func (d *DRTV) series(ctx context.Context, show *drItem, opts Options) (*Result,
 // season reads a season into one file an episode.
 func (d *DRTV) season(ctx context.Context, season *drItem, opts Options) (*Result, error) {
 	show := cmp.Or(season.show(), strings.TrimSpace(season.Title), season.ID)
-	title := ardJoin(show, drSeasonLabel(show, season))
+	title := joinTitle(show, drSeasonLabel(show, season), titleContains)
 	episodes, walkNote, err := d.children(ctx, season.ID)
 	if err != nil {
 		return nil, fmt.Errorf("drtv: %s: %w", title, err)

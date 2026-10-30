@@ -596,7 +596,7 @@ func TestARDSeasonsAreFoundOnTheEntries(t *testing.T) {
 // one, has already left the audio-described copies out.
 func TestARDSeasonListingNamesTheSeason(t *testing.T) {
 	widget := decode[ardWidget](t, ardSeasonListing)
-	if got := ardJoin(ardShowTitle(widget.Teasers), widget.Title); got != "A Drama - Staffel 2" {
+	if got := joinTitle(ardShowTitle(widget.Teasers), widget.Title, titleContains); got != "A Drama - Staffel 2" {
 		t.Errorf("title = %q, want the season named in it", got)
 	}
 	if got := len(ardRefs(widget.Teasers, "")); got != 2 {
@@ -675,8 +675,8 @@ func TestARDJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := ardJoin(tc.show, tc.episode); got != tc.want {
-			t.Errorf("ardJoin(%q, %q) = %q, want %q", tc.show, tc.episode, got, tc.want)
+		if got := joinTitle(tc.show, tc.episode, titleContains); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titleContains) = %q, want %q", tc.show, tc.episode, got, tc.want)
 		}
 	}
 }

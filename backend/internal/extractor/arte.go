@@ -145,7 +145,7 @@ func (a *Arte) config(ctx context.Context, lang, id string) (*arteConfig, string
 		return nil, "", fmt.Errorf("arte: %s: %w", id, err)
 	}
 	attrs := cfg.Data.Attributes
-	title := nrkJoin(strings.TrimSpace(attrs.Metadata.Title), strings.TrimSpace(attrs.Metadata.Subtitle))
+	title := joinTitle(strings.TrimSpace(attrs.Metadata.Title), strings.TrimSpace(attrs.Metadata.Subtitle), titleEqual)
 	title = cmp.Or(title, id)
 	switch geo := attrs.Restriction.Geoblocking; {
 	case attrs.Error != nil:
@@ -242,8 +242,7 @@ func (a *Arte) collection(ctx context.Context, lang, id string) (*Result, error)
 		return nil, fmt.Errorf("arte: %s lists no programmes", title)
 	}
 
-	var refused []string
-	resolved, note, err := expandSeries(ctx, series[arteEntry]{
+	return listSeries(ctx, title, series[arteEntry]{
 		site: "arte", noun: "programmes", link: title,
 		items: programmes,
 		// A season of a collection is a folder of its own even when it is
@@ -259,15 +258,8 @@ func (a *Arte) collection(ctx context.Context, lang, id string) (*Result, error)
 			file := a.lazy(lang, entry)
 			return &file, nil
 		},
-		refused: &refused,
+		noteRefused: true,
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, refusedNote(refused))}, nil
 }
 
 // arteEntry is one programme or collection a playlist names, and the season
@@ -289,7 +281,7 @@ func (a *Arte) playlist(ctx context.Context, lang, id string) (string, []arteEnt
 		if item.ProviderID == "" {
 			continue
 		}
-		title := nrkJoin(strings.TrimSpace(item.Title), strings.TrimSpace(item.Subtitle))
+		title := joinTitle(strings.TrimSpace(item.Title), strings.TrimSpace(item.Subtitle), titleEqual)
 		entries = append(entries, arteEntry{id: item.ProviderID, title: cmp.Or(title, item.ProviderID)})
 	}
 	return strings.TrimSpace(attrs.Metadata.Title), entries, nil

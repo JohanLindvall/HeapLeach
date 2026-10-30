@@ -464,8 +464,8 @@ func TestSRFJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := srfJoin(tc.show, tc.title); got != tc.want {
-			t.Errorf("srfJoin(%q, %q) = %q, want %q", tc.show, tc.title, got, tc.want)
+		if got := joinTitle(tc.show, tc.title, titlePrefixed); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titlePrefixed) = %q, want %q", tc.show, tc.title, got, tc.want)
 		}
 	}
 }

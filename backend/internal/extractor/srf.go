@@ -216,7 +216,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
 	// before a byte moved.
-	resolved, note, err := expandSeries(ctx, series[srfEpisodeRef]{
+	return listSeries(ctx, util.FirstNonEmpty(title, showURN), series[srfEpisodeRef]{
 		site: "srf", noun: "episodes", link: u.Redacted(),
 		items: episodes, more: more,
 		label: func(ep srfEpisodeRef) string { return ep.season },
@@ -229,11 +229,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 			return file, nil
 		},
 		unplayable: "the catalogue lists them but the Integration Layer offers no stream for any of them",
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: util.FirstNonEmpty(title, showURN), Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
+	}, walkNote)
 }
 
 // srfEpisodeRef is one episode of a show, with the season it belongs to.
@@ -296,7 +292,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", &broadcastRefusal{"srf", urn, srfBlockMessage(chapter.BlockReason)}
 	}
 
-	title := srfJoin(doc.Show.Title, util.FirstNonEmpty(chapter.Title, doc.Episode.Title))
+	title := joinTitle(doc.Show.Title, util.FirstNonEmpty(chapter.Title, doc.Episode.Title), titlePrefixed)
 	headers := httpx.Referer(srfPlay)
 
 	// A plain file first, and by a wide margin: it ranges, so it resumes and
@@ -344,23 +340,6 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 	// of a stored MP4 and names the path after it — ".mp4.csmil/" over
 	// MPEG-TS parts. See segmentsExtension.
 	return new(media.file(media.extension(), headers)), title, nil
-}
-
-// srfJoin names a programme by its show and its own title.
-//
-// SRF names each instalment of a daily strand after the strand — "10 vor 10
-// vom 21.08.2026" — so prefixing the show again would say it twice. The
-// prefix is added only when the title does not already open with it.
-func srfJoin(show, title string) string {
-	switch {
-	case title == "":
-		return show
-	case show == "":
-		return title
-	case strings.HasPrefix(strings.ToLower(title), strings.ToLower(show)):
-		return title
-	}
-	return show + " - " + title
 }
 
 // srfSecure upgrades a progressive link to https. The Integration Layer hands

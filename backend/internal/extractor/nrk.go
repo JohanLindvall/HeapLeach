@@ -208,7 +208,7 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 	// are kept, though: when every episode is refused it is refused for the
 	// same reason, and NRK's own words for it are better than anything this
 	// could conclude. The episodes are asked for one at a time.
-	resolved, note, err := expandSeries(ctx, series[nrkEpisodeRef]{
+	return listSeries(ctx, util.FirstNonEmpty(title, ref.slug), series[nrkEpisodeRef]{
 		site: "nrk", noun: "episodes", link: u.Redacted(),
 		items: episodes, inTurn: true,
 		label: func(ep nrkEpisodeRef) string { return ep.season },
@@ -222,10 +222,6 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 		},
 		unplayable: "the catalogue lists them but the player offers no stream",
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: util.FirstNonEmpty(title, ref.slug), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // nrkEpisodeRef is one episode of a series, with the season it belongs to.
@@ -280,7 +276,7 @@ func (n *NRK) season(ctx context.Context, slug, name string) (string, []nrkEpiso
 	// There is only one season here, so a folder would say nothing; and
 	// several seasons downloaded separately would otherwise share a folder,
 	// where an episode list that starts again at "1. episode" collides.
-	title := nrkJoin(util.FirstNonEmpty(doc.Links.Series.Title, slug), doc.Titles.Title)
+	title := joinTitle(util.FirstNonEmpty(doc.Links.Series.Title, slug), doc.Titles.Title, titleEqual)
 	return title, nrkRefs(doc, "", make(map[string]bool)), nil
 }
 
@@ -370,19 +366,7 @@ func (n *NRK) title(ctx context.Context, id string) string {
 		httpx.Referer(nrkRoot+"/"), &doc); err != nil {
 		return ""
 	}
-	return nrkJoin(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title))
-}
-
-// nrkJoin names something by its series and its episode together, and copes
-// with a programme that has only one of the two.
-func nrkJoin(series, episode string) string {
-	switch {
-	case episode == "":
-		return series
-	case series == "" || strings.EqualFold(series, episode):
-		return episode
-	}
-	return series + " - " + episode
+	return joinTitle(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title), titleEqual)
 }
 
 // nrkManifest is the part of a playback manifest this needs.

@@ -165,7 +165,7 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 	// selection and two playlists each. Fetched one after another that is
 	// minutes before a byte moves, so they go out several at a time, in the
 	// listing's order.
-	resolved, note, err := expandSeries(ctx, series[bbcItem]{
+	return listSeries(ctx, title, series[bbcItem]{
 		site: "bbcsounds", noun: "episodes", link: title,
 		items: items, listed: total,
 		resolve: func(ctx context.Context, item bbcItem) (*File, error) {
@@ -180,11 +180,7 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 			return file, nil
 		},
 		unplayable: "the media selector named no stream for any of them",
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
+	}, walkNote)
 }
 
 // listing pages a container's episodes, up to limit of them, with the

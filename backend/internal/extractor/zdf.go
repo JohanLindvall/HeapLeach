@@ -233,7 +233,7 @@ func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach 
 
 // expand resolves a listing's videos into one file each.
 func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRef, reach *zdfReach) (*Result, error) {
-	resolved, note, err := expandSeries(ctx, series[zdfRef]{
+	return listSeries(ctx, title, series[zdfRef]{
 		site: "zdf", noun: "videos", link: u.Redacted(),
 		items: refs,
 		label: func(ref zdfRef) string {
@@ -251,10 +251,6 @@ func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRe
 		// here.
 		unplayable: "each offers no stream",
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
 }
 
 // video resolves one listed video. A document that will not load is

@@ -158,7 +158,7 @@ func (p *PBS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 	// say what it belongs to, so its name carries the programme as well. PBS
 	// numbers the episodes of its long-running strands and calls them nothing
 	// else, and "Episode 4" on its own names nothing.
-	title := util.FirstNonEmpty(pbsJoin(episode.program, episode.title), id)
+	title := util.FirstNonEmpty(joinTitle(episode.program, episode.title, titleEqual), id)
 	episode.file.Name = title + ".mp4"
 	return &Result{Title: title, Files: []File{episode.file}}, nil
 }
@@ -411,7 +411,7 @@ func (p *PBS) probe(ctx context.Context, link string) (final *url.URL, mediaType
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", 0, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: link}
+		return nil, "", 0, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
 	}
 
 	size = knownSize(resp.ContentLength)
@@ -481,18 +481,6 @@ func pbsSeasonOf(info string) string {
 		return ""
 	}
 	return "Season " + match[1]
-}
-
-// pbsJoin names a video by its programme and its own title together, and
-// copes with one that has only the second.
-func pbsJoin(program, title string) string {
-	switch {
-	case title == "":
-		return program
-	case program == "" || strings.EqualFold(program, title):
-		return title
-	}
-	return program + " - " + title
 }
 
 // pbsBridge is the part of the player state this needs. These fields are why

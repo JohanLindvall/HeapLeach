@@ -163,13 +163,7 @@ func (a *ABCListen) episode(u *url.URL, doc abcListenDoc) (*Result, error) {
 	// it belongs to, so the name carries the programme as well: a daily
 	// bulletin's own title is the programme's name and nothing more, which is
 	// also why saying it twice is worth avoiding.
-	title := strings.TrimSpace(doc.Title)
-	switch programme := doc.programme(); {
-	case title == "":
-		title = programme
-	case programme != "" && !strings.EqualFold(programme, title):
-		title = programme + " - " + title
-	}
+	title := joinTitle(doc.programme(), strings.TrimSpace(doc.Title), titleEqual)
 
 	file.Name = abcListenName(doc.ID, title) + file.Name // Name holds only the extension here
 	return &Result{Title: util.FirstNonEmpty(title, doc.ID), Files: []File{file}}, nil
@@ -190,22 +184,14 @@ func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPa
 		return nil, fmt.Errorf("abclisten: no episodes listed on %s", u.Redacted())
 	}
 
-	resolved, note, err := expandSeries(ctx, series[abcListenItem]{
+	return listSeries(ctx, util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)), series[abcListenItem]{
 		site: "abclisten", noun: "episodes", link: u.Redacted(),
 		items: episodes, listed: listed,
 		resolve: func(ctx context.Context, ep abcListenItem) (*File, error) {
 			return a.listed(ctx, u, ep)
 		},
 		unplayable: "none carries media",
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{
-		Title: util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)),
-		Files: listedFiles(resolved),
-		Note:  listingNote(note, walkNote),
-	}, nil
+	}, walkNote)
 }
 
 // listed resolves one entry of a programme listing. The episode goes in a

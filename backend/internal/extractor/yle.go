@@ -170,7 +170,7 @@ func (od *yleOndemand) title(lang, id string) string {
 	if od.Series != nil {
 		series = od.Series.Title.in(lang)
 	}
-	return cmp.Or(ardJoin(series, od.Title.in(lang)), id)
+	return cmp.Or(joinTitle(series, od.Title.in(lang), titleContains), id)
 }
 
 // finlandOnly reports a programme Yle shows in Finland alone.
@@ -481,7 +481,7 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Resu
 		return nil, fmt.Errorf("yle: %s lists no episodes", title)
 	}
 	if page.season() {
-		title = ardJoin(name, lists[0].season)
+		title = joinTitle(name, lists[0].season, titleContains)
 	}
 	if page.appID == "" || page.key == "" {
 		return nil, fmt.Errorf("yle: %s: the page names no key for its listings", title)
@@ -517,7 +517,7 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Resu
 			case audio:
 				ext = ".mp3"
 			}
-			file := y.lazy(lang, ardJoin(name, cmp.Or(c.episode.title, c.episode.id)), ext, c.episode)
+			file := y.lazy(lang, joinTitle(name, cmp.Or(c.episode.title, c.episode.id), titleContains), ext, c.episode)
 			return &file, nil
 		},
 	})

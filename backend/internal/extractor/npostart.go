@@ -264,7 +264,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 		// which would say nothing; and two seasons fetched separately would
 		// otherwise share a folder, where episode names that start again at
 		// the top of the season collide.
-		title = npoJoin(title, seasons[0].name())
+		title = joinTitle(title, seasons[0].name(), titleEqual)
 	}
 
 	// One locked or withdrawn episode must not sink the rest — a mixed
@@ -533,7 +533,6 @@ type npoStreamLink struct {
 // npoStream is the stream the player was given.
 type npoStream struct {
 	URL     string `json:"streamURL"`
-	Profile string `json:"streamProfile"`
 	DRMType string `json:"drmType"`
 	// DRM is the licence server and certificate the player would need. It is
 	// read as raw JSON because only its presence matters here.
@@ -610,21 +609,9 @@ type npoProgram struct {
 // place, which is what a viewer calls that episode anyway.
 func (p npoProgram) name() string {
 	if p.Title == "" || strings.EqualFold(p.Series.Title, p.Title) {
-		return npoJoin(util.FirstNonEmpty(p.Series.Title, p.Title), npoDate(p.Published))
+		return joinTitle(util.FirstNonEmpty(p.Series.Title, p.Title), npoDate(p.Published), titleEqual)
 	}
-	return npoJoin(p.Series.Title, p.Title)
-}
-
-// npoJoin names something by its series and what distinguishes it, and copes
-// with either half being missing or the two being the same.
-func npoJoin(series, part string) string {
-	switch {
-	case part == "":
-		return series
-	case series == "" || strings.EqualFold(series, part):
-		return part
-	}
-	return series + " - " + part
+	return joinTitle(p.Series.Title, p.Title, titleEqual)
 }
 
 // npoDate renders a broadcast timestamp as a plain date.

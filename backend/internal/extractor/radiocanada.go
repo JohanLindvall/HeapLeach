@@ -100,7 +100,6 @@ var (
 	radioCanadaEmission  = regexp.MustCompile(`"Emission":"((?:[^"\\]|\\.)*)"`)
 	radioCanadaEpisode   = regexp.MustCompile(`\{"typename":"EpisodeListItem"(?s:.*?)"mediaIds":\[([0-9]+)[^\]]*\](?s:.*?)"title":"((?:[^"\\]|\\.)*)"`)
 	radioCanadaPages     = regexp.MustCompile(`"pagination":\{"pageNumber":[0-9]+,"pageSize":[0-9]+,"totalCount":([0-9]+)\}`)
-	radioCanadaTitle     = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 // Extract reads the media a page plays, or an OHdio programme's episodes,
@@ -117,16 +116,13 @@ func (r *RadioCanada) Extract(ctx context.Context, u *url.URL, opts Options) (*R
 	if err != nil {
 		return nil, fmt.Errorf("radio-canada: %s: %w", u.Redacted(), err)
 	}
-	title := ""
-	if m := radioCanadaTitle.FindStringSubmatch(page); m != nil {
-		title = util.TrimTitleSuffix(util.Unescape(m[1]), " | ")
-	}
+	title := util.TrimTitleSuffix(writtenTitle(page), " | ")
 	if id := radioCanadaPageMedia(page); id != "" {
 		var emission string
 		if e := radioCanadaEmission.FindStringSubmatch(page); e != nil && strings.Contains(u.Path, "/ohdio/") {
 			emission = radioCanadaText(e[1])
 		}
-		return r.single(ctx, "medianet", id, ardJoin(emission, title))
+		return r.single(ctx, "medianet", id, joinTitle(emission, title, titleContains))
 	}
 	if radioCanadaEpisode.MatchString(page) {
 		return r.programme(ctx, final, title, page)
@@ -179,10 +175,9 @@ func (r *RadioCanada) article(ctx context.Context, title, page string) (*Result,
 	// and the registry holds the files to the user's cap. When none plays,
 	// the first reason one gave is the answer.
 	title = cmp.Or(title, "Radio-Canada")
-	var refusals []string
-	resolved, note, err := expandSeries(ctx, series[attached]{
+	return listSeries(ctx, title, series[attached]{
 		site: "radio-canada", noun: "media", link: title,
-		items: media, refused: &refusals,
+		items: media, noteRefused: true,
 		resolve: func(ctx context.Context, a attached) (*File, error) {
 			target, err := r.stream(ctx, a.app, a.id, "")
 			if err != nil {
@@ -193,13 +188,6 @@ func (r *RadioCanada) article(ctx context.Context, title, page string) (*Result,
 		},
 		unplayable: "they hold nothing to download",
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, refusedNote(refusals))}, nil
 }
 
 // radioCanadaText is a string written into the page's data, its escapes
@@ -295,7 +283,7 @@ func (r *RadioCanada) name(ctx context.Context, app, id string) string {
 	for _, m := range doc.Metas {
 		metas[m.Name] = strings.TrimSpace(m.Text)
 	}
-	return cmp.Or(ardJoin(metas["Emission"], metas["Title"]), id)
+	return cmp.Or(joinTitle(metas["Emission"], metas["Title"], titleContains), id)
 }
 
 // radioCanadaUnfiltered is a master's link without the filter the API puts
@@ -382,12 +370,12 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 				if number == 1 && season > 0 {
 					label := "Saison " + strconv.Itoa(season)
 					if m := radioCanadaSeasonName.FindStringSubmatch(doc); m != nil {
-						label = cmp.Or(ardJoin(radioCanadaText(m[2]), radioCanadaText(m[1])), label)
+						label = cmp.Or(joinTitle(radioCanadaText(m[2]), radioCanadaText(m[1]), titleContains), label)
 					}
 					switch {
 					case pastedSeason:
 						// A season pasted alone is filed under its own name.
-						seasonTitle = ardJoin(title, label)
+						seasonTitle = joinTitle(title, label, titleContains)
 					case len(seasons) > 1:
 						folder = sourceFolder(label)
 					}
@@ -397,7 +385,7 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 				var items []listed
 				for _, e := range radioCanadaEpisode.FindAllStringSubmatch(doc, -1) {
 					if id := e[1]; !seen[id] {
-						items = append(items, listed{id, r.lazy(id, cmp.Or(ardJoin(title, radioCanadaText(e[2])), id), folder)})
+						items = append(items, listed{id, r.lazy(id, cmp.Or(joinTitle(title, radioCanadaText(e[2]), titleContains), id), folder)})
 					}
 				}
 				// The list ends at the count it states.

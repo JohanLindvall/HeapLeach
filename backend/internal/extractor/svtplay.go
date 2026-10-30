@@ -49,7 +49,7 @@ const svtSeasonsQuery = `query($slug:String!){
     ... on TvSeries {
       associatedContent(include:[season]){
         id name type
-        items { item { __typename ... on Episode { name videoSvtId positionInSeason } } }
+        items { item { __typename ... on Episode { name videoSvtId } } }
       }
     }
   }
@@ -233,10 +233,9 @@ func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []svtEpisod
 					Type  string `json:"type"`
 					Items []struct {
 						Item struct {
-							TypeName         string `json:"__typename"`
-							Name             string `json:"name"`
-							VideoSvtID       string `json:"videoSvtId"`
-							PositionInSeason string `json:"positionInSeason"`
+							TypeName   string `json:"__typename"`
+							Name       string `json:"name"`
+							VideoSvtID string `json:"videoSvtId"`
 						} `json:"item"`
 					} `json:"items"`
 				} `json:"associatedContent"`

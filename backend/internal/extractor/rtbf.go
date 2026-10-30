@@ -208,7 +208,7 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	if data.Program != nil {
 		programme = data.Program.Title
 	}
-	stem := cmp.Or(ardJoin(strings.TrimSpace(cmp.Or(programme, data.Title)), strings.TrimSpace(data.Subtitle)), id)
+	stem := cmp.Or(joinTitle(strings.TrimSpace(cmp.Or(programme, data.Title)), strings.TrimSpace(data.Subtitle), titleContains), id)
 	if strings.EqualFold(data.PlayerType, "LIVE") {
 		return nil, &broadcastRefusal{"rtbf", stem, "it is a live stream, which has no end to download to"}
 	}
@@ -621,7 +621,7 @@ func rtbfWithQuery(link string, params url.Values) string {
 // keeps the name it is listed under, so that a listing read again finds
 // what was saved under it.
 func (r *RTBF) lazy(l rtbfListed, ext string) File {
-	stem := cmp.Or(ardJoin(strings.TrimSpace(l.entry.Title), strings.TrimSpace(l.entry.Subtitle)), l.entry.ID)
+	stem := cmp.Or(joinTitle(strings.TrimSpace(l.entry.Title), strings.TrimSpace(l.entry.Subtitle), titleContains), l.entry.ID)
 	assetID := l.entry.AssetID
 	return lazyEpisode(stem+ext, "", rtbfHeaders(), func(ctx context.Context) (*Target, error) {
 		return r.stream(ctx, assetID, stem)
@@ -631,7 +631,6 @@ func (r *RTBF) lazy(l rtbfListed, ext string) File {
 var (
 	rtbfAssetAttr = regexp.MustCompile(`data-asset-id="([0-9]+)"`)
 	rtbfEmbedLink = regexp.MustCompile(`auvio\.rtbf\.be/embed/[^"'\s<>]*?/media/([0-9]+)`)
-	rtbfPageTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 // embedded reads the Auvio players a page embeds, an article's say, each
@@ -659,16 +658,13 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL) (*Result, error) {
 		return r.media(ctx, ids[0])
 	}
 	title := u.Redacted()
-	if m := rtbfPageTitle.FindStringSubmatch(html); m != nil {
-		title = cmp.Or(strings.TrimSpace(util.Unescape(m[1])), title)
-	}
+	title = cmp.Or(strings.TrimSpace(writtenTitle(html)), title)
 	// Each player is a request to resolve, so they are cut to the request
 	// budget and the registry holds the files to the user's cap. When none
 	// plays, the first reason one gave is the answer.
-	var refusals []string
-	resolved, note, err := expandSeries(ctx, series[string]{
+	return listSeries(ctx, title, series[string]{
 		site: "rtbf", noun: "players", link: title,
-		items: ids, refused: &refusals,
+		items: ids, noteRefused: true,
 		resolve: func(ctx context.Context, id string) (*File, error) {
 			res, err := r.media(ctx, id)
 			if err != nil {
@@ -678,11 +674,4 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL) (*Result, error) {
 		},
 		unplayable: "they hold nothing to download",
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, refusedNote(refusals))}, nil
 }

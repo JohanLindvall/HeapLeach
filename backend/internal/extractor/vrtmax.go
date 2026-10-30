@@ -250,7 +250,7 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 	// thirty-odd seasons. A whole season refused is a whole season refused
 	// for one reason, and VRT's code for it is the only thing the caller can
 	// act on.
-	resolved, note, err := expandSeries(ctx, series[vrtEpisodeRef]{
+	return listSeries(ctx, util.FirstNonEmpty(page.Title, vrtSlug(id)), series[vrtEpisodeRef]{
 		site: "vrtmax", noun: "episodes", link: u.Redacted(),
 		items: episodes,
 		label: func(ep vrtEpisodeRef) string { return ep.season },
@@ -264,10 +264,6 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 		},
 		unplayable: "the listing named them but the player offered no stream",
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id)), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // vrtEpisodeRef is one episode of a programme, with the season it belongs to.
@@ -564,14 +560,12 @@ func vrtSlug(id string) string {
 // itself: the media document names the programme and the episode's place in
 // it — "A Programme S2026 E167" is the shape — but not what it is about, and
 // the page names the episode but not what it belongs to.
+// Where the two differ only in case, the programme's spelling is kept.
 func vrtTitle(programme, episode string) string {
-	switch {
-	case programme == "":
-		return episode
-	case episode == "" || strings.EqualFold(programme, episode):
+	if strings.EqualFold(programme, episode) {
 		return programme
 	}
-	return programme + " - " + episode
+	return joinTitle(programme, episode, titleEqual)
 }
 
 // vrtReason puts the media service's refusal code into words, keeping the
