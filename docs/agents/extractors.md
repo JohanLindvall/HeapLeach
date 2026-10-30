@@ -323,8 +323,9 @@ line in the saved queue.
 - `unpackJS` and `jwSource` (`players.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
-  for DRM and geo refusals in the broadcaster's own words, `resolveListed`
-  for a listing's episodes resolved concurrently in order, `lazyEpisode` and
+  for DRM and geo refusals in the broadcaster's own words, `resolveListed`,
+  `resolveInTurn` and `resolveEach` for a listing's episodes resolved
+  concurrently or one at a time, in order, `lazyEpisode` and
   `refreshing` for files re-read at transfer time, and the listing notes. A
   new broadcaster uses these rather than types of its own.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
@@ -334,6 +335,10 @@ line in the saved queue.
   partial notes. A new paged listing supplies only the reader for one page.
 - `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
   playlist or target as a File, every field carried over.
+- `rankIn` (`rank.go`): a name's place in a quality ladder, ignoring case,
+  with the caller choosing the value for a name not on it.
+- `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
+  `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
 - `fixturePage`, `htmlPage`, `expectRecognised` and `expectShape`
   (`recognise_test.go`): recognition fixtures, checked from an unrelated host
