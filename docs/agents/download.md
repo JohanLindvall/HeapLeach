@@ -43,6 +43,12 @@ and even a done status can include canceled files or a partial listing, so
 neither status alone is enough. Incomplete jobs and their pending retries
 remain available. The UI's `isComplete` predicate mirrors this rule.
 
+**Stopping is allowed during shutdown; starting is not.** The job actions look
+their job up through `jobLocked`, which returns with `mu` held. Retries and
+limit changes pass `refuseClosing` and get `ErrClosed` once `Close` has begun;
+`CancelJob` and `RemoveJob` do not, since cancelling is what shutdown wants
+anyway. Both share `cancelJobLocked`.
+
 ## Part files
 
 Transfers resume from the `.part` file with a `Range` request.
@@ -289,7 +295,11 @@ itself as "(2)", then "(3)". Two things cover it:
   `.mp4` it became, so `remuxToMP4` makes the same check on its output;
   rewrapping is deterministic, so the copies are byte for byte the same.
   `identicalOnDisk` skips the new file itself, which by then already sits
-  under a numbered name.
+  under a numbered name. It and `alreadyOnDisk`'s `onDiskAs` share one scan
+  of the name and its numbered siblings (`numberedSiblings`, beside
+  `numberedName`), and both record the find through `markSkipped`.
+  `finishTransfer` is this end of `Manager.transfer`: join, the identical-file
+  check, `reserve`, rename and remux.
 
 ## Names and paths
 

@@ -883,20 +883,12 @@ func (m *Manager) logFinishedLocked(it *Item, msg string) {
 func (m *Manager) CancelJob(id string) error {
 	// Something the user did, so they see it at once. See nudge.
 	defer m.nudge()
-	m.mu.Lock()
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, false)
+	if err != nil {
+		return err
 	}
-	job.canceled = true
+	cancelJobLocked(job)
 	job.restored = false
-	if job.cancel != nil {
-		job.cancel()
-	}
-	for _, it := range job.Items {
-		cancelItemLocked(it)
-	}
 	m.pruneQueueLocked()
 	m.mu.Unlock()
 
@@ -925,6 +917,35 @@ func (m *Manager) CancelItem(jobID, itemID string) error {
 	m.markDirty()
 	m.signal()
 	return nil
+}
+
+// jobLocked takes mu and looks up a job, returning with mu still held. On an
+// error — ErrClosed when refuseClosing and the manager is shutting down,
+// ErrNotFound for an unknown id — it releases mu first.
+func (m *Manager) jobLocked(id string, refuseClosing bool) (*Job, error) {
+	m.mu.Lock()
+	if refuseClosing && m.closing {
+		m.mu.Unlock()
+		return nil, ErrClosed
+	}
+	job, ok := m.jobs[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, ErrNotFound
+	}
+	return job, nil
+}
+
+// cancelJobLocked stops a job's source and every file under it. Caller
+// holds mu.
+func cancelJobLocked(job *Job) {
+	job.canceled = true
+	if job.cancel != nil {
+		job.cancel()
+	}
+	for _, it := range job.Items {
+		cancelItemLocked(it)
+	}
 }
 
 // cancelItemLocked marks an item cancelled and interrupts it if running.
@@ -956,15 +977,9 @@ func (m *Manager) RetryJob(id string) error {
 	defer m.nudge()
 	recheckTools()
 
-	m.mu.Lock()
-	if m.closing {
-		m.mu.Unlock()
-		return ErrClosed
-	}
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, true)
+	if err != nil {
+		return err
 	}
 	if job.resolving && !job.canceled {
 		m.mu.Unlock()
@@ -1003,25 +1018,21 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	defer m.nudge()
 	recheckTools()
 
-	m.mu.Lock()
-	if m.closing {
-		m.mu.Unlock()
-		return ErrClosed
+	job, err := m.jobLocked(jobID, true)
+	if err != nil {
+		return err
 	}
-	it, ok := m.findItemLocked(jobID, itemID)
+	it, ok := job.item(itemID)
 	if !ok {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-	job := m.jobs[jobID]
-	unfetchable := job != nil && (job.restored || job.unfetchable)
+	unfetchable := job.restored || job.unfetchable
 	if !unfetchable && (it.Status == StatusRunning || it.Status == StatusQueued) {
 		m.mu.Unlock()
 		return errors.New("item is already in progress")
 	}
-	if job != nil {
-		job.canceled = false
-	}
+	job.canceled = false
 
 	// A restored job's items carry no URL — none is stored, because the
 	// signed links half these hosts hand out would be stale by the next run
@@ -1292,19 +1303,11 @@ func (m *Manager) deferStalledLocked(it *Item, err error) bool {
 func (m *Manager) RemoveJob(id string) error {
 	// Something the user did, so they see it at once. See nudge.
 	defer m.nudge()
-	m.mu.Lock()
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, false)
+	if err != nil {
+		return err
 	}
-	job.canceled = true
-	if job.cancel != nil {
-		job.cancel()
-	}
-	for _, it := range job.Items {
-		cancelItemLocked(it)
-	}
+	cancelJobLocked(job)
 	delete(m.jobs, id)
 	m.order = util.Remove(m.order, id)
 	m.pruneQueueLocked()
@@ -1421,7 +1424,12 @@ func (m *Manager) findItemLocked(jobID, itemID string) (*Item, bool) {
 	if !ok {
 		return nil, false
 	}
-	for _, it := range job.Items {
+	return job.item(itemID)
+}
+
+// item looks up one of the job's files. Caller holds mu.
+func (j *Job) item(itemID string) (*Item, bool) {
+	for _, it := range j.Items {
 		if it.ID == itemID {
 			return it, true
 		}

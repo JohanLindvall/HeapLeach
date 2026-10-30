@@ -8,55 +8,40 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
-// chunkPool recycles the fixed-size buffers the hot paths copy and decrypt
-// through. Every user wants exactly CopyBufferSize: a connection borrows one
-// for the life of an attempt, a decrypting write borrows one per call. They
-// are all the same size, so one pool serves the lot — and a long queue of
-// small files stops asking the allocator for identical 256 KiB blocks over
-// and over.
-var chunkPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, config.CopyBufferSize)
+// bytePool recycles buffers of one fixed size, so a long queue of small
+// files stops asking the allocator for identical blocks over and over.
+type bytePool struct{ pool sync.Pool }
+
+func newBytePool(size int) *bytePool {
+	p := &bytePool{}
+	p.pool.New = func() any {
+		buf := make([]byte, size)
 		return &buf
-	},
+	}
+	return p
 }
 
-// borrowChunk lends a CopyBufferSize buffer and the function that returns
-// it. The buffer is not zeroed; every caller writes before reading.
-func borrowChunk() ([]byte, func()) {
-	buf := chunkPool.Get().(*[]byte)
-	return *buf, func() { chunkPool.Put(buf) }
+// borrow lends a buffer and the function that returns it. The buffer is not
+// zeroed; every caller writes before reading.
+func (p *bytePool) borrow() ([]byte, func()) {
+	buf := p.pool.Get().(*[]byte)
+	return *buf, func() { p.pool.Put(buf) }
 }
 
-// writePool recycles the larger buffers connections accumulate into before
-// touching the file. They are kept apart from the chunk pool because they
-// are a different size and have a different lifetime: a read buffer is
-// borrowed for the length of an attempt, a write buffer for the length of
-// one connection's run at one segment.
-var writePool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, config.WriteBufferSize)
-		return &buf
-	},
-}
+// The pools are kept apart because their buffers differ in size and
+// lifetime.
+var (
+	// borrowChunk lends a CopyBufferSize buffer, the size the hot paths copy
+	// and decrypt through: a connection borrows one for the life of an
+	// attempt, a decrypting write borrows one per call.
+	borrowChunk = newBytePool(config.CopyBufferSize).borrow
 
-// borrowWriteBuffer lends a WriteBufferSize buffer and the function that
-// returns it.
-func borrowWriteBuffer() ([]byte, func()) {
-	buf := writePool.Get().(*[]byte)
-	return *buf, func() { writePool.Put(buf) }
-}
+	// borrowWriteBuffer lends a WriteBufferSize buffer, the larger one a
+	// connection accumulates into before touching the file, for the length
+	// of one connection's run at one segment.
+	borrowWriteBuffer = newBytePool(config.WriteBufferSize).borrow
 
-// startPool recycles the WriteBufferStart buffers every connection begins
-// with; see bufferedWriterAt.grow.
-var startPool = sync.Pool{
-	New: func() any {
-		buf := make([]byte, config.WriteBufferStart)
-		return &buf
-	},
-}
-
-func borrowStartBuffer() ([]byte, func()) {
-	buf := startPool.Get().(*[]byte)
-	return *buf, func() { startPool.Put(buf) }
-}
+	// borrowStartBuffer lends the WriteBufferStart buffer every connection
+	// begins with; see bufferedWriterAt.grow.
+	borrowStartBuffer = newBytePool(config.WriteBufferStart).borrow
+)
