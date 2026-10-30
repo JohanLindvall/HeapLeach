@@ -122,8 +122,7 @@ func (r *RedGifs) user(ctx context.Context, name string, opts Options) (*Result,
 			if err := r.call(ctx, path, &payload); err != nil {
 				return pageOf[redgifsItem]{}, fmt.Errorf("redgifs: user %s: %w", name, err)
 			}
-			end := len(payload.Gifs) == 0 || (payload.Pages > 0 && n+1 >= payload.Pages)
-			return pageOf[redgifsItem]{items: payload.Gifs, next: true, end: end}, nil
+			return pageOf[redgifsItem]{items: payload.Gifs, next: true, end: len(payload.Gifs) == 0, pages: payload.Pages}, nil
 		},
 	})
 	if err != nil {

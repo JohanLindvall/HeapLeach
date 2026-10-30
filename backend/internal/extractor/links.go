@@ -149,8 +149,8 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 
 	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
 	note := partialNote("links", e, found, len(sources) < found)
-	if note == "" && e.used < found {
-		note = fmt.Sprintf("%d of %d links resolved", e.used, found)
+	if note == "" {
+		note = resolvedNote(e.used, found, "links")
 	}
 	return &Result{
 		Title: title,

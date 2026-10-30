@@ -243,7 +243,7 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 				return pageOf[orfEpisodeDoc]{}, err
 			}
 			items := doc.Embedded.Items
-			return pageOf[orfEpisodeDoc]{items: items, next: true, end: len(items) == 0 || n+1 >= doc.Pages}, nil
+			return pageOf[orfEpisodeDoc]{items: items, next: true, end: len(items) == 0, pages: max(doc.Pages, 1)}, nil
 		},
 		key:   func(ep orfEpisodeDoc) string { return strconv.FormatInt(ep.ID, 10) },
 		limit: -1,
@@ -295,7 +295,7 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 		}
 		return nil, fmt.Errorf("orf: series %s lists no episodes", id)
 	}
-	note := listingNote(cappedNote(len(files), len(episodes)-drm-austria, "episodes"), walkNote,
+	note := joinNotes(cappedNote(len(files), len(episodes)-drm-austria, "episodes"), walkNote,
 		leftOutNote(austria, " that ORF shows in Austria only"), leftOutNote(drm, " that are DRM-protected"))
 	return &Result{Title: cmp.Or(title, "series "+id), Files: files, Note: note}, nil
 }

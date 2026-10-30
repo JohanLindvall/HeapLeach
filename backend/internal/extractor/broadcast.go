@@ -135,7 +135,7 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 		}
 	}
 	if s.noteRefused {
-		note = listingNote(note, refusedNote(refusals))
+		note = joinNotes(note, refusedNote(refusals))
 	}
 	return resolved, note, nil
 }
@@ -151,7 +151,7 @@ func listSeries[T any](ctx context.Context, title string, s series[T], notes ...
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(append([]string{note}, notes...)...)}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: joinNotes(append([]string{note}, notes...)...)}, nil
 }
 
 // joinTitle names something by its series and its episode together, coping
@@ -258,7 +258,7 @@ func readSeasons[S, T any](ctx context.Context, seasons []S, inTurn bool, read f
 		list.note = cmp.Or(list.note, out.list.note)
 	}
 	if unread {
-		list.note = listingNote(list.note, unreadableSeasons)
+		list.note = joinNotes(list.note, unreadableSeasons)
 	}
 	return list, first
 }
@@ -310,61 +310,4 @@ func listedFiles[T any](resolved []listedItem[T]) []File {
 // listed under, so that a listing read again finds what was saved under it.
 func lazyEpisode(name, dir string, headers httpx.Header, resolve func(context.Context) (*Target, error)) File {
 	return File{Name: name, Size: -1, Dir: dir, Headers: headers, Resolve: resolve}
-}
-
-// listingNote joins what a listing says of itself, leaving out the parts
-// that are empty.
-func listingNote(parts ...string) string {
-	var kept []string
-	for _, part := range parts {
-		if part != "" {
-			kept = append(kept, part)
-		}
-	}
-	return strings.Join(kept, "; ")
-}
-
-// cappedNote says a listing of shown items was cut to kept, or nothing when
-// it was not.
-func cappedNote(kept, shown int, unit string) string {
-	if shown <= kept {
-		return ""
-	}
-	return fmt.Sprintf("%d of %d %s", kept, shown, unit)
-}
-
-// leftOutNote says n items were left out, and why, or nothing when none
-// were. why reads on from "left out": ": <reason>" or " that ...".
-func leftOutNote(n int, why string) string {
-	if n == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%d left out%s", n, why)
-}
-
-// refusedNote says how many were left out for each reason given, in the
-// order the reasons first came up — "3 left out: gone; 1 left out: live"
-// — or nothing when none were.
-func refusedNote(reasons []string) string {
-	var order []string
-	counts := make(map[string]int)
-	for _, reason := range reasons {
-		if counts[reason] == 0 {
-			order = append(order, reason)
-		}
-		counts[reason]++
-	}
-	notes := make([]string, len(order))
-	for i, reason := range order {
-		notes[i] = leftOutNote(counts[reason], ": "+reason)
-	}
-	return listingNote(notes...)
-}
-
-// brokenNote says a listing's walk broke off partway, when it did.
-func brokenNote(err error) string {
-	if err == nil {
-		return ""
-	}
-	return "the listing broke off partway"
 }

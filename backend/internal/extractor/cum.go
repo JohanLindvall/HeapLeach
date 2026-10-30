@@ -186,8 +186,8 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 	if invalid {
 		note = joinNotes(note, "partial — invalid posts in listing")
 	}
-	if capped := cappedNote(len(posts), total, "posts"); note == "" && capped != "" {
-		note = "partial — " + capped
+	if note == "" {
+		note = partial(cappedNote(len(posts), total, "posts"))
 	}
 	res.Note = note
 	for _, post := range posts {

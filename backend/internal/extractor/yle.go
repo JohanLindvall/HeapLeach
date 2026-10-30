@@ -553,7 +553,7 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Resu
 	if len(files) == 0 {
 		return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 	}
-	note = listingNote(note, walkNote, brokenNote(walkErr),
+	note = joinNotes(note, walkNote, brokenNote(walkErr),
 		leftOutNote(finland, " that Yle shows in Finland only"), refusedNote(refused))
 	return &Result{Title: title, Files: files, Note: note}, nil
 }

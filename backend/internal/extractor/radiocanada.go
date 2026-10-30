@@ -422,7 +422,7 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 		}
 		return nil, errors.New("radio-canada: " + title + " lists no episodes")
 	}
-	note := listingNote(walkNote, brokenNote(walkErr))
+	note := joinNotes(walkNote, brokenNote(walkErr))
 	return &Result{Title: cmp.Or(seasonTitle, title), Files: files, Note: note}, nil
 }
 

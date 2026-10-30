@@ -267,7 +267,10 @@ intact. `sources.go` holds what they share:
   titles were filed under a form of its own before this existed keeps that
   form through `expandSourcesNamed`'s `folders` hook, since renaming them
   would download them all again.
-- **The note.** "N of M" admits a truncated answer.
+- **The note.** "N of M" admits a truncated answer (`partialNote`, on
+  `cappedNote`); a listing expanded into its sources says what its walk,
+  the file cap and the sources that did not resolve left out
+  (`expansionNote`).
 
 ### Walking pages
 
@@ -329,6 +332,17 @@ line in the saved queue.
   folder never does. A note in the title would change the folder whenever a
   cap was raised or a rate limit waited out, and the next run would file
   everything somewhere new and download it all again.
+- **A note is built from the helpers in `notes.go`, so every extractor's
+  reads alike.** `joinNotes` is the one joiner: "; " between parts, empty
+  parts dropped, a part the note already holds not repeated (a joined note's
+  parts count one by one), and "partial — " said once, at the note's start —
+  "partial — invalid next page; file limit". The parts: `partial` marks one
+  as a cut, `cappedNote` says "N of M <unit>" (bare "N of M" with no unit),
+  `resolvedNote` "N of M <noun> resolved", `leftOutNote` "N left out…",
+  `refusedNote` counts refusals per reason ("3 left out: gone; 1 left out:
+  live", on `tally`), and `brokenNote` a walk that broke off. A hand-built
+  "partial — " + count, or a join of its own, is what these replace; a new
+  note uses them rather than a `Sprintf` that only nearly matches.
 - **A slash in a title is not a path.** `SafeName` keeps only what follows the
   last separator, which is right for a name a server hands over (RFC 6266 says
   to strip a `Content-Disposition` name of its path) and wrong for a title:
@@ -369,7 +383,7 @@ line in the saved queue.
   up to the request budget and says whether it went on, `readSeasons` for
   a programme's season lists read at once or in turn, an unreadable season
   left out and noted, `lazyEpisode` and
-  `refreshing` for files re-read at transfer time, the listing notes (`refusedNote` counting refusals by reason),
+  `refreshing` for files re-read at transfer time, the note helpers above,
   `joinTitle` with its `titleEqual`, `titlePrefixed` and `titleContains`
   for naming an episode by its programme, and `writtenTitle` for a
   page's `<title>` with its spacing kept. A new broadcaster uses these
@@ -412,8 +426,9 @@ line in the saved queue.
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
   (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
   that singles out one failure returns `pageFailed` for the rest, leaving
-  their note to the walk. `listingNotes` (`sources.go`) builds the job note
-  of a listing expanded into its sources.
+  their note to the walk. `expansionNote` (`sources.go`) builds the job note
+  of a listing expanded into its sources, and `partialNote` that of a page
+  or search whose sources a cap cut.
 - `expandSources` keeps, beside the files, the refusals and first failure of
   the sources that did not resolve (`expansion.refusals`, `failed`), so a
   page none of whose sources resolved says why through `noneRead`; a link no

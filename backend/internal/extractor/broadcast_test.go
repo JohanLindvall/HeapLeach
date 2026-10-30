@@ -110,24 +110,6 @@ func TestResolveEachKeepsItems(t *testing.T) {
 	}
 }
 
-func TestListingNote(t *testing.T) {
-	tests := []struct {
-		got, want string
-	}{
-		{listingNote(cappedNote(5, 5, "episodes"), brokenNote(nil), leftOutNote(0, " that x"), refusedNote(nil)), ""},
-		{listingNote(cappedNote(5, 9, "episodes"), brokenNote(errors.New("x"))), "5 of 9 episodes; the listing broke off partway"},
-		{listingNote(leftOutNote(2, " that are DRM-protected"), refusedNote([]string{"gone", "late"})),
-			"2 left out that are DRM-protected; 1 left out: gone; 1 left out: late"},
-		// Refusals are counted by reason, in the order the reasons came up.
-		{refusedNote([]string{"live", "gone", "live", "live"}), "3 left out: live; 1 left out: gone"},
-	}
-	for i, tc := range tests {
-		if tc.got != tc.want {
-			t.Errorf("%d: note = %q, want %q", i, tc.got, tc.want)
-		}
-	}
-}
-
 // TestReadSeasons pins how a programme's seasons are read, at once or in
 // turn: in the seasons' order, a season that fails left out with the note
 // saying so, the first walk note and any cut kept, and the first season's

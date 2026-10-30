@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -140,22 +141,23 @@ func nprResult(doc string, u *url.URL) (*Result, error) {
 			"(/programs/<slug>/) and a podcast (/podcasts/<id>/<slug>)", u.Redacted())
 	}
 
-	var refused nprRefusals
+	var refused []nprRefusal
 	playable := make([]nprAudio, 0, len(listed))
 	for _, entry := range listed {
 		if reason := entry.refusal(); reason != nprPlayable {
-			refused.add(reason)
+			refused = append(refused, reason)
 			continue
 		}
 		playable = append(playable, entry)
 	}
+	reasons := nprReasons(refused)
 	if len(playable) == 0 {
 		return nil, fmt.Errorf("npr: none of the %d pieces of audio on %s can be fetched: %s",
-			len(listed), u.Redacted(), refused)
+			len(listed), u.Redacted(), nprTally(reasons))
 	}
 
 	title := util.FirstNonEmpty(nprPageTitle(root), strings.Trim(u.Path, "/"))
-	return &Result{Title: title, Files: nprFiles(playable)}, nil
+	return &Result{Title: title, Files: nprFiles(playable), Note: refusedNote(reasons)}, nil
 }
 
 // nprAudioFrom pulls every audio block out of a parsed page, in document
@@ -284,16 +286,29 @@ type nprAudio struct {
 func (a nprAudio) program() string { return strings.TrimSpace(a.Program) }
 
 // nprRefusal is why a listed block cannot be fetched, or nprPlayable when it
-// can be.
+// can be. The refusals are in the order a page's are reported in.
 type nprRefusal int
 
 const (
 	nprPlayable nprRefusal = iota
-	nprUnavailable
 	nprSubscriberOnly
+	nprUnavailable
 	nprLiveStream
 	nprNoAudio
 )
+
+// String reads a refusal back in NPR's terms rather than in ours.
+func (r nprRefusal) String() string {
+	switch r {
+	case nprSubscriberOnly:
+		return "behind an NPR+ subscription"
+	case nprUnavailable:
+		return "marked unavailable"
+	case nprLiveStream:
+		return "listed as a live stream, which has no end to download to"
+	}
+	return "listed with no audio at all"
+}
 
 // refusal reports whether this block is worth queueing, and why not when it
 // is not.
@@ -317,45 +332,24 @@ func (a nprAudio) refusal() nprRefusal {
 	return nprNoAudio
 }
 
-// nprRefusals counts why a page's audio was passed over, so a page that
-// yields nothing says which of NPR's reasons applied instead of reporting
-// itself as empty.
-type nprRefusals struct {
-	unavailable int
-	subscriber  int
-	live        int
-	silent      int
-}
-
-func (r *nprRefusals) add(reason nprRefusal) {
-	switch reason {
-	case nprUnavailable:
-		r.unavailable++
-	case nprSubscriberOnly:
-		r.subscriber++
-	case nprLiveStream:
-		r.live++
-	default:
-		r.silent++
+// nprReasons are why a page's audio was passed over, in the order a page's
+// refusals are reported in, so the note and the error read alike.
+func nprReasons(refused []nprRefusal) []string {
+	slices.Sort(refused)
+	reasons := make([]string, len(refused))
+	for i, r := range refused {
+		reasons[i] = r.String()
 	}
+	return reasons
 }
 
-// String reads back as the tail of a sentence about a page, in NPR's terms
-// rather than in ours.
-func (r nprRefusals) String() string {
+// nprTally reads back as the tail of a sentence about a page that yields
+// nothing, saying which of NPR's reasons applied instead of reporting the
+// page as empty.
+func nprTally(reasons []string) string {
 	var parts []string
-	for _, part := range []struct {
-		count int
-		text  string
-	}{
-		{r.subscriber, "behind an NPR+ subscription"},
-		{r.unavailable, "marked unavailable"},
-		{r.live, "listed as a live stream, which has no end to download to"},
-		{r.silent, "listed with no audio at all"},
-	} {
-		if part.count > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", part.count, part.text))
-		}
+	for _, c := range tally(reasons) {
+		parts = append(parts, fmt.Sprintf("%d %s", c.n, c.reason))
 	}
 	if len(parts) == 0 {
 		return "the page lists them but names nothing to fetch"

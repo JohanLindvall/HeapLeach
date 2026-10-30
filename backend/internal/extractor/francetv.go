@@ -446,7 +446,7 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 	case clips > 1:
 		clipNote = fmt.Sprintf("%d clips left out", clips)
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(cappedNote(len(files), len(cards)-clips, "videos"), clipNote, walkNote)}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(cappedNote(len(files), len(cards)-clips, "videos"), clipNote, walkNote)}, nil
 }
 
 // lazy is a listed video, asked for and resolved when its transfer starts.

@@ -119,7 +119,7 @@ func (b *Bunkr) album(ctx context.Context, u *url.URL, opts Options) (*Result, e
 					trimSiteSuffix(firstText(root, atom.Title)))
 			}
 			last = max(last, lastAlbumPage(root))
-			return pageOf[bunkrEntry]{items: b.albumEntries(root, u), next: true, end: n+1 >= last}, nil
+			return pageOf[bunkrEntry]{items: b.albumEntries(root, u), next: true, pages: last}, nil
 		},
 	})
 	if err != nil {

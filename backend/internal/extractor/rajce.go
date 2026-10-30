@@ -109,7 +109,7 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	if unavailable > 0 {
 		notes = append(notes, fmt.Sprintf("%d album items unavailable", unavailable))
 	}
-	res.Note = listingNote(notes...)
+	res.Note = joinNotes(notes...)
 	return res, nil
 }
 

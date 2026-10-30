@@ -599,7 +599,7 @@ func TestPartialNoteAdmitsOnlyWhatACapDropped(t *testing.T) {
 		{"too many files", expansion{used: 224, full: true}, 500, false, "224 of 500 links"},
 		{"both caps", expansion{used: 224, full: true}, 2700, true, "224 of 2700 links"},
 		{"one huge source", expansion{used: 1, full: true, cut: 2000, of: 3120}, 1, false, "2000 of 3120 files"},
-		{"huge first of several", expansion{used: 1, full: true, cut: 2000, of: 3120}, 3, false, "1 of 3 links, 2000 of 3120 files"},
+		{"huge first of several", expansion{used: 1, full: true, cut: 2000, of: 3120}, 3, false, "1 of 3 links; 2000 of 3120 files"},
 	}
 	for _, c := range cases {
 		if got := partialNote("links", c.e, c.found, c.capped); got != c.want {

@@ -61,7 +61,7 @@ page, a radio-canada article's media) sets `noteRefused`, and one that
 places them among notes of its own (rtbf's tabs, yle) passes `refused` to
 be handed the reasons. Either way `refusedNote` counts them by reason, in
 the order the reasons came up ("3 left out: <reason>; 1 left out:
-<reason>"), so that one refusal's reason never stands for all of them. Most callers end there, and `listSeries` is that ending: the
+<reason>"), so that one refusal's reason never stands for all of them. npr, which resolves nothing per item, notes the audio a page passes over the same way, in the order its error for a page with nothing playable names the reasons (subscription, unavailable, live stream, no audio). Most callers end there, and `listSeries` is that ending: the
 result titled, its note the cap's followed by the caller's own, and the
 context's error rather than a partial result when it ended while the
 episodes resolved; npostart, pbs, svtplay, rtpplay, yle and rtbf's tabs,

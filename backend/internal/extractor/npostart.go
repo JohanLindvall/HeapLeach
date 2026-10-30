@@ -314,7 +314,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(seasonsNote, unread, note)}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: joinNotes(seasonsNote, unread, note)}, nil
 }
 
 // npoEpisodeRef is one episode of a series, with the season it belongs to.

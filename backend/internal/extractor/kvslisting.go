@@ -107,7 +107,7 @@ func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (
 		}
 		return nil, noneRead(kvsLabel, len(pages), "videos", l.url, refusals, failed)
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
 }
 
 // kvsEmpty is the error for a listing with no videos on it, saying why in

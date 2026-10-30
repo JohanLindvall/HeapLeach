@@ -478,7 +478,7 @@ func (n *Niconico) list(ctx context.Context, opts Options, label string,
 	if gone > 0 {
 		goneNote = fmt.Sprintf("%d no longer on the site", gone)
 	}
-	note := listingNote(capped, leftOutNote(skipped, " that need an account or a payment"), goneNote, walkNote)
+	note := joinNotes(capped, leftOutNote(skipped, " that need an account or a payment"), goneNote, walkNote)
 	return &Result{Title: cmp.Or(title, label), Files: files, Note: note}, nil
 }
 

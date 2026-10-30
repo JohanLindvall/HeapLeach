@@ -180,7 +180,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("celeb: no images found")
 	}
 	// A gallery that came up short says by how much, beside what stopped it.
-	res.Note = listingNote(note, cappedNote(len(res.Files), p.Creator.ImageCount, "images"))
+	res.Note = joinNotes(note, cappedNote(len(res.Files), p.Creator.ImageCount, "images"))
 	return res, nil
 }
 

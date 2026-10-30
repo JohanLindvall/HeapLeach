@@ -83,11 +83,11 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 	if len(e.files) == 0 {
 		return nil, noneRead("wordpress", len(sources), "posts", page.Redacted(), e.refusals, e.failed)
 	}
-	notes := listingNotes(note, e, len(sources), "posts")
+	note = expansionNote(note, e, len(sources), "posts")
 	if e.partial > 0 {
-		notes = append(notes, fmt.Sprintf("%d posts have incomplete downloads", e.partial))
+		note = joinNotes(note, fmt.Sprintf("%d posts have incomplete downloads", e.partial))
 	}
-	return &Result{Title: title, Note: strings.Join(notes, "; "), Files: e.files}, nil
+	return &Result{Title: title, Note: note, Files: e.files}, nil
 }
 
 // wordPressList walks a category from its first page, whichever page was
@@ -400,9 +400,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if len(sources) < found {
 		notes = append(notes, "partial — source limit")
 	}
-	if linked := len(sources) - e.unrecognised; e.used < linked {
-		notes = append(notes, fmt.Sprintf("%d of %d links resolved", e.used, linked))
-	}
+	notes = append(notes, resolvedNote(e.used, len(sources)-e.unrecognised, "links"))
 	if e.partial > 0 {
 		notes = append(notes, fmt.Sprintf("%d linked sources are incomplete", e.partial))
 	}
@@ -417,9 +415,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 		}
 		if media != nil {
 			e.files = media.Files
-			if media.Note != "" {
-				notes = append(notes, media.Note)
-			}
+			notes = append(notes, media.Note)
 		}
 	}
 	images := wordPressJPEGs(content, page)
@@ -446,7 +442,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if len(e.files) == 0 {
 		return nil, fmt.Errorf("wordpress: post has no accessible downloads")
 	}
-	return &Result{Title: title, Note: strings.Join(util.Dedupe(notes), "; "), Files: e.files}, nil
+	return &Result{Title: title, Note: joinNotes(notes...), Files: e.files}, nil
 }
 
 // Log the source before entering its resolver: a player can spend a long time

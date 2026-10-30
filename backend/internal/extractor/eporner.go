@@ -508,8 +508,5 @@ func epornerProfileTitle(user, tab string) string {
 // looks exactly like a complete one. A note rather than part of the title,
 // which names the folder, so a later complete run files into the same one.
 func epornerProfileNote(got, declared int) string {
-	if declared > 0 && got < declared {
-		return fmt.Sprintf("partial — %d of %d", got, declared)
-	}
-	return ""
+	return partial(cappedNote(got, declared, ""))
 }

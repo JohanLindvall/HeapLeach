@@ -297,7 +297,7 @@ func TestRegistryHoldsTheFileCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Files) != 2 || res.Note != "already partial, partial — file limit" {
+	if len(res.Files) != 2 || res.Note != "already partial; partial — file limit" {
 		t.Fatalf("files=%d note=%q", len(res.Files), res.Note)
 	}
 }

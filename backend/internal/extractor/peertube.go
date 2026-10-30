@@ -513,7 +513,7 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 	if len(files) == 0 {
 		return nil, noneRead(peerTubeLabel, len(ids), "videos", u.Redacted(), refusals, failed)
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
 }
 
 // peerTubeOwnerName reads the display name of the channel, account or

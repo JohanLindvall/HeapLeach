@@ -250,6 +250,12 @@ func TestNPRListingPageResolves(t *testing.T) {
 	if res.Title != "A Programme" {
 		t.Errorf("title = %q", res.Title)
 	}
+	// What was left out says why, as a page with nothing to fetch would.
+	const note = "1 left out: behind an NPR+ subscription; 1 left out: marked unavailable; " +
+		"1 left out: listed as a live stream, which has no end to download to"
+	if res.Note != note {
+		t.Errorf("note = %q, want %q", res.Note, note)
+	}
 
 	want := []File{
 		{Name: "A segment.mp3", Size: 4965817, Dir: "A Programme"},
@@ -316,19 +322,15 @@ func TestNPRWithheldPageNamesTheSubscription(t *testing.T) {
 // TestNPRRefusalsRead covers the counting, since it is the whole of what a
 // failed page has to say for itself.
 func TestNPRRefusalsRead(t *testing.T) {
-	var r nprRefusals
-	if got := r.String(); !strings.Contains(got, "names nothing to fetch") {
+	if got := nprTally(nprReasons(nil)); !strings.Contains(got, "names nothing to fetch") {
 		t.Errorf("an empty tally reads %q", got)
 	}
 
-	r.add(nprSubscriberOnly)
-	r.add(nprUnavailable)
-	r.add(nprUnavailable)
-	r.add(nprLiveStream)
-	r.add(nprNoAudio)
+	// Reported in NPR's order, whichever order the page listed them in.
+	reasons := nprReasons([]nprRefusal{nprNoAudio, nprUnavailable, nprSubscriberOnly, nprLiveStream, nprUnavailable})
 	const want = "1 behind an NPR+ subscription, 2 marked unavailable, " +
 		"1 listed as a live stream, which has no end to download to, 1 listed with no audio at all"
-	if got := r.String(); got != want {
+	if got := nprTally(reasons); got != want {
 		t.Errorf("tally = %q, want %q", got, want)
 	}
 }

@@ -107,11 +107,7 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 		return nil, fmt.Errorf("darkgram: album has no downloadable media")
 	}
 	if unavailable > 0 {
-		note := fmt.Sprintf("%d album items unavailable", unavailable)
-		if res.Note != "" {
-			res.Note += "; "
-		}
-		res.Note += note
+		res.Note = joinNotes(res.Note, fmt.Sprintf("%d album items unavailable", unavailable))
 	}
 	return res, nil
 }

@@ -694,17 +694,6 @@ func probeWorthy(u *url.URL) bool {
 // fileExtension is an extension that names a file type.
 var fileExtension = regexp.MustCompile(`^\.[a-z][a-z0-9]{0,4}$`)
 
-// joinNotes adds a note to a job's note, unless it already says so.
-func joinNotes(note, add string) string {
-	switch {
-	case note == "":
-		return add
-	case strings.Contains(note, add):
-		return note
-	}
-	return note + ", " + add
-}
-
 // follow extracts a link chosen for the form of its link — a source on a
 // page, a frame, a file a listing names — strictly: a page that turns out to
 // be no extractor's is errUnrecognised, never handed to the fallback to be

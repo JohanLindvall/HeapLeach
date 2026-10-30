@@ -347,7 +347,7 @@ func (d *DRTV) children(ctx context.Context, id string) ([]drItem, string, error
 				url.Values{"page": {strconv.Itoa(n + 1)}}), drHeaders(), &doc); err != nil {
 				return pageOf[drItem]{}, err
 			}
-			return pageOf[drItem]{items: doc.Items, next: true, end: len(doc.Items) == 0 || n+1 >= doc.Paging.Total}, nil
+			return pageOf[drItem]{items: doc.Items, next: true, end: len(doc.Items) == 0, pages: max(doc.Paging.Total, 1)}, nil
 		},
 		key:   func(item drItem) string { return item.ID },
 		limit: -1,
@@ -384,7 +384,7 @@ func (d *DRTV) series(ctx context.Context, show *drItem, opts Options) (*Result,
 			entries = append(entries, drListed{item: child})
 		}
 	}
-	return d.listing(ctx, title, title, entries, listingNote(walkNote, brokenNote(walkErr)), walkErr, opts)
+	return d.listing(ctx, title, title, entries, joinNotes(walkNote, brokenNote(walkErr)), walkErr, opts)
 }
 
 // season reads a season into one file an episode.
@@ -448,7 +448,7 @@ func (d *DRTV) listing(ctx context.Context, title, show string, entries []drList
 		}
 		return nil, fmt.Errorf("drtv: %s lists nothing DR TV offers now", title)
 	}
-	note := listingNote(cappedNote(len(files), shown, "episodes"), walkNote,
+	note := joinNotes(cappedNote(len(files), shown, "episodes"), walkNote,
 		leftOutNote(denmark, " that DR shows in Denmark only"))
 	return &Result{Title: title, Files: files, Note: note}, nil
 }

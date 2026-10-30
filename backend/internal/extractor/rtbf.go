@@ -490,7 +490,7 @@ func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 		return nil, err
 	}
 
-	note = listingNote(note, walkNote, brokenNote(walkErr), refusedNote(refusals))
+	note = joinNotes(note, walkNote, brokenNote(walkErr), refusedNote(refusals))
 	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
 }
 

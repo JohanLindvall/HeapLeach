@@ -372,7 +372,7 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, op
 		}
 		return nil, noneRead("imgur", len(entries), "posts", imgurRoot+target.Listing, refusals, failed)
 	}
-	return &Result{Title: target.Title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
+	return &Result{Title: target.Title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
 }
 
 // listingEntries walks a listing's pages on origin, up to the listing cap:

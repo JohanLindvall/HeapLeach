@@ -319,7 +319,7 @@ func TestWebLink(t *testing.T) {
 	}
 }
 
-func TestListingNotes(t *testing.T) {
+func TestExpansionNote(t *testing.T) {
 	for _, tc := range []struct {
 		walk   string
 		e      expansion
@@ -330,9 +330,10 @@ func TestListingNotes(t *testing.T) {
 		{"partial — source limit", expansion{used: 3}, 3, "partial — source limit"},
 		{"", expansion{used: 2, full: true}, 3, "partial — file limit; 2 of 3 videos resolved"},
 		{"partial — repeated page", expansion{used: 1}, 3, "partial — repeated page; 1 of 3 videos resolved"},
+		{"partial — repeated page", expansion{used: 1, full: true}, 3, "partial — repeated page; file limit; 1 of 3 videos resolved"},
 	} {
-		if got := strings.Join(listingNotes(tc.walk, tc.e, tc.listed, "videos"), "; "); got != tc.want {
-			t.Errorf("listingNotes(%q, %+v, %d) = %q, want %q", tc.walk, tc.e, tc.listed, got, tc.want)
+		if got := expansionNote(tc.walk, tc.e, tc.listed, "videos"); got != tc.want {
+			t.Errorf("expansionNote(%q, %+v, %d) = %q, want %q", tc.walk, tc.e, tc.listed, got, tc.want)
 		}
 	}
 }

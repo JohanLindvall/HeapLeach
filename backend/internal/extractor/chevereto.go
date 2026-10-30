@@ -158,7 +158,7 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 		if e.full {
 			note = joinNotes(note, "partial — file limit")
 		}
-		return &Result{Title: listing.title, Files: e.files, Note: listingNote(note, refusedNote(e.refusals))}, nil
+		return &Result{Title: listing.title, Files: e.files, Note: joinNotes(note, refusedNote(e.refusals))}, nil
 	}
 	return cheveretoSingle(root, u, listing.title)
 }

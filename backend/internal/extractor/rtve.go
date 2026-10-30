@@ -308,7 +308,7 @@ func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string,
 			if err := client.GetJSON(ctx, request, httpx.Referer(rtveRoot+"/"), &doc); err != nil {
 				return pageOf[T]{}, err
 			}
-			return pageOf[T]{items: doc.Page.Items, next: true, end: len(doc.Page.Items) == 0 || n+1 >= doc.Page.TotalPages}, nil
+			return pageOf[T]{items: doc.Page.Items, next: true, end: len(doc.Page.Items) == 0, pages: max(doc.Page.TotalPages, 1)}, nil
 		},
 		key:   key,
 		quiet: true,

@@ -255,7 +255,7 @@ func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Re
 		}
 		return nil, noneRead("coomerfans", len(links), "posts", u.Redacted(), refusals, failed)
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
 }
 
 // postLinks walks the creator's pages for the posts they list, up to the

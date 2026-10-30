@@ -60,20 +60,13 @@ type treeWalk struct {
 
 // note adds a reason the result is incomplete, once.
 func (w *treeWalk) note(reason string) {
-	switch {
-	case w.res.Note == "":
-		w.res.Note = "partial — " + reason
-	case !strings.Contains(w.res.Note, reason):
-		w.res.Note += "; " + reason
-	}
+	w.res.Note = joinNotes(w.res.Note, partial(reason))
 }
 
 // partial adds a "partial — …" note a folder's own listing came back with,
 // such as walkPages', once; an empty note adds nothing.
 func (w *treeWalk) partial(note string) {
-	if note != "" {
-		w.note(strings.TrimPrefix(note, "partial — "))
-	}
+	w.note(strings.TrimPrefix(note, partialPrefix))
 }
 
 // room is how many more files the walk may take. A list function that pages

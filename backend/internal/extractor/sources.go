@@ -5,7 +5,6 @@ package extractor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"path"
 	"strings"
@@ -282,30 +281,17 @@ func partialNote(noun string, e expansion, found int, capped bool) string {
 	if !capped && !e.full {
 		return ""
 	}
-	var notes []string
-	if e.used < found {
-		notes = append(notes, fmt.Sprintf("%d of %d %s", e.used, found, noun))
-	}
-	if e.cut > 0 {
-		notes = append(notes, fmt.Sprintf("%d of %d files", e.cut, e.of))
-	}
-	return strings.Join(notes, ", ")
+	return joinNotes(cappedNote(e.used, found, noun), cappedNote(e.cut, e.of, "files"))
 }
 
-// listingNotes are a walked listing's notes once its entries are expanded:
+// expansionNote is a walked listing's note once its entries are expanded:
 // the walk's own, the file cap when it cut the expansion short, and how
 // many of the listed entries resolved when some did not, in the caller's
-// noun. The caller joins them, after any of its own.
-func listingNotes(walk string, e expansion, listed int, noun string) []string {
-	var notes []string
-	if walk != "" {
-		notes = append(notes, walk)
-	}
+// noun.
+func expansionNote(walk string, e expansion, listed int, noun string) string {
+	limit := ""
 	if e.full {
-		notes = append(notes, "partial — file limit")
+		limit = "partial — file limit"
 	}
-	if e.used < listed {
-		notes = append(notes, fmt.Sprintf("%d of %d %s resolved", e.used, listed, noun))
-	}
-	return notes
+	return joinNotes(walk, limit, resolvedNote(e.used, listed, noun))
 }

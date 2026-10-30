@@ -276,7 +276,7 @@ func (b *BitChute) channel(ctx context.Context, segment string, opts Options) (*
 		}
 		return nil, noneRead("bitchute", len(videos), "videos", "channel "+segment, refusals, failed)
 	}
-	return &Result{Title: b.channelName(ctx, segment), Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
+	return &Result{Title: b.channelName(ctx, segment), Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
 }
 
 // channelVideos pages through a channel's listing.
