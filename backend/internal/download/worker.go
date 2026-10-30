@@ -83,6 +83,18 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	rel := it.Dir
 	expected := it.Size
 	approx := it.SizeApprox
+	// The part file is keyed on the job's source — the URL the user
+	// submitted — because the item's own URL is often a signed link that
+	// expires between runs, and a key that changes every run cannot resume
+	// anything.
+	source := it.URL
+	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
+		source = job.Source
+	}
+	isPlaylist := len(it.Segments) > 0
+	withAudio := isPlaylist && len(it.Audio) > 0
+	external := it.External
+	encrypted := it.cipher != nil
 	m.mu.Unlock()
 
 	root, err := os.OpenRoot(m.DownloadDir())
@@ -109,16 +121,6 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// interrupted transfer is picked up again by the next run. If that
 	// exact path is already being written — the same URL queued twice —
 	// this transfer falls back to a name only it can hold.
-	// Keyed on the job's source — the URL the user submitted — because the
-	// item's own URL is often a signed link that expires between runs, and
-	// a key that changes every run cannot resume anything.
-	m.mu.Lock()
-	source := it.URL
-	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
-		source = job.Source
-	}
-	m.mu.Unlock()
-
 	parts := partNames(name, source, it.ID)
 	part := filepath.Join(dir, parts[0])
 	release, ok := m.claimPart(part)
@@ -129,13 +131,6 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		}
 	}
 	defer release()
-
-	m.mu.Lock()
-	isPlaylist := len(it.Segments) > 0
-	withAudio := isPlaylist && len(it.Audio) > 0
-	external := it.External
-	encrypted := it.cipher != nil
-	m.mu.Unlock()
 
 	// A soundtrack kept apart from the video is joined to it with ffmpeg,
 	// and without ffmpeg the video alone would be silent. Asked before a
@@ -268,14 +263,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			busyWaits++
 			wait := util.Backoff(busyWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.log.Info("host busy, waiting", "item", it.ID, "name", name,
-				"attempt", busyWaits, "wait", wait)
 			// A host with several storage servers per file is rotated to
 			// the next one by resolving again, which may not be busy.
-			if err := m.waitThenRefresh(ctx, it, busyNote(rotates, wait, busyWaits), wait); err != nil {
+			// This was not a failure, so the attempt is not counted.
+			if attempt, err = m.retryUnspent(ctx, it, attempt-1, wait, busyNote(rotates, wait, busyWaits),
+				"host busy, waiting", "item", it.ID, "name", name, "attempt", busyWaits, "wait", wait); err != nil {
 				return err
 			}
-			attempt-- // this was not a failure
 			continue
 		}
 
@@ -303,15 +297,15 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			limitWaits++
 			wait := util.Backoff(limitWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.log.Info("host is at its connection limit, waiting", "item", it.ID, "name", name,
-				"host", host, "attempt", limitWaits, "wait", wait)
 			note := fmt.Sprintf("%s allows only so many downloads at once — waiting %s "+
 				"for one to finish (attempt %d of %d)", host, wait.Round(time.Second),
 				limitWaits, config.ConnectionLimitRetries)
-			if err := m.waitThenRefresh(ctx, it, note, wait); err != nil {
+			// Being told to queue is not a failed attempt.
+			if attempt, err = m.retryUnspent(ctx, it, attempt-1, wait, note,
+				"host is at its connection limit, waiting", "item", it.ID, "name", name,
+				"host", host, "attempt", limitWaits, "wait", wait); err != nil {
 				return err
 			}
-			attempt-- // being told to queue is not a failed attempt
 			continue
 		}
 
@@ -416,13 +410,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// an endless one, and the cancel is always there.
 		if moved {
 			wait := m.timings.progressRetry
-			m.log.Info("connection dropped after progress; resuming", "item", it.ID, "name", name,
-				"gained", after-before, "wait", wait, "err", err)
 			note := fmt.Sprintf("connection dropped — resuming in %s", wait.Round(time.Second))
-			if err := m.waitThenRefresh(ctx, it, note, wait); err != nil {
+			// -1, so the loop's increment makes the next attempt a first.
+			if attempt, err = m.retryUnspent(ctx, it, -1, wait, note,
+				"connection dropped after progress; resuming", "item", it.ID, "name", name,
+				"gained", after-before, "wait", wait, "err", err); err != nil {
 				return err
 			}
-			attempt = -1 // the loop's increment makes the next one a first
 			continue
 		}
 
@@ -435,7 +429,28 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			return err
 		}
 	}
+	return m.finishTransfer(ctx, it, files, dir, rel, part, name, isPlaylist)
+}
 
+// retryUnspent logs msg with args, then waits out wait under note and
+// refreshes the item's link before the next attempt: a wait that does not
+// spend the retry budget. It returns next, the attempt counter the loop
+// carries on from (its own increment still applies).
+func (m *Manager) retryUnspent(ctx context.Context, it *Item, next int, wait time.Duration,
+	note, msg string, args ...any) (int, error) {
+	m.log.Info(msg, args...)
+	if err := m.waitThenRefresh(ctx, it, note, wait); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+// finishTransfer puts a whole part file in place under name in dir: joined
+// with its audio and subtitles first where it is a playlist that has them,
+// recognised as a copy already on disk, or else reserved a name, renamed
+// and remuxed.
+func (m *Manager) finishTransfer(ctx context.Context, it *Item, files transferFiles,
+	dir, rel, part, name string, isPlaylist bool) error {
 	// A video whose audio came apart from it is joined to it first, and the
 	// joined file is what is finished. The parts it was made of go only once
 	// it is in place, so a join that fails leaves them for a retry to join
@@ -494,10 +509,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	if existing, ok := identicalOnDisk(dir, name, finished, files); ok {
 		_ = files.remove(finished)
 		clearParts()
-		m.mu.Lock()
-		it.Skipped = true
-		m.mu.Unlock()
-		m.setPath(it, filepath.Join(rel, existing))
+		m.markSkipped(it, rel, existing, 0)
 		return nil
 	}
 	dest, err := files.reserve(dir, name)
@@ -591,9 +603,6 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	// transfer asks for one range at a time, this first one included
 	// (multiroute.go); a range past the end is served up to the end.
 	askEnd, routeRange := rangeEnd, m.timings.routeRange
-	if routeRange <= 0 {
-		routeRange = config.RouteRangeSize
-	}
 	if routeSource != nil && (askEnd <= 0 || askEnd-offset > routeRange) {
 		askEnd = offset + routeRange
 	}
@@ -754,14 +763,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 
 		routeSource: routeSource,
 		group:       group,
-		routeRange:  routeRange,
-
-		pollInterval:  m.timings.poll,
-		probeInterval: m.timings.probe,
-		addCooldown:   m.timings.cooldown,
-		saveInterval:  m.timings.save,
 	}
-	transfer.withDefaults()
 	// Establish the sparse-file checkpoint before any range can write. A
 	// sparse file without a sidecar looks like a contiguous sequential part
 	// on the next run, which could falsely finish with unwritten holes.
@@ -1473,14 +1475,24 @@ func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64, fil
 	if !ok {
 		return false
 	}
-	it.downloaded.Store(size)
+	m.markSkipped(it, rel, found, size)
+	return true
+}
+
+// markSkipped records that it is already in the destination as rel/name,
+// so nothing was transferred, and at size bytes where size is above zero.
+func (m *Manager) markSkipped(it *Item, rel, name string, size int64) {
+	if size > 0 {
+		it.downloaded.Store(size)
+	}
 	m.mu.Lock()
-	it.Size = size
-	it.SizeApprox = false
+	if size > 0 {
+		it.Size = size
+		it.SizeApprox = false
+	}
 	it.Skipped = true
 	m.mu.Unlock()
-	m.setPath(it, filepath.Join(rel, found))
-	return true
+	m.setPath(it, filepath.Join(rel, name))
 }
 
 // identicalOnDisk finds a file already in dir, under name or one of the
@@ -1501,33 +1513,7 @@ func identicalOnDisk(dir, name, part string, files transferFiles) (string, bool)
 		return err == nil && fi.Mode().IsRegular() && fi.Size() == info.Size() &&
 			sameContent(files, path, part)
 	}
-	if same(name) {
-		return name, true
-	}
-	directory, err := files.open(dir, os.O_RDONLY, 0)
-	if err != nil {
-		return "", false
-	}
-	defer directory.Close()
-	entries, err := directory.ReadDir(-1)
-	if err != nil {
-		return "", false
-	}
-	ext := filepath.Ext(name)
-	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
-	for _, entry := range entries {
-		n := entry.Name()
-		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
-			continue
-		}
-		if _, err := strconv.Atoi(n[len(prefix) : len(n)-len(suffix)]); err != nil {
-			continue
-		}
-		if same(n) {
-			return n, true
-		}
-	}
-	return "", false
+	return numberedSiblings(dir, name, files, same)
 }
 
 // sameContent reports whether two files hold the same bytes.
@@ -1574,37 +1560,8 @@ func sameContent(files transferFiles, a, b string) bool {
 // copies of the same files per restart, hundreds of them in all, each new
 // enough to read as freshly downloaded.
 func onDiskAs(dir, name string, size int64, files transferFiles) (string, bool) {
-	matches := func(entry string) bool {
+	return numberedSiblings(dir, name, files, func(entry string) bool {
 		fi, err := files.stat(filepath.Join(dir, entry))
 		return err == nil && fi.Mode().IsRegular() && fi.Size() == size
-	}
-	if matches(name) {
-		return name, true
-	}
-
-	directory, err := files.open(dir, os.O_RDONLY, 0)
-	if err != nil {
-		return "", false
-	}
-	defer directory.Close()
-	entries, err := directory.ReadDir(-1)
-	if err != nil {
-		return "", false
-	}
-	ext := filepath.Ext(name)
-	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
-	for _, entry := range entries {
-		n := entry.Name()
-		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
-			continue
-		}
-		number := n[len(prefix) : len(n)-len(suffix)]
-		if _, err := strconv.Atoi(number); err != nil {
-			continue
-		}
-		if matches(n) {
-			return n, true
-		}
-	}
-	return "", false
+	})
 }

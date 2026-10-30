@@ -193,7 +193,7 @@ func (t *segmentedTransfer) nextSegment() *segment {
 // route reading again whenever a range is left with nobody reading it.
 func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 	spawnPrimary func(*segment, io.ReadCloser), spawnSource func(*segment, *streamSource, chan struct{})) {
-	ticker := time.NewTicker(t.pollInterval)
+	ticker := time.NewTicker(t.manager.timings.poll)
 	defer ticker.Stop()
 
 	type extra struct {
@@ -211,14 +211,14 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 		sinceProbe, sinceSave time.Duration
 		lastAdd               time.Time
 		// Each extra stream costs a CAPTCHA, so ones that get nowhere are
-		// tried less and less often: once per addCooldown, doubling with
+		// tried less and less often: once per cooldown, doubling with
 		// each in a row, up to RouteExtraBackoffMax.
 		failures    int
 		nextAcquire time.Time
 	)
 	backOff := func() {
 		failures++
-		wait := min(t.addCooldown<<min(failures, 20), config.RouteExtraBackoffMax)
+		wait := min(t.manager.timings.cooldown<<min(failures, 20), config.RouteExtraBackoffMax)
 		nextAcquire = time.Now().Add(wait)
 	}
 	defer func() {
@@ -276,8 +276,8 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			if t.table.complete() {
 				return
 			}
-			sinceSave += t.pollInterval
-			if sinceSave >= t.saveInterval {
+			sinceSave += t.manager.timings.poll
+			if sinceSave >= t.manager.timings.save {
 				sinceSave = 0
 				t.saveState()
 			}
@@ -310,8 +310,8 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 				}
 			}
 
-			sinceProbe += t.pollInterval
-			if sinceProbe < t.probeInterval {
+			sinceProbe += t.manager.timings.poll
+			if sinceProbe < t.manager.timings.probe {
 				continue
 			}
 			elapsed := sinceProbe
@@ -349,16 +349,12 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 				speed >= float64(t.slowBelow) || paused || t.manager.throttle.limiting() || t.item.limiter.limiting() {
 				continue
 			}
-			if !lastAdd.IsZero() && time.Since(lastAdd) < t.addCooldown || now.Before(nextAcquire) {
+			if !lastAdd.IsZero() && time.Since(lastAdd) < t.manager.timings.cooldown || now.Before(nextAcquire) {
 				continue
 			}
 			// The queue sets up only so many at once: each is a hunt and a
 			// CAPTCHA, which the files' own routes need first.
-			most := int32(t.manager.timings.extraAcquisitions)
-			if most <= 0 {
-				most = config.RouteExtraAcquisitions
-			}
-			if t.manager.extraAcquiring.Add(1) > most {
+			if t.manager.extraAcquiring.Add(1) > int32(t.manager.timings.extraAcquisitions) {
 				t.manager.extraAcquiring.Add(-1)
 				continue
 			}

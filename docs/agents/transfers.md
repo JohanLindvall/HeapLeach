@@ -33,8 +33,11 @@ after a flat `config.ProgressRetryDelay` (30s) and starts the attempt count
 over, so `MaxRetries` bounds consecutive unproductive attempts rather than the
 whole life of a large file on a flaky host. The waits that are not failures
 — a busy host, a connection limit, a dropped connection after progress — go
-through `waitThenRefresh`, which sleeps under a note, clears it and resolves
-the link again; a failed attempt waits through `retryAfter`, which every
+through `retryUnspent`, which logs, waits in `waitThenRefresh` (sleep under a
+note, clear it, resolve the link again) and returns the attempt counter the
+loop carries on from: one back for a refusal, so it is not counted, and `-1`
+after progress, so the count starts over. A failed attempt waits through
+`retryAfter`, which every
 retry loop of the transfer engine shares. The judgement is made against the
 disk, not the wire: `onDisk` reads what the part file held before the attempt
 — the segment sidecar's tally, the playlist checkpoint, or the file's length —
@@ -97,7 +100,13 @@ the engine and its supervisor. Points worth knowing before changing them:
 
 - Every hot-path copy and decrypt draws its 256 KiB buffer from one shared
   pool (`buffers.go`, `borrowChunk`). They all want exactly `CopyBufferSize`,
-  so keep new ones on the pool rather than allocating per attempt.
+  so keep new ones on the pool rather than allocating per attempt. A buffer
+  of another size gets a `bytePool` of its own, as the write buffers have.
+- A transfer reads its intervals from `Manager.timings` as it runs rather
+  than copying them. Every default lives in `downloadTimings.withDefaults`,
+  so a test that replaces the timings wholesale passes them through it
+  (`fastTimings`), and one that builds a `Manager` by hand for a supervisor
+  sets them there; a zero interval would stop the supervisor's ticker cold.
 - Splitting bisects the *remaining* span of the widest segment, with ties
   broken leftmost-first. That is what produces the halves, quarters and
   eighths in their natural order, and it self-balances once some segments are

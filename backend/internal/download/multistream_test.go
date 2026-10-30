@@ -239,16 +239,24 @@ func newTestTransfer(m *Manager, it *Item, part string, table *segmentTable, str
 	if err != nil {
 		panic(err)
 	}
+	m.timings = fastTimings()
 	tr := &segmentedTransfer{
 		manager: m, item: it, file: f, table: table, part: part,
 		name: "test", validator: `"fixed-etag"`, maxStreams: streams,
-		slowBelow:     m.cfg.SlowSpeed,
-		pollInterval:  5 * time.Millisecond,
-		probeInterval: 25 * time.Millisecond,
-		addCooldown:   25 * time.Millisecond,
-		saveInterval:  20 * time.Millisecond,
+		slowBelow: m.cfg.SlowSpeed,
 	}
-	return tr.withDefaults(), f
+	return tr, f
+}
+
+// fastTimings is the production timings with the supervisor's intervals cut
+// to a few milliseconds.
+func fastTimings() downloadTimings {
+	return downloadTimings{
+		poll:     5 * time.Millisecond,
+		probe:    25 * time.Millisecond,
+		cooldown: 25 * time.Millisecond,
+		save:     20 * time.Millisecond,
+	}.withDefaults()
 }
 
 func openPrimary(t *testing.T, ctx context.Context, m *Manager, url string, seg *segment) io.ReadCloser {
@@ -321,12 +329,7 @@ func TestSlowDownloadSplitsThroughTheManager(t *testing.T) {
 		c.SlowSpeed = 1 << 40 // treat every transfer as slow
 	})
 	dir := manager.DownloadDir()
-	manager.timings = downloadTimings{
-		poll:     5 * time.Millisecond,
-		probe:    25 * time.Millisecond,
-		cooldown: 25 * time.Millisecond,
-		save:     20 * time.Millisecond,
-	}
+	manager.timings = fastTimings()
 	manager.Start()
 	defer manager.Close()
 

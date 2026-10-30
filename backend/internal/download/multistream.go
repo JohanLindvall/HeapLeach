@@ -43,23 +43,16 @@ type segmentedTransfer struct {
 	routeSource   func(context.Context) (*streamSource, error)
 	group         string
 	primaryActive atomic.Bool
-	// routeRange is the most one of its requests asks for.
-	routeRange int64
 
 	// crowded records that opening a connection measurably slowed this
 	// transfer down, so no more are opened. Touched only by the supervisor
 	// goroutine.
 	crowded bool
-
-	// Timings, overridable so tests need not wait out the real intervals.
-	pollInterval  time.Duration
-	probeInterval time.Duration
-	addCooldown   time.Duration
-	saveInterval  time.Duration
 }
 
 // downloadTimings groups the intervals the download loop waits out, kept in
-// one place so tests need not sit through the production values.
+// one place so tests need not sit through the production values. A transfer
+// reads them from its manager as it goes.
 type downloadTimings struct {
 	poll     time.Duration
 	probe    time.Duration
@@ -81,40 +74,27 @@ type downloadTimings struct {
 	extraAcquisitions int
 }
 
-func defaultDownloadTimings() downloadTimings {
-	return downloadTimings{
-		poll:          config.SegmentPollInterval,
-		probe:         config.StreamProbeInterval,
-		cooldown:      config.StreamAddCooldown,
-		save:          config.SegmentStateInterval,
-		busyBase:      config.BusyRetryBase,
-		busyMax:       config.BusyRetryMax,
-		progressRetry: config.ProgressRetryDelay,
-		routeRange:    config.RouteRangeSize,
-		wantedRecheck: config.RouteWantedRecheck,
+func defaultDownloadTimings() downloadTimings { return downloadTimings{}.withDefaults() }
 
-		extraAcquisitions: config.RouteExtraAcquisitions,
-	}
+// withDefaults fills in any timing left unset with its production value.
+func (d downloadTimings) withDefaults() downloadTimings {
+	orDefault(&d.poll, config.SegmentPollInterval)
+	orDefault(&d.probe, config.StreamProbeInterval)
+	orDefault(&d.cooldown, config.StreamAddCooldown)
+	orDefault(&d.save, config.SegmentStateInterval)
+	orDefault(&d.busyBase, config.BusyRetryBase)
+	orDefault(&d.busyMax, config.BusyRetryMax)
+	orDefault(&d.progressRetry, config.ProgressRetryDelay)
+	orDefault(&d.routeRange, config.RouteRangeSize)
+	orDefault(&d.wantedRecheck, config.RouteWantedRecheck)
+	orDefault(&d.extraAcquisitions, config.RouteExtraAcquisitions)
+	return d
 }
 
-// withDefaults fills in any timing left unset.
-func (t *segmentedTransfer) withDefaults() *segmentedTransfer {
-	if t.pollInterval <= 0 {
-		t.pollInterval = config.SegmentPollInterval
+func orDefault[T time.Duration | int64 | int](v *T, def T) {
+	if *v <= 0 {
+		*v = def
 	}
-	if t.probeInterval <= 0 {
-		t.probeInterval = config.StreamProbeInterval
-	}
-	if t.addCooldown <= 0 {
-		t.addCooldown = config.StreamAddCooldown
-	}
-	if t.saveInterval <= 0 {
-		t.saveInterval = config.SegmentStateInterval
-	}
-	if t.routeRange <= 0 {
-		t.routeRange = config.RouteRangeSize
-	}
-	return t
 }
 
 // run drives the transfer to completion. primary is the already-open body
@@ -216,7 +196,7 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 // supervise watches throughput and opens another connection while the
 // transfer is slow, up to the configured ceiling.
 func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, string)) {
-	ticker := time.NewTicker(t.pollInterval)
+	ticker := time.NewTicker(t.manager.timings.poll)
 	defer ticker.Stop()
 
 	var (
@@ -246,14 +226,14 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 				return
 			}
 
-			sinceSave += t.pollInterval
-			if sinceSave >= t.saveInterval {
+			sinceSave += t.manager.timings.poll
+			if sinceSave >= t.manager.timings.save {
 				sinceSave = 0
 				t.saveState()
 			}
 
-			sinceProbe += t.pollInterval
-			if sinceProbe < t.probeInterval {
+			sinceProbe += t.manager.timings.poll
+			if sinceProbe < t.manager.timings.probe {
 				continue
 			}
 
@@ -357,7 +337,7 @@ func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bo
 		return false
 	}
 	// Let the previous addition settle before judging the rate again.
-	return lastAdd.IsZero() || time.Since(lastAdd) >= t.addCooldown
+	return lastAdd.IsZero() || time.Since(lastAdd) >= t.manager.timings.cooldown
 }
 
 // pump fetches one segment, retrying it on its own so a single dropped
@@ -547,7 +527,7 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool, 
 	}
 	pos, end := seg.pos.Load(), seg.end.Load()
 	if t.routeSource != nil {
-		pos, end = t.table.request(seg, t.routeRange)
+		pos, end = t.table.request(seg, t.manager.timings.routeRange)
 	}
 	// Another route's link may be on another of the host's storage servers,
 	// whose validator need not match: there, If-Range would read as the file

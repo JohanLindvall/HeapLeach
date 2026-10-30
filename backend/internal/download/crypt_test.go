@@ -191,12 +191,7 @@ func TestEncryptedTransferOverManyConnections(t *testing.T) {
 
 	manager, item := testTransferDeps(t, srv.URL)
 	item.cipher = sc
-	manager.timings = downloadTimings{
-		poll:     5 * time.Millisecond,
-		probe:    25 * time.Millisecond,
-		cooldown: 25 * time.Millisecond,
-		save:     20 * time.Millisecond,
-	}
+	manager.timings = fastTimings()
 
 	part := filepath.Join(manager.cfg.DownloadDir, "clip.bin.part")
 	if _, err := manager.transferOnce(context.Background(), item, part, "clip.bin", transferFiles{}); err != nil {

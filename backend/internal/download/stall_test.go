@@ -160,6 +160,12 @@ func superviseHarness(t *testing.T, cooldown time.Duration) (*segmentedTransfer,
 	m := &Manager{
 		hosts: newHostLimiter(4),
 		log:   testLogger(),
+		timings: downloadTimings{
+			poll:     time.Millisecond,
+			probe:    4 * time.Millisecond,
+			cooldown: cooldown,
+			save:     time.Hour, // never; there is no part file behind this transfer
+		}.withDefaults(),
 	}
 	tr := &segmentedTransfer{
 		manager:    m,
@@ -168,11 +174,6 @@ func superviseHarness(t *testing.T, cooldown time.Duration) (*segmentedTransfer,
 		name:       "x",
 		maxStreams: 8,
 		slowBelow:  1 << 30, // everything is "slow", so only the stall guard can refuse
-
-		pollInterval:  time.Millisecond,
-		probeInterval: 4 * time.Millisecond,
-		addCooldown:   cooldown,
-		saveInterval:  time.Hour, // never; there is no part file behind this transfer
 	}
 
 	var spawns atomic.Int32
