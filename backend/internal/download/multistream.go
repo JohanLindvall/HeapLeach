@@ -226,11 +226,7 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 				return
 			}
 
-			sinceSave += t.manager.timings.poll
-			if sinceSave >= t.manager.timings.save {
-				sinceSave = 0
-				t.saveState()
-			}
+			t.saveDue(&sinceSave)
 
 			sinceProbe += t.manager.timings.poll
 			if sinceProbe < t.manager.timings.probe {
@@ -582,6 +578,16 @@ func (t *segmentedTransfer) host() string {
 	t.manager.mu.Lock()
 	defer t.manager.mu.Unlock()
 	return hostOf(t.item.URL)
+}
+
+// saveDue counts one supervisor tick into since, the time since the last
+// save, and saves once that reaches the save interval.
+func (t *segmentedTransfer) saveDue(since *time.Duration) {
+	*since += t.manager.timings.poll
+	if *since >= t.manager.timings.save {
+		*since = 0
+		t.saveState()
+	}
 }
 
 // saveState records segment progress so an interrupted transfer resumes

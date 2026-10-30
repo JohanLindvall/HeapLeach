@@ -342,10 +342,11 @@ func francetvSubtitles(answer *francetvAnswer) []Track {
 	return tracks
 }
 
+// francetvRoot is the site the player is served from.
+const francetvRoot = "https://www.france.tv"
+
 // francetvHeaders are what the site's own player sends.
-func francetvHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://www.france.tv/", "https://www.france.tv")
-}
+func francetvHeaders() httpx.Header { return httpx.SiteOrigin(francetvRoot) }
 
 // francetvCardDoc is one card of a programme's listing.
 type francetvCardDoc struct {

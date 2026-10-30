@@ -67,8 +67,6 @@ const (
 	// yleUIVersion is the version of the UI API the site's own client asks
 	// for; a list asked for without one is refused.
 	yleUIVersion = "10"
-	// yleListPage is how many cards a page of a list asks for.
-	yleListPage = 100
 )
 
 // yleUILanguage is how the UI API spells each of the preview's languages.
@@ -276,8 +274,7 @@ func (y *Yle) refusedHere(ctx context.Context, link string, headers httpx.Header
 
 // headers are what the site's own player sends.
 func (y *Yle) headers(lang string) httpx.Header {
-	site := y.site[lang]
-	return httpx.RefererOrigin(site+"/", site)
+	return httpx.SiteOrigin(y.site[lang])
 }
 
 // host is the site's host, which the player names to the preview.
@@ -592,7 +589,7 @@ func (y *Yle) walk(ctx context.Context, lang string, page *ylePage, lists []yleL
 		offset, count := 0, 0
 		got, cut, walkNote, err := walkEpisodes(ctx, limit-len(episodes), pageWalk[yleEpisode]{
 			fetch: func(ctx context.Context, _ int) (pageOf[yleEpisode], error) {
-				cards, err := y.cards(ctx, lang, page, l, offset, yleListPage)
+				cards, err := y.cards(ctx, lang, page, l, offset, config.FolderPageSize)
 				if err != nil {
 					return pageOf[yleEpisode]{}, err
 				}

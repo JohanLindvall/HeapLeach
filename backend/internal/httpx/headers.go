@@ -109,3 +109,9 @@ func Referer(url string) Header {
 func RefererOrigin(referer, origin string) Header {
 	return Header{HeaderReferer: referer, HeaderOrigin: origin}
 }
+
+// SiteOrigin is RefererOrigin for a request made from a site's front page:
+// root is the scheme and host, without a trailing slash.
+func SiteOrigin(root string) Header {
+	return RefererOrigin(root+"/", root)
+}

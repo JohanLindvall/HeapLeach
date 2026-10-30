@@ -294,7 +294,7 @@ func (b *Bunkr) resolver(pageURL string) func(context.Context) (*Target, error) 
 			URL:     raw.String(),
 			Name:    filename,
 			Size:    -1,
-			Headers: httpx.RefererOrigin(util.Origin(u)+"/", util.Origin(u)),
+			Headers: httpx.SiteOrigin(util.Origin(u)),
 		}, nil
 	}
 }
@@ -313,7 +313,7 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 	}
 	endpoint := bunkrSignService + "?path=" + url.QueryEscape(decoded)
 	if err := b.client.GetJSON(ctx, endpoint,
-		httpx.RefererOrigin(bunkrSignReferer+"/", bunkrSignReferer), &out); err != nil {
+		httpx.SiteOrigin(bunkrSignReferer), &out); err != nil {
 		return "", "", fmt.Errorf("bunkr: sign %s: %w", decoded, err)
 	}
 	if out.Token == "" {

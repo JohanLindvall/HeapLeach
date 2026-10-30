@@ -364,7 +364,7 @@ func (b *BitChute) expand(ctx context.Context, videos []bitchuteVideo) ([]File, 
 // bitchuteAPIHeaders are what the site's own scripts send. The API lives on
 // its own host, so a browser reaching it always states where it came from.
 func bitchuteAPIHeaders() httpx.Header {
-	return httpx.RefererOrigin(bitchuteRoot+"/", bitchuteRoot)
+	return httpx.SiteOrigin(bitchuteRoot)
 }
 
 // bitchuteVideoName is a listed video's title, falling back to its id.

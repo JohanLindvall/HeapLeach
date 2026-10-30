@@ -331,7 +331,7 @@ func (g *Gofile) ensureToken(ctx context.Context, force bool) (string, error) {
 		} `json:"data"`
 	}
 	err := g.client.PostJSON(ctx, gofileAPI+"/accounts",
-		httpx.RefererOrigin(gofileRoot+"/", gofileRoot), nil, &env)
+		httpx.SiteOrigin(gofileRoot), nil, &env)
 	if err != nil {
 		return "", fmt.Errorf("gofile: create guest account: %w", err)
 	}

@@ -405,7 +405,9 @@ func archiveTracks(files []archiveFile) []archiveFile {
 		if r < 0 {
 			continue
 		}
-		stem := archiveStem(f.Name)
+		// The name without its extension identifies a track across its
+		// renditions. The directory is kept: two may hold the same name.
+		stem := util.Stem(f.Name)
 		if _, seen := best[stem]; !seen {
 			order = append(order, stem)
 			best[stem], rank[stem] = f, r
@@ -587,14 +589,6 @@ func archiveRankIn(ranking []string, format archiveText) int {
 // them for people to read, so they carry capitals and spaces.
 func archiveLabel(format archiveText) string {
 	return strings.ToLower(strings.TrimSpace(string(format)))
-}
-
-// archiveStem is a name with its extension removed, which is what identifies
-// a track across its renditions. The directory is kept, because a name may
-// legitimately contain a slash and two directories may hold the same track
-// name.
-func archiveStem(name string) string {
-	return strings.TrimSuffix(name, path.Ext(name))
 }
 
 // ------------------------------------------------------------ file layout

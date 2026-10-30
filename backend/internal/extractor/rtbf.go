@@ -171,10 +171,11 @@ func (r *RTBF) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, err
 // rtbfGone is what RTBF's answer means for an id it has nothing under.
 const rtbfGone = "it is not on Auvio: removed, expired, or not published yet"
 
+// rtbfRoot is the site the player is served from.
+const rtbfRoot = "https://auvio.rtbf.be"
+
 // rtbfHeaders are what the site's own player sends.
-func rtbfHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://auvio.rtbf.be/", "https://auvio.rtbf.be")
-}
+func rtbfHeaders() httpx.Header { return httpx.SiteOrigin(rtbfRoot) }
 
 // bffURL is an endpoint of RTBF's own API, asked as the site's pages ask.
 func (r *RTBF) bffURL(endpoint string) string {
@@ -630,16 +631,7 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL) (*Result, error) {
 		return nil, fmt.Errorf("rtbf: %s: %w", u.Redacted(), err)
 	}
 	text := strings.ReplaceAll(html, `\/`, "/")
-	var ids []string
-	seen := make(map[string]bool)
-	for _, re := range []*regexp.Regexp{rtbfAssetAttr, rtbfEmbedLink} {
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			if !seen[m[1]] {
-				seen[m[1]] = true
-				ids = append(ids, m[1])
-			}
-		}
-	}
+	ids := matchedIDs(text, rtbfAssetAttr, rtbfEmbedLink)
 	switch len(ids) {
 	case 0:
 		return nil, fmt.Errorf("rtbf: %s embeds no Auvio player", u.Redacted())

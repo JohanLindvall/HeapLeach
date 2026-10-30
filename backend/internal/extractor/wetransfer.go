@@ -154,7 +154,7 @@ func (w *WeTransfer) mint(ctx context.Context, link wetransferLink) (*Target, er
 	}
 	endpoint := w.api + "/" + url.PathEscape(link.id) + "/download"
 	if err := w.client.PostJSON(ctx, endpoint,
-		httpx.RefererOrigin(wetransferRoot+"/", wetransferRoot), body, &out); err != nil {
+		httpx.SiteOrigin(wetransferRoot), body, &out); err != nil {
 		return nil, wetransferFailure(link.id, err)
 	}
 	if out.DirectLink == "" {

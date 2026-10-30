@@ -357,10 +357,7 @@ func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	default:
 		m.applyResultLocked(job, ex.Name(), res, present)
 	}
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 }
 
 func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Result, extractor.Extractor, error) {
@@ -869,10 +866,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	if m.jobActive[it.JobID]--; m.jobActive[it.JobID] <= 0 {
 		delete(m.jobActive, it.JobID)
 	}
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 }
 
 // logFinishedLocked records one finished transfer, so a backend log holds a
@@ -902,10 +896,7 @@ func (m *Manager) CancelJob(id string) error {
 	cancelJobLocked(job)
 	job.restored = false
 	m.pruneQueueLocked()
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -924,10 +915,7 @@ func (m *Manager) CancelItem(jobID, itemID string) error {
 		job.restored = false
 	}
 	m.pruneQueueLocked()
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -1017,10 +1005,7 @@ func (m *Manager) RetryJob(id string) error {
 			m.enqueueLocked(it)
 		}
 	}
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -1062,10 +1047,7 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	}
 
 	m.enqueueLocked(it)
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -1323,10 +1305,7 @@ func (m *Manager) RemoveJob(id string) error {
 	delete(m.jobs, id)
 	m.order = util.Remove(m.order, id)
 	m.pruneQueueLocked()
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -1449,6 +1428,15 @@ func (m *Manager) signal() {
 	case m.wake <- struct{}{}:
 	default:
 	}
+}
+
+// commitLocked ends a change made under m.mu: it releases the lock, then has
+// the change published and the scheduler look at the queue again. Called
+// with m.mu held; neither step may run under it.
+func (m *Manager) commitLocked() {
+	m.mu.Unlock()
+	m.markDirty()
+	m.signal()
 }
 
 // markDirty asks the broadcaster to publish, for a change no running

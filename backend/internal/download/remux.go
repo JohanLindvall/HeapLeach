@@ -33,7 +33,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 		return path
 	}
 
-	target := strings.TrimSuffix(path, filepath.Ext(path)) + ".mp4"
+	target := util.WithExt(path, ".mp4")
 	unique, err := (transferFiles{}).reserve(filepath.Dir(target), filepath.Base(target))
 	if err != nil {
 		return path

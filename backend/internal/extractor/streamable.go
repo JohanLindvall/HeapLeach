@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
 
@@ -244,7 +243,7 @@ func streamableTitle(video *streamableVideo, id string) string {
 	name := strings.TrimSpace(video.Title)
 	if name == "" {
 		upload := strings.TrimSpace(video.OriginalName)
-		name = strings.TrimSuffix(upload, path.Ext(upload))
+		name = util.Stem(upload)
 	}
 	return cmp.Or(name, id)
 }

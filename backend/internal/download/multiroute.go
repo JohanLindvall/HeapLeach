@@ -276,11 +276,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			if t.table.complete() {
 				return
 			}
-			sinceSave += t.manager.timings.poll
-			if sinceSave >= t.manager.timings.save {
-				sinceSave = 0
-				t.saveState()
-			}
+			t.saveDue(&sinceSave)
 			live := extras[:0]
 			for _, e := range extras {
 				select {

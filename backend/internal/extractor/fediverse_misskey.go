@@ -206,7 +206,7 @@ func misskeyName(file *misskeyFile) string {
 	name := cmp.Or(file.Name, util.NameFromURL(file.URL), file.ID)
 	served := fediExt(file.URL)
 	if served != "" && !strings.EqualFold(path.Ext(name), served) {
-		name = strings.TrimSuffix(name, path.Ext(name)) + served
+		name = util.WithExt(name, served)
 	}
 	return name
 }

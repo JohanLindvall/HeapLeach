@@ -213,10 +213,11 @@ const drGone = "it is not on DR TV: removed, expired, or not published yet"
 // errDRDenmarkOnly is a programme DR shows in Denmark alone, refused here.
 var errDRDenmarkOnly = errors.New("shown in Denmark only, and its stream is refused anywhere else")
 
+// drRoot is the site the player is served from.
+const drRoot = "https://www.dr.dk"
+
 // drHeaders are what the site's own player sends.
-func drHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://www.dr.dk/", "https://www.dr.dk")
-}
+func drHeaders() httpx.Header { return httpx.SiteOrigin(drRoot) }
 
 // endpoint is an API URL, asked as the anonymous subscriber and the web
 // player.

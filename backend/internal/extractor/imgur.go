@@ -131,7 +131,7 @@ func (i *Imgur) Recognise(ctx context.Context, p *Page) bool {
 			return false
 		}
 		name := path.Base(media.Path)
-		return strings.TrimSuffix(name, path.Ext(name)) == target.ID && p.Named("Imgur")
+		return util.Stem(name) == target.ID && p.Named("Imgur")
 	}
 	return false
 }
@@ -337,7 +337,7 @@ func imgurPreferMP4(link string) (string, bool) {
 	if err != nil || !strings.EqualFold(path.Ext(u.Path), imgurGIFExt) {
 		return link, false
 	}
-	u.Path = strings.TrimSuffix(u.Path, path.Ext(u.Path)) + imgurMP4Ext
+	u.Path = util.WithExt(u.Path, imgurMP4Ext)
 	return u.String(), true
 }
 

@@ -9,7 +9,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"path"
 	"slices"
@@ -127,29 +126,12 @@ func (f *Feeds) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	return feedResult(body, u, opts.maxFiles())
 }
 
-// fetch reads the document and reports the type it was served as.
-//
-// GetString would be shorter but discards the response headers, and the
-// declared content type is half of how a feed is recognised — see feedish.
+// fetch reads the document and reports the type it was served as: the
+// declared content type is half of how a feed is recognised (see feedish).
 func (f *Feeds) fetch(ctx context.Context, u *url.URL) (body []byte, contentType string, err error) {
-	req, err := f.client.NewRequest(ctx, http.MethodGet, u.String(), nil)
+	body, resp, err := f.client.Fetch(ctx, u.String(), httpx.Header{httpx.HeaderAccept: feedAccept})
 	if err != nil {
 		return nil, "", err
-	}
-	req.Header.Set(httpx.HeaderAccept, feedAccept)
-
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	body, err = io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
-	if err != nil {
-		return nil, "", fmt.Errorf("read body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", fmt.Errorf("%s", resp.Status)
 	}
 	return body, resp.Header.Get(httpx.HeaderContentType), nil
 }

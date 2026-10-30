@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -206,14 +205,14 @@ func (r *RadioCanada) single(ctx context.Context, app, id, stem string) (*Result
 		return nil, err
 	}
 	file := r.file(app, id, target)
-	return &Result{Title: strings.TrimSuffix(file.Name, path.Ext(file.Name)), Files: []File{file}}, nil
+	return &Result{Title: util.Stem(file.Name), Files: []File{file}}, nil
 }
 
 // file is a resolved media as its file, read again when its transfer
 // starts: some media are signed, their master for two minutes and their
 // segments for a day, which a queue can outwait.
 func (r *RadioCanada) file(app, id string, target *Target) File {
-	stem := strings.TrimSuffix(target.Name, path.Ext(target.Name))
+	stem := util.Stem(target.Name)
 	return refreshing(target, func(ctx context.Context) (*Target, error) {
 		return r.stream(ctx, app, id, stem)
 	})
@@ -302,10 +301,11 @@ func radioCanadaUnfiltered(link string) string {
 	return u.String()
 }
 
+// radioCanadaRoot is the site the player is served from.
+const radioCanadaRoot = "https://ici.radio-canada.ca"
+
 // radioCanadaHeaders are what the site's own player sends.
-func radioCanadaHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://ici.radio-canada.ca/", "https://ici.radio-canada.ca")
-}
+func radioCanadaHeaders() httpx.Header { return httpx.SiteOrigin(radioCanadaRoot) }
 
 var (
 	radioCanadaSeasonPath = regexp.MustCompile(`/saison-([0-9]+)$`)

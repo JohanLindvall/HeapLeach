@@ -621,7 +621,7 @@ func (m *Mega) api(ctx context.Context, client *httpx.Client, folder string, cmd
 
 	var raw json.RawMessage
 	err := client.PostJSON(ctx, endpoint,
-		httpx.RefererOrigin(megaRoot+"/", megaRoot), []megaCommand{cmd}, &raw)
+		httpx.SiteOrigin(megaRoot), []megaCommand{cmd}, &raw)
 	if err != nil {
 		return fmt.Errorf("mega: api request: %w", err)
 	}

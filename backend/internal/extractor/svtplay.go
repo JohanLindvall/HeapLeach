@@ -280,12 +280,8 @@ func (s *SVTPlay) episodesFromPage(ctx context.Context, u *url.URL) (string, []s
 		return "", nil, fmt.Errorf("svtplay: fetch %s: %w", u.Redacted(), err)
 	}
 	var episodes []svtEpisodeRef
-	seen := make(map[string]bool)
-	for _, match := range svtVideoLink.FindAllStringSubmatch(doc, -1) {
-		if id := match[1]; !seen[id] {
-			seen[id] = true
-			episodes = append(episodes, svtEpisodeRef{videoID: id})
-		}
+	for _, id := range matchedIDs(doc, svtVideoLink) {
+		episodes = append(episodes, svtEpisodeRef{videoID: id})
 	}
 	if len(episodes) == 0 {
 		return "", nil, fmt.Errorf("svtplay: no episodes listed on %s", u.Redacted())

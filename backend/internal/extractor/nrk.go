@@ -309,12 +309,8 @@ func (n *NRK) episodesFromPage(ctx context.Context, u *url.URL) (string, []nrkEp
 	}
 
 	var episodes []nrkEpisodeRef
-	seen := make(map[string]bool)
-	for _, match := range nrkEpisodeLink.FindAllStringSubmatch(doc, -1) {
-		if id := match[1]; !seen[id] {
-			seen[id] = true
-			episodes = append(episodes, nrkEpisodeRef{id: id})
-		}
+	for _, id := range matchedIDs(doc, nrkEpisodeLink) {
+		episodes = append(episodes, nrkEpisodeRef{id: id})
 	}
 	if len(episodes) == 0 {
 		return "", nil, fmt.Errorf("nrk: no episodes listed on %s", u.Redacted())

@@ -199,7 +199,7 @@ func (o *ORF) stream(ctx context.Context, ep *orfEpisodeDoc) (*Target, error) {
 	if master == "" {
 		return nil, fmt.Errorf("orf: %s offers no stream to download", name)
 	}
-	headers := httpx.RefererOrigin(orfSite, strings.TrimSuffix(orfSite, "/"))
+	headers := httpx.SiteOrigin(strings.TrimSuffix(orfSite, "/"))
 	media, err := resolveMediaPlaylist(ctx, o.client, master, headers)
 	if err != nil {
 		return nil, fmt.Errorf("orf: %s: %w", name, err)

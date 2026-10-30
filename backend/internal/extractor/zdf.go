@@ -344,17 +344,19 @@ func zdfDocumentID(u *url.URL) string {
 // zdfVideoLinks finds the videos a page plays, keeping only those filed under
 // pageID. Ids are returned once each, in the order the page had them.
 func zdfVideoLinks(page, pageID string) []string {
-	pattern := regexp.MustCompile(`/video/[A-Za-z0-9_-]+/` + regexp.QuoteMeta(pageID) + `/([A-Za-z0-9_-]+)`)
+	return matchedIDs(page, regexp.MustCompile(`/video/[A-Za-z0-9_-]+/`+regexp.QuoteMeta(pageID)+`/([A-Za-z0-9_-]+)`))
+}
 
+// matchedIDs is the first group of every match of each pattern in text, in
+// turn, each id kept once where it first appears and empty ones dropped.
+func matchedIDs(text string, res ...*regexp.Regexp) []string {
 	var ids []string
-	seen := make(map[string]bool)
-	for _, match := range pattern.FindAllStringSubmatch(page, -1) {
-		if id := match[1]; !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
+	for _, re := range res {
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			ids = append(ids, m[1])
 		}
 	}
-	return ids
+	return util.Dedupe(ids)
 }
 
 // zdfSeasonFolder names the folder a season's videos go in.

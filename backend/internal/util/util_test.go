@@ -112,6 +112,24 @@ func TestTrimTitleSuffix(t *testing.T) {
 	}
 }
 
+func TestStemAndWithExtKeepTheDirectory(t *testing.T) {
+	cases := []struct{ in, stem, mp4 string }{
+		{"clip.ts", "clip", "clip.mp4"},
+		{"dir/clip.tar.gz", "dir/clip.tar", "dir/clip.tar.mp4"},
+		{"no-extension", "no-extension", "no-extension.mp4"},
+		{"dir.v2/clip", "dir.v2/clip", "dir.v2/clip.mp4"},
+		{"", "", ".mp4"},
+	}
+	for _, c := range cases {
+		if got := Stem(c.in); got != c.stem {
+			t.Errorf("Stem(%q) = %q, want %q", c.in, got, c.stem)
+		}
+		if got := WithExt(c.in, ".mp4"); got != c.mp4 {
+			t.Errorf("WithExt(%q) = %q, want %q", c.in, got, c.mp4)
+		}
+	}
+}
+
 func TestTruncateCollapsesAndCutsOnARuneBoundary(t *testing.T) {
 	cases := []struct {
 		in   string

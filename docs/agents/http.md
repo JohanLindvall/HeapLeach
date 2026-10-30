@@ -2,7 +2,8 @@
 
 `backend/internal/httpx`; file names are relative to it. Header names and
 common values live in `headers.go` (`httpx.Header`, `httpx.Referer`,
-`httpx.RefererOrigin`). `Header.Apply` sets a header map on a request, and
+`httpx.RefererOrigin`, and `httpx.SiteOrigin(root)` for the common pair
+sent from a site's front page). `Header.Apply` sets a header map on a request, and
 `httpx.Navigate` is what a browser sends with a page it navigates to (HTML
 asked for, and the `Sec-Fetch-Dest`/`Sec-Fetch-Mode` pair some hosts check);
 it is shared, so apply or `Merge` it, never write to it. The response header

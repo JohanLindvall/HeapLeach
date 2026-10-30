@@ -13,7 +13,9 @@ jobs, the queue and what reaches the disk. How a single transfer runs is in
 counters (`downloaded` and `streams`) is guarded by `Manager.mu`. `downloaded`
 is atomic so the progress ticker can sample a running transfer without
 contending with workers. Workers take `mu` only to publish state transitions,
-never while blocked on I/O.
+never while blocked on I/O. A change that the browser should see and the
+scheduler should act on ends in `commitLocked`, which releases `mu` and only
+then marks the state dirty and wakes the dispatcher.
 
 **Item ownership — do not regress this.** `Item.inFlight` marks an item from
 dispatch until its worker has fully finished. Status alone cannot serve that

@@ -93,7 +93,9 @@ the engine and its supervisor. Points worth knowing before changing them:
   fails removes its `.tmp`; a missing or unreadable checkpoint reads as none,
   which means starting over. Every file operation of a transfer takes the
   `transferFiles` it was started under; the zero value is for trusted local
-  paths only (remuxing, tests).
+  paths only (remuxing, tests). Both supervisors, single- and multi-route,
+  write the segment `.state` from their tick through `saveDue`, so the two
+  checkpoint at the same interval.
 - The primary connection and every extra one ask for their range through
   `rangedRequest`, so they send the same headers, `Accept-Encoding:
   identity` and the same `If-Range` rules.

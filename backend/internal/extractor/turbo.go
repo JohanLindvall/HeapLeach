@@ -91,6 +91,6 @@ func (t *Turbo) sign(ctx context.Context, base, id string) (*Target, error) {
 		URL:     out.URL,
 		Name:    cmp.Or(out.OriginalFilename, out.Filename, util.NameFromURL(out.URL), id),
 		Size:    -1,
-		Headers: httpx.RefererOrigin(base+"/", base),
+		Headers: httpx.SiteOrigin(base),
 	}, nil
 }

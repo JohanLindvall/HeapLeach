@@ -77,6 +77,18 @@ func NameFromURL(raw string) string {
 	return strings.TrimSpace(base)
 }
 
+// Stem is a name or path with its extension (path.Ext) removed; any
+// directory is kept.
+func Stem(name string) string {
+	return strings.TrimSuffix(name, path.Ext(name))
+}
+
+// WithExt is name with its extension, if any, replaced by ext, which carries
+// its own dot.
+func WithExt(name, ext string) string {
+	return Stem(name) + ext
+}
+
 // Origin renders scheme://host for a URL.
 func Origin(u *url.URL) string { return u.Scheme + "://" + u.Host }
 

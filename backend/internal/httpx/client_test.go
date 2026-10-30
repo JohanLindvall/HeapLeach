@@ -458,6 +458,10 @@ func TestHeaderHelpers(t *testing.T) {
 	if ro[HeaderReferer] != "https://example.test/page" || ro[HeaderOrigin] != "https://example.test" {
 		t.Errorf("RefererOrigin = %v", ro)
 	}
+	so := SiteOrigin("https://example.test")
+	if so[HeaderReferer] != "https://example.test/" || so[HeaderOrigin] != "https://example.test" {
+		t.Errorf("SiteOrigin = %v", so)
+	}
 }
 
 func TestStreamingClientSharesEverythingButTheTimeout(t *testing.T) {

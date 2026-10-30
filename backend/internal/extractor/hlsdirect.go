@@ -180,7 +180,7 @@ var hlsGenericNames = map[string]bool{
 func hlsName(u *url.URL) string {
 	segs := util.PathSegments(u)
 	for _, seg := range slices.Backward(segs) {
-		seg := strings.TrimSuffix(seg, path.Ext(seg))
+		seg := util.Stem(seg)
 		if seg != "" && !hlsGenericNames[strings.ToLower(seg)] {
 			return seg
 		}

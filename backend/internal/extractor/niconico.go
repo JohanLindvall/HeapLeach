@@ -192,7 +192,7 @@ func (n *Niconico) file(id, title string) File {
 	return File{
 		Name:    title + ".mp4",
 		Size:    -1,
-		Headers: httpx.RefererOrigin(niconicoOrigin+"/", niconicoOrigin),
+		Headers: httpx.SiteOrigin(niconicoOrigin),
 		Resolve: func(ctx context.Context) (*Target, error) { return n.stream(ctx, id) },
 	}
 }
@@ -319,7 +319,7 @@ func (n *Niconico) stream(ctx context.Context, id string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	headers := httpx.RefererOrigin(niconicoOrigin+"/", niconicoOrigin)
+	headers := httpx.SiteOrigin(niconicoOrigin)
 	if cookie != "" {
 		headers[httpx.HeaderCookie] = "domand_bid=" + cookie
 	}

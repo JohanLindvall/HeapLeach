@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -660,5 +662,14 @@ func TestZDFRank(t *testing.T) {
 		URL: "https://cdn.example.test/none/a.mp4",
 	}}, zdfProgressive); !ok {
 		t.Error("a rendition with an unrecognised quality was refused although it was the only one")
+	}
+}
+
+func TestMatchedIDsKeepsFirstSightingsAcrossPatterns(t *testing.T) {
+	a := regexp.MustCompile(`a=([0-9]*)`)
+	b := regexp.MustCompile(`b=([0-9]+)`)
+	got := matchedIDs("a=3 b=1 a=1 a= a=2 b=3 b=4 a=3", a, b)
+	if want := []string{"3", "1", "2", "4"}; !slices.Equal(got, want) {
+		t.Errorf("matchedIDs = %q, want %q", got, want)
 	}
 }

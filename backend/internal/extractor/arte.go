@@ -183,10 +183,11 @@ func (a *Arte) programme(ctx context.Context, lang, id string) (*Target, string,
 	return media.target(master, title+media.extension(), headers), title, nil
 }
 
+// arteRoot is the site the player is served from.
+const arteRoot = "https://www.arte.tv"
+
 // arteHeaders are what the site's own player sends.
-func arteHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://www.arte.tv/", "https://www.arte.tv")
-}
+func arteHeaders() httpx.Header { return httpx.SiteOrigin(arteRoot) }
 
 // arteCollection is the part of a collection's playlist read here.
 type arteCollection struct {

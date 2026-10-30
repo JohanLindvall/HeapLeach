@@ -253,7 +253,7 @@ func cyberdropAuthURL(slug string) string {
 // cyberdropAPIHeaders are what the site's own script sends. The API is a
 // separate origin, so a browser attaches Origin alongside Referer.
 func cyberdropAPIHeaders() httpx.Header {
-	return httpx.RefererOrigin(cyberdropRoot+"/", cyberdropRoot)
+	return httpx.SiteOrigin(cyberdropRoot)
 }
 
 // cyberdropEntry is one row of an album listing.
