@@ -117,10 +117,7 @@ func (o *OKru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, err
 		if err != nil {
 			return nil, fmt.Errorf("ok.ru: %w", err)
 		}
-		return &Result{Title: title, Files: []File{{
-			Name: title + media.extensionOr(".ts"), Size: -1, Headers: headers,
-			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
-		}}}, nil
+		return &Result{Title: title, Files: []File{media.file(title+media.extensionOr(".ts"), headers)}}, nil
 	}
 
 	return nil, fmt.Errorf("ok.ru: %s offers no playable rendition%s", id, okruWhyNot(meta))

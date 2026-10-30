@@ -101,7 +101,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/video/", site + "/search/"},
 		},
 		{
-			name: "pornhub", r: NewPornHub(nil),
+			name: "pornhub", r: NewPlayer(nil, &pornhubPlayer),
 			good: site + "/view_video.php?viewkey=abc123def", wrongForm: site + "/video?page=2",
 			page:      head("First Clip - Pornhub.com", "og:site_name=Pornhub") + `<script>var flashvars_123 = {"mediaDefinitions":[]};</script></body></html>`,
 			unmarked:  head("First Clip - Pornhub.com", "og:site_name=Pornhub") + "</body></html>",
@@ -109,7 +109,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/view_video.php", site + "/"},
 		},
 		{
-			name: "xhamster", r: NewXHamster(nil),
+			name: "xhamster", r: NewPlayer(nil, &xhamsterPlayer),
 			good: site + "/videos/first-clip-xhAb12c", wrongForm: site + "/categories/first",
 			page:      head("First Clip | xHamster", "og:site_name=xHamster") + `<script>window.initials = {"xplayerSettings":{}};</script></body></html>`,
 			unmarked:  head("First Clip | xHamster", "og:site_name=xHamster") + "</body></html>",
@@ -117,7 +117,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/categories/first", site + "/"},
 		},
 		{
-			name: "tnaflix", r: NewTNAFlix(nil),
+			name: "tnaflix", r: NewPlayer(nil, &tnaflixPlayer),
 			good: site + "/amateur/first-clip/video123", wrongForm: site + "/amateur",
 			page:      `<html><head><title>First Clip - Tnaflix.com</title></head><body><video><source src="https://cdn.example.test/1/first-480p.mp4" type="video/mp4"></video></body></html>`,
 			unmarked:  `<html><head><title>First Clip - Tnaflix.com</title></head><body></body></html>`,
@@ -125,7 +125,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/amateur", site + "/de"},
 		},
 		{
-			name: "pornone", r: NewPornOne(nil),
+			name: "pornone", r: NewPlayer(nil, &pornonePlayer),
 			good: site + "/funny/first-clip/12345678/", wrongForm: site + "/funny/",
 			page:      `<html><head><title>first clip - PornOne ex vPorn</title></head><body><video><source src="https://cdn.example.test/1/12345678_1920x1080_4000k.mp4"></video></body></html>`,
 			unmarked:  `<html><head><title>first clip - PornOne ex vPorn</title></head><body><video><source src="https://cdn.example.test/1/first.mp4"></video></body></html>`,
@@ -133,7 +133,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/de/", site + "/funny/first-clip/1/"},
 		},
 		{
-			name: "drtuber", r: NewDrTuber(nil),
+			name: "drtuber", r: NewPlayer(nil, &drtuberPlayer),
 			good: site + "/video/1234567/first-clip", wrongForm: site + "/categories/first",
 			page:      `<html><head><title>First Clip at DrTuber</title></head><body><script>var configUrl = "/player_config_json/?vid=1234567";</script></body></html>`,
 			unmarked:  `<html><head><title>First Clip at DrTuber</title></head><body></body></html>`,
@@ -171,7 +171,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/abc12", site + "/e/abc12"},
 		},
 		{
-			name: "vidmoly", r: NewVidmoly(nil),
+			name: "vidmoly", r: NewPlayer(nil, &vidmolyPlayer),
 			good: site + "/v/abcdefghijkl", wrongForm: site + "/make-money",
 			page:      `<html><head><title>First - Cinema</title></head><body><script>window.__NUXT__={}</script><a href="/embed-abcdefghijkl.html">embed</a></body></html>`,
 			unmarked:  `<html><head><title>First - Cinema</title></head><body><script>window.__NUXT__={}</script></body></html>`,
@@ -194,7 +194,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/video", site + "/discovery"},
 		},
 		{
-			name: "streamtape", r: NewStreamtape(nil),
+			name: "streamtape", r: NewPlayer(nil, &streamtapePlayer),
 			good: site + "/v/AbCdEf123/first.mp4", wrongForm: site + "/support",
 			page:      `<html><head><title>first.mp4 - Streamtape</title></head><body><script>document.getElementById('robotlink').innerHTML = '//cdn.example.test/get_video?id=1&expires=2' + ('xyz&token=3').substring(3);</script></body></html>`,
 			unmarked:  `<html><head><title>first.mp4 - Streamtape</title></head><body></body></html>`,
@@ -213,7 +213,7 @@ func TestVideoRecognition(t *testing.T) {
 			},
 		},
 		{
-			name: "mixdrop", r: NewMixDrop(nil),
+			name: "mixdrop", r: NewPlayer(nil, &mixdropPlayer),
 			good: site + "/e/abcdef123", wrongForm: site + "/copyright/",
 			page:      `<html><head><title>MixDrop</title></head><body><script>MDCore.ref = "abcdef123";</script></body></html>`,
 			unmarked:  `<html><head><title>MixDrop</title></head><body></body></html>`,
@@ -224,7 +224,7 @@ func TestVideoRecognition(t *testing.T) {
 			},
 		},
 		{
-			name: "lulustream", r: NewLuluStream(nil),
+			name: "lulustream", r: NewPlayer(nil, &luluPlayer),
 			good: site + "/e/abcdefghijkl", wrongForm: site + "/premium",
 			page:      `<html><head><title>first - LuluStream</title></head><body><script>jwplayer("v").setup({sources: [{file:"https://cdn.example.test/hls/master.m3u8?t=1"}]})</script></body></html>`,
 			unmarked:  `<html><head><title>first - LuluStream</title></head><body></body></html>`,
@@ -235,7 +235,7 @@ func TestVideoRecognition(t *testing.T) {
 			},
 		},
 		{
-			name: "vids.st", r: NewVidsSt(nil),
+			name: "vids.st", r: NewPlayer(nil, &vidsPlayer),
 			good: site + "/v/123", wrongForm: site + "/register",
 			page:      `<html><body><script>var playerConfig = {"videoUrl":"/media/first.mp4","videoName":"first.mp4"};</script></body></html>`,
 			unmarked:  `<html><head><title>VIDS.ST</title></head><body></body></html>`,
@@ -243,7 +243,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/register", site + "/e/clip"},
 		},
 		{
-			name: "sendvid", r: NewSendvid(nil),
+			name: "sendvid", r: NewPlayer(nil, &sendvidPlayer),
 			good: site + "/abc123xy", wrongForm: site + "/help/faq",
 			page:      `<html><head><title>first - Sendvid</title></head><body><video><source id="video_source" src="https://cdn.example.test/first.mp4"></video></body></html>`,
 			unmarked:  `<html><head><title>first - Sendvid</title></head><body></body></html>`,

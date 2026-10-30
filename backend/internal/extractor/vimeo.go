@@ -265,16 +265,8 @@ func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers
 	if err != nil {
 		return nil, err
 	}
-	return &File{
-		Name:       title + media.extension(),
-		URL:        master,
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	file := media.target(master, title+media.extension(), headers).file("")
+	return &file, nil
 }
 
 // vimeoProgressiveFile is the tallest progressive MP4 the configuration
