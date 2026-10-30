@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -241,14 +240,7 @@ func bitchuteVideos(n int) []bitchuteVideo {
 
 func bitchuteExtract(t *testing.T, b *BitChute, raw string) *Result {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := b.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract(%s): %v", raw, err)
-	}
+	res := extractOK(t, b, raw, Options{})
 	return res
 }
 
@@ -256,10 +248,7 @@ func bitchuteExtract(t *testing.T, b *BitChute, raw string) *Result {
 // it and not about the rest.
 func hostOf(t *testing.T, raw string) string {
 	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse %q: %v", raw, err)
-	}
+	u := mustParse(t, raw)
 	return u.Host
 }
 
@@ -307,10 +296,7 @@ func TestBitChuteVideoIsAnUnsignedFileOnEveryMirror(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		u, err := url.Parse(target.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, target.URL)
 		if want := "/CHANNEL/AAAABBBBCCCC.mp4"; u.Path != want {
 			t.Errorf("mirror %s changed the path to %q, want %q", u.Host, u.Path, want)
 		}
@@ -396,11 +382,7 @@ func TestBitChuteReportsAVideoNeitherRouteCanResolve(t *testing.T) {
 	stub := &bitchuteStub{refuse: map[string]bool{"AAAABBBBCCCC": true}}
 	b := stub.start(t)
 
-	u, err := ParseURL("https://www.bitchute.com/video/AAAABBBBCCCC/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = b.Extract(context.Background(), u, Options{})
+	_, err := extract(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/", Options{})
 	if err == nil {
 		t.Fatal("a video that resolves nowhere was accepted")
 	}
@@ -546,10 +528,7 @@ func TestBitChuteChannelReportsAnEmptyListing(t *testing.T) {
 	stub := &bitchuteStub{}
 	b := stub.start(t)
 
-	u, err := ParseURL("https://www.bitchute.com/channel/CHANNELID/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.bitchute.com/channel/CHANNELID/")
 	if _, err := b.Extract(context.Background(), u, Options{}); err == nil {
 		t.Fatal("a channel with nothing on it was accepted")
 	}
@@ -567,10 +546,7 @@ func TestBitChuteRejectsPathsThatNameNeitherAVideoNorAChannel(t *testing.T) {
 		"https://www.bitchute.com/profile/AAAABBBBCCCC/",
 		"https://www.bitchute.com/search?query=x",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if _, err := b.Extract(context.Background(), u, Options{}); err == nil {
 			t.Errorf("%s was accepted", raw)
 		}

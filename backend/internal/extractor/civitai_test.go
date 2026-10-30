@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -93,10 +92,7 @@ func TestCivitaiTargetOf(t *testing.T) {
 
 	c := NewCivitai(nil)
 	for _, tt := range tests {
-		u, err := url.Parse(tt.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tt.raw)
 		got := civitaiTargetOf(u)
 		if tt.value == "" {
 			if got != nil {
@@ -193,10 +189,7 @@ func TestCivitaiQueryLiftsMatureFiltering(t *testing.T) {
 	raw := civitaiQuery("https://civitai.example/api/v1/images",
 		&civitaiTarget{selector: civitaiByUser, value: "Some Creator"})
 
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("built an unparsable query %q: %v", raw, err)
-	}
+	u := mustParse(t, raw)
 	query := u.Query()
 	if query.Get("nsfw") != civitaiNSFW {
 		t.Errorf("nsfw = %q, want %q — without it the listing silently hides mature items",
@@ -388,10 +381,7 @@ func TestCivitaiNextPageStaysOnTheHost(t *testing.T) {
 // becomes: the id names the file, the URL is untouched, and nothing about
 // this host needs the machinery the awkward ones do.
 func TestCivitaiFilesAreNamedByIDAndFetchedAtFullSize(t *testing.T) {
-	var page civitaiListing
-	if err := json.Unmarshal([]byte(civitaiListingPage), &page); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	page := decode[civitaiListing](t, civitaiListingPage)
 
 	want := []struct {
 		name string
@@ -482,10 +472,7 @@ const civitaiModelPayload = `{
 // TestCivitaiModelFilesGroupByVersion covers the endpoint the image listing
 // cannot stand in for, and the naming that has to work without an id field.
 func TestCivitaiModelFilesGroupByVersion(t *testing.T) {
-	var model civitaiModel
-	if err := json.Unmarshal([]byte(civitaiModelPayload), &model); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	model := decode[civitaiModel](t, civitaiModelPayload)
 
 	files := civitaiModelFiles(&model)
 	if len(files) != 3 {

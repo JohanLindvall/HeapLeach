@@ -220,10 +220,7 @@ func TestCheveretoPageAtKeepsTheQueryAndDropsTheCursor(t *testing.T) {
 	base := mustParse(t, "https://pics.example.test/album/x.XYZ?sort=date_desc&seek=ABC&page=1")
 	got := cheveretoPageAt(base, 3)
 
-	u, err := url.Parse(got)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, got)
 	query := u.Query()
 	if query.Get("page") != "3" {
 		t.Errorf("page = %q, want 3", query.Get("page"))
@@ -446,10 +443,7 @@ func TestCheveretoPagePath(t *testing.T) {
 		"https://pics.example.test/i/AAA111.png":      false,
 	}
 	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := cheveretoPagePath(u); got != want {
 			t.Errorf("cheveretoPagePath(%q) = %v, want %v", raw, got, want)
 		}
@@ -502,10 +496,7 @@ func TestCheveretoWalksEveryPage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/album/holiday.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/album/holiday.XYZ")
 	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -536,10 +527,7 @@ func TestCheveretoStopsWhenAPageRepeats(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/album/holiday.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/album/holiday.XYZ")
 	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -583,10 +571,7 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/someone/albums")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/someone/albums")
 	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -640,17 +625,14 @@ func TestCheveretoPasswordGate(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/album/locked.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/album/locked.XYZ")
 	client := cheveretoTestClient()
 
 	if _, err := cheveretoExtract(context.Background(), client, u, Options{}); !errors.Is(err, ErrPasswordRequired) {
 		t.Fatalf("without a password the error was %v, want ErrPasswordRequired", err)
 	}
 
-	_, err = cheveretoExtract(context.Background(), client, u, Options{Password: "wrong"})
+	_, err := cheveretoExtract(context.Background(), client, u, Options{Password: "wrong"})
 	if err == nil {
 		t.Fatal("a wrong password resolved the album")
 	}
@@ -712,10 +694,7 @@ func TestCheveretoRefusesABareDomain(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/")
 	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{}); err == nil {
 		t.Fatal("a bare domain resolved to something")
 	}

@@ -57,10 +57,7 @@ func TestFediverseTargetShapes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.raw, func(t *testing.T) {
-			u, err := ParseURL(tc.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
+			u := mustParse(t, tc.raw)
 			got := fediTargetOf(u)
 			if got == nil {
 				t.Fatal("not recognised as a fediverse link")
@@ -89,10 +86,7 @@ func TestFediverseTargetRefusesOtherShapes(t *testing.T) {
 		"https://example.test/@alice@nodot",
 		"https://example.test/users/alice/statuses/1",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := fediTargetOf(u); got != nil {
 			t.Errorf("%s was taken as a %d for %q", raw, got.kind, got.handle)
 		}
@@ -106,10 +100,7 @@ func TestFediverseTargetRefusesOtherShapes(t *testing.T) {
 // pixelfed-shaped entry here is the evidence — so it has to be read, and read
 // from the right link.
 func TestFediverseNodeInfoHref(t *testing.T) {
-	instance, err := ParseURL("https://example.test/@alice")
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := mustParse(t, "https://example.test/@alice")
 
 	tests := []struct {
 		name  string
@@ -235,10 +226,7 @@ const mastodonFixture = `[
 ]`
 
 func TestMastodonFiles(t *testing.T) {
-	var statuses []mastodonStatus
-	if err := json.Unmarshal([]byte(mastodonFixture), &statuses); err != nil {
-		t.Fatal(err)
-	}
+	statuses := decode[[]mastodonStatus](t, mastodonFixture)
 
 	files := mastodonFiles(statuses)
 	want := []struct{ name, link string }{
@@ -525,12 +513,9 @@ const lemmyFixture = `{"posts": [
 ]}`
 
 func TestLemmyFiles(t *testing.T) {
-	var payload struct {
+	payload := decode[struct {
 		Posts []lemmyPostView `json:"posts"`
-	}
-	if err := json.Unmarshal([]byte(lemmyFixture), &payload); err != nil {
-		t.Fatal(err)
-	}
+	}](t, lemmyFixture)
 
 	files := lemmyFiles(payload.Posts)
 	want := []struct{ name, link string }{
@@ -663,10 +648,7 @@ const misskeyFixture = `[
 ]`
 
 func TestMisskeyFiles(t *testing.T) {
-	var notes []misskeyNote
-	if err := json.Unmarshal([]byte(misskeyFixture), &notes); err != nil {
-		t.Fatal(err)
-	}
+	notes := decode[[]misskeyNote](t, misskeyFixture)
 
 	files := misskeyFiles(notes)
 	if len(files) != 2 {
@@ -832,10 +814,7 @@ func readBody(r *http.Request) []byte {
 func fediExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
 	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, err := url.Parse(srv.URL + path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+path)
 	if !f.Shape(u) {
 		t.Fatalf("%s is not of a fediverse form", u)
 	}

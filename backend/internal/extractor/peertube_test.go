@@ -119,10 +119,7 @@ func peerTubeDecodeVideo(t *testing.T, doc string) *peerTubeVideo {
 
 func peerTubeURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return u
 }
 
@@ -198,10 +195,7 @@ func TestPeerTubeFileForKeepsTheFederatedHostAndExactSize(t *testing.T) {
 	u := peerTubeURL(t, "https://example.test/w/aaaaaaaaaaaaaaaaaaaaaa")
 	file := peerTubeFileFor(u, video.Name, best, "")
 
-	media, err := url.Parse(file.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	media := mustParse(t, file.URL)
 	if media.Host != "media.example.com" {
 		t.Errorf("file host = %q, want the one the API named rather than the instance", media.Host)
 	}

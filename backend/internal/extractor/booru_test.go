@@ -338,10 +338,7 @@ func TestBooruParseTargetNewFamilies(t *testing.T) {
 		{raw: "https://example.test/index.php", api: apiGelbooru01},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		site := &booruSite{name: "test", root: "https://example.test", api: tc.api}
 		tags, post, listing := site.parseTarget(u)
 		if tags != tc.wantTags || post != tc.wantPost || listing != tc.wantListing {

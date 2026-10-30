@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -228,10 +227,7 @@ func TestImgurTargetOf(t *testing.T) {
 		"/search/x/y":                {},
 	}
 	for raw, want := range tests {
-		u, err := url.Parse("https://imgur.com" + raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, "https://imgur.com"+raw)
 		if got := imgurTargetOf(util.PathSegments(u)); got != want {
 			t.Errorf("imgurTargetOf(%q) = %+v, want %+v", raw, got, want)
 		}

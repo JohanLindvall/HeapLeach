@@ -384,7 +384,7 @@ func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []chevere
 			return nil, err
 		}
 		listing := cheveretoWalk(ctx, client, u, root, opts)
-		dir := util.FirstNonEmpty(album.Name, listing.title)
+		dir := sourceFolder(util.FirstNonEmpty(album.Name, listing.title))
 		for j := range listing.files {
 			listing.files[j].Dir = dir
 		}
@@ -505,10 +505,7 @@ func cheveretoViewerSize(viewer *html.Node) int64 {
 	if loader == nil {
 		return -1
 	}
-	if n := parsedSize(attr(loader, cheveretoSizeAttr)); n > 0 {
-		return n
-	}
-	return -1
+	return parsedSize(attr(loader, cheveretoSizeAttr))
 }
 
 // cheveretoOriginal turns a rendition link into the stored file it stands for.

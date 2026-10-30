@@ -391,8 +391,8 @@ func (a cumAttachment) file(edges []string, referer string) (File, error) {
 			continue
 		}
 		size := int64(-1)
-		if variant.Bytes != nil && *variant.Bytes >= 0 {
-			size = *variant.Bytes
+		if variant.Bytes != nil {
+			size = knownSize(*variant.Bytes)
 		}
 		links := make([]string, 0, len(edges))
 		for _, edge := range edges {

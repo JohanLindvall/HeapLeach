@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,10 +85,7 @@ func balbumsExtract(t *testing.T, index *Balbums, raw string) (*Result, error) {
 
 func balbumsExtractWith(t *testing.T, index *Balbums, raw string, opts Options) (*Result, error) {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return index.Extract(context.Background(), u, opts)
 }
 
@@ -115,10 +111,7 @@ func TestBalbumsSearchKeepsTheNarrowingAndDropsThePaging(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		u, err := url.Parse(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		query, first, ok := balbumsSearch(u)
 		if !ok {
 			t.Errorf("balbumsSearch(%q) found no search", tc.raw)
@@ -143,10 +136,7 @@ func TestBalbumsSearchRejectsEverythingElse(t *testing.T) {
 		"https://balbums.st/topalbums",
 		"https://balbums.st/live",
 	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if _, _, ok := balbumsSearch(u); ok {
 			t.Errorf("balbumsSearch(%q) claimed a search", raw)
 		}
@@ -154,10 +144,7 @@ func TestBalbumsSearchRejectsEverythingElse(t *testing.T) {
 }
 
 func TestBalbumsPageNamesOnePageOfTheResults(t *testing.T) {
-	u, err := url.Parse("https://balbums.st/?search=Driftwood&mode=broad")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://balbums.st/?search=Driftwood&mode=broad")
 	_, first, ok := balbumsSearch(u)
 	if !ok {
 		t.Fatal("no search")
@@ -221,8 +208,9 @@ func TestBalbumsWalksEveryPageAndFoldersEachAlbum(t *testing.T) {
 	}
 }
 
-// A search wider than anybody meant stops at the cap, and says so where the
-// job is named rather than quietly returning a prefix.
+// A search wider than anybody meant stops at the album cap configured, and
+// says so where the job is named rather than quietly returning a prefix; the
+// walk stops at the cap rather than reading every page to throw most away.
 func TestBalbumsCapsTheAlbumsItFollows(t *testing.T) {
 	const albumHost = "albums.example.test"
 	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
@@ -235,27 +223,28 @@ func TestBalbumsCapsTheAlbumsItFollows(t *testing.T) {
 		}
 		pages[page] = balbumsPageHTML(albumHost, page, 8, albums...)
 	}
-	index, root, asked := balbumsIndex(t, stub, pages)
-
-	res, err := balbumsExtract(t, index, root+"/?search=Driftwood")
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	if len(res.Files) != config.MaxExpandedSources {
-		t.Errorf("got %d files, want the cap of %d", len(res.Files), config.MaxExpandedSources)
-	}
-	// Admitted in the note, not the title: the title names the folder, and
-	// a folder that changed with the cap would re-download everything.
-	if res.Title != "Driftwood" {
-		t.Errorf("title = %q, want the plain query", res.Title)
-	}
-	if want := fmt.Sprintf("%d of 800 albums", config.MaxExpandedSources); res.Note != want {
-		t.Errorf("note = %q, want %q", res.Note, want)
-	}
-	// The walk stops at the cap rather than reading eight pages to throw
-	// three away.
-	if got := asked(); len(got) != 5 {
-		t.Errorf("asked for %d pages, want 5 (the cap reached on the fifth): %v", len(got), got)
+	for _, tc := range []struct {
+		sources, files, asked int
+		note                  string
+	}{
+		{0, config.MaxExpandedSources, 5, fmt.Sprintf("%d of 800 albums", config.MaxExpandedSources)},
+		{150, 150, 2, "150 of 800 albums"},
+		{5000, 800, 8, ""},
+	} {
+		index, root, asked := balbumsIndex(t, stub, pages)
+		res, err := balbumsExtractWith(t, index, root+"/?search=Driftwood", Options{limits: Limits{Sources: tc.sources}})
+		if err != nil {
+			t.Fatalf("Extract: %v", err)
+		}
+		// Admitted in the note, not the title: the title names the folder,
+		// and a folder that changed with the cap would re-download
+		// everything.
+		if len(res.Files) != tc.files || res.Note != tc.note || res.Title != "Driftwood" {
+			t.Errorf("cap %d: got %d files, title %q, note %q", tc.sources, len(res.Files), res.Title, res.Note)
+		}
+		if got := asked(); len(got) != tc.asked {
+			t.Errorf("cap %d: asked for %d pages, want %d", tc.sources, len(got), tc.asked)
+		}
 	}
 }
 
@@ -336,46 +325,8 @@ func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
 	}
 }
 
-// The album cap is the one configured: a search asked to follow fewer stops
-// sooner, and one asked for more reads further.
-func TestBalbumsFollowsAsManyAlbumsAsConfigured(t *testing.T) {
-	const albumHost = "albums.example.test"
-	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
-
-	pages := make(map[int]string)
-	for page := 1; page <= 8; page++ {
-		albums := make([]string, 0, 100)
-		for i := range 100 {
-			albums = append(albums, fmt.Sprintf("p%02dn%02d", page, i))
-		}
-		pages[page] = balbumsPageHTML(albumHost, page, 8, albums...)
-	}
-
-	index, root, asked := balbumsIndex(t, stub, pages)
-	res, err := balbumsExtractWith(t, index, root+"/?search=Driftwood", Options{limits: Limits{Sources: 150}})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	if len(res.Files) != 150 || res.Note != "150 of 800 albums" {
-		t.Errorf("got %d files, note %q; want 150 and the note saying so", len(res.Files), res.Note)
-	}
-	if got := asked(); len(got) != 2 {
-		t.Errorf("asked for %d pages, want 2: %v", len(got), got)
-	}
-
-	index, root, _ = balbumsIndex(t, stub, pages)
-	res, err = balbumsExtractWith(t, index, root+"/?search=Driftwood", Options{limits: Limits{Sources: 5000}})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	if len(res.Files) != 800 || res.Note != "" {
-		t.Errorf("got %d files, note %q; want all 800 and nothing to admit", len(res.Files), res.Note)
-	}
-}
-
-// A search ends where its results do, with nothing to admit: at a page that
-// is not there, at one with nothing new on it, or at the last page the
-// search states, however short that page is.
+// A search ends where its results do, with nothing to admit: at the last
+// page the search states, however short that page is.
 func TestBalbumsEndsWhereTheResultsDo(t *testing.T) {
 	const albumHost = "albums.example.test"
 	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
@@ -385,14 +336,6 @@ func TestBalbumsEndsWhereTheResultsDo(t *testing.T) {
 		want  int
 		asked int
 	}{
-		{"missing page", map[int]string{
-			1: balbumsPageHTML(albumHost, 1, 3, "AAAA", "BBBB"),
-		}, 2, 2},
-		{"nothing new", map[int]string{
-			1: balbumsPageHTML(albumHost, 1, 3, "AAAA", "BBBB"),
-			2: balbumsPageHTML(albumHost, 2, 3, "AAAA"),
-			3: balbumsPageHTML(albumHost, 3, 3, "CCCC"),
-		}, 2, 2},
 		{"short last page", map[int]string{
 			1: balbumsPageHTML(albumHost, 1, 2, "AAAA", "BBBB"),
 			2: balbumsPageHTML(albumHost, 2, 2, "CCCC"),

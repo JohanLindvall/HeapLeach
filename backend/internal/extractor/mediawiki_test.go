@@ -210,10 +210,7 @@ func testMediaWiki(t *testing.T) *MediaWiki {
 
 func mediaWikiExtract(t *testing.T, m *MediaWiki, raw string) (*Result, error) {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return m.Extract(context.Background(), u, Options{})
 }
 
@@ -532,10 +529,7 @@ func TestMediaWikiTitle(t *testing.T) {
 		{"https://a.example.test/", "", false},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		title, explicit := mediaWikiTitle(u)
 		if title != tc.title || explicit != tc.explicit {
 			t.Errorf("mediaWikiTitle(%s) = %q/%v, want %q/%v", tc.raw, title, explicit, tc.title, tc.explicit)
@@ -625,10 +619,7 @@ func TestMediaWikiDepth(t *testing.T) {
 		"https://a.example.test/wiki/Category:A?depth=99": config.MaxFolderDepth,
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := mediaWikiDepth(u); got != want {
 			t.Errorf("mediaWikiDepth(%s) = %d, want %d", raw, got, want)
 		}

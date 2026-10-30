@@ -73,10 +73,7 @@ func kvsScriptedVideo(slug string) string {
 // "#" back to where it is nor read the control's presence as the end.
 func TestKVSNextPageIgnoresAScriptedControl(t *testing.T) {
 	const base = "https://tube.example.test/search/some-query/"
-	root, err := parseHTML(kvsScriptedListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, kvsScriptedListing)
 	if got := kvsNextPage(root, base); got != "" {
 		t.Errorf("next page = %q, want none: the anchor points at \"#\"", got)
 	}
@@ -88,10 +85,7 @@ func TestKVSNextPageIgnoresAScriptedControl(t *testing.T) {
 // The last page of a scripted listing is announced in its pager, and that
 // is the only signal there is: asking for one more page is a 404.
 func TestKVSListingEndsOnTheLastScriptedPage(t *testing.T) {
-	root, err := parseHTML(kvsScriptedLastPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, kvsScriptedLastPage)
 	if !kvsListingEnds(root) {
 		t.Error("a pager whose next item holds no anchor was not read as the end")
 	}
@@ -111,10 +105,7 @@ func TestKVSListingEndsSaysNothingWithoutANextControl(t *testing.T) {
 		"no pager":   `<html><body><a href="/videos/1/x/">x</a></body></html>`,
 		"a carousel": `<html><body><div class="next"><span>›</span></div><a href="/videos/1/x/">x</a></body></html>`,
 	} {
-		root, err := parseHTML(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
+		root := mustParseDoc(t, doc)
 		if kvsListingEnds(root) {
 			t.Errorf("%s: read as the last page", name)
 		}
@@ -124,10 +115,7 @@ func TestKVSListingEndsSaysNothingWithoutANextControl(t *testing.T) {
 // Both the block and the pager are chosen by name: the albums block comes
 // first in the fixture, and its pager says the albums end on page one.
 func TestKVSListingPrefersTheVideosBlockAndPager(t *testing.T) {
-	root, err := parseHTML(kvsScriptedListing)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, kvsScriptedListing)
 	if got, want := kvsListingBlock(root), "list_videos_videos_list_search_result"; got != want {
 		t.Errorf("kvsListingBlock = %q, want %q", got, want)
 	}
@@ -171,10 +159,7 @@ func TestKVSSearchResolvesEveryPageOfResults(t *testing.T) {
 	defer srv.Close()
 
 	k := NewKVS(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, err := ParseURL(srv.URL + "/search/some-query/3/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/search/some-query/3/")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -213,10 +198,9 @@ func TestKVSSearchResolvesEveryPageOfResults(t *testing.T) {
 	}
 }
 
-// The walk's end conditions, each where the listing itself says it ends:
-// none of them is an error once the first page has been read. The stated
-// total is checked ahead of the cap, so a page that reaches the total keeps
-// every tile it has.
+// The walk's own end conditions, where the listing itself says it ends: the
+// stated total and the last page. The stated total is checked ahead of the
+// cap, so a page that reaches the total keeps every tile it has.
 func TestKVSListingPagesEnds(t *testing.T) {
 	page := func(showing, next string, slugs ...string) string {
 		var b strings.Builder
@@ -242,14 +226,6 @@ func TestKVSListingPagesEnds(t *testing.T) {
 			"/list/2/": page("", "/list/3/", "c"),
 			"/list/3/": page("", "", "d"),
 		}, 0, 3, "/list/3/"},
-		{"missing page ends it", map[string]string{
-			"/list/": page("", "/list/2/", "a", "b"),
-		}, 0, 2, ""},
-		{"page adding nothing ends it", map[string]string{
-			"/list/":   page("", "/list/2/", "a", "b"),
-			"/list/2/": page("", "/list/3/", "a", "b"),
-			"/list/3/": page("", "", "c"),
-		}, 0, 2, "/list/3/"},
 		{"last page says so", map[string]string{
 			"/list/":   page("", "/list/2/", "a", "b"),
 			"/list/2/": page("", "", "c") + `<div class="pagination"><ul><li class="next"><span>Next</span></li></ul></div>`,

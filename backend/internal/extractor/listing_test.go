@@ -357,7 +357,7 @@ func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
 	}))
 	defer srv.Close()
 	client := httpx.New("test", "en", 0, time.Second)
-	root, _ := parseHTML(`<h1>Owned</h1><div id="list"><a href="/item/a">a</a></div><a rel="next" href="/list?page=2">Next</a>`)
+	root := mustParseDoc(t, `<h1>Owned</h1><div id="list"><a href="/item/a">a</a></div><a rel="next" href="/list?page=2">Next</a>`)
 	key := func(u *url.URL) string {
 		k := *u
 		q := k.Query()
@@ -377,7 +377,7 @@ func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
 		t.Fatalf("asked %v", asked)
 	}
 
-	empty, _ := parseHTML(`<h1>Nothing</h1><div id="list"></div>`)
+	empty := mustParseDoc(t, `<h1>Nothing</h1><div id="list"></div>`)
 	links, title, note, err = walkListing(context.Background(), client, mustParse(t, srv.URL+"/list"), listingWalk{
 		name: "test", limit: -1, quiet: true, read: testListingPage, root: empty,
 	})

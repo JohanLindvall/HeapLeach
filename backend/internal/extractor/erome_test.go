@@ -6,7 +6,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -39,11 +38,7 @@ func TestEromeAlbum(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, _ := ParseURL(srv.URL + "/a/AAAA")
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, e, srv.URL+"/a/AAAA", Options{})
 	if res.Title != "An Album" {
 		t.Errorf("title = %q, want the page's own heading", res.Title)
 	}
@@ -101,10 +96,7 @@ const eromeProfilePageTwo = `<html><body>
 // reposted, so it has to survive being paged — otherwise page two onward
 // silently walks a different listing.
 func TestEromeProfilePageKeepsTheTab(t *testing.T) {
-	u, err := url.Parse("https://www.erome.com/creator?t=reposts")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.erome.com/creator?t=reposts")
 
 	// The first page is asked for exactly as the user gave it.
 	if got := eromeProfilePage(u, 1); got.String() != u.String() {
@@ -121,7 +113,7 @@ func TestEromeProfilePageKeepsTheTab(t *testing.T) {
 	}
 
 	// A profile with no tab stays that way rather than gaining one.
-	plain, _ := url.Parse("https://www.erome.com/creator")
+	plain := mustParse(t, "https://www.erome.com/creator")
 	third := eromeProfilePage(plain, 3)
 	if got := third.Query(); got.Get("page") != "3" || got.Has("t") {
 		t.Errorf("query = %v, want only a page number", got)
@@ -129,14 +121,8 @@ func TestEromeProfilePageKeepsTheTab(t *testing.T) {
 }
 
 func TestEromeAlbumLinks(t *testing.T) {
-	base, err := url.Parse("https://www.erome.com/creator?t=posts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := parseHTML(eromeProfilePageOne)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://www.erome.com/creator?t=posts")
+	root := mustParseDoc(t, eromeProfilePageOne)
 
 	seen := map[string]bool{}
 	got := eromeAlbumLinks(root, base, seen)
@@ -156,10 +142,7 @@ func TestEromeAlbumLinks(t *testing.T) {
 
 	// The second page contributes only what the first did not, which is what
 	// tells the walk it has reached the end.
-	next, err := parseHTML(eromeProfilePageTwo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	next := mustParseDoc(t, eromeProfilePageTwo)
 	second := eromeAlbumLinks(next, base, seen)
 	if len(second) != 1 || second[0] != "https://www.erome.com/a/DDDD4444" {
 		t.Errorf("page two contributed %v, want only the album page one lacked", second)
@@ -300,7 +283,7 @@ func TestEromeDeletedAlbumIsReportedPlainly(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, _ := ParseURL(srv.URL + "/a/AAAA")
+	u := mustParse(t, srv.URL+"/a/AAAA")
 	_, err := e.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a deleted album was accepted")

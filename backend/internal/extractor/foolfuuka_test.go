@@ -427,10 +427,7 @@ func TestFoolFuukaParse(t *testing.T) {
 		{raw: "https://archive.example.test/a/search/filename/x.jpg/deleted/not-deleted/", kind: foolFuukaSearchTarget, board: "a", page: 1, query: "deleted=not-deleted&filename=x.jpg"},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		got, err := foolFuukaParse(u)
 		if err != nil {
 			t.Errorf("%s: %v", tc.raw, err)
@@ -459,10 +456,7 @@ func TestFoolFuukaParseRejectsWhatIsNotABoard(t *testing.T) {
 		"https://archive.example.test/a/gallery/",
 		"https://archive.example.test/a/thread/",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got, err := foolFuukaParse(u); err == nil {
 			t.Errorf("%s was accepted as board %q kind %d", raw, got.board, got.kind)
 		}
@@ -584,13 +578,9 @@ func TestFoolFuukaSearchStopsWhenAPageRepeats(t *testing.T) {
 		}
 	})
 
-	u, err := ParseURL("https://example.test/b/search/text/thing/")
+	res, err := f.Extract(context.Background(), mustParse(t, "https://example.test/b/search/text/thing/"), Options{})
 	if err != nil {
 		t.Fatal(err)
-	}
-	res, err := f.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
 	}
 	if len(res.Files) != 6 {
 		t.Errorf("got %d files, want the 6 distinct ones — a repeated page was collected twice",
@@ -614,11 +604,8 @@ func TestFoolFuukaSearchReportsAnEmptyFirstPage(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":"No results found."}`)
 	})
 
-	u, err := ParseURL("https://example.test/b/search/text/nothing/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://example.test/b/search/text/nothing/")
+	_, err := f.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a search that matched nothing was accepted")
 	}
@@ -653,13 +640,9 @@ func TestFoolFuukaIndexOpensEveryThread(t *testing.T) {
 			num, num, num, num, num, num, num, num))
 	})
 
-	u, err := ParseURL("https://example.test/b/page/2/")
+	res, err := f.Extract(context.Background(), mustParse(t, "https://example.test/b/page/2/"), Options{})
 	if err != nil {
 		t.Fatal(err)
-	}
-	res, err := f.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
 	}
 
 	var got []string
@@ -698,11 +681,8 @@ func TestFoolFuukaIndexSaysWhyAPageYieldedNothing(t *testing.T) {
 		_, _ = io.WriteString(w, "<html><head><title>Just a moment...</title></head></html>")
 	})
 
-	u, err := ParseURL("https://example.test/b/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://example.test/b/")
+	_, err := f.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a page whose every thread was refused was accepted")
 	}

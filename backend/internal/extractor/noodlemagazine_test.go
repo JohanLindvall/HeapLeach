@@ -221,22 +221,17 @@ func TestNoodleListingWalksOnlySearchCardsAndDefersPlayers(t *testing.T) {
 	}
 }
 
-func TestNoodleListingCapsAndIncompletePages(t *testing.T) {
+// The walk itself is the shared walker's; what is the site's own is the
+// listing cap it is held to and which "more" controls it will follow.
+func TestNoodleListingCapsAndNextPages(t *testing.T) {
 	for _, tc := range []struct {
-		name, second, pager, note string
-		limits                    Limits
-		files, pages              int
+		name, pager, note string
+		limits            Limits
+		files, pages      int
 	}{
 		{name: "source-cap", limits: Limits{Sources: 1}, files: 1, pages: 1, note: "source limit"},
-		{name: "file-cap", limits: Limits{Files: 1}, files: 1, pages: 1, note: "file limit"},
-		{name: "exact-cap-more", limits: Limits{Sources: 2}, files: 2, pages: 1, note: "source limit"},
-		{name: "exact-cap-complete", limits: Limits{Sources: 2}, pager: "none", files: 2, pages: 1},
 		{name: "hidden-next", pager: `<div class="more" data-page="1" hidden></div>`, files: 2, pages: 1},
 		{name: "related-next", pager: `<div class="more" data-page="1" data-action="related"></div>`, files: 2, pages: 1},
-		{name: "repeated", files: 2, pages: 2, note: "repeated or empty"},
-		{name: "missing", second: "missing", files: 2, pages: 2, note: "listing is missing"},
-		{name: "failure", second: "failed", files: 2, pages: 2, note: "could not fetch"},
-		{name: "redirect", second: "redirect", files: 2, pages: 3, note: "redirected"},
 		{name: "bad-page", pager: `<div class="more" data-page="invalid"></div>`, files: 2, pages: 1, note: "invalid next page"},
 		{name: "backwards", pager: `<div class="more" data-page="0"></div>`, files: 2, pages: 1, note: "invalid next page"},
 		{name: "skipped-page", pager: `<div class="more" data-page="2"></div>`, files: 2, pages: 1, note: "invalid next page"},
@@ -244,23 +239,10 @@ func TestNoodleListingCapsAndIncompletePages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if calls.Add(1) > 3 {
+				if calls.Add(1) > 1 {
 					t.Error("listing failed to stop")
 					http.NotFound(w, r)
 					return
-				}
-				if r.URL.Query().Get("p") == "1" {
-					switch tc.second {
-					case "missing":
-						fmt.Fprint(w, "<html>Missing listing</html>")
-						return
-					case "failed":
-						http.NotFound(w, r)
-						return
-					case "redirect":
-						http.Redirect(w, r, "/video/another", http.StatusFound)
-						return
-					}
 				}
 				pager := tc.pager
 				if pager == "" {
@@ -289,22 +271,5 @@ func TestNoodleListingNeverUsesRecommendationsForEmptySearch(t *testing.T) {
 	_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(context.Background(), mustParse(t, srv.URL+"/video/synthetic"), Options{})
 	if err == nil || !strings.Contains(err.Error(), "no videos found") {
 		t.Fatalf("empty search became recommendations: %v", err)
-	}
-}
-
-func TestNoodleListingCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("p") == "1" {
-			cancel()
-			return
-		}
-		fmt.Fprint(w, noodleListing(noodleCard("/watch/1_1", "First"), `<div class="more" data-page="1"></div>`))
-	}))
-	defer srv.Close()
-	_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(ctx, mustParse(t, srv.URL+"/video/synthetic"), Options{})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("partial listing hid cancellation: %v", err)
 	}
 }

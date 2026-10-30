@@ -144,10 +144,7 @@ const bunkrServingPage = `<html><body>
 </body></html>`
 
 func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
-	root, err := parseHTML(bunkrMaintenancePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bunkrMaintenancePage)
 	got := bunkrUnavailable(root)
 	if got == "" {
 		t.Fatal("a disabled download control was read as a page offering a download")
@@ -165,10 +162,7 @@ func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
 // A page that will serve the file must not be read as a refusal, and a
 // disabled control that is not the download must not be mistaken for one.
 func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
-	root, err := parseHTML(bunkrServingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bunkrServingPage)
 	if got := bunkrUnavailable(root); got != "" {
 		t.Errorf("a servable page was refused: %q", got)
 	}
@@ -176,11 +170,8 @@ func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
 
 // The fact is worth reporting even when the page says nothing about why.
 func TestBunkrUnavailableWithoutAnExplanation(t *testing.T) {
-	root, err := parseHTML(
+	root := mustParseDoc(t,
 		`<html><body><button class="ic-download-01" disabled></button></body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got := bunkrUnavailable(root); got == "" {
 		t.Error("a disabled download control with no tooltip reported nothing at all")
 	}
