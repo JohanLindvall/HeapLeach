@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -30,7 +31,6 @@ import (
 
 // Dropbox turns a share link into the download it stands for.
 type Dropbox struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -44,10 +44,33 @@ const (
 
 // NewDropbox builds the dropbox extractor.
 func NewDropbox(client *httpx.Client) *Dropbox {
-	return &Dropbox{hostSet: hostSet{"dropbox.com", "dropboxusercontent.com"}, client: client}
+	return &Dropbox{client: client}
 }
 
 func (d *Dropbox) Name() string { return "dropbox" }
+
+// dropboxShape is a share link: /s/<id>/<name> and /sh/<id>/<key>, and the
+// newer /scl/fi/<id>/<name> and /scl/fo/<id>/<key>.
+var dropboxShape = pathShape(`^/(s|sh)/[A-Za-z0-9_-]+/[^/]+`, `^/scl/(fi|fo)/[A-Za-z0-9_-]+/[^/]+`)
+
+// dropboxBundle is where the web app's viewer bundles are served from.
+const dropboxBundle = "/static/atlas/"
+
+// Recognises is the inventory's description.
+func (d *Dropbox) Recognises() string {
+	return "share links (`/s/…`, `/sh/…`, `/scl/fi/…`, `/scl/fo/…`) whose page is the Dropbox viewer, " +
+		"loading its `/static/atlas/` bundle"
+}
+
+// Shape reports a share link.
+func (d *Dropbox) Shape(u *url.URL) bool { return dropboxShape(u) }
+
+// Recognise takes a share link whose page is the site's viewer. Nothing on
+// it is read — the download is the same link asking for the bytes — so the
+// viewer is known by the bundle it loads and the name it gives itself.
+func (d *Dropbox) Recognise(_ context.Context, p *Page) bool {
+	return dropboxShape(p.Final) && p.Script(dropboxBundle) && p.Named("Dropbox")
+}
 
 // Extract rewrites the link to ask for the bytes rather than the viewer.
 //
@@ -90,7 +113,6 @@ func dropboxIsFolder(u *url.URL) bool {
 
 // Mediafire resolves file pages and folder shares.
 type Mediafire struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -107,10 +129,56 @@ const (
 
 // NewMediafire builds the mediafire extractor.
 func NewMediafire(client *httpx.Client) *Mediafire {
-	return &Mediafire{hostSet: hostSet{"mediafire.com"}, client: client}
+	return &Mediafire{client: client}
 }
 
 func (m *Mediafire) Name() string { return "mediafire" }
+
+// mediafireFileShape is a file page, /file/<key>[/<name>[/file]] and its
+// older spellings; mediafireFolderShape is a folder share, /folder/<key>.
+// A key is ten to fifteen lower-case letters and digits, which keeps the
+// forms off the /file/<x> and /download/<x> paths of every other site.
+var (
+	mediafireFileShape   = pathShape(`^/(file|file_premium|view|download)/[a-z0-9]{10,15}(/|$)`)
+	mediafireFolderShape = pathShape(`^/folder/[a-z0-9]{10,15}(/|$)`)
+	// mediafireQueryShape is the oldest link, the key alone as the query.
+	mediafireQueryShape = regexp.MustCompile(`^[a-z0-9]{11,15}$`)
+)
+
+// mediafireFolderMarker is on the file-row template of the folder viewer.
+const mediafireFolderMarker = "mf_filecontainer"
+
+// Recognises is the inventory's description.
+func (m *Mediafire) Recognises() string {
+	return "file pages (`/file/<key>/…`) carrying the `#downloadButton` link, and folder shares " +
+		"(`/folder/<key>`) whose page is the MediaFire folder viewer"
+}
+
+// Shape reports a file page, a folder share, or the old /?<key> link.
+func (m *Mediafire) Shape(u *url.URL) bool {
+	return mediafireFileShape(u) || mediafireFolderShape(u) ||
+		(u.EscapedPath() == "" || u.EscapedPath() == "/") && mediafireQueryShape.MatchString(u.RawQuery)
+}
+
+// Recognise takes a file page by the download button Extract reads its
+// link from, and a folder by the viewer's own file-row template — the folder
+// itself is listed by the API — each named as the site names itself.
+func (m *Mediafire) Recognise(_ context.Context, p *Page) bool {
+	if !p.Named("MediaFire") {
+		return false
+	}
+	switch {
+	case mediafireFileShape(p.Final):
+		root := p.HTML()
+		return root != nil && findFirst(root, func(n *html.Node) bool {
+			return isElem(n, atom.A) && attr(n, "id") == mediafireButtonID &&
+				(attr(n, "href") != "" || attr(n, mediafireScrambled) != "")
+		}) != nil
+	case mediafireFolderShape(p.Final):
+		return p.Has(mediafireFolderMarker)
+	}
+	return false
+}
 
 // Extract resolves either a single file page or a folder share.
 func (m *Mediafire) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -148,7 +216,11 @@ func (m *Mediafire) resolver(page, name string) func(context.Context) (*Target, 
 
 // filePage reads one file page for its download link and filename.
 func (m *Mediafire) filePage(ctx context.Context, page string) (link, name string, err error) {
-	doc, err := m.client.GetString(ctx, page, httpx.Referer(mediafireRoot+"/"))
+	pageURL, err := url.Parse(page)
+	if err != nil {
+		return "", "", fmt.Errorf("mediafire: %w", err)
+	}
+	doc, _, err := fetchDocument(ctx, m.client, pageURL, httpx.Referer(mediafireRoot+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("mediafire: fetch %s: %w", page, err)
 	}
@@ -338,12 +410,42 @@ func NewGoogleDrive(client *httpx.Client) *GoogleDrive { return &GoogleDrive{cli
 
 func (g *GoogleDrive) Name() string { return "drive" }
 
-func (g *GoogleDrive) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, "drive.google.com") || util.HostMatches(u.Host, "drive.usercontent.google.com") {
+// driveFileShape is a file's viewer, /file/d/<id>[/view]; driveQueryShape
+// the endpoints that take the id as a query, /open, /uc and /download.
+var (
+	driveFileShape  = pathShape(`^/file/d/[A-Za-z0-9_-]{10,}(/[a-z]*)?/?$`)
+	driveQueryShape = pathShape(`^/(open|uc|download)/?$`)
+)
+
+// driveViewerBundle is the file viewer's script bundle.
+const driveViewerBundle = "/_/apps-fileview/"
+
+// Recognises is the inventory's description.
+func (g *GoogleDrive) Recognises() string {
+	return "file links (`/file/d/<id>`, `/open?id=`, `/uc?id=`) whose page is the Google Drive file viewer " +
+		"(its `apps-fileview` bundle), or the download confirmation form"
+}
+
+// Shape reports a file link.
+func (g *GoogleDrive) Shape(u *url.URL) bool {
+	return driveFileShape(u) || driveQueryShape(u) && u.Query().Get("id") != ""
+}
+
+// Recognise takes a file link answered by the viewer — known by its bundle
+// and its name, since the file itself is fetched from the download endpoint
+// rather than read off the page — or by the confirmation form that endpoint
+// puts in front of a large file, which is what Extract walks past.
+func (g *GoogleDrive) Recognise(_ context.Context, p *Page) bool {
+	if !g.Shape(p.URL) && !g.Shape(p.Final) {
+		return false
+	}
+	if p.Script(driveViewerBundle) && p.Named("Google Drive") {
 		return true
 	}
-	// docs.google.com serves the same /uc endpoint for drive files.
-	return util.HostMatches(u.Host, "docs.google.com") && strings.Contains(u.Path, "/uc")
+	root := p.HTML()
+	return root != nil && findFirst(root, func(n *html.Node) bool {
+		return isElem(n, atom.Form) && attr(n, "id") == driveFormID
+	}) != nil
 }
 
 // Extract resolves a share link to the download endpoint.

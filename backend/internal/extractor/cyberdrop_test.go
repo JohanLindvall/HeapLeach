@@ -205,36 +205,30 @@ func TestCyberdropAPIURLsAreSlugSubstitution(t *testing.T) {
 	}
 }
 
-// TestCyberdropMatchIsTheOneDomain is the correction worth pinning: the two
-// domains listed alongside this host are not aliases of it. One does not
-// resolve, and the other is parked and would answer with advertising.
-func TestCyberdropMatchIsTheOneDomain(t *testing.T) {
+// TestCyberdropRecognise pins the correction the type comment describes: a
+// page is the service's by what it carries, so a parked lookalike serving
+// advertising under the service's name is not taken for it.
+func TestCyberdropRecognise(t *testing.T) {
 	c := NewCyberdrop(nil)
-	for _, raw := range []string{
-		"https://cyberdrop.cr/a/abcd1234",
-		"https://www.cyberdrop.cr/f/abcd1234",
-	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !c.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	for _, raw := range []string{
-		"https://cyberdrop.me/a/abcd1234",
-		"https://cyberdrop.to/a/abcd1234",
-		"https://cyberdrop.example.test/a/abcd1234",
-	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.Match(u) {
-			t.Errorf("Match(%q) = true, but that host is not this service", raw)
-		}
-	}
+	album := `<html><head><title>Album: Example [1 file] | CyberDrop</title></head><body><h1 id="title">Example</h1>` +
+		`<div class="image-container"><a id="file" href="/f/abcd1234" title="first.gif">first.gif</a>` +
+		`<p class="file-size">798155 B</p></div></body></html>`
+	file := `<html><head><title>CyberDrop</title></head><body><h1 id="file-name"></h1>` +
+		`<script>axios.get("https://api.example.test/api/file/info/" + slug)</script></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/a/abcd1234", album), true)
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/f/abcd1234", file), true)
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/e/abcd1234", file), true)
+	// The form and the name: a parked page, or an album emptied of entries.
+	parked := `<html><head><title>CyberDrop</title><meta name="application-name" content="CyberDrop"></head>` +
+		`<body><script src="/fingerprint.js"></script></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/a/abcd1234", parked), false)
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/f/abcd1234", parked), false)
+	// The markers on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/faq", file), false)
+	expectShape(t, c, "https://drop.example.test/a/abcd1234", true)
+	expectShape(t, c, "https://drop.example.test/e/abcd1234", true)
+	expectShape(t, c, "https://drop.example.test/u/someone", false)
+	expectShape(t, c, "https://drop.example.test/f/abcd1234/extra", false)
 }
 
 // TestCyberdropRejectsUnknownPathsWithoutFetching keeps a URL that names

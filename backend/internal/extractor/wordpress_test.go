@@ -54,6 +54,10 @@ func wordPressPostHTML(title, content string) string {
 
 func wordPressTestSite(t *testing.T, pages map[string]string) (*Registry, *Direct, string, func() map[string]int) {
 	t.Helper()
+	shells := keep2ShareShells(t)
+	for path, doc := range pages {
+		pages[path] = shells.Replace(doc)
+	}
 	var mu sync.Mutex
 	requests := make(map[string]int)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +94,6 @@ func wordPressTestSite(t *testing.T, pages map[string]string) (*Registry, *Direc
 	for _, ex := range reg.extractors {
 		if k, ok := ex.(*Keep2Share); ok {
 			k.api, k.files = srv.URL+"/api/"+k.Name(), ""
-			k.hostSet = hostSet{k.Name() + ".example.test", k.Name() + "-alias.example.test"}
 		}
 	}
 	return reg, reg.fallback.(*Direct), srv.URL, func() map[string]int {
@@ -120,10 +123,12 @@ func TestWordPressCategoryCollectsPostDownloadsAndOriginalJPEGs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Title != "Example Category" || res.Note != "" || len(res.Files) != 7 {
+	// The two services share one file store, so the same id on the other
+	// service's domain is the same file and is folded with it.
+	if res.Title != "Example Category" || res.Note != "" || len(res.Files) != 6 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
-	for i, service := range []string{"keep2share", "fileboom"} {
+	for i, service := range []string{"keep2share"} {
 		f := res.Files[i]
 		if f.Name != "first.bin" || f.URL != "" || f.Resolve == nil || f.Size != 1234 || f.Pace == nil ||
 			*f.Pace != (Pace{Streams: 1, Files: 1, Group: service, PerRoute: true}) {
@@ -134,7 +139,7 @@ func TestWordPressCategoryCollectsPostDownloadsAndOriginalJPEGs(t *testing.T) {
 		}
 	}
 	for i, suffix := range []string{"original.jpeg?token=example", "lazy.JPG", "large.jpg"} {
-		f := res.Files[i+2]
+		f := res.Files[i+1]
 		if f.URL != base+"/uploads/"+suffix || f.Dir != "First Post - Part One" || f.Size != -1 ||
 			f.Headers[httpx.HeaderReferer] != base+"/first/" {
 			t.Fatalf("JPEG %d: %+v", i, f)

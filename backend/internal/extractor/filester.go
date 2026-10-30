@@ -6,10 +6,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // Filester resolves single-file shares (/d/<slug>) and folders (/f/<id>).
@@ -25,11 +25,9 @@ import (
 // Folder pages list filenames and exact sizes. Protected folders grant an
 // access cookie, also needed when signing their files; see filesterfolder.go.
 //
-// The site moves between top-level domains — .si, .me, .gg and .sh have all
-// turned up, each answering the same API — so Match takes filester under any
-// of them rather than a list that trails the next move. The /d/ or /f/ shape is
-// required as well, since a bare name under an unknown TLD is a weaker claim
-// than a name and the site's own link shape together.
+// The site moves between top-level domains, each answering the same API,
+// which is why it is known by its pages — the download script on a file
+// page, the cards or the password form on a folder — and never by a name.
 type Filester struct {
 	client *httpx.Client
 }
@@ -43,15 +41,43 @@ func NewFilester(client *httpx.Client) *Filester {
 	return &Filester{client: client}
 }
 
-// Match accepts file and folder links on filester under any top-level domain.
-func (f *Filester) Match(u *url.URL) bool {
-	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
-	name, _, ok := strings.Cut(host, ".")
-	if !ok || name != "filester" {
+// filesterFileShape is a file share, /d/<slug>; filesterFolderShape a
+// folder, /f/<id>.
+var (
+	filesterFileShape   = pathShape(`^/d/[A-Za-z0-9_-]+/?$`)
+	filesterFolderShape = pathShape(`^/f/[A-Za-z0-9_-]+/?$`)
+)
+
+// filesterDownloadScript is the file page's script, which asks the token
+// endpoint for the link.
+const filesterDownloadScript = "/js/file_dl.js"
+
+// Recognises is the inventory's description.
+func (f *Filester) Recognises() string {
+	return "file shares (`/d/<slug>`) loading `file_dl.js` beside a `#downloadButton`, and folders " +
+		"(`/f/<id>`) listing file cards or asking for their password"
+}
+
+// Shape reports a file share or a folder.
+func (f *Filester) Shape(u *url.URL) bool { return filesterFileShape(u) || filesterFolderShape(u) }
+
+// Recognise takes a file page by the script that signs its download, which
+// Extract does in its place, and a folder by the file cards the walk reads
+// or the password form it fills in.
+func (f *Filester) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	if root == nil {
 		return false
 	}
-	segs := util.PathSegments(u)
-	return len(segs) >= 2 && (segs[0] == "d" || segs[0] == "f")
+	switch {
+	case filesterFileShape(p.Final):
+		return p.Script(filesterDownloadScript) && findFirst(root, func(n *html.Node) bool {
+			return attr(n, "id") == "downloadButton"
+		}) != nil
+	case filesterFolderShape(p.Final):
+		return filesterCardLinkRE.MatchString(p.Body) || filesterPasswordForm(root) != nil
+	}
+	return false
 }
 
 func (f *Filester) Name() string { return "filester" }

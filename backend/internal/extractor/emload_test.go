@@ -221,11 +221,6 @@ func TestPlainPageFindsRegisteredEmloadShare(t *testing.T) {
 	}))
 	defer page.Close()
 	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
-	for _, ex := range reg.extractors {
-		if e, ok := ex.(*Emload); ok {
-			e.hostSet = hostSet{"127.0.0.1"}
-		}
-	}
 	res, _, err := reg.Extract(context.Background(), strings.Replace(page.URL, "127.0.0.1", "localhost", 1)+"/post.html", Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -233,4 +228,20 @@ func TestPlainPageFindsRegisteredEmloadShare(t *testing.T) {
 	if len(res.Files) != 1 || res.Files[0].Name != "First.mp4" || res.Files[0].Resolve == nil || res.Files[0].Pace == nil || !res.Files[0].Pace.PerRoute {
 		t.Fatalf("plain-page handoff lost the file's native resolver or pacing: %+v", res)
 	}
+}
+
+func TestEmloadRecognise(t *testing.T) {
+	e := NewEmload(nil)
+	share := "https://share.example.test/v2/file/dGVzdC1pZA==/First.mp4"
+	expectRecognised(t, e, htmlPage(t, share, emloadTestPage("https://storage.example.test/", "synthetic-token")), true)
+	expectRecognised(t, e, htmlPage(t, "https://share.example.test/file/dGVzdC1pZA==", `<div class="nofile">File not found</div>`), true)
+	// The form and the site's name, without the download panel.
+	expectRecognised(t, e, htmlPage(t, share, `<html><head><title>EMLOAD</title></head><body></body></html>`), false)
+	// The panel, on a page of another form.
+	expectRecognised(t, e, htmlPage(t, "https://share.example.test/v2/premium", emloadTestPage("https://storage.example.test/", "t")), false)
+
+	expectShape(t, e, share, true)
+	expectShape(t, e, "https://share.example.test/v2/file/dGVzdC1pZA==", true)
+	expectShape(t, e, "https://share.example.test/v2/", false)
+	expectShape(t, e, "https://share.example.test/v2/file/a/b/c", false)
 }

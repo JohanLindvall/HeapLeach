@@ -25,7 +25,6 @@ import (
 // a server-specified wait. Both happen at transfer time so a queued file
 // does not spend its download ticket before it can use it.
 type Keep2Share struct {
-	hostSet
 	client *httpx.Client
 	api    string
 	// files is the newer API the site's own pages ask whether a file can be
@@ -87,27 +86,55 @@ func (k *Keep2Share) waiting(ctx context.Context) error {
 
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
 	return &Keep2Share{
-		hostSet: hostSet{"k2s.cc", "keep2share.cc"},
-		client:  client.WithTimeout(config.Keep2ShareRequestTimeout),
-		api:     "https://k2s.cc/api/v2",
-		files:   "https://api.k2s.cc/v1/files",
-		label:   "Keep2Share",
-		pace:    keep2SharePace,
+		client: client.WithTimeout(config.Keep2ShareRequestTimeout),
+		api:    "https://k2s.cc/api/v2",
+		files:  "https://api.k2s.cc/v1/files",
+		label:  "Keep2Share",
+		pace:   keep2SharePace,
 	}
 }
 
 func NewFileBoom(client *httpx.Client) *Keep2Share {
 	return &Keep2Share{
-		hostSet: hostSet{"fboom.me"},
-		client:  client.WithTimeout(config.Keep2ShareRequestTimeout),
-		api:     "https://fboom.me/api/v2",
-		files:   "https://api.fboom.me/v1/files",
-		label:   "FileBoom",
-		pace:    fileBoomPace,
+		client: client.WithTimeout(config.Keep2ShareRequestTimeout),
+		api:    "https://fboom.me/api/v2",
+		files:  "https://api.fboom.me/v1/files",
+		label:  "FileBoom",
+		pace:   fileBoomPace,
 	}
 }
 
 func (k *Keep2Share) Name() string { return k.pace.Group }
+
+// keep2ShareShape is a file link, /file/<id>, with or without the filename
+// the site appends.
+var keep2ShareShape = pathShape(`^/file/[A-Za-z0-9_-]+(/[^/]*)?/?$`)
+
+// The web app shell both services serve for every file link: the entry
+// bundle and the client chunk it preloads, mounted on #root.
+const (
+	keep2ShareEntryScript = "/static/js/entry-index-"
+	keep2ShareClientChunk = "/static/js/chunk-client-"
+)
+
+// Recognises is the inventory's description.
+func (k *Keep2Share) Recognises() string {
+	return "file links (`/file/<id>`) whose page is the " + k.label +
+		" web app shell (its `entry-index` bundle and `chunk-client` preload on `#root`), named " + k.label
+}
+
+// Shape reports a file link.
+func (k *Keep2Share) Shape(u *url.URL) bool { return keep2ShareShape(u) }
+
+// Recognise takes a file link served by the service's app shell. The file
+// is described by the API and nothing of it is in the page, deleted or not,
+// so the shell is what is checked — its entry bundle and client chunk — and
+// then the name, which is the one thing that tells the two services apart:
+// they serve the same app.
+func (k *Keep2Share) Recognise(_ context.Context, p *Page) bool {
+	return keep2ShareShape(p.Final) && p.Script(keep2ShareEntryScript) &&
+		p.Has(keep2ShareClientChunk, `id="root"`) && p.Named(k.label)
+}
 
 var keep2SharePace = Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
 var fileBoomPace = Pace{Streams: 1, Files: 1, Group: "fileboom", PerRoute: true}
@@ -617,7 +644,8 @@ func (k *Keep2Share) captchaImage(ctx context.Context, raw string) ([]byte, erro
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, k.errorf("invalid CAPTCHA URL")
 	}
-	if u.Scheme == "http" && k.Match(u) {
+	if api, err := url.Parse(k.api); err == nil && u.Scheme == "http" && api.Scheme == "https" &&
+		util.HostMatches(u.Host, api.Hostname()) {
 		u.Scheme = "https"
 	}
 	req, err := k.client.NewRequest(ctx, http.MethodGet, u.String(), nil)

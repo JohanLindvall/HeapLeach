@@ -38,8 +38,8 @@ import (
 // that same stored file. See imagePondDirect.
 //
 // A link to the media host itself — media.imagepond.net/… — is the stored
-// file, and is taken as given: Match claims that host along with the site,
-// since one is a subdomain of the other, so nothing else would handle it.
+// file, and is taken as given when it reaches Extract; through the registry
+// such a link is a plain file and the direct fallback downloads it.
 //
 // Albums (/a/<code>) are served whole and server-side, so one fetch names
 // every item. What that page does *not* carry is the media: each card links
@@ -49,7 +49,6 @@ import (
 // Profile pages are still not handled: those render their listing
 // client-side, so the delivered HTML names none of the items.
 type ImagePond struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -71,10 +70,80 @@ const (
 
 // NewImagePond builds the imagepond extractor.
 func NewImagePond(client *httpx.Client) *ImagePond {
-	return &ImagePond{hostSet: hostSet{"imagepond.net"}, client: client}
+	return &ImagePond{client: client}
 }
 
 func (i *ImagePond) Name() string { return "imagepond" }
+
+// imagePondItemShape is a viewer page, /i/<code>; imagePondAlbumShape an
+// album, /a/<code>.
+var (
+	imagePondItemShape  = pathShape(`^/i/[^/]+/?$`)
+	imagePondAlbumShape = pathShape(`^/a/[^/]+/?$`)
+	// imagePondItemPath is a viewer page's path, which album cards link to.
+	imagePondItemPath = regexp.MustCompile(`^/i/[^/]+$`)
+	// imagePondMediaPath is a stored file's path on the media host, or the
+	// site's /i/<code>/direct route to one.
+	imagePondMediaPath = regexp.MustCompile(`^/media/(images|videos)/[^/]+$|^/i/[^/]+/direct$`)
+)
+
+// Recognises is the inventory's description.
+func (i *ImagePond) Recognises() string {
+	return "viewer pages (`/i/<code>`) naming their stored file (`/media/…`, `/i/<code>/direct`) in the player " +
+		"or og:video/og:image, and albums (`/a/<code>`) of cards linking to viewer pages, on pages named ImagePond"
+}
+
+// Shape reports a viewer page or an album.
+func (i *ImagePond) Shape(u *url.URL) bool { return imagePondItemShape(u) || imagePondAlbumShape(u) }
+
+// Recognise reads the places Extract takes the file from — the player
+// element, then og:video and og:image — for a link of the stored file's
+// form, and an album's cards for a link to a viewer page. The site's name is
+// required beside them, since a viewer path and a /media/ path are common.
+func (i *ImagePond) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	if root == nil || !p.Named("ImagePond") {
+		return false
+	}
+	pathOf := func(raw string) string {
+		u, err := p.Final.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return ""
+		}
+		return u.Path
+	}
+	switch {
+	case imagePondItemShape(p.Final):
+		for _, key := range []string{"og:video", "og:image"} {
+			if imagePondMediaPath.MatchString(pathOf(metaContent(root, key))) {
+				return true
+			}
+		}
+		return findFirst(root, func(n *html.Node) bool {
+			return (isElem(n, atom.Video) || isElem(n, atom.Source)) &&
+				(imagePondMediaPath.MatchString(pathOf(attr(n, "data-src"))) || imagePondMediaPath.MatchString(pathOf(attr(n, "src"))))
+		}) != nil
+	case imagePondAlbumShape(p.Final):
+		return findFirst(root, func(a *html.Node) bool {
+			if !isElem(a, atom.A) {
+				return false
+			}
+			for _, raw := range []string{attr(a, ":href"), attr(a, "href")} {
+				candidates := []string{raw}
+				for _, m := range imagePondQuoted.FindAllStringSubmatch(raw, -1) {
+					candidates = append(candidates, m[1])
+				}
+				for _, c := range candidates {
+					if c != "" && imagePondItemPath.MatchString(pathOf(c)) {
+						return true
+					}
+				}
+			}
+			return false
+		}) != nil
+	}
+	return false
+}
 
 // Extract resolves a viewer page (/i/<code>), an album (/a/<code>), or a link
 // to the stored file itself.
@@ -142,7 +211,7 @@ func (i *ImagePond) item(ctx context.Context, u *url.URL, code string) (*Result,
 // name the page states. Shared by the single-item route and an album's
 // per-item resolver, which need exactly the same hop.
 func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (link, name string, err error) {
-	doc, err := i.client.GetString(ctx, u.String(), httpx.Referer(imagePondRoot+"/"))
+	doc, _, err := fetchDocument(ctx, i.client, u, httpx.Referer(imagePondRoot+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("imagepond: fetch %s: %w", u.Redacted(), err)
 	}
@@ -200,7 +269,7 @@ func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (lin
 // doing that fetch per item at download time beats doing every one of them
 // before the first byte moves.
 func (i *ImagePond) album(ctx context.Context, u *url.URL, code string) (*Result, error) {
-	doc, err := i.client.GetString(ctx, u.String(), httpx.Referer(imagePondRoot+"/"))
+	doc, _, err := fetchDocument(ctx, i.client, u, httpx.Referer(imagePondRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("imagepond: fetch %s: %w", u.Redacted(), err)
 	}

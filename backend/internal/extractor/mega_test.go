@@ -12,7 +12,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -299,17 +298,26 @@ func TestMegaFieldToleratesNonStrings(t *testing.T) {
 	}
 }
 
-func TestMegaMatch(t *testing.T) {
+func TestMegaRecognise(t *testing.T) {
 	m := NewMega(nil)
-	for _, host := range []string{"mega.nz", "www.mega.nz", "mega.co.nz"} {
-		u := &url.URL{Scheme: "https", Host: host, Path: "/file/AAAAAAAA"}
-		if !m.Match(u) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if m.Match(&url.URL{Scheme: "https", Host: "notmega.nz"}) {
-		t.Error("a lookalike host was matched")
-	}
+	shell := `<html><head><title>File on MEGA</title></head><body id="bodyel">` +
+		`<script src="/secureboot.js?r=1"></script><div id="mainlayout"><div id="fmholder"></div></div></body></html>`
+	link := "https://share.example.test/file/AAAAAAAA#" + strings.Repeat("k", 43)
+	expectRecognised(t, m, htmlPage(t, link, shell), true)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/folder/BBBBBBBB#"+strings.Repeat("k", 22), shell), true)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/#F!BBBBBBBB!"+strings.Repeat("k", 22), shell), true)
+	// The right form and the name, but not the client's boot shell.
+	expectRecognised(t, m, htmlPage(t, link, `<html><head><title>File on MEGA</title></head><body></body></html>`), false)
+	// The shell, but not a link of its form.
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/register", shell), false)
+	expectRecognised(t, m, htmlPage(t, link, `<html><title>A blog</title></html>`), false)
+
+	expectShape(t, m, link, true)
+	expectShape(t, m, "https://share.example.test/embed/AAAAAAAA", true)
+	expectShape(t, m, "https://share.example.test/#!AAAAAAAA!key", true)
+	expectShape(t, m, "https://share.example.test/file/AAAAAAAA/extra", false)
+	expectShape(t, m, "https://share.example.test/", false)
+	expectShape(t, m, "https://share.example.test/about#section", false)
 }
 
 // megaTestAPI serves mega's API from answer, which is given each command and

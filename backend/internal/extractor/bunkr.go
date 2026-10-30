@@ -42,14 +42,42 @@ func NewBunkr(client *httpx.Client) *Bunkr { return &Bunkr{client: client} }
 
 func (b *Bunkr) Name() string { return "bunkr" }
 
-// Match accepts any host whose registrable name starts with "bunkr", which
-// covers the domain rotation without needing a hard-coded list.
-func (b *Bunkr) Match(u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
-	for label := range strings.SplitSeq(host, ".") {
-		if strings.HasPrefix(label, "bunkr") {
-			return true
-		}
+// bunkrFileShape is a file page: /f/<slug>, and the /v/ viewer older links
+// use. bunkrAlbumShape is an album, /a/<slug>.
+var (
+	bunkrFileShape  = pathShape(`^/[fv]/[^/]+/?$`)
+	bunkrAlbumShape = pathShape(`^/a/[^/]+/?$`)
+)
+
+// Recognises is the inventory's description.
+func (b *Bunkr) Recognises() string {
+	return "file pages (`/f/<slug>`) carrying a numeric `data-file-id`, and albums (`/a/<slug>`) " +
+		"listing `theItem` cards that link to file pages"
+}
+
+// Shape reports a file page or an album.
+func (b *Bunkr) Shape(u *url.URL) bool { return bunkrFileShape(u) || bunkrAlbumShape(u) }
+
+// Recognise reads what Extract goes on to read. A file page must carry the
+// numeric file id the metadata endpoint is asked about; an album must list
+// at least one card linking to a file page. The site moves between domains
+// often enough that these, rather than any name, are what identify it.
+func (b *Bunkr) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	if root == nil {
+		return false
+	}
+	switch {
+	case bunkrFileShape(p.Final):
+		return findFirst(root, func(n *html.Node) bool {
+			return n.Type == html.ElementNode && attr(n, "data-file-id") != ""
+		}) != nil
+	case bunkrAlbumShape(p.Final):
+		return findFirst(root, func(n *html.Node) bool {
+			return hasClass(n, "theItem") && findFirst(n, func(a *html.Node) bool {
+				return isElem(a, atom.A) && isBunkrFilePage(resolveRef(p.Final, attr(a, "href")))
+			}) != nil
+		}) != nil
 	}
 	return false
 }
@@ -191,7 +219,7 @@ func (b *Bunkr) albumPage(ctx context.Context, u *url.URL, page int) (*html.Node
 	}
 	target.RawQuery = query.Encode()
 
-	doc, err := b.client.GetString(ctx, target.String(), httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, b.client, &target, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("bunkr: fetch album page %d: %w", page, err)
 	}
@@ -304,7 +332,7 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 // pageInfo scrapes a file page for its numeric id, display name and the
 // download host that serves it.
 func (b *Bunkr) pageInfo(ctx context.Context, u *url.URL) (id, name, dlHost string, err error) {
-	doc, err := b.client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return "", "", "", fmt.Errorf("bunkr: fetch %s: %w", u.Redacted(), err)
 	}

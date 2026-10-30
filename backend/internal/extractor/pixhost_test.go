@@ -110,3 +110,23 @@ func TestPixhostFullImage(t *testing.T) {
 		}
 	}
 }
+
+func TestPixhostRecognise(t *testing.T) {
+	p := NewPixhost(nil)
+	gallery := `<html><head><title>Example Gallery - Images</title></head><body>` +
+		`<a href="/show/1/1_first.jpg"><img src="https://t1.example.test/thumbs/1/1_first.jpg"></a></body></html>`
+	viewer := `<html><head><title>first.jpg - Images</title></head><body>` +
+		`<img id="image" src="https://img1.example.test/images/1/1_first.jpg"></body></html>`
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/gallery/abc12", gallery), true)
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/show/1/1_first.jpg", viewer), true)
+	// The form and a title, without the thumbnails or the image element.
+	plain := `<html><head><title>Example Gallery - Images</title></head><body><img src="/logo.png"></body></html>`
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/gallery/abc12", plain), false)
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/show/1/1_first.jpg", plain), false)
+	// The markers on a page of another form.
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/", gallery), false)
+	expectShape(t, p, "https://images.example.test/gallery/abc12", true)
+	expectShape(t, p, "https://images.example.test/show/1/1_first.jpg", true)
+	expectShape(t, p, "https://images.example.test/show/1", false)
+	expectShape(t, p, "https://images.example.test/gallery/", false)
+}

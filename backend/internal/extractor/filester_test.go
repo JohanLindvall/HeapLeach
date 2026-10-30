@@ -65,27 +65,24 @@ func TestFilesterSignsAtDownloadTime(t *testing.T) {
 	}
 }
 
-func TestFilesterMatch(t *testing.T) {
+func TestFilesterRecognise(t *testing.T) {
 	f := NewFilester(nil)
-	for raw, want := range map[string]bool{
-		"https://filester.si/d/AbC123x":     true,
-		"https://filester.me/d/AbC123x":     true,
-		"https://filester.gg/d/AbC123x":     true,
-		"https://www.filester.sh/d/AbC123x": true,
-		// The domain has moved before and will again.
-		"https://filester.example/d/AbC123x":           true,
-		"https://filester.example/f/folder":            true,
-		"https://www.filester.example/f/folder?page=2": true,
-		"https://filester.example/f/":                  false,
-		"https://notfilester.example/f/folder":         false,
-		"https://filester.si/":                         false,
-		"https://filester.si/api-docs":                 false,
-		"https://notfilester.si/d/AbC123x":             false,
-		"https://filester.si.example/x":                false,
-	} {
-		u, _ := url.Parse(raw)
-		if got := f.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
+	file := `<html><head><title>first.png | Files</title></head><body><button id="downloadButton">Download</button>` +
+		`<script src="/js/file_dl.js?ver=1"></script></body></html>`
+	folder := `<html><head><title>Example | Files</title></head><body>` +
+		`<div class="file-card" onclick="window.location.href='/d/AbC123x'">first.png</div></body></html>`
+	locked := `<html><body><form id="password-form" method="post"><input name="nonce" value="n"></form></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/d/AbC123x", file), true)
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/f/folder", folder), true)
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/f/folder", locked), true)
+	// The form and a title, without the download script or the folder's cards.
+	plain := `<html><head><title>first.png | Files</title></head><body><button id="downloadButton">Download</button></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/d/AbC123x", plain), false)
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/f/folder", plain), false)
+	// The markers on a page of another form.
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/api-docs", file), false)
+	expectShape(t, f, "https://share.example.test/d/AbC123x", true)
+	expectShape(t, f, "https://share.example.test/f/folder?page=2", true)
+	expectShape(t, f, "https://share.example.test/f/", false)
+	expectShape(t, f, "https://share.example.test/", false)
 }
