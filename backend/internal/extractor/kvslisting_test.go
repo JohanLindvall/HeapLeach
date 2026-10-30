@@ -11,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // A listing that pages in script, as a search does on every install seen
@@ -158,7 +156,7 @@ func TestKVSSearchResolvesEveryPageOfResults(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	k := NewKVS(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	k := NewKVS(testClient())
 	u := mustParse(t, srv.URL+"/search/some-query/3/")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -261,7 +259,7 @@ func TestKVSListingPagesEnds(t *testing.T) {
 			defer srv.Close()
 			l := kvsListingForPage(srv.URL + "/list/")
 			l.limit = tc.limit
-			pages, title, note, err := kvsListingWalk(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), l)
+			pages, title, note, err := kvsListingWalk(context.Background(), testClient(), l)
 			if err != nil || len(pages) != tc.want || title != "Example" || note != tc.note {
 				t.Fatalf("pages=%d title=%q note=%q err=%v, want %d, %q", len(pages), title, note, err, tc.want, tc.note)
 			}

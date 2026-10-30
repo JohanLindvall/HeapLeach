@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -466,10 +465,7 @@ func peerTubePlaylistURL(video *peerTubeVideo) string {
 // which is the site's own convention and the only thing distinguishing two
 // downloads of one video at different qualities.
 func peerTubeFileName(title string, candidate peerTubeCandidate) string {
-	ext := path.Ext(util.NameFromURL(candidate.URL))
-	if ext == "" {
-		ext = ".mp4"
-	}
+	ext := linkExtAsIs(candidate.URL, ".mp4")
 	if candidate.Label == "" {
 		return title + ext
 	}
@@ -517,7 +513,7 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 	if len(files) == 0 {
 		return nil, noneRead(peerTubeLabel, len(ids), "videos", u.Redacted(), refusals, failed)
 	}
-	return &Result{Title: title, Files: files, Note: note}, nil
+	return &Result{Title: title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
 }
 
 // peerTubeOwnerName reads the display name of the channel, account or

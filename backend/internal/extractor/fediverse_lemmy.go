@@ -125,12 +125,11 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget, opts O
 	// page numbers with a cursor, and an instance that ignores a parameter
 	// it no longer knows hands back the first page again, which adds
 	// nothing and so ends the walk. Most posts may be text, so the file cap
-	// is counted in files (fediTimeline).
-	postKey := func(view lemmyPostView) string { return strconv.FormatInt(view.Post.ID, 10) }
-	timeline := newFediTimeline(opts, postKey, lemmyFiles)
+	// is counted in files (weigh).
 	views, note, err := walkPages(ctx, pageWalk[lemmyPostView]{
-		key:   postKey,
-		limit: -1, pages: config.MaxTimelinePages,
+		key:   func(view lemmyPostView) string { return strconv.FormatInt(view.Post.ID, 10) },
+		limit: opts.maxFiles(), limitNote: "partial — file limit", pages: config.MaxTimelinePages,
+		weigh: func(views []lemmyPostView) int { return len(lemmyFiles(views)) },
 		fetch: func(ctx context.Context, n int) (pageOf[lemmyPostView], error) {
 			query := url.Values{}
 			query.Set(key, t.handle)
@@ -147,7 +146,7 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget, opts O
 			if len(payload.Posts) == 0 {
 				return pageOf[lemmyPostView]{end: true}, nil
 			}
-			return timeline.page(payload.Posts, true), nil
+			return pageOf[lemmyPostView]{items: payload.Posts, next: true}, nil
 		},
 	})
 	if err != nil {

@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -392,7 +391,7 @@ func TestFediverseRefusesAHostThatIsNotAnInstance(t *testing.T) {
 // nodeinfo names its software, and nothing else.
 func TestFediverseRecognise(t *testing.T) {
 	srv := fediServer(t, "mastodon", nil)
-	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFediverse(testClient())
 
 	page := htmlPage(t, srv.URL+"/@alice", `<html><head><title>Alice</title></head></html>`)
 	for range 2 {
@@ -813,7 +812,7 @@ func readBody(r *http.Request) []byte {
 // fediExtract runs the extractor against a synthetic instance.
 func fediExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
-	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFediverse(testClient())
 	u := mustParse(t, srv.URL+path)
 	if !f.Shape(u) {
 		t.Fatalf("%s is not of a fediverse form", u)
@@ -887,7 +886,7 @@ func TestFediverseTimelineStopsAtTheFileCap(t *testing.T) {
 		}
 		return true
 	})
-	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFediverse(testClient())
 	opts := Options{limits: Limits{Files: fediMastodonPageSize + 10}}
 	res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/@alice"), opts)
 	if err != nil {

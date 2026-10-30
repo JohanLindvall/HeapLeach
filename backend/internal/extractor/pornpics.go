@@ -215,62 +215,31 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 			return pageOf[string]{items: links, next: true, end: len(links) == 0}, err
 		},
 	})
-	files, refusals, failed := p.expand(ctx, links)
-	if len(files) > opts.maxFiles() {
-		files, note = pornpicsTrim(files, opts.maxFiles()), joinNotes(note, "partial — file limit")
-	}
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead("pornpics", len(links), "galleries", u.Redacted(), refusals, failed)
-	}
-	return &Result{Title: pornpicsTitle(root, u), Files: files, Note: note}, nil
-}
-
-// pornpicsTrim cuts a listing down to the file ceiling on a gallery boundary.
-//
-// Only the search endpoint can reach that ceiling — the other route stops
-// itself at a thousand galleries — but when it does, half a gallery is worse
-// than one gallery fewer: a folder holding an arbitrary prefix of its pictures
-// looks like a finished download and is not. The files of one gallery arrive
-// together and share a Dir, so the boundary is where that changes.
-func pornpicsTrim(files []File, ceiling int) []File {
-	if len(files) <= ceiling {
-		return files
-	}
-	cut := ceiling
-	for cut > 0 && files[cut].Dir == files[cut-1].Dir {
-		cut--
-	}
-	if cut == 0 {
-		return files[:ceiling] // one gallery larger than the whole ceiling
-	}
-	return files[:cut]
-}
-
-// expand opens every gallery a listing named, several at a time.
-//
-// Each gallery's own title becomes the subdirectory rather than a prefix on
-// each name: one category resolves to hundreds of galleries and thousands of
-// images, and the CDN's filenames carry the gallery's id but nothing a person
-// would recognise it by. A gallery that will not open leaves the rest
-// (resolveFiles), and why comes back beside the files for when none did.
-func (p *PornPics) expand(ctx context.Context, links []string) ([]File, []string, error) {
-	return resolveFiles(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+	// Every gallery is opened, several at a time, into a folder named after
+	// its own title rather than a prefix on each name: one category resolves
+	// to hundreds of galleries and thousands of images, and the CDN's
+	// filenames carry the gallery's id but nothing a person would recognise
+	// it by. The expansion takes a gallery whole or not at all, since a
+	// folder holding an arbitrary prefix of its pictures looks like a
+	// finished download and is not; a gallery that will not open leaves the
+	// rest, and why comes back for when none did.
+	e := expandSourcesWith(ctx, links, opts, func(ctx context.Context, link string) (*Result, error) {
 		u, err := ParseURL(link)
 		if err != nil {
 			return nil, err
 		}
-		res, err := p.gallery(ctx, u)
-		if err != nil {
+		return p.gallery(ctx, u)
+	})
+	if len(e.files) == 0 {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		for i := range res.Files {
-			res.Files[i].Dir = sourceFolder(res.Title)
-		}
-		return res.Files, nil
-	})
+		return nil, noneRead("pornpics", len(links), "galleries", u.Redacted(), e.refusals, e.failed)
+	}
+	if e.full {
+		note = joinNotes(note, "partial — file limit")
+	}
+	return &Result{Title: pornpicsTitle(root, u), Files: e.files, Note: note}, nil
 }
 
 // block fetches one page of a listing and reads the galleries out of it.

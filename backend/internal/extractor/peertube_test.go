@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -343,7 +342,7 @@ func TestPeerTubeRecogniseAskingTheAPI(t *testing.T) {
 		_, _ = io.WriteString(w, `{"serverVersion":"7.0.0"}`)
 	}))
 	t.Cleanup(srv.Close)
-	p := NewPeerTube(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	p := NewPeerTube(testClient())
 	botCheck := htmlPage(t, srv.URL+"/w/aaaaaaaaaaaaaaaaaaaaaa",
 		`<html><head><title>Making sure you are not a bot</title><script src="/.within.website/x/main.mjs"></script></head></html>`)
 	for range 2 {
@@ -419,7 +418,7 @@ func TestPeerTubeListVideosPagesToTheStatedTotal(t *testing.T) {
 		_, _ = io.WriteString(w, `{"total":3,"data":[`+rows+`]}`)
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 
 	ids, note, err := peerTubeListVideos(context.Background(), client, srv.URL+"/videos", nil, "channel", Options{})
 	if err != nil || strings.Join(ids, ",") != "a,b,c" || note != "" || strings.Join(starts, ",") != "0,2" {
@@ -647,12 +646,40 @@ func TestPeerTubeListingSaysWhyNoVideoCouldBeRead(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	u, _ := url.Parse(srv.URL + "/c/someone")
 
 	_, err := peerTubeListingResult(context.Background(), client, u, "/video-channels/someone", "channel", Options{})
 	if err == nil || !strings.Contains(err.Error(), "none of the 2 videos") ||
 		!strings.Contains(err.Error(), `"Live Now" is a live stream`) {
 		t.Fatalf("err = %v, want the live stream named as the reason", err)
+	}
+}
+
+// TestPeerTubeListingNotesWhatItLeftOut: a channel some of whose videos
+// refuse keeps the rest, and its note says how many were left out and why.
+func TestPeerTubeListingNotesWhatItLeftOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/video-channels/someone/videos":
+			_, _ = io.WriteString(w, `{"total":2,"data":[{"uuid":"a"},{"uuid":"b"}]}`)
+		case "/api/v1/videos/a":
+			_, _ = io.WriteString(w, `{"name":"Live Now","isLive":true,"state":{"id":4,"label":"Waiting for livestream"}}`)
+		case "/api/v1/videos/b":
+			_, _ = io.WriteString(w, peerTubeBothListsVideo)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL + "/c/someone")
+
+	res, err := peerTubeListingResult(context.Background(), testClient(), u, "/video-channels/someone", "channel", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || !strings.HasPrefix(res.Note, "1 left out: ") ||
+		!strings.Contains(res.Note, `"Live Now" is a live stream`) {
+		t.Errorf("%d files, note %q; want the one video and the live stream named as left out", len(res.Files), res.Note)
 	}
 }

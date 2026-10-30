@@ -33,6 +33,7 @@ video shows no thumbnail there at all. So every post is opened, through
 listing following its next links: the listing states no length, so a later
 page that fails or adds nothing ends it without a note. Every post costs a
 request, so the walk is held to `listingLimit` and says so when it cuts.
+Posts the site refused are counted in the note (`refusedNote`).
 
 ## celeb.st
 
@@ -44,7 +45,7 @@ recommendations are separate. URLs are base64 plus repeating XOR, as decoded
 by the site's player, and the resulting image endpoint is stable rather than
 signed. File names use the image id and extension, since the URL's basename is
 an opaque token. A pasted later gallery page starts from page one, and the
-walk follows the page count the first page states. A gallery that comes back
+walk ends on the page count the first page states (`pageOf.pages`). A gallery that comes back
 short of the creator's stated image count — a cap, a repeated page, a later
 page that failed — says "N of M images" in `Result.Note` beside the walk's own
 note for what stopped it, leaving the creator's folder name stable.
@@ -92,14 +93,19 @@ dropping it walks the default tab instead and quietly returns the wrong set at
 the right-looking count. And albums are foldered by title, which is not
 unique: two albums sharing a title would collide into one folder, which looks
 like lost files that did in fact download. `eromeFolders` appends the album id
-only to titles that actually repeat, so the ordinary case keeps clean names. A
+only to titles that actually repeat, so the ordinary case keeps clean names.
+Its form, "title id" compared case for case, predates the shared
+`sourceFolders` ("title [id]", case-blind) and is kept through
+`expandSourcesNamed`, since changing it would rename every repeated album
+already downloaded. A
 walk that hits a rate limit it cannot outwait returns what it got, and its
 `failed` hook marks the job "partial — rate limited" rather than letting it
 pass for complete; the mark is a note, not part of the title, so the folder
 stays put. The profile is a quiet, numbered `walkListing`: any other failed
 page is the end of the profile. Every album costs a request of its own, so
-the albums are held to `listingLimit`. They are read through
-`resolveOutcomes`, which keeps a failed album's reason, so a profile none of
+the albums are held to `listingLimit`. They are expanded like any other
+sources (`expandSourcesNamed`): taken whole up to the file cap, which is
+noted where it cuts, with a failed album's reason kept, so a profile none of
 whose albums holds anything says why (`noneRead`).
 
 ## rajce
@@ -137,7 +143,8 @@ its one release. Each release of a discography is a page to read, so a
 catalogue is read as far as `config.MaxResolvedReleases` releases, the note
 saying what that left out, and the registry holds the tracks to the user's
 file cap. The releases are read through `resolveFiles` (`resolve.go`); when
-none can be, `noneRead` gives the first reason.
+none can be, `noneRead` gives the first reason, and releases refused beside
+others that resolved are counted in the note (`refusedNote`).
 
 ## bandzoogle
 

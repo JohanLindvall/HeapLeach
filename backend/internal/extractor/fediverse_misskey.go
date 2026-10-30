@@ -127,11 +127,10 @@ func (f *Fediverse) misskeyLookup(ctx context.Context, root, handle string) (*mi
 // timeline's does — at an empty page, a page that adds nothing, or a cap.
 func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string, opts Options) ([]misskeyNote, string, error) {
 	until := ""
-	key := func(note misskeyNote) string { return note.ID }
-	timeline := newFediTimeline(opts, key, misskeyFiles)
 	return walkPages(ctx, pageWalk[misskeyNote]{
-		key:   key,
-		limit: -1, pages: config.MaxTimelinePages,
+		key:   func(note misskeyNote) string { return note.ID },
+		limit: opts.maxFiles(), limitNote: "partial — file limit", pages: config.MaxTimelinePages,
+		weigh: func(notes []misskeyNote) int { return len(misskeyFiles(notes)) },
 		fetch: func(ctx context.Context, _ int) (pageOf[misskeyNote], error) {
 			body := struct {
 				UserID    string `json:"userId"`
@@ -148,7 +147,7 @@ func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string, op
 				return pageOf[misskeyNote]{end: true}, nil
 			}
 			until = batch[len(batch)-1].ID
-			return timeline.page(batch, until != ""), nil
+			return pageOf[misskeyNote]{items: batch, next: until != ""}, nil
 		},
 	})
 }

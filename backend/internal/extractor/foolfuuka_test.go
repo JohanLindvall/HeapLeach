@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -544,6 +545,17 @@ func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *foolFuukaArchive 
 	}
 }
 
+// foolFuukaUnderTest drives a fixture's archive through the extraction
+// helpers, which call nothing but Extract.
+type foolFuukaUnderTest struct {
+	Extractor
+	archive *foolFuukaArchive
+}
+
+func (f foolFuukaUnderTest) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	return f.archive.Extract(ctx, u, opts)
+}
+
 // foolFuukaSearchPage renders one page of results, numbered from base.
 func foolFuukaSearchPage(base int) string {
 	var posts []string
@@ -555,6 +567,33 @@ func foolFuukaSearchPage(base int) string {
 			"media_size":"100","media_status":"normal"}}`, num, num, num))
 	}
 	return `{"0":{"posts":[` + strings.Join(posts, ",") + `]},"meta":{"total_found":9}}`
+}
+
+// TestFoolFuukaSearchCountsTheCapInFiles walks past posts that carry no
+// file: the cap counts attachments, so a search whose first page is all text
+// still reaches the files after it, and the page that passes the cap is
+// noted.
+func TestFoolFuukaSearchCountsTheCapInFiles(t *testing.T) {
+	var pages int
+	f := foolFuukaFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("page") {
+		case "1":
+			_, _ = io.WriteString(w, `{"0":{"posts":[{"num":"1","title":null},{"num":"2","title":null},{"num":"3","title":null}]}}`)
+		case "2":
+			_, _ = io.WriteString(w, foolFuukaSearchPage(100))
+		default:
+			_, _ = io.WriteString(w, foolFuukaSearchPage(200))
+		}
+	})
+
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/search/text/thing/",
+		Options{limits: Limits{Files: 2}})
+	if len(res.Files) != 3 || res.Note != "partial — file limit" || pages != 2 {
+		t.Errorf("%d files over %d pages, note %q; want the second page's 3 and the cap noted",
+			len(res.Files), pages, res.Note)
+	}
 }
 
 // TestFoolFuukaSearchStopsWhenAPageRepeats covers a listing walked past its
@@ -578,10 +617,7 @@ func TestFoolFuukaSearchStopsWhenAPageRepeats(t *testing.T) {
 		}
 	})
 
-	res, err := f.Extract(context.Background(), mustParse(t, "https://example.test/b/search/text/thing/"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/search/text/thing/", Options{})
 	if len(res.Files) != 6 {
 		t.Errorf("got %d files, want the 6 distinct ones — a repeated page was collected twice",
 			len(res.Files))
@@ -640,10 +676,7 @@ func TestFoolFuukaIndexOpensEveryThread(t *testing.T) {
 			num, num, num, num, num, num, num, num))
 	})
 
-	res, err := f.Extract(context.Background(), mustParse(t, "https://example.test/b/page/2/"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/page/2/", Options{})
 
 	var got []string
 	for _, file := range res.Files {
@@ -686,7 +719,7 @@ func TestFoolFuukaIndexSaysWhyAPageYieldedNothing(t *testing.T) {
 	if err == nil {
 		t.Fatal("a page whose every thread was refused was accepted")
 	}
-	if !strings.Contains(err.Error(), "would open") {
+	if !strings.Contains(err.Error(), "could be read") {
 		t.Errorf("error %q reads as though the threads held no files, "+
 			"when in fact none of them could be opened", err)
 	}

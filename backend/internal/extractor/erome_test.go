@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -37,7 +36,7 @@ func TestEromeAlbum(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	e := NewErome(testClient())
 	res := extractOK(t, e, srv.URL+"/a/AAAA", Options{})
 	if res.Title != "An Album" {
 		t.Errorf("title = %q, want the page's own heading", res.Title)
@@ -159,12 +158,14 @@ func TestEromeAlbumLinks(t *testing.T) {
 // holds. Only the repeats are qualified, so every other album keeps the
 // folder it has always had and a re-run skips rather than re-fetches it.
 func TestEromeFoldersDisambiguateRepeatedTitles(t *testing.T) {
-	albums := []eromeAlbum{
-		{title: "A Day Out", id: "AAAA1111"},
-		{title: "Summer Series", id: "BBBB2222"},
-		{title: "A Day Out", id: "CCCC3333"},
-		{title: "", id: "DDDD4444"},
-		{title: "A Day Out", id: "EEEE5555"},
+	albums := []sourceResult{
+		eromeResolved("A Day Out", "AAAA1111"),
+		eromeResolved("Summer Series", "BBBB2222"),
+		eromeResolved("A Day Out", "CCCC3333"),
+		eromeResolved("", "DDDD4444"),
+		eromeResolved("A Day Out", "EEEE5555"),
+		// Titles are told apart by case, as they always have been here.
+		eromeResolved("a day out", "FFFF6666"),
 	}
 	got := eromeFolders(albums)
 	want := []string{
@@ -173,6 +174,7 @@ func TestEromeFoldersDisambiguateRepeatedTitles(t *testing.T) {
 		"A Day Out CCCC3333",
 		"DDDD4444",
 		"A Day Out EEEE5555",
+		"a day out",
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -196,15 +198,20 @@ func TestEromeFoldersDisambiguateRepeatedTitles(t *testing.T) {
 // The ordinary case has to stay ordinary: a profile whose titles are all its
 // own is filed under exactly those titles.
 func TestEromeFoldersLeaveUniqueTitlesAlone(t *testing.T) {
-	albums := []eromeAlbum{
-		{title: "A Day Out", id: "AAAA1111"},
-		{title: "Summer Series", id: "BBBB2222"},
+	albums := []sourceResult{
+		eromeResolved("A Day Out", "AAAA1111"),
+		eromeResolved("Summer Series", "BBBB2222"),
 	}
 	for i, got := range eromeFolders(albums) {
-		if got != albums[i].title {
-			t.Errorf("[%d] folder = %q, want the album's own title %q", i, got, albums[i].title)
+		if got != albums[i].res.Title {
+			t.Errorf("[%d] folder = %q, want the album's own title %q", i, got, albums[i].res.Title)
 		}
 	}
+}
+
+// eromeResolved is an album as the expansion hands it to eromeFolders.
+func eromeResolved(title, id string) sourceResult {
+	return sourceResult{link: "https://www.erome.com/a/" + id, res: &Result{Title: title}}
 }
 
 // A profile page for the walk tests, whose album links name the site
@@ -227,7 +234,7 @@ func eromeWalkServer(t *testing.T, handler http.HandlerFunc) (*Erome, string) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL
+	return NewErome(testClient()), srv.URL
 }
 
 // Asking past the last page is how the walk finds the end of a profile, so
@@ -282,7 +289,7 @@ func TestEromeDeletedAlbumIsReportedPlainly(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	e := NewErome(testClient())
 	u := mustParse(t, srv.URL+"/a/AAAA")
 	_, err := e.Extract(context.Background(), u, Options{})
 	if err == nil {

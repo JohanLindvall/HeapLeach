@@ -749,10 +749,11 @@ func (p *booruPost) fileURL(site *booruSite) string {
 // filename names the saved file after the post, so results sort by id and
 // two boards never collide.
 func (p *booruPost) filename(link string) string {
-	ext := path.Ext(util.NameFromURL(link))
-	if ext == "" && p.File.Ext != "" {
+	ext := ""
+	if p.File.Ext != "" {
 		ext = "." + p.File.Ext
 	}
+	ext = linkExtAsIs(link, ext)
 	if id := p.ID.String(); id != "" {
 		return id + ext
 	}

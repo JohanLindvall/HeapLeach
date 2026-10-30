@@ -235,12 +235,6 @@ func bitchuteVideos(n int) []bitchuteVideo {
 	return out
 }
 
-func bitchuteExtract(t *testing.T, b *BitChute, raw string) *Result {
-	t.Helper()
-	res := extractOK(t, b, raw, Options{})
-	return res
-}
-
 // hostOf is the host of a link, for assertions that care which mirror served
 // it and not about the rest.
 func hostOf(t *testing.T, raw string) string {
@@ -259,7 +253,7 @@ func TestBitChuteVideoIsAnUnsignedFileOnEveryMirror(t *testing.T) {
 	stub := &bitchuteStub{}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/", Options{})
 
 	if res.Title != "A Video Called AAAABBBBCCCC" {
 		t.Errorf("title = %q, want the video's own name", res.Title)
@@ -317,7 +311,7 @@ func TestBitChuteVideoNameFallsBackToTheID(t *testing.T) {
 	stub := &bitchuteStub{noTitles: true}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://old.bitchute.com/video/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://old.bitchute.com/video/AAAABBBBCCCC/", Options{})
 
 	if res.Title != "bitchute-AAAABBBBCCCC" {
 		t.Errorf("title = %q, want the id", res.Title)
@@ -336,7 +330,7 @@ func TestBitChuteEmbedPageIsASecondRouteToTheMedia(t *testing.T) {
 	}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/embed/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://www.bitchute.com/embed/AAAABBBBCCCC/", Options{})
 
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
@@ -398,7 +392,7 @@ func TestBitChutePlaylistMediaArrivesAsSegments(t *testing.T) {
 	stub := &bitchuteStub{playlists: map[string]bool{"AAAABBBBCCCC": true}}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/", Options{})
 
 	file := res.Files[0]
 	if file.URL != "" {
@@ -421,7 +415,7 @@ func TestBitChuteChannelPagesUntilAnEmptyPage(t *testing.T) {
 	stub := &bitchuteStub{videos: bitchuteVideos(117)}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/A-Legacy-Slug/")
+	res := extractOK(t, b, "https://www.bitchute.com/channel/A-Legacy-Slug/", Options{})
 
 	if res.Title != "A Channel" {
 		t.Errorf("title = %q, want the channel's own name", res.Title)
@@ -489,7 +483,7 @@ func TestBitChuteChannelSkipsAVideoThatWillNotResolve(t *testing.T) {
 	}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/CHANNELID/")
+	res := extractOK(t, b, "https://www.bitchute.com/channel/CHANNELID/", Options{})
 
 	want := []string{"video-000.mp4", "video-001.mp4", "video-003.mp4", "video-004.mp4"}
 	if len(res.Files) != len(want) {
@@ -508,7 +502,7 @@ func TestBitChuteChannelTitleFallsBackToTheURLSegment(t *testing.T) {
 	stub := &bitchuteStub{videos: bitchuteVideos(3), noChannelName: true}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/a-legacy-slug/")
+	res := extractOK(t, b, "https://www.bitchute.com/channel/a-legacy-slug/", Options{})
 
 	if res.Title != "a-legacy-slug" {
 		t.Errorf("title = %q, want the segment from the URL", res.Title)

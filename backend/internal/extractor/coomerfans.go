@@ -255,7 +255,7 @@ func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Re
 		}
 		return nil, noneRead("coomerfans", len(links), "posts", u.Redacted(), refusals, failed)
 	}
-	return &Result{Title: title, Files: files, Note: note}, nil
+	return &Result{Title: title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
 }
 
 // postLinks walks the creator's pages for the posts they list, up to the
@@ -269,13 +269,9 @@ func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Re
 func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([]string, string, string, error) {
 	headers := httpx.Referer(coomerFansRoot + "/")
 	fallback := strings.Trim(u.Path, "/")
-	doc, _, err := fetchDocument(ctx, c.client, u, headers)
+	root, _, err := fetchRoot(ctx, c.client, u, headers)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("coomerfans: fetch %s: %w", u.String(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fallback, "", nil
 	}
 	limit, limitNote := listingLimit(opts)
 	found, title, note, err := walkListing(ctx, c.client, u, listingWalk{

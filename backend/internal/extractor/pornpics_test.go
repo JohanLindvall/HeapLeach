@@ -12,9 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // A gallery page shaped like the site's, carrying every trap that decides how
@@ -362,7 +359,7 @@ func pornpicsServer(t *testing.T) (*httptest.Server, *pornpicsSite) {
 }
 
 func testPornPics() *PornPics {
-	return NewPornPics(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	return NewPornPics(testClient())
 }
 
 func TestPornPicsExpandsASearchListingThroughTheSearchEndpoint(t *testing.T) {
@@ -434,34 +431,18 @@ func TestPornPicsExtractsASingleGallery(t *testing.T) {
 	}
 }
 
-// The ceiling exists because the search endpoint, unlike the own-path route,
-// clamps nothing: a broad enough query describes more galleries than anyone
-// meant to ask for. Where it falls matters — a folder holding some of its
-// pictures reads as a finished download.
-func TestPornPicsTrimCutsOnAGalleryBoundary(t *testing.T) {
-	var files []File
-	for _, dir := range []string{"one", "one", "two", "two", "two", "three"} {
-		files = append(files, File{Dir: dir})
-	}
+// The file cap takes a listing a gallery at a time: a folder holding some of
+// its pictures reads as a finished download, so a gallery that would cross
+// the cap is left out whole and the cut is noted.
+func TestPornPicsFileCapTakesWholeGalleries(t *testing.T) {
+	srv, _ := pornpicsServer(t)
 
-	// The ceiling falls inside "two", so "two" goes whole rather than in part.
-	got := pornpicsTrim(files, 4)
-	if len(got) != 2 || got[len(got)-1].Dir != "one" {
-		t.Errorf("trimmed to %d files ending in %q, want the two of \"one\"",
-			len(got), got[len(got)-1].Dir)
+	res := extractOK(t, testPornPics(), srv.URL+"/some-category/", Options{limits: Limits{Files: 3}})
+	if len(res.Files) != 2 || res.Files[1].Dir != "Gallery 10000001" {
+		t.Errorf("files = %v, want the first gallery's two alone", filePaths(res.Files))
 	}
-	// A ceiling that lands on a boundary already needs no moving.
-	if got := pornpicsTrim(files, 5); len(got) != 5 {
-		t.Errorf("trimmed to %d files, want 5: the ceiling was already a boundary", len(got))
-	}
-	if got := pornpicsTrim(files, 99); len(got) != len(files) {
-		t.Errorf("trimmed to %d files, want all %d", len(got), len(files))
-	}
-	// One gallery bigger than the whole ceiling has nowhere to cut back to,
-	// and must still yield something.
-	single := []File{{Dir: "one"}, {Dir: "one"}, {Dir: "one"}}
-	if got := pornpicsTrim(single, 2); len(got) != 2 {
-		t.Errorf("trimmed to %d files, want the ceiling's 2", len(got))
+	if !strings.Contains(res.Note, "partial — file limit") {
+		t.Errorf("note = %q, want the file cap admitted", res.Note)
 	}
 }
 

@@ -9,9 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // coomerFansPostPage is a post carrying one image and one video, in the shape
@@ -184,7 +181,7 @@ func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
 				http.NotFound(w, r)
 			}))
 			defer srv.Close()
-			c := NewCoomerFans(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+			c := NewCoomerFans(testClient())
 			links, title, note, err := c.postLinks(context.Background(), mustParse(t, srv.URL+"/u/onlyfans/1/a-creator"), tc.opts)
 			if err != nil || title != "a-creator" || len(links) != len(tc.want) || note != tc.note {
 				t.Fatalf("links=%v title=%q note=%q err=%v", links, title, note, err)

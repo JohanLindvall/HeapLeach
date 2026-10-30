@@ -232,7 +232,7 @@ func TestBandcampDiscographyReadsEachRelease(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	b := NewBandcamp(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	b := NewBandcamp(testClient())
 
 	res := extractOK(t, b, srv.URL+"/", Options{})
 	if len(res.Files) != 3 || res.Title != "A Band" || res.Note != "" {

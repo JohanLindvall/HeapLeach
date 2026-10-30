@@ -153,14 +153,13 @@ func (f *Fediverse) mastodonLookup(ctx context.Context, root, handle string) (*m
 // is what keeps that cap spent on posts there is something to fetch from
 // rather than on a year of conversation. A page after the first that fails
 // is not fatal: what has already been collected is still worth queueing.
-// The walk stops sooner at the user's file cap (fediTimeline).
+// The walk stops sooner at the user's file cap, counted in files (weigh).
 func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string, pixelfed bool, opts Options) ([]mastodonStatus, string, error) {
 	until := ""
-	key := func(status mastodonStatus) string { return status.ID }
-	timeline := newFediTimeline(opts, key, mastodonFiles)
 	return walkPages(ctx, pageWalk[mastodonStatus]{
-		key:   key,
-		limit: -1, pages: config.MaxTimelinePages,
+		key:   func(status mastodonStatus) string { return status.ID },
+		limit: opts.maxFiles(), limitNote: "partial — file limit", pages: config.MaxTimelinePages,
+		weigh: func(statuses []mastodonStatus) int { return len(mastodonFiles(statuses)) },
 		fetch: func(ctx context.Context, _ int) (pageOf[mastodonStatus], error) {
 			batch, err := f.mastodonStatuses(ctx, root, accountID, until, pixelfed)
 			if err != nil {
@@ -170,7 +169,7 @@ func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string
 				return pageOf[mastodonStatus]{end: true}, nil
 			}
 			until = batch[len(batch)-1].ID
-			return timeline.page(batch, until != ""), nil
+			return pageOf[mastodonStatus]{items: batch, next: until != ""}, nil
 		},
 	})
 }

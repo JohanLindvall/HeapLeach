@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -264,7 +263,7 @@ func TestImgurListingEntriesStop(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"data":[` + body + `]}`))
 		}))
-		i := NewImgur(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+		i := NewImgur(testClient())
 		entries, note, err := i.listingEntries(t.Context(), nil, srv.URL, "/t/cats", Options{limits: Limits{Sources: tc.limit}})
 		srv.Close()
 		if err != nil || len(entries) != tc.rows || note != tc.note {
@@ -376,7 +375,7 @@ func TestImgurRecognisesAListingByItsJSON(t *testing.T) {
 		_, _ = w.Write([]byte(imgurListingShell))
 	}))
 	defer srv.Close()
-	i := NewImgur(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	i := NewImgur(testClient())
 	shell := strings.Replace(imgurListingShell, "<title>", `<meta property="og:site_name" content="Imgur"><title>`, 1)
 	p := htmlPage(t, srv.URL+"/user/someone", shell)
 	for range 2 {
