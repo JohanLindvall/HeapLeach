@@ -170,28 +170,29 @@ func noodleCards(root *html.Node, page, _ *url.URL) listingPage {
 			break
 		}
 	}
-	p.next, p.note = noodleNext(root, page)
+	p.next, p.badNext = noodleNext(root, page)
 	return p
 }
 
 // The "more" control supplies the zero-based page index. GET renders the
 // same results as the player's POST, with a fresh pager; preserve the search
 // path's escaping and every filter when advancing it.
-func noodleNext(root *html.Node, page *url.URL) (*url.URL, string) {
+// A control naming any page but the next one is an invalid next page.
+func noodleNext(root *html.Node, page *url.URL) (next *url.URL, invalid bool) {
 	control := findFirst(root, func(n *html.Node) bool {
 		return hasClass(n, "more") && !hasAttr(n, "hidden") && attr(n, "data-action") == ""
 	})
 	if control == nil {
-		return nil, ""
+		return nil, false
 	}
 	query := page.Query()
 	current, _ := strconv.Atoi(query.Get("p"))
-	next, err := strconv.Atoi(attr(control, "data-page"))
-	if err != nil || next <= 0 || next != current+1 {
-		return nil, "partial — invalid next page"
+	number, err := strconv.Atoi(attr(control, "data-page"))
+	if err != nil || number <= 0 || number != current+1 {
+		return nil, true
 	}
 	link := *page
-	query.Set("p", strconv.Itoa(next))
+	query.Set("p", strconv.Itoa(number))
 	link.RawQuery = query.Encode()
-	return &link, ""
+	return &link, false
 }

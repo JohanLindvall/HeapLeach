@@ -73,21 +73,14 @@ var eromeSections = map[string]bool{
 	"dmca": true, "faq": true, "contact": true, "settings": true, "upload": true,
 }
 
-const (
-	// eromeMaxProfilePages bounds how far a profile is paged through.
-	eromeMaxProfilePages = 50
-	// eromeMaxAlbums bounds how many albums one profile expands to.
-	eromeMaxAlbums = 500
-)
-
 // Extract handles an album (/a/<id>) or a whole profile (/<user>).
-func (e *Erome) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (e *Erome) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	switch {
 	case len(segs) >= 2 && segs[0] == "a":
 		return e.album(ctx, u)
 	case len(segs) == 1 && !eromeSections[strings.ToLower(segs[0])]:
-		return e.profile(ctx, u)
+		return e.profile(ctx, u, opts)
 	default:
 		return nil, fmt.Errorf("erome: %s is neither an album nor a profile", u.Redacted())
 	}
@@ -95,8 +88,8 @@ func (e *Erome) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 
 // profile walks a user's pages and expands every album they list, filing
 // each album's media into its own folder.
-func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
-	albums, title, limited, err := e.profileAlbums(ctx, u)
+func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	albums, title, note, err := e.profileAlbums(ctx, u, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +121,7 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 		}}, nil
 	})
 
-	result := &Result{Title: title, Note: eromeProfileNote(limited)}
+	result := &Result{Title: title, Note: note}
 	folders := eromeFolders(resolved)
 	for i, album := range resolved {
 		for _, file := range album.files {
@@ -143,41 +136,48 @@ func (e *Erome) profile(ctx context.Context, u *url.URL) (*Result, error) {
 	return result, nil
 }
 
-// profileAlbums walks a profile's pages for the albums they list, and
-// reports what the walk learned along the way: the profile's own name, and
-// whether the host cut the listing short rather than the listing ending.
+// profileAlbums walks a profile's pages for the albums they list, up to the
+// listing cap, since every album costs a request of its own, and reports
+// what the walk learned along the way: the profile's own name, and the note
+// for a listing cut short rather than ended.
 //
 // Kept apart from the expansion so a fixture can stand in for the pages —
 // the expansion fetches an album apiece, which a test of the walk has no
 // business doing.
-func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string, title string, limited bool, err error) {
+func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (albums []string, title, note string, err error) {
 	headers := httpx.Referer(eromeReferer + "/")
 	first := eromeProfilePage(u, 1)
 	doc, _, err := fetchDocument(ctx, e.client, &first, headers)
 	if err != nil {
-		return nil, "", false, fmt.Errorf("erome: fetch profile: %w", err)
+		return nil, "", "", fmt.Errorf("erome: fetch profile: %w", err)
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
-		return nil, "", false, fmt.Errorf("erome: %w", err)
+		return nil, "", "", fmt.Errorf("erome: %w", err)
 	}
 
 	// The pages are numbered rather than linked, and the walk asks for one
-	// more until a page adds nothing, the page cap or the album cap; the
-	// album cap is checked a page at a time, as it always has been.
+	// more until a page adds nothing or will not load.
 	seen := make(map[string]bool)
 	page := 1
-	found, title, _, err := walkListing(ctx, e.client, &first, listingWalk{
-		name: "erome", title: strings.Join(util.PathSegments(u), "-"), limit: -1, quiet: true, root: root,
+	limit, limitNote := listingLimit(opts)
+	found, title, note, err := walkListing(ctx, e.client, &first, listingWalk{
+		name: "erome", title: strings.Join(util.PathSegments(u), "-"), quiet: true, root: root,
+		limit: limit, limitNote: limitNote,
 		// A page that will not load is ordinarily the end of the listing:
 		// asking past the last one is how the walk learns where to stop. A
 		// rate limit is not that. The host has said come back, the client
 		// has already waited it out as far as it will go, and reading it as
 		// the end would hand back part of a profile as though it were the
-		// whole of it.
+		// whole of it. It is a note rather than part of the title because
+		// the title names the folder: a partial run filed under "(partial —
+		// rate limited)" and the complete run after it under the plain name
+		// was every file downloaded twice.
 		failed: func(err error) string {
-			limited = httpx.HasStatus(err, http.StatusTooManyRequests)
-			return eromeProfileNote(limited)
+			if httpx.HasStatus(err, http.StatusTooManyRequests) {
+				return "partial — rate limited"
+			}
+			return ""
 		},
 		fetch: fetchAsAsked(e.client, headers),
 		read: func(root *html.Node, base, _ *url.URL) listingPage {
@@ -185,36 +185,19 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string,
 			for _, link := range eromeAlbumLinks(root, base, seen) {
 				p.links = append(p.links, listingLink{key: link, url: link})
 			}
-			if page < eromeMaxProfilePages && len(seen) < eromeMaxAlbums {
-				page++
-				next := eromeProfilePage(u, page)
-				p.next = &next
-			}
+			page++
+			next := eromeProfilePage(u, page)
+			p.next = &next
 			return p
 		},
 	})
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", "", err
 	}
 	for _, link := range found {
 		albums = append(albums, link.url)
 	}
-	return albums, title, limited, nil
-}
-
-// eromeProfileNote admits a listing the host cut short, for the job's
-// Note.
-//
-// Handing back the first two pages of a profile without a word would be
-// indistinguishable from that profile having two pages. It is a note rather
-// than part of the title because the title names the folder: a partial run
-// filed under "(partial — rate limited)" and the complete run after it
-// under the plain name was every file downloaded twice.
-func eromeProfileNote(limited bool) string {
-	if !limited {
-		return ""
-	}
-	return "partial — rate limited"
+	return albums, title, note, nil
 }
 
 // eromeAlbum is one of a profile's albums, once its page has been read.
@@ -250,9 +233,9 @@ func eromeFolders(albums []eromeAlbum) []string {
 			// Nothing to disambiguate against, and the id is already unique.
 			names[i] = album.id
 		case seen[album.title] > 1:
-			names[i] = album.title + " " + album.id
+			names[i] = sourceFolder(album.title + " " + album.id)
 		default:
-			names[i] = album.title
+			names[i] = sourceFolder(album.title)
 		}
 	}
 	return names

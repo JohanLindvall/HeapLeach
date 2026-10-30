@@ -490,7 +490,7 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 	headers := peerTubeAPIHeaders(u, opts.Password)
 	base := peerTubeAPI(u) + ownerPath
 
-	ids, err := peerTubeListVideos(ctx, client, base+"/videos", headers, kind)
+	ids, note, err := peerTubeListVideos(ctx, client, base+"/videos", headers, kind, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +511,7 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // peerTubeOwnerName reads the display name of the channel, account or
@@ -530,51 +530,43 @@ func peerTubeOwnerName(ctx context.Context, client *httpx.Client, endpoint strin
 	return strings.TrimSpace(util.FirstNonEmpty(owner.DisplayName, owner.Name))
 }
 
-// peerTubeListVideos walks a paginated /videos listing for the ids it names.
+// peerTubeListVideos walks a paginated /videos listing for the ids it names,
+// to the total the listing states, or a page that comes back empty. Every
+// id listed costs a request of its own, so the listing cap bounds it.
 //
 // nsfw=both is asked for because the default is the instance's own, which on
 // most of them hides such videos — a channel would then be downloaded with
-// part of it silently missing rather than visibly refused. Paging stops at a
-// short page, at the cap, and at a page that adds nothing new, the last
-// because a listing run past its end tends to answer with its last page
-// again rather than with nothing.
+// part of it silently missing rather than visibly refused. A listing run
+// past its end tends to answer with its last page again rather than with
+// nothing, which adds nothing and so ends the walk too.
 func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint string,
-	headers httpx.Header, kind string) ([]string, error) {
+	headers httpx.Header, kind string, opts Options) ([]string, string, error) {
 
-	var ids []string
-	seen := make(map[string]bool)
-
-	for start := 0; start < config.MaxListingVideos; start += config.FolderPageSize {
-		count := min(config.FolderPageSize, config.MaxListingVideos-start)
-		query := url.Values{
-			"count": {strconv.Itoa(count)},
-			"start": {strconv.Itoa(start)},
-			"nsfw":  {"both"},
-		}
-
-		var page peerTubeListing
-		if err := client.GetJSON(ctx, endpoint+"?"+query.Encode(), headers, &page); err != nil {
-			if start == 0 {
-				return nil, fmt.Errorf("%s: read this %s: %w", peerTubeLabel, kind, err)
+	limit, limitNote := listingLimit(opts)
+	start := 0
+	return walkPages(ctx, pageWalk[string]{
+		key:   func(id string) string { return id },
+		limit: limit, limitNote: limitNote,
+		fetch: func(ctx context.Context, _ int) (pageOf[string], error) {
+			query := url.Values{
+				"count": {strconv.Itoa(config.FolderPageSize)},
+				"start": {strconv.Itoa(start)},
+				"nsfw":  {"both"},
 			}
-			break // a later page failing still leaves the earlier ones
-		}
-
-		added := 0
-		for _, entry := range page.Data {
-			id := entry.videoID()
-			if id == "" || seen[id] {
-				continue
+			var page peerTubeListing
+			if err := client.GetJSON(ctx, endpoint+"?"+query.Encode(), headers, &page); err != nil {
+				return pageOf[string]{}, fmt.Errorf("%s: read this %s: %w", peerTubeLabel, kind, err)
 			}
-			seen[id] = true
-			ids = append(ids, id)
-			added++
-		}
-		if added == 0 || len(page.Data) < count {
-			break
-		}
-	}
-	return ids, nil
+			start += len(page.Data)
+			ids := make([]string, 0, len(page.Data))
+			for _, entry := range page.Data {
+				if id := entry.videoID(); id != "" {
+					ids = append(ids, id)
+				}
+			}
+			return pageOf[string]{items: ids, next: true, end: len(page.Data) == 0 || (page.Total > 0 && start >= page.Total)}, nil
+		},
+	})
 }
 
 // peerTubeExpand reads every listed video's own record, several at a time.
@@ -646,7 +638,8 @@ type peerTubeFile struct {
 
 // peerTubeListing is a page of any of the three video listings.
 type peerTubeListing struct {
-	Data []peerTubeListingEntry `json:"data"`
+	Total int                    `json:"total"`
+	Data  []peerTubeListingEntry `json:"data"`
 }
 
 // peerTubeListingEntry is one row of a listing.

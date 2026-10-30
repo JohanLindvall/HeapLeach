@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -206,7 +205,7 @@ type foolFuukaArchive struct {
 }
 
 // Extract resolves a URL against this archive.
-func (a *foolFuukaArchive) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (a *foolFuukaArchive) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	target, err := foolFuukaParse(u)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", a.name, err)
@@ -217,7 +216,7 @@ func (a *foolFuukaArchive) Extract(ctx context.Context, u *url.URL, _ Options) (
 	case foolFuukaPostTarget:
 		return a.post(ctx, target)
 	case foolFuukaSearchTarget:
-		return a.search(ctx, target)
+		return a.search(ctx, target, opts)
 	default:
 		return a.index(ctx, target)
 	}
@@ -478,58 +477,55 @@ func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []s
 	return files, firstErr
 }
 
-// search walks a board's search results.
+// search walks a board's search results, up to the file cap.
 //
 // Paging stops at the archive's own answer rather than at a page count: past
 // the last page the endpoint reports "No results found.", which is the end of
 // the walk and not a failure — but on the *first* page it means the search
 // matched nothing, which is worth saying.
 //
-// It also stops at a page that adds no post it has not already seen, for the
-// two reasons coomerfans.go pages that way: a listing run past its end tends
-// to answer with the last page again rather than with nothing, and an archive
-// taking new posts while the walk is in progress shifts everything down a
-// page, which without this would queue the same file twice.
-func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget) (*Result, error) {
+// The walk also stops at a page that adds no post it has not already seen,
+// for the two reasons coomerfans.go pages that way: a listing run past its
+// end tends to answer with the last page again rather than with nothing, and
+// an archive taking new posts while the walk is in progress shifts
+// everything down a page, which without this would queue the same file twice.
+func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget, opts Options) (*Result, error) {
 	query := url.Values{"board": {t.board}}
 	maps.Copy(query, t.search)
 
-	var files []File
-	seen := make(map[string]bool)
-	for page := t.page; len(files) < config.MaxSearchResults && page-t.page < config.MaxAlbumPages; page++ {
-		query.Set("page", strconv.Itoa(page))
-		entries, err := a.call(ctx, foolFuukaSearchAPI, query)
-		if err != nil {
-			if page == t.page {
-				return nil, fmt.Errorf("%s: /%s/ search: %w", a.name, t.board, err)
+	posts, note, err := walkPages(ctx, pageWalk[foolFuukaPost]{
+		key: func(post foolFuukaPost) string {
+			if post.Media != nil {
+				return util.FirstNonEmpty(post.Num.String(), post.Media.Media)
 			}
-			break
-		}
-		var posts []foolFuukaPost
-		for _, entry := range entries {
-			for _, post := range entry.posts() {
-				if num := post.Num.String(); num == "" || !seen[num] {
-					seen[num] = true
-					posts = append(posts, post)
-				}
+			return post.Num.String()
+		},
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, n int) (pageOf[foolFuukaPost], error) {
+			query.Set("page", strconv.Itoa(t.page+n))
+			entries, err := a.call(ctx, foolFuukaSearchAPI, query)
+			if err != nil && n > 0 && err.Error() == foolFuukaReason(foolFuukaNoResults) {
+				return pageOf[foolFuukaPost]{end: true}, nil
 			}
-		}
-		if len(posts) == 0 {
-			break
-		}
-		files = append(files, a.files(posts, "")...)
+			if err != nil {
+				return pageOf[foolFuukaPost]{}, fmt.Errorf("%s: /%s/ search: %w", a.name, t.board, err)
+			}
+			var posts []foolFuukaPost
+			for _, entry := range entries {
+				posts = append(posts, entry.posts()...)
+			}
+			return pageOf[foolFuukaPost]{items: posts, next: true, end: len(posts) == 0}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
-
+	files := a.files(posts, "")
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%s: nothing on /%s/ matching %q has an attachment",
 			a.name, t.board, t.label)
 	}
-	// The loop stops once the ceiling is reached, which is a page later than
-	// the ceiling itself. Trimming keeps the number meaning what it says.
-	if len(files) > config.MaxSearchResults {
-		files = files[:config.MaxSearchResults]
-	}
-	return &Result{Title: t.board + " " + t.label, Files: files}, nil
+	return &Result{Title: t.board + " " + t.label, Files: files, Note: note}, nil
 }
 
 // ------------------------------------------------------------------- files
@@ -790,6 +786,9 @@ func foolFuukaDecode(raw []byte) ([]foolFuukaEntry, error) {
 	}
 	return out, nil
 }
+
+// foolFuukaNoResults is what search answers a page past its last with.
+const foolFuukaNoResults = "No results found."
 
 // foolFuukaReason tidies the archive's own message for use inside one of
 // ours, where its trailing full stop would land mid-sentence.

@@ -166,7 +166,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 			}
 			if p.next = wordPressLocalLink(page, ref); p.next == nil || !wordPressSameCategory(first, p.next) {
 				log.DebugContext(ctx, "wordpress: invalid next page", "page", page.Redacted(), "next", ref)
-				p.next, p.note = nil, "partial — invalid next page"
+				p.next, p.badNext = nil, true
 			}
 			return p
 		},

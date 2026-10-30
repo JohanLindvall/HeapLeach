@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -142,14 +141,14 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 	listing := cheveretoWalk(ctx, client, u, root, opts)
 	switch {
 	case len(listing.files) > 0:
-		return &Result{Title: listing.title, Files: listing.files}, nil
+		return &Result{Title: listing.title, Files: listing.files, Note: listing.note}, nil
 	case len(listing.albums) > 0:
 		files := cheveretoExpand(ctx, client, listing.albums, opts)
 		if len(files) == 0 {
 			return nil, fmt.Errorf("%s: none of the %d albums on %s could be read",
 				cheveretoLabel, len(listing.albums), u.Redacted())
 		}
-		return &Result{Title: listing.title, Files: files}, nil
+		return &Result{Title: listing.title, Files: files, Note: listing.note}, nil
 	}
 	return cheveretoSingle(root, u, listing.title)
 }
@@ -163,6 +162,14 @@ type cheveretoListing struct {
 	// files, which is what a user's album tab is.
 	albums []cheveretoAlbum
 	title  string
+	// note is the walk's, for a listing it did not read to the end.
+	note string
+}
+
+// cheveretoEntry is one entry of a listing page: a file, or an album.
+type cheveretoEntry struct {
+	file  File
+	album cheveretoAlbum
 }
 
 // cheveretoAlbum is one album a listing pointed at.
@@ -173,63 +180,65 @@ type cheveretoAlbum struct {
 
 // cheveretoWalk follows a listing's own pagination, collecting items.
 //
-// It stops at a page that adds nothing new as well as at the end of the
-// pagination, because a listing asked for a page past its last tends to answer
-// with the last one again rather than with nothing.
+// The pagination anchor is printed on every page and only carries an href
+// while a next page exists, so its absence is usually the end. A theme that
+// omits the anchor still prints the "page was full" marker, and that is when
+// a page number is worth guessing — and a guessed page asked for past the
+// last tends to answer with the last one again rather than with nothing,
+// which ends the listing.
 func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node,
 	opts Options) *cheveretoListing {
 
 	out := &cheveretoListing{title: cheveretoTitle(root, u)}
-	seen := make(map[string]bool)
 	page := u
-
-	for i := range config.MaxAlbumPages {
-		if i > 0 {
-			var err error
-			if _, root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
-				break // a later page failing still leaves the earlier ones
+	listed := make(map[string]bool)
+	guessed := false
+	entries, note, _ := walkPages(ctx, pageWalk[cheveretoEntry]{
+		key:   func(e cheveretoEntry) string { return util.FirstNonEmpty(e.file.URL, e.album.URL) },
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, n int) (pageOf[cheveretoEntry], error) {
+			if n > 0 {
+				var err error
+				if _, root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
+					return pageOf[cheveretoEntry]{}, err
+				}
 			}
-		}
-
-		added := 0
-		for _, file := range cheveretoItems(root, page) {
-			if seen[file.URL] {
-				continue
+			var entries []cheveretoEntry
+			for _, file := range cheveretoItems(root, page) {
+				entries = append(entries, cheveretoEntry{file: file})
 			}
-			seen[file.URL] = true
-			out.files = append(out.files, file)
-			added++
-		}
-		for _, album := range cheveretoAlbumLinks(root, page) {
-			if seen[album.URL] {
-				continue
+			for _, album := range cheveretoAlbumLinks(root, page) {
+				entries = append(entries, cheveretoEntry{album: album})
 			}
-			seen[album.URL] = true
-			out.albums = append(out.albums, album)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-
-		next := cheveretoNextPage(root, page)
-		if next == "" {
-			// The pagination anchor is printed on every page and only carries
-			// an href while a next page exists, so its absence is usually the
-			// end. A theme that omits the anchor still prints the "page was
-			// full" marker, and that is when a page number is worth guessing.
-			if !cheveretoHasMore(root) {
-				break
+			fresh := false
+			for _, e := range entries {
+				key := util.FirstNonEmpty(e.file.URL, e.album.URL)
+				fresh = fresh || !listed[key]
+				listed[key] = true
 			}
-			next = cheveretoPageAt(page, i+2)
+			if guessed && !fresh {
+				return pageOf[cheveretoEntry]{end: true}, nil
+			}
+			next := cheveretoNextPage(root, page)
+			if guessed = next == "" && cheveretoHasMore(root); guessed {
+				next = cheveretoPageAt(page, n+2)
+			}
+			parsed, err := ParseURL(next)
+			if next == "" || err != nil {
+				return pageOf[cheveretoEntry]{items: entries}, nil
+			}
+			page = parsed
+			return pageOf[cheveretoEntry]{items: entries, next: true}, nil
+		},
+	})
+	for _, e := range entries {
+		if e.file.URL != "" {
+			out.files = append(out.files, e.file)
+		} else {
+			out.albums = append(out.albums, e.album)
 		}
-		parsed, err := ParseURL(next)
-		if err != nil {
-			break
-		}
-		page = parsed
 	}
-
+	out.note = note
 	return out
 }
 
@@ -307,18 +316,11 @@ type cheveretoObject struct {
 // the length as a JSON string and others as a number, which is what flexValue
 // is for.
 func (o *cheveretoObject) size(link, attrSize string) int64 {
-	if n := parsedSize(o.Size.String()); n > 0 {
-		return n
-	}
+	nested := int64(-1)
 	if o.Image.URL != "" && cheveretoOriginal(o.Image.URL) == link {
-		if n := parsedSize(o.Image.Size.String()); n > 0 {
-			return n
-		}
+		nested = parsedSize(o.Image.Size.String())
 	}
-	if n := parsedSize(attrSize); n > 0 {
-		return n
-	}
-	return -1
+	return knownSize(parsedSize(o.Size.String()), nested, parsedSize(attrSize))
 }
 
 // cheveretoAlbumLinks reads the albums a page lists.

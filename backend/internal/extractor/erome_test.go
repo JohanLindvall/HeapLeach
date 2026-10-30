@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -225,23 +224,6 @@ func TestEromeFoldersLeaveUniqueTitlesAlone(t *testing.T) {
 	}
 }
 
-// A listing the host cut short must not pass for a complete one. Asking past
-// the last page is how the walk finds its end, so a page that will not load
-// is ordinarily just that — but a rate limit means the opposite, and the
-// job's note says so.
-func TestEromeProfileNoteAdmitsARateLimit(t *testing.T) {
-	if got := eromeProfileNote(false); got != "" {
-		t.Errorf("note = %q, want nothing for a whole profile", got)
-	}
-	got := eromeProfileNote(true)
-	if got == "" {
-		t.Fatal("a listing cut short by the host was reported as a whole profile")
-	}
-	if !strings.Contains(got, "rate limited") {
-		t.Errorf("title = %q, want it to say why it is partial", got)
-	}
-}
-
 // A profile page for the walk tests, whose album links name the site
 // outright: the walk resolves each href against the page it came from, and
 // what makes a link an album is that it is on erome. A fixture served from a
@@ -265,84 +247,31 @@ func eromeWalkServer(t *testing.T, handler http.HandlerFunc) (*Erome, string) {
 	return NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL
 }
 
-// A later page that will not load is ordinarily the end of the listing, and
-// the walk is right to stop there and keep what it has.
-func TestEromeProfileAlbumsStopsAtTheEnd(t *testing.T) {
-	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "2" {
-			http.NotFound(w, r)
-			return
+// Asking past the last page is how the walk finds the end of a profile, so
+// a later page that will not load ends it quietly — but a rate limit means
+// the opposite, and the walk says so.
+func TestEromeProfileAlbumsEndsAtAMissingPageButAdmitsARateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		note   string
+	}{
+		{http.StatusNotFound, ""},
+		{http.StatusTooManyRequests, "partial — rate limited"},
+	} {
+		e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "2" {
+				// The host naming its own interval is believed, so this
+				// keeps the test to the behaviour rather than to the waiting.
+				w.Header().Set(httpx.HeaderRetryAfter, "0")
+				w.WriteHeader(tc.status)
+				return
+			}
+			_, _ = w.Write([]byte(eromeWalkPage))
+		})
+		albums, title, note, err := e.profileAlbums(context.Background(), mustParse(t, base+"/creator?t=posts"), Options{})
+		if err != nil || len(albums) != 3 || title != "creator" || note != tc.note {
+			t.Errorf("%d: albums=%d title=%q note=%q err=%v", tc.status, len(albums), title, note, err)
 		}
-		_, _ = w.Write([]byte(eromeWalkPage))
-	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	albums, title, limited, err := e.profileAlbums(context.Background(), u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(albums) != 3 {
-		t.Errorf("collected %d albums, want the 3 page one lists", len(albums))
-	}
-	if title != "creator" {
-		t.Errorf("title = %q, want the profile's own heading", title)
-	}
-	if limited {
-		t.Error("an ordinary end of listing was reported as a rate limit")
-	}
-}
-
-// A rate limit is the opposite: the host has said come back, the client has
-// already waited it out as far as it goes, and what came back is part of a
-// profile rather than the whole of it. The walk has to say so, or the caller
-// cannot tell a short profile from a truncated one.
-func TestEromeProfileAlbumsReportsARateLimit(t *testing.T) {
-	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "2" {
-			// The host naming its own interval is believed, so this keeps
-			// the test to the behaviour rather than to the waiting.
-			w.Header().Set(httpx.HeaderRetryAfter, "0")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write([]byte(eromeWalkPage))
-	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	albums, _, limited, err := e.profileAlbums(context.Background(), u)
-	if err != nil {
-		t.Fatalf("a rate limit on page two lost the pages already walked: %v", err)
-	}
-	if len(albums) != 3 {
-		t.Errorf("collected %d albums, want page one's 3 kept", len(albums))
-	}
-	if !limited {
-		t.Fatal("a rate limit was read as the end of the listing")
-	}
-}
-
-// A page that adds nothing is the end of the listing too, which the host
-// tends to answer past its last page with the last page again: the walk
-// stops there without asking for another, and nothing about it is partial.
-func TestEromeProfileAlbumsStopsAtAPageAddingNothing(t *testing.T) {
-	var mu sync.Mutex
-	asked := map[string]int{}
-	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		asked[r.URL.Query().Get("page")]++
-		mu.Unlock()
-		_, _ = w.Write([]byte(eromeWalkPage))
-	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	albums, title, limited, err := e.profileAlbums(context.Background(), u)
-	if err != nil || len(albums) != 3 || title != "creator" || limited {
-		t.Fatalf("albums=%d title=%q limited=%v err=%v", len(albums), title, limited, err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if asked[""] != 1 || asked["2"] != 1 || asked["3"] != 0 {
-		t.Errorf("asked %v, want page one and two once each", asked)
 	}
 }
 
@@ -353,9 +282,7 @@ func TestEromeProfileAlbumsFailsOnTheFirstPage(t *testing.T) {
 		w.Header().Set(httpx.HeaderRetryAfter, "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	if _, _, _, err := e.profileAlbums(context.Background(), u); err == nil {
+	if _, _, _, err := e.profileAlbums(context.Background(), mustParse(t, base+"/creator?t=posts"), Options{}); err == nil {
 		t.Fatal("a profile whose first page never loaded was reported as empty rather than failed")
 	}
 }

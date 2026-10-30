@@ -37,11 +37,6 @@ const (
 	epornerHashGroups   = 4
 	epornerHashGroupLen = 8
 	epornerHashLen      = epornerHashGroups * epornerHashGroupLen
-
-	// epornerMaxProfilePages and epornerMaxVideos bound a profile walk, the
-	// way erome's are bounded.
-	epornerMaxProfilePages = 60
-	epornerMaxVideos       = 2000
 )
 
 var (
@@ -365,7 +360,8 @@ func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL) ([]li
 // what it lists and the total the tab claims to hold. Asking past the last
 // page is how the walk finds its end — the listing answers 404 rather than
 // an empty page — so the walk is quiet: a short one is caught by the
-// declared count, not by trusting how it stopped.
+// declared count, not by trusting how it stopped. Its videos are read only
+// when their transfers start, so the file cap is what bounds it.
 func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL, user, tab string) ([]listingLink, int, error) {
 	headers := httpx.Referer(epornerRoot + "/")
 	first, err := url.Parse(epornerProfilePage(u, user, tab, 1))
@@ -378,7 +374,7 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 	}
 	declared := epornerDeclaredCount(root, tab)
 	seen := make(map[string]bool)
-	page, total := 1, 0
+	page := 1
 	links, _, _, err := walkListing(ctx, client, first, listingWalk{
 		name: "eporner", limit: -1, quiet: true, anyRedirect: true, root: root,
 		fetch: func(ctx context.Context, next, _ *url.URL) (*html.Node, *url.URL, error) {
@@ -394,10 +390,8 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 			for _, v := range found {
 				lp.links = append(lp.links, listingLink{key: v.Page, url: v.Page, title: v.Title})
 			}
-			page, total = page+1, total+len(found)
-			if page <= epornerMaxProfilePages && total < epornerMaxVideos {
-				lp.next, _ = url.Parse(epornerProfilePage(u, user, tab, page))
-			}
+			page++
+			lp.next, _ = url.Parse(epornerProfilePage(u, user, tab, page))
 			return lp
 		},
 	})

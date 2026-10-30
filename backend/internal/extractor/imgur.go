@@ -11,7 +11,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -41,8 +40,8 @@ import (
 // included, and needs no request at all. Reading the first kind is a request
 // per post, so they are read several at a time — a creator with a few hundred
 // posts would otherwise spend minutes resolving before a byte moved — and
-// bounded by config.MaxListingPosts, because the site does rate-limit a client
-// that asks for thousands of pages in a row and a tag feed will happily supply
+// bounded by the listing cap, because the site does rate-limit a client that
+// asks for thousands of pages in a row and a tag feed will happily supply
 // them.
 type Imgur struct {
 	client *httpx.Client
@@ -137,11 +136,11 @@ func (i *Imgur) Recognise(ctx context.Context, p *Page) bool {
 }
 
 // Extract resolves a post, an album, or a listing of them.
-func (i *Imgur) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (i *Imgur) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	target := imgurTargetOf(util.PathSegments(u))
 	switch {
 	case target.Listing != "":
-		return i.listing(ctx, probed(ctx, u), target)
+		return i.listing(ctx, probed(ctx, u), target, opts)
 	case target.ID != "":
 		return i.post(ctx, target.ID)
 	}
@@ -358,8 +357,8 @@ func imgurUsableLink(link string) bool {
 // ----------------------------------------------------------------- listings
 
 // listing resolves an account, a tag or a mirrored subreddit.
-func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget) (*Result, error) {
-	entries, err := i.listingEntries(ctx, probe, target.Listing)
+func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, opts Options) (*Result, error) {
+	entries, note, err := i.listingEntries(ctx, probe, imgurRoot, target.Listing, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -371,74 +370,58 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget) (*
 		return nil, fmt.Errorf("imgur: none of the %d posts on %s%s could be read",
 			len(entries), imgurRoot, target.Listing)
 	}
-	return &Result{Title: target.Title, Files: files}, nil
+	return &Result{Title: target.Title, Files: files, Note: note}, nil
 }
 
-// listingEntries walks a listing's pages.
+// listingEntries walks a listing's pages on origin, up to the listing cap:
+// a row naming a post costs a request to expand.
 //
 // A listing that does not exist is not reported as absent, because the site
 // does not answer it as absent: it serves its ordinary HTML shell under a 200,
 // so the JSON decode failing on the first page is what "no such account or
 // tag" looks like, and the decode error carries the shell's opening bytes to
-// say so. A later page failing leaves the posts already collected intact,
-// which is worth more than the few at the end. The first page is the one
-// the recogniser asked for the probed page, when it did.
-func (i *Imgur) listingEntries(ctx context.Context, probe *Page, base string) ([]imgurEntry, error) {
-	walk := imgurPageWalk{seen: make(map[string]bool)}
-
-	for page := range config.MaxAlbumPages {
-		endpoint := imgurListingPage(imgurRoot, base, page)
-
-		var body struct {
-			Data []imgurEntry `json:"data"`
-		}
-		asked := page == 0 && probe != nil &&
-			askedJSON(ctx, probe, i.client, imgurListingPage(util.Origin(probe.Final), base, 0), &body)
-		if !asked {
-			if err := i.client.GetJSON(ctx, endpoint, httpx.Referer(imgurRoot+"/"), &body); err != nil {
-				if page == 0 {
-					return nil, fmt.Errorf("imgur: fetch %s: %w", endpoint, err)
-				}
-				break
+// say so. The first page is the one the recogniser asked for the probed page,
+// when it did.
+//
+// The listings disagree about what running past the end means, so the walk
+// is a quiet one. An account's stops answering, so the array comes back
+// empty. A mirrored subreddit's answers with its first page again, and goes
+// on doing so forever, so a page carrying no row not already seen is the end
+// too. A tag's does neither: it keeps handing back older posts for as long as
+// it is asked, which is what the cap is for. A later page failing leaves the
+// posts already collected intact, which is worth more than the few at the
+// end.
+func (i *Imgur) listingEntries(ctx context.Context, probe *Page, origin, base string, opts Options) ([]imgurEntry, string, error) {
+	limit, limitNote := listingLimit(opts)
+	return walkPages(ctx, pageWalk[imgurEntry]{
+		key:   func(entry imgurEntry) string { return entry.Hash },
+		limit: limit, limitNote: limitNote, quiet: true,
+		fetch: func(ctx context.Context, n int) (pageOf[imgurEntry], error) {
+			endpoint := imgurListingPage(origin, base, n)
+			var body struct {
+				Data []imgurEntry `json:"data"`
 			}
-		}
-		if !walk.add(body.Data) {
-			break
-		}
-	}
-	return walk.entries, nil
+			asked := n == 0 && probe != nil &&
+				askedJSON(ctx, probe, i.client, imgurListingPage(util.Origin(probe.Final), base, 0), &body)
+			if !asked {
+				if err := i.client.GetJSON(ctx, endpoint, httpx.Referer(imgurRoot+"/"), &body); err != nil {
+					return pageOf[imgurEntry]{}, fmt.Errorf("imgur: fetch %s: %w", endpoint, err)
+				}
+			}
+			rows := make([]imgurEntry, 0, len(body.Data))
+			for _, entry := range body.Data {
+				if entry.Hash != "" {
+					rows = append(rows, entry)
+				}
+			}
+			return pageOf[imgurEntry]{items: rows, next: true, end: len(body.Data) == 0}, nil
+		},
+	})
 }
 
 // imgurListingPage is the JSON for one page of a listing on an origin.
 func imgurListingPage(origin, base string, page int) string {
 	return fmt.Sprintf("%s%s/page/%d/hit.json?scrolled", origin, base, page)
-}
-
-// imgurPageWalk accumulates a listing's rows and decides when it has ended.
-type imgurPageWalk struct {
-	entries []imgurEntry
-	seen    map[string]bool
-}
-
-// add folds one page in and reports whether another is worth asking for.
-//
-// Three ways to stop, because the listings disagree about what running past
-// the end means. An account's stops answering, so the array comes back empty.
-// A mirrored subreddit's answers with its first page again, and goes on doing
-// so forever, so a page carrying no id that has not already been seen is the
-// end too. A tag's does neither: it keeps handing back older posts for as long
-// as it is asked, which is what the count bound is for.
-func (w *imgurPageWalk) add(page []imgurEntry) bool {
-	added := 0
-	for _, entry := range page {
-		if entry.Hash == "" || w.seen[entry.Hash] {
-			continue
-		}
-		w.seen[entry.Hash] = true
-		w.entries = append(w.entries, entry)
-		added++
-	}
-	return added > 0 && len(w.entries) < config.MaxListingPosts
 }
 
 // expand turns listing rows into files.

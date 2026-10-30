@@ -11,7 +11,6 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -62,8 +61,8 @@ const (
 	//
 	// The endpoint takes a limit and caps it here without saying so: asked
 	// for 100 or 200 it answers with a byte-identical fifty-record body. It
-	// publishes no total either, so a short page is the only end-of-listing
-	// signal there is.
+	// publishes no total either, and answers an offset past the end with an
+	// empty page, which is how a walk finds the end.
 	bitchutePageSize = 50
 )
 
@@ -131,14 +130,14 @@ func (b *BitChute) Recognise(_ context.Context, p *Page) bool {
 // Extract resolves a video page or a channel. The embed page is accepted as
 // well: it names the same video, and it is the shape a link copied out of an
 // iframe has.
-func (b *BitChute) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (b *BitChute) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) >= 2 {
 		switch segs[0] {
 		case "video", "embed":
 			return b.video(ctx, segs[1])
 		case "channel":
-			return b.channel(ctx, segs[1])
+			return b.channel(ctx, segs[1], opts)
 		}
 	}
 	return nil, fmt.Errorf("bitchute: %s is neither a video (/video/<id>/) nor a channel (/channel/<id>/)",
@@ -261,8 +260,8 @@ func (b *BitChute) videoName(ctx context.Context, id string) string {
 // ---------------------------------------------------------------- channel
 
 // channel expands a channel into every video it has published.
-func (b *BitChute) channel(ctx context.Context, segment string) (*Result, error) {
-	videos, err := b.channelVideos(ctx, segment)
+func (b *BitChute) channel(ctx context.Context, segment string, opts Options) (*Result, error) {
+	videos, note, err := b.channelVideos(ctx, segment, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +274,7 @@ func (b *BitChute) channel(ctx context.Context, segment string) (*Result, error)
 		return nil, fmt.Errorf("bitchute: none of the %d videos on channel %s could be resolved",
 			len(videos), segment)
 	}
-	return &Result{Title: b.channelName(ctx, segment), Files: files}, nil
+	return &Result{Title: b.channelName(ctx, segment), Files: files, Note: note}, nil
 }
 
 // channelVideos pages through a channel's listing.
@@ -284,40 +283,32 @@ func (b *BitChute) channel(ctx context.Context, segment string) (*Result, error)
 // takes a channel's legacy slug as readily as its id, and case-insensitively
 // at that — so whatever spelling the link carried is already the right one.
 //
-// Paging stops at the first short page, which is the only end-of-listing
-// signal on offer: the answer holds nothing but the records themselves, no
-// total and no cursor. A page that fails after the first breaks out rather
-// than sinking the job, since most of a large channel is still worth having.
+// The answer holds nothing but the records themselves, no total and no
+// cursor, so the walk asks until a page comes back empty. A page that fails
+// after the first ends the walk rather than sinking the job, since most of a
+// large channel is still worth having.
 //
-// The page backstop is doing real work here rather than guarding a pathology.
-// Channels on this site run to tens of thousands of videos — the largest in a
-// sample of eighty-odd was 79,351 — so MaxAlbumPages is what actually decides
-// how much of one a job takes: the newest MaxAlbumPages × bitchutePageSize of
-// them, newest first, which is the order the listing itself gives.
-func (b *BitChute) channelVideos(ctx context.Context, segment string) ([]bitchuteVideo, error) {
-	var all []bitchuteVideo
-
-	for page := range config.MaxAlbumPages {
-		var out struct {
-			Videos []bitchuteVideo `json:"videos"`
-		}
-		req := bitchuteChannelRequest{
-			ChannelID: segment,
-			Offset:    page * bitchutePageSize,
-			Limit:     bitchutePageSize,
-		}
-		if err := b.client.PostJSON(ctx, b.api+"/channel/videos", bitchuteAPIHeaders(), req, &out); err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("bitchute: list channel %s: %w", segment, err)
+// Channels on this site run to tens of thousands of videos — the largest in
+// a sample of eighty-odd was 79,351 — and every video listed costs a request
+// of its own, so the listing cap is what actually decides how much of one a
+// job takes: the newest videos, newest first, which is the order the listing
+// itself gives.
+func (b *BitChute) channelVideos(ctx context.Context, segment string, opts Options) ([]bitchuteVideo, string, error) {
+	limit, limitNote := listingLimit(opts)
+	return walkPages(ctx, pageWalk[bitchuteVideo]{
+		key:   func(video bitchuteVideo) string { return video.ID },
+		limit: limit, limitNote: limitNote,
+		fetch: func(ctx context.Context, n int) (pageOf[bitchuteVideo], error) {
+			var out struct {
+				Videos []bitchuteVideo `json:"videos"`
 			}
-			break
-		}
-		all = append(all, out.Videos...)
-		if len(out.Videos) < bitchutePageSize {
-			break
-		}
-	}
-	return all, nil
+			req := bitchuteChannelRequest{ChannelID: segment, Offset: n * bitchutePageSize, Limit: bitchutePageSize}
+			if err := b.client.PostJSON(ctx, b.api+"/channel/videos", bitchuteAPIHeaders(), req, &out); err != nil {
+				return pageOf[bitchuteVideo]{}, fmt.Errorf("bitchute: list channel %s: %w", segment, err)
+			}
+			return pageOf[bitchuteVideo]{items: out.Videos, next: true, end: len(out.Videos) == 0}, nil
+		},
+	})
 }
 
 // channelName names the job, and so the folder every video lands in.

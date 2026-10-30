@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -194,7 +193,7 @@ func civitaiIsID(seg string) bool {
 }
 
 // Extract resolves an image, a post, a user's gallery or a model.
-func (c *Civitai) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (c *Civitai) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	target := civitaiTargetOf(u)
 	if target == nil {
 		return nil, fmt.Errorf("civitai: %s is not an image (/images/<id>), a post "+
@@ -204,7 +203,7 @@ func (c *Civitai) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		return c.model(ctx, u, target.value)
 	}
 
-	items, err := c.listing(ctx, target)
+	items, note, err := c.listing(ctx, target, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -217,12 +216,12 @@ func (c *Civitai) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	for _, item := range items {
 		files = append(files, civitaiFile(item))
 	}
-	return &Result{Title: civitaiTitle(target, items), Files: files}, nil
+	return &Result{Title: civitaiTitle(target, items), Files: files, Note: note}, nil
 }
 
 // listing collects everything one selector names.
-func (c *Civitai) listing(ctx context.Context, target *civitaiTarget) ([]civitaiImage, error) {
-	return c.walk(ctx, civitaiQuery(civitaiAPI+"/images", target))
+func (c *Civitai) listing(ctx context.Context, target *civitaiTarget, opts Options) ([]civitaiImage, string, error) {
+	return c.walk(ctx, civitaiQuery(civitaiAPI+"/images", target), opts)
 }
 
 // civitaiQuery builds the first page's request: the site's own maximum page,
@@ -236,34 +235,35 @@ func civitaiQuery(endpoint string, target *civitaiTarget) string {
 	return endpoint + "?" + query.Encode()
 }
 
-// walk follows the listing's cursor from one page to the next. The page count
-// is bounded the way every album listing here is, as a backstop against a site
-// that keeps answering rather than ending.
-func (c *Civitai) walk(ctx context.Context, next string) ([]civitaiImage, error) {
-	var (
-		items []civitaiImage
-		seen  = make(map[int64]bool)
-	)
-	for page := 0; next != "" && page < config.MaxAlbumPages; page++ {
-		payload, err := c.page(ctx, next)
-		if err != nil {
-			return nil, err
-		}
-		if len(payload.Items) == 0 {
-			break
-		}
-		for _, item := range payload.Items {
-			// A cursor boundary hands the same item out twice, once at the
-			// end of a page and again at the head of the next.
-			if item.URL == "" || seen[item.ID] {
-				continue
+// walk follows the listing's cursor from one page to the next, until a page
+// names no next one. A cursor boundary hands the same item out twice, once
+// at the end of a page and again at the head of the next, which the walk
+// counts once.
+func (c *Civitai) walk(ctx context.Context, next string, opts Options) ([]civitaiImage, string, error) {
+	return walkPages(ctx, pageWalk[civitaiImage]{
+		key:   func(item civitaiImage) string { return strconv.FormatInt(item.ID, 10) },
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		failed: func(err error) string {
+			if httpx.HasStatus(err, http.StatusServiceUnavailable) {
+				return "partial — the image search stayed overloaded"
 			}
-			seen[item.ID] = true
-			items = append(items, item)
-		}
-		next = civitaiNextPage(next, payload.Metadata.NextPage)
-	}
-	return items, nil
+			return "partial — could not fetch next page"
+		},
+		fetch: func(ctx context.Context, _ int) (pageOf[civitaiImage], error) {
+			payload, err := c.page(ctx, next)
+			if err != nil {
+				return pageOf[civitaiImage]{}, err
+			}
+			items := make([]civitaiImage, 0, len(payload.Items))
+			for _, item := range payload.Items {
+				if item.URL != "" {
+					items = append(items, item)
+				}
+			}
+			next = civitaiNextPage(next, payload.Metadata.NextPage)
+			return pageOf[civitaiImage]{items: items, next: next != "", end: len(payload.Items) == 0}, nil
+		},
+	})
 }
 
 // civitaiNextPage takes the cursor link the listing supplies as it stands.
@@ -293,8 +293,9 @@ func civitaiNextPage(current, raw string) string {
 // it arrives with neither Retry-After nor any rate-limit header to pace by,
 // so the wait is our own. What it must never be read as is the end of the
 // listing: a gallery cut short at page seven looks exactly like a finished
-// one, so an overload that outlasts the attempts fails the extraction rather
-// than quietly returning most of it.
+// one, so an overload that outlasts the attempts fails the first page, and
+// marks a gallery a later one cut short as partial rather than quietly
+// returning most of it.
 func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, error) {
 	overloaded := func(_ *civitaiListing, err error) bool {
 		return httpx.HasStatus(err, http.StatusServiceUnavailable)

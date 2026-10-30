@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -72,18 +71,14 @@ type booruSite struct {
 	filterID string
 }
 
-const (
-	// booruPageSize is what each family accepts as a page limit.
-	booruPageSize = 100
-	// booruMaxPosts bounds a tag search, which can otherwise be endless.
-	booruMaxPosts = 1000
-)
+// booruPageSize is what each family accepts as a page limit.
+const booruPageSize = 100
 
 // Gelbooru 0.1, which is scraped rather than queried.
 const (
 	// gelbooru01PageSize is what one listing page holds. The board offers no
-	// way to ask for more, and this is what tells a last page from a full
-	// one, so it has to be what the site does rather than what we would like.
+	// way to ask for more, and its pid counts posts, so this is the step from
+	// one page to the next.
 	gelbooru01PageSize = 20
 	// gelbooru01Pace is the wait between listing pages.
 	//
@@ -142,7 +137,7 @@ func (b *Booru) Recognise(ctx context.Context, p *Page) bool {
 }
 
 // Extract resolves a tag search, or a single post, into files.
-func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (b *Booru) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	p := probed(ctx, u)
 	if p == nil {
 		p = probePage(ctx, b.client, u)
@@ -154,13 +149,13 @@ func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 	if site.api == apiPhilomena {
 		site.filterID = b.everythingFilter(ctx, site)
 	}
-	return b.extract(ctx, u, site)
+	return b.extract(ctx, u, site, opts)
 }
 
-func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Result, error) {
+func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite, opts Options) (*Result, error) {
 	tags, postID, listing := site.parseTarget(u)
 	if postID != "" {
-		files, err := b.fetch(ctx, site, "id:"+postID, postID)
+		files, _, err := b.fetch(ctx, site, "id:"+postID, postID, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -174,7 +169,7 @@ func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Resu
 			"paste a tag search or a post link", u.Redacted())
 	}
 
-	files, err := b.fetch(ctx, site, tags, "")
+	files, note, err := b.fetch(ctx, site, tags, "", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +179,7 @@ func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Resu
 	} else {
 		title += " latest"
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // everythingFilter looks up the philomena site's own "everything" filter,
@@ -365,77 +360,73 @@ func (s *booruSite) parseTarget(u *url.URL) (tags, postID string, listing bool) 
 	}
 }
 
-// fetch pages through the board until the results run out.
-func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string) ([]File, error) {
-	var files []File
+// fetch pages through the board until the results run out: to the total
+// the families that state one give, or else to the first empty page.
+func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string, opts Options) ([]File, string, error) {
 	fileHeaders := httpx.Referer(site.root + "/")
 	apiHeaders := site.apiHeaders()
 
-	// Capped on pages as well as posts: a tag whose posts all withhold their
-	// file from an anonymous caller adds nothing per page and would
-	// otherwise be walked to the board's end.
-	for page := 0; len(files) < booruMaxPosts && page < config.MaxAlbumPages; page++ {
-		posts, err := b.posts(ctx, site, tags, single, page, apiHeaders)
-		if err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("booru: %s: %w", site.name, err)
+	// Posts are what is walked, so that a page whose posts all withhold their
+	// file from an anonymous caller is no page that adds nothing. A board
+	// that stops answering partway through is not a reason to discard what
+	// it did answer: booru.org ends a long walk exactly this way when its
+	// rate limit runs out.
+	posts, note, err := walkPages(ctx, pageWalk[booruPost]{
+		key: func(post booruPost) string {
+			return util.FirstNonEmpty(post.ID.String(), post.fileURL(site), post.MD5)
+		},
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, n int) (pageOf[booruPost], error) {
+			posts, total, err := b.posts(ctx, site, tags, single, n, apiHeaders)
+			if err != nil {
+				return pageOf[booruPost]{}, fmt.Errorf("booru: %s: %w", site.name, err)
 			}
-			// A board that stops answering partway through is not a reason
-			// to discard what it did answer: several hundred posts already
-			// in hand beat an error message. booru.org ends a long walk
-			// exactly this way when its rate limit runs out.
-			break
+			// A single post never pages.
+			return pageOf[booruPost]{items: posts, next: true, total: total, end: single != "" || len(posts) == 0}, nil
+		},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	var files []File
+	for _, post := range posts {
+		link := post.fileURL(site)
+		if link == "" {
+			continue
 		}
-		for _, post := range posts {
-			link := post.fileURL(site)
-			if link == "" {
-				continue
-			}
-			files = append(files, File{
-				Name:    post.filename(link),
-				URL:     link,
-				Size:    post.size(),
-				Headers: fileHeaders,
-			})
-		}
-		// A short page is the last page, and a single post never pages.
-		if len(posts) < site.pageSize() || single != "" {
-			break
-		}
+		files = append(files, File{
+			Name:    post.filename(link),
+			URL:     link,
+			Size:    post.size(),
+			Headers: fileHeaders,
+		})
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("booru: %s returned no posts for %q", site.name, tags)
+		return nil, "", fmt.Errorf("booru: %s returned no posts for %q", site.name, tags)
 	}
-	return files, nil
+	return files, note, nil
 }
 
 // posts fetches one page of results in whichever form the board publishes
-// them: as JSON from an API, or as the listing page itself.
+// them: as JSON from an API, or as the listing page itself, with the total
+// the page states, 0 when it states none.
 func (b *Booru) posts(ctx context.Context, site *booruSite, tags, single string,
-	page int, headers httpx.Header) ([]booruPost, error) {
+	page int, headers httpx.Header) ([]booruPost, int, error) {
 
 	if site.api == apiGelbooru01 {
 		if single != "" {
-			return b.scrapePost(ctx, site, single, headers)
+			posts, err := b.scrapePost(ctx, site, single, headers)
+			return posts, 0, err
 		}
 		if page > 0 {
 			if err := util.SleepCtx(ctx, gelbooru01Pace); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 		}
-		return b.scrapeList(ctx, site, tags, page, headers)
+		posts, err := b.scrapeList(ctx, site, tags, page, headers)
+		return posts, 0, err
 	}
 	return b.page(ctx, site.endpoint(tags, page), headers)
-}
-
-// pageSize is how many posts one request returns when there are more to come.
-// It is what tells the last page from a full one, so it has to be what the
-// board does rather than what was asked of it.
-func (s *booruSite) pageSize() int {
-	if s.api == apiGelbooru01 {
-		return gelbooru01PageSize
-	}
-	return booruPageSize
 }
 
 // apiHeaders are what a request for a listing needs, which is not what a
@@ -506,13 +497,21 @@ func (s *booruSite) endpoint(tags string, page int) string {
 	}
 }
 
-// page fetches and normalises one response, whatever shape it arrives in.
-func (b *Booru) page(ctx context.Context, endpoint string, headers httpx.Header) ([]booruPost, error) {
+// page fetches and normalises one response, whatever shape it arrives in,
+// with the total that szurubooru and philomena state beside their results.
+func (b *Booru) page(ctx context.Context, endpoint string, headers httpx.Header) ([]booruPost, int, error) {
 	var raw json.RawMessage
 	if err := b.client.GetJSON(ctx, endpoint, headers, &raw); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return booruDecode(raw)
+	var stated struct {
+		Total int `json:"total"`
+	}
+	if len(raw) > 0 && raw[0] == '{' {
+		_ = json.Unmarshal(raw, &stated)
+	}
+	posts, err := booruDecode(raw)
+	return posts, stated.Total, err
 }
 
 func booruDecode(raw json.RawMessage) ([]booruPost, error) {

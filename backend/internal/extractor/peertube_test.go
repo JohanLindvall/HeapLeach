@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -114,10 +113,7 @@ const peerTubeBothListsVideo = `{
 // alongside the logic that reads them.
 func peerTubeDecodeVideo(t *testing.T, doc string) *peerTubeVideo {
 	t.Helper()
-	var video peerTubeVideo
-	if err := json.Unmarshal([]byte(doc), &video); err != nil {
-		t.Fatalf("decode fixture: %v", err)
-	}
+	video := decode[peerTubeVideo](t, doc)
 	return &video
 }
 
@@ -386,10 +382,7 @@ func TestPeerTubeListingEntriesUnwrapPlaylistPositions(t *testing.T) {
 	  ]
 	}`
 
-	var page peerTubeListing
-	if err := json.Unmarshal([]byte(listing), &page); err != nil {
-		t.Fatalf("decode listing: %v", err)
-	}
+	page := decode[peerTubeListing](t, listing)
 
 	var ids []string
 	for _, entry := range page.Data {
@@ -411,12 +404,36 @@ func TestPeerTubeListingEntriesReadPlainRows(t *testing.T) {
 	  "data": [ { "uuid": "00000000-0000-4000-8000-00000000000d", "shortUUID": "dd", "name": "Only" } ]
 	}`
 
-	var page peerTubeListing
-	if err := json.Unmarshal([]byte(listing), &page); err != nil {
-		t.Fatalf("decode listing: %v", err)
-	}
+	page := decode[peerTubeListing](t, listing)
 	if got := page.Data[0].videoID(); got != "00000000-0000-4000-8000-00000000000d" {
 		t.Errorf("videoID = %q, want the row's own uuid", got)
+	}
+}
+
+// TestPeerTubeListVideosPagesToTheStatedTotal: the listing states its total,
+// which ends the walk however few rows a page carries, and the listing cap
+// bounds it, every id costing a request of its own.
+func TestPeerTubeListVideosPagesToTheStatedTotal(t *testing.T) {
+	var starts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := r.URL.Query().Get("start")
+		starts = append(starts, start)
+		rows := map[string]string{
+			"0": `{"uuid":"a"},{"uuid":"b"}`,
+			"2": `{"uuid":"c"}`,
+		}[start]
+		_, _ = io.WriteString(w, `{"total":3,"data":[`+rows+`]}`)
+	}))
+	defer srv.Close()
+	client := httpx.New("test", "en", 0, time.Second)
+
+	ids, note, err := peerTubeListVideos(context.Background(), client, srv.URL+"/videos", nil, "channel", Options{})
+	if err != nil || strings.Join(ids, ",") != "a,b,c" || note != "" || strings.Join(starts, ",") != "0,2" {
+		t.Fatalf("ids=%v note=%q starts=%v err=%v", ids, note, starts, err)
+	}
+	ids, note, _ = peerTubeListVideos(context.Background(), client, srv.URL+"/videos", nil, "channel", Options{limits: Limits{Sources: 2}})
+	if len(ids) != 2 || note != "partial — source limit" {
+		t.Fatalf("capped: ids=%v note=%q", ids, note)
 	}
 }
 

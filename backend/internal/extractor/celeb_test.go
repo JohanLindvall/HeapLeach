@@ -177,8 +177,6 @@ func TestCelebBadPagesFailInsteadOfReturningACompleteGallery(t *testing.T) {
 		{"wrong tab", celebFixture("Creator/Media", strings.Replace(celebGalleryProps, `"mediaType":"media"`, `"mediaType":"videos"`, 1)), ""},
 		{"empty gallery", celebFixture("Creator/Media", `{"mediaType":"media","currentPage":1,"pages":1,"media":[]}`), ""},
 		{"invalid image", celebFixture("Creator/Media", strings.Replace(celebGalleryProps, "https://cdn.example.test/api/v1/image/second.png", "broken", 1)), ""},
-		{"malformed API", celebFixture("Creator/Media", celebGalleryProps), `{"error":"unavailable"}`},
-		{"HTTP failure", celebFixture("Creator/Media", celebGalleryProps), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +194,26 @@ func TestCelebBadPagesFailInsteadOfReturningACompleteGallery(t *testing.T) {
 				t.Fatal("accepted a missing, malformed or incomplete gallery")
 			}
 		})
+	}
+}
+
+// A later page that fails ends the gallery with what was read, admitted.
+func TestCelebLaterPageFailureAdmitsPartialGallery(t *testing.T) {
+	for _, next := range []string{`{"error":"unavailable"}`, ""} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/creator/") {
+				fmt.Fprint(w, celebFixture("Creator/Media", celebGalleryProps))
+			} else if next != "" {
+				fmt.Fprint(w, next)
+			} else {
+				http.Error(w, "unavailable", http.StatusForbidden)
+			}
+		}))
+		res := extractOK(t, NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)), srv.URL+"/creator/a-creator-42/images", Options{})
+		srv.Close()
+		if len(res.Files) != 2 || res.Note != "2 of 4 images" {
+			t.Errorf("files = %d, note = %q", len(res.Files), res.Note)
+		}
 	}
 }
 

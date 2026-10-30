@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -79,10 +78,10 @@ func (b *Bunkr) Recognise(_ context.Context, p *Page) bool {
 }
 
 // Extract handles both /f/<slug> (one file) and /a/<slug> (an album).
-func (b *Bunkr) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (b *Bunkr) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) >= 2 && segs[0] == "a" {
-		return b.album(ctx, u)
+		return b.album(ctx, u, opts)
 	}
 	name, err := b.pageName(ctx, u)
 	if err != nil {
@@ -104,42 +103,42 @@ func (b *Bunkr) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 // Large albums are split across ?page=N, and the nav only ever links a
 // window of them, so the last page number is re-read from every page rather
 // than trusted from the first. Asking for a page past the end serves the
-// last page again, which is why a page that adds nothing new ends the walk.
-func (b *Bunkr) album(ctx context.Context, u *url.URL) (*Result, error) {
-	var (
-		files []File
-		title string
-		seen  = make(map[string]bool)
-	)
-
-	last := 1
-	for page := 1; page <= last && page <= config.MaxAlbumPages; page++ {
-		root, err := b.albumPage(ctx, u, page)
-		if err != nil {
-			return nil, err
-		}
-		if page == 1 {
-			title = util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.H1),
-				trimSiteSuffix(firstText(root, atom.Title)))
-		}
-
-		added := 0
-		for _, f := range b.albumEntries(root, u, seen) {
-			added++
-			files = append(files, f)
-		}
-		if page > 1 && added == 0 {
-			break
-		}
-		if n := lastAlbumPage(root); n > last {
-			last = n
-		}
+// last page again, which adds nothing and so ends the walk too.
+func (b *Bunkr) album(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	title, last := "", 1
+	entries, note, err := walkPages(ctx, pageWalk[bunkrEntry]{
+		key:   func(e bunkrEntry) string { return e.href },
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, n int) (pageOf[bunkrEntry], error) {
+			root, err := b.albumPage(ctx, u, n+1)
+			if err != nil {
+				return pageOf[bunkrEntry]{}, err
+			}
+			if n == 0 {
+				title = util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.H1),
+					trimSiteSuffix(firstText(root, atom.Title)))
+			}
+			last = max(last, lastAlbumPage(root))
+			return pageOf[bunkrEntry]{items: b.albumEntries(root, u), next: true, end: n+1 >= last}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if len(files) == 0 {
+	if len(entries) == 0 {
 		return nil, fmt.Errorf("bunkr: no files linked from album %s", u.Redacted())
 	}
-	return &Result{Title: title, Files: files}, nil
+	files := make([]File, len(entries))
+	for i, e := range entries {
+		files[i] = e.file
+	}
+	return &Result{Title: title, Files: files, Note: note}, nil
+}
+
+// bunkrEntry is one file an album page links to, and the file page it is.
+type bunkrEntry struct {
+	href string
+	file File
 }
 
 // albumEntries reads one listing page.
@@ -149,8 +148,9 @@ func (b *Bunkr) album(ctx context.Context, u *url.URL) (*Result, error) {
 // the queue shows real names and sizes straight away instead of a wall of
 // blank rows waiting on 300 separate resolves. Listings that do not use
 // cards fall back to a plain scan for file links.
-func (b *Bunkr) albumEntries(root *html.Node, base *url.URL, seen map[string]bool) []File {
-	var files []File
+func (b *Bunkr) albumEntries(root *html.Node, base *url.URL) []bunkrEntry {
+	var entries []bunkrEntry
+	seen := make(map[string]bool)
 
 	for _, card := range findAll(root, func(n *html.Node) bool { return hasClass(n, "theItem") }) {
 		link := findFirst(card, func(n *html.Node) bool {
@@ -176,16 +176,16 @@ func (b *Bunkr) albumEntries(root *html.Node, base *url.URL, seen map[string]boo
 			size = parseHumanSize(textOf(el))
 		}
 
-		files = append(files, File{
+		entries = append(entries, bunkrEntry{href: href, file: File{
 			Name: util.FirstNonEmpty(name, linkLabel(link)),
 			// Listings round these, so they are a display hint only.
 			Size:       size,
 			SizeApprox: size > 0,
 			Resolve:    b.resolver(href),
-		})
+		}})
 	}
-	if len(files) > 0 {
-		return files
+	if len(entries) > 0 {
+		return entries
 	}
 
 	for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
@@ -194,13 +194,13 @@ func (b *Bunkr) albumEntries(root *html.Node, base *url.URL, seen map[string]boo
 			continue
 		}
 		seen[href] = true
-		files = append(files, File{
+		entries = append(entries, bunkrEntry{href: href, file: File{
 			Name:    util.FirstNonEmpty(strings.TrimSpace(attr(a, "title")), linkLabel(a)),
 			Size:    -1,
 			Resolve: b.resolver(href),
-		})
+		}})
 	}
-	return files
+	return entries
 }
 
 // albumPage fetches one page of an album listing.

@@ -435,9 +435,10 @@ func TestBitChutePlaylistMediaArrivesAsSegments(t *testing.T) {
 
 // ---------------------------------------------------------------- channel
 
-// TestBitChuteChannelPagesUntilAShortPage pins the only stop condition the
-// endpoint offers. A listing that never went short would page to the backstop.
-func TestBitChuteChannelPagesUntilAShortPage(t *testing.T) {
+// TestBitChuteChannelPagesUntilAnEmptyPage pins the only stop condition the
+// endpoint offers: no total and no cursor, so the walk asks past the end, and
+// a short page is not the end until an empty one says so.
+func TestBitChuteChannelPagesUntilAnEmptyPage(t *testing.T) {
 	stub := &bitchuteStub{videos: bitchuteVideos(117)}
 	b := stub.start(t)
 
@@ -449,8 +450,8 @@ func TestBitChuteChannelPagesUntilAShortPage(t *testing.T) {
 	if len(res.Files) != 117 {
 		t.Fatalf("got %d files, want 117", len(res.Files))
 	}
-	if got := stub.hits("/api/beta/channel/videos"); got != 3 {
-		t.Errorf("asked for %d pages, want 3: 50, 50 and a short one", got)
+	if got := stub.hits("/api/beta/channel/videos"); got != 4 {
+		t.Errorf("asked for %d pages, want 4: 50, 50, a short one and the empty one", got)
 	}
 
 	// Files keep the channel's order however the media calls interleaved.
@@ -483,20 +484,18 @@ func TestBitChuteChannelPagesUntilAShortPage(t *testing.T) {
 	}
 }
 
-// TestBitChuteChannelPagesExactlyToTheEnd covers the boundary a short page
-// cannot signal: a channel whose count is a multiple of the page size only
-// ends when an empty page comes back.
-func TestBitChuteChannelPagesExactlyToTheEnd(t *testing.T) {
+// TestBitChuteChannelStopsAtTheListingCap: every listed video costs a
+// request of its own, so the source cap bounds the channel.
+func TestBitChuteChannelStopsAtTheListingCap(t *testing.T) {
 	stub := &bitchuteStub{videos: bitchuteVideos(2 * bitchutePageSize)}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/CHANNELID/")
-
-	if len(res.Files) != 2*bitchutePageSize {
-		t.Fatalf("got %d files, want %d", len(res.Files), 2*bitchutePageSize)
+	res := extractOK(t, b, "https://www.bitchute.com/channel/CHANNELID/", Options{limits: Limits{Sources: 60}})
+	if len(res.Files) != 60 || res.Note != "partial — source limit" {
+		t.Fatalf("got %d files, note %q", len(res.Files), res.Note)
 	}
-	if got := stub.hits("/api/beta/channel/videos"); got != 3 {
-		t.Errorf("asked for %d pages, want 3: two full ones and the empty one that ends it", got)
+	if got := stub.hits("/api/beta/channel/videos"); got != 2 {
+		t.Errorf("asked for %d pages, want 2", got)
 	}
 }
 

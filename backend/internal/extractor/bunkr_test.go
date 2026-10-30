@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 
@@ -86,14 +85,14 @@ const bunkrAlbumPage = `<html><body>
 </body></html>`
 
 func TestBunkrAlbumEntries(t *testing.T) {
-	root, err := parseHTML(bunkrAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, _ := url.Parse("https://bunkr.example/a/AAAA")
+	root := mustParseDoc(t, bunkrAlbumPage)
+	base := mustParse(t, "https://bunkr.example/a/AAAA")
 
 	b := NewBunkr(nil)
-	files := b.albumEntries(root, base, make(map[string]bool))
+	var files []File
+	for _, e := range b.albumEntries(root, base) {
+		files = append(files, e.file)
+	}
 	if len(files) != 2 {
 		t.Fatalf("read %d entries, want 2 (the repeat folded, the FAQ ignored)", len(files))
 	}
@@ -188,21 +187,14 @@ func TestBunkrUnavailableWithoutAnExplanation(t *testing.T) {
 }
 
 func TestLastAlbumPage(t *testing.T) {
-	root, err := parseHTML(bunkrAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := lastAlbumPage(root); got != 3 {
+	if got := lastAlbumPage(mustParseDoc(t, bunkrAlbumPage)); got != 3 {
 		t.Errorf("last page = %d, want 3", got)
 	}
 }
 
 func TestBunkrLinkLabel(t *testing.T) {
-	root, err := parseHTML(`<a href="/f/x"><img alt="from the alt"></a>` +
+	root := mustParseDoc(t, `<a href="/f/x"><img alt="from the alt"></a>`+
 		`<a id="second" href="/f/y">from the text</a>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	anchors := findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) })
 	if len(anchors) != 2 {
 		t.Fatalf("parsed %d anchors, want 2", len(anchors))

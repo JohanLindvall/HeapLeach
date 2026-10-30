@@ -80,7 +80,7 @@ func (f *Fediverse) misskey(ctx context.Context, u *url.URL, t *fediTarget) (*Re
 	}
 	title := "@" + fediHandle(t.handle, u.Hostname())
 
-	notes, err := f.misskeyTimeline(ctx, root, user.ID)
+	notes, note, err := f.misskeyTimeline(ctx, root, user.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (f *Fediverse) misskey(ctx context.Context, u *url.URL, t *fediTarget) (*Re
 		return nil, fmt.Errorf("fediverse: %s has attached no files to its most recent %d notes",
 			title, config.MaxTimelinePages*fediMisskeyPageSize)
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // misskeyLookup turns a handle into the user, and above all into their id.
@@ -123,40 +123,32 @@ func (f *Fediverse) misskeyLookup(ctx context.Context, root, handle string) (*mi
 // misskeyTimeline pages back through a user's notes that carry files.
 //
 // untilId is this API's max_id: exclusive, newest first, each page asking for
-// what precedes the last id of the one before. The same three stopping
-// conditions apply as to a Mastodon timeline — a short page, a page that
-// makes no progress, and the cap.
-func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([]misskeyNote, error) {
-	var all []misskeyNote
+// what precedes the last id of the one before. The walk ends as a Mastodon
+// timeline's does — at an empty page, a page that adds nothing, or the cap.
+func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([]misskeyNote, string, error) {
 	until := ""
+	return walkPages(ctx, pageWalk[misskeyNote]{
+		key:   func(note misskeyNote) string { return note.ID },
+		limit: -1, pages: config.MaxTimelinePages,
+		fetch: func(ctx context.Context, _ int) (pageOf[misskeyNote], error) {
+			body := struct {
+				UserID    string `json:"userId"`
+				Limit     int    `json:"limit"`
+				WithFiles bool   `json:"withFiles"`
+				UntilID   string `json:"untilId,omitempty"`
+			}{UserID: userID, Limit: fediMisskeyPageSize, WithFiles: true, UntilID: until}
 
-	for page := range config.MaxTimelinePages {
-		body := struct {
-			UserID    string `json:"userId"`
-			Limit     int    `json:"limit"`
-			WithFiles bool   `json:"withFiles"`
-			UntilID   string `json:"untilId,omitempty"`
-		}{UserID: userID, Limit: fediMisskeyPageSize, WithFiles: true, UntilID: until}
-
-		var batch []misskeyNote
-		if err := f.client.PostJSON(ctx, root+"/api/users/notes", fediHeaders(root), body, &batch); err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("fediverse: read the account's notes: %w", err)
+			var batch []misskeyNote
+			if err := f.client.PostJSON(ctx, root+"/api/users/notes", fediHeaders(root), body, &batch); err != nil {
+				return pageOf[misskeyNote]{}, fmt.Errorf("fediverse: read the account's notes: %w", err)
 			}
-			break
-		}
-		if len(batch) == 0 {
-			break
-		}
-		all = append(all, batch...)
-
-		next := batch[len(batch)-1].ID
-		if next == "" || next == until || len(batch) < fediMisskeyPageSize {
-			break
-		}
-		until = next
-	}
-	return all, nil
+			if len(batch) == 0 {
+				return pageOf[misskeyNote]{end: true}, nil
+			}
+			until = batch[len(batch)-1].ID
+			return pageOf[misskeyNote]{items: batch, next: until != ""}, nil
+		},
+	})
 }
 
 // misskeyFiles flattens notes into downloadable attachments.
@@ -185,8 +177,8 @@ func misskeyFiles(notes []misskeyNote) []File {
 			}
 			seen[file.URL] = true
 
-			size := file.Size
-			if size <= 0 || misskeyIsDerived(file.URL) {
+			size := knownSize(file.Size)
+			if misskeyIsDerived(file.URL) {
 				size = -1
 			}
 			files = append(files, File{

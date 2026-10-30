@@ -3,9 +3,13 @@
 package extractor
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -89,6 +93,54 @@ func TestKemonoFilesOf(t *testing.T) {
 		if f.Dir != "" {
 			t.Errorf("%s filed under %q, want no folder for a single post", f.Name, f.Dir)
 		}
+	}
+}
+
+// A creator's posts are paged by offset to the count its profile states, or,
+// where it states none, to the 400 the API answers an offset past the end
+// with, which is no failure.
+func TestKemonoCreatorPagesToTheStatedEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		asked string
+	}{
+		{name: "stated count", count: 3, asked: "0,2"},
+		{name: "past the end", asked: "0,2,3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sample/user/creator/profile":
+					fmt.Fprintf(w, `{"id":"creator","service":"sample","name":"A Creator","post_count":%d}`, tc.count)
+				case "/api/v1/sample/user/creator/posts":
+					o := r.URL.Query().Get("o")
+					asked = append(asked, o)
+					var posts []kemonoPost
+					switch o {
+					case "0":
+						posts = []kemonoPost{{ID: "1", File: kemonoAttachment{Path: "/a/one.jpg"}}, {ID: "2", File: kemonoAttachment{Path: "/a/two.jpg"}}}
+					case "2":
+						posts = []kemonoPost{{ID: "3", File: kemonoAttachment{Path: "/a/three.jpg"}}}
+					default:
+						http.Error(w, `{"error":"Offset is bigger than total count."}`, http.StatusBadRequest)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(posts)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			res := extractOK(t, NewKemono(httpx.New("test", "en", 0, time.Second)), srv.URL+"/sample/user/creator", Options{})
+			if len(res.Files) != 3 || res.Title != "A Creator" || res.Note != "" || strings.Join(asked, ",") != tc.asked {
+				t.Fatalf("files=%d title=%q note=%q asked=%v", len(res.Files), res.Title, res.Note, asked)
+			}
+			if got := strings.Join(filePaths(res.Files), ","); got != "1/one.jpg,2/two.jpg,3/three.jpg" {
+				t.Fatalf("files %s", got)
+			}
+		})
 	}
 }
 

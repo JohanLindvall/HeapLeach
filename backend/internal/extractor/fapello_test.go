@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,19 +45,14 @@ func TestFapelloExtractWalksAndDeduplicates(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	f := NewFapello(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, _ := ParseURL(srv.URL + "/model-one/")
-	res, err := f.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewFapello(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL+"/model-one/", Options{})
 	if res.Title != "model-one" {
 		t.Errorf("title = %q, want the model's name", res.Title)
 	}
 	if len(res.Files) != 2 {
 		t.Fatalf("got %d files, want the model's own 2 (the other model's dropped)", len(res.Files))
 	}
-	if res.Files[0].Name != "model-one_0300.jpg" {
+	if res.Files[0].Name != "model-one_0300.jpg" || res.Note != "" {
 		t.Errorf("name = %q, want the thumbnail suffix stripped", res.Files[0].Name)
 	}
 	if pagesServed != 2 {
