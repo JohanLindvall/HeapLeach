@@ -238,7 +238,7 @@ concurrently with `Wait`, so that its inherited-pipe deadline actually starts.
 `util.BoundedBuffer` keeps diagnostic readers draining without unbounded
 allocation.
 
-**Probing.** That bound is why the yt-dlp probes (`youtube.go`) print only the
+**Probing.** That bound is why the yt-dlp probes (`handoffs.go`) print only the
 fields they read with `--print`, one JSON object per line, rather than dumping
 with `-J`: a full dump of one ordinary YouTube video can be ten megabytes,
 almost all of it machine-translated automatic captions, which would fail the
