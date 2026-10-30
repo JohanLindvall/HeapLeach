@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"encoding/json"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -715,22 +714,6 @@ func TestARDJoin(t *testing.T) {
 	for _, tc := range tests {
 		if got := ardJoin(tc.show, tc.episode); got != tc.want {
 			t.Errorf("ardJoin(%q, %q) = %q, want %q", tc.show, tc.episode, got, tc.want)
-		}
-	}
-}
-
-func TestARDMatch(t *testing.T) {
-	a := NewARD(nil)
-	for _, host := range []string{"www.ardmediathek.de", "ardmediathek.de", "ARDMEDIATHEK.DE"} {
-		if !a.Match(&url.URL{Scheme: "https", Host: host, Path: "/video/x"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	// The other public-broadcaster sites run their own players, and matching
-	// them would promise more than this resolves.
-	for _, host := range []string{"www.zdf.de", "daserste.de", "sportschau.de", "ardmediathek.de.example.test"} {
-		if a.Match(&url.URL{Scheme: "https", Host: host, Path: "/video/x"}) {
-			t.Errorf("%s was matched", host)
 		}
 	}
 }

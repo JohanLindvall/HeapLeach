@@ -121,16 +121,18 @@ func NewSRF(client *httpx.Client) *SRF { return &SRF{client: client, il: srfIL} 
 
 func (s *SRF) Name() string { return "srf" }
 
-// Match claims the Play section of srf.ch, and any srf.ch URL that names a
-// media urn outright. The rest of srf.ch is a news site whose articles embed
-// a player this does not read, and claiming those would promise more than it
-// resolves.
-func (s *SRF) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "srf.ch") {
-		return false
-	}
-	return srfURN(u.Query().Get("urn")) != "" ||
-		strings.HasPrefix(strings.ToLower(u.Path), "/play/")
+// Recognises is the inventory's description.
+func (s *SRF) Recognises() string {
+	return "programmes and shows of Play SRF (a `urn=` or a show's `id=` in the query) whose page names its `urn:srf:` media"
+}
+
+// Shape reports a link naming a media urn, or a Play show page by its id.
+func (s *SRF) Shape(u *url.URL) bool { return srfTarget(u).urn != "" }
+
+// Recognise takes a page of Play SRF naming what it plays: its media are
+// addressed by urn:srf: urns, which the Integration Layer resolves.
+func (s *SRF) Recognise(_ context.Context, p *Page) bool {
+	return s.Shape(p.Final) && p.Has("urn:srf:") && p.Named("Play SRF")
 }
 
 // Extract handles a single programme or a whole show.

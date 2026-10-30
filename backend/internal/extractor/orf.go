@@ -42,7 +42,6 @@ import (
 // Anything else on orf.at — its radio, its news pages — is still handed to
 // yt-dlp, as all of it was.
 type ORF struct {
-	hostSet
 	client *httpx.Client
 	// site is where the runtime configuration is read from, a field so that
 	// tests can stand in for it.
@@ -58,9 +57,8 @@ type orfAPI struct{ base, authorization string }
 
 // orfRest is the part of orf.at still handed to yt-dlp.
 var orfRest = handoffSite{
-	name:    "orf",
-	domains: []string{"orf.at", "tvthek.orf.at", "on.orf.at"},
-	why:     "only ORF ON's videos and series are read natively, not a page like this one",
+	name: "orf",
+	why:  "only ORF ON's videos and series are read natively, not a page like this one",
 }
 
 const orfSite = "https://on.orf.at/"
@@ -68,12 +66,33 @@ const orfSite = "https://on.orf.at/"
 // NewORF builds the ORF extractor.
 func NewORF(client *httpx.Client) *ORF {
 	return &ORF{
-		hostSet: orfRest.domains, client: client, site: orfSite,
-		handoff: &Handoff{hostSet: orfRest.domains, client: client, site: orfRest},
+		client: client, site: orfSite,
+		handoff: &Handoff{client: client, site: orfRest},
 	}
 }
 
 func (o *ORF) Name() string { return "orf" }
+
+// Recognises is the inventory's description.
+func (o *ORF) Recognises() string {
+	return "episodes and series (`/video/<id>`, `/sendereihe/<id>`, `/profile/…`) of ORF ON, whose page carries the runtime configuration (`__NUXT__`) the API credentials are read from"
+}
+
+// Shape reports an episode or series link as ORF ON writes them, with the
+// slug after the id: a bare /video/<number> is every other video site's
+// form too, and only a probed page can say it is this one.
+func (o *ORF) Shape(u *url.URL) bool {
+	kind, _ := orfLink(u)
+	segs := util.PathSegments(u)
+	return kind != 0 && (segs[0] == "profile" || len(segs) >= 3)
+}
+
+// Recognise takes a page of ORF ON: it carries the runtime configuration
+// (window.__NUXT__) that names the API and the credentials this reads with.
+// A page of it that is no episode or series is handed to yt-dlp, as before.
+func (o *ORF) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.Has("__NUXT__") && p.Named("ORF ON")
+}
 
 // The kinds of page read natively.
 const (
@@ -89,8 +108,6 @@ var orfNumber = regexp.MustCompile(`^[0-9]+$`)
 func orfLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
 	switch {
-	case !util.HostMatches(u.Host, "on.orf.at") && !util.HostMatches(u.Host, "tvthek.orf.at"):
-		return 0, ""
 	case len(segs) >= 2 && segs[0] == "video" && orfNumber.MatchString(segs[1]):
 		return orfEpisode, segs[1]
 	case len(segs) >= 2 && segs[0] == "sendereihe" && orfNumber.MatchString(segs[1]):

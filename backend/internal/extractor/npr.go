@@ -65,14 +65,6 @@ type NPR struct {
 }
 
 const (
-	// nprHost is the site, and the match is against it exactly rather than
-	// through util.HostMatches. The subdomains are not pages and are each
-	// already somebody else's job: ondemand.npr.org is a plain MP3 the
-	// fallback extractor downloads as it stands, and feeds.npr.org serves the
-	// open podcast archive as RSS, which the feed extractor reads better than
-	// this could.
-	nprHost = "npr.org"
-
 	// nprAudioAttr holds one piece of audio's metadata, as JSON in an
 	// attribute. It is read with the HTML tokeniser rather than matched out
 	// of the page text, and the ampersands are the reason: NPR writes its
@@ -104,16 +96,29 @@ func NewNPR(client *httpx.Client) *NPR { return &NPR{client: client} }
 
 func (n *NPR) Name() string { return "npr" }
 
-// Match takes the site itself and nothing under it — see nprHost.
-func (n *NPR) Match(u *url.URL) bool {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	return host == nprHost || host == "www."+nprHost
+// nprShape is a story (/<yyyy>/<mm>/<dd>/<id>/<slug>), a programme
+// (/programs/<slug>/) or a podcast (/podcasts/<id>/<slug>).
+var nprShape = pathShape(`^/[0-9]{4}/[0-9]{2}/[0-9]{2}/(?:[0-9]{6,}|nx-s[0-9]+-[0-9]+)/[^/]+`, `^/programs/[^/]+`, `^/podcasts/[0-9]+/[^/]+`)
+
+// Recognises is the inventory's description.
+func (n *NPR) Recognises() string {
+	return "NPR pages carrying audio players (`data-audio`): stories, programmes, podcasts and sections"
+}
+
+// Shape reports a story, programme or podcast link.
+func (n *NPR) Shape(u *url.URL) bool { return nprShape(u) }
+
+// Recognise takes an NPR page carrying audio, in the player blocks
+// (data-audio) this lists: any page of the site that has them, a section
+// front as much as a story.
+func (n *NPR) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.Has(nprAudioAttr+"=") && p.Named("NPR")
 }
 
 // Extract reads a page and lists every piece of audio on it.
 func (n *NPR) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	// No headers: the pages need none, and neither does the audio they name.
-	doc, err := n.client.GetString(ctx, u.String(), nil)
+	doc, _, err := fetchDocument(ctx, n.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("npr: fetch %s: %w", u.Redacted(), err)
 	}

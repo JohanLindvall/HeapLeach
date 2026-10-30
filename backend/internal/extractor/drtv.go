@@ -53,7 +53,6 @@ import (
 // request a page, and an episode's videos are read when its transfer
 // starts. Anything else on dr.dk is still handed to yt-dlp.
 type DRTV struct {
-	hostSet
 	client *httpx.Client
 	// api is the API's base, a field so that tests can stand in for it.
 	api     string
@@ -64,20 +63,37 @@ const drAPIRoot = "https://production-cdn.dr-massive.com/api"
 
 // drRest is the part of dr.dk still handed to yt-dlp.
 var drRest = handoffSite{
-	name:    "drtv",
-	domains: []string{"dr.dk"},
-	why:     "only DR TV's programmes and series are read natively, not a page like this one",
+	name: "drtv",
+	why:  "only DR TV's programmes and series are read natively, not a page like this one",
 }
 
 // NewDRTV builds the DR TV extractor.
 func NewDRTV(client *httpx.Client) *DRTV {
 	return &DRTV{
-		hostSet: drRest.domains, client: client, api: drAPIRoot,
-		handoff: &Handoff{hostSet: drRest.domains, client: client, site: drRest},
+		client: client, api: drAPIRoot,
+		handoff: &Handoff{client: client, site: drRest},
 	}
 }
 
 func (d *DRTV) Name() string { return "drtv" }
+
+// drShell marks DR TV's app: the state it boots from, its route table.
+const drShell = `window.__data = {"app":{"config"`
+
+// Recognises is the inventory's description.
+func (d *DRTV) Recognises() string {
+	return "programmes, seasons and series (`/drtv/…/<slug>_<id>`) of DR TV, served by its app with the state it boots from"
+}
+
+// Shape reports a DR TV link ending in an item id.
+func (d *DRTV) Shape(u *url.URL) bool { return drLink(u) != "" }
+
+// Recognise takes a page of DR TV's app (its boot state, window.__data)
+// under /drtv/. One naming no item is handed to yt-dlp, as before.
+func (d *DRTV) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	return len(segs) >= 2 && segs[0] == "drtv" && p.Has(drShell) && p.Named("DRTV")
+}
 
 var drItemID = regexp.MustCompile(`(?:^|_)([0-9]+)$`)
 

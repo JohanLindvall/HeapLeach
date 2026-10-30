@@ -55,7 +55,6 @@ import (
 // series that has seasons. They are recognised by their ids instead: see
 // ardWithoutVariants.
 type ARD struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -84,10 +83,32 @@ const (
 
 // NewARD builds the ARD Mediathek extractor.
 func NewARD(client *httpx.Client) *ARD {
-	return &ARD{hostSet: hostSet{"ardmediathek.de"}, client: client}
+	return &ARD{client: client}
 }
 
 func (a *ARD) Name() string { return "ard" }
+
+// Recognises is the inventory's description.
+func (a *ARD) Recognises() string {
+	return "videos (`/video/…/<id>`) and programmes (`/sendung/`, `/serie/`, `/film/`) of the ARD Mediathek, whose page loads from its page gateway"
+}
+
+// ardShapeIDLen is how long a content id is before the link scanner takes
+// it for one. An id is base64 of a whole content identifier and runs to
+// dozens of characters; another site's /video/<number> does not.
+const ardShapeIDLen = 24
+
+// Shape reports a video or programme link with its content id.
+func (a *ARD) Shape(u *url.URL) bool {
+	ref := ardTarget(u)
+	return len(ref.item) >= ardShapeIDLen || len(ref.show) >= ardShapeIDLen
+}
+
+// Recognise takes a video or programme page of the Mediathek: its state is
+// read from the page gateway (/page-gateway/), the API this resolves with.
+func (a *ARD) Recognise(_ context.Context, p *Page) bool {
+	return ardTarget(p.Final) != ardRef{} && p.Has("/page-gateway/") && p.Named("ARD Mediathek")
+}
 
 // Extract handles a single video, or a programme that expands to every
 // episode listed under it.

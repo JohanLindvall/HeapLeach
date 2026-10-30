@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"encoding/json"
-	"net/url"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -512,21 +511,5 @@ func TestNRKEpisodeLinkIgnoresPositions(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] != "ABCD10000101" || ids[1] != "ABCD10000201" {
 		t.Errorf("found %v, want the two programme ids and nothing else", ids)
-	}
-}
-
-func TestNRKMatch(t *testing.T) {
-	n := NewNRK(nil)
-	for _, host := range []string{"tv.nrk.no", "TV.NRK.NO"} {
-		if !n.Match(&url.URL{Scheme: "https", Host: host, Path: "/serie/a-series"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	// Radio and the news site run on the same player API but have a
-	// catalogue of their own, which nothing here reads.
-	for _, host := range []string{"radio.nrk.no", "www.nrk.no", "nrk.no", "nottv.nrk.no.example.test"} {
-		if n.Match(&url.URL{Scheme: "https", Host: host, Path: "/serie/a-series"}) {
-			t.Errorf("%s was matched", host)
-		}
 	}
 }

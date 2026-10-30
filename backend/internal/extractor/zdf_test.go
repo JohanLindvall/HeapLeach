@@ -675,24 +675,3 @@ func TestZDFRank(t *testing.T) {
 		t.Error("a rendition with an unrecognised quality was refused although it was the only one")
 	}
 }
-
-func TestZDFMatch(t *testing.T) {
-	z := NewZDF(nil)
-	tests := map[string]bool{
-		"https://www.zdf.de/dokus/a-show-100":                       true,
-		"https://zdf.de/video/dokus/a-show-100/a-programme-100":     true,
-		"https://zdf-prod-futura.zdf.de/mediathekV2/document/x-100": true,
-		"https://www.zdf.example.test/dokus/a-show-100":             false,
-		"https://notzdf.de/dokus/a-show-100":                        false,
-		"https://www.ardmediathek.de/video/x":                       false,
-	}
-	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := z.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
-}

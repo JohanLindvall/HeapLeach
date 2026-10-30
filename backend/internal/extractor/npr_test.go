@@ -398,25 +398,3 @@ func TestNPRPageTitle(t *testing.T) {
 		}
 	}
 }
-
-// TestNPRMatch pins the host list. It is exact rather than the usual
-// subdomain match because every npr.org subdomain that matters is somebody
-// else's job: the on-demand store serves a plain MP3 the fallback extractor
-// downloads as it stands, and the feed host serves RSS that the feed
-// extractor reads.
-func TestNPRMatch(t *testing.T) {
-	n := NewNPR(nil)
-	for _, host := range []string{"npr.org", "www.npr.org", "WWW.NPR.ORG", "www.npr.org."} {
-		if !n.Match(&url.URL{Scheme: "https", Host: host, Path: "/programs/a-programme/"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{
-		"ondemand.npr.org", "feeds.npr.org", "media.npr.org",
-		"npr.simplecastaudio.com", "npr.org.example.test",
-	} {
-		if n.Match(&url.URL{Scheme: "https", Host: host, Path: "/a/b.mp3"}) {
-			t.Errorf("%s was matched", host)
-		}
-	}
-}

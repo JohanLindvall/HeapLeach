@@ -528,40 +528,6 @@ func TestRTPTarget(t *testing.T) {
 	}
 }
 
-// TestRTPMatch pins the host rule. RTP's news site and its radio station
-// pages share the domain and nothing else, so only /play is claimed.
-func TestRTPMatch(t *testing.T) {
-	r := NewRTPPlay(nil)
-	for _, raw := range []string{
-		"https://www.rtp.pt/play/p1/a-programme",
-		"https://rtp.pt/play/p1/e11/a-programme",
-		"https://WWW.RTP.PT/play/p1/a-programme",
-		"https://www.rtp.pt/play/",
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !r.Match(u) {
-			t.Errorf("%s was not matched", raw)
-		}
-	}
-	for _, raw := range []string{
-		"https://www.rtp.pt/noticias/pais/a-story_v1",
-		"https://www.rtp.pt/antena1/programas/a-show",
-		"https://www.rtp.pt/",
-		"https://notrtp.pt.example.test/play/p1/a-programme",
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if r.Match(u) {
-			t.Errorf("%s was matched", raw)
-		}
-	}
-}
-
 // TestRTPRefusedCarriesTheReason covers what the season expansion leans on:
 // a whole season refused for one reason should read as that one reason.
 func TestRTPRefusedCarriesTheReason(t *testing.T) {

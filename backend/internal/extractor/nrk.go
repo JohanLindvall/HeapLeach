@@ -45,7 +45,6 @@ import (
 // which names the series and the episode in fields of their own and leaves
 // both empty when there is no series to name.
 type NRK struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -74,9 +73,33 @@ var nrkEpisodeLink = regexp.MustCompile(`/episode/([A-Za-z][A-Za-z0-9]{5,})`)
 // NewNRK builds the NRK TV extractor. It takes tv.nrk.no alone: radio and the
 // news site share the same player API but not the catalogue below, and
 // claiming them would promise more than this resolves.
-func NewNRK(client *httpx.Client) *NRK { return &NRK{hostSet: hostSet{"tv.nrk.no"}, client: client} }
+func NewNRK(client *httpx.Client) *NRK { return &NRK{client: client} }
 
 func (n *NRK) Name() string { return "nrk" }
+
+// nrkShape is a programme or series link; the share links are /se?v= and
+// /se?s=.
+var nrkShape = pathShape(`^/(?:program|serie)/[^/]+`)
+
+// Recognises is the inventory's description.
+func (n *NRK) Recognises() string {
+	return "programmes and series (`/program/<id>`, `/serie/<slug>`, `/se?v=`) of NRK TV, whose page data names programmes by `prfId`"
+}
+
+// Shape reports a programme, series or share link.
+func (n *NRK) Shape(u *url.URL) bool {
+	if nrkShape(u) {
+		return true
+	}
+	q := u.Query()
+	return strings.Trim(u.Path, "/") == "se" && (q.Get("v") != "" || q.Get("s") != "")
+}
+
+// Recognise takes a programme or series page of NRK TV, whose page data
+// names programmes by the psapi's own ids (prfId).
+func (n *NRK) Recognise(_ context.Context, p *Page) bool {
+	return n.Shape(p.Final) && p.Has(`"prfId"`) && p.Named("NRK TV")
+}
 
 // Extract handles a single programme, one season, or a whole series.
 func (n *NRK) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -296,7 +319,7 @@ func (n *NRK) numbered(ctx context.Context, ref nrkRef) (string, error) {
 
 // episodesFromPage recovers programme ids straight from the rendered page.
 func (n *NRK) episodesFromPage(ctx context.Context, u *url.URL) (string, []nrkEpisodeRef, error) {
-	doc, err := n.client.GetString(ctx, u.String(), httpx.Referer(nrkRoot+"/"))
+	doc, _, err := fetchDocument(ctx, n.client, u, httpx.Referer(nrkRoot+"/"))
 	if err != nil {
 		return "", nil, fmt.Errorf("nrk: fetch %s: %w", u.Redacted(), err)
 	}

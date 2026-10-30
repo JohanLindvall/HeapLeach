@@ -53,7 +53,6 @@ import (
 //
 // It used to go to yt-dlp, whose RTBF extractor no longer works.
 type RTBF struct {
-	hostSet
 	client *httpx.Client
 	// bff and exposure are the APIs' bases, fields so that tests can stand
 	// in for them.
@@ -78,10 +77,35 @@ const (
 
 // NewRTBF builds the RTBF Auvio extractor.
 func NewRTBF(client *httpx.Client) *RTBF {
-	return &RTBF{hostSet: hostSet{"rtbf.be", "auvio.rtbf.be"}, client: client, bff: rtbfBFF, exposure: rtbfExposure}
+	return &RTBF{client: client, bff: rtbfBFF, exposure: rtbfExposure}
 }
 
 func (r *RTBF) Name() string { return "rtbf" }
+
+// rtbfAuvioAPI marks an Auvio page: its widgets are addressed by the BFF
+// API's paths, which this reads too.
+var rtbfAuvioAPI = regexp.MustCompile(`/auvio/v1\.[0-9]+/widgets/`)
+
+// Recognises is the inventory's description.
+func (r *RTBF) Recognises() string {
+	return "media, programmes and live pages of RTBF Auvio (`/media/<slug>-<id>`, `/emission/<slug>-<id>`) whose page addresses the Auvio API, and RTBF pages embedding Auvio players"
+}
+
+// Shape reports a media, programme, live or embedded-player link.
+func (r *RTBF) Shape(u *url.URL) bool {
+	kind, _ := rtbfLink(u)
+	return kind != rtbfOther
+}
+
+// Recognise takes an Auvio page whose widgets are addressed by the Auvio
+// API, or a page of RTBF's own that embeds Auvio players by asset id.
+func (r *RTBF) Recognise(_ context.Context, p *Page) bool {
+	if kind, _ := rtbfLink(p.Final); kind != rtbfOther {
+		return rtbfAuvioAPI.MatchString(p.Body) && p.Named("RTBF Auvio", "Auvio")
+	}
+	return len(p.Segments()) > 0 && p.Named("RTBF", "RTBF Actus") &&
+		(rtbfAssetAttr.MatchString(p.Body) || rtbfEmbedLink.MatchString(p.Body))
+}
 
 // The kinds of link read.
 const (
@@ -102,7 +126,7 @@ var (
 // page to look in for players.
 func rtbfLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
-	if util.HostMatches(u.Host, "auvio.rtbf.be") && len(segs) > 0 {
+	if len(segs) > 0 {
 		trailing := func(seg string) string {
 			if m := rtbfTrailingID.FindStringSubmatch(seg); m != nil {
 				return m[1]
@@ -635,7 +659,7 @@ var (
 // embedded reads the Auvio players a page embeds, an article's say, each
 // into its file.
 func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	html, err := r.client.GetString(ctx, u.String(), nil)
+	html, _, err := fetchDocument(ctx, r.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rtbf: %s: %w", u.Redacted(), err)
 	}
