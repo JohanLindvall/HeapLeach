@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -51,13 +52,6 @@ type Streamable struct {
 }
 
 const (
-	// streamableSite is the only host that serves video pages, and matching
-	// is an allowlist against it rather than the usual subdomain test: the
-	// media comes from cdn-*.streamable.com and this metadata from ajax.,
-	// and neither belongs here. A CDN link is already a direct link, and
-	// putting one through this extractor would turn a working URL into a
-	// lookup of a video id that does not exist.
-	streamableSite = "streamable.com"
 
 	// streamableAPI is the document the site's own player reads.
 	streamableAPI = "https://ajax.streamable.com/videos/"
@@ -86,9 +80,29 @@ func NewStreamable(client *httpx.Client) *Streamable {
 
 func (s *Streamable) Name() string { return "streamable" }
 
-func (s *Streamable) Match(u *url.URL) bool {
-	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	return host == streamableSite || host == "www."+streamableSite
+var (
+	// streamablePage is the watch page, /<id>, or a player under one of its
+	// prefixes. Both are far too common a form to single out to the link
+	// scanner — a bare slug, or the /e/<id> of every other video host — so
+	// the extractor reports no form of its own and is found by its pages.
+	streamablePage = pathShape(`^/(?:[eost]/)?[0-9a-z]{4,10}/?$`)
+	// streamablePlayer is the player a watch page offers for embedding.
+	streamablePlayer = regexp.MustCompile(`^/[eot]/[0-9a-z]+`)
+)
+
+// Recognises is the inventory's description.
+func (s *Streamable) Recognises() string {
+	return "videos (`/<id>`, `/e/<id>`) whose page, named Streamable, offers the site's player " +
+		"(`/t/<id>`) for embedding"
+}
+
+// Shape reports no form: see streamablePage.
+func (s *Streamable) Shape(*url.URL) bool { return false }
+
+// Recognise takes a watch page by the player it offers for embedding,
+// which is the id Extract asks the API about.
+func (s *Streamable) Recognise(_ context.Context, p *Page) bool {
+	return streamablePage(p.Final) && p.playerMeta(streamablePlayer) && p.Named("Streamable")
 }
 
 // Extract resolves a video page to its best rendition.

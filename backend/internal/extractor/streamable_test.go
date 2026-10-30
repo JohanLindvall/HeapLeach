@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -362,23 +361,6 @@ func TestStreamableID(t *testing.T) {
 		}
 		if got := streamableID(u); got != want {
 			t.Errorf("streamableID(%s) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-// The match is deliberately an allowlist. A direct CDN link is already
-// downloadable and belongs to the fallback extractor; routed here it would
-// become an API lookup for a video id that does not exist.
-func TestStreamableMatch(t *testing.T) {
-	s := NewStreamable(nil)
-	for _, host := range []string{"streamable.com", "www.streamable.com", "Streamable.com", "streamable.com:443"} {
-		if !s.Match(&url.URL{Scheme: "https", Host: host, Path: "/abcd12"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{"cdn-cf-west.streamable.com", "ajax.streamable.com", "notstreamable.com"} {
-		if s.Match(&url.URL{Scheme: "https", Host: host, Path: "/video/mp4/abcd12.mp4"}) {
-			t.Errorf("%s was matched, and it serves no video pages", host)
 		}
 	}
 }

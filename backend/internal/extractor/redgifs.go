@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +24,6 @@ import (
 // with no account behind it, so this is only a preliminary step rather than
 // a login. Tokens are reused until they age out.
 type RedGifs struct {
-	hostSet
 	client *httpx.Client
 
 	mu       sync.Mutex
@@ -41,10 +41,39 @@ const (
 
 // NewRedGifs builds the redgifs extractor.
 func NewRedGifs(client *httpx.Client) *RedGifs {
-	return &RedGifs{hostSet: hostSet{"redgifs.com"}, client: client}
+	return &RedGifs{client: client}
 }
 
 func (r *RedGifs) Name() string { return "redgifs" }
+
+var (
+	// redgifsShape is a clip, its player, or a user's clips.
+	redgifsShape = pathShape(`^/(?:watch|ifr)/[A-Za-z]+/?$`, `^/users/[^/]+/?$`)
+	// redgifsPlayer is the player a clip's page offers for embedding.
+	redgifsPlayer = regexp.MustCompile(`^/ifr/[A-Za-z]+`)
+)
+
+// redgifsBundle is the path the app's client data script is served under.
+const redgifsBundle = "/client_data/"
+
+// Recognises is the inventory's description.
+func (r *RedGifs) Recognises() string {
+	return "clips (`/watch/<id>`, `/ifr/<id>`) and users (`/users/<name>`) served by the RedGIFs app, " +
+		"a clip's page naming its embed player"
+}
+
+// Shape reports a clip, a player or a user.
+func (r *RedGifs) Shape(u *url.URL) bool { return redgifsShape(u) }
+
+// Recognise takes a page of the app — its bundle and name — and for a
+// clip's page the player it names, the id Extract asks the API about. A
+// user's page is the app shell alone.
+func (r *RedGifs) Recognise(_ context.Context, p *Page) bool {
+	if !redgifsShape(p.Final) || !p.Script(redgifsBundle) || !p.Named("RedGIFs") {
+		return false
+	}
+	return p.Segments()[0] != "watch" || p.playerMeta(redgifsPlayer)
+}
 
 // Extract handles a single item (/watch/<id>) or a user's whole feed
 // (/users/<name>).

@@ -34,7 +34,6 @@ import (
 // The links it hands back are signed and carry an expiry a few minutes out,
 // so the configuration is read again when the item actually starts.
 type DrTuber struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -52,10 +51,32 @@ var drtuberQualities = map[string]int{"lq": 320, "hq": 720, "4k": 2160}
 
 // NewDrTuber builds the drtuber extractor.
 func NewDrTuber(client *httpx.Client) *DrTuber {
-	return &DrTuber{hostSet: hostSet{"drtuber.com"}, client: client}
+	return &DrTuber{client: client}
 }
 
 func (d *DrTuber) Name() string { return "drtuber" }
+
+// drtuberShape is a watch page or the embedded player.
+var drtuberShape = pathShape(`^/video/[0-9]+(?:/[^/]*)?/?$`, `^/embed/[0-9]+/?$`)
+
+// drtuberConfigPath is the player configuration endpoint, which both the
+// watch page and the player name, and which is all Extract reads.
+const drtuberConfigPath = "player_config_json"
+
+// Recognises is the inventory's description.
+func (d *DrTuber) Recognises() string {
+	return "watch pages and players (`/video/<id>/<slug>`, `/embed/<id>`) whose player is configured " +
+		"from the DrTuber `player_config_json` endpoint"
+}
+
+// Shape reports a watch page or a player.
+func (d *DrTuber) Shape(u *url.URL) bool { return drtuberShape(u) }
+
+// Recognise takes a page whose player names the configuration endpoint
+// Extract asks.
+func (d *DrTuber) Recognise(_ context.Context, p *Page) bool {
+	return drtuberShape(p.Final) && p.Has(drtuberConfigPath)
+}
 
 // Extract resolves a video page to its best rendition, re-reading the
 // configuration at download time because the links expire.

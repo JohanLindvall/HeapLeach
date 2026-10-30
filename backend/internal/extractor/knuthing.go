@@ -19,15 +19,49 @@ import (
 // which supplies an HLS playlist; refresh the whole chain per attempt so a
 // listing can wait in the queue without spending its signatures.
 type Knuthing struct {
-	hostSet
 	client *httpx.Client
 }
 
 func NewKnuthing(client *httpx.Client) *Knuthing {
-	return &Knuthing{hostSet: hostSet{"knuthing.com"}, client: client}
+	return &Knuthing{client: client}
 }
 
 func (k *Knuthing) Name() string { return "knuthing" }
+
+var (
+	// knuthingVideoShape is a watch page or the embedded player.
+	knuthingVideoShape = pathShape(`^/watch/[^/]+\.html$`, `^/embed/[^/]+/?$`)
+	// knuthingListShape is a category's listing, the one form distinct
+	// enough to single out; knuthingListPage is any of its listings.
+	knuthingListShape = pathShape(`^/videos/category/[0-9]+/?$`)
+	knuthingListPage  = pathShape(`^/videos/[^/]+(?:/[^/]+)*/?$`)
+)
+
+// knuthingTheme is where the site's theme serves its scripts from.
+const knuthingTheme = "/themes/knuthing/"
+
+// Recognises is the inventory's description.
+func (k *Knuthing) Recognises() string {
+	return "watch pages (`/watch/<video>.html`) whose player frame or player block the KNUTHING " +
+		"theme renders, and its video listings (`/videos/<section>`) by their video list"
+}
+
+// Shape reports a watch page, a player or a listing.
+func (k *Knuthing) Shape(u *url.URL) bool { return knuthingVideoShape(u) || knuthingListShape(u) }
+
+// Recognise takes a page rendered by the site's theme by what Extract
+// reads on it: the player frame, or the player block that stands in for it
+// before a free video is confirmed, and a listing's video list.
+func (k *Knuthing) Recognise(_ context.Context, p *Page) bool {
+	listing := knuthingListPage(p.Final) && !strings.HasSuffix(p.Final.Path, "/rss")
+	if !knuthingVideoShape(p.Final) && !listing || !p.Script(knuthingTheme) {
+		return false
+	}
+	if knuthingVideoShape(p.Final) {
+		return p.hasElement(func(n *html.Node) bool { return hasClass(n, "bunnyframe") || hasClass(n, "player-video") })
+	}
+	return p.hasElement(func(n *html.Node) bool { return hasClass(n, "videos-latest-list") })
+}
 
 func (k *Knuthing) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	parts := util.PathSegments(u)
@@ -65,7 +99,7 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 	headers := httpx.Referer(util.Origin(page) + "/")
 	for attempt := range 2 {
 		ResolveNote(ctx, "Reading video page")
-		doc, final, err := k.client.GetPage(ctx, page.String(), headers, nil)
+		doc, final, err := fetchDocument(ctx, k.client, page, headers)
 		if err != nil {
 			return nil, fmt.Errorf("knuthing: fetch video page: %w", err)
 		}

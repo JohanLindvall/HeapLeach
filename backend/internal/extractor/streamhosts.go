@@ -40,14 +40,11 @@ import (
 // markup: an incomplete one in a hidden element, and the remainder in a
 // script that appends it minus a few leading characters.
 type Streamtape struct {
-	hostSet
 	client *httpx.Client
 }
 
-var streamtapeHosts = hostSet{
-	"streamtape.com", "streamtape.net", "streamtape.to", "streamtape.xyz",
-	"streamtape.cc", "streamtape.site", "streamta.pe", "strcloud.link",
-}
+// streamtapeShape is a watch page or a player, /v/<id> or /e/<id>.
+var streamtapeShape = pathShape(`^/[ve]/[0-9A-Za-z]{6,}(?:/[^/]*)?/?$`)
 
 // streamtapeLink matches the assignment that joins the two halves, taking
 // the substring offset from the page rather than assuming it.
@@ -57,10 +54,23 @@ var streamtapeLink = regexp.MustCompile(
 
 // NewStreamtape builds the streamtape extractor.
 func NewStreamtape(client *httpx.Client) *Streamtape {
-	return &Streamtape{hostSet: streamtapeHosts, client: client}
+	return &Streamtape{client: client}
 }
 
 func (s *Streamtape) Name() string { return "streamtape" }
+
+// Recognises is the inventory's description.
+func (s *Streamtape) Recognises() string {
+	return "videos (`/v/<id>`, `/e/<id>`) whose page assembles the Streamtape `robotlink` media link"
+}
+
+// Shape reports a watch page or a player.
+func (s *Streamtape) Shape(u *url.URL) bool { return streamtapeShape(u) }
+
+// Recognise takes a page that assembles the link Extract assembles.
+func (s *Streamtape) Recognise(_ context.Context, p *Page) bool {
+	return streamtapeShape(p.Final) && streamtapeLink.MatchString(p.Body)
+}
 
 // Extract resolves an embed or watch page.
 func (s *Streamtape) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -72,7 +82,7 @@ func (s *Streamtape) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 }
 
 func (s *Streamtape) media(ctx context.Context, page string) (link, title string, err error) {
-	doc, err := s.client.GetString(ctx, page, httpx.Referer(streamtapeReferer(page)))
+	doc, err := fetchPage(ctx, s.client, page, httpx.Referer(streamtapeReferer(page)))
 	if err != nil {
 		return "", "", fmt.Errorf("streamtape: fetch %s: %w", page, err)
 	}
@@ -133,15 +143,17 @@ func streamtapeReferer(page string) string {
 // endpoint, and that endpoint returns a prefix which the player completes
 // with a random tail, the token and a timestamp.
 type DoodStream struct {
-	hostSet
 	client *httpx.Client
 }
 
-var doodHosts = hostSet{
-	"doodstream.com", "dood.to", "dood.so", "dood.watch", "dood.la", "dood.ws",
-	"dood.sh", "dood.yt", "dood.re", "dood.li", "ds2play.com", "d0o0d.com",
-	"do0od.com", "dooood.com", "vidply.com", "d000d.com", "playmogo.com",
-}
+var (
+	// doodShape is a player or its landing page, /e/<code> or /d/<code>.
+	doodShape = pathShape(`^/[ed]/[0-9a-z]{6,}/?$`)
+	// doodLanding is the landing page, which frames the player.
+	doodLanding = pathShape(`^/d/[0-9a-z]{6,}/?$`)
+	// doodPlayerFrame is the player a landing page frames.
+	doodPlayerFrame = regexp.MustCompile(`^/e/[0-9a-z]{6,}`)
+)
 
 // doodPassPath finds the token endpoint the page points at.
 var doodPassPath = regexp.MustCompile(`(/pass_md5/[^'"\s]+)`)
@@ -154,10 +166,38 @@ const doodTailLength = 10
 
 // NewDoodStream builds the doodstream extractor.
 func NewDoodStream(client *httpx.Client) *DoodStream {
-	return &DoodStream{hostSet: doodHosts, client: client}
+	return &DoodStream{client: client}
 }
 
 func (d *DoodStream) Name() string { return "doodstream" }
+
+// Recognises is the inventory's description.
+func (d *DoodStream) Recognises() string {
+	return "players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its " +
+		"player gate, and landing pages (`/d/<code>`) named DoodStream that frame such a player"
+}
+
+// Shape reports a player or a landing page.
+func (d *DoodStream) Shape(u *url.URL) bool { return doodShape(u) }
+
+// Recognise takes a player by the token endpoint Extract asks, or by the
+// gate that stands in for it until a challenge is passed; and a landing
+// page by the player it frames, under the site's name.
+func (d *DoodStream) Recognise(_ context.Context, p *Page) bool {
+	if !doodShape(p.Final) {
+		return false
+	}
+	if doodPassPath.MatchString(p.Body) || doodChallengePage(p.Body) {
+		return true
+	}
+	return doodLanding(p.Final) && p.Named("DoodStream") && p.hasElement(func(n *html.Node) bool {
+		if !isElem(n, atom.Iframe) {
+			return false
+		}
+		src, err := url.Parse(attr(n, "src"))
+		return err == nil && doodPlayerFrame.MatchString(src.EscapedPath())
+	})
+}
 
 func (d *DoodStream) ProxyFallback() bool { return true }
 
@@ -298,25 +338,57 @@ func doodChallengePage(doc string) bool {
 // MixDrop keeps its link inside a packed script, which unpacks to an
 // assignment naming the delivery host.
 type MixDrop struct {
-	hostSet
 	client *httpx.Client
 }
 
-var mixdropHosts = hostSet{
-	"mixdrop.co", "mixdrop.to", "mixdrop.ag", "mixdrop.bz", "mixdrop.ch",
-	"mixdrop.club", "mixdrop.gl", "mixdrop.is", "mixdrop.my", "mixdrop.sx",
-	"mixdrop.ps", "mixdrp.co", "mixdrp.to", "mdbekjwqa.pw",
-}
+var (
+	// mixdropShape is a player or its landing page, /e/<code> or /f/<code>.
+	mixdropShape = pathShape(`^/[ef]/[0-9a-z]{6,}(?:/[^/]*)?/?$`)
+	// mixdropLanding is the landing page.
+	mixdropLanding = pathShape(`^/f/[0-9a-z]{6,}(?:/[^/]*)?/?$`)
+)
 
 // mixdropURL matches the assignment the unpacked script leaves behind.
 var mixdropURL = regexp.MustCompile(`MDCore\.(?:wurl|vsrc)\s*=\s*["']([^"']+)["']`)
 
 // NewMixDrop builds the mixdrop extractor.
 func NewMixDrop(client *httpx.Client) *MixDrop {
-	return &MixDrop{hostSet: mixdropHosts, client: client}
+	return &MixDrop{client: client}
 }
 
 func (m *MixDrop) Name() string { return "mixdrop" }
+
+// mixdropCore is the player object whose settings the page assigns.
+const mixdropCore = "MDCore."
+
+// Recognises is the inventory's description.
+func (m *MixDrop) Recognises() string {
+	return "players (`/e/<code>`) configuring the MixDrop player object (`MDCore`), and landing pages " +
+		"(`/f/<code>`) named MixDrop that frame or configure one"
+}
+
+// Shape reports a player or a landing page.
+func (m *MixDrop) Shape(u *url.URL) bool { return mixdropShape(u) }
+
+// Recognise takes a page that configures the player object whose media
+// link Extract reads. A landing page frames the player rather than being
+// it, so it is taken under the site's name when it frames a player of its
+// own form.
+func (m *MixDrop) Recognise(_ context.Context, p *Page) bool {
+	if !mixdropShape(p.Final) {
+		return false
+	}
+	if p.Has(mixdropCore) {
+		return true
+	}
+	return mixdropLanding(p.Final) && p.Named("MixDrop") && p.hasElement(func(n *html.Node) bool {
+		if !isElem(n, atom.Iframe) {
+			return false
+		}
+		src, err := url.Parse(attr(n, "src"))
+		return err == nil && strings.HasPrefix(src.EscapedPath(), "/e/")
+	})
+}
 
 // Extract resolves a file or embed page.
 func (m *MixDrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -333,7 +405,7 @@ func (m *MixDrop) media(ctx context.Context, page string) (link, title string, e
 	if err != nil {
 		return "", "", fmt.Errorf("mixdrop: %w", err)
 	}
-	doc, err := m.client.GetString(ctx, page, httpx.Referer(util.Origin(base)+"/"))
+	doc, err := fetchPage(ctx, m.client, page, httpx.Referer(util.Origin(base)+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("mixdrop: fetch %s: %w", page, err)
 	}

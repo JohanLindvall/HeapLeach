@@ -15,56 +15,14 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// TestHandoffMatch pins the routing. A host list is the whole of what these
-// extractors decide, so too broad a match steals a URL another extractor
-// handles and too narrow a one drops it on the direct-link fallback, which
-// would save the page rather than the media.
-func TestHandoffMatch(t *testing.T) {
-	sites := NewHandoffs(nil)
-
-	match := func(raw string) string {
-		t.Helper()
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, site := range sites {
-			if legacyMatch(site, u) {
-				return site.Name()
-			}
-		}
-		return ""
-	}
-
-	for raw, want := range map[string]string{
-		"https://odysee.com/@channel:1/a-clip:2":     "odysee",
-		"https://lbry.tv/@channel:1/a-clip:2":        "odysee",
-		"https://www.dailymotion.com/video/x000000":  "dailymotion",
-		"https://dai.ly/x000000":                     "dailymotion",
-		"https://www.bilibili.com/video/BV00000000":  "bilibili",
-		"https://b23.tv/aaaaaa":                      "bilibili",
-		"https://soundcloud.com/an-artist/a-track":   "soundcloud",
-		"https://m.soundcloud.com/an-artist/a-track": "soundcloud",
-		"https://www.mixcloud.com/a-user/a-show/":    "mixcloud",
-		"https://rumble.com/v000000-a-clip.html":     "rumble",
-		// Lookalikes: a suffix match on the bare string would take these.
-		"https://rumble.example.test/v000000-x/": "",
-		"https://notsoundcloud.com/a/b":          "",
-	} {
-		if got := match(raw); got != want {
-			t.Errorf("%s went to %q, want %q", raw, got, want)
-		}
-	}
-}
-
 // TestHandoffSitesAreUsable guards the table itself. Every field of it ends
 // up in front of the user: the name opens each error and labels the host in
 // the UI, and `why` completes a sentence explaining what yt-dlp is for.
 func TestHandoffSitesAreUsable(t *testing.T) {
 	seen := make(map[string]bool, len(handoffSites))
 	for _, site := range handoffSites {
-		if site.name == "" || site.why == "" || len(site.domains) == 0 {
-			t.Errorf("%+v is missing a name, a reason or a domain", site)
+		if site.name == "" || site.why == "" || site.recognise == nil || site.shape == nil || site.recognises == "" {
+			t.Errorf("%s is missing a name, a reason, a form or a recogniser", site.name)
 		}
 		if seen[site.name] {
 			t.Errorf("two handoff hosts are both named %q", site.name)

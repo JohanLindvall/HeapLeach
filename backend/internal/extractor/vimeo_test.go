@@ -62,18 +62,6 @@ func TestVimeoPlayerURL(t *testing.T) {
 	}
 }
 
-func TestVimeoMatch(t *testing.T) {
-	v := NewVimeo(nil)
-	for _, host := range []string{"vimeo.com", "www.vimeo.com", "player.vimeo.com"} {
-		if !v.Match(&url.URL{Scheme: "https", Host: host, Path: "/1"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if v.Match(&url.URL{Scheme: "https", Host: "notvimeo.com"}) {
-		t.Error("a lookalike host was matched")
-	}
-}
-
 // vimeoServer stands in for the player pages and the CDN behind them. Each
 // page is a configuration, with {{base}} standing for the server's own URL;
 // the playlists are one master naming a video, an audio group and a

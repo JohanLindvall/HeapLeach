@@ -168,22 +168,6 @@ func TestVidmolyEmbedAlwaysUsesTheHostThatAnswers(t *testing.T) {
 	}
 }
 
-func TestVidmolyMatch(t *testing.T) {
-	v := NewVidmoly(nil)
-	for _, host := range []string{
-		"vidmoly.me", "vidmoly.to", "vidmoly.biz", "vidmoly.net", "www.vidmoly.biz",
-	} {
-		if !v.Match(&url.URL{Scheme: "https", Host: host, Path: "/embed-abcdefghijkl.html"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{"vidmoly.example.test", "notvidmoly.me", "vidmoly.com"} {
-		if v.Match(&url.URL{Scheme: "https", Host: host, Path: "/embed-abcdefghijkl.html"}) {
-			t.Errorf("%s was matched", host)
-		}
-	}
-}
-
 func TestVidmolyExtension(t *testing.T) {
 	tests := map[string]string{
 		"https://s1.example.test/v/abcdefghijkl.mp4?t=TOKEN": ".mp4",

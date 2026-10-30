@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"testing"
 )
 
@@ -83,20 +82,8 @@ func TestDrTuberRenditionsOnAVideoWithNoFiles(t *testing.T) {
 	}
 }
 
-// Match covers the watch page and the player the embeds point at, and the
-// id pattern is what separates a video from the rest of the site.
-func TestDrTuberMatchAndID(t *testing.T) {
-	d := NewDrTuber(nil)
-	for _, host := range []string{"drtuber.com", "www.drtuber.com", "m.drtuber.com"} {
-		u := &url.URL{Scheme: "https", Host: host, Path: "/video/1234567/a-synthetic-clip"}
-		if !d.Match(u) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if d.Match(&url.URL{Scheme: "https", Host: "notdrtuber.com", Path: "/video/1234567/x"}) {
-		t.Error("notdrtuber.com was matched")
-	}
-
+// The id pattern is what separates a video from the rest of the site.
+func TestDrTuberID(t *testing.T) {
 	ids := map[string]string{
 		"/video/1234567/a-synthetic-clip": "1234567",
 		"/video/1234567":                  "1234567",

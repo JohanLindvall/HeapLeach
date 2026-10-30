@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -61,6 +62,10 @@ import (
 // mean resolving the collection here, which is the work these hosts were
 // handed over to avoid.
 type Handoff struct {
+	// hostSet is set only by an extractor not yet moved to recognition that
+	// hands part of its site over; the handoffs registered on their own
+	// are recognised by their pages and leave it empty.
+	// TODO(generic-dispatch): remove with the last such caller.
 	hostSet
 	client *httpx.Client
 	site   handoffSite
@@ -68,8 +73,19 @@ type Handoff struct {
 
 // handoffSite is one host passed over whole.
 type handoffSite struct {
-	name    string
+	name string
+	// domains is the host list of a handoff still claimed by host, as part
+	// of an extractor not yet moved to recognition. The sites below are
+	// recognised by their pages instead and leave it empty.
+	// TODO(generic-dispatch): remove once no caller sets it.
 	domains []string
+	// shape is the URL forms the site's media and collections have, for the
+	// link scanner; recognise says whether a probed page is the site's,
+	// by what the page carries that yt-dlp goes on to read; recognises
+	// describes both for the inventory.
+	shape      func(u *url.URL) bool
+	recognise  func(ctx context.Context, h *Handoff, p *Page) bool
+	recognises string
 	// why completes the sentence explaining what yt-dlp is needed for. It
 	// only ever reaches the user when yt-dlp is missing, which is the one
 	// moment the reason is something they can act on.
@@ -88,44 +104,157 @@ const rumbleOEmbed = "https://rumble.com/api/Media/oembed.json"
 // each `why` is short for.
 var handoffSites = []handoffSite{
 	{
-		name:    "odysee",
-		domains: []string{"odysee.com", "lbry.tv"},
-		why:     "its pages name no media URL, only an LBRY claim to resolve",
+		name:  "odysee",
+		why:   "its pages name no media URL, only an LBRY claim to resolve",
+		shape: odyseeShape,
+		recognise: func(_ context.Context, _ *Handoff, p *Page) bool {
+			// A claim's page names the LBRY embed player for it; a channel
+			// is the app shell around its bundle.
+			if !odyseeShape(p.Final) || !p.Named("Odysee") {
+				return false
+			}
+			return p.playerMeta(odyseeEmbed) || odyseeChannel(p.Final) && p.Script(odyseeBundle)
+		},
+		recognises: "claims (`/@<channel>/<claim>`) whose page, named Odysee, offers the LBRY embed player " +
+			"(`/$/embed/`), and channels (`/@<channel>`) served by its app bundle",
 	},
 	{
-		name:    "dailymotion",
-		domains: []string{"dailymotion.com", "dai.ly"},
-		why:     "its manifest is refused to anything but a browser, and it offers no plain file",
+		name:  "dailymotion",
+		why:   "its manifest is refused to anything but a browser, and it offers no plain file",
+		shape: dailymotionShape,
+		recognise: func(_ context.Context, _ *Handoff, p *Page) bool {
+			// The watch page is rendered by the site's own server-side app,
+			// and a short link redirects to it.
+			return dailymotionShape(p.Final) && p.Script(dailymotionBundle) && p.Named("Dailymotion")
+		},
+		recognises: "videos and playlists (`/video/<xid>`, `/playlist/<xid>`) rendered by the " +
+			"Dailymotion server-side app (its `neon` bundle), short links included",
 	},
 	{
-		name:    "bilibili",
-		domains: []string{"bilibili.com", "b23.tv"},
-		why:     "its playback call is signed per session and answers with video and audio apart",
+		name:  "bilibili",
+		why:   "its playback call is signed per session and answers with video and audio apart",
+		shape: bilibiliShape,
+		recognise: func(_ context.Context, _ *Handoff, p *Page) bool {
+			// The video page's state, and its play information or the
+			// player it offers for embedding, are what yt-dlp reads.
+			return bilibiliShape(p.Final) && p.Has(bilibiliState) &&
+				(p.Has(bilibiliPlayInfo) || p.playerMeta(bilibiliPlayer)) &&
+				p.Named("bilibili", "哔哩哔哩")
+		},
+		recognises: "videos (`/video/BV<id>`) and bangumi episodes whose page carries the bilibili " +
+			"player state (`window.__INITIAL_STATE__` with its play information), short links included",
 	},
 	{
-		name:    "soundcloud",
-		domains: []string{"soundcloud.com"},
-		why:     "its API needs a client key scraped from a script bundle that rotates",
+		name:  "soundcloud",
+		why:   "its API needs a client key scraped from a script bundle that rotates",
+		shape: soundcloudShape,
+		recognise: func(_ context.Context, _ *Handoff, p *Page) bool {
+			// A track or a set is a two-segment path, far too common to
+			// single out by form, so the page must be the web client's,
+			// hydrated with the sound and offering its widget player.
+			return soundcloudPage(p.Final) && p.Has(soundcloudHydration) &&
+				p.playerMeta(soundcloudWidget) && p.Named("SoundCloud")
+		},
+		recognises: "tracks and sets (`/<artist>/<track>`, `/<artist>/sets/<set>`) whose page is the " +
+			"SoundCloud web client hydrated with the sound (`__sc_hydration`) and offering its widget player",
 	},
 	{
-		name:    "mixcloud",
-		domains: []string{"mixcloud.com"},
-		why:     "its stream URLs are obfuscated rather than published",
+		name:  "mixcloud",
+		why:   "its stream URLs are obfuscated rather than published",
+		shape: mixcloudShape,
+		recognise: func(_ context.Context, _ *Handoff, p *Page) bool {
+			// A show is /<user>/<show>/, as common a form as any, so the
+			// page must carry the app's query for that show.
+			return mixcloudPage(p.Final) && p.Has(mixcloudQuery) && p.Named("Mixcloud")
+		},
+		recognises: "shows (`/<user>/<show>/`) whose page, named Mixcloud, carries the app's " +
+			"`cloudcastQuery` for the show",
 	},
 	{
-		name:    "rumble",
-		domains: []string{"rumble.com"},
-		why:     "its media endpoint sits behind a browser challenge",
-		oembed:  rumbleOEmbed,
+		name:   "rumble",
+		why:    "its media endpoint sits behind a browser challenge",
+		oembed: rumbleOEmbed,
+		shape:  rumbleShape,
+		recognise: func(ctx context.Context, h *Handoff, p *Page) bool {
+			// The site's pages are usually behind a browser challenge, so
+			// they say nothing. Its oEmbed endpoint is not, and is what this
+			// extractor names the media from: the URL's own origin is asked
+			// about it, once the form has matched.
+			return rumbleShape(p.Final) && h.rumbleKnows(ctx, p)
+		},
+		recognises: "videos (`/v<id>-<slug>.html`, `/embed/v<id>`) that the origin's Rumble oEmbed " +
+			"endpoint describes",
 	},
 }
 
-// NewHandoffs builds one extractor per host, so each is matched on its own
-// domains and named for itself in the UI exactly as a hand-written host is.
+// The forms and markers the handoff sites are recognised by.
+var (
+	odyseeShape   = pathShape(`^/@[^/]+(?:/[^/]+)?/?$`, `^/(?:%24|\$)/embed/[^/]+`, `^/[^/@$][^/]*:[0-9a-f]+/?$`)
+	odyseeChannel = pathShape(`^/@[^/]+/?$`)
+	odyseeEmbed   = regexp.MustCompile(`^/(?:%24|\$)/embed/`)
+
+	dailymotionShape = pathShape(`^/(?:video|playlist)/x[0-9a-z]+/?$`, `^/embed/video/x[0-9a-z]+/?$`)
+
+	bilibiliShape  = pathShape(`^(?:/en)?/video/(?:BV[0-9A-Za-z]{10}|av[0-9]+)/?$`, `^/bangumi/play/(?:ep|ss)[0-9]+/?$`)
+	bilibiliPlayer = regexp.MustCompile(`^/player\.html\?(?:.*&)?(?:bvid|aid)=`)
+
+	soundcloudShape  = pathShape(`^/[^/]+/sets/[^/]+/?$`)
+	soundcloudPage   = pathShape(`^/[^/]+/[^/]+/?$`, `^/[^/]+/sets/[^/]+/?$`)
+	soundcloudWidget = regexp.MustCompile(`^/player/`)
+
+	mixcloudShape = func(*url.URL) bool { return false }
+	mixcloudPage  = pathShape(`^/[^/]+/[^/]+/$`)
+
+	rumbleShape = pathShape(`^/v[0-9a-z]{4,}-[^/]*\.html$`, `^/embed/v[0-9a-z]{4,}/?$`)
+)
+
+const (
+	odyseeBundle        = "/public/assets/"
+	dailymotionBundle   = "/neon-user-ssr/"
+	bilibiliState       = "window.__INITIAL_STATE__"
+	bilibiliPlayInfo    = "window.__playinfo__"
+	soundcloudHydration = "window.__sc_hydration"
+	mixcloudQuery       = "cloudcastQuery"
+	// rumbleOEmbedPath is where a Rumble origin's oEmbed endpoint is.
+	rumbleOEmbedPath = "/api/Media/oembed.json"
+)
+
+// rumbleKnows asks the page's own origin whether its oEmbed endpoint
+// describes the page as one of its videos. Every recogniser that would ask
+// the same shares the one answer.
+func (h *Handoff) rumbleKnows(ctx context.Context, p *Page) bool {
+	if h.client == nil {
+		return false
+	}
+	endpoint := util.Origin(p.Final) + rumbleOEmbedPath + "?" + url.Values{"url": {p.Final.String()}}.Encode()
+	return p.Memo(endpoint, func() any {
+		var out struct {
+			Type         string `json:"type"`
+			ProviderName string `json:"provider_name"`
+			HTML         string `json:"html"`
+		}
+		return platformJSON(ctx, h.client, endpoint, nil, &out) &&
+			strings.HasPrefix(strings.ToLower(out.ProviderName), "rumble") && out.HTML != ""
+	}).(bool)
+}
+
+// Recognises is the inventory's description.
+func (h *Handoff) Recognises() string { return h.site.recognises }
+
+// Shape reports the site's URL forms worth a probe.
+func (h *Handoff) Shape(u *url.URL) bool { return h.site.shape != nil && h.site.shape(u) }
+
+// Recognise reports whether the probed page is the site's.
+func (h *Handoff) Recognise(ctx context.Context, p *Page) bool {
+	return h.site.recognise != nil && h.site.recognise(ctx, h, p)
+}
+
+// NewHandoffs builds one extractor per host, so each is recognised by its
+// own pages and named for itself in the UI exactly as a hand-written host is.
 func NewHandoffs(client *httpx.Client) []Extractor {
 	out := make([]Extractor, 0, len(handoffSites))
 	for _, site := range handoffSites {
-		out = append(out, &Handoff{hostSet: site.domains, client: client, site: site})
+		out = append(out, &Handoff{client: client, site: site})
 	}
 	return out
 }

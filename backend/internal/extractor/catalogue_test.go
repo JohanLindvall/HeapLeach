@@ -83,6 +83,11 @@ func TestEveryDeclaredHostRoutesToItsExtractor(t *testing.T) {
 		if !ok {
 			continue
 		}
+		if _, recognised := e.(Recogniser); recognised && len(hosts) == 0 {
+			// Recognised by its pages; the embedding is a transitional
+			// leftover shared with extractors still claiming hosts.
+			continue
+		}
 		if len(hosts) == 0 {
 			t.Errorf("%s embeds an empty hostSet, so it can never match anything", e.Name())
 			continue

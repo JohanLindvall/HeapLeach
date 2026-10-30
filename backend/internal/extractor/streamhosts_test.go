@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -126,31 +125,6 @@ func TestPackerIndex(t *testing.T) {
 		if ok != tc.valid || (ok && got != tc.want) {
 			t.Errorf("packerIndex(%q, %d) = %d, %v; want %d, %v",
 				tc.word, tc.base, got, ok, tc.want, tc.valid)
-		}
-	}
-}
-
-func TestStreamHostMatching(t *testing.T) {
-	tests := []struct {
-		host  string
-		match func(*url.URL) bool
-		want  bool
-	}{
-		{host: "streamtape.com", match: NewStreamtape(nil).Match, want: true},
-		{host: "streamtape.to", match: NewStreamtape(nil).Match, want: true},
-		{host: "streamtape.example.test", match: NewStreamtape(nil).Match, want: false},
-		{host: "dood.to", match: NewDoodStream(nil).Match, want: true},
-		{host: "d0o0d.com", match: NewDoodStream(nil).Match, want: true},
-		{host: "d000d.com", match: NewDoodStream(nil).Match, want: true},
-		{host: "playmogo.com", match: NewDoodStream(nil).Match, want: true},
-		{host: "mixdrop.co", match: NewMixDrop(nil).Match, want: true},
-		{host: "www.mixdrop.ag", match: NewMixDrop(nil).Match, want: true},
-		{host: "mixdrop.example.test", match: NewMixDrop(nil).Match, want: false},
-	}
-	for _, tc := range tests {
-		u := &url.URL{Scheme: "https", Host: tc.host, Path: "/e/x"}
-		if got := tc.match(u); got != tc.want {
-			t.Errorf("%s matched = %v, want %v", tc.host, got, tc.want)
 		}
 	}
 }

@@ -28,7 +28,6 @@ import (
 // asked for them, so they are resolved when the item starts rather than when
 // the page is read.
 type OKru struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -51,10 +50,32 @@ var okruQualities = []string{
 
 // NewOKru builds the odnoklassniki extractor.
 func NewOKru(client *httpx.Client) *OKru {
-	return &OKru{hostSet: hostSet{"ok.ru", "odnoklassniki.ru"}, client: client}
+	return &OKru{client: client}
 }
 
 func (o *OKru) Name() string { return "ok.ru" }
+
+// okruShape is a video page, its player, or a live stream.
+var okruShape = pathShape(`^/(?:video|videoembed|live)/[0-9]+/?$`)
+
+// okruPlayerModule is the player component the pages mount, configured by
+// the data-options attribute Extract reads.
+const okruPlayerModule = `data-module="OKVideo"`
+
+// Recognises is the inventory's description.
+func (o *OKru) Recognises() string {
+	return "videos (`/video/<id>`, `/videoembed/<id>`, `/live/<id>`) whose page mounts the OK video " +
+		"player (`OKVideo`) with its `data-options` configuration"
+}
+
+// Shape reports a video, a player or a live stream.
+func (o *OKru) Shape(u *url.URL) bool { return okruShape(u) }
+
+// Recognise takes a page that mounts the player whose configuration
+// Extract reads.
+func (o *OKru) Recognise(_ context.Context, p *Page) bool {
+	return okruShape(p.Final) && p.Has(okruPlayerModule, okruOptionsAttr)
+}
 
 // Extract resolves a video page to its best rendition.
 func (o *OKru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -146,7 +167,7 @@ func okruPlayable(meta *okruMetadata) bool {
 // fetchMetadata reads the embed page once.
 func (o *OKru) fetchMetadata(ctx context.Context, id string) (*okruMetadata, error) {
 	page := okruEmbed + url.PathEscape(id)
-	doc, err := o.client.GetString(ctx, page, httpx.Referer(okruRoot+"/"))
+	doc, err := fetchPage(ctx, o.client, page, httpx.Referer(okruRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("ok.ru: fetch %s: %w", page, err)
 	}
