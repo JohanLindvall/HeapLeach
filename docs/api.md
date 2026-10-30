@@ -13,7 +13,7 @@ The API has no authentication. Read [network access and trust](usage.md#network-
 | `POST` | `/api/downloads` | `{"urls": "…", "password": "…"}` — newline-separated or an array. |
 | `GET` | `/api/settings` | Current runtime settings, including configured proxy endpoints and discovery feeds. |
 | `POST` | `/api/settings` | Any of `{"concurrency": n, "streams": n, "paused": bool, "speedLimit": n, "downloadDir": "…", "proxies": bool, "proxyEndpoints": ["…"], "proxyFeeds": ["…"]}` — each optional, so a request carries only what changed. |
-| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `fileboom`, `emload`, `mega`, or `cloudflare`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
+| `GET` | `/api/proxies` | Proxy measurements and feed status. Query: `site` (`keep2share`, the default, `emload`, `mega`, or `cloudflare`; `fileboom` is still accepted and read as `keep2share`), `offset`, `limit` (1–200, default 50), `search`, `status` (`all`, `available`, `active`, `busy`, `cooling`, `untested`, `finishing`), `sort` (`score`, `throughput`, `success`, `address`). |
 | `POST` | `/api/clear` | Forget finished jobs. |
 | `POST` | `/api/jobs/{id}/cancel` · `/retry` | Whole job. |
 | `POST` | `/api/jobs/{id}/limits` | `{"fileLimit": n, "streamLimit": n, "speedLimit": n}`, each optional: replaces the job's own limits beneath the queue's; a field left out has none. `fileLimit` 0 holds its new downloads. |
