@@ -124,20 +124,6 @@ func TestRecognitionNeverReadsTheHost(t *testing.T) {
 	}
 }
 
-// TestEveryRecogniserDescribesItself keeps the generated inventory complete:
-// a recognising extractor has no domain list to show, only its account of
-// what it takes.
-func TestEveryRecogniserDescribesItself(t *testing.T) {
-	for _, e := range testCatalogueRegistry(t).extractors {
-		if _, ok := e.(Recogniser); !ok {
-			continue
-		}
-		if d, ok := e.(Describer); !ok || d.Recognises() == "" {
-			t.Errorf("%s recognises pages but does not describe them", e.Name())
-		}
-	}
-}
-
 // TestPageCacheFetchesAPageOnce: however many recognisers, extractors and
 // sources ask for one URL at once, it is fetched once.
 func TestPageCacheFetchesAPageOnce(t *testing.T) {
@@ -207,3 +193,11 @@ func TestPageMemoComputesOnce(t *testing.T) {
 		t.Errorf("computed %d times, want 1", calls.Load())
 	}
 }
+
+// hostClaim stands in for a host's extractor in tests, claiming one host as
+// no real recogniser may, so a test can route links without a fixture page.
+type hostClaim string
+
+func (h hostClaim) Shape(u *url.URL) bool                     { return u.Host == string(h) || u.Hostname() == string(h) }
+func (h hostClaim) Recognise(_ context.Context, p *Page) bool { return h.Shape(p.URL) }
+func (h hostClaim) Recognises() string                        { return "the test host " + string(h) }

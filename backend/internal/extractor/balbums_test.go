@@ -309,10 +309,12 @@ func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {
 
 // sameTitleStub answers every link with the same title, the way two albums
 // on an index can both be called "Clapper 10".
-type sameTitleStub struct{ host, title string }
+type sameTitleStub struct {
+	hostClaim
+	title string
+}
 
-func (s *sameTitleStub) Name() string          { return "same" }
-func (s *sameTitleStub) Match(u *url.URL) bool { return u.Host == s.host }
+func (s *sameTitleStub) Name() string { return "same" }
 func (s *sameTitleStub) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
 	return &Result{Title: s.title, Files: []File{{Name: "clip.mov", URL: u.String(), Size: -1}}}, nil
 }
@@ -325,8 +327,8 @@ func (s *sameTitleStub) Extract(_ context.Context, u *url.URL, _ Options) (*Resu
 func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
 	reg := &Registry{fallback: NewDirect(nil)}
 	reg.extractors = []Extractor{
-		&sameTitleStub{host: "a.example.test", title: "Clapper 10"},
-		&sameTitleStub{host: "b.example.test", title: "Alone"},
+		&sameTitleStub{hostClaim: "a.example.test", title: "Clapper 10"},
+		&sameTitleStub{hostClaim: "b.example.test", title: "Alone"},
 	}
 	files := expandSources(context.Background(), reg, []string{
 		"https://a.example.test/a/AAAA",

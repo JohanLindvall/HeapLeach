@@ -187,14 +187,10 @@ following the link ourselves routes around that.
 ## Kernel Video Sharing
 
 KVS is a product, not a site. `kvs.go` holds the reusable parts (flashvars
-parsing, license-code permutation) and `kvssites.go` builds one extractor per
-known install, so each is matched and named like a hand-written host. A
-compiled-in list can only trail a platform sold to hundreds of sites, so there
-are two escapes: the `kvs` family of `HEAPLEACH_EXTRA_HOSTS` adds installs at
-runtime, and `kvsSniff`, called from the `Direct` fallback, recognises the
-`/videos/<id>/<slug>/` shape and tries the page before treating it as a file.
-A page that turns out not to be one falls through to what would have happened
-anyway.
+parsing, license-code permutation) and `kvssites.go` the one `kvs` extractor
+for every install, recognised by the platform's fingerprint below the site
+root: flashvars carrying a `license_code`, the `kt_player` script, or the
+asynchronous `list_videos` controls. There is no install list to keep.
 
 Installs vary more than one product suggests, and three differences each
 produce output that looks right and is not:

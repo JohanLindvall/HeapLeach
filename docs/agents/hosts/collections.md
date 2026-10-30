@@ -119,11 +119,9 @@ its one release.
 
 ## bandzoogle
 
-bandzoogle is a platform family with an empty host list: it is website
-software musicians rent, so every install answers on its owner's own domain
-and there is nothing to compile in. It is reached entirely through the
-direct-fallback sniff, with `HEAPLEACH_EXTRA_HOSTS`'s `bandzoogle` family for
-naming one outright. The marker is `data-zoogle-track` on the track anchors,
+bandzoogle is website software musicians rent, so every install answers on
+its owner's own domain. It is recognised by its page alone, with no URL form
+to follow links by. The marker is `data-zoogle-track` on the track anchors,
 which the player script binds to rather than a theme supplying, and the same
 anchor carries the title, the artist and the audio path, so nothing is read
 from the surrounding markup, which differs from one band's site to the next.

@@ -2,12 +2,14 @@
 
 [Documentation](README.md) · [Project home](../README.md)
 
-For the generated list of registered domains, see [every supported site](../README.md#every-supported-site). This guide explains accepted link formats and host-specific behavior.
+For the generated inventory of extractors and the pages each one recognises, see [every supported site](../README.md#every-supported-site). This guide explains accepted link formats and host-specific behavior.
+
+No link is chosen by its domain. HeapLeach fetches the page once and picks the extractor whose markers the page carries (its player configuration, embedded data, scripts or structure, together with the link's form), so a site that moves to a new domain, or an install nobody listed, still works. A link to a plain file that no extractor's form claims is downloaded as it is, without that extra fetch.
 
 | Host | Accepts | How it resolves |
 |---|---|---|
 | **gofile** | `/d/<code>` | Mints a guest token, then signs each API call with `sha256(ua :: lang :: token :: 4h-slot :: secret)` in an `X-Website-Token` header. The secret is rotated server-side, so it is read out of gofile's own obfuscated script rather than pinned: its string table is RC4 under a shuffled base64 alphabet, and the one rotation that decodes the whole file is what proves the answer. A signature gofile rejects is not repeated — it blocks addresses that sign badly. Downloads carry the token as a cookie. Walks nested folders. |
-| **bunkr** | `/f/<slug>`, `/a/<slug>`, any `bunkr*` domain | Page → numeric file id → metadata endpoint → separate signing service for the `token`/`ex` pair the CDN demands. |
+| **bunkr** | `/f/<slug>`, `/a/<slug>`, on any domain serving its pages | Page → numeric file id → metadata endpoint → separate signing service for the `token`/`ex` pair the CDN demands. |
 | **pixeldrain** | `/l/<id>`, `/u/<id>`, `/f/<id>` | Public JSON API. |
 | **cum.st** | `/creators/<service>/<id>` and `/creators/<service>/<id>/post/<post>` | Downloads original post attachments, with a separate folder per post and fallback across the site's advertised media servers. Creator pagination starts at the beginning and preserves post search, sort and media filters. Exact sizes are loaded when each post's first download starts. Source/file limits and incomplete listings are reported; thumbnails, smaller video renditions and other creator tabs are excluded. |
 | **keep2share** | `/file/<id>`, with or without a filename, on `k2s.cc` or `keep2share.cc` | Free downloads through the public API. Reads the image CAPTCHA locally, waits for the host's timer, and reuses the resulting link when resuming. OCR model and runtime included in releases and the container image. Premium-only and private files are reported as restricted. |
@@ -34,7 +36,7 @@ For the generated list of registered domains, see [every supported site](../READ
 | **rajce** | `rajce.idnes.cz/<user>/album/<slug>`, legacy album links on `rajce.net` | Reads the album's embedded media list in one request, preserving its title, filenames and order. Downloads full-size photos and MP4 videos, excluding thumbnails, video posters and recommendations. File limits and unavailable items are reported; private or password-protected albums require public access. |
 | **pixhost** | `/gallery/<code>`, `/show/<group>/<file>` | A gallery's thumbnails say where the full images are: the two links differ only by host prefix and one path segment. Deriving them resolves a gallery of fifty in one request instead of fifty, and a mapping that ever changed would fail visibly with a 404 rather than quietly fetching thumbnails. |
 | **suvobox** | `/a/<id>`, `/f/<id>` | The album listing states every file's id, its full name with extension and its size, so a whole album resolves in one request with real names in the queue from the start. The bytes come from the media host's `?raw=1`, which needs no token — the site's own signed `?dl=1` link would only expire while an item waited its turn. |
-| **imagepond** | `/i/<code>`, the title-slug form of the same page, `/a/<code>` albums, and links straight to `media.imagepond.net` | The metadata names the item, but for a video it names the *poster frame*, and it has been seen misreporting a QuickTime file as MP4 — so the player element's own `data-src` is read first and the metadata is the fallback. An album arrives whole in one document, but its cards link only to each item's viewer, so the files behind them are resolved one at a time as they download rather than in a burst of fetches up front. An item the host has aged out answers 200 with an expiry notice rather than a 404, and is reported as expired instead of as a parse failure. A link to the media host is the stored file already, and is taken as given — that host is a subdomain of the site, so this extractor claims it and nothing else would. Profile pages list their items client-side and are still not supported. |
+| **imagepond** | `/i/<code>`, the title-slug form of the same page, `/a/<code>` albums, and links straight to `media.imagepond.net` | The metadata names the item, but for a video it names the *poster frame*, and it has been seen misreporting a QuickTime file as MP4 — so the player element's own `data-src` is read first and the metadata is the fallback. An album arrives whole in one document, but its cards link only to each item's viewer, so the files behind them are resolved one at a time as they download rather than in a burst of fetches up front. An item the host has aged out answers 200 with an expiry notice rather than a 404, and is reported as expired instead of as a parse failure. A link to the media host is the stored file already, and is downloaded as a plain file. Profile pages list their items client-side and are still not supported. |
 | **yandex** | `/video/preview/<id>`, on any of its country domains | Yandex hosts none of this: a preview is a viewer wrapped around somebody else's video, and the page links the source beside the player. That link is what is followed, and the video is left to yt-dlp, which knows far more hosts than this program does. Needs `make dependencies`. |
 | **noodlemagazine** | `/video/<query>` searches, `/watch/<id>` videos | Walks search results from the first page, preserving duration, sort and HD filters and excluding unrelated recommendations. Queues video titles and refreshes signed playback links when each download starts. Selects the highest offered resolution, preferring MP4 over HLS at the same resolution; HLS keys and separate tracks are handled natively. Source and file limits apply, with incomplete listings reported. |
 | **ok.ru** | `/video/<id>`, `/videoembed/<id>` | The watch page carries an empty rendition list for a logged-out caller, and the player's metadata endpoint answers the same way; the embed page, which exists to be framed elsewhere, carries the same structure filled in. Links are signed with an expiry and the requesting address, so they resolve at download time. |
@@ -44,8 +46,8 @@ For the generated list of registered domains, see [every supported site](../READ
 | **bitchute** | `/video/<id>`, `/channel/<name>` | Two unsigned JSON posts give a permanent MP4. Eleven seed hosts serve each other's paths byte-identically, so they are kept as mirrors — failover onto a set that cannot be wrong. |
 | **civitai** | `/images/<id>`, `/posts/<id>`, `/models/<id>`, `/user/<name>/images` | Documented public JSON, unsigned content-addressed CDN. Collection links are deliberately **not** matched: the API silently ignores that parameter and returns the site's front page instead, which would look like a successful download of the wrong thing. |
 | **pornpics** | `/galleries/<slug>-<id>/`, categories, `/pornstars/`, `/channels/` | A gallery's full-size URLs are in the page, so one request resolves it. Listings take one of two pagination routes, and the wrong one returns the first 20 items forever while looking like it works. |
-| **bandzoogle** (family) | any install | One extractor for the band-website product, which musicians rent and run on their own domains — so unlike the families above it ships with no host list at all, and every site is found by the sniff. The pages label their own player: each track anchor carries the title, the artist and the path the audio comes from, so one fetch yields the lot. Files are named `NN Title.ext` under a folder per album, taking the position the page prints beside each track and padding it so a directory listing sorts the way the album plays — the folder matters because the numbering restarts with each album. A listing shows twenty and says whether more follow, so the rest are fetched too rather than the album arriving quietly short. The audio link is the site's own `/player/…/tracks/….mp3`, which redirects to storage signed for a couple of hours; the player link is what is kept, since the signature is minted per request and a stored one would go stale in the queue. |
-| **chevereto** (family) | imgbb, freeimage, gifyu, and any install | One extractor for the image-host product, recognised by its own `generator` tag, so an unlisted install works without a rebuild. imagepond was one of these once and is not any more — it was rewritten onto software of its own and keeps its own extractor, which is why it is listed separately above. |
+| **bandzoogle** (family) | any install | One extractor for the band-website product, which musicians rent and run on their own domains — so every install is found by its player markup on its own domain. The pages label their own player: each track anchor carries the title, the artist and the path the audio comes from, so one fetch yields the lot. Files are named `NN Title.ext` under a folder per album, taking the position the page prints beside each track and padding it so a directory listing sorts the way the album plays — the folder matters because the numbering restarts with each album. A listing shows twenty and says whether more follow, so the rest are fetched too rather than the album arriving quietly short. The audio link is the site's own `/player/…/tracks/….mp3`, which redirects to storage signed for a couple of hours; the player link is what is kept, since the signature is minted per request and a stored one would go stale in the queue. |
+| **chevereto** (family) | imgbb, freeimage, gifyu, and any install | One extractor for the image-host product, recognised by its page markup, so an unlisted install works without a rebuild. imagepond was one of these once and is not any more — it was rewritten onto software of its own and keeps its own extractor, which is why it is listed separately above. |
 | **peertube** (family) | `/w/<id>`, `/videos/watch/<id>`, channels, accounts | ~1,795 federated instances behind one versioned API, confirmed by a version probe rather than guessed from markup. Unsigned, rangeable, exact lengths. A federated video's file may live on a different instance than the one asked, and the API says which. |
 | **fediverse** (family) | Mastodon, Pleroma, Pixelfed, Lemmy, Misskey | Found through `/.well-known/nodeinfo`, which is a specification rather than a list, so the table cannot go stale. Three API dialects behind one sniff. |
 | **foolfuuka** (family) | `/{board}/thread/<n>` on the 4chan archives | Where threads persist after 4chan drops them, through an API modelled on 4chan's own — and better than it, since each post carries the poster's original filename and an exact size. |
@@ -78,13 +80,11 @@ through its player or asynchronous block controls. Existing PeerTube,
 Chevereto and Bandzoogle detection continues to work the same way.
 
 A familiar URL path selects a possible API; it does not establish support.
-Guessed API requests are bounded and do not retry. Recognised platforms
-use their normal extractors, including pagination, deferred resolvers and
-transfer pacing. Unidentified pages continue through the generic fallback.
-Known-host registrations remain useful for discovering embedded download
-links, naming supported sites, and retaining aliases and site-specific settings
-such as booru filters. They are shortcuts, not a requirement for detecting a
-compatible platform from a pasted URL.
+API requests made to identify a page whose HTML says nothing (one behind a
+browser check, say) are bounded, do not retry, and are made once per page.
+Recognised platforms use their normal extractors, including pagination,
+deferred resolvers and transfer pacing. Unidentified pages continue through
+the generic fallback.
 
 Other entries are not hosts at all but **shapes** — an adaptive
 manifest, an open directory, a page carrying supported download links,
@@ -92,10 +92,11 @@ and a page carrying a video in its markup.
 Those cover the sites nobody will ever get round to naming.
 
 Automatic webpage scanning reads anchors, embedded frames and links printed
-as text, then expands only links claimed by registered extractors. A recognised
+as text, then follows the links whose form an extractor reads, keeping those
+whose page that extractor recognises. A recognised
 WordPress category also follows its own post permalinks and pagination;
 ordinary navigation links are not followed. Exact duplicates are
-removed; K2S aliases and repeated file IDs are also merged within each service.
+removed; K2S and FileBoom links are also merged by file ID, across services and aliases.
 Recognised platforms keep their own extraction behavior. Use `links:<url>`
 to explicitly scan a page that would otherwise go to a dedicated extractor.
 

@@ -79,7 +79,7 @@ var francetvShape = pathShape(`/[0-9]{6,}-[^/]+\.html$`, `/toutes-les-videos/?$`
 
 // Recognises is the inventory's description.
 func (f *FranceTV) Recognises() string {
-	return "video pages (`/…/<id>-<slug>.html`) and programme listings of france.tv whose flight data names `video_factory_id`s"
+	return "video pages (`/…/<id>-<slug>.html`) and programme listings of France TV whose flight data names `video_factory_id`s"
 }
 
 // Shape reports a video page or a programme's every video.

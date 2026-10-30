@@ -41,14 +41,15 @@ func TestRegistryNamesAreUsable(t *testing.T) {
 	t.Logf("%d hosts: %v", len(hosts), hosts)
 }
 
-// TestRegistryFindNeverReturnsNil is the contract Manager relies on: an
-// unrecognised host is the direct-link extractor's job, not an error.
-func TestRegistryFindNeverReturnsNil(t *testing.T) {
+// TestRegistryGuessNeverComesBackEmpty is the contract Manager relies on
+// for a job's label before it is read: a link of no extractor's form is the
+// fallback's, never nothing.
+func TestRegistryGuessNeverComesBackEmpty(t *testing.T) {
 	reg := testRegistry(t, nil)
 	for _, raw := range []string{
-		"https://mega.nz/file/AAAAAAAA#key",
-		"https://www.dropbox.com/s/abc/file.zip",
-		"https://thisvid.com/videos/1/x/",
+		"https://share.example.test/file/AAAAAAAA#key",
+		"https://share.example.test/s/abc/file.zip",
+		"https://tube.example.test/videos/1/x/",
 		"https://nobody.example.test/some/file.bin",
 		"http://192.0.2.1/",
 	} {
@@ -56,43 +57,45 @@ func TestRegistryFindNeverReturnsNil(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ex := reg.Find(u); ex == nil {
-			t.Errorf("Find(%s) returned nil", raw)
+		if got := reg.Guess(u); got == "" {
+			t.Errorf("Guess(%s) is empty", raw)
 		}
 	}
 }
 
-// TestRegistryRoutesToTheExpectedHost pins the routing for the hosts added
-// most recently, where a Match that is too broad or too narrow is easiest to
-// introduce and hardest to notice.
-func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
+// TestRegistryKnowsLinksByTheirForm pins which extractor a link's form alone
+// points to — what the link scanner follows and a queued job is labelled —
+// whatever host the link is on. Recognition of the page decides for real.
+func TestRegistryKnowsLinksByTheirForm(t *testing.T) {
 	reg := testRegistry(t, nil)
 	tests := map[string]string{
-		"https://mega.nz/file/AAAAAAAA#key":                      "mega",
-		"https://mega.co.nz/folder/BBBBBBBB#key":                 "mega",
-		"https://www.dropbox.com/scl/fi/a/b.zip":                 "dropbox",
-		"https://www.mediafire.com/file/abcdefgh12345/name/file": "mediafire",
-		"https://drive.google.com/file/d/FILEID123456/view":      "drive",
-		"https://coomerfans.com/u/onlyfans/1/a-creator":          "coomerfans",
-		"https://coomerfans.com/p/1/2/onlyfans":                  "coomerfans",
-		"https://ok.ru/videoembed/1234567890":                    "ok.ru",
-		"https://vimeo.com/123456789":                            "vimeo",
-		"https://pornone.com/funny/a-clip/12345678/":             "pornone",
-		"https://pixhost.to/gallery/abc123":                      "pixhost",
-		"https://pixhost.to/show/9999/1_a.jpg":                   "pixhost",
-		"https://www.imagepond.net/i/abcd1234":                   "imagepond",
-		"https://imagepond.net/i/a-title-slug":                   "imagepond",
-		"https://yandex.kz/video/preview/1234567890":             "yandex",
-		"https://nobody.example.test/some/file.bin":              "direct",
-		"https://nobody.example.test/videos/1/some-clip/":        "kvs",
+		"/file/AAAAAAAA#key":            "mega",
+		"/folder/BBBBBBBB#key":          "mega",
+		"/scl/fi/a/b.zip":               "dropbox",
+		"/file/abcdefgh12345/name/file": "mediafire",
+		"/file/d/FILEID123456/view":     "drive",
+		"/u/onlyfans/1/a-creator":       "coomerfans",
+		"/p/1/2/onlyfans":               "coomerfans",
+		"/videoembed/1234567890":        "ok.ru",
+		"/123456789":                    "vimeo",
+		"/funny/a-clip/12345678/":       "pornone",
+		"/gallery/abc123":               "pixhost",
+		"/show/9999/1_a.jpg":            "pixhost",
+		"/i/abcd1234":                   "imagepond",
+		"/i/a-title-slug":               "imagepond",
+		"/video/preview/1234567890":     "yandex",
+		"/some/file.bin":                "direct",
+		"/videos/1/some-clip/":          "kvs",
 	}
-	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := reg.Find(u).Name(); got != want {
-			t.Errorf("%s went to %q, want %q", raw, got, want)
+	for _, host := range []string{"one.example.test", "another.example.test"} {
+		for path, want := range tests {
+			u, err := ParseURL("https://" + host + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reg.Guess(u); got != want {
+				t.Errorf("%s went to %q, want %q", u, got, want)
+			}
 		}
 	}
 }
@@ -102,7 +105,7 @@ func TestRegistryRoutesToTheExpectedHost(t *testing.T) {
 // lookalike, where taken as a path it was cut to what followed it.
 func TestRegistryKeepsATitleWithASlashWhole(t *testing.T) {
 	reg := &Registry{fallback: NewDirect(nil)}
-	reg.extractors = []Extractor{stubExtractor{host: "tube.example.test", title: "A Series (1/7)"}}
+	reg.extractors = []Extractor{stubExtractor{hostClaim: "tube.example.test", title: "A Series (1/7)"}}
 	res, _, err := reg.Extract(context.Background(), "https://tube.example.test/v/1", Options{})
 	if err != nil {
 		t.Fatal(err)

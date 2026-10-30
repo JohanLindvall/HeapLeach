@@ -5,7 +5,6 @@ package extractor
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -610,15 +609,5 @@ func TestBBCSoundsExtractRefusesWhatItCannotResolve(t *testing.T) {
 		if _, err := b.Extract(t.Context(), u, Options{}); err == nil {
 			t.Errorf("%s resolved to something", raw)
 		}
-	}
-}
-
-// TestBBCSoundsSitesNamesThePath is why this extractor's catalogue entry is
-// not simply its domain. It claims one section of bbc.co.uk, and a row
-// reading "bbc.co.uk" would promise the news site and iPlayer along with it.
-func TestBBCSoundsSitesNamesThePath(t *testing.T) {
-	got := NewBBCSounds(nil).Sites()
-	if len(got) != 1 || !strings.HasPrefix(got[0], "bbc.co.uk/") {
-		t.Errorf("Sites() = %v, want the domain qualified by the section claimed", got)
 	}
 }

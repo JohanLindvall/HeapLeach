@@ -161,9 +161,9 @@ filester file shares use `/d/<slug>`. The script POSTs the slug to
 (`server` + `/v2/` + `file` + `?token=`). The token lasts half an hour and
 encodes the requesting address, so it is minted through `Resolve`. The
 `download=true&n=` the page's button adds only sets a disposition name and is
-left off. The site moves between top-level domains, all serving one API, so
-`Match` takes `filester.<any TLD>` with the `/d/` or `/f/` shape rather than a
-`hostSet` that would trail every move.
+left off. The site moves between top-level domains, all serving one API; the
+page is recognised by its download script and button, so a move needs
+nothing here.
 
 Folder shares use `/f/<id>`. `filesterfolder.go` reads only `filesGrid` cards:
 their `onclick` names the file page, `data-name` preserves the original name,

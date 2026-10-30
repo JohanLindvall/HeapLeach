@@ -97,7 +97,7 @@ func TestAlohaTubeResolvesAKnownFrameThroughTheRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := &Registry{fallback: NewDirect(nil)}
-	reg.extractors = []Extractor{stubExtractor{host: "tube.example.test", title: "a synthetic clip"}}
+	reg.extractors = []Extractor{stubExtractor{hostClaim: "tube.example.test", title: "a synthetic clip"}}
 
 	if ex, ok := reg.Known(parsed); !ok {
 		t.Fatal("the stub host was not claimed")
@@ -109,11 +109,12 @@ func TestAlohaTubeResolvesAKnownFrameThroughTheRegistry(t *testing.T) {
 }
 
 // stubExtractor stands in for whichever host a frame points at.
-type stubExtractor struct{ host, title string }
+type stubExtractor struct {
+	hostClaim
+	title string
+}
 
 func (s stubExtractor) Name() string { return "stub" }
-
-func (s stubExtractor) Match(u *url.URL) bool { return u.Hostname() == s.host }
 
 func (s stubExtractor) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
 	return &Result{Title: s.title, Files: []File{{Name: s.title + ".mp4", URL: u.String(), Size: -1}}}, nil

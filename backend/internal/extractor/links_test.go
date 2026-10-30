@@ -252,26 +252,26 @@ func TestLinksParseURLRejectsAnEmptyTarget(t *testing.T) {
 func TestLinksRoutesAheadOfTheHosts(t *testing.T) {
 	reg := NewRegistry(&config.Config{}, nil)
 	for _, raw := range []string{
-		"links:https://gofile.io/d/AAAA",
-		"links:https://thisvid.com/",
+		"links:https://share.example.test/d/AAAA",
+		"links:https://tube.example.test/",
 		"links:https://board.example.test/threads/a-thread",
 	} {
 		u, err := ParseURL(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := reg.Find(u).Name(); got != linksScheme {
+		if got := reg.Guess(u); got != linksScheme {
 			t.Errorf("%s went to %q, want the harvester", raw, got)
 		}
 	}
 
-	// And the prefix is the only thing that redirects it: the same pages
-	// without it belong to their own hosts.
-	u, err := ParseURL("https://gofile.io/d/AAAA")
+	// And the prefix is the only thing that redirects it: the same link
+	// without it has its own extractor's form.
+	u, err := ParseURL("https://share.example.test/d/AAAA")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reg.Find(u).Name(); got != "gofile" {
+	if got := reg.Guess(u); got != "gofile" {
 		t.Errorf("an ordinary link went to %q, want gofile", got)
 	}
 }
@@ -319,6 +319,7 @@ func (s *linksStub) Shape(u *url.URL) bool { return u.Host == s.host }
 func (s *linksStub) Recognise(_ context.Context, p *Page) bool {
 	return p.URL.Host == s.host
 }
+func (s *linksStub) Recognises() string { return "the test host " + s.host }
 
 func (s *linksStub) Extract(_ context.Context, u *url.URL, opts Options) (*Result, error) {
 	s.mu.Lock()

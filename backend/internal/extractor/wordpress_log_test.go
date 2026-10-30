@@ -33,7 +33,7 @@ func (b *wordPressLogBuffer) String() string {
 }
 
 type wordPressLogSource struct {
-	hostSet
+	hostClaim
 	release <-chan struct{}
 	err     error
 }
@@ -85,7 +85,7 @@ func TestWordPressDebugLogsWhileLinkedSourceIsWaiting(t *testing.T) {
 				"/second/":                  wordPressPostHTML("Second", `<img src="/photo.jpg">`),
 			})
 			release := make(chan struct{})
-			source := &wordPressLogSource{hostSet: hostSet{"player.example.test"}, release: release}
+			source := &wordPressLogSource{hostClaim: "player.example.test", release: release}
 			if fail {
 				source.err = errors.New("synthetic player failure")
 			}

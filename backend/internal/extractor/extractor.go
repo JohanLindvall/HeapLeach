@@ -318,8 +318,11 @@ func (r *Result) Label() string {
 	return r.Title + " (" + r.Note + ")"
 }
 
-// Extractor resolves one family of pages.
+// Extractor resolves one family of pages: it recognises them (Recogniser),
+// says which for the inventory (Describer), and extracts them.
 type Extractor interface {
+	Recogniser
+	Describer
 	// Name is the short label shown in the UI.
 	Name() string
 	// Extract resolves the URL into downloadable files. opts may be zero.
@@ -584,7 +587,7 @@ func (r *Registry) Guess(u *url.URL) string {
 // find it is no extractor's.
 func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 	for _, e := range r.extractors {
-		if shapeOf(e, u) {
+		if e.Shape(u) {
 			return e, true
 		}
 	}
@@ -594,55 +597,21 @@ func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 // identify probes the URL and returns the first extractor that recognises
 // the page, or the fallback.
 func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) {
-	// Fetched on the first extractor that needs to see it. Only the
-	// transitional host matchers can answer without it.
-	var p *Page
-	page := func() *Page {
-		if p == nil {
-			if r.client == nil {
-				p = &Page{URL: u, Final: u, Err: errors.New("no client to probe with")}
-			} else {
-				p = r.pages.get(ctx, r.client, u)
-			}
-		}
-		return p
-	}
 	if !probeWorthy(u) {
-		if ex, ok := r.Known(u); ok {
-			if _, legacy := ex.(legacyMatcher); legacy {
-				return ex, &Page{URL: u, Final: u}
-			}
-		} else {
+		if _, ok := r.Known(u); !ok {
 			return r.fallback, &Page{URL: u, Final: u}
 		}
 	}
+	p := &Page{URL: u, Final: u, Err: errors.New("no client to probe with")}
+	if r.client != nil {
+		p = r.pages.get(ctx, r.client, u)
+	}
 	for _, e := range r.extractors {
-		switch m := e.(type) {
-		case Recogniser:
-			if m.Recognise(ctx, page()) {
-				return e, p
-			}
-		case legacyMatcher:
-			if m.Match(u) {
-				return e, &Page{URL: u, Final: u}
-			}
+		if e.Recognise(ctx, p) {
+			return e, p
 		}
 	}
-	return r.fallback, page()
-}
-
-// legacyMatcher is an extractor not yet moved to recognition: it still
-// claims URLs by host. TODO(generic-dispatch): remove once none is left.
-type legacyMatcher interface{ Match(u *url.URL) bool }
-
-func shapeOf(e Extractor, u *url.URL) bool {
-	switch e := e.(type) {
-	case Recogniser:
-		return e.Shape(u)
-	case legacyMatcher:
-		return e.Match(u)
-	}
-	return false
+	return r.fallback, p
 }
 
 // probeWorthy reports whether a URL could be a page, by the extension its

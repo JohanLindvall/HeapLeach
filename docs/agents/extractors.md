@@ -171,42 +171,36 @@ ends.
 
 ## The generic fallback
 
-`Direct` checks an ordinary HTML page for every registered host's links before
-using a generic embedded player. This is how a page embedding a supported
-player works without an extractor of its own. `filelinks.go` shares the
-`links:` harvester's bounded expansion, but never follows links assigned to
-the generic fallback, so a plain HTML navigation link cannot start another
-scan. Named hosts and recognised platforms keep their own extractors.
-K2S/FileBoom links are deduplicated by service and file ID across aliases;
-other links keep their full URLs, including Mega keys. The fetch checks HTML
-headers before reading a bounded body, and supports extensionless pages and
-common HTML/script extensions. Supported links that all fail are reported as
-an error rather than saved as an HTML shell, and partial results report
-counts.
+`Direct` takes what no extractor recognised. It reads the probed document
+(`Direct.document`) rather than fetching it again, recognises WordPress
+categories and DarkGram albums in it, and otherwise scans it for links of a
+supported form before using a generic embedded player. This is how a page
+embedding a supported player works without an extractor of its own.
+`filelinks.go` shares the `links:` harvester's bounded expansion; its links
+are extracted strictly, so a link that only had a supported form is dropped
+once its page proves to be nobody's, and a page whose links were all of that
+kind falls through to its own media. K2S/FileBoom links are deduplicated by
+file ID alone, since the form cannot tell the two services apart and they
+share one store; other links keep their full URLs, including Mega keys.
+Supported links that all fail are reported as an error rather than saved as
+an HTML shell, and partial results report counts.
 
-### Platform detection
+### Platforms behind a closed page
 
-The fallback also identifies unregistered installs of known platforms.
-`platform.go` supplies bounded, single-attempt JSON probes and page-marker
-detection. Pixeldrain file/list/filesystem metadata, booru original-media
-records, FoolFuuka archive records, Kemono creator profiles and MediaWiki
-siteinfo select the existing extractors at the pasted URL's origin. KVS player
-signatures and asynchronous listing controls identify its pages, including
-members and searches; a generic videos container alone does not. MediaWiki's
-generator and EditURI link also locate custom API directories. Recognised page
-content is tried before guessed APIs, so an ordinary blog post with an
-embedded album does not probe unrelated services. The fediverse's `/u/` and
-`/post/` path matches overlap two of these platforms; if nodeinfo does not
-identify the site, their APIs get a turn.
+Most platforms are recognised in the probed page itself. When the page cannot
+say — challenged, not OK, empty, or a proof-of-work interstitial served with
+200 (`pageSilent`) — a recogniser whose URL form matched may ask the page's
+own origin a bounded, single-attempt question instead (`pageJSON`, memoised
+per page, so every recogniser asking the same endpoint shares one answer):
+pixeldrain file metadata, booru post records, FoolFuuka archive records,
+Kemono creator profiles, MediaWiki siteinfo, PeerTube's config. An extractor
+then reads the memoised answers back through `probedPage` instead of asking
+again. Positive identification commits to an extractor, whose errors must be
+returned rather than falling back to saving the page shell.
 
-Keep these broad URL shapes out of `Registry.Known`: its answer controls which
-links the ordinary page scanner follows. Host registrations provide that
-discovery boundary, the generated inventory, canonical aliases and per-site
-settings (including booru filters), so a host stays registered even where
-direct input would autodetect it; dropping the registration silently loses
-embedded-link discovery. Positive identification commits to an extractor,
-whose errors must be returned rather than falling back to saving the page
-shell.
+Keep forms that are this broad out of `Shape` where they would make ordinary
+navigation a probe per link; `TestRegistryKnowsLinksByTheirForm` pins which
+forms the link scanner follows.
 
 ### DarkGram albums
 
@@ -320,7 +314,10 @@ line in the saved queue.
   host-neutral.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
-- `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts` and `hostSet`, above.
+- `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
+- `fixturePage`, `htmlPage`, `expectRecognised` and `expectShape`
+  (`recognise_test.go`): recognition fixtures, checked from an unrelated host
+  as well.
 
 ## Live tests
 

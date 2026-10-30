@@ -30,8 +30,6 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_USER_AGENT` | a current desktop Chrome UA | Sent on every request. Gofile mixes it into its signature, so it must match what signs. |
 | `HEAPLEACH_LANGUAGE` | `en-US` | `Accept-Language`, and part of the gofile signature. |
 | `HEAPLEACH_GOFILE_SECRET` | read from gofile | The secret gofile signs requests with. It is normally recovered from gofile's own script and cached for as long as that script says it is good for, so this is only needed if that ever stops working — setting it overrides the lookup entirely. |
-| `HEAPLEACH_EXTRA_HOSTS` | unset | Extra hosts for a platform family, as `family:host,host;family:host` — for example `peertube:tube.example;kvs:tube2.example`. Every family here is software many sites run, so a list compiled into a binary can only ever trail them; this adds installs without a rebuild. Families: `kvs`, `peertube`, `chevereto`, `foolfuuka`, `fediverse`, `mediawiki`, `bandzoogle`. |
-| `HEAPLEACH_KVS_HOSTS` | unset | The original KVS-only form of the above, still honoured. |
 | `HEAPLEACH_IA_FORMATS` | unset | Archive.org format labels to keep, overriding the per-mediatype rendition policy — the escape for when an item's interesting rendition is one the policy passes over. |
 | `HEAPLEACH_UTLS` | unset | `HEAPLEACH_UTLS=0` turns the browser-shaped TLS handshake off and uses Go's standard one. A few hosts (wiki.gg) challenge the default fingerprint; a few others require it. |
 | `HEAPLEACH_DEBUG` | `1` | Debug logging. Set `0`, `false`, `no` or `off` to disable it. Flag: `-debug=false`. |
@@ -40,3 +38,8 @@ and a flag beats the environment. Sizes and rates take a unit — `5MB`,
 | `HEAPLEACH_PPROF` | unset | Serve Go's runtime profiles at this address, on a listener of their own — `go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30` then shows where the CPU goes. Flag: `-pprof`. Off unless set. Name a loopback address: the profiles describe the process from the inside, and a non-loopback one is logged as a warning. In a container, the container's own 127.0.0.1 is reached with `docker exec`. |
 | `HEAPLEACH_RESUME` | unset | Resume the jobs a previous run left unfinished at startup, instead of holding them for Resume or a retry. Flag: `-resume`. For a service that is redeployed without anyone watching — held would mean stopped until noticed. |
 | `HEAPLEACH_OPEN` | unset | Open a browser once listening. Flag: `-open`. A bare run does this anyway, so this is mostly how to say **no**: `HEAPLEACH_OPEN=0` (also `false`, `no`, `off`) suppresses it, for a machine with no desktop or a session over SSH. |
+
+`HEAPLEACH_EXTRA_HOSTS` and `HEAPLEACH_KVS_HOSTS` are retired. They named
+extra installs of a platform, and every page is now recognised by what it
+serves rather than by its host, so an install nobody listed is found
+anyway. If either is still set, a warning is logged and the value ignored.

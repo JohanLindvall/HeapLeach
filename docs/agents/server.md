@@ -27,8 +27,8 @@ GiB of buffers at worst; slow ones keep the 64 KiB they start with
 
 Settings documented with what they govern:
 
-- listing caps (`HEAPLEACH_MAX_SOURCES`, `HEAPLEACH_MAX_FILES`) and
-  `HEAPLEACH_EXTRA_HOSTS`: [extractors.md](extractors.md)
+- listing caps (`HEAPLEACH_MAX_SOURCES`, `HEAPLEACH_MAX_FILES`):
+  [extractors.md](extractors.md)
 - the free-space floor, `HEAPLEACH_RESUME`, `HEAPLEACH_STATE`, and the
   settings and job limits saved with the queue: [download.md](download.md)
 - the proxy pool and its protocols: [proxies.md](proxies.md)
