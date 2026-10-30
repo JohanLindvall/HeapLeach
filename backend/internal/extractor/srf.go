@@ -520,14 +520,7 @@ func (r srfResource) usable() bool {
 var srfQualities = []string{"HD", "SD"}
 
 // srfRank orders a rendition by its label.
-func srfRank(quality string) int {
-	for i, known := range srfQualities {
-		if strings.EqualFold(quality, known) {
-			return i
-		}
-	}
-	return len(srfQualities)
-}
+func srfRank(quality string) int { return rankIn(srfQualities, quality, len(srfQualities)) }
 
 // pick returns the best usable resource speaking one protocol.
 func (c srfChapter) pick(protocol string) (srfResource, bool) {

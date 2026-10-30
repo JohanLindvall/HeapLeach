@@ -293,47 +293,36 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 		episodes = episodes[:config.MaxListingVideos]
 	}
 
-	// The error travels in the value rather than being returned, because
-	// FanOut drops an item whose fetch failed and a season refused in full has
-	// exactly one thing worth reporting: the reason.
-	outcomes := FanOut(ctx, episodes, func(ctx context.Context, ep rtpEpisodeRef) ([]rtpOutcome, error) {
+	// One refused episode must not sink the rest, but the reasons are kept:
+	// when every episode is refused it is refused for the same reason, and
+	// RTP's own words for it beat anything concluded here.
+	resolved, refused, _ := resolveEach(ctx, episodes, false, func(ctx context.Context, ep rtpEpisodeRef) (*File, error) {
 		file, _, err := r.episode(ctx, ep.page, ref.program)
-		return []rtpOutcome{{id: ep.id, file: file, err: err}}, nil
+		return file, err
 	})
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("rtpplay: none of the %d episodes of %s are playable: %s",
+			len(episodes), ref.page, util.FirstNonEmpty(append(refused,
+				"the page lists them but none carries a stream")...))
+	}
 
 	title := util.FirstNonEmpty(rtpTitle(root), ref.program)
 	if capped {
 		title = fmt.Sprintf("%s (first %d episodes)", title, len(episodes))
 	}
-
 	result := &Result{Title: title}
 	names := make(map[string]bool)
-	var refused string
-	for _, out := range outcomes {
-		if out.err != nil {
-			// One refused episode must not sink the rest, but its reason is
-			// kept: when every episode is refused it is refused for the same
-			// reason, and RTP's own words for it beat anything concluded here.
-			if reason, ok := refusalReason(out.err); ok && refused == "" {
-				refused = reason
-			}
-			continue
-		}
-		file := *out.file
+	for _, done := range resolved {
+		file := done.file
 		// Two episodes of one programme can share a page title, because RTP
 		// names an untitled instalment after its programme and the date and
 		// then repeats a date across parts. Two files with one name is one
 		// file, so the episode id is what tells them apart.
 		if names[file.Name] {
-			file.Name = out.id + " - " + file.Name
+			file.Name = done.item.id + " - " + file.Name
 		}
 		names[file.Name] = true
 		result.Files = append(result.Files, file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("rtpplay: none of the %d episodes of %s are playable: %s",
-			len(episodes), ref.page,
-			util.FirstNonEmpty(refused, "the page lists them but none carries a stream"))
 	}
 	return result, nil
 }
@@ -342,14 +331,6 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 type rtpEpisodeRef struct {
 	id   string
 	page string
-}
-
-// rtpOutcome is what resolving one episode produced, which is either a file
-// or the reason there is none.
-type rtpOutcome struct {
-	id   string
-	file *File
-	err  error
 }
 
 // listing asks for one page of a programme's episodes.
