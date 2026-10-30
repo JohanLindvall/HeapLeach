@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -14,7 +15,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-// OKru resolves Odnoklassniki video pages.
+// Odnoklassniki video pages.
 //
 // The watch page is no use on its own. Served to a logged-out client it
 // carries the player's options with an empty rendition list, and asking the
@@ -25,12 +26,9 @@ import (
 // session, no token, no player JavaScript.
 //
 // The links it hands out are signed with both an expiry and the address that
-// asked for them, so they are resolved when the item starts rather than when
-// the page is read.
-type OKru struct {
-	client *httpx.Client
-}
-
+// asked for them, so the row is signed. Live streams, and some ordinary
+// videos, come only as a playlist, which is taken when no file is offered;
+// a live one has no end, and is let through.
 const (
 	okruRoot = "https://ok.ru"
 	// okruEmbed is the page carrying a filled-in rendition list.
@@ -39,6 +37,9 @@ const (
 	// attribute. The HTML parser unescapes it, so it needs no unescaping
 	// of its own.
 	okruOptionsAttr = "data-options"
+	// okruPlaylistRank ranks the playlist below every file, an unknown name
+	// included (okruRank).
+	okruPlaylistRank = -2
 )
 
 // okruQualities are the rendition names, worst first. The site names them
@@ -48,79 +49,57 @@ var okruQualities = []string{
 	"mobile", "lowest", "low", "sd", "hd", "full", "quad", "ultra",
 }
 
-// NewOKru builds the odnoklassniki extractor.
-func NewOKru(client *httpx.Client) *OKru {
-	return &OKru{client: client}
-}
-
-func (o *OKru) Name() string { return "ok.ru" }
-
 // okruShape is a video page, its player, or a live stream.
 var okruShape = pathShape(`^/(?:video|videoembed|live)/[0-9]+/?$`)
 
 // okruPlayerModule is the player component the pages mount, configured by
-// the data-options attribute Extract reads.
+// the data-options attribute read reads.
 const okruPlayerModule = `data-module="OKVideo"`
 
-// Recognises is the inventory's description.
-func (o *OKru) Recognises() string {
-	return "videos (`/video/<id>`, `/videoembed/<id>`, `/live/<id>`) whose page mounts the OK video " +
-		"player (`OKVideo`) with its `data-options` configuration"
+var okruPlayer = playerSite{
+	name:      "ok.ru",
+	shape:     okruShape,
+	recognise: func(p *Page) bool { return okruShape(p.Final) && p.Has(okruPlayerModule, okruOptionsAttr) },
+	recognises: "videos (`/video/<id>`, `/videoembed/<id>`, `/live/<id>`) whose page mounts the OK video " +
+		"player (`OKVideo`) with its `data-options` configuration",
+	page: func(u *url.URL) (string, error) {
+		id := okruVideoID(u)
+		if id == "" {
+			return "", fmt.Errorf("no video id in %s", u.Redacted())
+		}
+		return okruEmbed + url.PathEscape(id), nil
+	},
+	referer: siteRoot(okruRoot),
+	read:    okruRead,
+	signed:  true,
+	live:    true,
 }
 
-// Shape reports a video, a player or a live stream.
-func (o *OKru) Shape(u *url.URL) bool { return okruShape(u) }
-
-// Recognise takes a page that mounts the player whose configuration
-// Extract reads.
-func (o *OKru) Recognise(_ context.Context, p *Page) bool {
-	return okruShape(p.Final) && p.Has(okruPlayerModule, okruOptionsAttr)
-}
-
-// Extract resolves a video page to its best rendition.
-func (o *OKru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	id := okruVideoID(u)
-	if id == "" {
-		return nil, fmt.Errorf("ok.ru: no video id in %s", u.Redacted())
-	}
-
-	meta, err := o.metadata(ctx, id)
+// okruRead reads the embed page's renditions, asking again when the page
+// arrives without any.
+//
+// The site intermittently serves its ordinary page with the rendition list
+// empty while still reporting the video as fine. It comes and goes in
+// windows of minutes and follows neither the pacing of the requests nor
+// anything about the client, so it looks like a bad backend rather than
+// anything asked of us. Reported as it stands it reads as "this video offers
+// nothing", which is wrong and leaves the user nothing to act on, so a page
+// that calls the movie OK and then lists nothing is asked for again. A page
+// that says the video is gone is believed at once.
+func okruRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
+	id, _ := url.PathUnescape(path.Base(page))
+	meta, err := withExtractRetries(ctx,
+		func() (*okruMetadata, error) { return okruFetch(ctx, client, page) },
+		func(meta *okruMetadata, err error) bool {
+			return err == nil && !okruPlayable(meta) && strings.EqualFold(meta.Movie.Status, "OK")
+		})
 	if err != nil {
 		return nil, err
 	}
-	title := util.FirstNonEmpty(meta.Movie.Title, "ok.ru-"+id)
-	headers := httpx.Referer(okruRoot + "/")
-
-	if best, ok := okruBest(meta.Videos); ok {
-		return &Result{Title: title, Files: []File{{
-			Name:    title + ".mp4",
-			URL:     best,
-			Size:    -1,
-			Headers: headers,
-			Resolve: func(ctx context.Context) (*Target, error) {
-				fresh, err := o.metadata(ctx, id)
-				if err != nil {
-					return nil, err
-				}
-				link, ok := okruBest(fresh.Videos)
-				if !ok {
-					return nil, fmt.Errorf("ok.ru: %s no longer offers a downloadable rendition", id)
-				}
-				return &Target{URL: link, Name: title + ".mp4", Size: -1, Headers: headers}, nil
-			},
-		}}}, nil
+	if !okruPlayable(meta) {
+		return nil, fmt.Errorf("%s offers no playable rendition%s", id, okruWhyNot(meta))
 	}
-
-	// Live streams, and some ordinary videos, come only as a playlist.
-	if meta.HLSManifestURL != "" {
-		media, err := resolveMediaPlaylist(ctx, o.client, meta.HLSManifestURL, headers)
-		if err != nil {
-			return nil, fmt.Errorf("ok.ru: %w", err)
-		}
-		return &Result{Title: title, Files: []File{media.file(title+media.extensionOr(".ts"), headers)}}, nil
-	}
-
-	return nil, fmt.Errorf("ok.ru: %s offers no playable rendition%s", id, okruWhyNot(meta))
+	return &playerVideo{title: util.FirstNonEmpty(meta.Movie.Title, "ok.ru-"+id), candidates: okruCandidates(meta)}, nil
 }
 
 // okruWhyNot adds the site's own explanation when it gave one. A video that
@@ -133,44 +112,34 @@ func okruWhyNot(meta *okruMetadata) string {
 	return " (" + status + ")"
 }
 
-// metadata reads the embed page's player configuration, asking again when
-// the page arrives without one.
-//
-// The site intermittently serves its ordinary page with the rendition list
-// empty while still reporting the video as fine. It comes and goes in
-// windows of minutes and follows neither the pacing of the requests nor
-// anything about the client, so it looks like a bad backend rather than
-// anything asked of us. Reported as it stands it reads as "this video offers
-// nothing", which is wrong and leaves the user nothing to act on, so a page
-// that calls the movie OK and then lists nothing is asked for again. A page
-// that says the video is gone is believed at once.
-func (o *OKru) metadata(ctx context.Context, id string) (*okruMetadata, error) {
-	return withExtractRetries(ctx,
-		func() (*okruMetadata, error) { return o.fetchMetadata(ctx, id) },
-		func(meta *okruMetadata, err error) bool {
-			return err == nil && !okruPlayable(meta) && strings.EqualFold(meta.Movie.Status, "OK")
-		})
-}
-
 // okruPlayable reports whether the metadata carries anything to fetch.
 func okruPlayable(meta *okruMetadata) bool {
-	if meta.HLSManifestURL != "" {
-		return true
-	}
-	_, ok := okruBest(meta.Videos)
+	_, ok := bestCandidate(okruCandidates(meta))
 	return ok
 }
 
-// fetchMetadata reads the embed page once.
-func (o *OKru) fetchMetadata(ctx context.Context, id string) (*okruMetadata, error) {
-	page := okruEmbed + url.PathEscape(id)
-	doc, err := fetchPage(ctx, o.client, page, httpx.Referer(okruRoot+"/"))
+// okruCandidates are the files the page offers, ranked by name, and the
+// playlist below them all.
+func okruCandidates(meta *okruMetadata) []mediaCandidate {
+	var out []mediaCandidate
+	for _, v := range meta.Videos {
+		out = append(out, mediaCandidate{URL: v.URL, Quality: okruRank(v.Name)})
+	}
+	if meta.HLSManifestURL != "" {
+		out = append(out, mediaCandidate{URL: meta.HLSManifestURL, Quality: okruPlaylistRank, IsHLS: true})
+	}
+	return out
+}
+
+// okruFetch reads the embed page once.
+func okruFetch(ctx context.Context, client *httpx.Client, page string) (*okruMetadata, error) {
+	doc, err := fetchPage(ctx, client, page, httpx.Referer(okruRoot+"/"))
 	if err != nil {
-		return nil, fmt.Errorf("ok.ru: fetch %s: %w", page, err)
+		return nil, fmt.Errorf("fetch %s: %w", page, err)
 	}
 	meta, err := okruMetadataFrom(doc)
 	if err != nil {
-		return nil, fmt.Errorf("ok.ru: %s: %w", page, err)
+		return nil, fmt.Errorf("%s: %w", page, err)
 	}
 	return meta, nil
 }
@@ -214,23 +183,6 @@ func okruMetadataFrom(doc string) (*okruMetadata, error) {
 		return &meta, nil
 	}
 	return nil, fmt.Errorf("no player configuration on the page")
-}
-
-// okruBest picks the largest rendition the page offered.
-func okruBest(videos []okruVideo) (string, bool) {
-	// Starts below the rank of an unknown name, so a rendition the site
-	// labelled in a way this does not recognise is still taken when it is
-	// all there is.
-	best, rank := "", -2
-	for _, v := range videos {
-		if v.URL == "" {
-			continue
-		}
-		if r := okruRank(v.Name); r > rank {
-			best, rank = v.URL, r
-		}
-	}
-	return best, best != ""
 }
 
 // okruRank orders a rendition by name. An unknown name ranks below every

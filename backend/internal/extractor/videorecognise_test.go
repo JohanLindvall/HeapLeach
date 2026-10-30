@@ -141,7 +141,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/2", site + "/categories/first"},
 		},
 		{
-			name: "eporner", r: NewEporner(nil),
+			name: "eporner", r: NewPlayer(nil, &epornerPlayer),
 			good: site + "/video-AbC123/first-clip/", wrongForm: site + "/cat/first/",
 			page: head("First Clip - EPORNER", "og:site_name=EPORNER.COM") +
 				`<script>EP.video.player.vid = 'AbC123'; EP.video.player.hash = '0123456789abcdef0123456789abcdef';</script></body></html>`,
@@ -186,7 +186,7 @@ func TestVideoRecognition(t *testing.T) {
 			},
 		},
 		{
-			name: "ok.ru", r: NewOKru(nil),
+			name: "ok.ru", r: NewPlayer(nil, &okruPlayer),
 			good: site + "/video/1234567890", wrongForm: site + "/discovery",
 			page:      `<html><head><title>OK</title></head><body><div data-module="OKVideo" data-options="{}"></div></body></html>`,
 			unmarked:  head("OK", "og:site_name=OK.RU") + "</body></html>",
@@ -202,7 +202,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/support"},
 		},
 		{
-			name: "doodstream", r: NewDoodStream(nil),
+			name: "doodstream", r: NewPlayer(nil, &doodPlayer),
 			good: site + "/e/abcdef123", wrongForm: site + "/premium",
 			page:      `<html><head><title>first - DoodStream</title></head><body><script>$.get('/pass_md5/12-34/abcdef', function(d){})</script></body></html>`,
 			unmarked:  `<html><head><title>first - DoodStream</title></head><body></body></html>`,
@@ -251,7 +251,7 @@ func TestVideoRecognition(t *testing.T) {
 			notShapes: []string{site + "/abc123xy", site + "/help/faq"},
 		},
 		{
-			name: "knuthing", r: NewKnuthing(nil),
+			name: "knuthing", r: NewPlayer(nil, &knuthingPlayer),
 			good: site + "/watch/first-clip_Ab12.html", wrongForm: site + "/affiliates",
 			page:      `<html><head><title>First</title><script src="/themes/knuthing/js/jquery.js"></script></head><body><iframe class="bunnyframe" src="https://player.example.test/1"></iframe></body></html>`,
 			unmarked:  `<html><head><title>First</title><script src="/themes/knuthing/js/jquery.js"></script></head><body></body></html>`,
@@ -262,7 +262,7 @@ func TestVideoRecognition(t *testing.T) {
 			},
 		},
 		{
-			name: "noodlemagazine", r: NewNoodleMagazine(nil),
+			name: "noodlemagazine", r: NewPlayer(nil, &noodlePlayer),
 			good: site + "/watch/-123_456", wrongForm: site + "/home",
 			page:      head("First watch online", "og:site_name=noodlemagazine") + `<script>window.playlist = {"sources":[]};</script></body></html>`,
 			unmarked:  head("First watch online", "og:site_name=noodlemagazine") + "</body></html>",

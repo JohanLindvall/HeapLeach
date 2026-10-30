@@ -14,7 +14,8 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-func (d *DoodStream) getPage(ctx context.Context, raw, referer, stage string, attempt int) (string, *url.URL, error) {
+// doodGetPage fetches one stage of the handshake, logging what came back.
+func doodGetPage(ctx context.Context, client *httpx.Client, raw, referer, stage string, attempt int) (string, *url.URL, error) {
 	page := referer
 	if stage == "player" {
 		page = raw
@@ -24,7 +25,7 @@ func (d *DoodStream) getPage(ctx context.Context, raw, referer, stage string, at
 		"route", util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute))
 	start := time.Now()
 	log.DebugContext(ctx, "doodstream: request started")
-	doc, final, err := d.client.GetPage(httpx.WithLogger(ctx, log), raw, httpx.Referer(referer), func(doc string) bool {
+	doc, final, err := client.GetPage(httpx.WithLogger(ctx, log), raw, httpx.Referer(referer), func(doc string) bool {
 		challenged := doodChallengePage(doc)
 		if challenged {
 			doodLogPage(ctx, log, doc, true)

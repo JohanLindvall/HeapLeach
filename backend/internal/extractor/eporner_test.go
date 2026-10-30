@@ -333,9 +333,9 @@ func epornerServer(t *testing.T, declared int) (*httptest.Server, *int32) {
 	return srv, &pageHits
 }
 
-func epornerUnderTest(t *testing.T) *Eporner {
+func epornerUnderTest(t *testing.T) *Player {
 	t.Helper()
-	return NewEporner(httpx.New("test-agent", "en-US,en;q=0.9", 1, 10*time.Second))
+	return NewPlayer(httpx.New("test-agent", "en-US,en;q=0.9", 1, 10*time.Second), &epornerPlayer)
 }
 
 // One video, end to end: the page is read, the hash folded, the endpoint

@@ -33,7 +33,8 @@ func TestPlayerSitesAreCompleteAndRegistered(t *testing.T) {
 	var want []string
 	for _, site := range playerSites {
 		if site.name == "" || site.recognises == "" || site.shape == nil || site.recognise == nil ||
-			site.referer == nil || site.read == nil {
+			site.read == nil || site.listing != nil && site.listing.shape == nil ||
+			site.listing != nil && (site.listing.walk == nil) == (site.listing.links == nil) {
 			t.Errorf("row %q leaves out something the engine calls", site.name)
 		}
 		want = append(want, site.name)
@@ -827,5 +828,87 @@ func TestSendvidID(t *testing.T) {
 		if got := sendvidID(u); got != want {
 			t.Errorf("sendvidID(%s) = %q, want %q", raw, got, want)
 		}
+	}
+}
+
+// TestPlayerEngineOptions covers what a row can ask of the engine beyond
+// its read: the media referer a read names over the row's or none at all,
+// a playlist still being written refused unless the row serves live
+// streams, and the proxy fallback carried onto the file.
+func TestPlayerEngineOptions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/open.m3u8":
+			fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\n/part.ts\n")
+		case "/closed.m3u8":
+			fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\n/part.ts\n#EXT-X-ENDLIST\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		name          string
+		rowReferer    func(string) string
+		readReferer   string
+		link          string
+		live, proxied bool
+		wantReferer   string
+		wantErr       string
+	}{
+		{name: "row referer", rowReferer: samePage, link: "/file.mp4", wantReferer: "https://player.example.test/v/1"},
+		{name: "read referer wins", rowReferer: samePage, readReferer: "https://embed.example.test/p", link: "/file.mp4",
+			wantReferer: "https://embed.example.test/p"},
+		{name: "no referer", link: "/file.mp4"},
+		{name: "proxied", link: "/file.mp4", proxied: true},
+		{name: "finished playlist", link: "/closed.m3u8"},
+		{name: "unfinished playlist", link: "/open.m3u8", wantErr: "still being written"},
+		{name: "live playlist", link: "/open.m3u8", live: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			site := &playerSite{
+				name: "synthetic", referer: tc.rowReferer, signed: true, live: tc.live, proxyFallback: tc.proxied,
+				read: func(context.Context, *httpx.Client, string) (*playerVideo, error) {
+					return &playerVideo{title: "First Clip", candidates: playerLink(srv.URL + tc.link), referer: tc.readReferer}, nil
+				},
+			}
+			p := NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), site)
+			res, err := p.Extract(context.Background(), mustParse(t, "https://player.example.test/v/1"), Options{})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := res.Files[0]
+			if got := f.Headers[httpx.HeaderReferer]; got != tc.wantReferer || (tc.wantReferer == "" && f.Headers != nil) {
+				t.Errorf("referer = %q (headers %v), want %q", got, f.Headers, tc.wantReferer)
+			}
+			if f.ProxyFallback != tc.proxied || p.ProxyFallback() != tc.proxied {
+				t.Errorf("proxy fallback = %v/%v, want %v", f.ProxyFallback, p.ProxyFallback(), tc.proxied)
+			}
+			if f.Resolve == nil {
+				t.Error("a signed row's file is not read again at transfer time")
+			}
+		})
+	}
+}
+
+// TestPlayerGoneKeepsTheStatus checks that a page answering 404 reads as a
+// video that has gone and still carries the status underneath.
+func TestPlayerGoneKeepsTheStatus(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	site := &playerSite{name: "synthetic", read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
+		_, err := playerFetch(ctx, client, page, page)
+		return nil, err
+	}}
+	_, err := NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), site).
+		Extract(context.Background(), mustParse(t, srv.URL+"/v/1"), Options{})
+	if err == nil || !strings.Contains(err.Error(), "is not there") || !httpx.HasStatus(err, http.StatusNotFound) {
+		t.Fatalf("err = %v, want a gone video still carrying its 404", err)
 	}
 }
