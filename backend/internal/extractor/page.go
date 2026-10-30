@@ -299,10 +299,15 @@ func fetchPage(ctx context.Context, client *httpx.Client, link string, headers h
 // so a document read to recognise it is not parsed a second time.
 func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*html.Node, *url.URL, error) {
 	if p := probed(ctx, u); p != nil {
-		if _, ok := p.Document(); ok {
+		if doc, ok := p.Document(); ok {
 			if root := p.HTML(); root != nil {
 				return root, p.Final, nil
 			}
+			// A document the probe did not take for HTML, for want of a
+			// declared type, is still the one asked for: parse it here
+			// rather than fetch it again.
+			root, err := parseHTML(doc)
+			return root, p.Final, err
 		}
 	}
 	doc, final, err := client.GetPage(ctx, u.String(), headers, nil)
