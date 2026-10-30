@@ -112,80 +112,87 @@ func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pa
 }
 
 // kvsListingPages walks the listing and collects every video page it names.
+//
+// The listing's own end is the walk's: a page that adds nothing, one asked
+// for twice, a later page that will not load or parse. The stated total
+// ends it as well, ahead of the cap, so a last page that runs past the cap
+// is kept whole.
 func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, error) {
+	headers := httpx.Referer(l.url)
+	doc := l.first
+	if doc == "" {
+		var err error
+		if doc, err = client.GetString(ctx, l.url, headers); err != nil {
+			return nil, "", fmt.Errorf("%s: fetch %s: %w", kvsLabel, l.url, err)
+		}
+	}
+	root, err := parseHTML(doc)
+	if err != nil {
+		return nil, "", nil
+	}
+	first, err := url.Parse(l.url)
+	if err != nil {
+		return nil, "", nil
+	}
+	total := 0
+	if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
+		total, _ = strconv.Atoi(m[1])
+	}
+
 	var (
-		pages   []string
-		title   string
-		total   int
-		seen    = make(map[string]bool)
-		visited = make(map[string]bool)
-		target  = l.url
-		block   string
+		seen   = make(map[string]bool)
+		page   = 0
+		block  string
+		capped bool
 	)
-
-	for page := 1; page <= config.MaxAlbumPages && target != ""; page++ {
-		if visited[target] {
-			break // the listing pointed back at a page already walked
-		}
-		visited[target] = true
-
-		doc := l.first
-		if page > 1 || doc == "" {
-			var err error
-			doc, err = client.GetString(ctx, target, httpx.Referer(l.url))
-			if err != nil {
+	links, title, _, err := walkListing(ctx, client, first, listingWalk{
+		name: kvsLabel, title: l.title(root), limit: -1, quiet: true, root: root,
+		fetch: fetchAsAsked(client, headers),
+		read: func(root *html.Node, _, _ *url.URL) listingPage {
+			page++
+			var p listingPage
+			for _, link := range kvsListingVideos(root, l.url) {
+				p.links = append(p.links, listingLink{key: link, url: link})
+				seen[link] = true
+			}
+			switch {
+			case total > 0 && len(seen) >= total:
+				return p
+			case len(seen) >= l.fileCap():
+				capped = true
+				return p
+			case kvsListingEnds(root):
+				// The listing says where the next page is, and on the last
+				// one says that there is none. That is the stop condition;
+				// everything above is a guard against a listing that
+				// misreports itself.
+				return p
+			}
+			target := kvsNextPage(root, l.url)
+			if target == "" {
+				target = kvsAsyncNext(root, l.url)
+			}
+			if target == "" {
 				if page == 1 {
-					return nil, "", fmt.Errorf("%s: fetch %s: %w", kvsLabel, l.url, err)
+					block = kvsListingBlock(root)
 				}
-				break // a later page failing still leaves the earlier ones
+				target = kvsAsyncPage(l.url, block, page+1)
 			}
-		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			break
-		}
-		if page == 1 {
-			title = l.title(root)
-			if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
-				total, _ = strconv.Atoi(m[1])
+			if target != "" {
+				p.next, _ = url.Parse(target)
 			}
-		}
-
-		added := 0
-		for _, link := range kvsListingVideos(root, l.url) {
-			if seen[link] {
-				continue
-			}
-			seen[link] = true
-			pages = append(pages, link)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-		if total > 0 && len(pages) >= total {
-			break
-		}
-		if len(pages) >= l.fileCap() {
-			pages = pages[:l.fileCap()]
-			break
-		}
-		// The listing says where the next page is, and on the last one says
-		// that there is none. That is the stop condition; everything above
-		// is a guard against a listing that misreports itself.
-		if kvsListingEnds(root) {
-			break
-		}
-		target = kvsNextPage(root, l.url)
-		if target == "" {
-			target = kvsAsyncNext(root, l.url)
-		}
-		if target == "" {
-			if page == 1 {
-				block = kvsListingBlock(root)
-			}
-			target = kvsAsyncPage(l.url, block, page+1)
-		}
+			return p
+		},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	pages := make([]string, 0, len(links))
+	for _, link := range links {
+		pages = append(pages, link.url)
+	}
+	if capped {
+		pages = pages[:l.fileCap()]
 	}
 	return pages, title, nil
 }

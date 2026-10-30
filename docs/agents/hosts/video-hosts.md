@@ -297,6 +297,12 @@ page at all, since following it resolves straight back to page one. The query
 keeps the escaping it arrived with, because the site writes a plus as `%2B`
 and re-encoding a decoded segment would hand its routing a literal plus.
 
+`kvsListingPages` hands its pages to the shared `walkListing` as a quiet
+listing, with the first document from the probe or the browse fetch. Its
+reader stops at the stated total ahead of the cap, so a page reaching the
+total is kept whole, and a later page that fails, repeats or adds nothing is
+the end of the listing rather than a partial one.
+
 ### Signed rather than scrambled links
 
 Not every install scrambles. moannest signs its links instead — a plain

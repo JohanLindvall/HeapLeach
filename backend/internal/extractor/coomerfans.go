@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -255,52 +254,44 @@ func (c *CoomerFans) profile(ctx context.Context, u *url.URL) (*Result, error) {
 //
 // Paging stops at a page that adds nothing new as well as at the absence of
 // a next link, because a listing that runs past its end tends to answer with
-// the last page again rather than with nothing.
+// the last page again rather than with nothing. A later page that will not
+// load or parse ends the walk with the earlier ones, quietly: the listing
+// says nothing of how long it is, so there is nothing to call partial.
 func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL) ([]string, string, error) {
-	var (
-		links []string
-		title string
-		seen  = make(map[string]bool)
-		page  = u.String()
-	)
-
-	for i := 0; i < config.MaxAlbumPages && page != ""; i++ {
-		pageURL, err := url.Parse(page)
-		if err != nil {
-			break
-		}
-		doc, _, err := fetchDocument(ctx, c.client, pageURL, httpx.Referer(coomerFansRoot+"/"))
-		if err != nil {
-			if i == 0 {
-				return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", page, err)
-			}
-			break // a later page failing still leaves the earlier ones
-		}
-		root, parseErr := parseHTML(doc)
-		if parseErr != nil {
-			break
-		}
-		if title == "" {
-			title = coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))
-		}
-
-		added := 0
-		for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
-			link := resolveRef(u, attr(a, "href"))
-			if !coomerFansIsPost(link) || seen[link] {
-				continue
-			}
-			seen[link] = true
-			links = append(links, link)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-		page = coomerFansNextPage(root, u)
+	headers := httpx.Referer(coomerFansRoot + "/")
+	fallback := strings.Trim(u.Path, "/")
+	doc, _, err := fetchDocument(ctx, c.client, u, headers)
+	if err != nil {
+		return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", u.String(), err)
 	}
-
-	return links, util.FirstNonEmpty(title, strings.Trim(u.Path, "/")), nil
+	root, err := parseHTML(doc)
+	if err != nil {
+		return nil, fallback, nil
+	}
+	found, title, _, err := walkListing(ctx, c.client, u, listingWalk{
+		name: "coomerfans", title: fallback, limit: -1, quiet: true, root: root,
+		fetch: fetchAsAsked(c.client, headers),
+		read: func(root *html.Node, _, _ *url.URL) listingPage {
+			p := listingPage{title: coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))}
+			for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
+				if link := resolveRef(u, attr(a, "href")); coomerFansIsPost(link) {
+					p.links = append(p.links, listingLink{key: link, url: link})
+				}
+			}
+			if next := coomerFansNextPage(root, u); next != "" {
+				p.next, _ = url.Parse(next)
+			}
+			return p
+		},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	links := make([]string, 0, len(found))
+	for _, link := range found {
+		links = append(links, link.url)
+	}
+	return links, title, nil
 }
 
 // coomerFansNextPage follows the listing's own next link.

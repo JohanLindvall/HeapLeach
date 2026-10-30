@@ -212,3 +212,87 @@ func TestKVSSearchResolvesEveryPageOfResults(t *testing.T) {
 		}
 	}
 }
+
+// The walk's end conditions, each where the listing itself says it ends:
+// none of them is an error once the first page has been read. The stated
+// total is checked ahead of the cap, so a page that reaches the total keeps
+// every tile it has.
+func TestKVSListingPagesEnds(t *testing.T) {
+	page := func(showing, next string, slugs ...string) string {
+		var b strings.Builder
+		b.WriteString(`<h1>Example Videos</h1>` + showing + `<div id="list_videos_common">`)
+		for _, slug := range slugs {
+			b.WriteString(`<a href="/video/` + slug + `/">` + slug + `</a>`)
+		}
+		b.WriteString(`</div>`)
+		if next != "" {
+			b.WriteString(`<div class="pagination"><ul><li class="next"><a href="` + next + `">Next</a></li></ul></div>`)
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		name  string
+		pages map[string]string
+		limit int
+		want  int
+		never string
+	}{
+		{"stated total reached", map[string]string{
+			"/list/":   page("Showing 1 - 2 of 3", "/list/2/", "a", "b"),
+			"/list/2/": page("", "/list/3/", "c"),
+			"/list/3/": page("", "", "d"),
+		}, 0, 3, "/list/3/"},
+		{"missing page ends it", map[string]string{
+			"/list/": page("", "/list/2/", "a", "b"),
+		}, 0, 2, ""},
+		{"page adding nothing ends it", map[string]string{
+			"/list/":   page("", "/list/2/", "a", "b"),
+			"/list/2/": page("", "/list/3/", "a", "b"),
+			"/list/3/": page("", "", "c"),
+		}, 0, 2, "/list/3/"},
+		{"last page says so", map[string]string{
+			"/list/":   page("", "/list/2/", "a", "b"),
+			"/list/2/": page("", "", "c") + `<div class="pagination"><ul><li class="next"><span>Next</span></li></ul></div>`,
+		}, 0, 3, ""},
+		{"cap truncates", map[string]string{
+			"/list/":   page("", "/list/2/", "a", "b"),
+			"/list/2/": page("", "/list/3/", "c", "d"),
+			"/list/3/": page("", "", "e"),
+		}, 3, 3, "/list/3/"},
+		{"total ahead of the cap", map[string]string{
+			"/list/":   page("Showing 1 - 2 of 4", "/list/2/", "a", "b"),
+			"/list/2/": page("", "/list/3/", "c", "d"),
+		}, 3, 4, "/list/3/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				mu    sync.Mutex
+				asked []string
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				asked = append(asked, r.URL.RequestURI())
+				mu.Unlock()
+				if doc, ok := tc.pages[r.URL.RequestURI()]; ok {
+					io.WriteString(w, doc)
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer srv.Close()
+			l := kvsListingForPage(srv.URL + "/list/")
+			l.limit = tc.limit
+			pages, title, err := kvsListingPages(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), l)
+			if err != nil || len(pages) != tc.want || title != "Example" {
+				t.Fatalf("pages=%d title=%q err=%v, want %d", len(pages), title, err, tc.want)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, uri := range asked {
+				if tc.never != "" && uri == tc.never {
+					t.Errorf("asked past the end: %s", uri)
+				}
+			}
+		})
+	}
+}

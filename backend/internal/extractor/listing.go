@@ -26,7 +26,8 @@ type listingPage struct {
 	// title is the listing's own, read off its first page.
 	title string
 	// next is the following page, and note why there is none when the
-	// pager offered one that cannot be followed.
+	// pager offered one that cannot be followed. For a missing page, note
+	// says why in place of the walk's own words.
 	next *url.URL
 	note string
 	// missing marks a page without its listing; end one that says the
@@ -38,13 +39,44 @@ type listingPage struct {
 type listingWalk struct {
 	name  string // the extractor, prefixing errors
 	title string // the title when the first page names none
-	none  string // the error when the listing yields nothing
+	// none is the error when the listing yields nothing; without one, an
+	// empty listing is no error and the caller decides.
+	none string
+	// limit caps the entries; a negative one caps nothing.
 	limit int
 	// limitNote is the note for a walk cut short by limit.
 	limitNote string
 	// read takes one parsed page apart; page is where it was served from
-	// and first the listing's first page, as served.
+	// and first the listing's first page, as served. A listing paged by
+	// number rather than by a link names its next page here too.
 	read func(root *html.Node, page, first *url.URL) listingPage
+
+	// The rest is for listings the defaults do not fit.
+
+	// root is the first page, already fetched and parsed by the caller,
+	// which has then said for itself what failing to read it means.
+	root *html.Node
+	// fetch reads a page in place of fetchDocument with the first page as
+	// referer, and reports no progress for it. What it cannot read or
+	// parse is a page that could not be fetched.
+	fetch func(ctx context.Context, page, first *url.URL) (*html.Node, *url.URL, error)
+	// key names a page for spotting one read twice; its URL when nil.
+	key func(*url.URL) string
+	// anyRedirect leaves where a page was served from to read, which marks
+	// one that left the listing missing. Without it the first page must
+	// keep its path, and a later one its site, path and query.
+	anyRedirect bool
+	// missing is the error for a first page without its listing, in place
+	// of "no video listing on this page".
+	missing string
+	// quiet is a listing whose walk stops where the listing does: a page
+	// that adds nothing, one read twice, the page cap, a later page that
+	// fails or lacks its listing. It is no partial listing, so the walk
+	// adds no note of its own; read's notes and limitNote still stand.
+	quiet bool
+	// failed is the note for a later page that could not be fetched, in
+	// place of the walk's own, or of none when quiet.
+	failed func(error) string
 }
 
 // listingLimit is how many entries a listing may queue as files: the
@@ -66,18 +98,43 @@ func listingLimit(opts Options) (int, string) {
 // request saw the cancellation.
 func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w listingWalk) (links []listingLink, title, note string, err error) {
 	title, page := w.title, first
+	key := w.key
+	if key == nil {
+		key = (*url.URL).String
+	}
+	// stop is the walk's own note for ending early, which a quiet listing
+	// does not take.
+	stop := func(note string) string {
+		if w.quiet {
+			return ""
+		}
+		return note
+	}
 	seen, pages := make(map[string]bool), make(map[string]bool)
 	for n := range config.MaxAlbumPages {
 		if err := ctx.Err(); err != nil {
 			return nil, "", "", err
 		}
-		if pages[page.String()] {
-			note = "partial — repeated page"
+		if pages[key(page)] {
+			note = stop("partial — repeated page")
 			break
 		}
-		pages[page.String()] = true
-		ResolveNote(ctx, fmt.Sprintf("Reading listing page %d", n+1))
-		doc, final, err := fetchDocument(ctx, client, page, httpx.Referer(first.String()))
+		pages[key(page)] = true
+		var (
+			root  *html.Node
+			doc   string
+			final *url.URL
+			err   error
+		)
+		switch {
+		case n == 0 && w.root != nil:
+			root, final = w.root, page
+		case w.fetch != nil:
+			root, final, err = w.fetch(ctx, page, first)
+		default:
+			ResolveNote(ctx, fmt.Sprintf("Reading listing page %d", n+1))
+			doc, final, err = fetchDocument(ctx, client, page, httpx.Referer(first.String()))
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, "", "", ctx.Err()
@@ -85,26 +142,31 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 			if n == 0 {
 				return nil, "", "", fmt.Errorf("%s: fetch listing: %w", w.name, err)
 			}
-			note = "partial — could not fetch next page"
+			if w.failed != nil {
+				note = w.failed(err)
+			} else {
+				note = stop("partial — could not fetch next page")
+			}
 			break
 		}
-		if final.String() != page.String() && pages[final.String()] {
-			note = "partial — repeated page"
+		if key(final) != key(page) && pages[key(final)] {
+			note = stop("partial — repeated page")
 			break
 		}
-		pages[final.String()] = true
+		pages[key(final)] = true
 		if n == 0 {
-			if !samePath(final, first) {
+			if !w.anyRedirect && !samePath(final, first) {
 				return nil, "", "", fmt.Errorf("%s: listing redirected to another page", w.name)
 			}
 			first = final
-		} else if !sameSite(final, page) || !samePath(final, page) || final.RawQuery != page.RawQuery {
-			note = "partial — next page redirected to another listing"
+		} else if !w.anyRedirect && (!sameSite(final, page) || !samePath(final, page) || final.RawQuery != page.RawQuery) {
+			note = stop("partial — next page redirected to another listing")
 			break
 		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, "", "", err
+		if root == nil {
+			if root, err = parseHTML(doc); err != nil {
+				return nil, "", "", err
+			}
 		}
 		p := w.read(root, final, first)
 		if p.end {
@@ -112,9 +174,9 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 		}
 		if p.missing {
 			if n == 0 {
-				return nil, "", "", fmt.Errorf("%s: no video listing on this page", w.name)
+				return nil, "", "", fmt.Errorf("%s: %s", w.name, util.FirstNonEmpty(w.missing, "no video listing on this page"))
 			}
-			note = "partial — listing is missing on next page"
+			note = util.FirstNonEmpty(p.note, stop("partial — listing is missing on next page"))
 			break
 		}
 		if n == 0 {
@@ -132,7 +194,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 			links = append(links, link)
 		}
 		if len(links) == before {
-			note = "partial — repeated or empty page"
+			note = stop("partial — repeated or empty page")
 			break
 		}
 		if p.next == nil {
@@ -144,17 +206,30 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 			break
 		}
 		if n == config.MaxAlbumPages-1 {
-			note = "partial — page limit"
+			note = stop("partial — page limit")
 		}
 		page = p.next
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, "", "", err
 	}
-	if len(links) == 0 {
+	if len(links) == 0 && w.none != "" {
 		return nil, "", "", fmt.Errorf("%s: %s", w.name, w.none)
 	}
 	return links, title, note, nil
+}
+
+// fetchAsAsked is a listingWalk fetch for a listing that reads each page
+// with headers as the page it asked for, wherever it was served from.
+func fetchAsAsked(client *httpx.Client, headers httpx.Header) func(context.Context, *url.URL, *url.URL) (*html.Node, *url.URL, error) {
+	return func(ctx context.Context, page, _ *url.URL) (*html.Node, *url.URL, error) {
+		doc, _, err := client.GetPage(ctx, page.String(), headers, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		root, err := parseHTML(doc)
+		return root, page, err
+	}
 }
 
 // webLink resolves ref against base as an http or https link with a host

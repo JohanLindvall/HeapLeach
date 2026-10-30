@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -84,117 +83,98 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 	if len(e.files) == 0 {
 		return nil, fmt.Errorf("wordpress: no accessible downloads in %d posts", len(sources))
 	}
-	notes := []string{}
-	if note != "" {
-		notes = append(notes, note)
-	}
-	if e.full {
-		notes = append(notes, "partial — file limit")
-	}
-	if e.used < len(sources) {
-		notes = append(notes, fmt.Sprintf("%d of %d posts resolved", e.used, len(sources)))
-	}
+	notes := listingNotes(note, e, len(sources), "posts")
 	if e.partial > 0 {
 		notes = append(notes, fmt.Sprintf("%d posts have incomplete downloads", e.partial))
 	}
 	return &Result{Title: title, Note: strings.Join(notes, "; "), Files: e.files}, nil
 }
 
+// wordPressList walks a category from its first page, whichever page was
+// pasted. The pasted page's own tree stands for the first page when it is
+// the first page; a later one still means the whole category.
 func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, root *html.Node, limit int) (sources []string, title, note string, err error) {
 	log := extractionLogger(ctx)
 	defer func() {
 		log.DebugContext(ctx, "wordpress: category listing finished", "posts", len(sources), "note", note, "error", err)
 	}()
 	first := wordPressFirstPage(pasted)
+	cached := root != nil && wordPressPageKey(pasted) == wordPressPageKey(first)
+	log.DebugContext(ctx, "wordpress: reading category page", "page", first.Redacted(), "page_number", 1, "cached", cached)
 	page := first
-	if wordPressPageKey(pasted) != wordPressPageKey(first) {
-		root = nil // A pasted later page still means the whole category.
-	}
-	title = util.FirstNonEmpty(util.NameFromURL(first.String()), "WordPress category")
-	seen, pages := make(map[string]bool), make(map[string]bool)
-	for n := range config.MaxAlbumPages {
-		if err := ctx.Err(); err != nil {
+	if !cached {
+		var final *url.URL
+		if root, final, err = wordPressFetch(ctx, client, first); err != nil {
+			log.DebugContext(ctx, "wordpress: category page failed", "page", first.Redacted(), "error", err)
+			if ctx.Err() != nil {
+				return nil, "", "", ctx.Err()
+			}
 			return nil, "", "", err
 		}
-		key := wordPressPageKey(page)
-		if pages[key] {
-			return sources, title, "partial — repeated page", nil
-		}
-		pages[key] = true
-		log.DebugContext(ctx, "wordpress: reading category page", "page", page.Redacted(), "page_number", n+1, "cached", root != nil)
-		if root == nil {
-			var final *url.URL
-			root, final, err = wordPressFetch(ctx, client, page)
-			if err != nil {
-				log.DebugContext(ctx, "wordpress: category page failed", "page", page.Redacted(), "error", err)
-				if ctx.Err() != nil {
-					return nil, "", "", ctx.Err()
-				}
-				if n == 0 {
-					return nil, "", "", err
-				}
-				return sources, title, "partial — could not fetch next page", nil
-			}
-			if !wordPressSameCategory(first, final) || !wordPressCategory(root, final) {
-				log.DebugContext(ctx, "wordpress: category page not recognised", "page", page.Redacted(), "final", final.Redacted())
-				if n == 0 {
-					return nil, "", "", fmt.Errorf("wordpress: category page is missing")
-				}
-				return sources, title, "partial — category is missing on next page", nil
-			}
-			page = final
-		}
-		area := wordPressArea(root)
-		if n == 0 {
-			title = util.FirstNonEmpty(wordPressTitle(area, true), trimSiteSuffix(firstText(root, atomTitle)), title)
-		}
-		before := len(sources)
-		links := wordPressPostLinks(area)
-		log.DebugContext(ctx, "wordpress: category page parsed", "page", page.Redacted(), "post_links", len(links))
-		for _, ref := range links {
-			link := wordPressLocalLink(page, ref)
-			if link == nil {
-				continue
-			}
-			key := wordPressPageKey(link)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			if len(sources) == limit {
-				return sources, title, "partial — source limit", nil
-			}
-			sources = append(sources, link.String())
-		}
-		log.DebugContext(ctx, "wordpress: posts collected", "page", page.Redacted(), "new_posts", len(sources)-before, "posts_total", len(sources))
-		if len(sources) == before {
-			if n == 0 {
-				return nil, "", "", fmt.Errorf("wordpress: category has no post permalinks")
-			}
-			return sources, title, "partial — repeated or empty page", nil
-		}
-		ref, hasNext := wordPressNext(area)
-		if !hasNext {
-			// Some older themes put rel=next only in the document head.
-			if head := findFirst(root, func(n *html.Node) bool { return isElem(n, atom.Head) }); head != nil {
-				ref, hasNext = wordPressNext(head)
-			}
-		}
-		if !hasNext {
-			return sources, title, "", nil
-		}
-		next := wordPressLocalLink(page, ref)
-		if next == nil || !wordPressSameCategory(first, next) {
-			log.DebugContext(ctx, "wordpress: invalid next page", "page", page.Redacted(), "next", ref)
-			return sources, title, "partial — invalid next page", nil
-		}
-		if len(sources) == limit {
-			return sources, title, "partial — source limit", nil
-		}
-		log.DebugContext(ctx, "wordpress: following next page", "page", page.Redacted(), "next", next.Redacted())
-		page, root = next, nil
+		page = final
 	}
-	return sources, title, "partial — page limit", nil
+	// Each page is logged as it is read, and the next as it is followed:
+	// the walk asks for a page only once it means to follow it.
+	number, last := 1, page
+	collected := make(map[string]bool)
+	links, title, note, err := walkListing(ctx, client, page, listingWalk{
+		name: "wordpress", title: util.FirstNonEmpty(util.NameFromURL(first.String()), "WordPress category"),
+		none: "category has no post permalinks", missing: "category page is missing",
+		limit: limit, limitNote: "partial — source limit",
+		root: root, key: wordPressPageKey, anyRedirect: true,
+		fetch: func(ctx context.Context, next, _ *url.URL) (*html.Node, *url.URL, error) {
+			number++
+			log.DebugContext(ctx, "wordpress: following next page", "page", last.Redacted(), "next", next.Redacted())
+			log.DebugContext(ctx, "wordpress: reading category page", "page", next.Redacted(), "page_number", number, "cached", false)
+			root, final, err := wordPressFetch(ctx, client, next)
+			if err != nil {
+				log.DebugContext(ctx, "wordpress: category page failed", "page", next.Redacted(), "error", err)
+			}
+			return root, final, err
+		},
+		read: func(root *html.Node, page, _ *url.URL) listingPage {
+			last = page
+			if !wordPressSameCategory(first, page) || !wordPressCategory(root, page) {
+				log.DebugContext(ctx, "wordpress: category page not recognised", "page", page.Redacted())
+				return listingPage{missing: true, note: "partial — category is missing on next page"}
+			}
+			area := wordPressArea(root)
+			refs := wordPressPostLinks(area)
+			log.DebugContext(ctx, "wordpress: category page parsed", "page", page.Redacted(), "post_links", len(refs))
+			p := listingPage{title: util.FirstNonEmpty(wordPressTitle(area, true), trimSiteSuffix(firstText(root, atomTitle)))}
+			added := 0
+			for _, ref := range refs {
+				if link := wordPressLocalLink(page, ref); link != nil {
+					key := wordPressPageKey(link)
+					if !collected[key] {
+						collected[key] = true
+						added++
+					}
+					p.links = append(p.links, listingLink{key: key, url: link.String()})
+				}
+			}
+			log.DebugContext(ctx, "wordpress: posts collected", "page", page.Redacted(), "new_posts", added, "posts_total", len(collected))
+			ref, hasNext := wordPressNext(area)
+			if !hasNext {
+				// Some older themes put rel=next only in the document head.
+				if head := findFirst(root, func(n *html.Node) bool { return isElem(n, atom.Head) }); head != nil {
+					ref, hasNext = wordPressNext(head)
+				}
+			}
+			if !hasNext {
+				return p
+			}
+			if p.next = wordPressLocalLink(page, ref); p.next == nil || !wordPressSameCategory(first, p.next) {
+				log.DebugContext(ctx, "wordpress: invalid next page", "page", page.Redacted(), "next", ref)
+				p.next, p.note = nil, "partial — invalid next page"
+			}
+			return p
+		},
+	})
+	for _, link := range links {
+		sources = append(sources, link.url)
+	}
+	return sources, title, note, err
 }
 
 func wordPressFetch(ctx context.Context, client *httpx.Client, page *url.URL) (*html.Node, *url.URL, error) {
