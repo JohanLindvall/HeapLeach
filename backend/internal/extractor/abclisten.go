@@ -185,7 +185,7 @@ func (a *ABCListen) episode(u *url.URL, doc abcListenDoc) (*Result, error) {
 func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPage) (*Result, error) {
 	// The listing stops at 250 of its own accord today; the cap is the
 	// backstop for the day it does not.
-	episodes, listed := a.episodes(ctx, u, page.props.Collection, config.MaxResolvedEpisodes)
+	episodes, listed, walkNote := a.episodes(ctx, u, page.props.Collection, config.MaxResolvedEpisodes)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("abclisten: no episodes listed on %s", u.Redacted())
 	}
@@ -204,7 +204,7 @@ func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPa
 	return &Result{
 		Title: util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)),
 		Files: listedFiles(resolved),
-		Note:  note,
+		Note:  listingNote(note, walkNote),
 	}, nil
 }
 
@@ -237,60 +237,57 @@ func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem)
 }
 
 // episodes lists a programme's episodes, up to limit of them, with the
-// total the listing states when it went on past that.
+// total the listing states when it went on past that, and the note for a
+// listing cut short some other way.
 //
 // The page renders only the first handful and loads the rest from an endpoint
 // of its own as the reader pages through; asked directly that endpoint
 // answers fifty at a time and reports the true total. Those the page already
 // rendered are kept and paging continues after them, which is what makes the
 // endpoint additive: if it goes away, a programme resolves to the episodes on
-// the page instead of to nothing at all.
-func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCollection, limit int) ([]abcListenItem, int) {
-	var out []abcListenItem
-	seen := make(map[string]bool)
-	add := func(items []abcListenItem) int {
-		before := len(out)
-		for _, item := range items {
-			if item.ArticleLink == "" || seen[item.ArticleLink] {
-				continue
-			}
-			seen[item.ArticleLink] = true
-			out = append(out, item)
-		}
-		return len(out) - before
-	}
-
-	add(coll.Items)
-	total := coll.Pagination.Total
+// the page instead of to nothing at all, with a note that the listing was cut
+// there. A page that adds nothing new ends it too, in case the endpoint ever
+// stops honouring the offset.
+func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCollection, limit int) (episodes []abcListenItem, listed int, note string) {
+	total, offset := coll.Pagination.Total, 0
 	endpoint := util.Origin(u) + abcListenEpisodesPath + "/" + strings.Trim(u.EscapedPath(), "/")
-	for len(out) < total && len(out) < limit {
-		query := url.Values{
-			"collectionId": {coll.ID},
-			"offset":       {strconv.Itoa(len(out))},
-			"size":         {strconv.Itoa(abcListenPageSize)},
+	page := func(items []abcListenItem) pageOf[abcListenItem] {
+		offset += len(items)
+		var linked []abcListenItem
+		for _, item := range items {
+			if item.ArticleLink != "" {
+				linked = append(linked, item)
+			}
 		}
-		var body struct {
-			Collection abcListenCollection `json:"collection"`
-		}
-		err := a.client.GetJSON(ctx, endpoint+"?"+query.Encode(),
-			httpx.Referer(abcListenRoot+"/"), &body)
-		// A listing that stops early, for whatever reason, is still worth
-		// having: what is already in hand is the newest episodes, which is
-		// the half of a podcast anyone asks for first. A page that adds
-		// nothing new ends it too, in case the endpoint ever stops honouring
-		// the offset.
-		if err != nil || add(body.Collection.Items) == 0 {
-			break
-		}
-		if body.Collection.Pagination.Total > total {
-			total = body.Collection.Pagination.Total
-		}
+		// A listing that states no total is the page's own alone.
+		return pageOf[abcListenItem]{items: linked, next: total > 0, end: len(items) == 0, total: total}
 	}
-
-	if len(out) < limit {
-		return out, 0
+	episodes, more, note, _ := walkEpisodes(ctx, limit, pageWalk[abcListenItem]{
+		fetch: func(ctx context.Context, n int) (pageOf[abcListenItem], error) {
+			if n == 0 && len(coll.Items) > 0 {
+				return page(coll.Items), nil
+			}
+			query := url.Values{
+				"collectionId": {coll.ID},
+				"offset":       {strconv.Itoa(offset)},
+				"size":         {strconv.Itoa(abcListenPageSize)},
+			}
+			var body struct {
+				Collection abcListenCollection `json:"collection"`
+			}
+			if err := a.client.GetJSON(ctx, endpoint+"?"+query.Encode(),
+				httpx.Referer(abcListenRoot+"/"), &body); err != nil {
+				return pageOf[abcListenItem]{}, err
+			}
+			total = max(total, body.Collection.Pagination.Total)
+			return page(body.Collection.Items), nil
+		},
+		key: func(item abcListenItem) string { return item.ArticleLink },
+	})
+	if more {
+		return episodes, total, ""
 	}
-	return out[:limit], total
+	return episodes, 0, note
 }
 
 // page fetches one page and reads its JSON island.

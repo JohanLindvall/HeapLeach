@@ -378,22 +378,44 @@ func francetvCards(flight string) []francetvCardDoc {
 // where whole programmes are listed beside them.
 func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight string, opts Options) (*Result, error) {
 	cards := francetvCards(flight)
+	walkNote := ""
 	if strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "toutes-les-videos") {
-		seen := len(cards)
-		for page := 2; len(cards) < opts.maxFiles(); page++ {
-			next := *u
-			q := next.Query()
-			q.Set("page", strconv.Itoa(page))
-			next.RawQuery = q.Encode()
-			html, err := f.client.GetString(ctx, next.String(), nil)
-			if err != nil {
-				break
-			}
-			cards = francetvMerge(cards, francetvCards(strings.ReplaceAll(html, `\"`, `"`)))
-			if len(cards) == seen {
-				break
-			}
-			seen = len(cards)
+		// The page in hand is the first. Pages are read until they hold as
+		// many cards as the file cap, the cap and the clips left out being
+		// counted once the cards are in.
+		var err error
+		seen := make(map[string]bool)
+		cards, walkNote, err = walkPages(ctx, pageWalk[francetvCardDoc]{
+			fetch: func(ctx context.Context, n int) (pageOf[francetvCardDoc], error) {
+				page := cards
+				if n > 0 {
+					if len(seen) >= opts.maxFiles() {
+						return pageOf[francetvCardDoc]{end: true}, nil
+					}
+					next := *u
+					q := next.Query()
+					q.Set("page", strconv.Itoa(n+1))
+					next.RawQuery = q.Encode()
+					html, err := f.client.GetString(ctx, next.String(), nil)
+					if err != nil {
+						return pageOf[francetvCardDoc]{}, err
+					}
+					page = francetvCards(strings.ReplaceAll(html, `\"`, `"`))
+				}
+				for _, c := range page {
+					seen[c.id] = true
+				}
+				return pageOf[francetvCardDoc]{items: page, next: true}, nil
+			},
+			key:   func(c francetvCardDoc) string { return c.id },
+			limit: -1,
+			// A page past the end lists nothing new, which ends the walk
+			// quietly; a page that fails is a cut, and noted.
+			quiet:  true,
+			failed: func(error) string { return "partial — could not fetch next page" },
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 	whole := 0
@@ -424,22 +446,7 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 	case clips > 1:
 		clipNote = fmt.Sprintf("%d clips left out", clips)
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(cappedNote(len(files), len(cards)-clips, "videos"), clipNote)}, nil
-}
-
-// francetvMerge is cards with more's new ones after them.
-func francetvMerge(cards, more []francetvCardDoc) []francetvCardDoc {
-	seen := make(map[string]bool, len(cards))
-	for _, c := range cards {
-		seen[c.id] = true
-	}
-	for _, c := range more {
-		if !seen[c.id] {
-			seen[c.id] = true
-			cards = append(cards, c)
-		}
-	}
-	return cards
+	return &Result{Title: title, Files: files, Note: listingNote(cappedNote(len(files), len(cards)-clips, "videos"), clipNote, walkNote)}, nil
 }
 
 // lazy is a listed video, asked for and resolved when its transfer starts.

@@ -486,7 +486,7 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Resu
 	if page.appID == "" || page.key == "" {
 		return nil, fmt.Errorf("yle: %s: the page names no key for its listings", title)
 	}
-	listing, listed, walkErr := y.walk(ctx, lang, page, lists, !page.season(), config.MaxResolvedEpisodes)
+	listing, listed, walkNote, walkErr := y.walk(ctx, lang, page, lists, !page.season(), config.MaxResolvedEpisodes)
 	if len(listing) == 0 {
 		if walkErr != nil {
 			return nil, fmt.Errorf("yle: %s: %w", title, walkErr)
@@ -553,7 +553,7 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Resu
 	if len(files) == 0 {
 		return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 	}
-	note = listingNote(note, brokenNote(walkErr),
+	note = listingNote(note, walkNote, brokenNote(walkErr),
 		leftOutNote(finland, " that Yle shows in Finland only"), refusedNote(refused))
 	return &Result{Title: title, Files: files, Note: note}, nil
 }
@@ -570,52 +570,63 @@ type yleChecked struct {
 // followed by that count and by what each adds, never by the size asked
 // for, so a page cut shorter than asked does not end the list. The first
 // page that fails ends the walk, and what was read before it comes back
-// with the error.
-func (y *Yle) walk(ctx context.Context, lang string, page *ylePage, lists []yleList, folders bool, limit int) ([]yleEpisode, int, error) {
-	var (
-		episodes []yleEpisode
-		listed   int
-		seen     = make(map[string]bool)
-	)
+// with the error; note is the walk's own, for a list that pages in a
+// circle or past the page cap.
+func (y *Yle) walk(ctx context.Context, lang string, page *ylePage, lists []yleList, folders bool, limit int) (episodes []yleEpisode, listed int, note string, err error) {
+	seen := make(map[string]bool)
 	for _, l := range lists {
+		if len(episodes) >= limit {
+			// Full: the rest is only counted.
+			cards, err := y.cards(ctx, lang, page, l, 0, 1)
+			if err != nil {
+				return episodes, listed, note, err
+			}
+			listed += cards.Meta.Count
+			continue
+		}
 		folder := ""
 		if folders {
 			folder = sourceFolder(l.season)
 		}
-		for offset := 0; ; {
-			if len(episodes) >= limit {
-				// Full: the rest of the list is only counted.
-				cards, err := y.cards(ctx, lang, page, l, offset, 1)
+		var broke error
+		offset, count := 0, 0
+		got, cut, walkNote, err := walkEpisodes(ctx, limit-len(episodes), pageWalk[yleEpisode]{
+			fetch: func(ctx context.Context, _ int) (pageOf[yleEpisode], error) {
+				cards, err := y.cards(ctx, lang, page, l, offset, yleListPage)
 				if err != nil {
-					return episodes, listed, err
+					return pageOf[yleEpisode]{}, err
 				}
-				listed += max(cards.Meta.Count-offset, 0)
-				break
-			}
-			cards, err := y.cards(ctx, lang, page, l, offset, yleListPage)
-			if err != nil {
-				return episodes, listed, err
-			}
-			added := 0
-			for _, card := range cards.Data {
-				ep := strings.TrimPrefix(card.Pointer.URI, "yleareena://items/")
-				if !yleItemID.MatchString(ep) || seen[ep] || card.Pointer.Type != "program" && card.Pointer.Type != "clip" {
-					continue
+				offset, count = offset+len(cards.Data), cards.Meta.Count
+				// An episode another list named is not listed again, and a
+				// page that names nothing new ends the list.
+				var eps []yleEpisode
+				for _, card := range cards.Data {
+					ep := strings.TrimPrefix(card.Pointer.URI, "yleareena://items/")
+					if yleItemID.MatchString(ep) && !seen[ep] && (card.Pointer.Type == "program" || card.Pointer.Type == "clip") {
+						eps = append(eps, yleEpisode{id: ep, title: strings.TrimSpace(card.Title), folder: folder})
+					}
 				}
-				seen[ep] = true
-				added++
-				listed++
-				if len(episodes) < limit {
-					episodes = append(episodes, yleEpisode{id: ep, title: strings.TrimSpace(card.Title), folder: folder})
-				}
-			}
-			offset += len(cards.Data)
-			if added == 0 || cards.Meta.Count > 0 && offset >= cards.Meta.Count {
-				break
-			}
+				return pageOf[yleEpisode]{items: eps, next: true, end: len(eps) == 0 || count > 0 && offset >= count}, nil
+			},
+			key: func(ep yleEpisode) string { return ep.id },
+			failed: func(err error) string {
+				broke = err
+				return ""
+			},
+		})
+		for _, ep := range got {
+			seen[ep.id] = true
+		}
+		episodes, listed, note = append(episodes, got...), listed+len(got), cmp.Or(note, walkNote)
+		if cut {
+			// The rest of a list the cap cut is counted by what it states.
+			listed += max(count-len(got), 0)
+		}
+		if err := cmp.Or(err, broke); err != nil {
+			return episodes, listed, note, err
 		}
 	}
-	return episodes, listed, nil
+	return episodes, listed, note, nil
 }
 
 // cards reads one page of a list, with the parameters its season adds.

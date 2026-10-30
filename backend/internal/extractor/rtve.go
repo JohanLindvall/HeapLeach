@@ -211,7 +211,7 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 	}
 	// A long-running strand runs to thousands of instalments, which is a
 	// mistake being carried out efficiently rather than a download.
-	episodes, more, err := r.episodes(ctx, program, config.MaxResolvedEpisodes)
+	episodes, more, walkNote, err := r.episodes(ctx, program, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(episodes[0].Program.Title, slug), Files: listedFiles(resolved), Note: note}, nil
+	return &Result{Title: util.FirstNonEmpty(episodes[0].Program.Title, slug), Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
 }
 
 // programme reads a programme's numeric id off its page. Nothing in the URL
@@ -254,34 +254,47 @@ func (r *RTVE) programme(ctx context.Context, u *url.URL) (string, error) {
 // to thousands of entries mixing clips and trailers in with the episodes,
 // while a documentary strand has no seasons at all and answers the seasons
 // endpoint with an empty page.
-func (r *RTVE) episodes(ctx context.Context, program string, limit int) ([]rtveVideo, bool, error) {
+func (r *RTVE) episodes(ctx context.Context, program string, limit int) (videos []rtveVideo, more bool, note string, err error) {
 	seasons, err := r.seasons(ctx, program, limit)
 	if err != nil || len(seasons) == 0 {
 		// A programme with no seasons answers that endpoint with an empty
 		// page, and one whose seasons cannot be read at all is still
 		// described in full by the flat listing, so both land here.
-		return rtveList[rtveVideo](ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/videos", limit)
+		return rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/videos", limit, rtveVideoKey)
 	}
 
 	// Seasons are fetched together and collected in order, so a programme of
 	// twenty-odd seasons does not resolve one request at a time. A season
 	// that will not load is skipped rather than failing the rest.
-	var more atomic.Bool
-	videos := FanOut(ctx, seasons, func(ctx context.Context, season string) ([]rtveVideo, error) {
-		videos, cut, err := rtveList[rtveVideo](ctx, r.client, rtveProgramAPI+url.PathEscape(program)+
-			"/temporadas/"+url.PathEscape(season)+"/videos", limit)
-		if cut {
-			more.Store(true)
+	var (
+		cut   atomic.Bool
+		noted atomic.Pointer[string]
+	)
+	videos = FanOut(ctx, seasons, func(ctx context.Context, season string) ([]rtveVideo, error) {
+		videos, more, note, err := rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+
+			"/temporadas/"+url.PathEscape(season)+"/videos", limit, rtveVideoKey)
+		if more {
+			cut.Store(true)
+		}
+		if note != "" {
+			noted.CompareAndSwap(nil, &note)
 		}
 		return videos, err
 	})
-	return videos, more.Load(), nil
+	if p := noted.Load(); p != nil {
+		note = *p
+	}
+	return videos, cut.Load(), note, nil
 }
+
+// rtveVideoKey names a listed video.
+func rtveVideoKey(v rtveVideo) string { return v.ID }
 
 // seasons lists a programme's season ids, oldest first as the catalogue gives
 // them.
 func (r *RTVE) seasons(ctx context.Context, program string, limit int) ([]string, error) {
-	seasons, _, err := rtveList[rtveSeason](ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/temporadas", limit)
+	seasons, _, _, err := rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/temporadas", limit,
+		func(s rtveSeason) string { return strconv.Itoa(s.ID) })
 	if err != nil {
 		return nil, err
 	}
@@ -295,34 +308,35 @@ func (r *RTVE) seasons(ctx context.Context, program string, limit int) ([]string
 }
 
 // rtveList walks a paginated catalogue endpoint to its end, or to limit
-// entries, saying whether it went on past them.
+// entries, saying whether it went on past them, and the note for a walk cut
+// short by a page that failed. key names an entry.
 //
 // A page is asked for at the size the catalogue accepts rather than at its
 // default of twenty, which is what a season of thirty-three episodes was
 // being silently truncated to. Paging then stops at the page count the
-// response itself reports, and that bound is the one that matters: asked for
-// a page past the end, this API answers with the whole listing over again
-// rather than with nothing, so counting short pages would never terminate.
-func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string, limit int) ([]T, bool, error) {
-	var out []T
-	for page := 1; page <= config.MaxAlbumPages; page++ {
-		var doc rtvePage[T]
-		request := fmt.Sprintf("%s?size=%d&page=%d", endpoint, config.FolderPageSize, page)
-		if err := client.GetJSON(ctx, request, httpx.Referer(rtveRoot+"/"), &doc); err != nil {
-			if page == 1 {
-				return nil, false, fmt.Errorf("rtve: listing %s: %w", endpoint, err)
+// response itself reports, or at a page that adds nothing: asked for a page
+// past the end, this API answers with the whole listing over again rather
+// than with nothing, which is the listing's end and not a cut, so the walk
+// is quiet there; counting short pages would never terminate.
+func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string, limit int, key func(T) string) ([]T, bool, string, error) {
+	items, more, note, err := walkEpisodes(ctx, limit, pageWalk[T]{
+		fetch: func(ctx context.Context, n int) (pageOf[T], error) {
+			var doc rtvePage[T]
+			request := fmt.Sprintf("%s?size=%d&page=%d", endpoint, config.FolderPageSize, n+1)
+			if err := client.GetJSON(ctx, request, httpx.Referer(rtveRoot+"/"), &doc); err != nil {
+				return pageOf[T]{}, err
 			}
-			break // a later page failing still leaves the earlier ones
-		}
-		out = append(out, doc.Page.Items...)
-		if len(doc.Page.Items) == 0 || page >= doc.Page.TotalPages {
-			break
-		}
-		if len(out) >= limit {
-			return out, true, nil
-		}
+			return pageOf[T]{items: doc.Page.Items, next: true, end: len(doc.Page.Items) == 0 || n+1 >= doc.Page.TotalPages}, nil
+		},
+		key:   key,
+		quiet: true,
+		// A later page failing still leaves the earlier ones.
+		failed: func(error) string { return "partial — could not fetch next page" },
+	})
+	if err != nil {
+		return nil, false, "", fmt.Errorf("rtve: listing %s: %w", endpoint, err)
 	}
-	return out, false, nil
+	return items, more, note, nil
 }
 
 // episode resolves one entry of a programme listing.

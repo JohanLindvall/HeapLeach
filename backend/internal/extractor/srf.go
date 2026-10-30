@@ -208,7 +208,7 @@ func (s *SRF) programme(ctx context.Context, urn string) (*Result, error) {
 // series expands a show into one file per episode, filed by season when the
 // show has more than one.
 func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, error) {
-	title, episodes, more, err := s.episodes(ctx, showURN, config.MaxResolvedEpisodes)
+	title, episodes, more, walkNote, err := s.episodes(ctx, showURN, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(title, showURN), Files: listedFiles(resolved), Note: note}, nil
+	return &Result{Title: util.FirstNonEmpty(title, showURN), Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
 }
 
 // srfEpisodeRef is one episode of a show, with the season it belongs to.
@@ -245,56 +245,37 @@ type srfEpisodeRef struct {
 
 // episodes reads a show's episodes, following the listing's own paging up
 // to limit of them, and says whether the listing went on past that. A daily
-// strand has thousands of instalments and reaches it every time.
-func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (string, []srfEpisodeRef, bool, error) {
+// strand has thousands of instalments and reaches it every time. A page that
+// will not load part-way down a long show still leaves everything above it
+// worth downloading, and the note says the listing was cut there.
+func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (title string, episodes []srfEpisodeRef, more bool, note string, err error) {
 	next := s.il + srfEpisodesPath + url.PathEscape(showURN) + ".json?" +
 		"pageSize=" + strconv.Itoa(config.FolderPageSize) + "&" + srfVector
-
-	var (
-		title    string
-		episodes []srfEpisodeRef
-		seen     = make(map[string]bool)
-	)
-	for next != "" && len(episodes) < limit {
-		var doc srfEpisodeList
-		if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
-			if len(episodes) > 0 {
-				// A page that will not load part-way down a long show still
-				// leaves everything above it worth downloading.
-				next = ""
-				break
+	episodes, more, note, err = walkEpisodes(ctx, limit, pageWalk[srfEpisodeRef]{
+		fetch: func(ctx context.Context, _ int) (pageOf[srfEpisodeRef], error) {
+			var doc srfEpisodeList
+			if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
+				return pageOf[srfEpisodeRef]{}, err
 			}
-			return "", nil, false, fmt.Errorf("srf: episodes of %s: %w", showURN, err)
-		}
-		title = util.FirstNonEmpty(title, doc.Show.Title)
-
-		added := 0
-		for _, ep := range doc.EpisodeList {
-			urn := ep.urn()
-			if urn == "" || seen[urn] {
-				continue
+			title = util.FirstNonEmpty(title, doc.Show.Title)
+			var refs []srfEpisodeRef
+			for _, ep := range doc.EpisodeList {
+				if urn := ep.urn(); urn != "" {
+					refs = append(refs, srfEpisodeRef{urn: urn, name: ep.Title, season: ep.season()})
+				}
 			}
-			seen[urn] = true
-			added++
-			episodes = append(episodes, srfEpisodeRef{
-				urn:    urn,
-				name:   ep.Title,
-				season: ep.season(),
-			})
-		}
-		if added == 0 {
-			// A listing that keeps answering with what has already been
-			// taken is not paging any more.
-			next = ""
-			break
-		}
-		next = doc.Next
+			next = doc.Next
+			return pageOf[srfEpisodeRef]{items: refs, next: next != "", end: len(refs) == 0}, nil
+		},
+		key: func(ep srfEpisodeRef) string { return ep.urn },
+	})
+	if err != nil {
+		return "", nil, false, "", fmt.Errorf("srf: episodes of %s: %w", showURN, err)
 	}
-
 	if len(episodes) == 0 {
-		return "", nil, false, fmt.Errorf("srf: %s lists no episodes", showURN)
+		return "", nil, false, "", fmt.Errorf("srf: %s lists no episodes", showURN)
 	}
-	return title, episodes, next != "", nil
+	return title, episodes, more, note, nil
 }
 
 // chapter resolves one video urn to something downloadable. The returned File

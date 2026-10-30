@@ -414,42 +414,52 @@ type niconicoPage struct {
 func (n *Niconico) list(ctx context.Context, opts Options, label string,
 	page func(context.Context, int) (*niconicoPage, error)) (*Result, error) {
 	var (
-		title                string
-		files                []File
-		total, skipped, gone int
-		seen                 = make(map[string]bool)
+		title           string
+		total, playable int
+		files           []File
+		skipped, gone   int
+		seen            = make(map[string]bool)
 	)
 	limit := opts.maxFiles()
-	for number := 1; len(files) < limit; number++ {
-		p, err := page(ctx, number)
-		if err != nil {
-			if number == 1 {
-				return nil, fmt.Errorf("niconico: %s: %w", label, err)
+	// The walk stops once the pages read hold as many playable videos as
+	// the file cap: what is left out does not count towards it.
+	entries, walkNote, err := walkPages(ctx, pageWalk[niconicoEntry]{
+		fetch: func(ctx context.Context, number int) (pageOf[niconicoEntry], error) {
+			if playable >= limit {
+				return pageOf[niconicoEntry]{end: true}, nil
 			}
-			break
-		}
-		title, total = cmp.Or(title, p.title), max(total, p.total)
-		added := 0
-		for _, e := range p.entries {
-			if e.ID == "" || seen[e.ID] {
-				continue
+			p, err := page(ctx, number+1)
+			if err != nil {
+				return pageOf[niconicoEntry]{}, err
 			}
-			seen[e.ID] = true
-			added++
-			switch {
-			case e.gone:
-				gone++
-				continue
-			case e.IsPaymentRequired:
-				skipped++
-				continue
+			title, total = cmp.Or(title, p.title), max(total, p.total)
+			var entries []niconicoEntry
+			for _, e := range p.entries {
+				if e.ID == "" {
+					continue
+				}
+				entries = append(entries, e)
+				if !seen[e.ID] && !e.gone && !e.IsPaymentRequired {
+					playable++
+				}
+				seen[e.ID] = true
 			}
-			if len(files) < limit {
-				files = append(files, n.file(e.ID, cmp.Or(strings.TrimSpace(e.Title), e.ID)))
-			}
-		}
-		if added == 0 || !p.more {
-			break
+			return pageOf[niconicoEntry]{items: entries, next: p.more, end: len(entries) == 0}, nil
+		},
+		key:   func(e niconicoEntry) string { return e.ID },
+		limit: -1,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("niconico: %s: %w", label, err)
+	}
+	for _, e := range entries {
+		switch {
+		case e.gone:
+			gone++
+		case e.IsPaymentRequired:
+			skipped++
+		case len(files) < limit:
+			files = append(files, n.file(e.ID, cmp.Or(strings.TrimSpace(e.Title), e.ID)))
 		}
 	}
 	if len(files) == 0 {
@@ -467,7 +477,7 @@ func (n *Niconico) list(ctx context.Context, opts Options, label string,
 	if gone > 0 {
 		goneNote = fmt.Sprintf("%d no longer on the site", gone)
 	}
-	note := listingNote(capped, leftOutNote(skipped, " that need an account or a payment"), goneNote)
+	note := listingNote(capped, leftOutNote(skipped, " that need an account or a payment"), goneNote, walkNote)
 	return &Result{Title: cmp.Or(title, label), Files: files, Note: note}, nil
 }
 

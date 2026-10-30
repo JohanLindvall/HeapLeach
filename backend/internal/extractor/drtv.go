@@ -337,20 +337,21 @@ type drChildren struct {
 }
 
 // children reads every page of an item's children, in the order DR gives
-// them. What was read before a page failed comes back with the error.
-func (d *DRTV) children(ctx context.Context, id string) ([]drItem, error) {
-	var all []drItem
-	for page := 1; ; page++ {
-		var doc drChildren
-		if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id)+"/children",
-			url.Values{"page": {strconv.Itoa(page)}}), drHeaders(), &doc); err != nil {
-			return all, err
-		}
-		all = append(all, doc.Items...)
-		if len(doc.Items) == 0 || page >= doc.Paging.Total {
-			return all, nil
-		}
-	}
+// them, up to the page cap, with the note for a walk cut short. The listing
+// ends at the page count it states, or at an empty page.
+func (d *DRTV) children(ctx context.Context, id string) ([]drItem, string, error) {
+	return walkPages(ctx, pageWalk[drItem]{
+		fetch: func(ctx context.Context, n int) (pageOf[drItem], error) {
+			var doc drChildren
+			if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id)+"/children",
+				url.Values{"page": {strconv.Itoa(n + 1)}}), drHeaders(), &doc); err != nil {
+				return pageOf[drItem]{}, err
+			}
+			return pageOf[drItem]{items: doc.Items, next: true, end: len(doc.Items) == 0 || n+1 >= doc.Paging.Total}, nil
+		},
+		key:   func(item drItem) string { return item.ID },
+		limit: -1,
+	})
 }
 
 // drListed is an entry of a listing and the folder it goes into.
@@ -363,13 +364,18 @@ type drListed struct {
 // episode, each season's in a folder of its own.
 func (d *DRTV) series(ctx context.Context, show *drItem, opts Options) (*Result, error) {
 	title := cmp.Or(strings.TrimSpace(show.Title), show.ID)
-	children, walkErr := d.children(ctx, show.ID)
+	children, walkNote, walkErr := d.children(ctx, show.ID)
+	if walkErr != nil {
+		return nil, fmt.Errorf("drtv: %s: %w", title, walkErr)
+	}
 	var entries []drListed
 	for _, child := range children {
 		switch child.Type {
 		case "season":
-			episodes, err := d.children(ctx, child.ID)
+			// A season that cannot be read at all does not lose the others.
+			episodes, note, err := d.children(ctx, child.ID)
 			walkErr = cmp.Or(walkErr, err)
+			walkNote = cmp.Or(walkNote, note)
 			folder := sourceFolder(drSeasonLabel(title, &child))
 			for _, ep := range episodes {
 				entries = append(entries, drListed{item: ep, folder: folder})
@@ -378,24 +384,30 @@ func (d *DRTV) series(ctx context.Context, show *drItem, opts Options) (*Result,
 			entries = append(entries, drListed{item: child})
 		}
 	}
-	return d.listing(ctx, title, title, entries, walkErr, opts)
+	return d.listing(ctx, title, title, entries, listingNote(walkNote, brokenNote(walkErr)), walkErr, opts)
 }
 
 // season reads a season into one file an episode.
 func (d *DRTV) season(ctx context.Context, season *drItem, opts Options) (*Result, error) {
 	show := cmp.Or(season.show(), strings.TrimSpace(season.Title), season.ID)
-	episodes, walkErr := d.children(ctx, season.ID)
+	title := ardJoin(show, drSeasonLabel(show, season))
+	episodes, walkNote, err := d.children(ctx, season.ID)
+	if err != nil {
+		return nil, fmt.Errorf("drtv: %s: %w", title, err)
+	}
 	entries := make([]drListed, 0, len(episodes))
 	for _, ep := range episodes {
 		entries = append(entries, drListed{item: ep})
 	}
-	return d.listing(ctx, ardJoin(show, drSeasonLabel(show, season)), show, entries, walkErr, opts)
+	return d.listing(ctx, title, show, entries, walkNote, nil, opts)
 }
 
 // listing makes a listing's programmes into files, each resolved when its
 // transfer starts. What DR shows in Denmark alone is left out, the note
-// saying so, once one of them has been refused here.
-func (d *DRTV) listing(ctx context.Context, title, show string, entries []drListed, walkErr error, opts Options) (*Result, error) {
+// saying so, once one of them has been refused here. walkNote is what the
+// walk of the listing said of where it stopped, and walkErr why a season
+// of it could not be read at all.
+func (d *DRTV) listing(ctx context.Context, title, show string, entries []drListed, walkNote string, walkErr error, opts Options) (*Result, error) {
 	blocked, probes := false, 0
 	for i := range entries {
 		if probes == config.GeoProbesDR {
@@ -436,7 +448,7 @@ func (d *DRTV) listing(ctx context.Context, title, show string, entries []drList
 		}
 		return nil, fmt.Errorf("drtv: %s lists nothing DR TV offers now", title)
 	}
-	note := listingNote(cappedNote(len(files), shown, "episodes"), brokenNote(walkErr),
+	note := listingNote(cappedNote(len(files), shown, "episodes"), walkNote,
 		leftOutNote(denmark, " that DR shows in Denmark only"))
 	return &Result{Title: title, Files: files, Note: note}, nil
 }

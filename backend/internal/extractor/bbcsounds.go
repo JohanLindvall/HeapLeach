@@ -148,7 +148,7 @@ func (b *BBCSounds) episode(ctx context.Context, pid string) (*Result, error) {
 
 // container expands a brand or a series into one file per episode.
 func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) {
-	items, total, err := b.listing(ctx, pid, config.MaxResolvedEpisodes)
+	items, total, walkNote, err := b.listing(ctx, pid, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
@@ -184,44 +184,48 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, walkNote)}, nil
 }
 
 // listing pages a container's episodes, up to limit of them, with the
-// count the listing states when it stopped there.
+// count the listing states when it stopped there, and the note for a
+// listing cut short some other way.
 //
 // The endpoint caps a page at a hundred rows: a larger limit is echoed back
 // and then ignored, which is exactly config.FolderPageSize, so paging is by
 // the count actually returned rather than by the limit asked for. A strand
 // like a daily news programme runs to several thousand editions.
-func (b *BBCSounds) listing(ctx context.Context, container string, limit int) ([]bbcItem, int, error) {
-	var items []bbcItem
-	for offset := 0; ; {
-		query := url.Values{
-			"container": {container},
-			// The order the site itself lists a container in.
-			"sort":   {"sequential"},
-			"type":   {"episode"},
-			"limit":  {strconv.Itoa(config.FolderPageSize)},
-			"offset": {strconv.Itoa(offset)},
-		}
-		var page bbcListing
-		if err := b.client.GetJSON(ctx, bbcListingAPI+"?"+query.Encode(),
-			httpx.Referer(bbcSoundsRoot+"/"), &page); err != nil {
-			return nil, 0, fmt.Errorf("bbcsounds: episodes of %s: %w", container, err)
-		}
-		if len(page.Data) == 0 {
-			return items, 0, nil
-		}
-		items = append(items, page.Data...)
-		offset += len(page.Data)
-		switch {
-		case offset >= page.Total:
-			return items, 0, nil
-		case len(items) >= limit:
-			return items, page.Total, nil
-		}
+func (b *BBCSounds) listing(ctx context.Context, container string, limit int) (items []bbcItem, listed int, note string, err error) {
+	offset, total := 0, 0
+	items, more, note, err := walkEpisodes(ctx, limit, pageWalk[bbcItem]{
+		fetch: func(ctx context.Context, _ int) (pageOf[bbcItem], error) {
+			query := url.Values{
+				"container": {container},
+				// The order the site itself lists a container in.
+				"sort":   {"sequential"},
+				"type":   {"episode"},
+				"limit":  {strconv.Itoa(config.FolderPageSize)},
+				"offset": {strconv.Itoa(offset)},
+			}
+			var page bbcListing
+			if err := b.client.GetJSON(ctx, bbcListingAPI+"?"+query.Encode(),
+				httpx.Referer(bbcSoundsRoot+"/"), &page); err != nil {
+				return pageOf[bbcItem]{}, err
+			}
+			offset += len(page.Data)
+			total = page.Total
+			// A listing that states no total is its first page alone.
+			return pageOf[bbcItem]{items: page.Data, next: page.Total > 0, end: len(page.Data) == 0, total: page.Total}, nil
+		},
+		key: func(item bbcItem) string { return item.pid() },
+	})
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("bbcsounds: episodes of %s: %w", container, err)
 	}
+	if more {
+		return items, total, "", nil
+	}
+	return items, 0, note, nil
 }
 
 // file turns one playable item into something to download. The returned File

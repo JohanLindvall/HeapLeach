@@ -40,6 +40,10 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 			page(w, "Un article à deux vidéos", `{"IdsCollection":"|NewstoryId:11-5002|"}`+
 				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1001}}}}`+
 				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1003}}}}`)
+		case path == "/nouvelle/5003/un-article-hors-pays":
+			page(w, "Un article hors pays", `{"IdsCollection":"|NewstoryId:11-5003|"}`+
+				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1009}}}}`+
+				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1011}}}}`)
 		case path == "/ohdio/balados/2000/un-balado-invente/2001/un-episode":
 			page(w, "Un épisode inventé | OHdio", `{"Emission":"Un balado inventé","IdsCollection":"|ProgramId:2000|EpisodeId:2001|MedianetId:1002|"}`)
 		case path == "/ohdio/balados/2000/un-balado-invente":
@@ -252,5 +256,11 @@ func TestRadioCanadaReadsDailyEpisodesAndArticles(t *testing.T) {
 	}
 	if res.Title != "Un article à deux vidéos" || len(res.Files) != 2 || res.Files[0].Name != "Une émission inventée - Un titre inventé.mp4" {
 		t.Errorf("%q: %+v", res.Title, res.Files)
+	}
+	// None of them playable, the first reason one gave is the answer.
+	_, err = radioCanadaExtract(t, srv, "/nouvelle/5003/un-article-hors-pays")
+	if err == nil || !strings.HasPrefix(err.Error(), "radio-canada: none of the 2 media of Un article hors pays are playable: ") ||
+		!strings.Contains(err.Error(), "n'est pas disponible dans votre pays") {
+		t.Errorf("err = %v", err)
 	}
 }
