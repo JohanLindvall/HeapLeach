@@ -454,14 +454,7 @@ func zdfScore(f zdfFormat) int {
 // zdfRank orders a rendition by name. A name this does not recognise ranks
 // below every one it does but above nothing at all, so a ladder ZDF relabels
 // still yields a download.
-func zdfRank(quality string) int {
-	for i, known := range zdfQualities {
-		if strings.EqualFold(quality, known) {
-			return i
-		}
-	}
-	return -1
-}
+func zdfRank(quality string) int { return rankIn(zdfQualities, quality, -1) }
 
 // zdfWhyNot explains a document with nothing to fetch, in ZDF's own words.
 //

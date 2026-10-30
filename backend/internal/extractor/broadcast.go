@@ -46,27 +46,67 @@ func refusalReason(err error) (string, bool) {
 // kept in order, and the first other failure beside them, for the caller to
 // report: a refusal outranks a failure, being the one the caller can act on.
 func resolveListed[T any](ctx context.Context, items []T, resolve func(context.Context, T) (*File, error)) (files []File, refusals []string, failed error) {
+	resolved, refusals, failed := resolveEach(ctx, items, false, resolve)
+	return listedFiles(resolved), refusals, failed
+}
+
+// resolveInTurn is resolveListed one item at a time, for a broadcaster
+// whose resolving carries state from one episode to the next or that is
+// not to be asked several things at once.
+func resolveInTurn[T any](ctx context.Context, items []T, resolve func(context.Context, T) (*File, error)) (files []File, refusals []string, failed error) {
+	resolved, refusals, failed := resolveEach(ctx, items, true, resolve)
+	return listedFiles(resolved), refusals, failed
+}
+
+// listedItem is a listed item with the file it resolved to.
+type listedItem[T any] struct {
+	item T
+	file File
+}
+
+// resolveEach is resolveListed keeping each file beside its item, for a
+// caller that still needs the item afterwards; inTurn resolves one at a
+// time.
+func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) (resolved []listedItem[T], refusals []string, failed error) {
 	type outcome struct {
+		item T
 		file *File
 		err  error
 	}
-	// FanOut drops an item whose fetch errored, so the error travels as a
-	// value instead.
-	outcomes := FanOut(ctx, items, func(ctx context.Context, item T) ([]outcome, error) {
-		file, err := resolve(ctx, item)
-		return []outcome{{file: file, err: err}}, nil
-	})
+	var outcomes []outcome
+	if inTurn {
+		for _, item := range items {
+			file, err := resolve(ctx, item)
+			outcomes = append(outcomes, outcome{item: item, file: file, err: err})
+		}
+	} else {
+		// FanOut drops an item whose fetch errored, so the error travels as
+		// a value instead.
+		outcomes = FanOut(ctx, items, func(ctx context.Context, item T) ([]outcome, error) {
+			file, err := resolve(ctx, item)
+			return []outcome{{item: item, file: file, err: err}}, nil
+		})
+	}
 	for _, out := range outcomes {
 		switch reason, refused := refusalReason(out.err); {
 		case out.err == nil && out.file != nil:
-			files = append(files, *out.file)
+			resolved = append(resolved, listedItem[T]{item: out.item, file: *out.file})
 		case refused:
 			refusals = append(refusals, reason)
 		case failed == nil:
 			failed = out.err
 		}
 	}
-	return files, refusals, failed
+	return resolved, refusals, failed
+}
+
+// listedFiles is the files of resolved items, in order.
+func listedFiles[T any](resolved []listedItem[T]) []File {
+	var files []File
+	for _, r := range resolved {
+		files = append(files, r.file)
+	}
+	return files
 }
 
 // lazyEpisode is a listed episode resolved when its transfer starts: a

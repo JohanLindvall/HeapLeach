@@ -579,13 +579,7 @@ func archiveBookRank(format archiveText) int { return archiveRankIn(archiveBookR
 // archiveRankIn returns a format's position in a ranking, or -1 when it is
 // absent — which, for an allow-list, means "not this kind of file".
 func archiveRankIn(ranking []string, format archiveText) int {
-	label := archiveLabel(format)
-	for i, known := range ranking {
-		if label == known {
-			return i
-		}
-	}
-	return -1
+	return rankIn(ranking, archiveLabel(format), -1)
 }
 
 // archiveLabel normalises a format label for comparison. The archive writes

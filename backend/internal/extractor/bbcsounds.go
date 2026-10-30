@@ -417,14 +417,7 @@ func (d bbcDownload) best() (bbcVariant, bool) {
 
 // bbcQualityRank places a tier name. One nobody here has seen ranks last but
 // is still taken, since a URL that was published is a URL that works.
-func bbcQualityRank(name string) int {
-	for i, known := range bbcQualityOrder {
-		if strings.EqualFold(name, known) {
-			return i
-		}
-	}
-	return len(bbcQualityOrder)
-}
+func bbcQualityRank(name string) int { return rankIn(bbcQualityOrder, name, len(bbcQualityOrder)) }
 
 // bbcSelection is the media selector's answer.
 type bbcSelection struct {

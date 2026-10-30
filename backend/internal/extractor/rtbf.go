@@ -474,53 +474,45 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 		walkErr = cmp.Or(walkErr, err)
 	}
 
-	type checked struct {
-		listed rtbfListed
-		ext    string
-		reason string
-	}
-	results := FanOut(ctx, entries, func(ctx context.Context, l rtbfListed) ([]checked, error) {
-		c := checked{listed: l}
+	// An episode whose answer did not arrive, or names nothing this knows,
+	// is still listed: its transfer asks again, and says why if it fails.
+	files, refusals, _ := resolveListed(ctx, entries, func(ctx context.Context, l rtbfListed) (*File, error) {
 		answer, err := r.play(ctx, l.entry.AssetID, l.entry.ID)
-		if reason, ok := refusalReason(err); ok {
-			c.reason = reason
-		} else if answer != nil {
+		if _, ok := refusalReason(err); ok {
+			return nil, err
+		}
+		ext := ""
+		if answer != nil {
 			switch hls, file, protected := answer.playable(); {
 			case answer.StreamInfo.Live:
-				c.reason = "it is a live stream"
+				return nil, &broadcastRefusal{site: "rtbf", reason: "it is a live stream"}
 			case hls != "":
-				c.ext = ".mp4"
+				ext = ".mp4"
 			case file != "":
-				c.ext = rtbfExtension(file)
+				ext = rtbfExtension(file)
 			case protected:
-				c.reason = "it is DRM-protected"
+				return nil, &broadcastRefusal{site: "rtbf", reason: "it is DRM-protected"}
 			}
 		}
-		return []checked{c}, nil
+		file := r.lazy(l, cmp.Or(ext, ".mp4"))
+		return &file, nil
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	var (
-		files   []File
-		reasons []string
-		counts  = make(map[string]int)
-	)
-	for _, c := range results {
-		if c.reason != "" {
-			if counts[c.reason] == 0 {
-				reasons = append(reasons, c.reason)
-			}
-			counts[c.reason]++
-			continue
+	var reasons []string
+	counts := make(map[string]int)
+	for _, reason := range refusals {
+		if counts[reason] == 0 {
+			reasons = append(reasons, reason)
 		}
-		files = append(files, r.lazy(c.listed, cmp.Or(c.ext, ".mp4")))
+		counts[reason]++
 	}
 	if len(files) == 0 {
 		switch {
 		case len(reasons) > 0:
-			return nil, fmt.Errorf("rtbf: %s: none of its %d episodes can be had here: %s", title, len(results), reasons[0])
+			return nil, fmt.Errorf("rtbf: %s: none of its %d episodes can be had here: %s", title, len(entries), reasons[0])
 		case walkErr != nil:
 			return nil, fmt.Errorf("rtbf: %s: %w", title, walkErr)
 		}

@@ -184,29 +184,33 @@ func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*
 	}
 	names := ruvNames(episodes)
 
-	result := &Result{Title: prog.name()}
-	var refused string
+	type named struct {
+		ep   ruvEpisode
+		name string
+	}
+	listed := make([]named, len(episodes))
 	for i, ep := range episodes {
-		file, err := s.file(ctx, ep)
+		listed[i] = named{ep, names[i]}
+	}
+	// One Iceland-only or empty episode must not sink the rest. The reasons
+	// are kept, though: when every episode is refused they are refused for
+	// the same reason, and saying it once is the whole point of recognising
+	// it. They are asked in turn, because the session remembers the first
+	// Iceland-only refusal and turns the rest of that scope away unasked.
+	files, refused, _ := resolveInTurn(ctx, listed, func(ctx context.Context, l named) (*File, error) {
+		file, err := s.file(ctx, l.ep)
 		if err != nil {
-			// One Iceland-only or empty episode must not sink the rest. The
-			// reason is kept, though: when every episode is refused they are
-			// refused for the same reason, and saying it once is the whole
-			// point of recognising it.
-			if reason, ok := refusalReason(err); ok && refused == "" {
-				refused = reason
-			}
-			continue
+			return nil, err
 		}
-		file.Name = names[i] + file.Name
-		result.Files = append(result.Files, *file)
-	}
-	if len(result.Files) == 0 {
+		file.Name = l.name + file.Name
+		return file, nil
+	})
+	if len(files) == 0 {
 		return nil, fmt.Errorf("ruv: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(),
-			util.FirstNonEmpty(refused, "the programme lists them but none carries a stream"))
+			len(episodes), u.Redacted(), util.FirstNonEmpty(append(refused,
+				"the programme lists them but none carries a stream")...))
 	}
-	return result, nil
+	return &Result{Title: prog.name(), Files: files}, nil
 }
 
 // file resolves one episode to something downloadable. The returned File

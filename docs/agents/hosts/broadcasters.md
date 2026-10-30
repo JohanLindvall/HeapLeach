@@ -12,7 +12,14 @@ extractor, but they share `broadcast.go`. A programme a broadcaster declines
 reading `<site>: <title>: <reason>`, so that a series refused in full says
 why once rather than once an episode; `resolveListed` fans a listing out,
 keeping files in order with the refusals and the first other failure
-beside them, a refusal being the answer a caller can act on. An episode
+beside them, a refusal being the answer a caller can act on.
+`resolveInTurn` does the same one episode at a time, for nrk, whose player
+is asked for episodes one after another, and ruv, whose session remembers
+the first Iceland-only refusal and turns the rest of that scope away
+without asking; `resolveEach` keeps each file beside its item, which rtpplay
+needs to tell equally named episodes apart by id. A rendition's place in a
+quality ladder is `rankIn` (`rank.go`), each caller saying where an unknown
+name lands. An episode
 resolved at transfer time is `lazyEpisode`, one resolved now and read again
 at transfer time `refreshing`, and a listing's note is assembled from
 `cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
