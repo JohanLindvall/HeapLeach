@@ -3,10 +3,10 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // pageOf is one page of a paged listing, as its fetch hands it to walkPages.
@@ -121,7 +121,7 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 			break
 		}
 		if p.stop != "" {
-			note = util.FirstNonEmpty(p.note, own(p.stop))
+			note = cmp.Or(p.note, own(p.stop))
 			break
 		}
 		before := len(items)

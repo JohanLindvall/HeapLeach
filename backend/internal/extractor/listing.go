@@ -3,13 +3,13 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
 )
 
@@ -144,12 +144,12 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 			case p.end:
 				return pageOf[listingLink]{end: true}, nil
 			case p.missing && n == 0:
-				return pageOf[listingLink]{}, fmt.Errorf("%s: %s", w.name, util.FirstNonEmpty(w.missing, "no video listing on this page"))
+				return pageOf[listingLink]{}, fmt.Errorf("%s: %s", w.name, cmp.Or(w.missing, "no video listing on this page"))
 			case p.missing:
 				return pageOf[listingLink]{stop: "partial — listing is missing on next page", note: p.note}, nil
 			}
 			if n == 0 {
-				title = util.FirstNonEmpty(p.title, title)
+				title = cmp.Or(p.title, title)
 			}
 			if p.badNext {
 				p.next, p.note = nil, "partial — invalid next page"

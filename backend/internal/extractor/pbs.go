@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -158,7 +159,7 @@ func (p *PBS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 	// say what it belongs to, so its name carries the programme as well. PBS
 	// numbers the episodes of its long-running strands and calls them nothing
 	// else, and "Episode 4" on its own names nothing.
-	title := util.FirstNonEmpty(joinTitle(episode.program, episode.title, titleEqual), id)
+	title := cmp.Or(joinTitle(episode.program, episode.title, titleEqual), id)
 	episode.file.Name = title + ".mp4"
 	return &Result{Title: title, Files: []File{episode.file}}, nil
 }
@@ -272,7 +273,7 @@ func (p *PBS) show(ctx context.Context, u *url.URL, slug string) (*Result, error
 			episode.slug = ep.slug
 			*ep = *episode
 			file := episode.file
-			file.Name = util.FirstNonEmpty(episode.title, episode.slug) + ".mp4"
+			file.Name = cmp.Or(episode.title, episode.slug) + ".mp4"
 			return &file, nil
 		},
 		unplayable: "PBS answers a title past its availability window with a page saying so, " +

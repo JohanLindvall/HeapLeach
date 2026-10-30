@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"net/url"
 
@@ -51,7 +52,7 @@ func (d *Direct) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		return nil, err
 	}
 
-	name := util.FirstNonEmpty(util.NameFromURL(u.String()), u.Hostname())
+	name := cmp.Or(util.NameFromURL(u.String()), u.Hostname())
 	return &Result{
 		Title: name,
 		Files: []File{{

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -186,7 +187,7 @@ func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Resu
 	if err != nil {
 		return nil, err
 	}
-	res.Title = util.FirstNonEmpty(data.text(data.field(video, "title")), res.Title)
+	res.Title = cmp.Or(data.text(data.field(video, "title")), res.Title)
 	return res, nil
 }
 

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -212,7 +213,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	// Radio needs none of what follows. Its pages name an MP3 outright, and a
 	// plain rangeable file is much the better thing to hand the downloader.
 	if link := rtpPlainMediaURL(doc); link != "" {
-		name := util.FirstNonEmpty(title, util.NameFromURL(link), program)
+		name := cmp.Or(title, util.NameFromURL(link), program)
 		return &File{
 			Name:    name + linkExt(link, ""),
 			URL:     link,
@@ -226,7 +227,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 		// when there is not it says so in words meant for a viewer. Those are
 		// passed through: whether the episode expired, was never published or
 		// is licensed elsewhere is something only RTP knows.
-		return nil, "", &broadcastRefusal{"rtpplay", page, util.FirstNonEmpty(rtpUnavailable(root),
+		return nil, "", &broadcastRefusal{"rtpplay", page, cmp.Or(rtpUnavailable(root),
 			"the page carries no stream for this programme")}
 	}
 
@@ -234,7 +235,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	if err != nil {
 		return nil, "", fmt.Errorf("rtpplay: %s: %w", page, err)
 	}
-	name := util.FirstNonEmpty(title, program)
+	name := cmp.Or(title, program)
 	// Named off the segments, not the variant URL: RTP's manifests are
 	// nginx-vod-module urlsets, which spell the source MP4s out in the path
 	// of an MPEG-TS stream. See segmentsExtension.
@@ -304,7 +305,7 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 		return nil, err
 	}
 
-	title := util.FirstNonEmpty(rtpTitle(root), ref.program)
+	title := cmp.Or(rtpTitle(root), ref.program)
 	if capped {
 		title = fmt.Sprintf("%s (first %d episodes)", title, len(episodes))
 	}

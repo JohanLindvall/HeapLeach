@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -368,7 +369,7 @@ func bitchuteAPIHeaders() httpx.Header {
 
 // bitchuteVideoName is a listed video's title, falling back to its id.
 func bitchuteVideoName(video bitchuteVideo) string {
-	return util.FirstNonEmpty(strings.TrimSpace(video.Name), "bitchute-"+video.ID)
+	return cmp.Or(strings.TrimSpace(video.Name), "bitchute-"+video.ID)
 }
 
 // bitchuteExt keeps whatever extension the media URL carries.

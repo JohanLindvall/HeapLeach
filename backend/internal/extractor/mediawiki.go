@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -495,7 +496,7 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 	if err != nil {
 		return nil, err
 	}
-	label := util.FirstNonEmpty(site.name, u.Host)
+	label := cmp.Or(site.name, u.Host)
 	if len(files) == 0 {
 		return nil, fmt.Errorf("mediawiki: %s has no uploaded files", label)
 	}
@@ -621,7 +622,7 @@ func (m *MediaWiki) namespaceOf(ctx context.Context, site mediaWikiSite, title s
 	page := resp.Query.Pages[0]
 	if page.Invalid {
 		return mediaWikiArticle, title, fmt.Errorf("mediawiki: %q is not a valid title: %s",
-			title, util.FirstNonEmpty(page.InvalidReason, "the wiki did not say why"))
+			title, cmp.Or(page.InvalidReason, "the wiki did not say why"))
 	}
 	// A file page is reported missing when the file lives on a shared
 	// repository, which on any Wikipedia is the usual case, so that flag is
@@ -630,7 +631,7 @@ func (m *MediaWiki) namespaceOf(ctx context.Context, site mediaWikiSite, title s
 		return mediaWikiArticle, title, fmt.Errorf("mediawiki: %s has no page %q", site.name, title)
 	}
 
-	normalised := util.FirstNonEmpty(page.Title, title)
+	normalised := cmp.Or(page.Title, title)
 	switch page.NS {
 	case mediaWikiNSCategory:
 		return mediaWikiCategory, normalised, nil

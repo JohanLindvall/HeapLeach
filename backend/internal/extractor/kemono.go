@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,7 +113,7 @@ func (k *Kemono) extract(ctx context.Context, u *url.URL, root string, opts Opti
 		if len(files) == 0 {
 			return nil, fmt.Errorf("kemono: post %s has no attachments", segs[4])
 		}
-		return &Result{Title: util.FirstNonEmpty(post.Title, name), Files: files}, nil
+		return &Result{Title: cmp.Or(post.Title, name), Files: files}, nil
 	}
 
 	// The profile states how many posts there are. Without it, the end is
@@ -170,7 +171,7 @@ func (k *Kemono) filesOf(root string, posts []kemonoPost, group bool) []File {
 	for _, post := range posts {
 		folder := ""
 		if group {
-			folder = folderName(util.FirstNonEmpty(post.Title, post.ID))
+			folder = folderName(cmp.Or(post.Title, post.ID))
 		}
 		for _, item := range post.items() {
 			if item.Path == "" || seen[item.Path] {
@@ -178,7 +179,7 @@ func (k *Kemono) filesOf(root string, posts []kemonoPost, group bool) []File {
 			}
 			seen[item.Path] = true
 			files = append(files, File{
-				Name:    util.FirstNonEmpty(item.Name, path.Base(item.Path)),
+				Name:    cmp.Or(item.Name, path.Base(item.Path)),
 				URL:     root + "/data" + item.Path,
 				Size:    -1,
 				Dir:     folder,

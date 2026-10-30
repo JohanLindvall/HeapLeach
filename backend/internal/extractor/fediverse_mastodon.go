@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -77,7 +78,7 @@ func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pix
 		if len(files) == 0 {
 			return nil, fmt.Errorf("fediverse: post %s on %s carries no media", t.id, u.Hostname())
 		}
-		handle := fediHandle(util.FirstNonEmpty(status.Account.Acct, t.handle), u.Hostname())
+		handle := fediHandle(cmp.Or(status.Account.Acct, t.handle), u.Hostname())
 		return &Result{Title: "@" + handle + " " + t.id, Files: files}, nil
 	}
 
@@ -85,7 +86,7 @@ func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pix
 	if err != nil {
 		return nil, err
 	}
-	title := "@" + fediHandle(util.FirstNonEmpty(account.Acct, account.Username, t.handle), u.Hostname())
+	title := "@" + fediHandle(cmp.Or(account.Acct, account.Username, t.handle), u.Hostname())
 
 	statuses, note, err := f.mastodonTimeline(ctx, root, account.ID, pixelfed, opts)
 	if err != nil {
@@ -257,7 +258,7 @@ func mastodonFiles(statuses []mastodonStatus) []File {
 			continue
 		}
 		for i, media := range status.Media {
-			link := util.FirstNonEmpty(media.URL, media.RemoteURL)
+			link := cmp.Or(media.URL, media.RemoteURL)
 			if link == "" || seen[link] {
 				continue
 			}

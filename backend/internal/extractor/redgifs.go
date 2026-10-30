@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -199,7 +200,7 @@ type redgifsItem struct {
 
 // file turns an item into a downloadable entry, preferring the better copy.
 func (i redgifsItem) file() (File, bool) {
-	link := util.FirstNonEmpty(i.URLs.HD, i.URLs.SD)
+	link := cmp.Or(i.URLs.HD, i.URLs.SD)
 	if link == "" {
 		return File{}, false
 	}

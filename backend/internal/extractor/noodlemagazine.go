@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -129,7 +130,7 @@ func noodleRead(ctx context.Context, client *httpx.Client, page string) (*player
 		return nil, err
 	}
 	return &playerVideo{
-		title:      util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.H1), noodleVideoID(final)),
+		title:      cmp.Or(metaContent(root, "og:title"), firstText(root, atom.H1), noodleVideoID(final)),
 		candidates: candidates,
 		referer:    final.String(),
 	}, nil
@@ -165,7 +166,7 @@ func noodleCards(root *html.Node, page, _ *url.URL) listingPage {
 				continue
 			}
 			id := noodleVideoID(link)
-			title := util.FirstNonEmpty(textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "title") }), attr(card, "data-video-title-base"), id)
+			title := cmp.Or(textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "title") }), attr(card, "data-video-title-base"), id)
 			p.links = append(p.links, listingLink{key: id, url: link.String(), title: title})
 			break
 		}

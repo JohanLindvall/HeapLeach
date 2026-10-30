@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -115,7 +116,7 @@ func (b *Bunkr) album(ctx context.Context, u *url.URL, opts Options) (*Result, e
 				return pageOf[bunkrEntry]{}, err
 			}
 			if n == 0 {
-				title = util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.H1),
+				title = cmp.Or(metaContent(root, "og:title"), firstText(root, atom.H1),
 					trimSiteSuffix(firstText(root, atom.Title)))
 			}
 			last = max(last, lastAlbumPage(root))
@@ -177,7 +178,7 @@ func (b *Bunkr) albumEntries(root *html.Node, base *url.URL) []bunkrEntry {
 		}
 
 		entries = append(entries, bunkrEntry{href: href, file: File{
-			Name: util.FirstNonEmpty(name, linkLabel(link)),
+			Name: cmp.Or(name, linkLabel(link)),
 			// Listings round these, so they are a display hint only.
 			Size:       size,
 			SizeApprox: size > 0,
@@ -195,7 +196,7 @@ func (b *Bunkr) albumEntries(root *html.Node, base *url.URL) []bunkrEntry {
 		}
 		seen[href] = true
 		entries = append(entries, bunkrEntry{href: href, file: File{
-			Name:    util.FirstNonEmpty(strings.TrimSpace(attr(a, "title")), linkLabel(a)),
+			Name:    cmp.Or(strings.TrimSpace(attr(a, "title")), linkLabel(a)),
 			Size:    -1,
 			Resolve: b.resolver(href),
 		}})
@@ -274,7 +275,7 @@ func (b *Bunkr) resolver(pageURL string) func(context.Context) (*Target, error) 
 		if err != nil {
 			return nil, fmt.Errorf("bunkr: bad media url: %w", err)
 		}
-		filename := util.FirstNonEmpty(meta.Original, name, util.NameFromURL(raw.Path))
+		filename := cmp.Or(meta.Original, name, util.NameFromURL(raw.Path))
 
 		// Hop 3: the CDN only serves paths carrying a current signature.
 		token, expiry, err := b.sign(ctx, raw.Path)
@@ -363,7 +364,7 @@ func (b *Bunkr) pageInfo(ctx context.Context, u *url.URL) (id, name, dlHost stri
 		dlHost = "https://dl." + u.Hostname()
 	}
 
-	name = util.FirstNonEmpty(
+	name = cmp.Or(
 		metaContent(root, "og:title"),
 		firstText(root, atom.H1),
 		trimSiteSuffix(firstText(root, atom.Title)),
@@ -407,7 +408,7 @@ func bunkrUnavailable(root *html.Node) string {
 		return ""
 	}
 
-	reason := strings.TrimSpace(util.FirstNonEmpty(attr(button, "title"), textOf(button)))
+	reason := strings.TrimSpace(cmp.Or(attr(button, "title"), textOf(button)))
 	if reason == "" {
 		return "bunkr is not offering this file for download"
 	}

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -163,7 +164,7 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (al
 		},
 		fetch: fetchAsAsked(e.client, headers),
 		read: func(root *html.Node, base, _ *url.URL) listingPage {
-			p := listingPage{title: util.FirstNonEmpty(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle)))}
+			p := listingPage{title: cmp.Or(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle)))}
 			for _, link := range eromeAlbumLinks(root, base, seen) {
 				p.links = append(p.links, listingLink{key: link, url: link})
 			}
@@ -288,7 +289,7 @@ func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
 		return nil, fmt.Errorf("erome: %w", err)
 	}
 
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		textOfFirst(root, func(n *html.Node) bool {
 			return isElem(n, atom.H1) && hasClass(n, "album-title-page")
 		}),

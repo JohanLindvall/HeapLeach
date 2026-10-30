@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -114,7 +115,7 @@ func (c *CoomerFans) post(ctx context.Context, u *url.URL) (*Result, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("coomerfans: %s holds no media (it may be text only)", u.Redacted())
 	}
-	return &Result{Title: util.FirstNonEmpty(title, util.NameFromURL(u.String())), Files: files}, nil
+	return &Result{Title: cmp.Or(title, util.NameFromURL(u.String())), Files: files}, nil
 }
 
 // postFiles reads one post page into downloadable files.
@@ -132,7 +133,7 @@ func (c *CoomerFans) postFiles(ctx context.Context, u *url.URL) ([]File, string,
 
 	files := make([]File, 0, len(media))
 	for _, item := range media {
-		name := util.FirstNonEmpty(util.NameFromURL(item.URL), title)
+		name := cmp.Or(util.NameFromURL(item.URL), title)
 		file := File{
 			Name:    name,
 			URL:     item.URL,
@@ -214,7 +215,7 @@ func coomerFansPost(doc string, base *url.URL) (string, []coomerFansItem, error)
 		return "", nil, fmt.Errorf("no post body (the post may have been removed)")
 	}
 
-	title := coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))
+	title := coomerFansTitle(cmp.Or(firstText(root, atom.H1), firstText(root, atomTitle)))
 
 	seen := make(map[string]bool)
 	var media []coomerFansItem
@@ -279,7 +280,7 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([
 		limit: limit, limitNote: limitNote,
 		fetch: fetchAsAsked(c.client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {
-			p := listingPage{title: coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))}
+			p := listingPage{title: coomerFansTitle(cmp.Or(firstText(root, atom.H1), firstText(root, atomTitle)))}
 			for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
 				if link := resolveRef(u, attr(a, "href")); coomerFansIsPost(link) {
 					p.links = append(p.links, listingLink{key: link, url: link})

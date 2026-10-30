@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -133,7 +134,7 @@ func suvoboxAlbum(root *html.Node, u *url.URL) (*Result, error) {
 		size := parseHumanSize(suvoboxText(tile, suvoboxSizeClass))
 
 		files = append(files, File{
-			Name: util.FirstNonEmpty(name, id),
+			Name: cmp.Or(name, id),
 			URL:  suvoboxRawURL(id),
 			// Listings round these, so they total a job but never settle
 			// whether a file on disk is already this one.
@@ -151,7 +152,7 @@ func suvoboxAlbum(root *html.Node, u *url.URL) (*Result, error) {
 
 // suvoboxFile builds the single-file result for a /f/<id> page.
 func suvoboxFile(root *html.Node, id string, u *url.URL) (*Result, error) {
-	name := util.FirstNonEmpty(metaContent(root, "og:title"), id)
+	name := cmp.Or(metaContent(root, "og:title"), id)
 	return &Result{Title: name, Files: []File{{
 		Name:    name,
 		URL:     suvoboxRawURL(id),
@@ -165,7 +166,7 @@ func suvoboxFile(root *html.Node, id string, u *url.URL) (*Result, error) {
 // The page's own heading is truncated with an ellipsis to fit its box, so the
 // metadata is read first — it carries the name in full.
 func suvoboxTitle(root *html.Node, u *url.URL) string {
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		metaContent(root, "og:title"),
 		trimSiteSuffix(firstText(root, atom.Title)),
 		strings.Trim(u.Path, "/"),

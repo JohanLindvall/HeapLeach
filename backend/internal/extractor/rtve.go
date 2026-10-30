@@ -218,7 +218,7 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 		return nil, fmt.Errorf("rtve: programme %s lists no videos", program)
 	}
 
-	return listSeries(ctx, util.FirstNonEmpty(episodes[0].Program.Title, slug), series[rtveVideo]{
+	return listSeries(ctx, cmp.Or(episodes[0].Program.Title, slug), series[rtveVideo]{
 		site: "rtve", noun: "videos", link: u.Redacted(),
 		items: episodes, more: more,
 		label:      func(ep rtveVideo) string { return ep.Season },
@@ -484,7 +484,7 @@ func (v rtveVideo) playable() bool { return !v.Restricted || v.Allowed }
 // phrase like "Something": inside a season folder it says nothing about where
 // it belongs, and across a strand that has run for twenty years it collides.
 func (v rtveVideo) name() string {
-	return util.FirstNonEmpty(v.LongTitle, v.Title, v.ShortTitle, "rtve-"+v.ID)
+	return cmp.Or(v.LongTitle, v.Title, v.ShortTitle, "rtve-"+v.ID)
 }
 
 // size is the exact length of the file the media list will point at, or -1.

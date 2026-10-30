@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -127,7 +128,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, err
 	}
 	p := data.Props
-	res := &Result{Title: util.FirstNonEmpty(p.Creator.Name, segs[1])}
+	res := &Result{Title: cmp.Or(p.Creator.Name, segs[1])}
 	if imageID != 0 {
 		if data.Component != "Creator/MediaObject" || p.MediaID != imageID {
 			return nil, fmt.Errorf("celeb: image is missing from the page")
@@ -146,7 +147,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	// The page states how many pages the gallery has; the first is the
 	// page itself, the rest come from the API.
 	api := util.Origin(&pageURL) + "/api/v1/creator/" +
-		url.PathEscape(util.FirstNonEmpty(p.Creator.Slug, segs[1])) + "/media"
+		url.PathEscape(cmp.Or(p.Creator.Slug, segs[1])) + "/media"
 	pages := max(1, p.Pages)
 	images, note, err := walkPages(ctx, pageWalk[celebImage]{
 		key:   func(m celebImage) string { return strconv.FormatInt(m.ID, 10) },

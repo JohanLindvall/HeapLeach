@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -168,7 +169,7 @@ func kvsResult(doc string, u *url.URL) (*Result, error) {
 		return nil, fmt.Errorf("%s: no media URL in the player configuration", kvsLabel)
 	}
 
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		vars["video_title"],
 		pageTitle(doc),
 		strings.Trim(u.Path, "/"),

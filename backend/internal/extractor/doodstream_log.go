@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -22,7 +23,7 @@ func doodGetPage(ctx context.Context, client *httpx.Client, raw, referer, stage 
 	}
 	u, _ := url.Parse(page)
 	log := extractionLogger(ctx).With("player", u.Redacted(), "stage", stage, "attempt", attempt,
-		"route", util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute))
+		"route", cmp.Or(httpx.RouteID(ctx), httpx.DirectRoute))
 	start := time.Now()
 	log.DebugContext(ctx, "doodstream: request started")
 	doc, final, err := client.GetPage(httpx.WithResponseLog(ctx, log), raw, httpx.Referer(referer), func(doc string) bool {

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	stdhtml "html"
@@ -118,7 +119,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 	number, last := 1, page
 	collected := make(map[string]bool)
 	links, title, note, err := walkListing(ctx, client, page, listingWalk{
-		name: "wordpress", title: util.FirstNonEmpty(util.NameFromURL(first.String()), "WordPress category"),
+		name: "wordpress", title: cmp.Or(util.NameFromURL(first.String()), "WordPress category"),
 		none: "category has no post permalinks", missing: "category page is missing",
 		limit: limit, limitNote: "partial — source limit",
 		root: root, key: wordPressPageKey, anyRedirect: true,
@@ -141,7 +142,7 @@ func wordPressList(ctx context.Context, client *httpx.Client, pasted *url.URL, r
 			area := wordPressArea(root)
 			refs := wordPressPostLinks(area)
 			log.DebugContext(ctx, "wordpress: category page parsed", "page", page.Redacted(), "post_links", len(refs))
-			p := listingPage{title: util.FirstNonEmpty(wordPressTitle(area, true), trimSiteSuffix(firstText(root, atomTitle)))}
+			p := listingPage{title: cmp.Or(wordPressTitle(area, true), trimSiteSuffix(firstText(root, atomTitle)))}
 			added := 0
 			for _, ref := range refs {
 				if link := wordPressLocalLink(page, ref); link != nil {
@@ -367,7 +368,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if content == nil {
 		return nil, fmt.Errorf("wordpress: post content is missing")
 	}
-	title := util.FirstNonEmpty(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
+	title := cmp.Or(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
 	// Related-post plugins can append their own thumbnails inside entry-content.
 	for _, related := range findAll(content, func(n *html.Node) bool {
 		return hasClass(n, "crp_related") || hasClass(n, "related-posts") || hasClass(n, "wp-block-query")

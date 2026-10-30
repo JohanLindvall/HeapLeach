@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -216,7 +217,7 @@ func (v *VRTMax) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 		return v.series(ctx, u, page, id)
 	}
 	return nil, fmt.Errorf("vrtmax: %s is a %s, which names neither a programme nor an episode",
-		u.Redacted(), util.FirstNonEmpty(page.TypeName, "page of some other kind"))
+		u.Redacted(), cmp.Or(page.TypeName, "page of some other kind"))
 }
 
 // single resolves one episode page into a job of its own.
@@ -225,7 +226,7 @@ func (v *VRTMax) single(ctx context.Context, page *vrtPage, id string) (*Result,
 	if err != nil {
 		return nil, err
 	}
-	title := vrtTitle(programme, util.FirstNonEmpty(episode, vrtSlug(id)))
+	title := vrtTitle(programme, cmp.Or(episode, vrtSlug(id)))
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -247,7 +248,7 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 	// thirty-odd seasons. A whole season refused is a whole season refused
 	// for one reason, and VRT's code for it is the only thing the caller can
 	// act on.
-	return listSeries(ctx, util.FirstNonEmpty(page.Title, vrtSlug(id)), series[vrtEpisodeRef]{
+	return listSeries(ctx, cmp.Or(page.Title, vrtSlug(id)), series[vrtEpisodeRef]{
 		site: "vrtmax", noun: "episodes", link: u.Redacted(),
 		items: episodes,
 		label: func(ep vrtEpisodeRef) string { return ep.season },
@@ -256,7 +257,7 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 			if err != nil {
 				return nil, err
 			}
-			file.Name = util.FirstNonEmpty(ep.name, episode, vrtSlug(ep.id)) + file.Name
+			file.Name = cmp.Or(ep.name, episode, vrtSlug(ep.id)) + file.Name
 			return file, nil
 		},
 		unplayable: "the listing named them but the player offered no stream",
@@ -422,7 +423,7 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 	}
 
 	return new(stream.file(stream.extensionOr(playlistExtension(stream.Variant)), headers)),
-		media.Title, util.FirstNonEmpty(page.Title, page.Player.Title), nil
+		media.Title, cmp.Or(page.Title, page.Player.Title), nil
 }
 
 // vrtSilent reports a variant whose own segments carry no audio, which

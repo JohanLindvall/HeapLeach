@@ -18,16 +18,6 @@ import (
 	"unicode/utf8"
 )
 
-// FirstNonEmpty returns the first non-empty string, or "" when all are empty.
-func FirstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // Dedupe returns values with empties and duplicates removed, order preserved.
 func Dedupe(values []string) []string {
 	seen := make(map[string]bool, len(values))

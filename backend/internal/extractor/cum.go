@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -103,7 +104,7 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 		if err != nil {
 			return nil, err
 		}
-		res := &Result{Title: util.FirstNonEmpty(post.Title, post.ID)}
+		res := &Result{Title: cmp.Or(post.Title, post.ID)}
 		seen := make(map[string]bool)
 		for _, att := range post.Attachments {
 			if seen[att.SHA256] {
@@ -143,7 +144,7 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 	if profile.ID != creator || profile.Service != service {
 		return nil, fmt.Errorf("cum: creator is missing from the API response")
 	}
-	res := &Result{Title: util.FirstNonEmpty(profile.DisplayName, profile.Name, service+"-"+creator)}
+	res := &Result{Title: cmp.Or(profile.DisplayName, profile.Name, service+"-"+creator)}
 	params := cumPostQuery(query)
 	// The listing states its total; offset counts what it has served, the
 	// posts it lists wrongly too.

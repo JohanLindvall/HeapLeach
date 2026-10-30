@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -183,14 +184,14 @@ func (p *Pixeldrain) list(ctx context.Context, origin, id string) (*Result, erro
 		return nil, fmt.Errorf("pixeldrain: list %s: %w", id, err)
 	}
 	if !out.Success {
-		return nil, fmt.Errorf("pixeldrain: list %s: %s", id, util.FirstNonEmpty(out.Message, out.Value, "not available"))
+		return nil, fmt.Errorf("pixeldrain: list %s: %s", id, cmp.Or(out.Message, out.Value, "not available"))
 	}
 
 	files := make([]File, 0, len(out.Files))
 	for _, f := range out.Files {
 		files = append(files, p.toFile(origin, f))
 	}
-	return &Result{Title: util.FirstNonEmpty(out.Title, id), Files: files}, nil
+	return &Result{Title: cmp.Or(out.Title, id), Files: files}, nil
 }
 
 // file resolves a single upload.
@@ -203,13 +204,13 @@ func (p *Pixeldrain) file(ctx context.Context, origin, id string) (*Result, erro
 	if f.ID == "" {
 		f.ID = id
 	}
-	return &Result{Title: util.FirstNonEmpty(f.Name, id), Files: []File{p.toFile(origin, f)}}, nil
+	return &Result{Title: cmp.Or(f.Name, id), Files: []File{p.toFile(origin, f)}}, nil
 }
 
 // toFile converts API metadata into a downloadable entry.
 func (p *Pixeldrain) toFile(origin string, f pixeldrainFile) File {
 	return File{
-		Name:    util.FirstNonEmpty(f.Name, f.ID),
+		Name:    cmp.Or(f.Name, f.ID),
 		URL:     origin + pixeldrainAPI + "/file/" + url.PathEscape(f.ID) + "?download",
 		Size:    knownSize(f.Size),
 		Headers: httpx.Referer(origin + "/"),
@@ -251,7 +252,7 @@ func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string, o
 		return &Result{Title: file.Name, Files: []File{file}}, nil
 	}
 
-	res := &Result{Title: util.FirstNonEmpty(node.Name, segs[0])}
+	res := &Result{Title: cmp.Or(node.Name, segs[0])}
 	root := pixeldrainDir{segs: segs, children: children}
 	if err := walkTree(ctx, opts, res, pixeldrainPath(segs), root, p.lister(origin)); err != nil {
 		return nil, err
@@ -328,7 +329,7 @@ func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode)
 		return File{}, false
 	}
 	return File{
-		Name: util.FirstNonEmpty(n.Name, segs[len(segs)-1]),
+		Name: cmp.Or(n.Name, segs[len(segs)-1]),
 		// ?attach asks for the bytes; the bare path serves the viewer for
 		// anything the site can render.
 		URL:     pixeldrainFSURL(origin, segs) + "?attach",

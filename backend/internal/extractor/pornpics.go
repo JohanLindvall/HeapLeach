@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -292,7 +293,7 @@ func pornpicsSearchPager(u *url.URL, query, lang string) func(int) string {
 		query = decoded
 	}
 	endpoint := util.Origin(u) + pornpicsSearchPath
-	lang = util.FirstNonEmpty(lang, pornpicsDefaultLang)
+	lang = cmp.Or(lang, pornpicsDefaultLang)
 
 	return func(offset int) string {
 		values := url.Values{}
@@ -340,7 +341,7 @@ func pornpicsGlobals(root *html.Node) map[string]string {
 	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
 		for _, m := range pornpicsGlobalVar.FindAllStringSubmatch(textOf(script), -1) {
 			if _, seen := out[m[1]]; !seen {
-				out[m[1]] = util.FirstNonEmpty(m[2], m[3])
+				out[m[1]] = cmp.Or(m[2], m[3])
 			}
 		}
 	}
@@ -425,7 +426,7 @@ func pornpicsBareHost(host string) string {
 // pornpicsTitle names a gallery or a listing after its heading, which carries
 // the name and nothing else; the document title appends the site's own.
 func pornpicsTitle(root *html.Node, u *url.URL) string {
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		strings.TrimSpace(firstText(root, atom.H1)),
 		trimSiteSuffix(firstText(root, atom.Title)),
 		strings.Trim(u.Path, "/"),

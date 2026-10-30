@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -163,7 +164,7 @@ func epornerRead(ctx context.Context, client *httpx.Client, page string) (*playe
 	if err != nil {
 		return nil, err
 	}
-	return &playerVideo{title: util.FirstNonEmpty(epornerTitle(doc), vid), candidates: candidates}, nil
+	return &playerVideo{title: cmp.Or(epornerTitle(doc), vid), candidates: candidates}, nil
 }
 
 // epornerTitleSuffix strips the site's own name, and any tagline behind it,
@@ -355,7 +356,7 @@ func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL, opts 
 	if len(links) == 0 {
 		return nil, "", "", fmt.Errorf("%s lists no videos under %s", user, tab)
 	}
-	return links, epornerProfileTitle(user, tab), util.FirstNonEmpty(note, epornerProfileNote(len(links), declared)), nil
+	return links, epornerProfileTitle(user, tab), cmp.Or(note, epornerProfileNote(len(links), declared)), nil
 }
 
 // epornerProfileVideos pages through a profile tab by number, collecting
@@ -454,7 +455,7 @@ func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []epo
 		seen[id] = true
 		found = append(found, epornerVideo{
 			Page:  pages[id],
-			Title: util.FirstNonEmpty(titles[id], util.NameFromURL(pages[id]), id),
+			Title: cmp.Or(titles[id], util.NameFromURL(pages[id]), id),
 		})
 	}
 	return found

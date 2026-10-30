@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -87,7 +88,7 @@ func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 	if download == "" {
 		return nil, fmt.Errorf("filejump: no public download link (the share may be restricted, expired or password protected)")
 	}
-	name := util.FirstNonEmpty(textOfFirst(root, func(n *html.Node) bool { return hasClass(n, "title") }),
+	name := cmp.Or(textOfFirst(root, func(n *html.Node) bool { return hasClass(n, "title") }),
 		trimSiteSuffix(firstText(root, atom.Title)), parts[1])
 	meta := textOfFirst(root, func(n *html.Node) bool { return hasClass(n, "meta") })
 	size := parseHumanSize(strings.ReplaceAll(meta, ",", ""))

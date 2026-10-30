@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,7 +228,7 @@ type keep2ShareResponse struct {
 }
 
 func (r *keep2ShareResponse) Error() string {
-	message := util.FirstNonEmpty(r.Message, fmt.Sprintf("API error %d", r.ErrorCode))
+	message := cmp.Or(r.Message, fmt.Sprintf("API error %d", r.ErrorCode))
 	switch {
 	case r.ErrorCode == 42 && len(r.Errors) == 0:
 		message += ": free downloads are refused from this address"

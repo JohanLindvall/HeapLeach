@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -245,7 +246,7 @@ func streamableTitle(video *streamableVideo, id string) string {
 		upload := strings.TrimSpace(video.OriginalName)
 		name = strings.TrimSuffix(upload, path.Ext(upload))
 	}
-	return util.FirstNonEmpty(name, id)
+	return cmp.Or(name, id)
 }
 
 // streamableLink absolutises a media link, which the API states without a

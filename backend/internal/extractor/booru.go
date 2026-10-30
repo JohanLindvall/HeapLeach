@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -334,7 +335,7 @@ func (s *booruSite) parseTarget(u *url.URL) (tags, postID string, listing bool) 
 			return "", segs[1], true
 		}
 		_, hasQuery := query["query"]
-		return util.FirstNonEmpty(query.Get("query"), query.Get("tags")), "",
+		return cmp.Or(query.Get("query"), query.Get("tags")), "",
 			hasQuery || hasTags || (len(segs) >= 1 && segs[0] == "posts")
 	case apiPhilomena, apiTwibooru:
 		// /search?q=...  or  /images/123
@@ -342,7 +343,7 @@ func (s *booruSite) parseTarget(u *url.URL) (tags, postID string, listing bool) 
 			return "", segs[1], true
 		}
 		_, hasQuery := query["q"]
-		return util.FirstNonEmpty(query.Get("q"), query.Get("tags")), "",
+		return cmp.Or(query.Get("q"), query.Get("tags")), "",
 			hasQuery || hasTags || (len(segs) == 1 && segs[0] == "search")
 	case apiMoebooru:
 		// /post?tags=...  or  /post/show/123
@@ -373,7 +374,7 @@ func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string,
 	// rate limit runs out.
 	posts, note, err := walkPages(ctx, pageWalk[booruPost]{
 		key: func(post booruPost) string {
-			return util.FirstNonEmpty(post.ID.String(), post.fileURL(site), post.MD5)
+			return cmp.Or(post.ID.String(), post.fileURL(site), post.MD5)
 		},
 		limit: opts.maxFiles(), limitNote: "partial — file limit",
 		fetch: func(ctx context.Context, n int) (pageOf[booruPost], error) {
@@ -724,7 +725,7 @@ type booruPost struct {
 
 // fileURL finds the full-size file for a post.
 func (p *booruPost) fileURL(site *booruSite) string {
-	if link := util.FirstNonEmpty(p.FileURL, p.File.URL, p.ContentURL,
+	if link := cmp.Or(p.FileURL, p.File.URL, p.ContentURL,
 		p.ViewURL, p.Representations.Full); link != "" {
 		switch {
 		case strings.HasPrefix(link, "//"):
@@ -757,7 +758,7 @@ func (p *booruPost) filename(link string) string {
 	if id := p.ID.String(); id != "" {
 		return id + ext
 	}
-	return util.FirstNonEmpty(util.NameFromURL(link), p.MD5+ext)
+	return cmp.Or(util.NameFromURL(link), p.MD5+ext)
 }
 
 // size reports the byte length when the board included one.

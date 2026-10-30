@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -108,7 +109,7 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget, opts O
 			return nil, fmt.Errorf("fediverse: post %s links to no media — it is a text post, "+
 				"or a link to a page rather than to a file", t.id)
 		}
-		title := util.FirstNonEmpty(payload.PostView.Post.Name, "post "+t.id)
+		title := cmp.Or(payload.PostView.Post.Name, "post "+t.id)
 		return &Result{Title: folderName(title), Files: files}, nil
 	}
 

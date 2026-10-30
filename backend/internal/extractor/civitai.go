@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -331,7 +332,7 @@ func (c *Civitai) model(ctx context.Context, u *url.URL, id string) (*Result, er
 	if len(files) == 0 {
 		return nil, fmt.Errorf("civitai: model %s shows no images", id)
 	}
-	return &Result{Title: util.FirstNonEmpty(payload.Name, "civitai-model-"+id), Files: files}, nil
+	return &Result{Title: cmp.Or(payload.Name, "civitai-model-"+id), Files: files}, nil
 }
 
 // civitaiModelFiles flattens a model's versions, filing each version's
@@ -396,7 +397,7 @@ func civitaiTitle(target *civitaiTarget, items []civitaiImage) string {
 	}
 	switch target.selector {
 	case civitaiByUser:
-		return util.FirstNonEmpty(who, target.value)
+		return cmp.Or(who, target.value)
 	case civitaiByPost:
 		if who != "" {
 			return who + " post " + target.value

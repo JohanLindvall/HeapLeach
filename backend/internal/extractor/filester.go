@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -112,11 +113,11 @@ func (f *Filester) sign(ctx context.Context, base, slug string) (*Target, error)
 		return nil, fmt.Errorf("filester: sign %s: %w", slug, err)
 	}
 	if !out.Success || out.Server == "" || out.File == "" || out.Token == "" {
-		return nil, fmt.Errorf("filester: sign %s: %s", slug, util.FirstNonEmpty(out.Message, "no link returned"))
+		return nil, fmt.Errorf("filester: sign %s: %s", slug, cmp.Or(out.Message, "no link returned"))
 	}
 	return &Target{
 		URL:  filesterMediaURL(out.Server, out.File, out.Token),
-		Name: util.FirstNonEmpty(out.Name, out.File, slug),
+		Name: cmp.Or(out.Name, out.File, slug),
 		Size: -1,
 	}, nil
 }

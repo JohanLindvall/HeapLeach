@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -276,7 +277,7 @@ func (m *Mega) extractFile(ctx context.Context, link *megaLink) (*Result, error)
 	if err != nil {
 		return nil, fmt.Errorf("mega: %w", err)
 	}
-	name := util.FirstNonEmpty(attrs.Name, link.handle)
+	name := cmp.Or(attrs.Name, link.handle)
 
 	file := File{
 		Name:    name,
@@ -334,7 +335,7 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 	top := ""
 	if sub := nodes[link.sub]; link.sub != "" && sub != nil && sub.node.Type == megaTypeFolder {
 		top = link.sub
-		res.Title = util.FirstNonEmpty(sub.name, res.Title)
+		res.Title = cmp.Or(sub.name, res.Title)
 	}
 	for _, dec := range order {
 		if dec.node.Type != megaTypeFile || dec.key == nil {
@@ -350,7 +351,7 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 		if err != nil {
 			continue // a node whose key is the wrong shape is not ours to read
 		}
-		name := util.FirstNonEmpty(dec.name, dec.node.Handle)
+		name := cmp.Or(dec.name, dec.node.Handle)
 		cmd := megaCommand{A: "g", G: 1, SSL: 2, N: dec.node.Handle}
 		res.Files = append(res.Files, File{
 			Name:    name,
@@ -588,7 +589,7 @@ func (m *Mega) spend(ctx context.Context, left time.Duration) error {
 	if left <= 0 {
 		left = config.MegaQuotaWait
 	}
-	route := util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute)
+	route := cmp.Or(httpx.RouteID(ctx), httpx.DirectRoute)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.spent == nil {
@@ -602,7 +603,7 @@ func (m *Mega) spend(ctx context.Context, left time.Duration) error {
 
 // waiting returns the route's wait while its quota is used up, and nil after.
 func (m *Mega) waiting(ctx context.Context) error {
-	route := util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute)
+	route := cmp.Or(httpx.RouteID(ctx), httpx.DirectRoute)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if until := m.spent[route]; time.Now().Before(until) {

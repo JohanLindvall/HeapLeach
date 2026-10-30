@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -145,7 +146,7 @@ func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		if err != nil {
 			return nil, p.readError(page, err)
 		}
-		title = util.FirstNonEmpty(title, p.site.name)
+		title = cmp.Or(title, p.site.name)
 		return &Result{Title: title, Files: []File{p.deferred(page, title)}}, nil
 	}
 	first, title, err := p.resolve(ctx, page)
@@ -170,7 +171,7 @@ func (p *Player) deferred(page, title string) File {
 		target, _, err := p.resolve(ctx, page)
 		return target, err
 	}
-	return File{Name: title + util.FirstNonEmpty(p.site.ext, ".mp4"), Size: -1,
+	return File{Name: title + cmp.Or(p.site.ext, ".mp4"), Size: -1,
 		Resolve: resolve, Refresh: resolve, ProxyFallback: p.site.proxyFallback}
 }
 
@@ -210,7 +211,7 @@ func (p *Player) resolve(ctx context.Context, page string) (*Target, string, err
 	if !ok {
 		return nil, "", fmt.Errorf("%s: no playable rendition on %s (the video may have been removed)", name, page)
 	}
-	title := util.FirstNonEmpty(video.title, name)
+	title := cmp.Or(video.title, name)
 	referer := video.referer
 	if referer == "" && p.site.referer != nil {
 		referer = p.site.referer(page)
@@ -220,7 +221,7 @@ func (p *Player) resolve(ctx context.Context, page string) (*Target, string, err
 		headers = httpx.Referer(referer)
 	}
 	if !best.IsHLS {
-		return &Target{URL: best.URL, Name: title + util.FirstNonEmpty(video.ext, ".mp4"), Size: -1,
+		return &Target{URL: best.URL, Name: title + cmp.Or(video.ext, ".mp4"), Size: -1,
 			Headers: headers}, title, nil
 	}
 	ResolveNote(ctx, "Reading video playlist")

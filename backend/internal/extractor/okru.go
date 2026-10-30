@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -98,7 +99,7 @@ func okruRead(ctx context.Context, client *httpx.Client, page string) (*playerVi
 	if !okruPlayable(meta) {
 		return nil, fmt.Errorf("%s offers no playable rendition%s", id, okruWhyNot(meta))
 	}
-	return &playerVideo{title: util.FirstNonEmpty(meta.Movie.Title, "ok.ru-"+id), candidates: okruCandidates(meta)}, nil
+	return &playerVideo{title: cmp.Or(meta.Movie.Title, "ok.ru-"+id), candidates: okruCandidates(meta)}, nil
 }
 
 // okruWhyNot adds the site's own explanation when it gave one. A video that

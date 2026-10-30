@@ -461,7 +461,7 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 	// filed the next run somewhere new and downloaded every file again.
 	folder := ""
 	if len(res.Files) > 1 {
-		folder = SafeName(util.FirstNonEmpty(res.Title, job.Title))
+		folder = SafeName(cmp.Or(res.Title, job.Title))
 	}
 	items := make([]*Item, 0, len(res.Files))
 	for i, f := range res.Files {
@@ -491,7 +491,7 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) *Item {
 	name := f.Name
 	if name == "" {
-		name = util.FirstNonEmpty(util.NameFromURL(f.URL), fmt.Sprintf("file-%03d", index+1))
+		name = cmp.Or(util.NameFromURL(f.URL), fmt.Sprintf("file-%03d", index+1))
 	}
 	size := f.Size
 	if size == 0 {

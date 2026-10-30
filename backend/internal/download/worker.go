@@ -4,6 +4,7 @@ package download
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -672,7 +673,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 			name = chooseName(name, SafeName(fromServer))
 		}
 	}
-	if v := util.FirstNonEmpty(resp.Header.Get(httpx.HeaderETag), resp.Header.Get(httpx.HeaderLastModified)); v != "" {
+	if v := cmp.Or(resp.Header.Get(httpx.HeaderETag), resp.Header.Get(httpx.HeaderLastModified)); v != "" {
 		validator = v
 	}
 

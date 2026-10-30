@@ -285,7 +285,7 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 	if err != nil {
 		return nil, "", err
 	}
-	title := util.FirstNonEmpty(strings.TrimSpace(video.Name), id)
+	title := cmp.Or(strings.TrimSpace(video.Name), id)
 
 	if best, ok := peerTubeBest(peerTubeCandidates(video)); ok {
 		return []File{peerTubeFileFor(u, title, best, opts.Password)}, title, nil
@@ -370,7 +370,7 @@ func peerTubeExplain(err error, id string) error {
 // It is the instance's reason rather than a failure, so a listing none of
 // whose videos could be read says it (peerTubeListingResult).
 func peerTubeNoMedia(video *peerTubeVideo) error {
-	name := util.FirstNonEmpty(strings.TrimSpace(video.Name), "this video")
+	name := cmp.Or(strings.TrimSpace(video.Name), "this video")
 	reason := fmt.Sprintf("%q lists no media file (the instance may still be transcoding it)", name)
 	switch {
 	case video.IsLive:
@@ -529,7 +529,7 @@ func peerTubeOwnerName(ctx context.Context, client *httpx.Client, endpoint strin
 	if err := client.GetJSON(ctx, endpoint, headers, &owner); err != nil {
 		return ""
 	}
-	return strings.TrimSpace(util.FirstNonEmpty(owner.DisplayName, owner.Name))
+	return strings.TrimSpace(cmp.Or(owner.DisplayName, owner.Name))
 }
 
 // peerTubeListVideos walks a paginated /videos listing for the ids it names,
@@ -663,5 +663,5 @@ func (e peerTubeListingEntry) videoID() string {
 	if e.Video != nil {
 		return e.Video.videoID()
 	}
-	return util.FirstNonEmpty(e.UUID, e.ShortUUID)
+	return cmp.Or(e.UUID, e.ShortUUID)
 }

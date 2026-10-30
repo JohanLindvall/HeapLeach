@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -166,7 +167,7 @@ func (a *ABCListen) episode(u *url.URL, doc abcListenDoc) (*Result, error) {
 	title := joinTitle(doc.programme(), strings.TrimSpace(doc.Title), titleEqual)
 
 	file.Name = abcListenName(doc.ID, title) + file.Name // Name holds only the extension here
-	return &Result{Title: util.FirstNonEmpty(title, doc.ID), Files: []File{file}}, nil
+	return &Result{Title: cmp.Or(title, doc.ID), Files: []File{file}}, nil
 }
 
 // programme expands a programme into one file per episode.
@@ -184,7 +185,7 @@ func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPa
 		return nil, fmt.Errorf("abclisten: no episodes listed on %s", u.Redacted())
 	}
 
-	return listSeries(ctx, util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)), series[abcListenItem]{
+	return listSeries(ctx, cmp.Or(page.title, util.NameFromURL(u.Path)), series[abcListenItem]{
 		site: "abclisten", noun: "episodes", link: u.Redacted(),
 		items: episodes, listed: listed,
 		resolve: func(ctx context.Context, ep abcListenItem) (*File, error) {
@@ -217,8 +218,8 @@ func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem)
 		return nil, fmt.Errorf("abclisten: %s carries no audio or video", link)
 	}
 	file.Name = abcListenName(
-		util.FirstNonEmpty(doc.ID, ep.CardID),
-		util.FirstNonEmpty(doc.Title, ep.CardTitle)) + file.Name
+		cmp.Or(doc.ID, ep.CardID),
+		cmp.Or(doc.Title, ep.CardTitle)) + file.Name
 	return &file, nil
 }
 

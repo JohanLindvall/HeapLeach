@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -73,7 +74,7 @@ func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root
 		return nil, false
 	}
 
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		mediaPageTitle(root),
 		found.Title,
 		strings.Trim(u.Path, "/"),
@@ -379,7 +380,7 @@ func jwPlayerBest(feed *jwPlayerFeed) (mediaFinding, bool) {
 	source := stated[best.URL]
 	return mediaFinding{
 		mediaCandidate: best,
-		Title:          util.FirstNonEmpty(item.Title, feed.Title),
+		Title:          cmp.Or(item.Title, feed.Title),
 		Type:           mediaPageMediaType(source.Type),
 		Size:           knownSize(source.Filesize),
 	}, true
@@ -595,7 +596,7 @@ func linkedDataInt(value any) int {
 // is a title whose own dash is meaningful losing what follows it, which is a
 // name on disk, not a wrong download.
 func mediaPageTitle(root *html.Node) string {
-	return trimSiteSuffix(util.FirstNonEmpty(
+	return trimSiteSuffix(cmp.Or(
 		metaContent(root, "og:title"),
 		firstText(root, atomTitle),
 	))

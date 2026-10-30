@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -200,7 +201,7 @@ func (s *SRF) programme(ctx context.Context, urn string) (*Result, error) {
 	}
 	// A lone file lands straight in the download directory with no folder to
 	// say what it belongs to, so the name carries the show as well.
-	title = util.FirstNonEmpty(title, urn)
+	title = cmp.Or(title, urn)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -216,7 +217,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
 	// before a byte moved.
-	return listSeries(ctx, util.FirstNonEmpty(title, showURN), series[srfEpisodeRef]{
+	return listSeries(ctx, cmp.Or(title, showURN), series[srfEpisodeRef]{
 		site: "srf", noun: "episodes", link: u.Redacted(),
 		items: episodes, more: more,
 		label: func(ep srfEpisodeRef) string { return ep.season },
@@ -225,7 +226,7 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 			if err != nil {
 				return nil, err
 			}
-			file.Name = util.FirstNonEmpty(ep.name, name, ep.urn) + file.Name
+			file.Name = cmp.Or(ep.name, name, ep.urn) + file.Name
 			return file, nil
 		},
 		unplayable: "the catalogue lists them but the Integration Layer offers no stream for any of them",
@@ -253,7 +254,7 @@ func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (title st
 			if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
 				return pageOf[srfEpisodeRef]{}, err
 			}
-			title = util.FirstNonEmpty(title, doc.Show.Title)
+			title = cmp.Or(title, doc.Show.Title)
 			var refs []srfEpisodeRef
 			for _, ep := range doc.EpisodeList {
 				if urn := ep.urn(); urn != "" {
@@ -292,7 +293,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", &broadcastRefusal{"srf", urn, srfBlockMessage(chapter.BlockReason)}
 	}
 
-	title := joinTitle(doc.Show.Title, util.FirstNonEmpty(chapter.Title, doc.Episode.Title), titlePrefixed)
+	title := joinTitle(doc.Show.Title, cmp.Or(chapter.Title, doc.Episode.Title), titlePrefixed)
 	headers := httpx.Referer(srfPlay)
 
 	// A plain file first, and by a wide margin: it ranges, so it resumes and

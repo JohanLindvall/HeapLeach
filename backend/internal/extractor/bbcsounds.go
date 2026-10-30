@@ -141,7 +141,7 @@ func (b *BBCSounds) episode(ctx context.Context, pid string) (*Result, error) {
 	// A lone file lands straight in the download directory with no folder to
 	// say what it belongs to, so every level of the name is used: a Radio 4
 	// episode title on its own is routinely just a date.
-	title := util.FirstNonEmpty(bbcName(item.Titles.full()), pid)
+	title := cmp.Or(bbcName(item.Titles.full()), pid)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -158,7 +158,7 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 
 	// Every row names its container, so the job's folder is named without a
 	// request of its own.
-	title := util.FirstNonEmpty(bbcName(items[0].Container.Title), bbcName(items[0].Titles.Primary), pid)
+	title := cmp.Or(bbcName(items[0].Container.Title), bbcName(items[0].Titles.Primary), pid)
 
 	// A listing of downloadable episodes is already complete — each row
 	// carries its own file_url — and one of streamed episodes needs a media
@@ -176,7 +176,7 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 			// The folder is named for the container, which is the first
 			// level of every title in it, so the file is named by what lies
 			// below it.
-			file.Name = util.FirstNonEmpty(bbcName(item.Titles.within()), item.pid()) + file.Name
+			file.Name = cmp.Or(bbcName(item.Titles.within()), item.pid()) + file.Name
 			return file, nil
 		},
 		unplayable: "the media selector named no stream for any of them",
@@ -352,7 +352,7 @@ func (i bbcItem) pid() string {
 	if idx := strings.LastIndex(i.Urn, ":"); idx >= 0 {
 		return i.Urn[idx+1:]
 	}
-	return util.FirstNonEmpty(i.Urn, i.ID)
+	return cmp.Or(i.Urn, i.ID)
 }
 
 // bbcDownload is the offline copy, where one is offered.
@@ -483,7 +483,7 @@ func (t bbcTitles) full() string { return bbcJoin(t.Primary, t.Secondary, t.Tert
 // container is the first level, so that level is dropped — unless it is the
 // only level there is.
 func (t bbcTitles) within() string {
-	return util.FirstNonEmpty(bbcJoin(t.Secondary, t.Tertiary), bbcJoin(t.Primary))
+	return cmp.Or(bbcJoin(t.Secondary, t.Tertiary), bbcJoin(t.Primary))
 }
 
 // bbcJoin names something from the levels that were filled in, outermost

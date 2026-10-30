@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -209,7 +210,7 @@ func (m *Mediafire) resolver(page, name string) func(context.Context) (*Target, 
 		if err != nil {
 			return nil, err
 		}
-		return &Target{URL: link, Name: util.FirstNonEmpty(fresh, name), Size: -1,
+		return &Target{URL: link, Name: cmp.Or(fresh, name), Size: -1,
 			Headers: httpx.Referer(page)}, nil
 	}
 }
@@ -243,7 +244,7 @@ func (m *Mediafire) filePage(ctx context.Context, page string) (link, name strin
 		link = string(decoded)
 	}
 
-	name = util.FirstNonEmpty(
+	name = cmp.Or(
 		strings.TrimSpace(metaContent(root, "og:title")),
 		util.NameFromURL(link),
 		util.NameFromURL(page),
@@ -273,9 +274,9 @@ func (m *Mediafire) listFolder(ctx context.Context, w *treeWalk, key string, _ i
 	}
 	items := make([]treeItem[string], 0, len(files)+len(folders))
 	for _, f := range files {
-		page := util.FirstNonEmpty(f.Links.NormalDownload,
+		page := cmp.Or(f.Links.NormalDownload,
 			mediafireRoot+"/file/"+url.PathEscape(f.QuickKey))
-		name := util.FirstNonEmpty(f.Filename, util.NameFromURL(page))
+		name := cmp.Or(f.Filename, util.NameFromURL(page))
 		items = append(items, treeItem[string]{File: &File{
 			Name:    name,
 			Size:    parsedSize(f.Size),
@@ -321,7 +322,7 @@ func (m *Mediafire) folderContent(ctx context.Context, w *treeWalk, key string) 
 	room := w.room()
 	files, note, err := walkPages(ctx, pageWalk[mediafireFile]{
 		key: func(f mediafireFile) string {
-			return util.FirstNonEmpty(f.QuickKey, f.Links.NormalDownload, f.Filename)
+			return cmp.Or(f.QuickKey, f.Links.NormalDownload, f.Filename)
 		},
 		limit: room + 1,
 		fetch: func(ctx context.Context, n int) (pageOf[mediafireFile], error) {
@@ -389,7 +390,7 @@ func (m *Mediafire) contentChunk(ctx context.Context, key, kind string, chunk in
 	}
 	if env.Response.Result != "" && !strings.EqualFold(env.Response.Result, "Success") {
 		return mediafireChunk{}, fmt.Errorf("mediafire: list folder: %s",
-			util.FirstNonEmpty(env.Response.Message, env.Response.Result))
+			cmp.Or(env.Response.Message, env.Response.Result))
 	}
 	return env.Response.FolderContent, nil
 }
@@ -485,7 +486,7 @@ func (g *GoogleDrive) Extract(ctx context.Context, u *url.URL, _ Options) (*Resu
 	}
 	// The name is usually only in the Content-Disposition the transfer
 	// itself sees; an extensionless placeholder lets the server's win.
-	title := util.FirstNonEmpty(name, "drive-"+id)
+	title := cmp.Or(name, "drive-"+id)
 	return &Result{Title: title, Files: []File{{
 		Name:    title,
 		URL:     link,
@@ -496,7 +497,7 @@ func (g *GoogleDrive) Extract(ctx context.Context, u *url.URL, _ Options) (*Resu
 			if err != nil {
 				return nil, err
 			}
-			return &Target{URL: fresh, Name: util.FirstNonEmpty(freshName, title), Size: -1,
+			return &Target{URL: fresh, Name: cmp.Or(freshName, title), Size: -1,
 				Headers: httpx.Referer(driveRoot + "/")}, nil
 		},
 	}}}, nil
@@ -531,14 +532,14 @@ func (g *GoogleDrive) confirm(ctx context.Context, id string) (link, name string
 		return direct, driveName(root), nil
 	}
 
-	action := util.FirstNonEmpty(attr(form, "action"), driveDownload)
+	action := cmp.Or(attr(form, "action"), driveDownload)
 	values := url.Values{}
 	for _, input := range findAll(form, func(n *html.Node) bool { return isElem(n, atom.Input) }) {
 		if key := attr(input, "name"); key != "" {
 			values.Set(key, attr(input, "value"))
 		}
 	}
-	values.Set("confirm", util.FirstNonEmpty(values.Get("confirm"), "t"))
+	values.Set("confirm", cmp.Or(values.Get("confirm"), "t"))
 	if values.Get("id") == "" {
 		values.Set("id", id)
 	}

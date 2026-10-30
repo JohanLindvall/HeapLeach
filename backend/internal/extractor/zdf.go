@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -170,7 +171,7 @@ func (z *ZDF) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 		return z.single(ctx, &doc.Document, id, reach)
 	}
 	if refs := doc.videos(); len(refs) > 0 {
-		return z.expand(ctx, u, util.FirstNonEmpty(doc.Document.Titel, id), refs, reach)
+		return z.expand(ctx, u, cmp.Or(doc.Document.Titel, id), refs, reach)
 	}
 	// A film or a stage recording is filed under a page of its own that
 	// carries no renditions and lists nothing, because the one video it
@@ -180,7 +181,7 @@ func (z *ZDF) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 
 // single resolves one video into a job of its own.
 func (z *ZDF) single(ctx context.Context, doc *zdfDocument, fallback string, reach *zdfReach) (*Result, error) {
-	title := util.FirstNonEmpty(doc.Titel, fallback)
+	title := cmp.Or(doc.Titel, fallback)
 	file, err := z.file(ctx, doc, reach)
 	if err != nil {
 		// file's refusals are written to follow the programme's name as a
@@ -221,14 +222,14 @@ func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach 
 		if err != nil {
 			return nil, err
 		}
-		return z.single(ctx, &doc.Document, util.FirstNonEmpty(title, ids[0]), reach)
+		return z.single(ctx, &doc.Document, cmp.Or(title, ids[0]), reach)
 	}
 
 	refs := make([]zdfRef, 0, len(ids))
 	for _, videoID := range ids {
 		refs = append(refs, zdfRef{id: videoID})
 	}
-	return z.expand(ctx, u, util.FirstNonEmpty(title, pageTitle(page)), refs, reach)
+	return z.expand(ctx, u, cmp.Or(title, pageTitle(page)), refs, reach)
 }
 
 // expand resolves a listing's videos into one file each.
@@ -269,7 +270,7 @@ func (z *ZDF) video(ctx context.Context, ref zdfRef, reach *zdfReach) (*File, er
 	// The listing's own name for a video wins: it is what the page showed,
 	// and for a series it is the episode title where the document's is
 	// occasionally the whole strand's.
-	file.Name = util.FirstNonEmpty(ref.name, doc.Document.Titel, ref.id) + file.Name
+	file.Name = cmp.Or(ref.name, doc.Document.Titel, ref.id) + file.Name
 	return file, nil
 }
 

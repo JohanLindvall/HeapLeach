@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -221,7 +222,7 @@ func archiveResult(doc *archiveDoc, id, selector string, formats []string, limit
 			"Submit the items inside it instead", id)
 	}
 
-	title := util.FirstNonEmpty(strings.TrimSpace(string(doc.Metadata.Title)), id)
+	title := cmp.Or(strings.TrimSpace(string(doc.Metadata.Title)), id)
 
 	if selector != "" {
 		return archiveSelected(doc, id, title, selector)

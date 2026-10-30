@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -123,7 +124,7 @@ func bandzoogleParse(ctx context.Context, client *httpx.Client, doc string, u *u
 				}
 			}
 			added, pageArtist := bandzoogleTracks(page, u)
-			artist = util.FirstNonEmpty(artist, pageArtist)
+			artist = cmp.Or(artist, pageArtist)
 			for _, offset := range bandzoogleMore(page) {
 				if !followed[offset] && !slices.Contains(pending, offset) {
 					pending = append(pending, offset)
@@ -140,7 +141,7 @@ func bandzoogleParse(ctx context.Context, client *httpx.Client, doc string, u *u
 		return nil, fmt.Errorf("bandzoogle: no playable tracks on %s — the page "+
 			"names a player but nothing it could fetch", u.Redacted())
 	}
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		artist,
 		trimSiteSuffix(firstText(root, atom.Title)),
 		u.Hostname(),
@@ -206,7 +207,7 @@ func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist stri
 			name = bandzoogleNumber(a) + name + bandzoogleExt(link)
 		}
 		files = append(files, File{
-			Name: util.FirstNonEmpty(name, util.NameFromURL(link)),
+			Name: cmp.Or(name, util.NameFromURL(link)),
 			// Foldered by album, because the numbering restarts with each
 			// one. A page carrying two albums puts two track 1s in the same
 			// directory otherwise, where they sort next to each other and

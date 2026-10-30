@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -350,7 +351,7 @@ func (h *Handoff) title(ctx context.Context, ytdlp string, u *url.URL) (string, 
 		if err != nil {
 			return "", err
 		}
-		return util.FirstNonEmpty(title, handoffName(u)), nil
+		return cmp.Or(title, handoffName(u)), nil
 	}
 
 	// Elsewhere the probe is yt-dlp reading exactly what it will read again
@@ -361,7 +362,7 @@ func (h *Handoff) title(ctx context.Context, ytdlp string, u *url.URL) (string, 
 	if err != nil {
 		return "", fmt.Errorf("%s: yt-dlp could not read %s: %w", h.site.name, u.Redacted(), err)
 	}
-	return util.FirstNonEmpty(title, handoffName(u)), nil
+	return cmp.Or(title, handoffName(u)), nil
 }
 
 // ytdlpBinary is the tool these hosts depend on, spelled once in the
@@ -450,14 +451,14 @@ func (h *Handoff) list(ctx context.Context, ytdlp, target string, limit int) (*R
 			return nil, fmt.Errorf("%s: yt-dlp said nothing about %s", h.site.name, target)
 		}
 		video := entries[0]
-		name := util.FirstNonEmpty(video.Title, video.ID, "video")
-		link := util.FirstNonEmpty(video.WebURL, target)
+		name := cmp.Or(video.Title, video.ID, "video")
+		link := cmp.Or(video.WebURL, target)
 		return &Result{Title: name, Files: []File{{External: link, Name: name, Size: -1}}}, nil
 	}
 
-	res := &Result{Title: util.FirstNonEmpty(playlist.Title, playlist.ID, "playlist")}
+	res := &Result{Title: cmp.Or(playlist.Title, playlist.ID, "playlist")}
 	for _, entry := range entries {
-		link := util.FirstNonEmpty(entry.WebURL, entry.URL)
+		link := cmp.Or(entry.WebURL, entry.URL)
 		if link == "" && entry.ID != "" && h.site.watch != "" {
 			link = h.site.watch + entry.ID
 		}
@@ -466,7 +467,7 @@ func (h *Handoff) list(ctx context.Context, ytdlp, target string, limit int) (*R
 		}
 		res.Files = append(res.Files, File{
 			External: link,
-			Name:     util.FirstNonEmpty(entry.Title, entrySlug(link), entry.ID, "video"),
+			Name:     cmp.Or(entry.Title, entrySlug(link), entry.ID, "video"),
 			Size:     -1,
 		})
 		if len(res.Files) >= limit {
@@ -499,7 +500,7 @@ func ytdlpTitle(ctx context.Context, ytdlp, target string) (string, error) {
 	if len(entries) == 0 {
 		return "", nil
 	}
-	return util.FirstNonEmpty(entries[0].Title, entries[0].ID), nil
+	return cmp.Or(entries[0].Title, entries[0].ID), nil
 }
 
 // oembedTitle reads the title from the host's oEmbed endpoint.
@@ -576,6 +577,6 @@ func handoffName(u *url.URL) string {
 		return strings.ToLower(u.Hostname())
 	}
 	last := segs[len(segs)-1]
-	return util.FirstNonEmpty(strings.TrimSuffix(last, path.Ext(last)), last,
+	return cmp.Or(strings.TrimSuffix(last, path.Ext(last)), last,
 		strings.ToLower(u.Hostname()))
 }

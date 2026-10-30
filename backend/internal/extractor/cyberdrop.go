@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -174,7 +175,7 @@ func (c *Cyberdrop) file(ctx context.Context, slug string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := util.FirstNonEmpty(strings.TrimSpace(info.Name), slug)
+	name := cmp.Or(strings.TrimSpace(info.Name), slug)
 	size := knownSize(info.Size)
 	return &Result{Title: name, Files: []File{{
 		Name:    name,
@@ -292,7 +293,7 @@ func cyberdropEntries(root *html.Node, base *url.URL) []cyberdropEntry {
 			seen[slug] = true
 			out = append(out, cyberdropEntry{
 				slug: slug,
-				name: util.FirstNonEmpty(strings.TrimSpace(attr(n, "title")), slug),
+				name: cmp.Or(strings.TrimSpace(attr(n, "title")), slug),
 				size: -1,
 			})
 			open = len(out) - 1
@@ -313,11 +314,11 @@ func cyberdropTitle(root *html.Node, u *url.URL) string {
 	if n := findFirst(root, func(n *html.Node) bool {
 		return n.Type == html.ElementNode && attr(n, "id") == cyberdropTitleID
 	}); n != nil {
-		if name := util.FirstNonEmpty(strings.TrimSpace(attr(n, "title")), textOf(n)); name != "" {
+		if name := cmp.Or(strings.TrimSpace(attr(n, "title")), textOf(n)); name != "" {
 			return name
 		}
 	}
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		metaContent(root, "og:title"),
 		trimSiteSuffix(firstText(root, atom.Title)),
 		strings.Trim(u.Path, "/"),

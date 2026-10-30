@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -196,7 +197,7 @@ func (g *Gofile) lister(token, password string) treeList[*gofileContent] {
 // file is one listed file as a download.
 func (g *Gofile) file(c *gofileContent, token string) *File {
 	file := File{
-		Name:    util.FirstNonEmpty(c.Name, util.NameFromURL(c.Link)),
+		Name:    cmp.Or(c.Name, util.NameFromURL(c.Link)),
 		URL:     c.Link,
 		Size:    c.Size,
 		Headers: g.downloadHeaders(token),

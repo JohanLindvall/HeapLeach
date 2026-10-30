@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -141,7 +142,7 @@ func (s *SVTPlay) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		if err != nil {
 			return nil, err
 		}
-		title := util.FirstNonEmpty(episode, program, segs[1])
+		title := cmp.Or(episode, program, segs[1])
 		file.Name = title + file.Name // Name holds only the extension here
 		return &Result{Title: title, Files: []File{*file}}, nil
 	}
@@ -200,7 +201,7 @@ func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, ep
 				return nil, err
 			}
 			ep.program = program
-			file.Name = util.FirstNonEmpty(ep.name, episodeTitle, program, ep.videoID) + file.Name
+			file.Name = cmp.Or(ep.name, episodeTitle, program, ep.videoID) + file.Name
 			return file, nil
 		},
 		unplayable: "they may be outside their availability window, or geo-blocked",
@@ -209,7 +210,7 @@ func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, ep
 		return nil, err
 	}
 
-	result := &Result{Title: util.FirstNonEmpty(title, slug), Files: listedFiles(resolved), Note: note}
+	result := &Result{Title: cmp.Or(title, slug), Files: listedFiles(resolved), Note: note}
 	for _, r := range resolved {
 		if result.Title == slug && r.item.program != "" {
 			result.Title = r.item.program
@@ -399,7 +400,7 @@ func (s *SVTPlay) unavailable(ctx context.Context, id string, now time.Time) err
 		return fmt.Errorf("svtplay: SVT offers no stream for %s (it may no longer be available, or not be yet)", id)
 	}
 	item := out.Data.DetailsPageByPath.Item
-	name := util.FirstNonEmpty(item.Name, id)
+	name := cmp.Or(item.Name, id)
 	from, fromErr := time.Parse(time.RFC3339, item.ValidFrom)
 	to, toErr := time.Parse(time.RFC3339, item.ValidTo)
 	switch {

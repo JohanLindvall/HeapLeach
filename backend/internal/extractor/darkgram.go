@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,7 +42,7 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 	if err := json.Unmarshal([]byte(attr(player, "data-album")), &album); err != nil {
 		return nil, fmt.Errorf("darkgram: invalid album data: %w", err)
 	}
-	title := util.FirstNonEmpty(mediaPageTitle(root), strings.TrimSpace(album.Title), util.NameFromURL(page.String()), page.Hostname())
+	title := cmp.Or(mediaPageTitle(root), strings.TrimSpace(album.Title), util.NameFromURL(page.String()), page.Hostname())
 	res := &Result{Title: title}
 	headers := httpx.Referer(page.String())
 	seen := make(map[string]bool)
@@ -64,7 +65,7 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 		}
 		u.Fragment = ""
 		link := u.String()
-		key := item.Kind + "/" + util.FirstNonEmpty(item.ID, link)
+		key := item.Kind + "/" + cmp.Or(item.ID, link)
 		if seen[key] {
 			continue
 		}

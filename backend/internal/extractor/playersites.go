@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -83,7 +84,7 @@ func pornhubRead(ctx context.Context, client *httpx.Client, page string) (*playe
 	if err := json.NewDecoder(strings.NewReader(doc[loc[1]-1:])).Decode(&flashvars); err != nil {
 		return nil, fmt.Errorf("read player configuration: %w", err)
 	}
-	video := &playerVideo{title: util.FirstNonEmpty(flashvars.VideoTitle, pageTitle(doc))}
+	video := &playerVideo{title: cmp.Or(flashvars.VideoTitle, pageTitle(doc))}
 	for _, def := range flashvars.MediaDefinitions {
 		if def.Remote || def.VideoURL == "" {
 			continue // a pointer to another list, not a stream
@@ -228,7 +229,7 @@ func drtuberRead(ctx context.Context, client *httpx.Client, endpoint string) (*p
 		return nil, fmt.Errorf("read the player configuration for video %s: %w", id, err)
 	}
 	return &playerVideo{
-		title:      util.FirstNonEmpty(strings.TrimSpace(config.Title), "drtuber-"+id),
+		title:      cmp.Or(strings.TrimSpace(config.Title), "drtuber-"+id),
 		candidates: drtuberRenditions(config.Files),
 	}, nil
 }
@@ -283,7 +284,7 @@ var pornonePlayer = playerSite{
 			return nil, fmt.Errorf("fetch %s: %w", page, err)
 		}
 		return &playerVideo{
-			title:      util.FirstNonEmpty(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle))),
+			title:      cmp.Or(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle))),
 			candidates: pornoneRenditions(root),
 		}, nil
 	},
@@ -383,7 +384,7 @@ var vidmolyPlayer = playerSite{
 			return nil, fmt.Errorf("%s: %w", page, err)
 		}
 		return &playerVideo{
-			title:      util.FirstNonEmpty(pageTitle(doc), vidmolyCode(base)),
+			title:      cmp.Or(pageTitle(doc), vidmolyCode(base)),
 			candidates: playerLink(link),
 			ext:        linkExtAsIs(link, ".mp4"), // the rare page offering a progressive file
 		}, nil
@@ -529,7 +530,7 @@ var mixdropPlayer = playerSite{
 		if strings.HasPrefix(link, "//") {
 			link = "https:" + link
 		}
-		return &playerVideo{title: util.FirstNonEmpty(pageTitle(doc), util.NameFromURL(page)),
+		return &playerVideo{title: cmp.Or(pageTitle(doc), util.NameFromURL(page)),
 			candidates: playerLink(link)}, nil
 	},
 	signed: true,
@@ -575,7 +576,7 @@ var luluPlayer = playerSite{
 			return nil, fmt.Errorf("%s: %w", page, err)
 		}
 		// The heading names the video; the document title adds the site's.
-		return &playerVideo{title: util.FirstNonEmpty(firstHeading(doc), pageTitle(doc), util.NameFromURL(page)),
+		return &playerVideo{title: cmp.Or(firstHeading(doc), pageTitle(doc), util.NameFromURL(page)),
 			candidates: playerLink(link)}, nil
 	},
 	signed: true,
@@ -645,7 +646,7 @@ func vidsRead(ctx context.Context, client *httpx.Client, page string) (*playerVi
 		return nil, fmt.Errorf("%s: the player configuration names no video", page)
 	}
 	link := resolveRef(base, cfg.VideoURL)
-	name := util.FirstNonEmpty(strings.TrimSpace(cfg.VideoName), util.NameFromURL(link), "vids.st-"+id)
+	name := cmp.Or(strings.TrimSpace(cfg.VideoName), util.NameFromURL(link), "vids.st-"+id)
 	ext := path.Ext(name)
 	return &playerVideo{title: strings.TrimSuffix(name, ext), candidates: playerLink(link), ext: ext}, nil
 }
@@ -695,7 +696,7 @@ var sendvidPlayer = playerSite{
 			return nil, fmt.Errorf("no video on %s (it may have been removed, or the page layout changed)", page)
 		}
 		return &playerVideo{
-			title:      util.FirstNonEmpty(metaContent(root, "og:title"), metaContent(root, "twitter:title"), id),
+			title:      cmp.Or(metaContent(root, "og:title"), metaContent(root, "twitter:title"), id),
 			candidates: playerLink(link),
 		}, nil
 	},

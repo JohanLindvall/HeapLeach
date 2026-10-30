@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -100,7 +101,7 @@ func knuthingWatch(ctx context.Context, client *httpx.Client, raw string) (*knut
 		})
 		if frame != nil {
 			if embed := webLink(final, attr(frame, "src")); embed != nil {
-				title := util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.Title), util.NameFromURL(final.String()))
+				title := cmp.Or(metaContent(root, "og:title"), firstText(root, atom.Title), util.NameFromURL(final.String()))
 				return &knuthingVideo{title: title, embed: embed.String(), referer: final.String()}, nil
 			}
 			return nil, fmt.Errorf("player has no usable embed URL")
@@ -201,8 +202,8 @@ func knuthingCards(root *html.Node, page, first *url.URL) listingPage {
 			}
 			if parts := util.PathSegments(link); len(parts) == 2 && parts[0] == "watch" {
 				p.links = append(p.links, listingLink{
-					key: util.FirstNonEmpty(attr(card, "data-id"), link.Path), url: link.String(),
-					title: util.FirstNonEmpty(firstText(card, atom.H4), util.NameFromURL(link.String())),
+					key: cmp.Or(attr(card, "data-id"), link.Path), url: link.String(),
+					title: cmp.Or(firstText(card, atom.H4), util.NameFromURL(link.String())),
 				})
 				break
 			}

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -225,7 +226,7 @@ func (n *NPOStart) programme(ctx context.Context, slug string) (*Result, error) 
 	}
 	// A lone file lands straight in the download directory with no folder to
 	// say what it belongs to, so the name carries the series as well.
-	title := util.FirstNonEmpty(doc.name(), slug)
+	title := cmp.Or(doc.name(), slug)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -258,7 +259,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 		return nil, fmt.Errorf("npo: %s lists no episodes", target.series)
 	}
 
-	title := util.FirstNonEmpty(episodes[0].series, target.series)
+	title := cmp.Or(episodes[0].series, target.series)
 	if named {
 		// One season goes in the job title rather than in a folder below it,
 		// which would say nothing; and two seasons fetched separately would
@@ -296,7 +297,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 				}
 				return nil, err
 			}
-			file.Name = util.FirstNonEmpty(ref.name, ref.productID) + file.Name
+			file.Name = cmp.Or(ref.name, ref.productID) + file.Name
 			return file, nil
 		},
 		unplayable: "the catalogue lists them but the player offers no stream",
@@ -505,7 +506,7 @@ type npoRefusal struct {
 }
 
 func (r npoRefusal) message() string {
-	message := strings.TrimSpace(util.FirstNonEmpty(r.Body, r.Message))
+	message := strings.TrimSpace(cmp.Or(r.Body, r.Message))
 	from, until := npoDay(r.Context.From), npoDay(r.Context.Until)
 	switch {
 	case message == "":
@@ -576,7 +577,7 @@ type npoSeason struct {
 // different things on different series — "26" on one and "2026" on the next
 // — while the slug is always filled in and unique within the series, which
 // is what a folder name has to be.
-func (s npoSeason) name() string { return util.FirstNonEmpty(s.Label, s.Slug, s.Key) }
+func (s npoSeason) name() string { return cmp.Or(s.Label, s.Slug, s.Key) }
 
 // npoPick finds the season a URL named, if it named one at all.
 func npoPick(seasons []npoSeason, slug string) (npoSeason, bool) {
@@ -611,7 +612,7 @@ type npoProgram struct {
 // place, which is what a viewer calls that episode anyway.
 func (p npoProgram) name() string {
 	if p.Title == "" || strings.EqualFold(p.Series.Title, p.Title) {
-		return joinTitle(util.FirstNonEmpty(p.Series.Title, p.Title), npoDate(p.Published), titleEqual)
+		return joinTitle(cmp.Or(p.Series.Title, p.Title), npoDate(p.Published), titleEqual)
 	}
 	return joinTitle(p.Series.Title, p.Title, titleEqual)
 }

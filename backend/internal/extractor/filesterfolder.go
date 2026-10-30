@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -180,7 +181,7 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 			}
 			if n == 0 {
 				if depth == 0 {
-					w.res.Title = util.FirstNonEmpty(firstText(root, atom.H1), util.PathSegments(first)[1])
+					w.res.Title = cmp.Or(firstText(root, atom.H1), util.PathSegments(first)[1])
 				}
 				if folders != nil {
 					subfolders = findAll(folders, func(n *html.Node) bool {
@@ -288,7 +289,7 @@ func filesterCardOf(session *filesterSession, first *url.URL, card *html.Node) (
 	}
 	slug := util.PathSegments(fileURL)[1]
 	return filesterCard{slug: slug, file: &File{
-		Name: util.FirstNonEmpty(attr(card, "data-name"), textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "file-name") }), slug),
+		Name: cmp.Or(attr(card, "data-name"), textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "file-name") }), slug),
 		Size: parsedSize(attr(card, "data-size")),
 		Resolve: func(ctx context.Context) (*Target, error) {
 			return session.resolve(ctx, slug)

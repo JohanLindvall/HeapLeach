@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -331,7 +332,7 @@ func ruvNames(episodes []ruvEpisode) []string {
 	names := make([]string, len(episodes))
 	count := make(map[string]int, len(episodes))
 	for i, ep := range episodes {
-		names[i] = util.FirstNonEmpty(strings.TrimSpace(ep.Title), ep.ID)
+		names[i] = cmp.Or(strings.TrimSpace(ep.Title), ep.ID)
 		count[names[i]]++
 	}
 	for i, ep := range episodes {
@@ -364,7 +365,7 @@ type ruvProgram struct {
 
 // name is what the job and its folder are called.
 func (p *ruvProgram) name() string {
-	return util.FirstNonEmpty(strings.TrimSpace(p.Title), p.Slug, strconv.Itoa(p.ID))
+	return cmp.Or(strings.TrimSpace(p.Title), p.Slug, strconv.Itoa(p.ID))
 }
 
 // ordered puts the episodes in the order RÚV's own player shows them.
@@ -396,5 +397,5 @@ type ruvEpisode struct {
 
 // label names an episode in an error message.
 func (e ruvEpisode) label() string {
-	return util.FirstNonEmpty(strings.TrimSpace(e.Title), e.ID, "an untitled episode")
+	return cmp.Or(strings.TrimSpace(e.Title), e.ID, "an untitled episode")
 }

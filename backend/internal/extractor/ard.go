@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -201,7 +202,7 @@ func (a *ARD) video(ctx context.Context, id string) (*Result, error) {
 	// A lone file is written straight into the download directory with no
 	// folder to say what it belongs to, so the name carries the programme as
 	// well — unless, as is usual here, the episode title already repeats it.
-	title := joinTitle(show, util.FirstNonEmpty(episode, id), titleContains)
+	title := joinTitle(show, cmp.Or(episode, id), titleContains)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -220,7 +221,7 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
 	// minutes before a byte moved.
-	return listSeries(ctx, util.FirstNonEmpty(title, ref.show), series[ardEpisodeRef]{
+	return listSeries(ctx, cmp.Or(title, ref.show), series[ardEpisodeRef]{
 		site: "ard", noun: "entries", link: u.Redacted(),
 		items: episodes, more: more,
 		label: func(ep ardEpisodeRef) string { return ep.season },
@@ -229,7 +230,7 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 			if err != nil {
 				return nil, err
 			}
-			file.Name = util.FirstNonEmpty(episodeTitle, ep.name, ep.id) + file.Name
+			file.Name = cmp.Or(episodeTitle, ep.name, ep.id) + file.Name
 			return file, nil
 		},
 		unplayable: "the listing names them but no stream is offered",
@@ -281,7 +282,7 @@ func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string
 		// A season with no name of its own still needs a folder, or its
 		// episodes would be written beside the folders of every other season
 		// rather than into one of their own.
-		listed := ardRefs(l.teasers, util.FirstNonEmpty(l.widget.Title, "Staffel "+season))
+		listed := ardRefs(l.teasers, cmp.Or(l.widget.Title, "Staffel "+season))
 		return seasonList[ardEpisodeRef]{items: listed, more: l.more, note: l.note}, nil
 	})
 	if len(list.items) == 0 {
@@ -369,8 +370,8 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 		return nil, "", "", &broadcastRefusal{"ard", id, reason}
 	}
 	media := widget.MediaCollection.Embedded
-	show = util.FirstNonEmpty(widget.Show.Title, media.Meta.SeriesTitle)
-	episode = util.FirstNonEmpty(widget.Title, media.Meta.Title)
+	show = cmp.Or(widget.Show.Title, media.Meta.SeriesTitle)
+	episode = cmp.Or(widget.Title, media.Meta.Title)
 	headers := httpx.Referer(ardRoot + "/")
 
 	// The file, whenever there is one: rangeable, resumable, and skipped on a

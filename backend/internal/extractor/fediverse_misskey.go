@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -202,7 +203,7 @@ func misskeyIsDerived(link string) bool {
 // what the URL actually serves, so a re-encoded copy is not saved under the
 // format it used to be.
 func misskeyName(file *misskeyFile) string {
-	name := util.FirstNonEmpty(file.Name, util.NameFromURL(file.URL), file.ID)
+	name := cmp.Or(file.Name, util.NameFromURL(file.URL), file.ID)
 	served := fediExt(file.URL)
 	if served != "" && !strings.EqualFold(path.Ext(name), served) {
 		name = strings.TrimSuffix(name, path.Ext(name)) + served

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -156,7 +157,7 @@ func pixhostImage(root *html.Node, u *url.URL) (*Result, error) {
 // The document title carries it; the first heading on the page does not,
 // being a content warning rather than the gallery's name.
 func pixhostTitle(root *html.Node, u *url.URL) string {
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		trimSiteSuffix(firstText(root, atomTitle)),
 		strings.Trim(u.Path, "/"),
 	)

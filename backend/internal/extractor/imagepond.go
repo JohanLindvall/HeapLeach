@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -151,7 +152,7 @@ func (i *ImagePond) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 	// is already the answer the other two routes go looking for, so it is
 	// taken as it stands rather than rejected for not being a page.
 	if link := imagePondMediaFile(u); link != "" {
-		name := util.FirstNonEmpty(util.NameFromURL(link), "imagepond-file")
+		name := cmp.Or(util.NameFromURL(link), "imagepond-file")
 		return &Result{Title: name, Files: []File{{
 			Name: name,
 			URL:  link,
@@ -237,7 +238,7 @@ func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (lin
 	if fromLink == imagePondDirectSegment {
 		fromLink = ""
 	}
-	name = util.FirstNonEmpty(
+	name = cmp.Or(
 		imagePondName(metaContent(root, "og:title")),
 		fromLink,
 		code,
@@ -274,7 +275,7 @@ func (i *ImagePond) album(ctx context.Context, u *url.URL, code string) (*Result
 			"(it may be empty or private, or the page layout changed)", u.Redacted())
 	}
 
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		strings.TrimSpace(firstText(root, atom.H1)),
 		trimSiteSuffix(firstText(root, atom.Title)),
 		code,
@@ -332,7 +333,7 @@ func imagePondAlbumFiles(root *html.Node, base *url.URL,
 			}
 		}
 		files = append(files, File{
-			Name:    util.FirstNonEmpty(collapseSpace(textOf(a)), code),
+			Name:    cmp.Or(collapseSpace(textOf(a)), code),
 			Size:    -1,
 			Resolve: resolver(page, code),
 		})
@@ -425,7 +426,7 @@ func imagePondMediaLink(root *html.Node, base *url.URL) string {
 			}
 		}
 	}
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		imagePondUsable(resolveRef(base, metaContent(root, "og:video"))),
 		imagePondUsable(resolveRef(base, metaContent(root, "og:image"))),
 	)
@@ -434,7 +435,7 @@ func imagePondMediaLink(root *html.Node, base *url.URL) string {
 // imagePondUsable keeps a link the downloader can fetch: the stored file on
 // the media host, or the site's own route to it.
 func imagePondUsable(link string) string {
-	return util.FirstNonEmpty(imagePondHosted(link), imagePondDirect(link))
+	return cmp.Or(imagePondHosted(link), imagePondDirect(link))
 }
 
 // imagePondDirect keeps the site's own download route, /i/<code>/direct.

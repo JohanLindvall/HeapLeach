@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -82,5 +83,5 @@ func kvsMemberTitle(root *html.Node) string {
 	if name, _, ok := strings.Cut(heading, "'s "); ok && name != "" {
 		return name
 	}
-	return util.FirstNonEmpty(heading, trimSiteSuffix(firstText(root, atomTitle)))
+	return cmp.Or(heading, trimSiteSuffix(firstText(root, atomTitle)))
 }

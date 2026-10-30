@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -169,7 +170,7 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 		}
 		return nil, noneRead("bandcamp", len(links), "releases", u.Redacted(), refusals, failed)
 	}
-	band := util.FirstNonEmpty(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
+	band := cmp.Or(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
 	return &Result{Title: band, Files: files, Note: joinNotes(cappedNote(len(links), listed, "releases"), refusedNote(refusals))}, nil
 }
 

@@ -362,7 +362,7 @@ func (a *foolFuukaArchive) thread(ctx context.Context, t foolFuukaTarget) (*Resu
 	if op := entries[0].Thread.OP; op != nil {
 		title = strings.TrimSpace(op.Title)
 	}
-	return &Result{Title: util.FirstNonEmpty(title, t.board+"-"+t.num), Files: files}, nil
+	return &Result{Title: cmp.Or(title, t.board+"-"+t.num), Files: files}, nil
 }
 
 // post resolves the single attachment a /post/<number>/ link names.
@@ -479,7 +479,7 @@ func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget, opts O
 	posts, note, err := walkPages(ctx, pageWalk[foolFuukaPost]{
 		key: func(post foolFuukaPost) string {
 			if post.Media != nil {
-				return util.FirstNonEmpty(post.Num.String(), post.Media.Media)
+				return cmp.Or(post.Num.String(), post.Media.Media)
 			}
 			return post.Num.String()
 		},
@@ -532,7 +532,7 @@ func (a *foolFuukaArchive) files(posts []foolFuukaPost, dir string) []File {
 		// three people uploading "image.png" is the ordinary case. The
 		// original is kept as the fallback, for the rare row that has one
 		// and no stored name.
-		name := util.FirstNonEmpty(media.Media, media.Filename)
+		name := cmp.Or(media.Media, media.Filename)
 		if name == "" {
 			continue
 		}

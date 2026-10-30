@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,7 +77,7 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, err
 	}
 	page.Fragment, page.RawFragment = "", ""
-	res := &Result{Title: util.FirstNonEmpty(strings.TrimSpace(album.Title), util.NameFromURL(page.String()))}
+	res := &Result{Title: cmp.Or(strings.TrimSpace(album.Title), util.NameFromURL(page.String()))}
 	headers := httpx.Referer(page.String())
 	seen := make(map[string]bool)
 	unavailable := 0
@@ -155,7 +156,7 @@ func (m rajceMedium) file(page *url.URL) (File, bool) {
 		return File{}, false
 	}
 	u.Fragment, u.RawFragment = "", ""
-	name := util.FirstNonEmpty(m.Filename, util.NameFromURL(u.String()))
+	name := cmp.Or(m.Filename, util.NameFromURL(u.String()))
 	if name == "" {
 		return File{}, false
 	}

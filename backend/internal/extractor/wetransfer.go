@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -158,7 +159,7 @@ func (w *WeTransfer) mint(ctx context.Context, link wetransferLink) (*Target, er
 	}
 	if out.DirectLink == "" {
 		return nil, fmt.Errorf("wetransfer: %s: %s", link.id,
-			util.FirstNonEmpty(wetransferReason(out.Message), "the API returned no download link"))
+			cmp.Or(wetransferReason(out.Message), "the API returned no download link"))
 	}
 	return &Target{
 		URL:     out.DirectLink,

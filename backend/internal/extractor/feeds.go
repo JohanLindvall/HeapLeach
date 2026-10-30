@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -230,7 +231,7 @@ func feedResult(body []byte, u *url.URL, limit int) (*Result, error) {
 			"rather than enclosing media, so there is nothing here to download", u.Redacted())
 	}
 
-	return &Result{Title: util.FirstNonEmpty(doc.title(), strings.Trim(u.Path, "/")), Files: files}, nil
+	return &Result{Title: cmp.Or(doc.title(), strings.Trim(u.Path, "/")), Files: files}, nil
 }
 
 // feedFiles turns the parsed document into the download list.

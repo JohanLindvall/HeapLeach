@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -244,7 +245,7 @@ func (i *Imgur) postFiles(ctx context.Context, id string) ([]File, string, error
 	}
 	// An untitled post still needs a name for its folder, and the post's own
 	// id is a better one than whatever the URL happened to spell it as.
-	return files, util.FirstNonEmpty(strings.TrimSpace(post.Title), post.ID, id), nil
+	return files, cmp.Or(strings.TrimSpace(post.Title), post.ID, id), nil
 }
 
 // singleMedia resolves an id that is not a post: an image inside somebody's

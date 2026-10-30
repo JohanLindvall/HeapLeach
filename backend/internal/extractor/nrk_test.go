@@ -3,9 +3,8 @@
 package extractor
 
 import (
+	"cmp"
 	"testing"
-
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // nrkSequentialCatalogue is a drama series in the shape the catalogue serves
@@ -389,7 +388,7 @@ func TestNRKProgramTitles(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := decode[nrkProgram](t, tc.body)
-			got := joinTitle(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title), titleEqual)
+			got := joinTitle(doc.SeriesTitle, cmp.Or(doc.EpisodeTitle, doc.Title), titleEqual)
 			if got != tc.want {
 				t.Errorf("title = %q, want %q", got, tc.want)
 			}

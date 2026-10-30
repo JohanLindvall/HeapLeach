@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"golang.org/x/net/html"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // NPR resolves npr.org pages into the audio they publish.
@@ -156,7 +156,7 @@ func nprResult(doc string, u *url.URL) (*Result, error) {
 			len(listed), u.Redacted(), nprTally(reasons))
 	}
 
-	title := util.FirstNonEmpty(nprPageTitle(root), strings.Trim(u.Path, "/"))
+	title := cmp.Or(nprPageTitle(root), strings.Trim(u.Path, "/"))
 	return &Result{Title: title, Files: nprFiles(playable), Note: refusedNote(reasons)}, nil
 }
 

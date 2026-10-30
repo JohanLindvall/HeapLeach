@@ -9,18 +9,6 @@ import (
 	"time"
 )
 
-func TestFirstNonEmpty(t *testing.T) {
-	if got := FirstNonEmpty("", "", "a", "b"); got != "a" {
-		t.Errorf("got %q, want %q", got, "a")
-	}
-	if got := FirstNonEmpty("", ""); got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-	if got := FirstNonEmpty(); got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-}
-
 func TestDedupe(t *testing.T) {
 	got := Dedupe([]string{"a", "", "b", "a", "c", "b", ""})
 	want := []string{"a", "b", "c"}

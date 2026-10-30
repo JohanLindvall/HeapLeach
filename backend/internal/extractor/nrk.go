@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -187,7 +188,7 @@ func (n *NRK) programme(ctx context.Context, id string) (*Result, error) {
 	// A lone file is written straight into the download directory, with no
 	// folder to say what it belongs to, so the name carries the series as
 	// well: NRK episode titles are routinely no more than "1. episode".
-	title := util.FirstNonEmpty(n.title(ctx, id), id)
+	title := cmp.Or(n.title(ctx, id), id)
 	file.Name = title + file.Name
 	return &Result{Title: title, Files: []File{*file}}, nil
 }
@@ -208,7 +209,7 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 	// are kept, though: when every episode is refused it is refused for the
 	// same reason, and NRK's own words for it are better than anything this
 	// could conclude. The episodes are asked for one at a time.
-	return listSeries(ctx, util.FirstNonEmpty(title, ref.slug), series[nrkEpisodeRef]{
+	return listSeries(ctx, cmp.Or(title, ref.slug), series[nrkEpisodeRef]{
 		site: "nrk", noun: "episodes", link: u.Redacted(),
 		items: episodes, inTurn: true,
 		label: func(ep nrkEpisodeRef) string { return ep.season },
@@ -217,7 +218,7 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 			if err != nil {
 				return nil, err
 			}
-			file.Name = util.FirstNonEmpty(ep.name, ep.id) + file.Name
+			file.Name = cmp.Or(ep.name, ep.id) + file.Name
 			return file, nil
 		},
 		unplayable: "the catalogue lists them but the player offers no stream",
@@ -276,7 +277,7 @@ func (n *NRK) season(ctx context.Context, slug, name string) (string, []nrkEpiso
 	// There is only one season here, so a folder would say nothing; and
 	// several seasons downloaded separately would otherwise share a folder,
 	// where an episode list that starts again at "1. episode" collides.
-	title := joinTitle(util.FirstNonEmpty(doc.Links.Series.Title, slug), doc.Titles.Title, titleEqual)
+	title := joinTitle(cmp.Or(doc.Links.Series.Title, slug), doc.Titles.Title, titleEqual)
 	return title, nrkRefs(doc, "", make(map[string]bool)), nil
 }
 
@@ -366,7 +367,7 @@ func (n *NRK) title(ctx context.Context, id string) string {
 		httpx.Referer(nrkRoot+"/"), &doc); err != nil {
 		return ""
 	}
-	return joinTitle(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title), titleEqual)
+	return joinTitle(doc.SeriesTitle, cmp.Or(doc.EpisodeTitle, doc.Title), titleEqual)
 }
 
 // nrkManifest is the part of a playback manifest this needs.
@@ -427,7 +428,7 @@ func (m nrkManifest) refusal() string {
 	}
 	// A refusal with nothing to say to a viewer still has a machine-readable
 	// reason, which is better than reporting nothing at all.
-	return util.FirstNonEmpty(m.NonPlayable.Reason, m.Playability, "not playable")
+	return cmp.Or(m.NonPlayable.Reason, m.Playability, "not playable")
 }
 
 // nrkProgram is the part of a programme document this needs. Both title
@@ -459,7 +460,7 @@ type nrkCatalogue struct {
 
 // title is the series name, wherever the document filed it.
 func (c nrkCatalogue) title() string {
-	return util.FirstNonEmpty(c.Sequential.Titles.Title, c.Standard.Titles.Title, c.News.Titles.Title)
+	return cmp.Or(c.Sequential.Titles.Title, c.Standard.Titles.Title, c.News.Titles.Title)
 }
 
 // nrkTitled is anything the catalogue gives a name to.

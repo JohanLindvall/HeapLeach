@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -149,7 +150,7 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	// bulletins and its clips beside them, which the cap cuts short. One
 	// listing needs no folder: a folder every file goes in says nothing, and
 	// two programmes fetched separately would then share it.
-	return listSeries(ctx, util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/")), series[raiEntry]{
+	return listSeries(ctx, cmp.Or(doc.Name, strings.Trim(u.Path, "/")), series[raiEntry]{
 		site: "raiplay", noun: "entries", link: u.Redacted(),
 		items: entries,
 		label: func(entry raiEntry) string { return entry.label },
@@ -158,7 +159,7 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 			if err != nil {
 				return nil, err
 			}
-			file.Name = util.FirstNonEmpty(entry.name, title) + file.Name
+			file.Name = cmp.Or(entry.name, title) + file.Name
 			return file, nil
 		},
 		unplayable: "Rai offers no stream for any of them",
@@ -242,7 +243,7 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	if err := r.client.GetJSON(ctx, raiDocument(page), headers, &doc); err != nil {
 		return nil, "", fmt.Errorf("raiplay: video %s: %w", page, err)
 	}
-	title := util.FirstNonEmpty(joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed),
+	title := cmp.Or(joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed),
 		strings.TrimSuffix(util.NameFromURL(page), ".json"))
 
 	switch {
@@ -314,7 +315,7 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 // the three causes would be a guess dressed up as an answer, so all three are
 // named as the possibilities they are.
 func raiReason(message string) string {
-	said := util.FirstNonEmpty(strings.TrimSpace(message), "Rai will not serve this video")
+	said := cmp.Or(strings.TrimSpace(message), "Rai will not serve this video")
 	return said + " (Rai does not say why; the usual causes are a licence limited to " +
 		"Italy, an availability window that has closed, and material that needs a " +
 		"Rai account)"
@@ -354,7 +355,7 @@ func raiRelinker(contentURL string) string {
 func raiLabel(block, set string) string {
 	switch {
 	case set == "" || strings.EqualFold(block, set):
-		return util.FirstNonEmpty(block, set)
+		return cmp.Or(block, set)
 	case block == "":
 		return set
 	}

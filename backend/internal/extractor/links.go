@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -147,7 +148,7 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 		return nil, noneRead("links", len(sources)-e.unrecognised, "supported links", page.Redacted(), e.refusals, e.failed)
 	}
 
-	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
+	title := cmp.Or(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
 	note := partialNote("links", e, found, len(sources) < found)
 	if note == "" {
 		note = resolvedNote(e.used, found, "links")

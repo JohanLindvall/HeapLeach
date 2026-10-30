@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -204,7 +205,7 @@ func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *
 	listed := make(map[string]bool)
 	guessed := false
 	entries, note, _ := walkPages(ctx, pageWalk[cheveretoEntry]{
-		key:   func(e cheveretoEntry) string { return util.FirstNonEmpty(e.file.URL, e.album.URL) },
+		key:   func(e cheveretoEntry) string { return cmp.Or(e.file.URL, e.album.URL) },
 		limit: opts.maxFiles(), limitNote: "partial — file limit",
 		fetch: func(ctx context.Context, n int) (pageOf[cheveretoEntry], error) {
 			if n > 0 {
@@ -222,7 +223,7 @@ func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *
 			}
 			fresh := false
 			for _, e := range entries {
-				key := util.FirstNonEmpty(e.file.URL, e.album.URL)
+				key := cmp.Or(e.file.URL, e.album.URL)
 				fresh = fresh || !listed[key]
 				listed[key] = true
 			}
@@ -268,7 +269,7 @@ func cheveretoItems(root *html.Node, base *url.URL) []File {
 		if !ok {
 			continue
 		}
-		link := cheveretoOriginal(resolveRef(base, util.FirstNonEmpty(obj.URL, obj.Image.URL)))
+		link := cheveretoOriginal(resolveRef(base, cmp.Or(obj.URL, obj.Image.URL)))
 		if link == "" {
 			continue
 		}
@@ -277,7 +278,7 @@ func cheveretoItems(root *html.Node, base *url.URL) []File {
 			// in one album routinely share an original name, and this one is
 			// minted from the item's id, so it is unique and keeps its
 			// extension. Same reasoning as pixhost's id prefix.
-			Name:    util.FirstNonEmpty(obj.Filename, obj.Image.Filename, util.NameFromURL(link)),
+			Name:    cmp.Or(obj.Filename, obj.Image.Filename, util.NameFromURL(link)),
 			URL:     link,
 			Size:    obj.size(link, attr(n, cheveretoSizeAttr)),
 			Headers: headers,
@@ -401,7 +402,7 @@ func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []chevere
 			return nil, err
 		}
 		listing := cheveretoWalk(ctx, client, u, root, opts)
-		return &Result{Title: util.FirstNonEmpty(names[link], listing.title), Files: listing.files}, nil
+		return &Result{Title: cmp.Or(names[link], listing.title), Files: listing.files}, nil
 	})
 }
 
@@ -472,8 +473,8 @@ func cheveretoSingle(root *html.Node, u *url.URL, title string) (*Result, error)
 			"(the item may have been removed, or the page layout changed)",
 			cheveretoLabel, u.Redacted())
 	}
-	name := util.FirstNonEmpty(util.NameFromURL(link), title)
-	return &Result{Title: util.FirstNonEmpty(title, name), Files: []File{{
+	name := cmp.Or(util.NameFromURL(link), title)
+	return &Result{Title: cmp.Or(title, name), Files: []File{{
 		Name:    name,
 		URL:     link,
 		Size:    cheveretoViewerSize(viewer),
@@ -561,7 +562,7 @@ func cheveretoOriginal(link string) string {
 // The metadata carries it in full; the page's own heading is truncated to fit
 // its box on several themes, which is why it is not read first.
 func cheveretoTitle(root *html.Node, u *url.URL) string {
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		strings.TrimSpace(metaContent(root, "og:title")),
 		trimSiteSuffix(firstText(root, atomTitle)),
 		strings.Trim(u.Path, "/"),

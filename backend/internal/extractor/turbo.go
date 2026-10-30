@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -84,11 +85,11 @@ func (t *Turbo) sign(ctx context.Context, base, id string) (*Target, error) {
 		return nil, fmt.Errorf("turbo: sign %s: %w", id, err)
 	}
 	if !out.Success || out.URL == "" {
-		return nil, fmt.Errorf("turbo: sign %s: %s", id, util.FirstNonEmpty(out.Message, "no url returned"))
+		return nil, fmt.Errorf("turbo: sign %s: %s", id, cmp.Or(out.Message, "no url returned"))
 	}
 	return &Target{
 		URL:     out.URL,
-		Name:    util.FirstNonEmpty(out.OriginalFilename, out.Filename, util.NameFromURL(out.URL), id),
+		Name:    cmp.Or(out.OriginalFilename, out.Filename, util.NameFromURL(out.URL), id),
 		Size:    -1,
 		Headers: httpx.RefererOrigin(base+"/", base),
 	}, nil
