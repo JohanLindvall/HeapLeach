@@ -253,7 +253,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 		seasons = seasons[:config.MaxSeasonsNPO]
 	}
 
-	episodes := n.listings(ctx, seasons)
+	episodes, unread := n.listings(ctx, seasons)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("npo: %s lists no episodes", target.series)
 	}
@@ -314,7 +314,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(seasonsNote, note)}, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(seasonsNote, unread, note)}, nil
 }
 
 // npoEpisodeRef is one episode of a series, with the season it belongs to.
@@ -334,13 +334,14 @@ func (n *NPOStart) seasons(ctx context.Context, slug string) ([]npoSeason, error
 	return seasons, nil
 }
 
-// listings reads every season's episode list. These are independent requests
-// and a news strand has twenty of them, so they go out together.
-func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) []npoEpisodeRef {
-	return FanOut(ctx, seasons, func(ctx context.Context, season npoSeason) ([]npoEpisodeRef, error) {
+// listings reads every season's episode list, and the note when some could
+// not be read. These are independent requests and a news strand has twenty
+// of them, so they go out together.
+func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) ([]npoEpisodeRef, string) {
+	list, _ := readSeasons(ctx, seasons, false, func(ctx context.Context, season npoSeason) (seasonList[npoEpisodeRef], error) {
 		var listing []npoProgram
 		if err := n.fetch(ctx, npoListEndpoint, "guid", season.GUID, &listing); err != nil {
-			return nil, err
+			return seasonList[npoEpisodeRef]{}, err
 		}
 		out := make([]npoEpisodeRef, 0, len(listing))
 		for _, ep := range listing {
@@ -354,8 +355,9 @@ func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) []npoEpiso
 				season:    season.name(),
 			})
 		}
-		return out, nil
+		return seasonList[npoEpisodeRef]{items: out}, nil
 	})
+	return list.items, list.note
 }
 
 // stream resolves one product id to a playable segment list. The returned

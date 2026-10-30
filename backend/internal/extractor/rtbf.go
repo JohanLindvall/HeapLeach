@@ -490,19 +490,8 @@ func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 		return nil, err
 	}
 
-	var reasons []string
-	counts := make(map[string]int)
-	for _, reason := range refusals {
-		if counts[reason] == 0 {
-			reasons = append(reasons, reason)
-		}
-		counts[reason]++
-	}
-	notes := []string{note, walkNote, brokenNote(walkErr)}
-	for _, reason := range reasons {
-		notes = append(notes, leftOutNote(counts[reason], ": "+reason))
-	}
-	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(notes...)}, nil
+	note = listingNote(note, walkNote, brokenNote(walkErr), refusedNote(refusals))
+	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
 }
 
 // listedFile is a listed episode's file, its stream resolved when its

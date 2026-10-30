@@ -117,11 +117,44 @@ func TestListingNote(t *testing.T) {
 		{listingNote(cappedNote(5, 5, "episodes"), brokenNote(nil), leftOutNote(0, " that x"), refusedNote(nil)), ""},
 		{listingNote(cappedNote(5, 9, "episodes"), brokenNote(errors.New("x"))), "5 of 9 episodes; the listing broke off partway"},
 		{listingNote(leftOutNote(2, " that are DRM-protected"), refusedNote([]string{"gone", "late"})),
-			"2 left out that are DRM-protected; 2 left out: gone"},
+			"2 left out that are DRM-protected; 1 left out: gone; 1 left out: late"},
+		// Refusals are counted by reason, in the order the reasons came up.
+		{refusedNote([]string{"live", "gone", "live", "live"}), "3 left out: live; 1 left out: gone"},
 	}
 	for i, tc := range tests {
 		if tc.got != tc.want {
 			t.Errorf("%d: note = %q, want %q", i, tc.got, tc.want)
+		}
+	}
+}
+
+// TestReadSeasons pins how a programme's seasons are read, at once or in
+// turn: in the seasons' order, a season that fails left out with the note
+// saying so, the first walk note and any cut kept, and the first season's
+// failure handed back for a caller that fails on it.
+func TestReadSeasons(t *testing.T) {
+	read := func(_ context.Context, n int) (seasonList[string], error) {
+		switch n {
+		case 2:
+			return seasonList[string]{}, errors.New("unreadable")
+		case 3:
+			return seasonList[string]{items: []string{"c"}, more: true, note: "walk"}, nil
+		}
+		return seasonList[string]{items: []string{fmt.Sprint("s", n)}}, nil
+	}
+	for _, inTurn := range []bool{false, true} {
+		list, first := readSeasons(context.Background(), []int{1, 2, 3, 4}, inTurn, read)
+		if fmt.Sprint(list.items) != "[s1 c s4]" || !list.more || first != nil ||
+			list.note != "walk; "+unreadableSeasons {
+			t.Errorf("inTurn=%v: %+v, %v", inTurn, list, first)
+		}
+		list, first = readSeasons(context.Background(), []int{2, 1}, inTurn, read)
+		if fmt.Sprint(list.items) != "[s1]" || first == nil || list.note != unreadableSeasons {
+			t.Errorf("inTurn=%v, first failing: %+v, %v", inTurn, list, first)
+		}
+		list, first = readSeasons(context.Background(), []int{1, 4}, inTurn, read)
+		if fmt.Sprint(list.items) != "[s1 s4]" || list.more || list.note != "" || first != nil {
+			t.Errorf("inTurn=%v, all read: %+v, %v", inTurn, list, first)
 		}
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -262,25 +261,12 @@ func (r *RTVE) episodes(ctx context.Context, program string, limit int) (videos 
 	// Seasons are fetched together and collected in order, so a programme of
 	// twenty-odd seasons does not resolve one request at a time. A season
 	// that will not load is skipped rather than failing the rest.
-	var (
-		cut   atomic.Bool
-		noted atomic.Pointer[string]
-	)
-	videos = FanOut(ctx, seasons, func(ctx context.Context, season string) ([]rtveVideo, error) {
+	list, _ := readSeasons(ctx, seasons, false, func(ctx context.Context, season string) (seasonList[rtveVideo], error) {
 		videos, more, note, err := rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+
 			"/temporadas/"+url.PathEscape(season)+"/videos", limit, rtveVideoKey)
-		if more {
-			cut.Store(true)
-		}
-		if note != "" {
-			noted.CompareAndSwap(nil, &note)
-		}
-		return videos, err
+		return seasonList[rtveVideo]{items: videos, more: more, note: note}, err
 	})
-	if p := noted.Load(); p != nil {
-		note = *p
-	}
-	return videos, cut.Load(), note, nil
+	return list.items, list.more, list.note, nil
 }
 
 // rtveVideoKey names a listed video.

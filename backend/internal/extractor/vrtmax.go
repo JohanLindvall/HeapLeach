@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -84,12 +85,6 @@ const (
 	// vrtClientHeader is the one thing the GraphQL endpoint insists on.
 	vrtClientHeader = "x-vrt-client-name"
 	vrtClientName   = "WEB"
-
-	// vrtTokenLife is assumed when the token service does not say when its
-	// token expires, and vrtTokenMargin is how long before that moment a
-	// fresh one is minted instead.
-	vrtTokenLife   = 15 * time.Minute
-	vrtTokenMargin = time.Minute
 )
 
 // The GraphQL type names the walk below reads. They are string constants
@@ -238,7 +233,9 @@ func (v *VRTMax) single(ctx context.Context, page *vrtPage, id string) (*Result,
 // series expands a programme into one file per episode, filed by season when
 // there is more than one season to tell apart.
 func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id string) (*Result, error) {
-	episodes := vrtRefs(FanOut(ctx, vrtLists(page), v.fill))
+	// A season that will not load is left out, and the note says so.
+	lists, _ := readSeasons(ctx, vrtLists(page), false, v.fill)
+	episodes := vrtRefs(lists.items)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("vrtmax: %s lists no episodes "+
 			"(a programme page can outlive the run of the programme on it)", u.Redacted())
@@ -263,7 +260,7 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 			return file, nil
 		},
 		unplayable: "the listing named them but the player offered no stream",
-	})
+	}, lists.note)
 }
 
 // vrtEpisodeRef is one episode of a programme, with the season it belongs to.
@@ -344,19 +341,19 @@ func vrtSeasonLabel(title string) string {
 }
 
 // fill fetches a season the programme page named but did not inline.
-func (v *VRTMax) fill(ctx context.Context, list vrtList) ([]vrtList, error) {
+func (v *VRTMax) fill(ctx context.Context, list vrtList) (seasonList[vrtList], error) {
 	if list.listID == "" {
-		return []vrtList{list}, nil
+		return seasonList[vrtList]{items: []vrtList{list}}, nil
 	}
 	resp, err := v.gql(ctx, vrtListQuery, list.listID)
 	if err != nil {
-		return nil, err
+		return seasonList[vrtList]{}, err
 	}
 	if resp.Data.List == nil {
-		return nil, fmt.Errorf("vrtmax: season %q holds no list", list.label)
+		return seasonList[vrtList]{}, fmt.Errorf("vrtmax: season %q holds no list", list.label)
 	}
 	list.tiles = resp.Data.List.Items
-	return []vrtList{list}, nil
+	return seasonList[vrtList]{items: []vrtList{list}}, nil
 }
 
 // vrtRefs flattens the filled lists into episode references, keeping the
@@ -485,9 +482,9 @@ func (v *VRTMax) playerToken(ctx context.Context) (string, error) {
 	}
 
 	v.token = out.Token
-	v.expiry = time.Now().Add(vrtTokenLife)
+	v.expiry = time.Now().Add(config.VRTTokenLife)
 	if when, err := time.Parse(time.RFC3339, out.Expires); err == nil {
-		v.expiry = when.Add(-vrtTokenMargin)
+		v.expiry = when.Add(-config.VRTTokenMargin)
 	}
 	return v.token, nil
 }

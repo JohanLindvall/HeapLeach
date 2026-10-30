@@ -197,6 +197,72 @@ func titleContains(episode, series string) bool {
 	return strings.Contains(strings.ToLower(episode), strings.ToLower(series))
 }
 
+// seasonList is one season's listing as read: its entries, whether it went
+// on past the limit it was read to, and the note for a walk of it cut short
+// some other way.
+type seasonList[T any] struct {
+	items []T
+	more  bool
+	note  string
+}
+
+// unreadableSeasons is the note on a programme some of whose seasons could
+// not be read.
+const unreadableSeasons = "partial — unreadable seasons"
+
+// readSeasons reads a programme's seasons, several at a time or, inTurn,
+// one after another, into one listing in the seasons' order: their entries,
+// whether any went on past its limit, and the first walk's note. A season
+// that cannot be read is left out rather than losing the others, and the
+// note says seasons were (unreadableSeasons). first is the first season's
+// failure, when it could not be read, for a broadcaster that takes that as
+// the programme itself failing; the rest take what the others gave.
+func readSeasons[S, T any](ctx context.Context, seasons []S, inTurn bool, read func(context.Context, S) (seasonList[T], error)) (list seasonList[T], first error) {
+	type outcome struct {
+		index int
+		list  seasonList[T]
+		err   error
+	}
+	readOne := func(ctx context.Context, i int) ([]outcome, error) {
+		got, err := read(ctx, seasons[i])
+		return []outcome{{i, got, err}}, nil
+	}
+	indices := make([]int, len(seasons))
+	for i := range indices {
+		indices[i] = i
+	}
+	var outcomes []outcome
+	if inTurn {
+		for _, i := range indices {
+			if ctx.Err() != nil {
+				break
+			}
+			got, _ := readOne(ctx, i)
+			outcomes = append(outcomes, got...)
+		}
+	} else {
+		outcomes = FanOut(ctx, indices, readOne)
+	}
+
+	unread := false
+	for _, out := range outcomes {
+		if out.err != nil {
+			unread = true
+			if out.index == 0 {
+				first = out.err
+			}
+			continue
+		}
+		list.items = append(list.items, out.list.items...)
+		list.more = list.more || out.list.more
+		list.note = cmp.Or(list.note, out.list.note)
+	}
+	if unread {
+		list.note = listingNote(list.note, unreadableSeasons)
+	}
+	return list, first
+}
+
 // walkCut is the limit note walkEpisodes hands walkPages, to learn that
 // the walk stopped at its limit with the listing going on.
 const walkCut = "\x00cut"
@@ -276,13 +342,23 @@ func leftOutNote(n int, why string) string {
 	return fmt.Sprintf("%d left out%s", n, why)
 }
 
-// refusedNote says how many were left out for the reasons given, naming
-// the first, or nothing when none were.
+// refusedNote says how many were left out for each reason given, in the
+// order the reasons first came up — "3 left out: gone; 1 left out: live"
+// — or nothing when none were.
 func refusedNote(reasons []string) string {
-	if len(reasons) == 0 {
-		return ""
+	var order []string
+	counts := make(map[string]int)
+	for _, reason := range reasons {
+		if counts[reason] == 0 {
+			order = append(order, reason)
+		}
+		counts[reason]++
 	}
-	return fmt.Sprintf("%d left out: %s", len(reasons), reasons[0])
+	notes := make([]string, len(order))
+	for i, reason := range order {
+		notes[i] = leftOutNote(counts[reason], ": "+reason)
+	}
+	return listingNote(notes...)
 }
 
 // brokenNote says a listing's walk broke off partway, when it did.
