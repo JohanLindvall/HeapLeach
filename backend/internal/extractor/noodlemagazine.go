@@ -14,6 +14,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
 
@@ -21,15 +22,38 @@ import (
 // signed per visit, so only titles are queued and each attempt reopens its
 // own watch page, including when recovering on another route.
 type NoodleMagazine struct {
-	hostSet
 	client *httpx.Client
 }
 
 func NewNoodleMagazine(client *httpx.Client) *NoodleMagazine {
-	return &NoodleMagazine{hostSet: hostSet{"noodlemagazine.com"}, client: client}
+	return &NoodleMagazine{client: client}
 }
 
 func (n *NoodleMagazine) Name() string { return "noodlemagazine" }
+
+// noodleListShape is a search listing, /video/<query>.
+var noodleListShape = pathShape(`^/video/[^/]+/?$`)
+
+// Recognises is the inventory's description.
+func (n *NoodleMagazine) Recognises() string {
+	return "watch pages (`/watch/<id>`) named Noodlemagazine carrying the player's `window.playlist`, " +
+		"and search listings (`/video/<query>`) of its video cards"
+}
+
+// Shape reports a watch page or a listing.
+func (n *NoodleMagazine) Shape(u *url.URL) bool { return noodleVideoID(u) != "" || noodleListShape(u) }
+
+// Recognise takes a watch page by the playlist Extract reads, and a
+// listing by the card list it walks, rendered with the site's search
+// script.
+func (n *NoodleMagazine) Recognise(_ context.Context, p *Page) bool {
+	if noodleVideoID(p.Final) != "" {
+		return noodlePlaylist.MatchString(p.Body) && p.Named("noodlemagazine")
+	}
+	return noodleListShape(p.Final) && p.Script("/static/js/search.") &&
+		p.hasElement(func(n *html.Node) bool { return attr(n, "id") == "list_videos" }) &&
+		p.hasElement(func(n *html.Node) bool { return hasClass(n, "item_link") })
+}
 
 func (n *NoodleMagazine) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	if noodleVideoID(u) != "" {
@@ -69,7 +93,11 @@ type noodleVideo struct {
 
 func (n *NoodleMagazine) readVideo(ctx context.Context, page string) (*noodleVideo, error) {
 	ResolveNote(ctx, "Reading video page")
-	doc, final, err := n.client.GetPage(ctx, page, nil, nil)
+	pageURL, err := url.Parse(page)
+	if err != nil {
+		return nil, fmt.Errorf("noodlemagazine: %w", err)
+	}
+	doc, final, err := fetchDocument(ctx, n.client, pageURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("noodlemagazine: fetch video: %w", err)
 	}

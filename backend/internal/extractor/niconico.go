@@ -45,7 +45,6 @@ import (
 // rather than one a video. Anything else on the site is still handed to
 // yt-dlp, as all of it was.
 type Niconico struct {
-	hostSet
 	client *httpx.Client
 	// watch and api are where the watch pages and the API are, fields so
 	// that tests can stand in for them.
@@ -63,20 +62,63 @@ const (
 
 // niconicoRest is the part of the site still handed to yt-dlp.
 var niconicoRest = handoffSite{
-	name:    "niconico",
-	domains: []string{"nicovideo.jp", "nico.ms"},
-	why:     "only its videos, mylists, series and uploads are read natively, not a page like this one",
+	name: "niconico",
+	why:  "only its videos, mylists, series and uploads are read natively, not a page like this one",
 }
 
 // NewNiconico builds the niconico extractor.
 func NewNiconico(client *httpx.Client) *Niconico {
 	return &Niconico{
-		hostSet: niconicoRest.domains, client: client, watch: niconicoWatchRoot, api: niconicoAPIRoot,
-		handoff: &Handoff{hostSet: niconicoRest.domains, client: client, site: niconicoRest},
+		client: client, watch: niconicoWatchRoot, api: niconicoAPIRoot,
+		handoff: &Handoff{client: client, site: niconicoRest},
 	}
 }
 
 func (n *Niconico) Name() string { return "niconico" }
+
+var (
+	// niconicoWatchShape is a watch page, and the short link to one.
+	niconicoWatchShape = pathShape(`^/watch/(?:[a-z]{2})?[0-9]+/?$`, `^/(?:sm|nm|so)[0-9]+/?$`)
+	// niconicoListShape is a mylist, a series or a user's uploads.
+	niconicoListShape = pathShape(
+		`^/(?:mylist|series)/[0-9]+/?$`,
+		`^/user/[0-9]+(?:/video|/(?:mylist|series)/[0-9]+)?/?$`,
+	)
+)
+
+// niconicoNames are what the site calls itself: the video service, and the
+// portal its user pages belong to.
+var niconicoNames = []string{"ニコニコ動画", "ニコニコ", "niconico"}
+
+// niconicoResponseMeta is the meta element a watch page describes its
+// video in, which is what this extractor reads.
+const niconicoResponseMeta = `name="server-response"`
+
+// niconicoBundle is the web client's script bundle, which renders the
+// pages that carry no description of their own: a user's, a mylist.
+const niconicoBundle = "/web/scripts/bundle/"
+
+// Recognises is the inventory's description.
+func (n *Niconico) Recognises() string {
+	return "watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, " +
+		"and mylists, series and users' uploads rendered by the niconico web client's bundle; " +
+		"its other pages are handed to yt-dlp"
+}
+
+// Shape reports a watch page or a listing.
+func (n *Niconico) Shape(u *url.URL) bool { return niconicoWatchShape(u) || niconicoListShape(u) }
+
+// Recognise takes a page of the site by what this extractor reads on it: a
+// watch page by its server-response description, which a short link
+// redirects to, and a listing by the web client that renders it. Any other
+// page of the site that carries either is the handoff's, as all of it was
+// before videos and listings were read natively.
+func (n *Niconico) Recognise(_ context.Context, p *Page) bool {
+	if !p.Named(niconicoNames...) {
+		return false
+	}
+	return p.Has(niconicoResponseMeta) || p.Script(niconicoBundle)
+}
 
 // The kinds of page read natively.
 const (
@@ -204,7 +246,11 @@ var errNiconicoNoStream = errors.New("offers no quality to a viewer without a ni
 // kind it offers, and what to ask for them with. A page that is an error
 // says so in the same description, behind a 4xx, and that is read instead.
 func (n *Niconico) watchPage(ctx context.Context, id string) (*niconicoWatch, error) {
-	page, err := n.client.GetString(ctx, n.watch+url.PathEscape(id), httpx.Referer(niconicoOrigin+"/"))
+	watchURL, err := url.Parse(n.watch + url.PathEscape(id))
+	if err != nil {
+		return nil, fmt.Errorf("niconico: %s: %w", id, err)
+	}
+	page, _, err := fetchDocument(ctx, n.client, watchURL, httpx.Referer(niconicoOrigin+"/"))
 	if err != nil {
 		status, ok := errors.AsType[*httpx.StatusError](err)
 		if !ok || !strings.Contains(status.Body, "server-response") {

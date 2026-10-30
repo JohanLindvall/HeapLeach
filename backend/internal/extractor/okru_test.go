@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"testing"
 )
 
@@ -118,17 +117,5 @@ func TestOKruVideoID(t *testing.T) {
 		if got := okruVideoID(u); got != want {
 			t.Errorf("okruVideoID(%s) = %q, want %q", raw, got, want)
 		}
-	}
-}
-
-func TestOKruMatch(t *testing.T) {
-	o := NewOKru(nil)
-	for _, host := range []string{"ok.ru", "www.ok.ru", "m.ok.ru", "odnoklassniki.ru"} {
-		if !o.Match(&url.URL{Scheme: "https", Host: host, Path: "/video/1"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if o.Match(&url.URL{Scheme: "https", Host: "notok.ru"}) {
-		t.Error("a lookalike host was matched")
 	}
 }

@@ -44,7 +44,6 @@ import (
 // and covers the one real flake seen under parallel load — a transient nginx
 // 404 that succeeded on immediate retry.
 type BitChute struct {
-	hostSet
 	client *httpx.Client
 	// api and site are the two roots this reads, kept as fields rather than
 	// used as constants so the paging, the fan-out and the embed fallback
@@ -94,10 +93,40 @@ var bitchuteSeedHosts = []string{
 
 // NewBitChute builds the bitchute extractor.
 func NewBitChute(client *httpx.Client) *BitChute {
-	return &BitChute{hostSet: hostSet{"bitchute.com"}, client: client, api: bitchuteAPI, site: bitchuteRoot}
+	return &BitChute{client: client, api: bitchuteAPI, site: bitchuteRoot}
 }
 
 func (b *BitChute) Name() string { return "bitchute" }
+
+var (
+	// bitchuteShape is a video, its embed, or a channel.
+	bitchuteShape = pathShape(`^/(?:video|embed|channel)/[A-Za-z0-9_-]+/?$`)
+	// bitchuteEmbed is the player a video page offers for embedding.
+	bitchuteEmbed = regexp.MustCompile(`^/embed/[A-Za-z0-9_-]+`)
+)
+
+// bitchuteBundle is the web app's own script bundle.
+const bitchuteBundle = "/js/app."
+
+// Recognises is the inventory's description.
+func (b *BitChute) Recognises() string {
+	return "videos and channels (`/video/<id>/`, `/embed/<id>/`, `/channel/<id>/`) served by the " +
+		"BitChute web app, a video naming its embed player"
+}
+
+// Shape reports a video, an embed or a channel.
+func (b *BitChute) Shape(u *url.URL) bool { return bitchuteShape(u) }
+
+// Recognise takes a page of the web app: its bundle and name, and for a
+// video page the embed player it names, the id Extract asks the API about.
+// The app renders a channel itself, so its shell is all a channel shows.
+func (b *BitChute) Recognise(_ context.Context, p *Page) bool {
+	if !bitchuteShape(p.Final) || !p.Named("BitChute") || !p.Script(bitchuteBundle) {
+		return false
+	}
+	segs := p.Segments()
+	return segs[0] != "video" || p.playerMeta(bitchuteEmbed)
+}
 
 // Extract resolves a video page or a channel. The embed page is accepted as
 // well: it names the same video, and it is the shape a link copied out of an
@@ -203,7 +232,7 @@ var bitchuteEmbedMedia = regexp.MustCompile(`\bmedia_url\s*=\s*['"]([^'"]+)['"]`
 // that carries no media URL at all, so there is nothing to fall back to there.
 func (b *BitChute) embedMedia(ctx context.Context, id string) string {
 	page := b.site + "/embed/" + url.PathEscape(id) + "/"
-	doc, err := b.client.GetString(ctx, page, httpx.Referer(bitchuteRoot+"/"))
+	doc, err := fetchPage(ctx, b.client, page, httpx.Referer(bitchuteRoot+"/"))
 	if err != nil {
 		return ""
 	}

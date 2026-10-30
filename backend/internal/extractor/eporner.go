@@ -28,14 +28,12 @@ import (
 // time rather than at extraction time: a profile of a hundred videos would
 // otherwise start failing partway down its own queue.
 type Eporner struct {
-	hostSet
 	client *httpx.Client
 }
 
 const (
 	epornerRoot   = "https://www.eporner.com"
 	epornerDomain = "www.eporner.com"
-	epornerSite   = "eporner.com"
 	epornerExt    = ".mp4"
 
 	// The player hash arrives as four groups of eight hexadecimal digits.
@@ -51,10 +49,39 @@ const (
 
 // NewEporner builds the eporner extractor.
 func NewEporner(client *httpx.Client) *Eporner {
-	return &Eporner{hostSet: hostSet{epornerSite}, client: client}
+	return &Eporner{client: client}
 }
 
 func (e *Eporner) Name() string { return "eporner" }
+
+var (
+	// epornerVideoShape is a video by each of its routes.
+	epornerVideoShape = pathShape(`^/video-[A-Za-z0-9]+(?:/[^/]*)?/?$`, `^/(?:hd-porn|embed)/[A-Za-z0-9]+(?:/[^/]*)?/?$`)
+	// epornerProfileShape is a profile's video tab, or a later page of it.
+	epornerProfileShape = pathShape(`^/profile/[^/]+/(?:uploaded-videos|videos)(?:/[0-9]+)?/?$`)
+)
+
+// Recognises is the inventory's description.
+func (e *Eporner) Recognises() string {
+	return "videos (`/video-<id>/<slug>/`, `/hd-porn/<id>/`) whose page sets the EPORNER player's " +
+		"video id and hash, and profile video tabs rendered with its profile script"
+}
+
+// Shape reports a video or a profile's video tab.
+func (e *Eporner) Shape(u *url.URL) bool { return epornerVideoShape(u) || epornerProfileShape(u) }
+
+// Recognise takes a video page by the player's id and hash, which Extract
+// folds into the request for the sources, and a profile tab by the site's
+// profile script, under the site's own name.
+func (e *Eporner) Recognise(_ context.Context, p *Page) bool {
+	if !p.Named("EPORNER.COM", "EPORNER") {
+		return false
+	}
+	if epornerVideoShape(p.Final) {
+		return p.Has("EP.video.player") && epornerHashPattern.MatchString(p.Body)
+	}
+	return epornerProfileShape(p.Final) && p.Script("/profile.js")
+}
 
 // Extract handles one video or a profile tab that lists them.
 func (e *Eporner) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -147,7 +174,7 @@ func (e *Eporner) video(ctx context.Context, page string) (*Result, error) {
 // returns the page's title with the best MP4 link.
 func (e *Eporner) rendition(ctx context.Context, page string) (string, string, error) {
 	base := epornerBaseOf(page)
-	doc, err := e.client.GetString(ctx, page, httpx.Referer(base+"/"))
+	doc, err := fetchPage(ctx, e.client, page, httpx.Referer(base+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("eporner: fetch video page: %w", err)
 	}
@@ -392,7 +419,7 @@ func (e *Eporner) profileVideos(ctx context.Context, u *url.URL, user, tab strin
 
 	for page := 1; page <= epornerMaxProfilePages && len(videos) < epornerMaxVideos; page++ {
 		link := epornerProfilePage(u, user, tab, page)
-		doc, err := e.client.GetString(ctx, link, httpx.Referer(epornerRoot+"/"))
+		doc, err := fetchPage(ctx, e.client, link, httpx.Referer(epornerRoot+"/"))
 		if err != nil {
 			if page == 1 {
 				return nil, 0, fmt.Errorf("eporner: fetch profile: %w", err)

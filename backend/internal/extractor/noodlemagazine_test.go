@@ -24,16 +24,7 @@ func noodleTestClient(t *testing.T) *httpx.Client {
 }
 
 func TestNoodleMagazineRouting(t *testing.T) {
-	reg := testRegistry(t, nil)
-	for _, host := range []string{"noodlemagazine.com", "www.noodlemagazine.com", "adult.noodlemagazine.com"} {
-		if got := reg.Find(mustParse(t, "https://"+host+"/")).Name(); got != "noodlemagazine" {
-			t.Errorf("%s routes to %s", host, got)
-		}
-	}
 	n := NewNoodleMagazine(nil)
-	if n.Match(mustParse(t, "https://noodlemagazine.com.example.test/")) {
-		t.Fatal("matched a different host")
-	}
 	for _, path := range []string{"/", "/video/", "/watch/", "/watch/not-an-id", "/other/search"} {
 		if _, err := n.Extract(context.Background(), mustParse(t, "https://example.test"+path), Options{}); err == nil {
 			t.Errorf("accepted unsupported path %s", path)

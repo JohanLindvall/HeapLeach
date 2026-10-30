@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,7 +46,6 @@ import (
 // decrypt: yt-dlp fails on them too. The configuration says so (request.drm),
 // and those are refused in so many words.
 type Vimeo struct {
-	hostSet
 	client *httpx.Client
 	// player is where the player pages are, a field so that tests can stand
 	// in for it.
@@ -60,10 +60,46 @@ const vimeoConfigMarker = "window.playerConfig = "
 
 // NewVimeo builds the vimeo extractor.
 func NewVimeo(client *httpx.Client) *Vimeo {
-	return &Vimeo{hostSet: hostSet{"vimeo.com", "player.vimeo.com"}, client: client, player: vimeoPlayerRoot}
+	return &Vimeo{client: client, player: vimeoPlayerRoot}
 }
 
 func (v *Vimeo) Name() string { return "vimeo" }
+
+var (
+	// vimeoWatchShape is a video's own page in each of the places it is
+	// listed: /<id>, /<id>/<hash>, a channel's, a group's, an album's.
+	vimeoWatchShape = pathShape(
+		`^/[0-9]{3,}(?:/[0-9a-f]{6,})?/?$`,
+		`^/channels/[^/]+/[0-9]{3,}/?$`,
+		`^/groups/[^/]+/videos/[0-9]{3,}/?$`,
+		`^/album/[0-9]+/video/[0-9]{3,}/?$`,
+	)
+	// vimeoPlayerShape is the player page, /video/<id>.
+	vimeoPlayerShape = pathShape(`^/video/[0-9]{3,}/?$`)
+	// vimeoPlayerMeta is the player a watch page offers for embedding.
+	vimeoPlayerMeta = regexp.MustCompile(`^/video/[0-9]+`)
+)
+
+// Recognises is the inventory's description.
+func (v *Vimeo) Recognises() string {
+	return "player pages (`/video/<id>`) carrying `window.playerConfig`, and watch pages " +
+		"(`/<id>`, `/<id>/<hash>`, channel, group and album videos) of a site named Vimeo " +
+		"that offer that player for embedding"
+}
+
+// Shape reports a watch page or a player page.
+func (v *Vimeo) Shape(u *url.URL) bool { return vimeoWatchShape(u) || vimeoPlayerShape(u) }
+
+// Recognise takes the player page by the configuration this extractor
+// reads, and a watch page by the player it names in its meta tags — the
+// page this extractor goes on to read. A watch page answers anything but a
+// browser with a bot check, but that check still carries the meta tags.
+func (v *Vimeo) Recognise(_ context.Context, p *Page) bool {
+	if vimeoPlayerShape(p.Final) {
+		return p.Has(vimeoConfigMarker)
+	}
+	return vimeoWatchShape(p.Final) && p.playerMeta(vimeoPlayerMeta) && p.Named("Vimeo")
+}
 
 // Extract reads the player page into the one file it plays, read again
 // before each transfer for links freshly signed.
@@ -172,7 +208,12 @@ func (v *Vimeo) read(ctx context.Context, player, kind string) (*vimeoVideo, err
 
 // config fetches the player page and reads its configuration.
 func (v *Vimeo) config(ctx context.Context, player string) (*vimeoConfig, error) {
-	page, err := v.client.GetString(ctx, player, httpx.Referer("https://vimeo.com/"))
+	playerURL, err := url.Parse(player)
+	if err != nil {
+		return nil, fmt.Errorf("vimeo: %s: %w", player, err)
+	}
+	// The player page is often the page submitted, already probed.
+	page, _, err := fetchDocument(ctx, v.client, playerURL, httpx.Referer("https://vimeo.com/"))
 	if err != nil {
 		if httpx.HasStatus(err, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound) {
 			return nil, fmt.Errorf("vimeo: %w (%s)", errVimeoNotPublic, player)

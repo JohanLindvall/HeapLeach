@@ -40,13 +40,12 @@ import (
 // video together, so the segments join into something playable and the
 // external downloader is not needed.
 type Vidmoly struct {
-	hostSet
 	client *httpx.Client
 }
 
 const (
-	// vidmolyHost is the only domain that serves the embed page. The others
-	// are matched, so a pasted link of any shape works, but never fetched.
+	// vidmolyHost is the only domain that serves the embed page. A link on
+	// any of the others is recognised by its page, and its code read here.
 	vidmolyHost = "vidmoly.biz"
 	vidmolyRoot = "https://" + vidmolyHost
 
@@ -57,8 +56,13 @@ const (
 	vidmolyMinCodeLength = 5
 )
 
-// vidmolyHosts are the domains a link may arrive on.
-var vidmolyHosts = hostSet{"vidmoly.me", "vidmoly.to", "vidmoly.biz", "vidmoly.net"}
+var (
+	// vidmolyWatchShape is a watch page, /w/<code> or /v/<code>.
+	vidmolyWatchShape = pathShape(`^/[wv]/[A-Za-z0-9]{5,}/?$`)
+	// vidmolyEmbedShape is the player, /embed-<code>.html, doubled prefix
+	// included.
+	vidmolyEmbedShape = pathShape(`^/(?:embed-)+[A-Za-z0-9]{5,}\.html$`)
+)
 
 // vidmolyCodePattern is what a file code may consist of.
 var vidmolyCodePattern = regexp.MustCompile(`^[A-Za-z0-9]+$`)
@@ -80,10 +84,36 @@ var vidmolyFile = regexp.MustCompile(`["']?file["']?\s*:\s*["']([^"']+)["']`)
 
 // NewVidmoly builds the vidmoly extractor.
 func NewVidmoly(client *httpx.Client) *Vidmoly {
-	return &Vidmoly{hostSet: vidmolyHosts, client: client}
+	return &Vidmoly{client: client}
 }
 
 func (v *Vidmoly) Name() string { return "vidmoly" }
+
+// Recognises is the inventory's description.
+func (v *Vidmoly) Recognises() string {
+	return "watch pages (`/w/<code>`, `/v/<code>`) of the VidMoly app naming the file's player, and " +
+		"players (`/embed-<code>.html`) whose JWPlayer source list names VidMoly"
+}
+
+// Shape reports a watch page or a player.
+func (v *Vidmoly) Shape(u *url.URL) bool { return vidmolyWatchShape(u) || vidmolyEmbedShape(u) }
+
+// Recognise takes a watch page rendered by the site's app that links the
+// player for its own code, the page Extract reads; and a player by the
+// source list Extract reads, under the site's name.
+func (v *Vidmoly) Recognise(_ context.Context, p *Page) bool {
+	code := vidmolyCode(p.Final)
+	if code == "" {
+		return false
+	}
+	switch {
+	case vidmolyWatchShape(p.Final):
+		return p.Has("__NUXT", "embed-"+code)
+	case vidmolyEmbedShape(p.Final):
+		return vidmolySources.MatchString(p.Body) && p.HasAny("VidMoly", "Vidmoly")
+	}
+	return false
+}
 
 // Extract resolves any of the site's link shapes to one playable file.
 func (v *Vidmoly) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -95,7 +125,7 @@ func (v *Vidmoly) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	base := vidmolyEmbed(code)
 	page := base.String()
 
-	doc, err := v.client.GetString(ctx, page, httpx.Referer(vidmolyRoot+"/"))
+	doc, err := fetchPage(ctx, v.client, page, httpx.Referer(vidmolyRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("vidmoly: fetch %s: %w "+
 			"(the file may have been removed)", page, err)

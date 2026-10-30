@@ -33,16 +33,39 @@ import (
 // <title> is the site's name alone, so the title is og:title. A video that
 // is gone answers 404.
 type Sendvid struct {
-	hostSet
 	client *httpx.Client
 }
 
 // NewSendvid builds the sendvid extractor.
 func NewSendvid(client *httpx.Client) *Sendvid {
-	return &Sendvid{hostSet: hostSet{"sendvid.com"}, client: client}
+	return &Sendvid{client: client}
 }
 
 func (s *Sendvid) Name() string { return "sendvid" }
+
+var (
+	// sendvidShape is the player, /embed/<id>.
+	sendvidShape = pathShape(`^/embed/[A-Za-z0-9]{1,32}/?$`)
+	// sendvidPage is the player or the bare watch page, /<id>, too common a
+	// form for the link scanner.
+	sendvidPage = pathShape(`^/(?:embed/)?[A-Za-z0-9]{1,32}(?:\.mp4)?/?$`)
+)
+
+// Recognises is the inventory's description.
+func (s *Sendvid) Recognises() string {
+	return "videos (`/<id>`, `/embed/<id>`) whose page, named Sendvid, carries the player's " +
+		"`video_source`"
+}
+
+// Shape reports a player link.
+func (s *Sendvid) Shape(u *url.URL) bool { return sendvidShape(u) }
+
+// Recognise takes a page whose player carries the source Extract reads.
+func (s *Sendvid) Recognise(_ context.Context, p *Page) bool {
+	return sendvidPage(p.Final) && p.Named("Sendvid") && p.hasElement(func(n *html.Node) bool {
+		return isElem(n, atom.Source) && attr(n, "id") == "video_source"
+	})
+}
 
 // Extract resolves one video page.
 func (s *Sendvid) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -58,7 +81,7 @@ func (s *Sendvid) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 
 // media reads the page's title and its current signed link.
 func (s *Sendvid) media(ctx context.Context, page, id string) (title, link string, err error) {
-	doc, err := s.client.GetString(ctx, page, nil)
+	doc, err := fetchPage(ctx, s.client, page, nil)
 	if httpx.HasStatus(err, http.StatusNotFound) {
 		return "", "", fmt.Errorf("sendvid: video %s is not there — the site says it was not found or has been removed", id)
 	}

@@ -21,7 +21,6 @@ import (
 
 // PornHub reads the player configuration embedded in a video page.
 type PornHub struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -32,14 +31,37 @@ var pornhubFlashvars = regexp.MustCompile(`var\s+flashvars_\d+\s*=\s*\{`)
 
 // NewPornHub builds the pornhub extractor.
 func NewPornHub(client *httpx.Client) *PornHub {
-	return &PornHub{hostSet: hostSet{"pornhub.com"}, client: client}
+	return &PornHub{client: client}
 }
 
 func (p *PornHub) Name() string { return "pornhub" }
 
+// pornhubViewKey is what a viewkey looks like.
+var pornhubViewKey = regexp.MustCompile(`^[0-9a-z]{6,20}$`)
+
+// pornhubShape is a video page, /view_video.php?viewkey=<key>.
+func pornhubShape(u *url.URL) bool {
+	return u.EscapedPath() == "/view_video.php" && pornhubViewKey.MatchString(u.Query().Get("viewkey"))
+}
+
+// Recognises is the inventory's description.
+func (p *PornHub) Recognises() string {
+	return "video pages (`/view_video.php?viewkey=<key>`) named Pornhub whose player configuration " +
+		"(`flashvars_<n>` with its `mediaDefinitions`) is in the page"
+}
+
+// Shape reports a video page.
+func (p *PornHub) Shape(u *url.URL) bool { return pornhubShape(u) }
+
+// Recognise takes a video page by the player configuration Extract reads.
+func (pr *PornHub) Recognise(_ context.Context, p *Page) bool {
+	return pornhubShape(p.Final) && pornhubFlashvars.MatchString(p.Body) && p.Has("mediaDefinitions") &&
+		p.Named("Pornhub")
+}
+
 // Extract resolves a video page to its best rendition.
 func (p *PornHub) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	doc, err := p.client.GetString(ctx, u.String(), httpx.Referer(pornhubRoot+"/"))
+	doc, _, err := fetchDocument(ctx, p.client, u, httpx.Referer(pornhubRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("pornhub: fetch %s: %w", u.Redacted(), err)
 	}
@@ -115,18 +137,23 @@ func NewXHamster(client *httpx.Client) *XHamster { return &XHamster{client: clie
 
 func (x *XHamster) Name() string { return "xhamster" }
 
-// Match accepts any host with an "xhamster" label, the way bunkr covers its
-// domain rotation: xhamster.com, xhamster.desi, m.xhamster.com. A bare
-// substring test would also claim unrelated hosts that merely contain the
-// name ("notxhamster.example").
-func (x *XHamster) Match(u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
-	for label := range strings.SplitSeq(host, ".") {
-		if strings.HasPrefix(label, "xhamster") {
-			return true
-		}
-	}
-	return false
+// xhamsterShape is a video page, /videos/<slug>-<id>, or its embed.
+var xhamsterShape = pathShape(`^/videos/[^/]+-[0-9A-Za-z]+/?$`, `^/(?:xembed\.php|embed/[0-9A-Za-z]+/?)$`)
+
+// Recognises is the inventory's description.
+func (x *XHamster) Recognises() string {
+	return "video pages (`/videos/<slug>-<id>`) named xHamster that carry the site's page state " +
+		"(`window.initials`) and player settings"
+}
+
+// Shape reports a video page.
+func (x *XHamster) Shape(u *url.URL) bool { return xhamsterShape(u) }
+
+// Recognise takes a video page by the state and player settings the site
+// renders it from, which is where the media links Extract reads are. The
+// same pages are served on every one of the site's domains.
+func (x *XHamster) Recognise(_ context.Context, p *Page) bool {
+	return xhamsterShape(p.Final) && p.Has("window.initials", "xplayerSettings") && p.Named("xHamster")
 }
 
 // Extract picks the best rendition, re-reading the page at download time
@@ -140,7 +167,7 @@ func (x *XHamster) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 }
 
 func (x *XHamster) best(ctx context.Context, page string) (string, mediaCandidate, error) {
-	doc, err := x.client.GetString(ctx, page, httpx.Referer(xhamsterRoot+"/"))
+	doc, err := fetchPage(ctx, x.client, page, httpx.Referer(xhamsterRoot+"/"))
 	if err != nil {
 		return "", mediaCandidate{}, fmt.Errorf("xhamster: fetch %s: %w", page, err)
 	}
@@ -155,7 +182,6 @@ func (x *XHamster) best(ctx context.Context, page string) (string, mediaCandidat
 
 // TNAFlix lists its renditions as plain signed links in the page.
 type TNAFlix struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -163,10 +189,28 @@ const tnaflixRoot = "https://www.tnaflix.com"
 
 // NewTNAFlix builds the tnaflix extractor.
 func NewTNAFlix(client *httpx.Client) *TNAFlix {
-	return &TNAFlix{hostSet: hostSet{"tnaflix.com"}, client: client}
+	return &TNAFlix{client: client}
 }
 
 func (t *TNAFlix) Name() string { return "tnaflix" }
+
+// tnaflixShape is a video page, /<category>/<slug>/video<id>.
+var tnaflixShape = pathShape(`^/[^/]+/[^/]+/video[0-9]+/?$`)
+
+// Recognises is the inventory's description.
+func (t *TNAFlix) Recognises() string {
+	return "video pages (`/<category>/<slug>/video<id>`) named TNAFlix whose player lists its " +
+		"renditions as `<source>` elements"
+}
+
+// Shape reports a video page.
+func (t *TNAFlix) Shape(u *url.URL) bool { return tnaflixShape(u) }
+
+// Recognise takes a video page by the player's own source list, the
+// renditions Extract chooses among.
+func (t *TNAFlix) Recognise(_ context.Context, p *Page) bool {
+	return tnaflixShape(p.Final) && p.hasElement(videoSource) && p.namedPrefix("TNAFlix")
+}
 
 // Extract picks the best rendition, re-reading the page at download time
 // because the links carry an expiry.
@@ -179,7 +223,7 @@ func (t *TNAFlix) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 }
 
 func (t *TNAFlix) best(ctx context.Context, page string) (string, mediaCandidate, error) {
-	doc, err := t.client.GetString(ctx, page, httpx.Referer(tnaflixRoot+"/"))
+	doc, err := fetchPage(ctx, t.client, page, httpx.Referer(tnaflixRoot+"/"))
 	if err != nil {
 		return "", mediaCandidate{}, fmt.Errorf("tnaflix: fetch %s: %w", page, err)
 	}
@@ -195,7 +239,6 @@ func (t *TNAFlix) best(ctx context.Context, page string) (string, mediaCandidate
 // PornOne lists its renditions as <source> elements on the page, signed with
 // an expiry, so they are re-read when the item starts.
 type PornOne struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -207,10 +250,30 @@ var pornoneDimensions = regexp.MustCompile(`_(\d{2,5})x(\d{2,5})_`)
 
 // NewPornOne builds the pornone extractor.
 func NewPornOne(client *httpx.Client) *PornOne {
-	return &PornOne{hostSet: hostSet{"pornone.com"}, client: client}
+	return &PornOne{client: client}
 }
 
 func (p *PornOne) Name() string { return "pornone" }
+
+// pornoneShape is a video page, /<category>/<slug>/<id>/.
+var pornoneShape = pathShape(`^/[^/]+/[^/]+/[0-9]{5,}/?$`)
+
+// Recognises is the inventory's description.
+func (p *PornOne) Recognises() string {
+	return "video pages (`/<category>/<slug>/<id>/`) named PornOne whose player lists renditions " +
+		"as `<source>` elements named by their frame size"
+}
+
+// Shape reports a video page.
+func (p *PornOne) Shape(u *url.URL) bool { return pornoneShape(u) }
+
+// Recognise takes a video page by the renditions Extract reads: <source>
+// elements whose files are named with the size the encoder wrote.
+func (po *PornOne) Recognise(_ context.Context, p *Page) bool {
+	return pornoneShape(p.Final) && p.namedPrefix("PornOne") && p.hasElement(func(n *html.Node) bool {
+		return isElem(n, atom.Source) && pornoneDimensions.MatchString(attr(n, "src"))
+	})
+}
 
 // Extract picks the largest rendition, re-reading the page at download time
 // because the links carry an expiry.
@@ -223,7 +286,7 @@ func (p *PornOne) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 }
 
 func (p *PornOne) best(ctx context.Context, page string) (string, mediaCandidate, error) {
-	doc, err := p.client.GetString(ctx, page, httpx.Referer(pornoneRoot+"/"))
+	doc, err := fetchPage(ctx, p.client, page, httpx.Referer(pornoneRoot+"/"))
 	if err != nil {
 		return "", mediaCandidate{}, fmt.Errorf("pornone: fetch %s: %w", page, err)
 	}
@@ -273,6 +336,12 @@ func pornoneRenditions(root *html.Node) []mediaCandidate {
 }
 
 // ----------------------------------------------------------------- shared
+
+// videoSource is a <source> element naming a video file.
+func videoSource(n *html.Node) bool {
+	return isElem(n, atom.Source) && attr(n, "src") != "" &&
+		(strings.HasPrefix(attr(n, "type"), "video/") || strings.Contains(attr(n, "src"), ".mp4"))
+}
 
 // jsonObjectAfter extracts the brace-matched object that follows a marker.
 func jsonObjectAfter(doc string, marker *regexp.Regexp) (string, error) {

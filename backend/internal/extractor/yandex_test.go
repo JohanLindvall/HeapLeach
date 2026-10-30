@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -64,27 +63,6 @@ func TestYandexOffsite(t *testing.T) {
 	for link, want := range tests {
 		if got := yandexOffsite(link); got != want {
 			t.Errorf("yandexOffsite(%q) = %q, want %q", link, got, want)
-		}
-	}
-}
-
-// TestYandexMatch covers the country domains the same search runs on, and
-// keeps the extractor off the rest of the site.
-func TestYandexMatch(t *testing.T) {
-	y := NewYandex(nil)
-	for _, host := range []string{"yandex.kz", "yandex.ru", "yandex.com", "www.yandex.by"} {
-		u := &url.URL{Scheme: "https", Host: host, Path: "/video/preview/1"}
-		if !y.Match(u) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, u := range []*url.URL{
-		{Scheme: "https", Host: "yandex.ru", Path: "/search/"},
-		{Scheme: "https", Host: "yandex.ru", Path: "/"},
-		{Scheme: "https", Host: "notyandex.com", Path: "/video/preview/1"},
-	} {
-		if y.Match(u) {
-			t.Errorf("%s%s was matched", u.Host, u.Path)
 		}
 	}
 }

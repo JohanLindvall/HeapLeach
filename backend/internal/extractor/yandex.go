@@ -39,13 +39,26 @@ func NewYandex(client *httpx.Client) *Yandex { return &Yandex{client: client} }
 
 func (y *Yandex) Name() string { return "yandex" }
 
-// Match covers the many country domains the same search is served on.
-func (y *Yandex) Match(u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
-	if !strings.HasPrefix(host, "yandex.") && !strings.Contains(host, ".yandex.") {
-		return false
-	}
-	return strings.Contains(u.Path, "/video/")
+// yandexShape is a preview, /video/preview/<id>, the one page read here.
+var yandexShape = pathShape(`^/video/preview/[0-9]+/?$`)
+
+// yandexBundle is the path the search front end's scripts are served under.
+const yandexBundle = "/fiji-static/"
+
+// Recognises is the inventory's description.
+func (y *Yandex) Recognises() string {
+	return "video search previews (`/video/preview/<id>`) built by the Yandex search front end, " +
+		"naming the source video in its viewer"
+}
+
+// Shape reports a preview.
+func (y *Yandex) Shape(u *url.URL) bool { return yandexShape(u) }
+
+// Recognise takes a preview served by the search front end that carries the
+// viewer's source anchor this extractor reads — the same on every country
+// domain the search is served on.
+func (y *Yandex) Recognise(_ context.Context, p *Page) bool {
+	return yandexShape(p.Final) && p.Script(yandexBundle) && p.Has(yandexSourceClass)
 }
 
 // Extract finds the video's real home and hands it over.
@@ -56,7 +69,7 @@ func (y *Yandex) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 			"and yt-dlp is what fetches from those; %s (%s)", tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 
-	doc, err := y.client.GetString(ctx, u.String(), httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, y.client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("yandex: fetch %s: %w", u.Redacted(), err)
 	}

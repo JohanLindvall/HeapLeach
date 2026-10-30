@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"strconv"
 
 	"github.com/JohanLindvall/HeapLeach/internal/tools"
@@ -22,18 +23,62 @@ import (
 // on top of the signature and throttling parameters that already required
 // running its player JavaScript. yt-dlp exists to keep up with exactly that,
 // so this extractor only identifies the video and lets yt-dlp do the rest.
-type YouTube struct{ hostSet }
+type YouTube struct{}
 
 // ytdlpBinary is the tool this extractor depends on, spelled once in the
 // package that locates it.
 const ytdlpBinary = tools.YtDlp
 
 // NewYouTube builds the YouTube extractor.
-func NewYouTube() *YouTube {
-	return &YouTube{hostSet: hostSet{"youtube.com", "youtu.be", "youtube-nocookie.com"}}
-}
+func NewYouTube() *YouTube { return &YouTube{} }
 
 func (y *YouTube) Name() string { return "youtube" }
+
+// youtubeID is a video id: eleven characters of the URL-safe alphabet.
+var youtubeID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+
+// youtubePaths are the forms read by path: a video in each of its players,
+// and a channel's pages.
+var youtubePaths = pathShape(
+	`^/(?:shorts|embed|live|v)/[A-Za-z0-9_-]{11}/?$`,
+	`^/(?:@[^/]+|channel/UC[A-Za-z0-9_-]{22}|c/[^/]+|user/[^/]+)(?:/(?:videos|shorts|streams|playlists|featured))?/?$`,
+)
+
+// youtubeShape is a video, a playlist or a channel by its path and query.
+func youtubeShape(u *url.URL) bool {
+	switch u.EscapedPath() {
+	case "/watch":
+		return youtubeID.MatchString(u.Query().Get("v"))
+	case "/playlist":
+		return u.Query().Get("list") != ""
+	}
+	return youtubePaths(u)
+}
+
+// Recognises is the inventory's description.
+func (y *YouTube) Recognises() string {
+	return "videos (`/watch?v=<id>`, `/shorts/<id>`, `/embed/<id>`), playlists and channels whose page " +
+		"carries the YouTube web client's configuration (`ytcfg`) beside its player or page data, " +
+		"or the consent form that stands in for such a page"
+}
+
+// Shape reports a video, playlist or channel link.
+func (y *YouTube) Shape(u *url.URL) bool { return youtubeShape(u) }
+
+// Recognise takes a page of the web client: its configuration (ytcfg.set)
+// and the initial player response, page data or embedded player response
+// beside it, which is what yt-dlp reads in turn. A short link redirects to
+// the watch page, so it is judged there. A visitor from some regions is
+// first redirected to a consent page instead; that page is recognised by
+// its own consent form, and judged by the page it says it will continue to.
+func (y *YouTube) Recognise(_ context.Context, p *Page) bool {
+	if p.Has(`name="set_ytc"`) {
+		next, err := url.Parse(p.Final.Query().Get("continue"))
+		return err == nil && youtubeShape(next)
+	}
+	return youtubeShape(p.Final) && p.Has("ytcfg.set") &&
+		p.HasAny("ytInitialPlayerResponse", "ytInitialData", "embedded_player_response")
+}
 
 // Extract names the video, or every video of a playlist, leaving the actual
 // download to the helper script.

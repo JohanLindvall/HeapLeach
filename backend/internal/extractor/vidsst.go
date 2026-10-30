@@ -28,16 +28,35 @@ import (
 // does; httpx completes it the same way (aia.go), and nothing here has to
 // know.
 type VidsSt struct {
-	hostSet
 	client *httpx.Client
 }
 
 // NewVidsSt builds the vids.st extractor.
 func NewVidsSt(client *httpx.Client) *VidsSt {
-	return &VidsSt{hostSet: hostSet{"vids.st"}, client: client}
+	return &VidsSt{client: client}
 }
 
 func (v *VidsSt) Name() string { return "vids.st" }
+
+var (
+	// vidsShape is a watch page or a player by the numeric id the site
+	// issues, /v/<id> or /e/<id>; vidsPage takes any id of that form.
+	vidsShape = pathShape(`^/[ve]/[0-9]+/?$`)
+	vidsPage  = pathShape(`^/[ve]/[A-Za-z0-9]+/?$`)
+)
+
+// Recognises is the inventory's description.
+func (v *VidsSt) Recognises() string {
+	return "videos (`/v/<id>`, `/e/<id>`) whose page carries the player's `playerConfig` with its `videoUrl`"
+}
+
+// Shape reports a watch page or a player.
+func (v *VidsSt) Shape(u *url.URL) bool { return vidsShape(u) }
+
+// Recognise takes a page carrying the player configuration Extract reads.
+func (v *VidsSt) Recognise(_ context.Context, p *Page) bool {
+	return vidsPage(p.Final) && p.Has(vidsConfigMarker, `"videoUrl"`)
+}
 
 // vidsConfigMarker opens the page's player configuration.
 const vidsConfigMarker = "playerConfig = "
@@ -57,7 +76,7 @@ func (v *VidsSt) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 	page := util.Origin(u) + "/v/" + id
 	headers := httpx.Referer(page)
 
-	doc, err := v.client.GetString(ctx, page, headers)
+	doc, err := fetchPage(ctx, v.client, page, headers)
 	if httpx.HasStatus(err, http.StatusNotFound) {
 		return nil, fmt.Errorf("vids.st: video %s is not there — the site says it was not found or has been removed", id)
 	}

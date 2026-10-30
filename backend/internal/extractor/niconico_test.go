@@ -16,28 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
-
-// The site's links reach this extractor through the registry, the ones it
-// hands to yt-dlp included, and no longer the handoff table itself.
-func TestNiconicoIsWhereTheSitesLinksGo(t *testing.T) {
-	cfg := &config.Config{UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage}
-	registry := NewRegistry(cfg, httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, time.Second))
-	for _, raw := range []string{
-		"https://www.nicovideo.jp/watch/sm0000000", "https://nico.ms/sm0000000",
-		"https://www.nicovideo.jp/tag/an-invented-tag",
-	} {
-		u, _ := url.Parse(raw)
-		if got := registry.Find(u).Name(); got != "niconico" {
-			t.Errorf("%s went to %q", raw, got)
-		}
-		if _, native := registry.Find(u).(*Niconico); !native {
-			t.Errorf("%s did not reach the native extractor", raw)
-		}
-	}
-}
 
 func TestNiconicoLink(t *testing.T) {
 	for raw, want := range map[string]struct {

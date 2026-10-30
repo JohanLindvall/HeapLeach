@@ -28,16 +28,45 @@ import (
 // it: a queue longer than the signature would otherwise start failing partway
 // down, and a key fetched at extraction time could be stale by then too.
 type LuluStream struct {
-	hostSet
 	client *httpx.Client
 }
 
 // NewLuluStream builds the lulustream extractor.
 func NewLuluStream(client *httpx.Client) *LuluStream {
-	return &LuluStream{hostSet: hostSet{"lulustream.com", "luluvdo.com", "luluvido.com"}, client: client}
+	return &LuluStream{client: client}
 }
 
 func (l *LuluStream) Name() string { return "lulustream" }
+
+var (
+	// luluShape is a player or a download page.
+	luluShape = pathShape(`^/[ed]/[0-9a-z]{12}/?$`)
+	// luluPage is either, or the bare watch page, /<id>, too common a form
+	// for the link scanner.
+	luluPage = pathShape(`^/(?:[ed]/)?[0-9a-z]{12}/?$`)
+)
+
+// Recognises is the inventory's description.
+func (l *LuluStream) Recognises() string {
+	return "videos (`/<id>`, `/e/<id>`, `/d/<id>`) whose page names LuluStream and carries its " +
+		"player's HLS source"
+}
+
+// Shape reports a player or a download page.
+func (l *LuluStream) Shape(u *url.URL) bool { return luluShape(u) }
+
+// Recognise takes a page carrying the player source Extract reads, packed
+// or not, under the site's name.
+func (l *LuluStream) Recognise(_ context.Context, p *Page) bool {
+	if !luluPage(p.Final) || !p.HasAny("LuluStream", "LuluVdo", "Luluvdo") {
+		return false
+	}
+	if luluSource.MatchString(p.Body) {
+		return true
+	}
+	setup, ok := unpackJS(p.Body)
+	return ok && luluSource.MatchString(setup)
+}
 
 // luluSource finds the playlist the player is given in its unpacked setup.
 var luluSource = regexp.MustCompile(`file\s*:\s*"(https?://[^"]+\.m3u8[^"]*)"`)
@@ -100,7 +129,7 @@ func (v *luluVideo) name() string {
 // read fetches the page, unpacks the player's setup and follows its
 // playlist down to the segments.
 func (l *LuluStream) read(ctx context.Context, page string, headers httpx.Header) (*luluVideo, error) {
-	doc, err := l.client.GetString(ctx, page, headers)
+	doc, err := fetchPage(ctx, l.client, page, headers)
 	if err != nil {
 		return nil, fmt.Errorf("lulustream: fetch %s: %w", page, err)
 	}
