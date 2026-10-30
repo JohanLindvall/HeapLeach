@@ -129,7 +129,7 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget, opts O
 	// is counted in files (weigh).
 	views, note, err := walkPages(ctx, pageWalk[lemmyPostView]{
 		key:   func(view lemmyPostView) string { return strconv.FormatInt(view.Post.ID, 10) },
-		limit: opts.maxFiles(), limitNote: "partial — file limit", pages: config.MaxTimelinePages,
+		limit: opts.maxFiles(), limitNote: fileLimitNote, pages: config.MaxTimelinePages,
 		weigh: func(views []lemmyPostView) int { return len(lemmyFiles(views)) },
 		fetch: func(ctx context.Context, n int) (pageOf[lemmyPostView], error) {
 			query := url.Values{}

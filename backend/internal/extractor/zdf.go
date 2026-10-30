@@ -347,18 +347,6 @@ func zdfVideoLinks(page, pageID string) []string {
 	return matchedIDs(page, regexp.MustCompile(`/video/[A-Za-z0-9_-]+/`+regexp.QuoteMeta(pageID)+`/([A-Za-z0-9_-]+)`))
 }
 
-// matchedIDs is the first group of every match of each pattern in text, in
-// turn, each id kept once where it first appears and empty ones dropped.
-func matchedIDs(text string, res ...*regexp.Regexp) []string {
-	var ids []string
-	for _, re := range res {
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			ids = append(ids, m[1])
-		}
-	}
-	return util.Dedupe(ids)
-}
-
 // zdfSeasonFolder names the folder a season's videos go in.
 //
 // ZDF numbers a drama's seasons 1, 2, 3 and a magazine's by the calendar

@@ -243,7 +243,7 @@ func civitaiQuery(endpoint string, target *civitaiTarget) string {
 func (c *Civitai) walk(ctx context.Context, next string, opts Options) ([]civitaiImage, string, error) {
 	return walkPages(ctx, pageWalk[civitaiImage]{
 		key:   func(item civitaiImage) string { return strconv.FormatInt(item.ID, 10) },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		failed: func(err error) string {
 			if httpx.HasStatus(err, http.StatusServiceUnavailable) {
 				return "partial — the image search stayed overloaded"

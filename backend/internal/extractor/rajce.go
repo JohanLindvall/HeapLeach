@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -158,7 +157,7 @@ func (m rajceMedium) file(page *url.URL) (File, bool) {
 	if video {
 		// filename can be a JPEG poster or an extensionless media id. The
 		// separate video_url serves MP4 bytes in both cases.
-		name = strings.TrimSuffix(name, path.Ext(name)) + ".mp4"
+		name = util.WithExt(name, ".mp4")
 	} else if m.Version > 0 {
 		query := u.Query()
 		query.Set("ver", strconv.Itoa(m.Version))

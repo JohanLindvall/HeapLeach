@@ -109,7 +109,7 @@ func (b *Bunkr) album(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	title, last := "", 1
 	entries, note, err := walkPages(ctx, pageWalk[bunkrEntry]{
 		key:   func(e bunkrEntry) string { return e.href },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[bunkrEntry], error) {
 			root, err := b.albumPage(ctx, u, n+1)
 			if err != nil {

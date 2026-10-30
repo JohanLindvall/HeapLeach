@@ -11,7 +11,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -577,6 +576,6 @@ func handoffName(u *url.URL) string {
 		return strings.ToLower(u.Hostname())
 	}
 	last := segs[len(segs)-1]
-	return cmp.Or(strings.TrimSuffix(last, path.Ext(last)), last,
+	return cmp.Or(util.Stem(last), last,
 		strings.ToLower(u.Hostname()))
 }

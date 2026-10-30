@@ -229,7 +229,7 @@ tiles, so anything choosing a container by what precedes a tile rather than
 what contains it finds nothing. And a profile also shows a sidebar of the same
 tiles plus unrelated ones, so scraping every `/video-` link on the page
 collects entries the tab does not own. The tab states its own total, which is
-what `epornerProfileNote` compares against, so a short walk says so instead
+what the profile's `cappedNote` (in `epornerProfile`) compares against, so a short walk says so instead
 of passing for a whole one; a walk the cap cut short carries the cap's note
 in its place. The pages are numbered, and asking past the last
 answers 404, so the profile is a quiet `walkListing` that names each next

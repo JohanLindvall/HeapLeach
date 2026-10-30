@@ -207,7 +207,7 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 	// whatever it said, and the walk is a quiet one.
 	links, note, _ := walkPages(ctx, pageWalk[string]{
 		key:   func(link string) string { return link },
-		limit: opts.maxSources(), limitNote: "partial — source limit", quiet: true,
+		limit: opts.maxSources(), limitNote: sourceLimitNote, quiet: true,
 		fetch: func(ctx context.Context, n int) (pageOf[string], error) {
 			if n == 0 {
 				return pageOf[string]{items: first, next: true}, nil
@@ -238,7 +238,7 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 		return nil, noneRead("pornpics", len(links), "galleries", u.Redacted(), e.refusals, e.failed)
 	}
 	if e.full {
-		note = joinNotes(note, "partial — file limit")
+		note = joinNotes(note, fileLimitNote)
 	}
 	return &Result{Title: pornpicsTitle(root, u), Files: e.files, Note: note}, nil
 }

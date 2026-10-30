@@ -219,3 +219,15 @@ func firstTitleOf(doc string) string {
 	}
 	return firstText(root, atomTitle)
 }
+
+// matchedIDs is the first group of every match of each pattern in text, in
+// turn, each id kept once where it first appears and empty ones dropped.
+func matchedIDs(text string, res ...*regexp.Regexp) []string {
+	var ids []string
+	for _, re := range res {
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			ids = append(ids, m[1])
+		}
+	}
+	return util.Dedupe(ids)
+}

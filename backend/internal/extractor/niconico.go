@@ -471,14 +471,12 @@ func (n *Niconico) list(ctx context.Context, opts Options, label string,
 	}
 	// The total counts what was left out too, so only what is left over
 	// after those is what the cap cut.
-	capped, goneNote := "", ""
+	capped := ""
 	if total > len(files)+skipped+gone {
 		capped = cappedNote(len(files), total, "videos")
 	}
-	if gone > 0 {
-		goneNote = fmt.Sprintf("%d no longer on the site", gone)
-	}
-	note := joinNotes(capped, leftOutNote(skipped, " that need an account or a payment"), goneNote, walkNote)
+	note := joinNotes(capped, leftOutNote(skipped, " that need an account or a payment"),
+		countNote(gone, "no longer on the site"), walkNote)
 	return &Result{Title: cmp.Or(title, label), Files: files, Note: note}, nil
 }
 

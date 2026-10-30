@@ -374,11 +374,11 @@ func (a cumAttachment) name(ext string) string {
 		ext = path.Ext(a.OriginalFilename)
 	}
 	name := strings.TrimSpace(a.OriginalFilename)
-	if name == "" || strings.EqualFold(strings.TrimSuffix(name, path.Ext(name)), "original") {
+	if name == "" || strings.EqualFold(util.Stem(name), "original") {
 		return a.SHA256 + ext
 	}
 	if ext != "" && !strings.EqualFold(path.Ext(name), ext) {
-		name = strings.TrimSuffix(name, path.Ext(name)) + ext
+		name = util.WithExt(name, ext)
 	}
 	return name
 }

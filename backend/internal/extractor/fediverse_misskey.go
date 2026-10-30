@@ -130,7 +130,7 @@ func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string, op
 	until := ""
 	return walkPages(ctx, pageWalk[misskeyNote]{
 		key:   func(note misskeyNote) string { return note.ID },
-		limit: opts.maxFiles(), limitNote: "partial — file limit", pages: config.MaxTimelinePages,
+		limit: opts.maxFiles(), limitNote: fileLimitNote, pages: config.MaxTimelinePages,
 		weigh: func(notes []misskeyNote) int { return len(misskeyFiles(notes)) },
 		fetch: func(ctx context.Context, _ int) (pageOf[misskeyNote], error) {
 			body := struct {

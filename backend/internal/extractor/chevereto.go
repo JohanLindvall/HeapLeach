@@ -157,7 +157,7 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 			return nil, noneRead(cheveretoLabel, len(albums), "albums", u.Redacted(), e.refusals, e.failed)
 		}
 		if e.full {
-			note = joinNotes(note, "partial — file limit")
+			note = joinNotes(note, fileLimitNote)
 		}
 		return &Result{Title: listing.title, Files: e.files, Note: joinNotes(note, refusedNote(e.refusals))}, nil
 	}
@@ -206,7 +206,7 @@ func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *
 	guessed := false
 	entries, note, _ := walkPages(ctx, pageWalk[cheveretoEntry]{
 		key:   func(e cheveretoEntry) string { return cmp.Or(e.file.URL, e.album.URL) },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[cheveretoEntry], error) {
 			if n > 0 {
 				var err error

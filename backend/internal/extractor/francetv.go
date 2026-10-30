@@ -413,7 +413,7 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 			// A page past the end lists nothing new, which ends the walk
 			// quietly; a page that fails is a cut, and noted.
 			quiet:  true,
-			failed: func(error) string { return "partial — could not fetch next page" },
+			failed: func(error) string { return couldNotFetchNote },
 		})
 		if err != nil {
 			return nil, err
@@ -440,12 +440,9 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 	if len(files) == 0 {
 		return nil, fmt.Errorf("francetv: %s lists no videos", title)
 	}
-	clipNote := ""
-	switch {
-	case clips == 1:
+	clipNote := countNote(clips, "clips left out")
+	if clips == 1 {
 		clipNote = "1 clip left out"
-	case clips > 1:
-		clipNote = fmt.Sprintf("%d clips left out", clips)
 	}
 	return &Result{Title: title, Files: files, Note: joinNotes(cappedNote(len(files), len(cards)-clips, "videos"), clipNote, walkNote)}, nil
 }
