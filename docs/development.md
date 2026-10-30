@@ -30,8 +30,9 @@ toolchain pinned in `backend/go.mod` automatically. `make dev` needs both
 Go and Node locally.
 
 The checked-in tests use synthetic fixtures and local HTTP servers.
-Live extractor tests belong in gitignored `*live_test.go` files behind the
-`live` build tag and take their source URLs and passwords from environment
+Live extractor tests are `*live_test.go` files behind the `live` build tag.
+They are kept in a separate private repository and symlinked into the
+checkout, where they are gitignored; they take passwords from environment
 variables. A fresh clone has no live-site fixtures.
 
 ## Layout

@@ -7,9 +7,9 @@ node_modules/
 backend/internal/webui/dist/*
 !backend/internal/webui/dist/index.html
 
-# Live tests hit the real sites. They are kept out of the repository because
-# they name specific pages that go stale, and they are only useful with a
-# working network. `make test-live` runs whatever is present locally.
+# Live tests hit the real sites and name specific pages, so they live in the
+# private hl-priv repository and are symlinked in by its link.sh (see
+# AGENTS.md). `make test-live` runs whatever is linked locally.
 *live_test.go
 
 # Personal working notes, not part of the project.

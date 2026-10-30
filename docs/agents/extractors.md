@@ -291,12 +291,16 @@ line in the saved queue.
 ## Live tests
 
 Extractor tests that hit the real sites sit behind a build tag, because these
-hosts change their plumbing without warning. They live in untracked files
-(`*live_test.go` is gitignored, and `internal/extractor/live_test.go` holds
-the general one), so a fresh clone will not have them: write what you need and
-leave it untracked.
+hosts change their plumbing without warning. They live in the private
+[`hl-priv`](https://github.com/JohanLindvall/hl-priv) repository, at the paths
+they run from, together with the URL corpora used to check routing and
+extraction against the real sites; `internal/extractor/live_test.go` holds the
+general one. Its `link.sh` symlinks them into this checkout, where
+`*live_test.go` is gitignored. A new live test is written in `hl-priv` and
+linked, never left as a loose untracked file here.
 
 ```bash
+git clone git@github.com:JohanLindvall/hl-priv.git ../hl-priv && ../hl-priv/link.sh .
 make test-live                                              # all hosts
 cd backend && go test -tags live ./internal/extractor/ -run 'TestLiveExtract/gofile' -v
 ```

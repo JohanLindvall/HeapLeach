@@ -126,9 +126,15 @@ not care whose host a path belongs to; real-world correctness belongs in the
 live tests. Generate the expected value with the implementation once, then pin
 it.
 
-`.gitignore` carries `*live_test.go` to keep the live tests out, which makes
-them the place for a URL or filename taken from a real page. Before
-committing, check that nothing new slipped in:
+**Standing rule: live tests and real URLs live in the private
+[`hl-priv`](https://github.com/JohanLindvall/hl-priv) repository, and only
+there.** That covers every `*live_test.go`, and every list or note of URLs or
+filenames taken from real pages (verification corpora included). Clone it
+beside this checkout and run its `link.sh`, which symlinks the live tests into
+place; `.gitignore` carries `*live_test.go`, so the links are never committed
+here. Create a new live test in `hl-priv` and link it, rather than writing it
+into this checkout, and commit it there. Before committing here, check that
+nothing slipped in:
 
 ```bash
 git ls-files -z | xargs -0 grep -nE 'gofile\.io/d/[A-Za-z0-9]|thisvid\.com/videos/|youtube\.com/watch\?v=|mega\.nz/(file|folder)/[A-Za-z0-9_-]{4}'
