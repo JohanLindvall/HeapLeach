@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -282,5 +283,40 @@ func TestKnownAndParsedSizes(t *testing.T) {
 		if got := parsedSize(text); got != want {
 			t.Errorf("parsedSize(%q) = %d, want %d", text, got, want)
 		}
+	}
+}
+
+// TestRegistryHoldsTheFileCap cuts an extractor that listed past the cap,
+// and says so in the job's note.
+func TestRegistryHoldsTheFileCap(t *testing.T) {
+	reg := &Registry{fallback: NewDirect(nil), limits: Limits{Files: 2}}
+	reg.extractors = []Extractor{stubExtractor{hostClaim: "tube.example.test", title: "Clip"}}
+	many := &manyFiles{stubExtractor: stubExtractor{hostClaim: "many.example.test"}, n: 5}
+	reg.extractors = append(reg.extractors, many)
+	res, _, err := reg.Extract(context.Background(), "https://many.example.test/a", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 2 || res.Note != "already partial, partial — file limit" {
+		t.Fatalf("files=%d note=%q", len(res.Files), res.Note)
+	}
+}
+
+type manyFiles struct {
+	stubExtractor
+	n int
+}
+
+func (m *manyFiles) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
+	res := &Result{Title: "Many", Note: "already partial"}
+	for i := range m.n {
+		res.Files = append(res.Files, File{Name: fmt.Sprintf("f%d", i), URL: u.String(), Size: -1})
+	}
+	return res, nil
+}
+
+func TestFolderNameKeepsOneFolder(t *testing.T) {
+	if got := folderName(" A/B\\C "); got != "A_B_C" {
+		t.Errorf("folderName = %q", got)
 	}
 }

@@ -701,6 +701,17 @@ func probeWorthy(u *url.URL) bool {
 // fileExtension is an extension that names a file type.
 var fileExtension = regexp.MustCompile(`^\.[a-z][a-z0-9]{0,4}$`)
 
+// joinNotes adds a note to a job's note, unless it already says so.
+func joinNotes(note, add string) string {
+	switch {
+	case note == "":
+		return add
+	case strings.Contains(note, add):
+		return note
+	}
+	return note + ", " + add
+}
+
 // follow extracts a link chosen for the form of its link — a source on a
 // page, a frame, a file a listing names — strictly: a page that turns out to
 // be no extractor's is errUnrecognised, never handed to the fallback to be
@@ -730,6 +741,9 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	if len(opts.ancestors) >= config.MaxExtractionDepth {
 		return nil, nil, fmt.Errorf("%s: source nesting exceeds %d levels", label, config.MaxExtractionDepth)
 	}
+	// A source followed from another page is never the submitted URL, even
+	// when the page it was found on was read without the registry.
+	submitted := len(opts.ancestors) == 0 && !opts.strict
 	opts.ancestors = append(slices.Clone(opts.ancestors), u.String())
 	if opts.limits == (Limits{}) {
 		opts.limits = r.limits
@@ -786,6 +800,14 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	}
 	if res == nil || len(res.Files) == 0 {
 		return nil, ex, fmt.Errorf("%s: no downloadable files found at %s", ex.Name(), u.Redacted())
+	}
+	// The file cap holds whatever an extractor did about it: a submitted
+	// URL that listed more than the setting allows is cut here, and says
+	// so. A nested source is left whole for the expansion holding it, which
+	// applies the cap a source at a time and counts what it cut.
+	if limit := opts.maxFiles(); submitted && len(res.Files) > limit {
+		res.Files = res.Files[:limit]
+		res.Note = joinNotes(res.Note, "partial — file limit")
 	}
 	// The title names the job and, for a source expanded into folders, the
 	// folder too; see util.Unescape for why it may still carry entities.

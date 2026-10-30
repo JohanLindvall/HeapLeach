@@ -155,14 +155,19 @@ func trimSiteSuffix(title string) string {
 	return util.TrimTitleSuffix(title, " | ", " - ")
 }
 
-// folderName trims a title down to a readable directory name. The
-// downloader sanitises every path component anyway; this only keeps a
-// rambling title from becoming a rambling folder.
+// folderName trims a title down to a readable directory name, as one
+// folder: its separators turned as sourceFolder turns them, since a slash
+// in a post's title would otherwise nest it. The downloader sanitises every
+// path component anyway; this keeps a rambling title from becoming a
+// rambling folder. A label that names a folder untruncated — a season, a
+// programme — goes through sourceFolder alone, which keeps the names
+// existing downloads are filed under.
 func folderName(title string) string {
-	if runes := []rune(strings.TrimSpace(title)); len(runes) > 80 {
+	title = sourceFolder(title)
+	if runes := []rune(title); len(runes) > 80 {
 		return strings.TrimSpace(string(runes[:80]))
 	}
-	return strings.TrimSpace(title)
+	return title
 }
 
 // humanSize matches the "57.80 MB" shape listings print next to a file.
