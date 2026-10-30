@@ -112,7 +112,7 @@ func run() error {
 	// told to resume says it for itself. After Start, so there are workers
 	// to take what the jobs resolve to.
 	if cfg.ResumeRestored {
-		manager.SetPaused(false)
+		_ = manager.ApplySettings(download.Settings{Paused: new(false)})
 	}
 
 	// URLs on the command line mean "download these and quit" — no server,

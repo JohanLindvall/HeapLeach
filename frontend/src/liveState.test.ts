@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchState } from './api';
+import { deferred } from './testkit';
 import { subscribeLiveState } from './liveState';
 import type { Snapshot } from './types';
 
@@ -13,12 +14,6 @@ class Stream {
   onmessage: ((event: { data: string }) => void) | null = null;
   close = vi.fn();
   constructor() { Stream.instances.push(this); }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => { resolve = yes; });
-  return { promise, resolve };
 }
 
 const snapshot = { jobs: [], speed: 1 } as unknown as Snapshot;

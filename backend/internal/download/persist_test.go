@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,12 +17,6 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
-
-// A logger that goes nowhere: these tests are about the file, and a warning
-// about an unusable one is expected output rather than a failure.
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
 
 func newSavedManager(t *testing.T) (*Manager, string) {
 	t.Helper()
@@ -273,7 +265,8 @@ func retryRestoredItem(t *testing.T, status Status) {
 	}))
 	defer server.Close()
 
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 
 	// A job as Restore leaves one whose items all reached a terminal state:
 	// the placeholder records what last run knew, and carries no URL.
@@ -294,13 +287,13 @@ func retryRestoredItem(t *testing.T, status Status) {
 	}
 
 	if !waitForCond(20*time.Second, func() bool {
-		return itemStatusesOf(m, "restored", StatusDone) == 1
+		return countStatus(m, "restored", StatusDone) == 1
 	}) {
-		t.Fatalf("the item never downloaded; items now: %d", itemCountOf(m, "restored"))
+		t.Fatalf("the item never downloaded; items now: %d", len(jobView(m, "restored").Items))
 	}
 	// Re-read, not re-queued: the placeholder is gone and what finished is
 	// the item the extractor produced.
-	if n := itemCountOf(m, "restored"); n != 1 {
+	if n := len(jobView(m, "restored").Items); n != 1 {
 		t.Errorf("job holds %d items, want 1 — the placeholder was not dropped", n)
 	}
 	m.mu.Lock()
@@ -323,8 +316,9 @@ func TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem(t *testing.T
 	}))
 	defer server.Close()
 
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 
 	// A job as Restore would leave it: one placeholder item recording what
 	// the last run knew, and a note that the source must be read afresh.
@@ -351,14 +345,14 @@ func TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem(t *testing.T
 		t.Fatal("a restored job started before it was resumed")
 	}
 
-	m.SetPaused(false)
+	_ = m.ApplySettings(Settings{Paused: new(false)})
 
 	if !waitForCond(20*time.Second, func() bool {
-		return itemStatusesOf(m, "restored", StatusDone) == 1
+		return countStatus(m, "restored", StatusDone) == 1
 	}) {
-		t.Fatalf("the resumed job did not finish; items now: %d", itemCountOf(m, "restored"))
+		t.Fatalf("the resumed job did not finish; items now: %d", len(jobView(m, "restored").Items))
 	}
-	if n := itemCountOf(m, "restored"); n != 1 {
+	if n := len(jobView(m, "restored").Items); n != 1 {
 		t.Errorf("job holds %d items after re-resolution, want 1 — the placeholder was not dropped", n)
 	}
 	m.mu.Lock()
@@ -367,30 +361,6 @@ func TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem(t *testing.T
 	if restored {
 		t.Error("the job is still marked for re-resolution after being resumed")
 	}
-}
-
-func itemCountOf(m *Manager, jobID string) int {
-	for _, job := range m.Snapshot().Jobs {
-		if job.ID == jobID {
-			return len(job.Items)
-		}
-	}
-	return -1
-}
-
-func itemStatusesOf(m *Manager, jobID string, want Status) int {
-	n := 0
-	for _, job := range m.Snapshot().Jobs {
-		if job.ID != jobID {
-			continue
-		}
-		for _, it := range job.Items {
-			if it.Status == want {
-				n++
-			}
-		}
-	}
-	return n
 }
 
 // Shutting down must not record an interrupted transfer as cancelled.
@@ -426,7 +396,8 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 	defer close(release)
 
 	file := filepath.Join(t.TempDir(), "queue.json")
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	m.stateFile = file
 
 	jobID, err := m.Add(server.URL+"/endless.bin", "")
@@ -435,9 +406,9 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 	}
 	itemID := waitForItem(t, m, jobID)
 	if !waitForCond(10*time.Second, func() bool {
-		return itemStatus(m, jobID, itemID) == StatusRunning
+		return findItem(m, jobID, itemID).Status == StatusRunning
 	}) {
-		t.Fatalf("the transfer never started (status %q)", itemStatus(m, jobID, itemID))
+		t.Fatalf("the transfer never started (status %q)", findItem(m, jobID, itemID).Status)
 	}
 
 	m.Close() // idempotent; the harness closes it again on cleanup
@@ -490,7 +461,8 @@ func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
 	seed.order = []string{"old"}
 	seed.persist()
 
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	m.stateFile = file
 	unfinished, err := m.Restore()
 	if err != nil {
@@ -499,7 +471,7 @@ func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
 	if unfinished != 1 {
 		t.Fatalf("unfinished = %d, want 1", unfinished)
 	}
-	if m.Paused() {
+	if m.Snapshot().Paused {
 		t.Error("restoring paused the queue, which stops work the user adds next")
 	}
 
@@ -519,10 +491,10 @@ func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
 	}
 	itemID := waitForItem(t, m, jobID)
 	if !waitForCond(20*time.Second, func() bool {
-		return itemStatus(m, jobID, itemID) == StatusDone
+		return findItem(m, jobID, itemID).Status == StatusDone
 	}) {
 		t.Fatalf("a freshly added download never ran (status %q) — the restore is holding it",
-			itemStatus(m, jobID, itemID))
+			findItem(m, jobID, itemID).Status)
 	}
 
 	// And the restored one is still held, not quietly started.
@@ -555,7 +527,8 @@ func TestRetryingACancelledItemOfAnUnheldRestoredJobReReadsTheSource(t *testing.
 	seed.order = []string{"old"}
 	seed.persist()
 
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	m.stateFile = file
 	if unfinished, err := m.Restore(); err != nil || unfinished != 0 {
 		t.Fatalf("Restore = %d, %v; want a job with nothing held", unfinished, err)
@@ -565,7 +538,7 @@ func TestRetryingACancelledItemOfAnUnheldRestoredJobReReadsTheSource(t *testing.
 		t.Fatalf("RetryItem: %v", err)
 	}
 	if !waitForCond(20*time.Second, func() bool {
-		return itemStatusesOf(m, "old", StatusDone) == 1
+		return countStatus(m, "old", StatusDone) == 1
 	}) {
 		m.mu.Lock()
 		defer m.mu.Unlock()

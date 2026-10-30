@@ -85,7 +85,7 @@ const (
 // megaPace starts a file on the normal connection and moves it onto mega's
 // proxy routes, one file to an address, once that connection's quota is used
 // up.
-var megaPace = Pace{Group: "mega", Files: 1, PerRoute: true, DirectFirst: true}
+var megaPace = Pace{Group: config.GroupMega, Files: 1, PerRoute: true, DirectFirst: true}
 
 // NewMega builds the mega extractor.
 func NewMega(client *httpx.Client) *Mega {

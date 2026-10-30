@@ -125,7 +125,7 @@ func TestAStartedFileTakesTheNextRouteAfterOneFailsIt(t *testing.T) {
 	}
 
 	m.Start()
-	if !waitForCond(20*time.Second, func() bool { return itemStatusesOf(m, job.ID, StatusDone) == 3 }) {
+	if !waitForCond(20*time.Second, func() bool { return countStatus(m, job.ID, StatusDone) == 3 }) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		t.Fatalf("not all done: %s %s %s (%s)", job.Items[0].Status, job.Items[1].Status, job.Items[2].Status, job.Items[0].Err)

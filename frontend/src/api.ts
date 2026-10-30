@@ -12,6 +12,11 @@ export class ApiError extends Error {
   }
 }
 
+/** The server's message for a failed call, or fallback for one that never got an answer from it. */
+export function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,

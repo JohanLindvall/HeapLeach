@@ -91,7 +91,8 @@ func TestAWaitingItemGivesItsWorkerToTheRestOfTheQueue(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	var resolves atomic.Int32
 	until := time.Now().Add(2 * time.Second)
 	waits := extractor.File{Name: "waits.bin", Size: -1, Resolve: func(context.Context) (*extractor.Target, error) {
@@ -113,16 +114,7 @@ func TestAWaitingItemGivesItsWorkerToTheRestOfTheQueue(t *testing.T) {
 	m.mu.Unlock()
 	m.signal()
 
-	view := func(id string) ItemView {
-		for _, job := range m.Snapshot().Jobs {
-			for _, it := range job.Items {
-				if it.ID == id {
-					return it
-				}
-			}
-		}
-		return ItemView{}
-	}
+	view := func(id string) ItemView { return findItem(m, "", id) }
 
 	waitFor(t, 10*time.Second, func() bool { return view(second.ID).Status == StatusDone })
 	if v := view(first.ID); time.Now().Before(until) &&

@@ -299,7 +299,6 @@ type JobView struct {
 	Status     Status     `json:"status"`
 	Error      string     `json:"error,omitempty"`
 	Note       string     `json:"note,omitempty"`
-	CreatedAt  time.Time  `json:"createdAt"`
 	Items      []ItemView `json:"items"`
 	Total      int        `json:"total"`
 	Done       int        `json:"done"`
@@ -372,10 +371,6 @@ type Snapshot struct {
 	Version string `json:"version,omitempty"`
 }
 
-// storedNote is the note an item carries, for callers with nothing better.
-// The manager has something better — see Manager.itemNoteLocked.
-func storedNote(it *Item) string { return it.Note }
-
 // view renders an item for the wire.
 //
 // The note is supplied rather than read off the item because one kind of
@@ -422,7 +417,6 @@ func (j *Job) view(note func(*Item) string) JobView {
 		Title:     j.Title,
 		Host:      j.Host,
 		Error:     j.Err,
-		CreatedAt: j.CreatedAt,
 		Items:     make([]ItemView, 0, len(j.Items)),
 		Total:     len(j.Items),
 		SizeKnown: true,
@@ -480,9 +474,6 @@ func (j *Job) tally() itemTally {
 	}
 	return t
 }
-
-// status derives the job state from its phase and its items.
-func (j *Job) status() Status { return j.statusFrom(j.tally()) }
 
 // complete requires every file to be done and the source to have no error.
 // A done status alone can also include canceled files or a partial listing.

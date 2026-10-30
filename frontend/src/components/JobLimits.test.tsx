@@ -1,30 +1,20 @@
 // SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
+import { host, mountEachTest, root } from '../testkit';
 import { formatSpeed } from '../format';
 import type { JobLimit } from '../types';
 import { JobLimits, type QueueLimits } from './JobLimits';
 
 const queue: QueueLimits = { files: 10, streams: 4, speed: 0 };
 
-let root: Root;
-let host: HTMLDivElement;
 let sent: JobLimit[];
 
-beforeEach(() => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-  sent = [];
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-});
+mountEachTest();
 
-afterEach(async () => {
-  await act(async () => { root.unmount(); });
-  host.remove();
-  vi.unstubAllGlobals();
+beforeEach(() => {
+  sent = [];
 });
 
 async function render(limit: JobLimit = { fileLimit: 2 }, limits = queue) {

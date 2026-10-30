@@ -9,18 +9,7 @@ import {
   sliderShows,
   type SliderState,
 } from '../slider';
-
-/**
- * How long the control will go on showing the user's value when the server
- * never reports it.
- *
- * A request can fail, and a failed one leaves the slider showing a number
- * the queue does not have — the error toast says so, but the control would
- * go on lying until something else changed. Generous enough that an ordinary
- * round trip is never cut short, short enough to correct itself while the
- * user is still looking at it.
- */
-const SETTLE_TIMEOUT_MS = 4000;
+import { SETTLE_TIMEOUT_MS } from '../useSettledChoice';
 
 interface SettingSliderProps {
   readonly id: string;

@@ -73,7 +73,7 @@ func (e *Emload) Extract(_ context.Context, u *url.URL, _ Options) (*Result, err
 	name := parts[len(parts)-1]
 	return &Result{Title: name, Files: []File{{
 		Name: name, Size: -1,
-		Pace: &Pace{Group: e.Name(), Files: 1, Streams: 1, PerRoute: true},
+		Pace: &Pace{Group: config.GroupEmload, Files: 1, Streams: 1, PerRoute: true},
 		Resolve: func(ctx context.Context) (*Target, error) {
 			fresh, err := e.page(ctx, page.String())
 			if err != nil {

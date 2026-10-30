@@ -151,7 +151,7 @@ func (m *Manager) routeWantedLocked(group string) bool {
 	// route, and the transfer whose end frees the slot gives its route back
 	// with it. Counted, fifty files queued behind the limit kept 254 running
 	// ones on a stream apiece, with routes to spare.
-	if m.running < m.limit && !m.throttle.isPaused() && !m.lowOnSpace() {
+	if !m.capped() {
 		for _, it := range m.queue {
 			// A file its job holds back is not due to start: counted, a job
 			// paused with hundreds of files queued kept every other file of
@@ -318,7 +318,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			sinceProbe = 0
 			now := time.Now()
 			paused := t.manager.throttle.isPaused()
-			limited := paused || t.manager.throttle.currentLimit() > 0 || t.item.limiter.currentLimit() > 0
+			limited := t.manager.throttling(t.item)
 			for _, e := range extras {
 				n := e.src.bytes.Load()
 				if n != e.counted || paused {

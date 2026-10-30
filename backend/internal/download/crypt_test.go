@@ -199,7 +199,7 @@ func TestEncryptedTransferOverManyConnections(t *testing.T) {
 	}
 
 	part := filepath.Join(manager.cfg.DownloadDir, "clip.bin.part")
-	if _, err := manager.transferOnce(context.Background(), item, part, "clip.bin"); err != nil {
+	if _, err := manager.transferOnce(context.Background(), item, part, "clip.bin", transferFiles{}); err != nil {
 		t.Fatalf("encrypted transfer failed: %v", err)
 	}
 
@@ -240,7 +240,7 @@ func TestEncryptedTransferResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := manager.transferOnce(context.Background(), item, part, "clip.bin"); err != nil {
+	if _, err := manager.transferOnce(context.Background(), item, part, "clip.bin", transferFiles{}); err != nil {
 		t.Fatalf("resumed encrypted transfer failed: %v", err)
 	}
 	got, err := os.ReadFile(part)

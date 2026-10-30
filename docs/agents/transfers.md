@@ -31,7 +31,11 @@ failing on a host that was serving the file a moment ago, not the transfer
 going nowhere. `Manager.transfer` therefore resumes it from the part file
 after a flat `config.ProgressRetryDelay` (30s) and starts the attempt count
 over, so `MaxRetries` bounds consecutive unproductive attempts rather than the
-whole life of a large file on a flaky host. The judgement is made against the
+whole life of a large file on a flaky host. The waits that are not failures
+— a busy host, a connection limit, a dropped connection after progress — go
+through `waitThenRefresh`, which sleeps under a note, clears it and resolves
+the link again; a failed attempt waits through `retryAfter`, which every
+retry loop of the transfer engine shares. The judgement is made against the
 disk, not the wire: `onDisk` reads what the part file held before the attempt
 — the segment sidecar's tally, the playlist checkpoint, or the file's length —
 and the position afterwards has to be further. Bytes arriving is not enough,
@@ -78,6 +82,18 @@ refuse the response; a rejection is final and never retried.
 
 `segments.go` holds the range table and its resume sidecar, `multistream.go`
 the engine and its supervisor. Points worth knowing before changing them:
+
+- Every resume checkpoint — the segment table's `.state`, a playlist's
+  `.playlist` — goes through `writeSidecar`, `readSidecar` and `clearSidecar`
+  in `files.go`, which write JSON whole under a `.tmp` name and rename it
+  into place (`writeFile`, which the merged subtitles use too). A write that
+  fails removes its `.tmp`; a missing or unreadable checkpoint reads as none,
+  which means starting over. Every file operation of a transfer takes the
+  `transferFiles` it was started under; the zero value is for trusted local
+  paths only (remuxing, tests).
+- The primary connection and every extra one ask for their range through
+  `rangedRequest`, so they send the same headers, `Accept-Encoding:
+  identity` and the same `If-Range` rules.
 
 - Every hot-path copy and decrypt draws its 256 KiB buffer from one shared
   pool (`buffers.go`, `borrowChunk`). They all want exactly `CopyBufferSize`,

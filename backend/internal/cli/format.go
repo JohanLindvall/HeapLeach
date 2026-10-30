@@ -113,12 +113,6 @@ func barParts(fraction float64, width int) (fill, track string) {
 	return strings.Repeat(fillRune, filled), strings.Repeat(trackRune, width-filled)
 }
 
-// bar renders both parts uncoloured, which is what the tests measure.
-func bar(fraction float64, width int) string {
-	fill, track := barParts(fraction, width)
-	return fill + track
-}
-
 // truncate shortens a string to a display width, marking the cut. Width is
 // counted in runes, which is close enough for the names hosts hand out.
 func truncate(s string, width int) string {

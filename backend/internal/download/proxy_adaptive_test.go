@@ -15,9 +15,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
+)
+
+// The proxy pool's own upgrade timings (proxytron's lease package, which
+// does not export them): a route is judged only after the warmup, and then
+// once per interval.
+const (
+	leaseUpgradeWarmup   = 20 * time.Second
+	leaseUpgradeInterval = 10 * time.Second
 )
 
 func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
@@ -95,9 +102,9 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			// the production warmup. The transfer and resume are real HTTP.
 			m.mu.Lock()
 			now := time.Now()
-			it.lastBytes, it.lastSample, it.speed = 0, now.Add(-config.ProxyUpgradeWarmup), 0
+			it.lastBytes, it.lastSample, it.speed = 0, now.Add(-leaseUpgradeWarmup), 0
 			m.sampleLocked(now)
-			m.sampleLocked(now.Add(config.ProxyUpgradeInterval))
+			m.sampleLocked(now.Add(leaseUpgradeInterval))
 			reserved := it.routeUpgrade != nil
 			if mode == "cancel" || mode == "no ranges" {
 				cancelItemLocked(it)

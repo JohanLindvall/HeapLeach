@@ -13,7 +13,6 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"slices"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -37,8 +36,6 @@ var (
 	ErrExitInUse       = lease.ErrExitInUse
 	ErrExitProbeFailed = lease.ErrExitProbeFailed
 )
-
-func Services() []string { return slices.Clone(config.ProxyGroups) }
 
 // protocols maps a protocol a group can be held to onto proxytron's.
 var protocols = map[string]proxytron.ProxyType{
@@ -96,7 +93,7 @@ func Open(path string, endpoints, feeds []string, client *httpx.Client, log *slo
 			u, err := url.Parse(endpoint)
 			return err == nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5h")
 		}),
-		lease.WithPolicy(lease.Policy{RecoveryScopes: []string{"cloudflare"}, CappedScopes: []string{"keep2share", "emload"}}),
+		lease.WithPolicy(lease.Policy{RecoveryScopes: []string{config.GroupWAF}, CappedScopes: []string{config.GroupKeep2Share, config.GroupEmload}}),
 		lease.WithChallengeClassifier(func(err error) bool { var challenge *httpx.ChallengeError; return errors.As(err, &challenge) }))
 }
 
@@ -114,7 +111,7 @@ func (c clientAdapter) ThroughProxy(endpoint string) (lease.Client, error) {
 }
 func (c clientAdapter) WithRoute(ctx context.Context, id, scope string, observe func(lease.Observation)) context.Context {
 	agent := c.agent
-	if scope == "cloudflare" {
+	if scope == config.GroupWAF {
 		agent = ""
 	}
 	return httpx.WithRouteAgent(ctx, id, c.Client, func(o httpx.RouteObservation) {

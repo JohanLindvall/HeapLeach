@@ -644,7 +644,8 @@ func TestOverloadPatienceStartsOverWhenTheHostServesSomethingElse(t *testing.T) 
 // A retry starts the patience over. Carried across, a file that had run out
 // of it failed on the first refusal after being retried, without waiting.
 func TestRetryingAnItemStartsItsOverloadPatienceOver(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	it := &Item{ID: newID(), Name: "clip.mp4", Status: StatusFailed, overloadWaits: config.OverloadRetries + 1, refusedAt: time.Now()}
 	m.mu.Lock()
 	m.enqueueLocked(it)

@@ -91,11 +91,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 		args = append(args, step...)
 		args = append(args, "-movflags", "+faststart", unique)
 
-		cmd := tools.CommandContext(ctx, ffmpeg, args...)
-		diagnostic := &util.BoundedBuffer{Limit: config.ErrorBodySample}
-		cmd.Stdout, cmd.Stderr = diagnostic, diagnostic
-		runErr = cmd.Run()
-		output = diagnostic.Bytes()
+		output, runErr = runFFmpeg(ctx, ffmpeg, args...)
 		if runErr == nil {
 			break
 		}
@@ -122,7 +118,7 @@ func (m *Manager) remuxToMP4(ctx context.Context, path string) string {
 	// of the MP4 already there, which reserve has just numbered this copy
 	// to avoid. The copy already there is this file.
 	if unique != target {
-		if existing, ok := identicalOnDisk(filepath.Dir(target), filepath.Base(target), unique); ok {
+		if existing, ok := identicalOnDisk(filepath.Dir(target), filepath.Base(target), unique, transferFiles{}); ok {
 			_ = os.Remove(unique)
 			_ = os.Remove(path)
 			m.log.Debug("rewrapped as an mp4 already there", "path", existing)

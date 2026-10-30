@@ -73,7 +73,6 @@ export interface JobView extends JobLimit {
   status: Status;
   error?: string;
   note?: string;
-  createdAt: string;
   items: ItemView[];
   total: number;
   done: number;

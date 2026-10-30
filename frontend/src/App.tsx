@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ApiError,
   cancelItem,
   cancelJob,
   clearFinished,
+  errorMessage,
   removeJob,
   retryItem,
   retryJob,
@@ -118,7 +118,7 @@ export default function App() {
   const run = useCallback(
     (action: () => Promise<unknown>): void => {
       void action().catch((error: unknown) => {
-        notify(error instanceof ApiError ? error.message : 'Request failed.', 'error');
+        notify(errorMessage(error, 'Request failed.'), 'error');
       });
     },
     [notify],

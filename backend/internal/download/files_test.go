@@ -20,7 +20,9 @@ func TestTransfersCannotWriteThroughEscapingSymlinks(t *testing.T) {
 				_, _ = w.Write([]byte("downloaded data"))
 			}))
 			defer server.Close()
-			m, dir := newTestManager(t)
+			m := testManager(t, nil)
+			m.Start()
+			dir := m.DownloadDir()
 			outside := t.TempDir()
 			victim := filepath.Join(outside, "untouched.bin")
 			if err := os.WriteFile(victim, []byte("original"), 0o600); err != nil {
@@ -95,7 +97,9 @@ func TestCheckpointFailureStopsBeforeWritingFileData(t *testing.T) {
 		_, _ = w.Write([]byte("downloaded data"))
 	}))
 	defer server.Close()
-	m, dir := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
+	dir := m.DownloadDir()
 	item := &Item{ID: "item", Name: "payload.bin", URL: server.URL + "/payload.bin"}
 	part := filepath.Join(dir, item.Name+"."+partSuffix(item.URL)+".part")
 	// A nonempty directory cannot be cleared or replaced as a checkpoint.

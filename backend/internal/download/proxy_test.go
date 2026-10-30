@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -68,7 +69,7 @@ func addProxyFiles(m *Manager, count int, resolve func(context.Context) (*extrac
 }
 
 func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
-	for _, service := range proxy.Services() {
+	for _, service := range config.ProxyGroups {
 		t.Run(service, func(t *testing.T) {
 			m := busyManager(t)
 			m.limit = 1

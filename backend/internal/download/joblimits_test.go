@@ -77,15 +77,6 @@ func jobDone(m *Manager, job *Job) bool {
 	return true
 }
 
-func jobView(m *Manager, id string) JobView {
-	for _, v := range m.Snapshot().Jobs {
-		if v.ID == id {
-			return v
-		}
-	}
-	return JobView{}
-}
-
 // A job's limit on files holds its own beneath the queue's, while another
 // job from the same site goes on alongside it.
 func TestAJobsFilesAreLimitedBeneathTheQueue(t *testing.T) {

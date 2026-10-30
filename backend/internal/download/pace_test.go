@@ -110,30 +110,8 @@ func TestPaceCapsSimultaneousTransfersToOneHost(t *testing.T) {
 	manager.mu.Unlock()
 	manager.signal()
 
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		done := 0
-		for _, j := range manager.Snapshot().Jobs {
-			for _, it := range j.Items {
-				if it.Status == StatusDone {
-					done++
-				}
-			}
-		}
-		if done == 4 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	for _, j := range manager.Snapshot().Jobs {
-		for _, it := range j.Items {
-			if it.Status != StatusDone {
-				t.Fatalf("item %s ended %q (%s) — a paced host must still drain its queue",
-					it.Name, it.Status, it.Error)
-			}
-		}
-	}
+	// A paced host must still drain its queue.
+	waitForStatus(t, manager, StatusDone, 4, 30*time.Second)
 	if peak.Load() > 1 {
 		t.Errorf("host saw %d simultaneous transfers, want 1 — Pace.Files was ignored", peak.Load())
 	}

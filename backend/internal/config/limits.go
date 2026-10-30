@@ -7,13 +7,10 @@ import "time"
 // Application proxy configuration and scheduling. Pool health and discovery
 // defaults live in github.com/JohanLindvall/proxytron/lease.
 const (
-	DefaultProxyFeed     = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
-	ProxyDispatchTick    = time.Second
-	ProxyFeedTimeout     = 20 * time.Second
-	ProxyMaxPageSize     = 200
-	ProxyUpgradeWarmup   = 20 * time.Second
-	ProxyUpgradeInterval = 10 * time.Second
-	DefaultProxyRetries  = 20
+	DefaultProxyFeed    = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
+	ProxyDispatchTick   = time.Second
+	ProxyMaxPageSize    = 200
+	DefaultProxyRetries = 20
 
 	// RouteWantedRecheck is how long the answer to whether a service has a
 	// file due to start is kept before the queue is scanned again.

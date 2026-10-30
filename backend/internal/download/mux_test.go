@@ -76,17 +76,17 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 	if err := os.WriteFile(first, start, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := savePlaylistState(first, playlistState{Index: 2, Bytes: int64(len(start)), Total: parts, Track: "sv/Svenska"}); err != nil {
+	if err := savePlaylistState(first, playlistState{Index: 2, Bytes: int64(len(start)), Total: parts, Track: "sv/Svenska"}, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(second, []byte("another track's bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := savePlaylistState(second, playlistState{Index: 3, Bytes: 10, Total: parts, Track: "en/English"}); err != nil {
+	if err := savePlaylistState(second, playlistState{Index: 3, Bytes: 10, Total: parts, Track: "en/English"}, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := m.transferPlaylist(context.Background(), it, part, "show.mp4"); err != nil {
+	if _, err := m.transferPlaylist(context.Background(), it, part, "show.mp4", transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +112,7 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 		}
 	}
 	clear := playlistTrack{part: second, segments: it.Audio[1].Segments, audio: &it.Audio[1]}
-	if st := clear.state(); st == nil || st.Index != parts {
+	if st := clear.state(transferFiles{}); st == nil || st.Index != parts {
 		t.Errorf("checkpoint = %+v; want the track's own, complete", st)
 	}
 	m.mu.Lock()

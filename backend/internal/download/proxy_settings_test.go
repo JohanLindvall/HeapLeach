@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
@@ -107,7 +108,7 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 func TestEnablingAfterStartWakesForDiscoveredRoutes(t *testing.T) {
 	m := busyManager(t)
 	m.cfg.ProxyDB = filepath.Join(t.TempDir(), "proxies.db")
-	m.SetPaused(true)
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	m.Start()
 	destination := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -128,7 +129,7 @@ func TestEnablingAfterStartWakesForDiscoveredRoutes(t *testing.T) {
 	if err := m.ApplySettings(Settings{Proxies: &enabled, ProxyFeeds: &feeds}); err != nil {
 		t.Fatal(err)
 	}
-	m.SetPaused(false)
+	_ = m.ApplySettings(Settings{Paused: new(false)})
 	once.Do(func() { close(finish) })
 	waitFor(t, 5*time.Second, func() bool {
 		m.mu.Lock()
@@ -169,8 +170,8 @@ func TestProxyScopeAndSettingsErrorsAreAtomic(t *testing.T) {
 func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 	m := busyManager(t)
 	p := attachPool(t, m, []string{proxy.Direct})
-	job := addProxyFiles(m, len(proxy.Services()), nil)
-	for i, service := range proxy.Services() {
+	job := addProxyFiles(m, len(config.ProxyGroups), nil)
+	for i, service := range config.ProxyGroups {
 		lease := p.Acquire(service, "", 1)
 		if lease == nil {
 			t.Fatalf("another service's transfer blocked %s", service)
@@ -185,7 +186,7 @@ func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 			t.Fatalf("same address admitted a second %s transfer", service)
 		}
 	}
-	for i, service := range proxy.Services() {
+	for i, service := range config.ProxyGroups {
 		page := m.ProxyPage(proxy.Query{Site: service})
 		if len(page.Rows) != 1 || page.Rows[0].Active != 1 || page.Rows[0].CurrentSpeed != float64((i+1)*1024) {
 			t.Fatalf("service %s included another service's measurements: %+v", service, page)

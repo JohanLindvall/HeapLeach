@@ -15,10 +15,30 @@ import (
 
 // Settings is a partial runtime update. Nil fields keep their current value.
 type Settings struct {
-	Concurrency    *int      `json:"concurrency"`
-	Streams        *int      `json:"streams"`
-	Paused         *bool     `json:"paused"`
-	SpeedLimit     *int64    `json:"speedLimit"`
+	// Concurrency resizes the pool without interrupting running transfers;
+	// Streams changes the connection ceiling for new transfers.
+	Concurrency *int `json:"concurrency"`
+	Streams     *int `json:"streams"`
+	// Paused stops or resumes the whole queue. Pausing holds the
+	// connections open rather than dropping them: a running transfer parks
+	// inside its read, and the dispatcher stops handing out work. A long
+	// pause may still cost a connection to a server that times it out,
+	// which the usual retry and resume handle.
+	Paused *bool `json:"paused"`
+	// SpeedLimit caps total throughput in bytes per second; zero is
+	// unlimited. The cap is shared: it bounds everything moving at once,
+	// not each transfer separately.
+	SpeedLimit *int64 `json:"speedLimit"`
+	// DownloadDir moves the destination, creating the directory and proving
+	// it writable first — the same checks startup makes, since a directory
+	// named from the UI is no more trustworthy than one named on the command
+	// line.
+	//
+	// Transfers already running keep the destination they started with:
+	// their path was settled when the worker took the item, and moving a
+	// part file mid-flight would break the resume that part file exists
+	// for. Everything still queued goes to the new place. That is worth
+	// knowing rather than hiding, so the API says it back to the caller.
 	DownloadDir    *string   `json:"downloadDir"`
 	Proxies        *bool     `json:"proxies"`
 	ProxyEndpoints *[]string `json:"proxyEndpoints"`
@@ -79,7 +99,7 @@ func (m *Manager) ApplySettings(s Settings) error {
 		kinds, _ := config.CanonicalProxyTypes(*s.ProxyTypes)
 		s.ProxyTypes = &kinds
 		for group, kind := range kinds {
-			if !slices.Contains(config.ProxyGroups, group) {
+			if !config.IsProxyGroup(group) {
 				return fmt.Errorf("%q is not a proxy group (%s)", group, strings.Join(config.ProxyGroups, ", "))
 			}
 			if kind != "" && !config.ValidProxyType(kind) {
@@ -154,7 +174,7 @@ func (m *Manager) ApplySettings(s Settings) error {
 				// A file the normal connection was made to wait for goes on
 				// through the routes now on offer, as moveOntoRoutes does.
 				if it.routePace != nil && it.notBefore.After(now) {
-					it.pace, it.routePace, it.preferredRoute = it.routePace, nil, ""
+					it.takeRoutePace()
 				}
 				if proxyEligible(it) {
 					it.notBefore, it.Note = time.Time{}, ""

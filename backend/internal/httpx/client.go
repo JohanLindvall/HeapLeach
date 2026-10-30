@@ -459,10 +459,8 @@ func (c *Client) GetPage(ctx context.Context, rawURL string, headers Header, isC
 	if err != nil {
 		return "", nil, err
 	}
-	req.Header.Set(HeaderAccept, AcceptHTML)
-	req.Header.Set(HeaderSecFetchDest, "document")
-	req.Header.Set(HeaderSecFetchMode, "navigate")
-	applyHeaders(req, headers)
+	Navigate.Apply(req)
+	headers.Apply(req)
 	resp, err := c.Do(req)
 	if err != nil {
 		return "", nil, err
@@ -478,7 +476,7 @@ func (c *Client) GetJSON(ctx context.Context, url string, headers Header, out an
 		return err
 	}
 	req.Header.Set(HeaderAccept, AcceptJSON)
-	applyHeaders(req, headers)
+	headers.Apply(req)
 	return c.JSON(req, out)
 }
 
@@ -499,7 +497,7 @@ func (c *Client) PostJSON(ctx context.Context, url string, headers Header, in, o
 	}
 	req.Header.Set(HeaderContentType, ContentTypeJSON)
 	req.Header.Set(HeaderAccept, AcceptJSON)
-	applyHeaders(req, headers)
+	headers.Apply(req)
 	if out == nil {
 		_, err := c.Bytes(req)
 		return err
@@ -549,13 +547,6 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 // retryDelay is the backoff between attempts at a single request.
 func retryDelay(attempt int) time.Duration {
 	return util.Backoff(attempt, config.RequestRetryBase, config.RequestRetryMax)
-}
-
-// applyHeaders sets each entry on the request, overriding client defaults.
-func applyHeaders(req *http.Request, headers Header) {
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
 }
 
 // drain empties and closes a body so the connection returns to the pool.

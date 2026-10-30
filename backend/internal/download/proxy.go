@@ -29,7 +29,7 @@ import (
 // PerRoute applies the host's file cap to each address. Only supported
 // download protocols may opt in; unrelated hosts keep their normal client.
 func proxyEligible(it *Item) bool {
-	return it.pace != nil && it.pace.PerRoute && slices.Contains(proxy.Services(), it.pace.Group)
+	return it.pace != nil && it.pace.PerRoute && config.IsProxyGroup(it.pace.Group)
 }
 
 func (m *Manager) usesProxies(it *Item) bool {
@@ -57,10 +57,10 @@ func (m *Manager) proxyDemandLocked() map[string]int {
 	}
 	capacity := max(0, m.limit-(m.running-running))
 	blocked := make(map[string]bool)
-	for _, site := range proxy.Services() {
+	for _, site := range config.ProxyGroups {
 		active := min(m.proxyRunning[site], capacity)
 		capacity -= active
-		blocked[site] = m.hostActive["group:"+site] > m.proxyRunning[site]
+		blocked[site] = m.hostActive[groupKey(site)] > m.proxyRunning[site]
 		if !blocked[site] {
 			wanted[site] = active
 		}
@@ -79,7 +79,7 @@ func (m *Manager) proxyDemandLocked() map[string]int {
 	}
 	// Source extraction runs before there are files to dispatch. It still
 	// needs usable routes, even when this is the first job in an empty queue.
-	wanted["cloudflare"] = max(wanted["cloudflare"], min(m.proxyResolving, m.limit))
+	wanted[config.GroupWAF] = max(wanted[config.GroupWAF], min(m.proxyResolving, m.limit))
 	return wanted
 }
 
@@ -87,7 +87,7 @@ func (m *Manager) proxyDemandLocked() map[string]int {
 // inventory without holding the queue lock.
 func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
 	if q.Site == "" {
-		q.Site = "keep2share"
+		q.Site = config.GroupKeep2Share
 	}
 	m.mu.Lock()
 	pool := m.proxies
@@ -110,6 +110,10 @@ func (m *Manager) ProxyPage(q proxy.Query) proxy.Page {
 	return page
 }
 
+// noteWaitingForRoute is the note of a file that waits for a proxy route to
+// come free, and the reason given for a wait that only a route ends.
+const noteWaitingForRoute = "Waiting for an available download route"
+
 type routeGroup struct {
 	name  string
 	files int
@@ -127,7 +131,7 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 	}
 	group := routeGroup{it.pace.Group, it.pace.Files, it.pace.WAF}
 	if unavailable[group] {
-		it.Note, it.notBefore = "Waiting for an available download route", time.Time{}
+		it.Note, it.notBefore = noteWaitingForRoute, time.Time{}
 		return false
 	}
 	it.route = m.proxies.AcquireFor(it.pace.Group, it.preferredRoute, it.pace.Files, it.Size-it.downloaded.Load(), it.pace.WAF)
@@ -135,7 +139,7 @@ func (m *Manager) leaseRouteLocked(it *Item, unavailable map[routeGroup]bool) bo
 		// A large queue must not rescan the whole inventory for every file
 		// while every route in the same service is already busy/cooling.
 		unavailable[group] = true
-		it.Note = "Waiting for an available download route"
+		it.Note = noteWaitingForRoute
 		// The wait that brought it here has ended (nextLocked checked), and
 		// one left in the past hides the note: a queue of files waiting
 		// for routes read as a queue of files waiting for nothing.
@@ -194,7 +198,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		m.mu.Lock()
 		it.routeAttempts++
 		it.routeCancel, it.routeResumable = abort, false
-		if m.throttle.isPaused() || m.throttle.currentLimit() > 0 || it.limiter.currentLimit() > 0 {
+		if m.throttling(it) {
 			lease.Constrain()
 		}
 		m.mu.Unlock()
@@ -268,7 +272,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			lease.Cooldown(wait.Until)
 			// Only this address is waiting. The next dispatch may use a
 			// different one immediately, or wait in the queue for the pool.
-			err = &extractor.WaitError{Until: time.Now(), Reason: "Waiting for an available download route"}
+			err = &extractor.WaitError{Until: time.Now(), Reason: noteWaitingForRoute}
 		} else if _, routed := errors.AsType[*httpx.RouteError](err); routed {
 			m.mu.Lock()
 			it.preferredRoute = ""
@@ -314,10 +318,17 @@ func (m *Manager) moveOntoRoutes(it *Item, err error) bool {
 	if it.routePace == nil || !m.proxyEnabled || m.proxies == nil {
 		return false
 	}
-	it.pace, it.routePace, it.preferredRoute = it.routePace, nil, ""
+	it.takeRoutePace()
 	m.log.Info("the normal connection must wait; going on through proxies", "item", it.ID, "name", it.Name,
 		"service", it.pace.Group, "until", wait.Until.Format(time.DateTime), "reason", wait.Reason)
 	return true
+}
+
+// takeRoutePace moves an item onto the proxy pace it was holding back
+// (Item.routePace), forgetting any route it preferred before. Caller holds
+// mu.
+func (it *Item) takeRoutePace() {
+	it.pace, it.routePace, it.preferredRoute = it.routePace, nil, ""
 }
 
 // retryRouteFailure is shared by source recovery and opted-in direct files.

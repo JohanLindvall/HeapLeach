@@ -20,7 +20,7 @@ func TestSetDownloadDirCreatesAndAdopts(t *testing.T) {
 	m := busyManager(t)
 	target := filepath.Join(t.TempDir(), "made", "on", "demand")
 
-	if err := m.SetDownloadDir(target); err != nil {
+	if err := m.ApplySettings(Settings{DownloadDir: new(target)}); err != nil {
 		t.Fatalf("SetDownloadDir: %v", err)
 	}
 	if got := m.DownloadDir(); got != target {
@@ -47,7 +47,7 @@ func TestSetDownloadDirRefusesTheUnusable(t *testing.T) {
 		{"a file in the way", occupied, "not a directory"},
 		{"nothing at all", "   ", "no download directory"},
 	} {
-		err := m.SetDownloadDir(tc.path)
+		err := m.ApplySettings(Settings{DownloadDir: new(tc.path)})
 		if err == nil || !strings.Contains(err.Error(), tc.hint) {
 			t.Errorf("%s: err = %v, want mention of %q", tc.name, err, tc.hint)
 		}
@@ -68,7 +68,7 @@ func TestSetDownloadDirExpandsHome(t *testing.T) {
 
 	// A directory under the real home would litter it, so only the
 	// resolution is checked, against a path that already exists.
-	if err := m.SetDownloadDir("~"); err != nil {
+	if err := m.ApplySettings(Settings{DownloadDir: new("~")}); err != nil {
 		t.Fatalf("SetDownloadDir(~): %v", err)
 	}
 	if got := m.DownloadDir(); got != home {
@@ -84,7 +84,7 @@ func TestQueuedTransfersFollowTheNewDirectory(t *testing.T) {
 
 	m := busyManager(t)
 	moved := filepath.Join(t.TempDir(), "elsewhere")
-	if err := m.SetDownloadDir(moved); err != nil {
+	if err := m.ApplySettings(Settings{DownloadDir: new(moved)}); err != nil {
 		t.Fatal(err)
 	}
 

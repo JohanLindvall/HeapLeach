@@ -3,17 +3,12 @@
 package download
 
 import (
-	"io"
-	"log/slog"
 	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
@@ -114,7 +109,7 @@ func TestProxyTypesRefuseTheUnknown(t *testing.T) {
 	m := busyManager(t)
 	concurrency := 3
 	for name, s := range map[string]Settings{
-		"protocol":       {ProxyType: ptr("tor")},
+		"protocol":       {ProxyType: new("tor")},
 		"group":          {ProxyTypes: &map[string]string{"elsewhere": config.ProxyTypeSOCKS}},
 		"group protocol": {ProxyTypes: &map[string]string{"emload": "ftp"}},
 	} {
@@ -128,19 +123,13 @@ func TestProxyTypesRefuseTheUnknown(t *testing.T) {
 	}
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // typesManager is a manager keeping its queue in file, configured with the
 // protocols given, neither restored nor started.
 func typesManager(t *testing.T, file, kind string, kinds map[string]string) *Manager {
-	cfg := &config.Config{
-		DownloadDir: t.TempDir(), Concurrency: 4, Streams: 2, StateFile: file,
-		UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret, Timeout: 30 * time.Second,
-		ProxyType: kind, ProxyTypes: kinds,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, cfg.Timeout)
-	return New(cfg, extractor.NewRegistry(cfg, client), client, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return testManager(t, func(c *config.Config) {
+		c.Concurrency, c.Streams, c.StateFile = 4, 2, file
+		c.ProxyType, c.ProxyTypes = kind, kinds
+	})
 }
 
 // A queue saved before two groups became one names the former group, in the

@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -23,8 +22,8 @@ func challengePace(original *extractor.Pace) *extractor.Pace {
 	if original != nil {
 		pace = *original
 	}
-	if !pace.PerRoute || !slices.Contains(proxy.Services(), pace.Group) {
-		pace.Group = "cloudflare"
+	if !pace.PerRoute || !config.IsProxyGroup(pace.Group) {
+		pace.Group = config.GroupWAF
 	}
 	pace.PerRoute, pace.Files = true, max(1, pace.Files)
 	pace.WAF = true
@@ -58,7 +57,7 @@ func (m *Manager) recoverExtraction(ctx context.Context, read func(context.Conte
 		m.updateProxyDemandLocked()
 		m.mu.Unlock()
 	}()
-	pool.RefusedDirect("cloudflare", cause, 0)
+	pool.RefusedDirect(config.GroupWAF, cause, 0)
 	for attempt, retries := 2, 0; ; attempt++ {
 		attemptCtx := extractor.WithResolveNote(ctx, func(note string) {
 			extractor.ResolveNote(ctx, connectionNote(note, attempt))
@@ -129,7 +128,7 @@ func (m *Manager) challengeLease(ctx context.Context, pool *proxy.Pool) (*proxy.
 		if !enabled {
 			return nil, errors.New("proxy routing is disabled")
 		}
-		if lease := pool.Acquire("cloudflare", "", 1); lease != nil {
+		if lease := pool.Acquire(config.GroupWAF, "", 1); lease != nil {
 			return lease, nil
 		}
 		if err := util.SleepCtx(ctx, config.ProxyDispatchTick); err != nil {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { deferred, host, mountEachTest, root } from '../testkit';
 import { ApiError, fetchProxies, fetchSettings, updateSettings } from '../api';
 import type { ProxyPage, Snapshot } from '../types';
 import { SettingsPanel } from './SettingsPanel';
@@ -26,12 +26,10 @@ const inventory: ProxyPage = {
   summary: { total: 51, available: 49, active: 1, cooling: 1, untested: 45 }, sources: [],
 };
 
-let root: Root;
-let host: HTMLDivElement;
+mountEachTest();
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   vi.mocked(fetchProxies).mockReset().mockResolvedValue(inventory);
   vi.mocked(fetchSettings).mockReset().mockResolvedValue({
@@ -40,16 +38,10 @@ beforeEach(() => {
     proxyType: 'any', proxyTypes: {},
   });
   vi.mocked(updateSettings).mockReset().mockResolvedValue(snapshot);
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
 });
 
 afterEach(async () => {
-  await act(async () => { root.unmount(); });
-  host.remove();
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 async function render(value = snapshot) {
@@ -67,13 +59,6 @@ async function type(selector: string, value: string) {
     Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(field, value);
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
 }
 
 it('shows measured and live throughput, scoring and success, and pages on the server', async () => {

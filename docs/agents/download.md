@@ -22,7 +22,16 @@ winding down, so gating on status would let cancel-then-retry hand the same
 item — and the same `.part` file — to two goroutines. A retry requested during
 that window sets `retryPending`, and the exiting worker re-queues it.
 `enqueueLocked` is the single entry point for queueing; regression tests live
-in `ownership_test.go`.
+in `ownership_test.go`. Settings change only through `ApplySettings`, which
+validates the whole update before applying any of it; tests read them back
+from `Snapshot()` or `CurrentSettings()`.
+
+The package's tests build managers with `testManager` (`helpers_test.go`),
+whose function argument tunes the configuration before anything is built from
+it, and read the queue through `jobView`, `findItem`, `countStatus` and
+`waitForStatus`. A test's own differences — retries, timings, whether it calls
+`Start()` — stay at the test. Accessors the code itself never needs, such as
+`hostGate.quiet` or `throttle.take`, live in `testonly_test.go`.
 
 **Clear finished only forgets successful jobs** (`Job.complete`): the source
 has no error and every item is done. Terminal jobs can still have failures,
@@ -196,8 +205,8 @@ Three rules here are easy to break:
   means *held*, and a job whose files were all done or cancelled comes back
   unheld while its items are just as URL-less.
 - **Resolution appends to `job.Items`**, so a restored job's items must be
-  dropped before it is re-read or every file in it doubles. Both `SetPaused`
-  (resuming) and `RetryJob` clear them, and
+  dropped before it is re-read or every file in it doubles. Both resuming
+  (`ApplySettings` with `Paused` false) and `RetryJob` clear them, and
   `TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem` holds that
   in place.
 - **`Close` persists before `stop()`, not after `wg.Wait()`.** Stopping
@@ -211,7 +220,7 @@ Three rules here are easy to break:
 Restored jobs are held by default, because resuming is the user's word to
 give. A service replaced by a deploy tool has nobody to give it, and every new
 image would stop the queue until noticed, so `HEAPLEACH_RESUME` / `-resume`
-says it at startup instead (`manager.SetPaused(false)` after `Start`), and
+says it at startup instead (`ApplySettings` unpausing after `Start`), and
 `/api/health` reports the build's `version` so the tool can tell the new
 process from the one it replaced.
 

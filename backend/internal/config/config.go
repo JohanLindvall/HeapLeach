@@ -195,38 +195,29 @@ func FromEnv() (*Config, error) {
 	if c.ProxyTypes, err = ParseProxyTypes(LookupEnv("PROXY_TYPES")); err != nil {
 		return nil, fmt.Errorf("%sPROXY_TYPES: %w", envPrefix, err)
 	}
-	if c.ProxyRetries, err = envInt("PROXY_RETRIES", c.ProxyRetries); err != nil {
-		return nil, err
+	// Each read keeps the default when the setting is absent.
+	for _, s := range []struct {
+		name string
+		to   *int
+	}{
+		{"PROXY_RETRIES", &c.ProxyRetries}, {"CONCURRENCY", &c.Concurrency},
+		{"MAX_RETRIES", &c.MaxRetries}, {"STREAMS", &c.Streams},
+		{"MAX_CONCURRENCY", &c.MaxConcurrency}, {"CAPTCHA_CONCURRENCY", &c.CaptchaConcurrency},
+		{"MAX_SOURCES", &c.MaxSources}, {"MAX_FILES", &c.MaxFiles},
+	} {
+		if *s.to, err = envInt(s.name, *s.to); err != nil {
+			return nil, err
+		}
 	}
-	if c.Concurrency, err = envInt("CONCURRENCY", c.Concurrency); err != nil {
-		return nil, err
-	}
-	if c.MaxRetries, err = envInt("MAX_RETRIES", c.MaxRetries); err != nil {
-		return nil, err
-	}
-	if c.Streams, err = envInt("STREAMS", c.Streams); err != nil {
-		return nil, err
-	}
-	if c.MaxConcurrency, err = envInt("MAX_CONCURRENCY", c.MaxConcurrency); err != nil {
-		return nil, err
-	}
-	if c.CaptchaConcurrency, err = envInt("CAPTCHA_CONCURRENCY", c.CaptchaConcurrency); err != nil {
-		return nil, err
-	}
-	if c.MaxSources, err = envInt("MAX_SOURCES", c.MaxSources); err != nil {
-		return nil, err
-	}
-	if c.MaxFiles, err = envInt("MAX_FILES", c.MaxFiles); err != nil {
-		return nil, err
-	}
-	if c.SlowSpeed, err = envSize("SLOW_SPEED", c.SlowSpeed); err != nil {
-		return nil, err
-	}
-	if c.SpeedLimit, err = envSize("MAX_SPEED", c.SpeedLimit); err != nil {
-		return nil, err
-	}
-	if c.MinFreeDisk, err = envSize("MIN_FREE", c.MinFreeDisk); err != nil {
-		return nil, err
+	for _, s := range []struct {
+		name string
+		to   *int64
+	}{
+		{"SLOW_SPEED", &c.SlowSpeed}, {"MAX_SPEED", &c.SpeedLimit}, {"MIN_FREE", &c.MinFreeDisk},
+	} {
+		if *s.to, err = envSize(s.name, *s.to); err != nil {
+			return nil, err
+		}
 	}
 
 	if v := env("STALL_TIMEOUT", ""); v != "" {
@@ -718,15 +709,29 @@ const (
 	ProxyTypeHTTP  = "http"
 )
 
-// ProxyGroups are the groups that draw on the proxy pool, each a scope of
-// its own: services that count free downloads per address, and WAF recovery
-// on any host.
-var ProxyGroups = []string{"keep2share", "emload", "mega", "cloudflare"}
+// The proxy groups: services that count free downloads per address, each a
+// scope of the proxy pool of its own, and GroupWAF, recovery from a web
+// application firewall's challenge on any host. The names are what settings,
+// the API and the proxy database carry, so they stay as they are.
+const (
+	GroupKeep2Share = "keep2share"
+	GroupEmload     = "emload"
+	GroupMega       = "mega"
+	GroupWAF        = "cloudflare"
+)
+
+// ProxyGroups are the groups that draw on the proxy pool, in the order
+// settings list them. Read it, never change it.
+var ProxyGroups = []string{GroupKeep2Share, GroupEmload, GroupMega, GroupWAF}
+
+// IsProxyGroup reports whether name is a proxy group by its present name.
+// It is asked of every queued item, so it does not copy the list.
+func IsProxyGroup(name string) bool { return slices.Contains(ProxyGroups, name) }
 
 // proxyGroupAliases are the names groups were once known by. A setting
 // written before two groups became one still names the old one, and is
 // read as the group it is now part of.
-var proxyGroupAliases = map[string]string{"fileboom": "keep2share"}
+var proxyGroupAliases = map[string]string{"fileboom": GroupKeep2Share}
 
 // ProxyGroup returns the group a name stands for, its own or a former
 // one's, and whether it is a group at all.
@@ -734,7 +739,7 @@ func ProxyGroup(name string) (string, bool) {
 	if group, ok := proxyGroupAliases[name]; ok {
 		return group, true
 	}
-	return name, slices.Contains(ProxyGroups, name)
+	return name, IsProxyGroup(name)
 }
 
 // CanonicalProxyTypes returns types with each former group's name read as

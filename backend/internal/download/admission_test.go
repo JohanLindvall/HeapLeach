@@ -31,7 +31,8 @@ func TestResolutionConcurrencyAndCancelWhileWaiting(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	for i := range config.ResolveConcurrency {
 		if _, err := m.Add(fmt.Sprintf("links:%s/%d", srv.URL, i), ""); err != nil {
 			t.Fatal(err)

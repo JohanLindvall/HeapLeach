@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,28 +17,20 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // busyManager is a full manager with the busy backoff shrunk to test speed.
 // The dispatcher is not started: these tests drive transfer directly.
 func busyManager(t *testing.T) *Manager {
 	t.Helper()
-	cfg := &config.Config{
-		DownloadDir: t.TempDir(), Concurrency: 1, Streams: 1,
-		UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   1, Timeout: 30 * time.Second,
-	}
 	// These tests count the manager's transfer/queue attempts. HTTP retries
 	// have their own tests; repeating each synthetic refusal here only adds
-	// the real HTTP backoff to a deliberately accelerated queue cooldown.
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
+	// the real HTTP backoff to a deliberately accelerated queue cooldown. So
+	// the client is built with none, and the manager given its one after.
+	m := testManager(t, nil)
+	m.cfg.MaxRetries = 1
 	m.timings.busyBase = time.Millisecond
 	m.timings.busyMax = 5 * time.Millisecond
-	t.Cleanup(m.Close)
 	return m
 }
 

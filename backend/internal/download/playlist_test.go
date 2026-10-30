@@ -117,22 +117,22 @@ func TestPlaylistStateRoundTrip(t *testing.T) {
 	part := filepath.Join(dir, "x.part")
 
 	st := playlistState{Index: 40, Bytes: 123456, Total: 100}
-	if err := savePlaylistState(part, st); err != nil {
+	if err := savePlaylistState(part, st, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
-	got := loadPlaylistState(part, 100)
+	got := loadPlaylistState(part, 100, transferFiles{})
 	if got == nil || *got != st {
 		t.Fatalf("round trip = %+v, want %+v", got, st)
 	}
 
 	// A playlist that changed length is a different stream; resuming into
 	// it would splice two versions together.
-	if loadPlaylistState(part, 101) != nil {
+	if loadPlaylistState(part, 101, transferFiles{}) != nil {
 		t.Error("state for a 100-part stream resumed a 101-part one")
 	}
 
-	clearPlaylistState(part)
-	if loadPlaylistState(part, 100) != nil {
+	clearPlaylistState(part, transferFiles{})
+	if loadPlaylistState(part, 100, transferFiles{}) != nil {
 		t.Error("cleared state was still loadable")
 	}
 }
@@ -141,19 +141,19 @@ func TestLoadPlaylistStateRejectsGarbage(t *testing.T) {
 	dir := t.TempDir()
 	part := filepath.Join(dir, "y.part")
 
-	if loadPlaylistState(part, 10) != nil {
+	if loadPlaylistState(part, 10, transferFiles{}) != nil {
 		t.Error("a missing sidecar should mean starting over, not a value")
 	}
 	if err := os.WriteFile(playlistStatePath(part), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if loadPlaylistState(part, 10) != nil {
+	if loadPlaylistState(part, 10, transferFiles{}) != nil {
 		t.Error("a corrupt sidecar should mean starting over")
 	}
 	if err := os.WriteFile(playlistStatePath(part), []byte(`{"index":-1,"bytes":5,"total":10}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if loadPlaylistState(part, 10) != nil {
+	if loadPlaylistState(part, 10, transferFiles{}) != nil {
 		t.Error("an impossible index should mean starting over")
 	}
 }

@@ -4,8 +4,6 @@ package download
 
 import (
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -45,7 +43,8 @@ func BenchmarkDispatchQueue(b *testing.B) {
 // queued, so the housekeeping calls have something to distinguish.
 func seededManager(t *testing.T) (m *Manager, done, failed, queued string) {
 	t.Helper()
-	m, _ = newTestManager(t)
+	m = testManager(t, nil)
+	m.Start()
 	add := func(status Status) string {
 		job := &Job{ID: newID(), Source: "https://example.test/" + newID(), Title: "t", CreatedAt: time.Now()}
 		job.Items = []*Item{{ID: newID(), JobID: job.ID, Name: "f", Status: status}}
@@ -142,17 +141,13 @@ func TestCancelJobMarksEveryItem(t *testing.T) {
 	if err := m.CancelJob(queued); err != nil {
 		t.Fatal(err)
 	}
-	for _, job := range m.Snapshot().Jobs {
-		if job.ID != queued {
-			continue
-		}
-		if job.Status != StatusCanceled {
-			t.Errorf("job status = %s, want canceled", job.Status)
-		}
-		for _, it := range job.Items {
-			if it.Status != StatusCanceled {
-				t.Errorf("item status = %s, want canceled", it.Status)
-			}
+	job := jobView(m, queued)
+	if job.Status != StatusCanceled {
+		t.Errorf("job status = %s, want canceled", job.Status)
+	}
+	for _, it := range job.Items {
+		if it.Status != StatusCanceled {
+			t.Errorf("item status = %s, want canceled", it.Status)
 		}
 	}
 	if err := m.CancelJob("nope"); err != ErrNotFound {
@@ -163,12 +158,13 @@ func TestCancelJobMarksEveryItem(t *testing.T) {
 // The settings each refuse what the UI's controls cannot produce, and say so
 // rather than clamping silently.
 func TestSettingsRefuseTheOutOfRange(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 
-	if err := m.SetConcurrency(0); err == nil {
+	if err := m.ApplySettings(Settings{Concurrency: new(0)}); err == nil {
 		t.Error("concurrency 0 was accepted")
 	}
-	if err := m.SetConcurrency(config.DefaultMaxConcurrency + 1); err == nil {
+	if err := m.ApplySettings(Settings{Concurrency: new(config.DefaultMaxConcurrency + 1)}); err == nil {
 		t.Error("concurrency above the ceiling was accepted")
 	}
 	if got := m.Snapshot().MaxConcur; got != config.DefaultMaxConcurrency {
@@ -178,42 +174,42 @@ func TestSettingsRefuseTheOutOfRange(t *testing.T) {
 	// manager that has not started, so nothing else is reading it.
 	set := busyManager(t)
 	set.cfg.MaxConcurrency = 40
-	if err := set.SetConcurrency(41); err == nil {
+	if err := set.ApplySettings(Settings{Concurrency: new(41)}); err == nil {
 		t.Error("concurrency above a configured ceiling was accepted")
 	}
-	if err := set.SetConcurrency(40); err != nil {
+	if err := set.ApplySettings(Settings{Concurrency: new(40)}); err != nil {
 		t.Errorf("concurrency at a configured ceiling: %v", err)
 	}
 	if got := set.Snapshot().MaxConcur; got != 40 {
 		t.Errorf("snapshot ceiling = %d, want the configured 40", got)
 	}
-	if err := m.SetConcurrency(3); err != nil {
+	if err := m.ApplySettings(Settings{Concurrency: new(3)}); err != nil {
 		t.Errorf("concurrency 3: %v", err)
 	}
 	if got := m.Snapshot().Concurrency; got != 3 {
 		t.Errorf("snapshot concurrency = %d, want 3", got)
 	}
 
-	if err := m.SetStreams(0); err == nil {
+	if err := m.ApplySettings(Settings{Streams: new(0)}); err == nil {
 		t.Error("streams 0 was accepted")
 	}
-	if err := m.SetStreams(config.MaxStreams + 1); err == nil {
+	if err := m.ApplySettings(Settings{Streams: new(config.MaxStreams + 1)}); err == nil {
 		t.Error("streams above the ceiling was accepted")
 	}
-	if err := m.SetStreams(2); err != nil {
+	if err := m.ApplySettings(Settings{Streams: new(2)}); err != nil {
 		t.Errorf("streams 2: %v", err)
 	}
 	if got := m.Snapshot().Streams; got != 2 {
 		t.Errorf("snapshot streams = %d, want 2", got)
 	}
 
-	if err := m.SetSpeedLimit(-1); err == nil {
+	if err := m.ApplySettings(Settings{SpeedLimit: new(int64(-1))}); err == nil {
 		t.Error("a negative speed limit was accepted")
 	}
-	if err := m.SetSpeedLimit(1_000_000); err != nil {
+	if err := m.ApplySettings(Settings{SpeedLimit: new(int64(1_000_000))}); err != nil {
 		t.Errorf("speed limit: %v", err)
 	}
-	if got := m.SpeedLimit(); got != 1_000_000 {
+	if got := m.Snapshot().SpeedLimit; got != 1_000_000 {
 		t.Errorf("SpeedLimit = %d, want 1000000", got)
 	}
 	if got := m.Snapshot().SpeedLimit; got != 1_000_000 {
@@ -225,7 +221,8 @@ func TestSettingsRefuseTheOutOfRange(t *testing.T) {
 // still being read counts, and has to: it has no items yet, so the queue is
 // empty at exactly the moment work is about to arrive.
 func TestBusyCountsAResolvingJob(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	if m.Busy() {
 		t.Fatal("an empty manager is busy")
 	}
@@ -257,7 +254,8 @@ func TestBusyCountsAResolvingJob(t *testing.T) {
 // A stream subscribed after the manager has closed must end at once, or a
 // browser reloading during shutdown would hold the server to its deadline.
 func TestSubscribeAfterCloseIsAlreadyClosed(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	m.Close()
 
 	events, _, unsubscribe := m.Subscribe()
@@ -276,7 +274,8 @@ func TestSubscribeAfterCloseIsAlreadyClosed(t *testing.T) {
 // flag stays up for the next arrival, who is sent the snapshot as their
 // first frame, and nothing is encoded for no reader in the meantime.
 func TestBroadcastWaitsForASubscriber(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 
 	m.markDirty()
 	time.Sleep(3 * config.ProgressTick)
@@ -305,7 +304,7 @@ func TestSnapshotHostCountIsTheRegistrySize(t *testing.T) {
 	cfg := &config.Config{DownloadDir: t.TempDir(), Concurrency: 1,
 		UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage}
 	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, time.Second)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log := testLogger()
 	reg := extractor.NewRegistry(cfg, client)
 
 	m := New(cfg, reg, client, log)
@@ -325,7 +324,8 @@ func TestSnapshotHostCountIsTheRegistrySize(t *testing.T) {
 // that sits unchanged for most of a second after a click reads as the click
 // not having taken.
 func TestAUserActionIsPublishedAtOnce(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	events, _, unsubscribe := m.Subscribe()
 	defer unsubscribe()
 
@@ -342,7 +342,7 @@ func TestAUserActionIsPublishedAtOnce(t *testing.T) {
 
 	// An action that changes something: one that changes nothing has
 	// nothing to show and sends nothing.
-	if err := m.SetSpeedLimit(1 << 20); err != nil {
+	if err := m.ApplySettings(Settings{SpeedLimit: new(int64(1 << 20))}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -354,7 +354,8 @@ func TestAUserActionIsPublishedAtOnce(t *testing.T) {
 
 // An action that changed nothing — here, an unknown job — costs no frame.
 func TestARefusedActionSendsNothing(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	events, _, unsubscribe := m.Subscribe()
 	defer unsubscribe()
 
@@ -378,7 +379,8 @@ func TestARefusedActionSendsNothing(t *testing.T) {
 // Pasting a list of links is an Add per link. Those nudges arrive together
 // and must go out as one frame, not one snapshot of the whole queue each.
 func TestNudgesArrivingTogetherAreOneFrame(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	events, _, unsubscribe := m.Subscribe()
 	defer unsubscribe()
 	select { // let the ordinary beat send, so it is held off for a second
@@ -387,7 +389,7 @@ func TestNudgesArrivingTogetherAreOneFrame(t *testing.T) {
 	}
 
 	for i := range 10 {
-		if err := m.SetSpeedLimit(int64(1_000_000 * (i + 1))); err != nil {
+		if err := m.ApplySettings(Settings{SpeedLimit: new(int64(1_000_000 * (i + 1)))}); err != nil {
 			t.Fatal(err)
 		}
 	}

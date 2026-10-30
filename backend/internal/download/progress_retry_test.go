@@ -7,8 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,8 +18,6 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // droppingServer serves a file the way a flaky CDN does: each response
@@ -80,17 +76,8 @@ func (s *droppingServer) handler() http.Handler {
 // after a productive attempt shrunk to test speed.
 func progressManager(t *testing.T, retries int) *Manager {
 	t.Helper()
-	cfg := &config.Config{
-		DownloadDir: t.TempDir(), Concurrency: 1, Streams: 1,
-		UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   retries, Timeout: 30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
+	m := testManager(t, func(c *config.Config) { c.MaxRetries = retries })
 	m.timings.progressRetry = time.Millisecond
-	t.Cleanup(m.Close)
 	return m
 }
 
@@ -247,7 +234,7 @@ func TestRestartingFromZeroIsNotProgress(t *testing.T) {
 func TestStallAfterProgressRestartsTheDeferralCount(t *testing.T) {
 	m := &Manager{
 		cfg: &config.Config{MaxRetries: 2},
-		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log: testLogger(),
 	}
 
 	// Two deferrals in, with the budget about to run out.

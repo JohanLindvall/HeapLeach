@@ -151,7 +151,7 @@ func (k *Keep2Share) service(p *Page) *keep2ShareService {
 }
 
 // One free download at a time per address, whichever host serves it.
-var keep2SharePace = Pace{Streams: 1, Files: 1, Group: "keep2share", PerRoute: true}
+var keep2SharePace = Pace{Streams: 1, Files: 1, Group: config.GroupKeep2Share, PerRoute: true}
 
 // Extract asks the API of the host the link's page names. The registry has
 // already probed the page; a caller that has not is answered by a probe of

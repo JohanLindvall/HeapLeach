@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +43,7 @@ func resolveRequestError(err error) error {
 func resolveRetryManager(retries int) *Manager {
 	return &Manager{
 		cfg: &config.Config{MaxRetries: retries},
-		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log: testLogger(),
 	}
 }
 

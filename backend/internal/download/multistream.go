@@ -9,14 +9,12 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // segmentedTransfer fetches one file over one or more connections, writing
@@ -391,10 +389,10 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 						"item", t.item.ID, "host", reserved, "limit", limit, "err", err)
 					return nil
 				}
-				if meant || attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
+				if meant {
 					return err
 				}
-				if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+				if err := t.manager.retryAfter(ctx, attempt, err); err != nil {
 					return err
 				}
 				// An expired signed link is the usual cause; refresh it.
@@ -432,10 +430,7 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
-			return err
-		}
-		if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+		if err := t.manager.retryAfter(ctx, attempt, err); err != nil {
 			return err
 		}
 		_ = t.manager.resolveTarget(ctx, t.item)
@@ -550,28 +545,21 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool, 
 	if rawURL == "" {
 		return nil, errors.New("no download URL")
 	}
-	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
-	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
-
 	pos, end := seg.pos.Load(), seg.end.Load()
 	if t.routeSource != nil {
 		pos, end = t.table.request(seg, t.routeRange)
 	}
-	req.Header.Set(httpx.HeaderRange,
-		"bytes="+strconv.FormatInt(pos, 10)+"-"+strconv.FormatInt(end-1, 10))
 	// Another route's link may be on another of the host's storage servers,
 	// whose validator need not match: there, If-Range would read as the file
 	// having changed and throw away what is on disk. The total in its
 	// Content-Range is checked instead (validatePartial).
-	if t.validator != "" && src == nil {
-		req.Header.Set(httpx.HeaderIfRange, t.validator)
+	validator := t.validator
+	if src != nil {
+		validator = ""
+	}
+	req, err := m.rangedRequest(ctx, rawURL, headers, pos, end, validator)
+	if err != nil {
+		return nil, err
 	}
 
 	do := m.client.Do

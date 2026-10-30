@@ -25,7 +25,7 @@ func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
 	if group, ok := config.ProxyGroup(q.Site); ok {
 		q.Site = group
 	}
-	if q.Site != "" && !slices.Contains(proxy.Services(), q.Site) {
+	if q.Site != "" && !config.IsProxyGroup(q.Site) {
 		writeError(w, http.StatusBadRequest, "invalid proxy service")
 		return
 	}

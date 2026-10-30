@@ -2,7 +2,10 @@
 
 package httpx
 
-import "maps"
+import (
+	"maps"
+	"net/http"
+)
 
 // Header is a set of request headers to apply on top of the client defaults.
 // Extractors return one per file so the downloader can replay exactly what a
@@ -57,6 +60,23 @@ const (
 	// body would make the progress total disagree with what lands on disk.
 	EncodingIdentity = "identity"
 )
+
+// Navigate is what a browser sends with a page it is navigating to: it asks
+// for HTML, and says so in the fetch metadata some hosts check. It is shared:
+// apply it, or Merge it into a header of your own, but never write to it.
+var Navigate = Header{
+	HeaderAccept:       AcceptHTML,
+	HeaderSecFetchDest: "document",
+	HeaderSecFetchMode: "navigate",
+}
+
+// Apply sets each entry on the request, overriding what is there: the
+// client's defaults, or what an earlier Apply set.
+func (h Header) Apply(req *http.Request) {
+	for name, value := range h {
+		req.Header.Set(name, value)
+	}
+}
 
 // Merge returns a copy of base with the entries of extra applied over it.
 // Either may be nil.

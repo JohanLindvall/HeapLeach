@@ -5,8 +5,6 @@ package download
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +51,7 @@ func TestRemuxNeverReEncodes(t *testing.T) {
 			buildTS(t, ffmpeg, source, tc.audioArgs, tc.extraArgs)
 
 			before := probeStreams(t, ffmpeg, source)
-			manager := &Manager{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+			manager := &Manager{log: testLogger()}
 			result := manager.remuxToMP4(context.Background(), source)
 
 			if !tc.wantConvert {
@@ -112,7 +110,7 @@ func TestRemuxKeepsBestStreams(t *testing.T) {
 		t.Fatalf("fixture has %d streams, want 3", len(before))
 	}
 
-	manager := &Manager{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	manager := &Manager{log: testLogger()}
 	result := manager.remuxToMP4(context.Background(), source)
 	if result == source {
 		t.Fatal("did not convert a stream set MP4 can hold")
@@ -148,7 +146,7 @@ func TestRewrappingAPlaylistAlreadyThereKeepsOneMP4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := &Manager{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	manager := &Manager{log: testLogger()}
 	first := manager.remuxToMP4(context.Background(), source)
 	if first == source {
 		t.Fatal("the fixture did not rewrap")
@@ -178,7 +176,7 @@ func TestRemuxLeavesNonTransportStreamsAlone(t *testing.T) {
 		if err := os.WriteFile(path, []byte("not a transport stream"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		manager := &Manager{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		manager := &Manager{log: testLogger()}
 		if got := manager.remuxToMP4(context.Background(), path); got != path {
 			t.Errorf("%s was touched, want it left alone", name)
 		}
@@ -219,7 +217,7 @@ func TestRemuxKeepsBestOfEachLanguage(t *testing.T) {
 		"-metadata:s:a:2", "language=swe",
 		"-f", "mpegts", source)
 
-	manager := &Manager{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	manager := &Manager{log: testLogger()}
 	result := manager.remuxToMP4(context.Background(), source)
 	if result == source {
 		t.Fatal("did not convert")

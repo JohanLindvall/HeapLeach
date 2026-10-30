@@ -24,7 +24,6 @@ function job(status: Status, extra: Partial<JobView> = {}): JobView {
     title: 'Album ' + status,
     host: 'example',
     status,
-    createdAt: '2026-01-01T00:00:00Z',
     items: [],
     total: 0,
     done: 0,

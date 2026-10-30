@@ -4,8 +4,6 @@ package download
 
 import (
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,10 +12,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // An item a worker still owns must never be handed to a second worker.
@@ -153,7 +147,9 @@ func TestCancelRetryNeverDoubleRuns(t *testing.T) {
 	}
 	t.Cleanup(func() { itemHeld = nil })
 
-	m, dir := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
+	dir := m.DownloadDir()
 	jobID, err := m.Add(server.URL+"/payload.bin", "")
 	if err != nil {
 		t.Fatal(err)
@@ -167,11 +163,11 @@ func TestCancelRetryNeverDoubleRuns(t *testing.T) {
 				"(it was dispatched twice)", round, p)
 		}
 		if !waitForCond(5*time.Second, func() bool {
-			return itemStatus(m, jobID, itemID) == StatusRunning
+			return findItem(m, jobID, itemID).Status == StatusRunning
 		}) {
 			t.Fatalf("round %d: item never resumed running after cancel+retry "+
 				"(status %q, peak concurrency %d)",
-				round, itemStatus(m, jobID, itemID), peak.Load())
+				round, findItem(m, jobID, itemID).Status, peak.Load())
 		}
 		if err := m.CancelItem(jobID, itemID); err != nil {
 			t.Fatal(err)
@@ -184,10 +180,10 @@ func TestCancelRetryNeverDoubleRuns(t *testing.T) {
 	}
 
 	if !waitForCond(30*time.Second, func() bool {
-		return itemStatus(m, jobID, itemID) == StatusDone
+		return findItem(m, jobID, itemID).Status == StatusDone
 	}) {
 		t.Fatalf("item never completed (status %q, peak concurrency %d)",
-			itemStatus(m, jobID, itemID), peak.Load())
+			findItem(m, jobID, itemID).Status, peak.Load())
 	}
 
 	if p := workerPeak.Load(); p > 1 {
@@ -212,75 +208,4 @@ func TestCancelRetryNeverDoubleRuns(t *testing.T) {
 			t.Errorf("left a partial file behind: %s", n)
 		}
 	}
-}
-
-// --- helpers ---------------------------------------------------------------
-
-func newTestManager(t *testing.T) (*Manager, string) {
-	t.Helper()
-	dir := t.TempDir()
-	cfg := &config.Config{
-		DownloadDir:  dir,
-		Concurrency:  1,
-		UserAgent:    config.DefaultUserAgent,
-		Language:     config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   0,
-		Timeout:      30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
-	m.Start()
-	t.Cleanup(m.Close)
-	return m, dir
-}
-
-func waitForItem(t *testing.T, m *Manager, jobID string) string {
-	t.Helper()
-	var id string
-	waitFor(t, 10*time.Second, func() bool {
-		for _, job := range m.Snapshot().Jobs {
-			if job.ID == jobID && len(job.Items) == 1 {
-				id = job.Items[0].ID
-				return true
-			}
-		}
-		return false
-	})
-	return id
-}
-
-func itemStatus(m *Manager, jobID, itemID string) Status {
-	for _, job := range m.Snapshot().Jobs {
-		if job.ID != jobID {
-			continue
-		}
-		for _, it := range job.Items {
-			if it.ID == itemID {
-				return it.Status
-			}
-		}
-	}
-	return ""
-}
-
-func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
-	t.Helper()
-	if !waitForCond(timeout, cond) {
-		t.Fatalf("condition not met within %s", timeout)
-	}
-}
-
-// waitForCond polls until cond holds, reporting whether it did.
-func waitForCond(timeout time.Duration, cond func() bool) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return true
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return false
 }

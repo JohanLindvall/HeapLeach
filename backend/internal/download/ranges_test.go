@@ -23,7 +23,7 @@ func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
 			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
-			if _, err := m.transferOnce(t.Context(), it, part, "file.bin"); err == nil {
+			if _, err := m.transferOnce(t.Context(), it, part, "file.bin", transferFiles{}); err == nil {
 				t.Fatal("non-file response completed a transfer")
 			}
 			if _, err := os.Stat(part); !os.IsNotExist(err) {
@@ -57,7 +57,7 @@ func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := &transferState{Size: 9, Segments: []segmentState{{Start: 0, Pos: 3, End: 9}}}
-	if err := saveTransferState(part, st); err != nil {
+	if err := saveTransferState(part, st, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.transfer(context.Background(), it); err != nil {
@@ -98,11 +98,11 @@ func TestResumeRejectsUnprovenCompletion(t *testing.T) {
 			}
 			if tc.segmented {
 				st := &transferState{Size: 9, Segments: []segmentState{{Start: 0, Pos: 2, End: 3}, {Start: 3, Pos: 6, End: 9}}}
-				if err := saveTransferState(part, st); err != nil {
+				if err := saveTransferState(part, st, transferFiles{}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			_, err := m.transferOnce(context.Background(), it, part, "file.bin")
+			_, err := m.transferOnce(context.Background(), it, part, "file.bin", transferFiles{})
 			if (err == nil) != tc.complete {
 				t.Fatalf("completion = %v, want %v (err: %v)", err == nil, tc.complete, err)
 			}
@@ -134,7 +134,7 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 				}
 			}
 			st := &transferState{Size: 6, Segments: []segmentState{{Start: 0, Pos: 6, End: 6}}}
-			if err := saveTransferState(part, st); err != nil {
+			if err := saveTransferState(part, st, transferFiles{}); err != nil {
 				t.Fatal(err)
 			}
 			if mode == "corrupt checkpoint" {
@@ -142,7 +142,7 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := m.transferOnce(context.Background(), it, part, "file.bin"); err != nil {
+			if _, err := m.transferOnce(context.Background(), it, part, "file.bin", transferFiles{}); err != nil {
 				t.Fatal(err)
 			}
 			got, err := os.ReadFile(part)
@@ -176,7 +176,7 @@ func TestPartialResponsesAreValidatedBeforeWriting(t *testing.T) {
 			if err := os.WriteFile(part, []byte("abc"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := m.transferOnce(context.Background(), it, part, "file.bin"); err == nil {
+			if _, err := m.transferOnce(context.Background(), it, part, "file.bin", transferFiles{}); err == nil {
 				t.Error("primary accepted an invalid partial response")
 			}
 			got, err := os.ReadFile(part)

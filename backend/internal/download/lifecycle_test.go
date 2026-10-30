@@ -5,8 +5,6 @@ package download
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,8 +17,9 @@ import (
 )
 
 func TestRetryDoesNotStartASecondActiveExtraction(t *testing.T) {
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	m.mu.Lock()
 	m.jobs["job"] = &Job{ID: "job", Source: "https://example.test/file.bin", resolving: true}
 	m.mu.Unlock()
@@ -30,8 +29,9 @@ func TestRetryDoesNotStartASecondActiveExtraction(t *testing.T) {
 }
 
 func TestSupersededExtractionCannotPublish(t *testing.T) {
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	job := &Job{ID: "job", Source: "https://example.test/file.bin", resolving: true, resolveID: 2}
 	m.mu.Lock()
 	m.jobs[job.ID] = job
@@ -46,8 +46,9 @@ func TestSupersededExtractionCannotPublish(t *testing.T) {
 }
 
 func TestCloseRejectsNewWork(t *testing.T) {
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	id, err := m.Add("https://example.test/file.bin", "")
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +68,9 @@ func TestCloseRejectsNewWork(t *testing.T) {
 }
 
 func TestCloseCanRaceSubmissions(t *testing.T) {
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	var callers sync.WaitGroup
 	for range 40 {
 		callers.Go(func() {
@@ -83,8 +85,9 @@ func TestCloseCanRaceSubmissions(t *testing.T) {
 }
 
 func TestResolverDeadlineIsFailedRatherThanUserCanceled(t *testing.T) {
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	id, err := m.Add("https://example.test/file.bin", "")
 	if err != nil {
 		t.Fatal(err)
@@ -94,16 +97,17 @@ func TestResolverDeadlineIsFailedRatherThanUserCanceled(t *testing.T) {
 	item, _ := m.findItemLocked(id, itemID)
 	item.resolve = func(context.Context) (*extractor.Target, error) { return nil, context.DeadlineExceeded }
 	m.mu.Unlock()
-	m.SetPaused(false)
-	waitFor(t, 5*time.Second, func() bool { return itemStatus(m, id, itemID).Terminal() })
-	if got := itemStatus(m, id, itemID); got != StatusFailed {
+	_ = m.ApplySettings(Settings{Paused: new(false)})
+	waitFor(t, 5*time.Second, func() bool { return findItem(m, id, itemID).Status.Terminal() })
+	if got := findItem(m, id, itemID).Status; got != StatusFailed {
 		t.Fatalf("deadline reported as %s", got)
 	}
 }
 
 func TestCancelingPausedQueueReleasesCanceledWork(t *testing.T) {
-	m, _ := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	id, err := m.Add("https://example.test/file.bin", "")
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +146,7 @@ func TestClearFinishedPreservesPendingRetry(t *testing.T) {
 // changed with it filed the next run somewhere new and downloaded every file
 // again.
 func TestAJobIsFiledUnderItsTitleNotItsNote(t *testing.T) {
-	m := &Manager{jobs: map[string]*Job{}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	m := &Manager{jobs: map[string]*Job{}, log: testLogger()}
 	job := &Job{ID: "job", Source: "https://example.test/?search=a+band"}
 	res := &extractor.Result{
 		Title: "a band",
@@ -171,7 +175,7 @@ func TestAJobIsFiledUnderItsTitleNotItsNote(t *testing.T) {
 // replaced the server under an open tab, so every snapshot carries it.
 func TestSnapshotCarriesTheVersion(t *testing.T) {
 	cfg := &config.Config{DownloadDir: t.TempDir(), Concurrency: 1, Version: "v9.9.9"}
-	m := New(cfg, nil, httpx.New("test-agent", "en-US", 0, time.Second), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m := New(cfg, nil, httpx.New("test-agent", "en-US", 0, time.Second), testLogger())
 	m.mu.Lock()
 	snap := m.snapshotLocked()
 	m.mu.Unlock()

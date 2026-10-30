@@ -106,7 +106,7 @@ func TestAlreadyOnDisk(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.label, func(t *testing.T) {
 			it := &Item{ID: "i", Name: tc.file}
-			if got := m.alreadyOnDisk(it, dir, "", tc.file, tc.size); got != tc.want {
+			if got := m.alreadyOnDisk(it, dir, "", tc.file, tc.size, transferFiles{}); got != tc.want {
 				t.Errorf("alreadyOnDisk = %v, want %v", got, tc.want)
 			}
 			if tc.want && it.downloaded.Load() != tc.size {
@@ -123,7 +123,7 @@ func TestAlreadyOnDiskIgnoresDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &Manager{}
-	if m.alreadyOnDisk(&Item{ID: "i"}, dir, "", "clip.mp4", 4096) {
+	if m.alreadyOnDisk(&Item{ID: "i"}, dir, "", "clip.mp4", 4096, transferFiles{}) {
 		t.Error("a directory must never be mistaken for the downloaded file")
 	}
 }

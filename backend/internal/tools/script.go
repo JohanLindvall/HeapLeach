@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 //go:embed scripts/yt-download.sh
@@ -46,12 +45,4 @@ func YouTubeScript() (path string, cleanup func(), err error) {
 		return "", nil, fmt.Errorf("stage download script: %w", err)
 	}
 	return name, remove, nil
-}
-
-// ScriptDir is where an override copy of the script would live.
-func ScriptDir() string {
-	if exe, err := os.Executable(); err == nil {
-		return filepath.Dir(exe)
-	}
-	return "."
 }
