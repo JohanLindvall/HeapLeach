@@ -258,40 +258,35 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 		return nil, fmt.Errorf("rtpplay: fetch %s: %w", ref.page, err)
 	}
 
-	// The rendered page is page one of the listing, so the walk starts at two
-	// rather than fetching what is already in hand.
-	seen := make(map[string]bool)
-	episodes := rtpEpisodeLinks(root, ref, seen)
-	limit := config.MaxResolvedEpisodes
-	capped := false
-	for page := 2; ; page++ {
-		if page > config.MaxAlbumPages {
-			capped = true
-			break
-		}
-		more, err := r.listing(ctx, ref, page, seen)
-		// A listing request that fails ends the walk with what it has: a
-		// truncated season is worth more than no season, and the title below
-		// says it was truncated.
-		if err != nil {
-			capped = true
-			break
-		}
-		if len(more) == 0 {
-			break // past the end of the season, which is how a season ends
-		}
-		episodes = append(episodes, more...)
-		if len(episodes) >= limit {
-			capped = true
-			break
-		}
+	// The rendered page is page one of the listing, so the walk takes it as
+	// it is rather than fetching what is already in hand. A page past the end
+	// of the season is empty, which is how a season ends. A listing request
+	// that fails ends the walk with what it has: a truncated season is worth
+	// more than no season, and the title below says it was truncated, as it
+	// does for a walk the cap or the page limit stopped.
+	episodes, more, walkNote, err := walkEpisodes(ctx, config.MaxResolvedEpisodes, pageWalk[rtpEpisodeRef]{
+		fetch: func(ctx context.Context, n int) (pageOf[rtpEpisodeRef], error) {
+			// The walk drops what an earlier page listed.
+			seen := make(map[string]bool)
+			if n == 0 {
+				listed := rtpEpisodeLinks(root, ref, seen)
+				return pageOf[rtpEpisodeRef]{items: listed, next: true, end: len(listed) == 0}, nil
+			}
+			listed, err := r.listing(ctx, ref, n+1, seen)
+			if err != nil {
+				return pageOf[rtpEpisodeRef]{}, err
+			}
+			return pageOf[rtpEpisodeRef]{items: listed, next: true, end: len(listed) == 0}, nil
+		},
+		key: func(ep rtpEpisodeRef) string { return ep.id },
+	})
+	if err != nil {
+		return nil, err
 	}
+	capped := more || walkNote != ""
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("rtpplay: no episodes listed on %s", ref.page)
 	}
-	// The title says where the walk stopped, so the cap is taken here
-	// rather than noted again.
-	episodes = episodes[:min(len(episodes), limit)]
 
 	// One refused episode must not sink the rest, but the reasons are kept:
 	// when every episode is refused it is refused for the same reason, and

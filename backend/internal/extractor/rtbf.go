@@ -438,28 +438,31 @@ func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
 	}
 
-	// Each episode kept is asked of the player as it is listed, so only as
-	// many as config.MaxResolvedEpisodes are kept; the walk goes on to
-	// count the rest.
+	// Each episode kept is asked of the player as it is listed, so the
+	// walk stops at config.MaxResolvedEpisodes, saying the listing went on.
 	var (
-		entries []rtbfListed
-		listed  int
-		walkErr error
-		seen    = make(map[string]bool)
+		entries  []rtbfListed
+		more     bool
+		walkNote string
+		walkErr  error
+		seen     = make(map[string]bool)
 	)
 	for _, tab := range tabs {
-		err := r.walk(ctx, tab.ContentPath, func(e rtbfEntry) bool {
-			if e.AssetID == "" || seen[e.AssetID] || e.ResourceType != "" && e.ResourceType != "MEDIA" {
-				return false
-			}
+		budget := config.MaxResolvedEpisodes - len(entries)
+		if budget == 0 {
+			more = true
+			break
+		}
+		listed, cut, note, err := r.walk(ctx, tab.ContentPath, seen, budget)
+		walkErr, walkNote = cmp.Or(walkErr, err), cmp.Or(walkNote, note)
+		for _, e := range listed {
 			seen[e.AssetID] = true
-			listed++
-			if len(entries) < config.MaxResolvedEpisodes {
-				entries = append(entries, rtbfListed{entry: e, tab: tab.Title})
-			}
-			return true
-		})
-		walkErr = cmp.Or(walkErr, err)
+			entries = append(entries, rtbfListed{entry: e, tab: tab.Title})
+		}
+		if cut {
+			more = true
+			break
+		}
 	}
 	if len(entries) == 0 {
 		if walkErr != nil {
@@ -473,7 +476,7 @@ func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 	var refusals []string
 	resolved, note, err := expandSeries(ctx, series[rtbfListed]{
 		site: "rtbf", noun: "episodes", link: title,
-		items: entries, listed: listed,
+		items: entries, more: more,
 		// Each tab of several, a season or a year, is a folder of its own.
 		label:   func(l rtbfListed) string { return l.tab },
 		split:   len(tabs) > 1,
@@ -495,7 +498,7 @@ func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 		}
 		counts[reason]++
 	}
-	notes := []string{note, brokenNote(walkErr)}
+	notes := []string{note, walkNote, brokenNote(walkErr)}
 	for _, reason := range reasons {
 		notes = append(notes, leftOutNote(counts[reason], ": "+reason))
 	}
@@ -558,37 +561,46 @@ func (r *RTBF) tabs(ctx context.Context, widgets []rtbfWidget) ([]rtbfWidget, er
 }
 
 // walk reads a list a page at a time, following each page's own next
-// link, and hands each entry on; each says whether it was new. A page that
-// adds nothing ends the walk, whatever its next link says, so a list that
-// pages in a circle cannot hold it.
-func (r *RTBF) walk(ctx context.Context, list string, each func(rtbfEntry) bool) error {
+// link, into the media it names that are not in seen, up to limit of them,
+// saying whether the list went on past them. A page that names nothing new
+// ends the list, whatever its next link says. A page that fails is err,
+// whether or not pages were read before it, for the caller to say the
+// listing broke off; note is the walk's own, for a list that pages in a
+// circle or past the page cap.
+func (r *RTBF) walk(ctx context.Context, list string, seen map[string]bool, limit int) (entries []rtbfEntry, cut bool, note string, err error) {
 	next := rtbfWithQuery(list, url.Values{
 		"_page": {"1"}, "_limit": {strconv.Itoa(rtbfPage)}, "_embed": {"content"}, "userAgent": {rtbfAgent},
 	})
-	for next != "" {
-		var doc struct {
-			Data struct {
-				Content []rtbfEntry `json:"content"`
-			} `json:"data"`
-			Links struct {
-				Next string `json:"next"`
-			} `json:"links"`
-		}
-		if err := r.client.GetJSON(ctx, next, rtbfHeaders(), &doc); err != nil {
-			return err
-		}
-		added := 0
-		for _, e := range doc.Data.Content {
-			if each(e) {
-				added++
+	var broke error
+	entries, cut, note, err = walkEpisodes(ctx, limit, pageWalk[rtbfEntry]{
+		fetch: func(ctx context.Context, _ int) (pageOf[rtbfEntry], error) {
+			var doc struct {
+				Data struct {
+					Content []rtbfEntry `json:"content"`
+				} `json:"data"`
+				Links struct {
+					Next string `json:"next"`
+				} `json:"links"`
 			}
-		}
-		if added == 0 {
-			return nil
-		}
-		next = doc.Links.Next
-	}
-	return nil
+			if err := r.client.GetJSON(ctx, next, rtbfHeaders(), &doc); err != nil {
+				return pageOf[rtbfEntry]{}, err
+			}
+			var media []rtbfEntry
+			for _, e := range doc.Data.Content {
+				if e.AssetID != "" && !seen[e.AssetID] && (e.ResourceType == "" || e.ResourceType == "MEDIA") {
+					media = append(media, e)
+				}
+			}
+			next = doc.Links.Next
+			return pageOf[rtbfEntry]{items: media, next: next != "", end: len(media) == 0}, nil
+		},
+		key: func(e rtbfEntry) string { return e.AssetID },
+		failed: func(err error) string {
+			broke = err
+			return ""
+		},
+	})
+	return entries, cut, note, cmp.Or(err, broke)
 }
 
 // rtbfWithQuery is link with the parameters set on it.
@@ -646,29 +658,31 @@ func (r *RTBF) embedded(ctx context.Context, u *url.URL) (*Result, error) {
 	case 1:
 		return r.media(ctx, ids[0])
 	}
-	// Each player is a request to resolve; the registry holds the files to
-	// the user's cap.
-	embedded := len(ids)
-	ids = ids[:min(len(ids), config.MaxResolvedEpisodes)]
-	files, reasons, _ := resolveListed(ctx, ids, func(ctx context.Context, id string) (*File, error) {
-		res, err := r.media(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		return &res.Files[0], nil
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	title := u.Redacted()
 	if m := rtbfPageTitle.FindStringSubmatch(html); m != nil {
 		title = cmp.Or(strings.TrimSpace(util.Unescape(m[1])), title)
 	}
-	if len(files) == 0 {
-		if len(reasons) > 0 {
-			return nil, fmt.Errorf("rtbf: %s: none of its %d players can be had here: %s", title, len(ids), reasons[0])
-		}
-		return nil, fmt.Errorf("rtbf: %s: none of its players could be read", title)
+	// Each player is a request to resolve, so they are cut to the request
+	// budget and the registry holds the files to the user's cap. When none
+	// plays, the first reason one gave is the answer.
+	var refusals []string
+	resolved, note, err := expandSeries(ctx, series[string]{
+		site: "rtbf", noun: "players", link: title,
+		items: ids, refused: &refusals,
+		resolve: func(ctx context.Context, id string) (*File, error) {
+			res, err := r.media(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return &res.Files[0], nil
+		},
+		unplayable: "they hold nothing to download",
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return &Result{Title: title, Files: files, Note: listingNote(cappedNote(len(ids), embedded, "players"), refusedNote(reasons))}, nil
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: title, Files: listedFiles(resolved), Note: listingNote(note, refusedNote(refusals))}, nil
 }

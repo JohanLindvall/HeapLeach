@@ -41,34 +41,20 @@ func refusalReason(err error) (string, bool) {
 	return "", false
 }
 
-// resolveListed resolves a listing's items several at a time, keeping the
-// files in the listing's order. One item refused or failing must not sink
-// the rest; but when nothing resolves, why is the whole answer, and a whole
-// series refused is refused for one reason. So the broadcaster's reasons are
-// kept in order, and the first other failure beside them, for the caller to
-// report: a refusal outranks a failure, being the one the caller can act on.
-func resolveListed[T any](ctx context.Context, items []T, resolve func(context.Context, T) (*File, error)) (files []File, refusals []string, failed error) {
-	resolved, refusals, failed := resolveEach(ctx, items, false, resolve)
-	return listedFiles(resolved), refusals, failed
-}
-
-// resolveInTurn is resolveListed one item at a time, for a broadcaster
-// whose resolving carries state from one episode to the next or that is
-// not to be asked several things at once.
-func resolveInTurn[T any](ctx context.Context, items []T, resolve func(context.Context, T) (*File, error)) (files []File, refusals []string, failed error) {
-	resolved, refusals, failed := resolveEach(ctx, items, true, resolve)
-	return listedFiles(resolved), refusals, failed
-}
-
 // listedItem is a listed item with the file it resolved to.
 type listedItem[T any] struct {
 	item T
 	file File
 }
 
-// resolveEach is resolveListed keeping each file beside its item, for a
-// caller that still needs the item afterwards; inTurn resolves one at a
-// time.
+// resolveEach resolves a listing's items into one file each, several at a
+// time or, inTurn, one after another — for a broadcaster whose resolving
+// carries state from one episode to the next, or that is not to be asked
+// several things at once — keeping each file beside its item in the
+// listing's order. One item refused or failing must not sink the rest; but
+// when nothing resolves, why is the whole answer, so the broadcaster's
+// reasons are kept in order, and the first other failure beside them, for
+// the caller to report (firstReason).
 func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) (resolved []listedItem[T], refusals []string, failed error) {
 	outcomes := resolveOutcomes(ctx, items, inTurn, resolve)
 	refusals, failed = sortOutcomes(outcomes)
@@ -146,6 +132,24 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 		}
 	}
 	return resolved, note, nil
+}
+
+// walkCut is the limit note walkEpisodes hands walkPages, to learn that
+// the walk stopped at its limit with the listing going on.
+const walkCut = "\x00cut"
+
+// walkEpisodes is walkPages for a broadcaster's listing taken up to limit
+// entries (none when negative), saying whether the listing went on past
+// them (more) rather than noting it, so that expandSeries or the caller says
+// what the cap left out in its own words. note is the walk's own, for a
+// listing cut short some other way.
+func walkEpisodes[T any](ctx context.Context, limit int, w pageWalk[T]) (items []T, more bool, note string, err error) {
+	w.limit, w.limitNote = limit, walkCut
+	items, note, err = walkPages(ctx, w)
+	if note == walkCut {
+		return items, true, "", err
+	}
+	return items, false, note, err
 }
 
 // nestByLabel reports whether a listing spans more than one distinct

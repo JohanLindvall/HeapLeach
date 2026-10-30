@@ -76,7 +76,7 @@ func drFakeSite(t *testing.T) *httptest.Server {
 				_, _ = io.WriteString(w, item(id, "channel", "En opfundet kanal", "", false, ""))
 			case "2000":
 				_, _ = io.WriteString(w, item(id, "show", "Opfundet serie", "", false, ""))
-			case "2100":
+			case "2100", "2300", "2400":
 				_, _ = io.WriteString(w, item(id, "season", "Opfundet serie", "", false, `, "seasonNumber": 1, "show": {"title": "Opfundet serie"}`))
 			case "2101", "2102", "2201":
 				_, _ = io.WriteString(w, episode(id, int(id[3]-'0'), false))
@@ -118,6 +118,13 @@ func drFakeSite(t *testing.T) *httptest.Server {
 				_, _ = io.WriteString(w, page([]string{episode("2102", 2, false)}, 2))
 			case "2200/1":
 				_, _ = io.WriteString(w, page([]string{episode("2201", 1, false), episode("2202", 2, true)}, 1))
+			case "2300/1", "2300/2", "2300/3":
+				// A listing that ignores its page, stating more of them.
+				_, _ = io.WriteString(w, page([]string{episode("2101", 1, false)}, 50))
+			case "2400/1":
+				_, _ = io.WriteString(w, page([]string{episode("2101", 1, false)}, 2))
+			case "2400/2":
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			default:
 				_, _ = io.WriteString(w, page(nil, 0))
 			}
@@ -241,6 +248,22 @@ func TestDRListsASeasonAlone(t *testing.T) {
 	res = extractOK(t, drWith(srv), "https://www.dr.dk/drtv/saeson/opfundet-serie_2100", Options{limits: Limits{Files: 1}})
 	if len(res.Files) != 1 || res.Note != "1 of 2 episodes" {
 		t.Errorf("%d files, note %q", len(res.Files), res.Note)
+	}
+}
+
+// A listing that serves its first page again, whatever page it states, ends
+// there rather than at the page cap; one whose next page fails keeps what
+// came before. Either way the note says the listing was cut short.
+func TestDRStopsAListingThatRepeatsOrBreaksOff(t *testing.T) {
+	srv := drFakeSite(t)
+	for id, note := range map[string]string{
+		"2300": "partial — repeated or empty page",
+		"2400": "partial — could not fetch next page",
+	} {
+		res := extractOK(t, drWith(srv), "https://www.dr.dk/drtv/saeson/opfundet-serie_"+id, Options{})
+		if got := strings.Join(filePaths(res.Files), "\n"); got != "Opfundet serie - 1. Afsnit 2101.mp4" || res.Note != note {
+			t.Errorf("%s: %s, note %q, want %q", id, got, res.Note, note)
+		}
 	}
 }
 

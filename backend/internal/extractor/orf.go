@@ -235,22 +235,25 @@ type orfEpisodesPage struct {
 // left out; and once one shown in Austria alone turns out refused here,
 // the rest of those are left out with it, the note saying so once.
 func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, error) {
-	var episodes []orfEpisodeDoc
-	for page := 1; ; page++ {
-		var doc orfEpisodesPage
-		if err := o.get(ctx, fmt.Sprintf("profile/%s/episodes?limit=%d&page=%d", url.PathEscape(id), orfPageSize, page), &doc); err != nil {
-			if page == 1 {
-				if httpx.HasStatus(err, http.StatusNotFound) {
-					return nil, fmt.Errorf("orf: series %s does not exist", id)
-				}
-				return nil, fmt.Errorf("orf: series %s: %w", id, err)
+	// The whole listing is read, up to the page cap, before any is cut to
+	// the file cap: it is filed oldest first, and lists newest first.
+	episodes, walkNote, err := walkPages(ctx, pageWalk[orfEpisodeDoc]{
+		fetch: func(ctx context.Context, n int) (pageOf[orfEpisodeDoc], error) {
+			var doc orfEpisodesPage
+			if err := o.get(ctx, fmt.Sprintf("profile/%s/episodes?limit=%d&page=%d", url.PathEscape(id), orfPageSize, n+1), &doc); err != nil {
+				return pageOf[orfEpisodeDoc]{}, err
 			}
-			break
+			items := doc.Embedded.Items
+			return pageOf[orfEpisodeDoc]{items: items, next: true, end: len(items) == 0 || n+1 >= doc.Pages}, nil
+		},
+		key:   func(ep orfEpisodeDoc) string { return strconv.FormatInt(ep.ID, 10) },
+		limit: -1,
+	})
+	if err != nil {
+		if httpx.HasStatus(err, http.StatusNotFound) {
+			return nil, fmt.Errorf("orf: series %s does not exist", id)
 		}
-		episodes = append(episodes, doc.Embedded.Items...)
-		if page >= doc.Pages || len(doc.Embedded.Items) == 0 {
-			break
-		}
+		return nil, fmt.Errorf("orf: series %s: %w", id, err)
 	}
 	slices.Reverse(episodes)
 
@@ -293,7 +296,7 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 		}
 		return nil, fmt.Errorf("orf: series %s lists no episodes", id)
 	}
-	note := listingNote(cappedNote(len(files), len(episodes)-drm-austria, "episodes"),
+	note := listingNote(cappedNote(len(files), len(episodes)-drm-austria, "episodes"), walkNote,
 		leftOutNote(austria, " that ORF shows in Austria only"), leftOutNote(drm, " that are DRM-protected"))
 	return &Result{Title: cmp.Or(title, "series "+id), Files: files, Note: note}, nil
 }

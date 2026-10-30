@@ -679,10 +679,6 @@ const (
 	// whether they are refused here.
 	GeoProbesDR = 3
 
-	// MaxPagesRadioCanada is the most pages of a list, or seasons of a
-	// programme, that broadcaster's own loader asks for.
-	MaxPagesRadioCanada = 200
-
 	// MaxResolvedReleases bounds how many releases of a band's discography
 	// are read while it is listed, each a page of its own. A label's
 	// catalogue can run to hundreds; past this the listing says what it

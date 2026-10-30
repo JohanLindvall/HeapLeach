@@ -292,7 +292,7 @@ func TestYleCountsWhatACapLeavesOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	episodes, listed, err := y.walk(context.Background(), "fin", page, page.lists("1-3000"), !page.season(), 2)
+	episodes, listed, _, err := y.walk(context.Background(), "fin", page, page.lists("1-3000"), !page.season(), 2)
 	if err != nil || len(episodes) != 2 || listed != 5 {
 		t.Errorf("%d episodes of %d listed, err %v", len(episodes), listed, err)
 	}

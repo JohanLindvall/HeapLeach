@@ -31,12 +31,12 @@ func TestBroadcastRefusalReadsAsBefore(t *testing.T) {
 	}
 }
 
-// TestResolveListedKeepsOrderAndReasons pins what every series expansion
+// TestResolveEachKeepsOrderAndReasons pins what every series expansion
 // leans on: files in the listing's order, refusals kept in order, and the
 // first other failure kept beside them.
-func TestResolveListedKeepsOrderAndReasons(t *testing.T) {
+func TestResolveEachKeepsOrderAndReasons(t *testing.T) {
 	items := []string{"a", "refused-1", "b", "failed", "refused-2", "c"}
-	files, refusals, failed := resolveListed(context.Background(), items, func(_ context.Context, item string) (*File, error) {
+	resolved, refusals, failed := resolveEach(context.Background(), items, false, func(_ context.Context, item string) (*File, error) {
 		switch item {
 		case "refused-1", "refused-2":
 			return nil, &broadcastRefusal{"site", item, "reason " + item}
@@ -45,7 +45,7 @@ func TestResolveListedKeepsOrderAndReasons(t *testing.T) {
 		}
 		return &File{Name: item}, nil
 	})
-	names := fileNames(files)
+	names := fileNames(listedFiles(resolved))
 	if fmt.Sprint(names) != "[a b c]" {
 		t.Errorf("files = %v, want [a b c]", names)
 	}
@@ -57,13 +57,13 @@ func TestResolveListedKeepsOrderAndReasons(t *testing.T) {
 	}
 }
 
-// TestResolveInTurnAsksOneAtATime pins the sequential mode the stateful
+// TestResolveEachInTurnAsksOneAtATime pins the sequential mode the stateful
 // series lean on: never two resolves at once, each after the one before it
 // in listing order, with the same files and reasons as the parallel mode.
-func TestResolveInTurnAsksOneAtATime(t *testing.T) {
+func TestResolveEachInTurnAsksOneAtATime(t *testing.T) {
 	items := []string{"a", "refused-1", "b", "failed", "refused-2", "c"}
 	var running, seen int
-	files, refusals, failed := resolveInTurn(context.Background(), items, func(_ context.Context, item string) (*File, error) {
+	resolved, refusals, failed := resolveEach(context.Background(), items, true, func(_ context.Context, item string) (*File, error) {
 		running++
 		defer func() { running-- }()
 		if running > 1 {
@@ -78,7 +78,7 @@ func TestResolveInTurnAsksOneAtATime(t *testing.T) {
 		}
 		return &File{Name: fmt.Sprint(item, seen)}, nil
 	})
-	names := fileNames(files)
+	names := fileNames(listedFiles(resolved))
 	if fmt.Sprint(names) != "[a1 b3 c6]" {
 		t.Errorf("files = %v, want [a1 b3 c6]", names)
 	}
@@ -199,5 +199,36 @@ func TestExpandSeriesCapsNestsAndExplains(t *testing.T) {
 		if err == nil || err.Error() != tc.want {
 			t.Errorf("err = %v, want %q", err, tc.want)
 		}
+	}
+}
+
+// TestWalkEpisodesSaysWhetherTheListingWentOn pins the cut a series walk
+// hands expandSeries: more where the limit stopped a listing that goes on,
+// nothing where the listing ended at the limit, and the walk's own note
+// for a listing cut short some other way.
+func TestWalkEpisodesSaysWhetherTheListingWentOn(t *testing.T) {
+	walk := func(limit, pages int, fail bool) ([]int, bool, string) {
+		items, more, note, err := walkEpisodes(context.Background(), limit, pageWalk[int]{
+			fetch: func(_ context.Context, n int) (pageOf[int], error) {
+				if fail && n == 1 {
+					return pageOf[int]{}, errors.New("down")
+				}
+				return pageOf[int]{items: []int{2 * n, 2*n + 1}, next: n+1 < pages}, nil
+			},
+			key: func(n int) string { return fmt.Sprint(n) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return items, more, note
+	}
+	if items, more, note := walk(3, 3, false); len(items) != 3 || !more || note != "" {
+		t.Errorf("cut: %v, more %v, note %q", items, more, note)
+	}
+	if items, more, note := walk(4, 2, false); len(items) != 4 || more || note != "" {
+		t.Errorf("ended at the limit: %v, more %v, note %q", items, more, note)
+	}
+	if items, more, note := walk(10, 3, true); len(items) != 2 || more || note != "partial — could not fetch next page" {
+		t.Errorf("broke off: %v, more %v, note %q", items, more, note)
 	}
 }

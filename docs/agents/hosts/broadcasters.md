@@ -10,13 +10,28 @@ The public broadcasters' APIs have nothing in common, so each keeps its own
 extractor, but they share `broadcast.go`. A programme a broadcaster declines
 (gone, live, DRM-protected, licensed elsewhere) is a `broadcastRefusal`
 reading `<site>: <title>: <reason>`, so that a series refused in full says
-why once rather than once an episode; `resolveListed` fans a listing out,
-keeping files in order with the refusals and the first other failure
-beside them, a refusal being the answer a caller can act on.
-`resolveInTurn` does the same one episode at a time, for nrk, whose player
-is asked for episodes one after another, and ruv, whose session remembers
-the first Iceland-only refusal and turns the rest of that scope away
-without asking; `resolveEach` keeps each file beside its item.
+why once rather than once an episode; `resolveEach` fans a listing out,
+keeping each file beside its item in order with the refusals and the first
+other failure beside them, a refusal being the answer a caller can act on.
+`inTurn` asks one episode at a time, for nrk, whose player is asked for
+episodes one after another, and ruv, whose session remembers the first
+Iceland-only refusal and turns the rest of that scope away without asking.
+
+A broadcaster's paged listing walks through `walkPages` (see "Walking
+pages" in [extractors.md](../extractors.md)): the engine owns the page cap,
+the repeat check and what a later page that fails means. One whose
+episodes are resolved as it is listed walks through `walkEpisodes`, which
+stops at the request budget and says whether the listing went on (`more`)
+for `expandSeries` to note in its own words; drtv, orf, niconico, francetv
+and radio-canada, whose episodes are resolved when their transfers start,
+walk the whole listing to the page cap and cut it to the file cap after.
+A listing whose end is found by asking past it (rtve, which answers a page
+past the end with the first again, and francetv's `toutes-les-videos`)
+walks `quiet`, with the failure note kept for a page that really failed.
+Where a later page fails, the note says so ("partial — could not fetch next
+page", or "the listing broke off partway" for rtbf, radio-canada and yle,
+whose notes already said it that way, and for a drtv season that could not
+be read at all), and rtpplay names the cut in its title.
 
 A series resolved while it is listed goes through `expandSeries`, the one
 sequence ard, nrk, svtplay, srf, rtve, vrtmax, pbs, zdf, npostart, raiplay,
@@ -48,11 +63,11 @@ again, returns the lazy file rather than the error. npostart reads at most
 `config.MaxSeasonsNPO` seasons, each a request against the same budget, and
 its note says when it cut them.
 
-A listing resolved without `expandSeries` — the players an rtbf page
-embeds, the media a radio-canada article attaches — cuts what it asks to
-`config.MaxResolvedEpisodes` with a `cappedNote`, and leaves the user's file
-cap to the registry. A listing of lazy episodes that costs only its pages
-(radio-canada's programmes) cuts nothing itself.
+The players an rtbf page embeds and the media a radio-canada article
+attaches go through `expandSeries` too (noun "players", "media"), so that
+when none plays the error gives the first reason one was refused for. A
+listing of lazy episodes that costs only its pages (radio-canada's
+programmes) cuts nothing itself.
 
 A rendition's place in a quality ladder is `rankIn` (`renditions.go`), each caller
 saying where an unknown name lands. A file's extension read off its link is
@@ -128,7 +143,8 @@ the stream: asked from elsewhere, the master redirects to a notice
 (`insert_geoprotection`) that would download as a short clip of something
 else. It is recognised and refused in words, and a series' Austria-only
 episodes are left out once one has shown it. A series (`/sendereihe/<id>`,
-`profile/<id>/episodes`) lists newest first and is filed oldest first.
+`profile/<id>/episodes`) lists newest first and is filed oldest first, so
+it is read whole, up to the page cap, before the file cap cuts it.
 Anything else on orf.at, its radio and news pages, goes to yt-dlp.
 
 ## svtplay
@@ -267,7 +283,8 @@ session.
 A programme's episodes are the tabs of its `TAB_LIST` (a season or a year,
 each a folder), each list paged by its own `links.next`, 50 at most a page.
 The entries say nothing of who may play them, so each is asked of the play API
-as the listing is read (`expandSeries`, labelled by tab), and what cannot be
+as the listing is read (`expandSeries`, labelled by tab); the walk stops at
+that budget, the note saying the programme went on, and what cannot be
 had is left out with each reason counted once. Any other rtbf.be page, an article say, is read for
 the players it embeds (`data-asset-id`, embed links, escaped ones in script
 included).
@@ -302,7 +319,8 @@ number the link ends in. A video page's own `<title>` is the site's name
 alone, so pages are named by `og:title`, less its "en replay". A programme's
 page and its `toutes-les-videos` pages (`?page=N`) list cards with the video's
 id and `content_format`; whole programmes (`integrale`) are kept and clips
-left out where both are listed. Anything else on france.tv goes to yt-dlp.
+left out where both are listed. A page past the end lists nothing new, which
+ends the walk quietly. Anything else on france.tv goes to yt-dlp.
 
 ## radio-canada
 
@@ -347,7 +365,7 @@ leaves such a track out).
 An OHdio programme's page lists its episodes as `EpisodeListItem` entries with
 their media ids, fifty a page, newest first. The next pages are
 `?pageNumber=N`, which the site's own loader reads off the URL (1 to 200,
-`config.MaxPagesRadioCanada`; `?page=` is ignored), and
+the page cap, `config.MaxAlbumPages`; `?page=` is ignored), and
 `pagination.totalCount` says when to stop. A
 programme with seasons shows its latest alone; each season is a path of its
 own (`/saison-N`), linked from the page's season selector, with
