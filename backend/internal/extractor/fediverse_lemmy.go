@@ -93,7 +93,7 @@ type lemmyPostView struct {
 }
 
 // lemmy resolves a community, a person's submissions, or a single post.
-func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget) (*Result, error) {
+func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget, opts Options) (*Result, error) {
 	client := &lemmyClient{f: f, root: util.Origin(u)}
 
 	if t.kind == fediPost {
@@ -124,9 +124,12 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget) (*Resu
 	// Pages are asked for until one comes back empty. Lemmy 1.0 replaces
 	// page numbers with a cursor, and an instance that ignores a parameter
 	// it no longer knows hands back the first page again, which adds
-	// nothing and so ends the walk.
+	// nothing and so ends the walk. Most posts may be text, so the file cap
+	// is counted in files (fediTimeline).
+	postKey := func(view lemmyPostView) string { return strconv.FormatInt(view.Post.ID, 10) }
+	timeline := newFediTimeline(opts, postKey, lemmyFiles)
 	views, note, err := walkPages(ctx, pageWalk[lemmyPostView]{
-		key:   func(view lemmyPostView) string { return strconv.FormatInt(view.Post.ID, 10) },
+		key:   postKey,
 		limit: -1, pages: config.MaxTimelinePages,
 		fetch: func(ctx context.Context, n int) (pageOf[lemmyPostView], error) {
 			query := url.Values{}
@@ -141,7 +144,10 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget) (*Resu
 			if err := client.get(ctx, route, query, &payload); err != nil {
 				return pageOf[lemmyPostView]{}, fmt.Errorf("fediverse: read %s: %w", title, err)
 			}
-			return pageOf[lemmyPostView]{items: payload.Posts, next: true, end: len(payload.Posts) == 0}, nil
+			if len(payload.Posts) == 0 {
+				return pageOf[lemmyPostView]{end: true}, nil
+			}
+			return timeline.page(payload.Posts, true), nil
 		},
 	})
 	if err != nil {

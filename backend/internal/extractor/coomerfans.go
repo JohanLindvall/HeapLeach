@@ -86,7 +86,7 @@ func (c *CoomerFans) Recognise(_ context.Context, p *Page) bool {
 }
 
 // Extract resolves a creator's page or a single post.
-func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	// The site's random-creator and random-post links redirect to the page
 	// they chose, which is the one recognised and the one to read.
 	if _, final, ok := probedDocument(ctx, u); ok && final.String() != u.String() {
@@ -97,7 +97,7 @@ func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	case len(segs) >= 2 && segs[0] == "p":
 		return c.post(ctx, u)
 	case len(segs) >= 2 && segs[0] == "u":
-		return c.profile(ctx, u)
+		return c.profile(ctx, u, opts)
 	}
 	return nil, fmt.Errorf("coomerfans: %s is neither a creator page (/u/<service>/<id>/<name>) "+
 		"nor a post (/p/<post>/<id>/<service>)", u.Redacted())
@@ -238,38 +238,49 @@ func coomerFansPost(doc string, base *url.URL) (string, []coomerFansItem, error)
 
 // ---------------------------------------------------------------- profile
 
-// profile expands a creator's page into every post they have.
-func (c *CoomerFans) profile(ctx context.Context, u *url.URL) (*Result, error) {
-	links, title, err := c.postLinks(ctx, u)
+// profile expands a creator's page into every post they have, up to the
+// listing cap: every post is a page to read.
+func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	links, title, note, err := c.postLinks(ctx, u, opts)
 	if err != nil {
 		return nil, err
 	}
 	if len(links) == 0 {
 		return nil, fmt.Errorf("coomerfans: no posts on %s", u.Redacted())
 	}
-	return &Result{Title: title, Files: c.expand(ctx, links)}, nil
+	files, refusals, failed := c.expand(ctx, links)
+	if len(files) == 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, noneRead("coomerfans", len(links), "posts", u.Redacted(), refusals, failed)
+	}
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
-// postLinks walks the creator's pages for the posts they list.
+// postLinks walks the creator's pages for the posts they list, up to the
+// listing cap, with the note for a walk the cap cut short.
 //
 // Paging stops at a page that adds nothing new as well as at the absence of
 // a next link, because a listing that runs past its end tends to answer with
 // the last page again rather than with nothing. A later page that will not
 // load or parse ends the walk with the earlier ones, quietly: the listing
 // says nothing of how long it is, so there is nothing to call partial.
-func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL) ([]string, string, error) {
+func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([]string, string, string, error) {
 	headers := httpx.Referer(coomerFansRoot + "/")
 	fallback := strings.Trim(u.Path, "/")
 	doc, _, err := fetchDocument(ctx, c.client, u, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", u.String(), err)
+		return nil, "", "", fmt.Errorf("coomerfans: fetch %s: %w", u.String(), err)
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
-		return nil, fallback, nil
+		return nil, fallback, "", nil
 	}
-	found, title, _, err := walkListing(ctx, c.client, u, listingWalk{
-		name: "coomerfans", title: fallback, limit: -1, quiet: true, root: root,
+	limit, limitNote := listingLimit(opts)
+	found, title, note, err := walkListing(ctx, c.client, u, listingWalk{
+		name: "coomerfans", title: fallback, quiet: true, root: root,
+		limit: limit, limitNote: limitNote,
 		fetch: fetchAsAsked(c.client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {
 			p := listingPage{title: coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))}
@@ -285,13 +296,13 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL) ([]string, strin
 		},
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	links := make([]string, 0, len(found))
 	for _, link := range found {
 		links = append(links, link.url)
 	}
-	return links, title, nil
+	return links, title, note, nil
 }
 
 // coomerFansNextPage follows the listing's own next link.
@@ -317,11 +328,11 @@ func coomerFansIsPost(link string) bool {
 	return len(segs) >= 2 && segs[0] == "p"
 }
 
-// expand reads every post page, several at a time. FanOut supplies the
-// bounded concurrency, the ordering and the skip-on-failure; see fanout.go
-// for why each of those matters.
-func (c *CoomerFans) expand(ctx context.Context, links []string) []File {
-	return FanOut(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+// expand reads every post page, several at a time, in the listing's order
+// (resolveFiles); a post that will not load leaves the rest, and why comes
+// back beside the files for when none could be read.
+func (c *CoomerFans) expand(ctx context.Context, links []string) ([]File, []string, error) {
+	return resolveFiles(ctx, links, func(ctx context.Context, link string) ([]File, error) {
 		u, err := ParseURL(link)
 		if err != nil {
 			return nil, err

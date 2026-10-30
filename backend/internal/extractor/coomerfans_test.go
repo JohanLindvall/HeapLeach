@@ -154,11 +154,20 @@ func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
 		pages map[string]string
 		want  []string
 		never string
+		opts  Options
+		note  string
 	}{
 		{"missing page", map[string]string{
 			"":  page("?page=2", "11", "12"),
 			"2": page("?page=3", "12", "13"),
-		}, []string{"11", "12", "13"}, ""},
+		}, []string{"11", "12", "13"}, "", Options{}, ""},
+		// Every post is a page to read, so the listing cap stops the walk,
+		// and says so.
+		{"capped", map[string]string{
+			"":  page("?page=2", "11", "12"),
+			"2": page("?page=3", "13", "14"),
+			"3": page("", "15"),
+		}, []string{"11", "12", "13"}, "3", Options{limits: Limits{Sources: 3}}, "partial — source limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -176,9 +185,9 @@ func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := NewCoomerFans(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-			links, title, err := c.postLinks(context.Background(), mustParse(t, srv.URL+"/u/onlyfans/1/a-creator"))
-			if err != nil || title != "a-creator" || len(links) != len(tc.want) {
-				t.Fatalf("links=%v title=%q err=%v", links, title, err)
+			links, title, note, err := c.postLinks(context.Background(), mustParse(t, srv.URL+"/u/onlyfans/1/a-creator"), tc.opts)
+			if err != nil || title != "a-creator" || len(links) != len(tc.want) || note != tc.note {
+				t.Fatalf("links=%v title=%q note=%q err=%v", links, title, note, err)
 			}
 			for i, post := range tc.want {
 				if links[i] != "https://coomerfans.com/p/"+post+"/1/onlyfans" {

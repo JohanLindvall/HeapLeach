@@ -92,8 +92,9 @@ type playerListing struct {
 	// it, the caps aside.
 	walk func(u *url.URL) (*url.URL, listingWalk)
 	// links, in walk's place, reads a listing that pages in a way of its
-	// own: its entries, its title and its note.
-	links func(ctx context.Context, client *httpx.Client, u *url.URL) ([]listingLink, string, string, error)
+	// own, up to the listing cap (listingLimit): its entries, its title and
+	// its note.
+	links func(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) ([]listingLink, string, string, error)
 }
 
 // playerVideo is what one reading of a page found.
@@ -179,7 +180,7 @@ func (p *Player) list(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	var title, note string
 	if read := p.site.listing.links; read != nil {
 		var err error
-		if links, title, note, err = read(ctx, p.client, u); err != nil {
+		if links, title, note, err = read(ctx, p.client, u, opts); err != nil {
 			return nil, fmt.Errorf("%s: %w", p.site.name, err)
 		}
 	} else {

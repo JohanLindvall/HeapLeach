@@ -52,7 +52,7 @@ const misskeyWebPublic = "webpublic-"
 
 // misskey resolves a user's notes, or a single note. Every call is a POST
 // carrying JSON, including the ones that only read.
-func (f *Fediverse) misskey(ctx context.Context, u *url.URL, t *fediTarget) (*Result, error) {
+func (f *Fediverse) misskey(ctx context.Context, u *url.URL, t *fediTarget, opts Options) (*Result, error) {
 	if t.kind == fediCommunity {
 		return nil, fmt.Errorf("fediverse: communities are a lemmy thing, and %s does not run "+
 			"it (%s)", u.Hostname(), u.Redacted())
@@ -80,7 +80,7 @@ func (f *Fediverse) misskey(ctx context.Context, u *url.URL, t *fediTarget) (*Re
 	}
 	title := "@" + fediHandle(t.handle, u.Hostname())
 
-	notes, note, err := f.misskeyTimeline(ctx, root, user.ID)
+	notes, note, err := f.misskeyTimeline(ctx, root, user.ID, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -124,11 +124,13 @@ func (f *Fediverse) misskeyLookup(ctx context.Context, root, handle string) (*mi
 //
 // untilId is this API's max_id: exclusive, newest first, each page asking for
 // what precedes the last id of the one before. The walk ends as a Mastodon
-// timeline's does — at an empty page, a page that adds nothing, or the cap.
-func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([]misskeyNote, string, error) {
+// timeline's does — at an empty page, a page that adds nothing, or a cap.
+func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string, opts Options) ([]misskeyNote, string, error) {
 	until := ""
+	key := func(note misskeyNote) string { return note.ID }
+	timeline := newFediTimeline(opts, key, misskeyFiles)
 	return walkPages(ctx, pageWalk[misskeyNote]{
-		key:   func(note misskeyNote) string { return note.ID },
+		key:   key,
 		limit: -1, pages: config.MaxTimelinePages,
 		fetch: func(ctx context.Context, _ int) (pageOf[misskeyNote], error) {
 			body := struct {
@@ -146,7 +148,7 @@ func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([
 				return pageOf[misskeyNote]{end: true}, nil
 			}
 			until = batch[len(batch)-1].ID
-			return pageOf[misskeyNote]{items: batch, next: until != ""}, nil
+			return timeline.page(batch, until != ""), nil
 		},
 	})
 }

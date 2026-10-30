@@ -354,11 +354,19 @@ line in the saved queue.
   and `refreshing` for files re-read at transfer time, and the listing
   notes. A new broadcaster uses these rather than types of its own.
 - `resolveFiles` and `noneRead` (`resolve.go`): a listing whose items each
-  open into several files (a band's releases), resolved concurrently with
-  the files kept in order and the refusals and first failure beside them,
-  and the one error, `<site>: none of the <n> <noun> on <where> could be
-  read: <reason>`, for when none could. `resolveEach` and `expandSeries`
-  share its outcome handling.
+  open into files (a band's releases, a board's threads, a channel's
+  videos, a profile's posts, albums or galleries), resolved concurrently
+  with the files kept in order and the refusals and first failure beside
+  them, and the one error, `<site>: none of the <n> <noun> on <where> could
+  be read: <reason>`, for when none could. A listing that needs each item
+  beside what it resolved to uses `resolveOutcomes` and `sortOutcomes`
+  directly; `resolveEach` and `expandSeries` share the same outcome
+  handling. An item whose host states why it holds nothing (a live stream,
+  a video still transcoding) returns a `broadcastRefusal`, so that reason
+  outranks a failure in the error. Where every item costs a request at
+  listing time, the listing is held to `listingLimit` and notes the cut.
+  A listing of items to resolve uses these rather than `FanOut` alone, which
+  drops every error.
 - `linkExt` (`html.go`): the extension a link's file name carries,
   lowercased, read off the path's last element (so a trailing slash still
   names it), with a fallback where it names none.
