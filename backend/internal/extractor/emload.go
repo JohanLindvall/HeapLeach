@@ -20,15 +20,40 @@ import (
 // Restricted pages can carry those attributes too, so the token alone does
 // not establish that the site offers a free download.
 type Emload struct {
-	hostSet
 	client *httpx.Client
 }
 
 func NewEmload(client *httpx.Client) *Emload {
-	return &Emload{hostSet: hostSet{"emload.com"}, client: client.WithTimeout(config.EmloadRequestTimeout)}
+	return &Emload{client: client.WithTimeout(config.EmloadRequestTimeout)}
 }
 
 func (e *Emload) Name() string { return "emload" }
+
+// emloadShape is a file share, /v2/file/<id>[/<name>] or the older
+// /file/<id>[/<name>].
+var emloadShape = pathShape(`^(/v2)?/file/[A-Za-z0-9_=+%-]+(/[^/]*)?/?$`)
+
+// Recognises is the inventory's description.
+func (e *Emload) Recognises() string {
+	return "file shares (`/v2/file/<id>/<name>`) whose page carries the `dl-file` download panel, " +
+		"or its removed-file or password notice"
+}
+
+// Shape reports a file share.
+func (e *Emload) Shape(u *url.URL) bool { return emloadShape(u) }
+
+// Recognise takes a share page by the panel the resolver reads, the
+// dl-file block holding the name and the free-download control, or by the
+// notices the resolver reports in its place.
+func (e *Emload) Recognise(_ context.Context, p *Page) bool {
+	if !emloadShape(p.Final) {
+		return false
+	}
+	root := p.HTML()
+	return root != nil && findFirst(root, func(n *html.Node) bool {
+		return hasClass(n, "dl-file") || hasClass(n, "nofile") || hasClass(n, "_filepassw")
+	}) != nil
+}
 
 func (e *Emload) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
 	parts := util.PathSegments(u)

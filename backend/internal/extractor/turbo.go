@@ -9,6 +9,8 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Turbo resolves turbo.cr video links (/embed/<id>, /d/<id>, /f/<id>).
@@ -17,16 +19,53 @@ import (
 // timestamp roughly twenty minutes out, so signing is deferred to download
 // time via Resolve.
 type Turbo struct {
-	hostSet
 	client *httpx.Client
 }
 
 // NewTurbo builds the turbo.cr extractor.
 func NewTurbo(client *httpx.Client) *Turbo {
-	return &Turbo{hostSet: hostSet{"turbo.cr", "turbocdn.st"}, client: client}
+	return &Turbo{client: client}
 }
 
 func (t *Turbo) Name() string { return "turbo" }
+
+// turboShape is a video page: the player (/embed/<id>), the download page
+// (/d/<id>, /f/<id>) or the watch page (/v/<id>).
+var turboShape = pathShape(`^/(embed|d|f|v)/[A-Za-z0-9_-]+/?$`)
+
+// turboSignPath is the signing endpoint, which the player and the download
+// page call with the id.
+const turboSignPath = "/api/sign?v="
+
+// Recognises is the inventory's description.
+func (t *Turbo) Recognises() string {
+	return "video pages (`/embed/<id>`, `/d/<id>`, `/v/<id>`) whose player or download page " +
+		"calls the `/api/sign?v=` signing endpoint, or that frame that player"
+}
+
+// Shape reports a video page.
+func (t *Turbo) Shape(u *url.URL) bool { return turboShape(u) }
+
+// Recognise takes a video page that uses the signing endpoint Extract asks:
+// the player and the download page call it from their script, and the watch
+// page frames the player for the same id.
+func (t *Turbo) Recognise(_ context.Context, p *Page) bool {
+	segs := util.PathSegments(p.Final)
+	if !turboShape(p.Final) || len(segs) < 2 {
+		return false
+	}
+	if p.Has(turboSignPath) {
+		return true
+	}
+	root := p.HTML()
+	return root != nil && findFirst(root, func(n *html.Node) bool {
+		if !isElem(n, atom.Iframe) {
+			return false
+		}
+		src, err := p.Final.Parse(attr(n, "src"))
+		return err == nil && src.Path == "/embed/"+segs[1]
+	}) != nil
+}
 
 // Extract produces a single lazily-signed entry.
 func (t *Turbo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -64,7 +103,7 @@ func (t *Turbo) sign(ctx context.Context, base, id string) (*Target, error) {
 		OriginalFilename string `json:"original_filename"`
 		Message          string `json:"message"`
 	}
-	endpoint := base + "/api/sign?v=" + url.QueryEscape(id)
+	endpoint := base + turboSignPath + url.QueryEscape(id)
 	if err := t.client.GetJSON(ctx, endpoint,
 		httpx.RefererOrigin(base+"/embed/"+id, base), &out); err != nil {
 		return nil, fmt.Errorf("turbo: sign %s: %w", id, err)

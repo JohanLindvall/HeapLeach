@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +51,6 @@ import (
 // mega until it lifts. The waits are kept by route, so the rest of the queue
 // learns one without asking.
 type Mega struct {
-	hostSet
 	client *httpx.Client
 	// links asks for download links, which go through proxy routes once the
 	// normal connection's quota is used up. It is capped like the other
@@ -89,11 +89,49 @@ var megaPace = Pace{Group: "mega", Files: 1, PerRoute: true, DirectFirst: true}
 
 // NewMega builds the mega extractor.
 func NewMega(client *httpx.Client) *Mega {
-	return &Mega{hostSet: hostSet{"mega.nz", "mega.co.nz"}, client: client,
+	return &Mega{client: client,
 		links: client.WithTimeout(config.MegaRequestTimeout), endpoint: megaAPI}
 }
 
 func (m *Mega) Name() string { return "mega" }
+
+// megaPathShape is a link with the handle in the path: /file/<handle>,
+// /embed/<handle> or /folder/<handle>, the key following in the fragment.
+var megaPathShape = pathShape(`^/(file|embed|folder)/[A-Za-z0-9_-]{8}/?$`)
+
+// megaFragmentShape is the older form, everything in the fragment:
+// #!<handle>!<key> or #F!<handle>!<key>.
+var megaFragmentShape = regexp.MustCompile(`^F?![A-Za-z0-9_-]{8}!`)
+
+// Recognises is the inventory's description.
+func (m *Mega) Recognises() string {
+	return "file and folder links (`/file/<handle>#<key>`, `/folder/<handle>#<key>`, `/embed/…`, `#!…!…`) " +
+		"whose page is the MEGA web client's boot shell (`secureboot.js`, `#fmholder`)"
+}
+
+// Shape reports a file, folder or embed link in either form. A link without
+// its key still has the shape: it is mega's to explain that the key is
+// missing, which nobody else can.
+func (m *Mega) Shape(u *url.URL) bool {
+	if megaPathShape(u) {
+		return true
+	}
+	path := u.EscapedPath()
+	return (path == "" || path == "/") && megaFragmentShape.MatchString(u.Fragment)
+}
+
+// Recognise takes a link of mega's form served by its web client. The
+// server sees nothing of the link but the handle, so the page is the same
+// boot shell for every link, and that shell is what is checked: the boot
+// script every path loads, and the file manager it boots into. Its name is
+// checked as well, since the shell is all there is.
+func (m *Mega) Recognise(_ context.Context, p *Page) bool {
+	if !m.Shape(p.URL) && !m.Shape(p.Final) {
+		return false
+	}
+	return p.Script("/secureboot.js") && p.Has(`id="fmholder"`) &&
+		strings.Contains(strings.ToUpper(p.Title()), "MEGA")
+}
 
 // Extract resolves a public link into its files.
 func (m *Mega) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {

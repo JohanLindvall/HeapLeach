@@ -50,12 +50,12 @@ func fileLinksTestRegistry(t *testing.T, doc string) (*Registry, string) {
 		fmt.Fprint(w, doc)
 	}))
 	t.Cleanup(srv.Close)
+	doc = keep2ShareShells(t).Replace(doc)
 	client := httpx.New("test-agent", "en-US", 0, 2*time.Second)
 	reg := NewRegistry(&config.Config{}, client)
 	for _, ex := range reg.extractors {
 		if k, ok := ex.(*Keep2Share); ok {
 			k.api, k.files = srv.URL+"/api/"+k.Name(), ""
-			k.hostSet = hostSet{k.Name() + ".example.test", k.Name() + "-alias.example.test"}
 		}
 	}
 	return reg, srv.URL
@@ -68,23 +68,23 @@ func TestPlainPageHarvestsFileLinksBeforePreviewAndKeepsPacing(t *testing.T) {
 			<video src="https://media.example.test/preview.mp4"></video>
 			<a href="https://keep2share.example.test/file/first/First.bin?ref=board">first</a>
 			<a href="http://keep2share-alias.example.test/file/first#download">same file</a>
-			<a href="//fileboom.example.test/file/first">same ID, different service</a>
+			<a href="//fileboom.example.test/file/first">same ID, the other service's domain</a>
 			<p>https://fileboom.example.test/file/second.</p>
 			<a href="https://fileboom.example.test/file/second/Second.bin">duplicate</a>
 			<a href="https://keep2share.example.test/premium">upgrade</a>
 			<a href="https://fileboom.example.test/folder/example">folder</a>
 			<a href="https://keep2share.example.test/file/">missing ID</a>
-			<a href="https://elsewhere.example.test/file/third">unsupported</a>
+			<a href="https://elsewhere.example.test/download/third">unsupported</a>
 			<a href="/thread/next">navigation</a></html>`)
 			res, ex, err := reg.Extract(context.Background(), base+page, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ex.Name() != "direct" || res.Title != "Shared Files" || len(res.Files) != 3 || res.Note != "" {
+			if ex.Name() != "direct" || res.Title != "Shared Files" || len(res.Files) != 2 || res.Note != "" {
 				t.Fatalf("plain page did not expand unique file links: ex=%s result=%+v", ex.Name(), res)
 			}
 			for i, want := range []struct{ name, group string }{
-				{"first.bin", "keep2share"}, {"first.bin", "fileboom"}, {"second.bin", "fileboom"},
+				{"first.bin", "keep2share"}, {"second.bin", "fileboom"},
 			} {
 				f := res.Files[i]
 				if f.Name != want.name || f.URL != "" || f.Resolve == nil || f.Dir == "" || f.Size != 1234 ||

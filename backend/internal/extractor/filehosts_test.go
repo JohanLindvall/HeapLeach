@@ -138,25 +138,59 @@ func TestDriveRefusalMessages(t *testing.T) {
 	}
 }
 
-func TestFileHostMatching(t *testing.T) {
-	tests := []struct {
-		host  string
-		match func(*url.URL) bool
-		want  bool
-	}{
-		{host: "www.dropbox.com", match: NewDropbox(nil).Match, want: true},
-		{host: "dl.dropboxusercontent.com", match: NewDropbox(nil).Match, want: true},
-		{host: "dropbox.example.test", match: NewDropbox(nil).Match, want: false},
-		{host: "www.mediafire.com", match: NewMediafire(nil).Match, want: true},
-		{host: "mediafire.com", match: NewMediafire(nil).Match, want: true},
-		{host: "drive.google.com", match: NewGoogleDrive(nil).Match, want: true},
-		{host: "drive.usercontent.google.com", match: NewGoogleDrive(nil).Match, want: true},
-		{host: "docs.google.com", match: NewGoogleDrive(nil).Match, want: false},
-	}
-	for _, tc := range tests {
-		u := &url.URL{Scheme: "https", Host: tc.host, Path: "/"}
-		if got := tc.match(u); got != tc.want {
-			t.Errorf("%s matched = %v, want %v", tc.host, got, tc.want)
-		}
-	}
+func TestDropboxRecognise(t *testing.T) {
+	d := NewDropbox(nil)
+	viewer := `<html><head><title>Dropbox</title><meta property="og:site_name" content="Dropbox">` +
+		`<script src="/static/atlas/file_viewer/page_file-vflA1.js"></script></head><body></body></html>`
+	link := "https://share.example.test/scl/fi/abc123/holiday.zip?rlkey=xyz&dl=0"
+	expectRecognised(t, d, htmlPage(t, link, viewer), true)
+	expectRecognised(t, d, htmlPage(t, "https://share.example.test/s/abc123/holiday.zip", viewer), true)
+	expectRecognised(t, d, htmlPage(t, link, `<html><head><title>Dropbox</title></head></html>`), false)
+	expectRecognised(t, d, htmlPage(t, "https://share.example.test/plans", viewer), false)
+	expectShape(t, d, link, true)
+	expectShape(t, d, "https://share.example.test/scl/fo/abc123/xyz?rlkey=k", true)
+	expectShape(t, d, "https://share.example.test/s/abc123", false)
+	expectShape(t, d, "https://share.example.test/", false)
+}
+
+func TestMediafireRecognise(t *testing.T) {
+	m := NewMediafire(nil)
+	file := `<html><head><title>First Archive.zip - MediaFire</title><meta property="og:site_name" content="MediaFire"></head>` +
+		`<body><a id="downloadButton" href="https://download.example.test/key/First+Archive.zip">Download</a></body></html>`
+	folder := `<html><head><title>My Files</title><meta property="og:site_name" content="MediaFire"></head>` +
+		`<body><script type="text/template"><li class="row_container mf_filecontainer file"></li></script></body></html>`
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/file/abc123def45/First_Archive.zip/file", file), true)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/folder/abc123def45/Example", folder), true)
+	// The form and the name, without the button or the folder viewer.
+	named := `<html><head><meta property="og:site_name" content="MediaFire"></head><body></body></html>`
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/file/abc123def45/First_Archive.zip/file", named), false)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/folder/abc123def45", named), false)
+	// The button elsewhere, or under another name.
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/about", file), false)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/file/abc123def45",
+		`<html><title>A blog</title><a id="downloadButton" href="/x.zip">Download</a></html>`), false)
+	expectShape(t, m, "https://share.example.test/file/abc123def45/First_Archive.zip/file", true)
+	expectShape(t, m, "https://share.example.test/?abc123def4567", true)
+	expectShape(t, m, "https://share.example.test/folder/abc123def45", true)
+	expectShape(t, m, "https://share.example.test/?utm_source=x", false)
+	expectShape(t, m, "https://share.example.test/upgrade", false)
+}
+
+func TestGoogleDriveRecognise(t *testing.T) {
+	g := NewGoogleDrive(nil)
+	viewer := `<html><head><title>First Report.pdf - Google Drive</title>` +
+		`<script src="/_/apps-fileview/_/js/k=apps-fileview.v.1/m=v"></script></head><body></body></html>`
+	confirm := `<html><body><form id="download-form" action="https://download.example.test/download">` +
+		`<input type="hidden" name="id" value="FILEID123456"><input type="hidden" name="uuid" value="u"></form></body></html>`
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/file/d/FILEID123456/view?usp=sharing", viewer), true)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/uc?export=download&id=FILEID123456", confirm), true)
+	// The form and the name, without the viewer's bundle.
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/file/d/FILEID123456/view",
+		`<html><head><title>First Report.pdf - Google Drive</title></head></html>`), false)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/drive/folders/FOLDERID123", viewer), false)
+	expectShape(t, g, "https://share.example.test/file/d/FILEID123456/view", true)
+	expectShape(t, g, "https://share.example.test/open?id=FILEID123456", true)
+	expectShape(t, g, "https://share.example.test/uc?export=download&id=FILEID123456", true)
+	expectShape(t, g, "https://share.example.test/uc", false)
+	expectShape(t, g, "https://share.example.test/drive/folders/FOLDERID123", false)
 }

@@ -72,11 +72,15 @@ func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *Keep2Share) (
 	}))
 	t.Cleanup(srv.Close)
 	client := httpx.New("test-agent", "en-US", 0, time.Second)
-	reg := &Registry{fallback: NewDirect(nil)}
+	reg := &Registry{fallback: NewDirect(client)}
 	v := NewVoyeurKing(client, reg)
 	base, _ := url.Parse(srv.URL)
 	v.hostSet = hostSet{base.Hostname()}
-	k.hostSet = hostSet{"files.example.test"}
+	reg.client = client
+	shell := keep2ShareShell(t, k.label)
+	for path, doc := range pages {
+		pages[path] = strings.ReplaceAll(doc, "https://files.example.test", shell)
+	}
 	reg.extractors = []Extractor{v, k}
 	return reg, v, srv.URL, func() []string {
 		mu.Lock()

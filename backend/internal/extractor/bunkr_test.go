@@ -11,25 +11,25 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-func TestBunkrMatchCoversTheDomainRotation(t *testing.T) {
+func TestBunkrRecognise(t *testing.T) {
 	b := NewBunkr(nil)
-	cases := map[string]bool{
-		"https://bunkr.cr/a/AAAA":       true,
-		"https://bunkr.si/f/BBBB":       true,
-		"https://bunkrr.su/f/CCCC":      true,
-		"https://cdn.bunkr.example/x":   true,
-		"https://example.test/f/DDDD":   false,
-		"https://notbunkr.example/f/EE": false,
-	}
-	for raw, want := range cases {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := b.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", bunkrServingPage), true)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", bunkrMaintenancePage), true)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/a/AAAA", bunkrAlbumPage), true)
+	// The right form and the site's name, without the file id or the cards.
+	named := `<html><head><title>a-clip.mp4 | Bunkr</title></head><body><h1>a-clip.mp4</h1></body></html>`
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", named), false)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/a/AAAA", named), false)
+	// The markers, on a page of another form.
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/faq", bunkrServingPage), false)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", bunkrAlbumPage), false)
+
+	expectShape(t, b, "https://files.example.test/f/AAAA", true)
+	expectShape(t, b, "https://files.example.test/v/AAAA", true)
+	expectShape(t, b, "https://files.example.test/a/AAAA", true)
+	expectShape(t, b, "https://files.example.test/f/AAAA/extra", false)
+	expectShape(t, b, "https://files.example.test/AAAA", false)
+	expectShape(t, b, "https://files.example.test/", false)
 }
 
 func TestParseBunkrDownloadHref(t *testing.T) {

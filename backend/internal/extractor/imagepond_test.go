@@ -298,21 +298,31 @@ func TestImagePondExtractReportsAPageWithNoMedia(t *testing.T) {
 	}
 }
 
-func TestImagePondMatch(t *testing.T) {
+func TestImagePondRecognise(t *testing.T) {
 	i := NewImagePond(nil)
-	for _, raw := range []string{"https://www.imagepond.net/i/abc123", "https://imagepond.net/i/abc123"} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !i.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	other, _ := url.Parse("https://example.test/i/abc123")
-	if i.Match(other) {
-		t.Error("matched an unrelated host")
-	}
+	head := `<meta property="og:site_name" content="ImagePond">`
+	video := `<html><head>` + head + `<meta property="og:video" content="https://media.example.test/media/videos/First_Clip_ab12.mov">` +
+		`<meta property="og:image" content="https://media.example.test/media/videos/First_Clip_ab12_thumb.jpg"></head><body></body></html>`
+	direct := `<html><head>` + head + `<meta property="og:video" content="/i/abc123/direct"></head><body></body></html>`
+	album := `<html><head>` + head + `</head><body><a :href="manageMode ? 'javascript:void(0)' : '/i/abc123'">First</a></body></html>`
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123", video), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123", direct), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1", album), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1", imagePondAlbumPage), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1",
+		`<html><head>`+head+`</head><body><a href="/i/abc123">First</a></body></html>`), true)
+	// The form and the name, without the stored file or the cards.
+	named := `<html><head>` + head + `<meta property="og:image" content="/logo.png"></head><body><a href="/browse">Browse</a></body></html>`
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123", named), false)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1", named), false)
+	// The stored file under another name, or on a page of another form.
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123",
+		`<html><head><meta property="og:video" content="/media/videos/First_Clip.mov"></head></html>`), false)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/trending", video), false)
+	expectShape(t, i, "https://images.example.test/i/abc123", true)
+	expectShape(t, i, "https://images.example.test/a/album1", true)
+	expectShape(t, i, "https://images.example.test/i/abc123/direct", false)
+	expectShape(t, i, "https://images.example.test/browse", false)
 }
 
 // An album listing shaped like the site's. The traps it holds are both real:

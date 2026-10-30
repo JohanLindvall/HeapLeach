@@ -94,19 +94,21 @@ func TestSuvoboxFileID(t *testing.T) {
 	}
 }
 
-func TestSuvoboxMatch(t *testing.T) {
+func TestSuvoboxRecognise(t *testing.T) {
 	s := NewSuvobox(nil)
-	for _, raw := range []string{"https://www.suvobox.com/a/abcd", "https://suvobox.com/f/aaaa1111"} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !s.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	other, _ := url.Parse("https://example.test/a/abcd")
-	if s.Match(other) {
-		t.Error("matched an unrelated host")
-	}
+	file := `<html><head><meta property="og:title" content="first.jpg"><meta property="og:site_name" content="suvobox"></head>` +
+		`<body><a href="//cdn.example.test/f/aaaa1111?dl=1&amp;token=1.abc">Download</a></body></html>`
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/a/abcd", suvoboxAlbumPage), true)
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/f/aaaa1111", file), true)
+	// The form and the name, without the tiles or the file's own button.
+	named := `<html><head><meta property="og:site_name" content="suvobox"></head><body></body></html>`
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/a/abcd", named), false)
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/f/aaaa1111", named), false)
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/f/bbbb2222", file), false)
+	// The tiles on a page of another form.
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/browse", suvoboxAlbumPage), false)
+	expectShape(t, s, "https://share.example.test/a/abcd", true)
+	expectShape(t, s, "https://share.example.test/f/aaaa1111?album=abcd", true)
+	expectShape(t, s, "https://share.example.test/f/aaaa1111/extra", false)
+	expectShape(t, s, "https://share.example.test/browse", false)
 }

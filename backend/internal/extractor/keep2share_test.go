@@ -122,6 +122,35 @@ func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[strin
 	return keep2ShareProtocolTestSite(t, NewKeep2Share, getURL)
 }
 
+// keep2ShareShell serves the app shell a service answers its file links
+// with, named as the service names itself, and returns its origin. It is
+// served as localhost so that a test's other sites, matched on 127.0.0.1,
+// do not take its links.
+func keep2ShareShell(t *testing.T, name string) string {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<html><head><title>%s</title><script type="module" src="/static/js/entry-index-A1.js"></script>`+
+			`<link rel="modulepreload" href="/static/js/chunk-client-B2.js"></head><body><div id="root"></div></body></html>`, name)
+	}))
+	t.Cleanup(s.Close)
+	return strings.Replace(s.URL, "127.0.0.1", "localhost", 1)
+}
+
+// keep2ShareShells points the placeholder service hosts fixtures link to,
+// keep2share.example.test, its -alias and fileboom.example.test, at shells
+// of the services, so the links are identified by their pages.
+func keep2ShareShells(t *testing.T) *strings.Replacer {
+	t.Helper()
+	k2s, alias, boom := keep2ShareShell(t, "Keep2Share"), keep2ShareShell(t, "Keep2Share"), keep2ShareShell(t, "FileBoom")
+	bare := func(origin string) string { return strings.TrimPrefix(origin, "http:") }
+	return strings.NewReplacer(
+		"https://keep2share.example.test", k2s, "//keep2share.example.test", bare(k2s),
+		"http://keep2share-alias.example.test", alias, "https://keep2share-alias.example.test", alias,
+		"https://fileboom.example.test", boom, "//fileboom.example.test", bare(boom),
+	)
+}
+
 func keep2ShareProtocolTestSite(t *testing.T, create func(*httpx.Client) *Keep2Share, getURL func(http.ResponseWriter, map[string]string)) *Keep2Share {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -814,4 +843,29 @@ func TestKeep2ShareKeepsAFreeDownloadPerRoute(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestKeep2ShareRecognise(t *testing.T) {
+	k2s, boom := NewKeep2Share(nil), NewFileBoom(nil)
+	shell := func(name string) string {
+		return `<html><head><title>` + name + `</title><script type="module" crossorigin src="/static/js/entry-index-A1b2.js"></script>` +
+			`<link rel="modulepreload" href="/static/js/chunk-client-C3d4.js"></head><body><div id="root"></div></body></html>`
+	}
+	link := "https://share.example.test/file/0a1b2c3d4e5f6/First.Clip.mp4"
+	expectRecognised(t, k2s, htmlPage(t, link, shell("Keep2Share")), true)
+	expectRecognised(t, boom, htmlPage(t, link, shell("FileBoom")), true)
+	// One app on both services: the name is what tells them apart.
+	expectRecognised(t, k2s, htmlPage(t, link, shell("FileBoom")), false)
+	expectRecognised(t, boom, htmlPage(t, link, shell("Keep2Share")), false)
+	// A removed file is the same shell, answered with a 404.
+	expectRecognised(t, k2s, fixturePage(t, link, http.StatusNotFound, "text/html", shell("Keep2Share")), true)
+	// The form and the name, but not the app shell.
+	expectRecognised(t, k2s, htmlPage(t, link, `<html><head><title>Keep2Share</title></head><body></body></html>`), false)
+	// The shell, but not a file link.
+	expectRecognised(t, k2s, htmlPage(t, "https://share.example.test/premium", shell("Keep2Share")), false)
+
+	expectShape(t, k2s, "https://share.example.test/file/0a1b2c3d4e5f6", true)
+	expectShape(t, k2s, link, true)
+	expectShape(t, k2s, "https://share.example.test/file/", false)
+	expectShape(t, k2s, "https://share.example.test/folder/0a1b2c3d4e5f6", false)
 }

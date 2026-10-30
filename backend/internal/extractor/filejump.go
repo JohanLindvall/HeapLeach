@@ -18,15 +18,49 @@ import (
 // redirector that signs the storage URL on every request, so keep the button
 // URL itself: saving its redirect target would expire while queued.
 type FileJump struct {
-	hostSet
 	client *httpx.Client
 }
 
 func NewFileJump(client *httpx.Client) *FileJump {
-	return &FileJump{hostSet: hostSet{"filejump.com"}, client: client}
+	return &FileJump{client: client}
 }
 
 func (f *FileJump) Name() string { return "filejump" }
+
+// fileJumpShape is a public share, /s/<id>, or its /download and /content
+// routes.
+var fileJumpShape = pathShape(`^/s/[A-Za-z0-9_-]+(/(download|content))?/?$`)
+
+// Recognises is the inventory's description.
+func (f *FileJump) Recognises() string {
+	return "public shares (`/s/<id>`) whose page offers the share's own `/s/<id>/download` button"
+}
+
+// Shape reports a share or one of its routes.
+func (f *FileJump) Shape(u *url.URL) bool { return fileJumpShape(u) }
+
+// Recognise takes a share page carrying what Extract keeps: an enabled
+// link to the share's own download route, beside it on the same site.
+func (f *FileJump) Recognise(_ context.Context, p *Page) bool {
+	parts := util.PathSegments(p.Final)
+	if !fileJumpShape(p.Final) || len(parts) < 2 {
+		return false
+	}
+	root := p.HTML()
+	if root == nil {
+		return false
+	}
+	want := "/s/" + parts[1] + "/download"
+	return findFirst(root, func(a *html.Node) bool {
+		if !isElem(a, atom.A) || hasAttr(a, "disabled") || attr(a, "aria-disabled") == "true" {
+			return false
+		}
+		// The link resolved against the page: its path is compared, and its
+		// origin only with the page's own.
+		link, err := p.Final.Parse(strings.TrimSpace(attr(a, "href")))
+		return err == nil && link.Path == want && util.Origin(link) == util.Origin(p.Final)
+	}) != nil
+}
 
 func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	parts := util.PathSegments(u)
@@ -36,7 +70,7 @@ func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 	}
 	page := *u
 	page.Path, page.RawPath, page.Fragment = "/s/"+parts[1], "", ""
-	doc, err := f.client.GetString(ctx, page.String(), httpx.Referer(util.Origin(&page)+"/"))
+	doc, _, err := fetchDocument(ctx, f.client, &page, httpx.Referer(util.Origin(&page)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("filejump: fetch share: %w", err)
 	}

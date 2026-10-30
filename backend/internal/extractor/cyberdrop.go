@@ -27,12 +27,14 @@ import (
 // by a script once the browser runs — so the page is skipped entirely and the
 // metadata endpoint that script calls is asked directly.
 //
-// Only cyberdrop.cr is matched, and the two domains usually listed beside it
-// must not be: they are not aliases of this service. cyberdrop.me does not
-// resolve at all, and cyberdrop.to sits on a domain-parking address, which
-// answers a request with advertising and a fingerprinting script rather than
-// with an error. Matching that would hand a user someone else's payload and
-// call it their download, which is worse than not recognising the host.
+// Pages are recognised by what the service's own pages carry — an album's
+// entries, the file page's call to the metadata endpoint — never by name,
+// and that matters here: two domains usually listed beside the service are
+// not aliases of it. One does not resolve at all, and the other sits on a
+// domain-parking address, which answers a request with advertising and a
+// fingerprinting script rather than with an error. Taking that for the
+// service would hand a user someone else's payload and call it their
+// download, which is worse than not recognising it.
 //
 // Links are minted by a signing endpoint, so File.URL is empty and Resolve
 // does the work — the shape bunkr and turbo use, for a different reason. The
@@ -47,7 +49,6 @@ import (
 // DDoS-Guard fronts both the site and the API and passes cookieless requests,
 // so nothing here carries a session.
 type Cyberdrop struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -70,14 +71,47 @@ const (
 	cyberdropSizeClass = "file-size"
 )
 
-// NewCyberdrop builds the cyberdrop extractor. It claims cyberdrop.cr alone;
-// see the type comment for why the sibling domains are deliberately left to
-// the fallback.
+// NewCyberdrop builds the cyberdrop extractor.
 func NewCyberdrop(client *httpx.Client) *Cyberdrop {
-	return &Cyberdrop{hostSet: hostSet{"cyberdrop.cr"}, client: client}
+	return &Cyberdrop{client: client}
 }
 
 func (c *Cyberdrop) Name() string { return "cyberdrop" }
+
+// cyberdropAlbumShape is an album, /a/<id>; cyberdropFileShape a file's
+// viewer or embed player, /f/<slug> or /e/<slug>.
+var (
+	cyberdropAlbumShape = pathShape(`^/a/[A-Za-z0-9]+/?$`)
+	cyberdropFileShape  = pathShape(`^/[fe]/[A-Za-z0-9]+/?$`)
+)
+
+// cyberdropInfoPath is the metadata endpoint a file page's script asks.
+const cyberdropInfoPath = "/api/file/info/"
+
+// Recognises is the inventory's description.
+func (c *Cyberdrop) Recognises() string {
+	return "albums (`/a/<id>`) listing `#file` entries with a `file-size`, and file pages (`/f/<slug>`, " +
+		"`/e/<slug>`) whose script asks the `/api/file/info/` metadata endpoint"
+}
+
+// Shape reports an album or a file.
+func (c *Cyberdrop) Shape(u *url.URL) bool { return cyberdropAlbumShape(u) || cyberdropFileShape(u) }
+
+// Recognise reads what Extract does: an album's entries and the byte counts
+// beside them, or a file page's call to the metadata endpoint Extract asks
+// in its place.
+func (c *Cyberdrop) Recognise(_ context.Context, p *Page) bool {
+	switch {
+	case cyberdropAlbumShape(p.Final):
+		root := p.HTML()
+		return root != nil && findFirst(root, func(n *html.Node) bool {
+			return isElem(n, atom.A) && attr(n, "id") == cyberdropFileID
+		}) != nil && findFirst(root, func(n *html.Node) bool { return hasClass(n, cyberdropSizeClass) }) != nil
+	case cyberdropFileShape(p.Final):
+		return p.Has(cyberdropInfoPath)
+	}
+	return false
+}
 
 // Extract resolves an album or a single file.
 func (c *Cyberdrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -101,7 +135,7 @@ func (c *Cyberdrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 // There is no pagination to follow: the page carries every entry, however
 // many there are.
 func (c *Cyberdrop) album(ctx context.Context, u *url.URL) (*Result, error) {
-	doc, err := c.client.GetString(ctx, u.String(), httpx.Referer(cyberdropRoot+"/"))
+	doc, _, err := fetchDocument(ctx, c.client, u, httpx.Referer(cyberdropRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("cyberdrop: fetch %s: %w", u.Redacted(), err)
 	}

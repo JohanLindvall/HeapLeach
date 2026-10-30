@@ -193,7 +193,12 @@ func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Resu
 	if !known || (ex.Name() != "keep2share" && ex.Name() != "fileboom") {
 		return nil, fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
 	}
-	res, _, err := v.registry.Extract(ctx, link.String(), opts)
+	// The link's form is only a candidate: its page says which service, if
+	// either, it is.
+	res, ex, err := v.registry.Extract(ctx, link.String(), opts)
+	if err == nil && (ex == nil || (ex.Name() != "keep2share" && ex.Name() != "fileboom")) {
+		err = fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -67,8 +67,10 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 // fileLinkSources keeps links claimed by registered extractors. The generic
 // Direct fallback is never followed, even if it could discover more links on
 // that page. Other hosts keep their complete URLs (including Mega's key).
-// K2S and FileBoom additionally deduplicate by service and file ID, ignoring
-// aliases, filenames and tracking parameters, and exclude non-file pages.
+// K2S and FileBoom links additionally deduplicate by file ID, ignoring the
+// domain, filenames and tracking parameters, and exclude non-file pages: a
+// link's form cannot say which of the two it is before its page is probed,
+// and the two serve one file store, an ID naming the same file on either.
 func fileLinkSources(registry *Registry, candidates []string) []string {
 	var sources []string
 	seen := make(map[string]bool)
@@ -82,12 +84,12 @@ func fileLinkSources(registry *Registry, candidates []string) []string {
 			continue
 		}
 		key := link
-		if ex.Name() == "keep2share" || ex.Name() == "fileboom" {
+		if _, ok := ex.(*Keep2Share); ok {
 			parts := util.PathSegments(u)
 			if len(parts) < 2 || parts[0] != "file" {
 				continue
 			}
-			key = ex.Name() + "/" + parts[1]
+			key = "keep2share-file/" + parts[1]
 		}
 		if seen[key] {
 			continue

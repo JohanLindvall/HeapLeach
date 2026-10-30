@@ -27,7 +27,6 @@ import (
 // worth knowing only to say why it is not used — a signed link expires while
 // an item waits its turn, and this one buys nothing over the plain path.
 type Suvobox struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -46,10 +45,53 @@ const (
 
 // NewSuvobox builds the suvobox extractor.
 func NewSuvobox(client *httpx.Client) *Suvobox {
-	return &Suvobox{hostSet: hostSet{"suvobox.com"}, client: client}
+	return &Suvobox{client: client}
 }
 
 func (s *Suvobox) Name() string { return "suvobox" }
+
+// suvoboxAlbumShape is an album share, /a/<id>; suvoboxFileShape a file,
+// /f/<id>.
+var (
+	suvoboxAlbumShape = pathShape(`^/a/[A-Za-z0-9]+/?$`)
+	suvoboxFileShape  = pathShape(`^/f/[A-Za-z0-9]+/?$`)
+)
+
+// Recognises is the inventory's description.
+func (s *Suvobox) Recognises() string {
+	return "albums (`/a/<id>`) listing `thumb-item` tiles, and file pages (`/f/<id>`) " +
+		"whose download button is the file's own `/f/<id>?dl=1` link"
+}
+
+// Shape reports an album or a file.
+func (s *Suvobox) Shape(u *url.URL) bool { return suvoboxAlbumShape(u) || suvoboxFileShape(u) }
+
+// Recognise reads what Extract does: an album's tiles, each naming a file;
+// or, on a file page, the site's own download button for that file, the
+// ?dl=1 form of its path, which is what says the id is a stored file here.
+func (s *Suvobox) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	if root == nil {
+		return false
+	}
+	switch {
+	case suvoboxAlbumShape(p.Final):
+		return findFirst(root, func(n *html.Node) bool {
+			return isElem(n, atom.A) && hasClass(n, suvoboxTileClass) &&
+				suvoboxFileID(resolveRef(p.Final, attr(n, "href"))) != ""
+		}) != nil
+	case suvoboxFileShape(p.Final):
+		want := p.Final.EscapedPath()
+		return findFirst(root, func(n *html.Node) bool {
+			if !isElem(n, atom.A) {
+				return false
+			}
+			link, err := p.Final.Parse(attr(n, "href"))
+			return err == nil && link.EscapedPath() == want && link.Query().Get("dl") == "1"
+		}) != nil
+	}
+	return false
+}
 
 // Extract resolves an album or a single file.
 func (s *Suvobox) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -59,7 +101,7 @@ func (s *Suvobox) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 			u.Redacted())
 	}
 
-	doc, err := s.client.GetString(ctx, u.String(), httpx.Referer(suvoboxRoot+"/"))
+	doc, _, err := fetchDocument(ctx, s.client, u, httpx.Referer(suvoboxRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("suvobox: fetch %s: %w", u.Redacted(), err)
 	}

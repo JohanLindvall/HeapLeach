@@ -49,10 +49,6 @@ const (
 	wetransferRoot = "https://wetransfer.com"
 	wetransferAPI  = wetransferRoot + "/api/v4/transfers"
 
-	// wetransferShort is the site's own URL shortener, which is a plain
-	// redirect to a download page and carries nothing of its own.
-	wetransferShort = "we.tl"
-
 	// wetransferDownloads is the one path on the site this handles.
 	wetransferDownloads = "downloads"
 
@@ -78,31 +74,44 @@ func NewWeTransfer(client *httpx.Client) *WeTransfer {
 
 func (w *WeTransfer) Name() string { return "wetransfer" }
 
-// Match takes the site's download pages and its short links.
-//
-// The path gate on the site itself is deliberate. The bytes are served from a
-// signed link on a subdomain of the same domain, and one of those pasted
-// straight in is already a plain file that the direct fallback downloads as
-// it stands — whereas matching the whole domain here would leave this
-// extractor hunting for a transfer id in a storage path and failing the job.
-func (w *WeTransfer) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, wetransferShort) {
-		return true
-	}
-	if !util.HostMatches(u.Host, "wetransfer.com") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && segs[0] == wetransferDownloads
+// wetransferPageShape is a download page, /downloads/<id>[/<recipient>]/<hash>;
+// wetransferShortShape the short link the site mails, /t-<code>, which
+// redirects to one.
+var (
+	wetransferPageShape  = pathShape(`^/downloads/[A-Za-z0-9]+(/[A-Za-z0-9]+)?/[A-Za-z0-9]+/?$`)
+	wetransferShortShape = pathShape(`^/t-[A-Za-z0-9]+/?$`)
+)
+
+// Recognises is the inventory's description.
+func (w *WeTransfer) Recognises() string {
+	return "download pages (`/downloads/<id>/<hash>`) and the short links (`/t-<code>`) that redirect to them, " +
+		"served by the WeTransfer app with the transfer's `securityHash` in its page data"
+}
+
+// Shape reports a download page or a short link. The bytes are served from
+// signed links of another form, which stay the direct fallback's.
+func (w *WeTransfer) Shape(u *url.URL) bool { return wetransferPageShape(u) || wetransferShortShape(u) }
+
+// Recognise takes a download page — where a short link's redirect ends —
+// served by the site's app, whose page data carries the security hash the
+// download endpoint is then asked with.
+func (w *WeTransfer) Recognise(_ context.Context, p *Page) bool {
+	return wetransferPageShape(p.Final) && p.Has(`id="__NEXT_DATA__"`, `"securityHash"`) && p.Named("WeTransfer")
 }
 
 // Extract resolves a share link to the transfer's archive.
 func (w *WeTransfer) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+	// A short link names no transfer itself: the page it redirected to,
+	// which the probe already followed, or a fetch of it, does.
 	page := u
-	if util.HostMatches(u.Host, wetransferShort) {
-		var err error
-		if page, err = w.follow(ctx, u); err != nil {
-			return nil, err
+	if _, ok := wetransferParse(u); !ok {
+		if _, final, probed := probedDocument(ctx, u); probed {
+			page = final
+		} else {
+			var err error
+			if page, err = w.follow(ctx, u); err != nil {
+				return nil, err
+			}
 		}
 	}
 

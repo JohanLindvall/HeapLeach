@@ -100,30 +100,31 @@ func TestWeTransferParseRejectsEverythingElse(t *testing.T) {
 	}
 }
 
-// The storage host is the trap: it is a subdomain of the site, so matching
-// the domain alone would capture a signed link the user pasted and then fail
-// to find a transfer id in it, when the direct fallback would simply have
-// downloaded it.
-func TestWeTransferMatch(t *testing.T) {
+func TestWeTransferRecognise(t *testing.T) {
 	w := NewWeTransfer(nil)
-	cases := map[string]bool{
-		"https://wetransfer.com/downloads/aaaa1111/hash2222":          true,
-		"https://www.wetransfer.com/downloads/aaaa1111/rcpt/hash2222": true,
-		"https://we.tl/t-abcdef1234":                                  true,
-		"https://download.wetransfer.com/eugv/aaaa1111/hash2222":      false,
-		"https://wetransfer.com/":                                     false,
-		"https://wetransfer.com/help-center":                          false,
-		"https://example.test/downloads/aaaa1111/hash2222":            false,
-	}
-	for raw, want := range cases {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := w.Match(u); got != want {
-			t.Errorf("Match(%q) = %v, want %v", raw, got, want)
-		}
-	}
+	app := `<html><head><title>WeTransfer</title><meta property="og:site_name" content="WeTransfer"></head><body>` +
+		`<div id="__next"></div><script id="__NEXT_DATA__" type="application/json">` +
+		`{"props":{"pageProps":{"initialTransfer":null,"securityHash":"hash2222"}}}</script></body></html>`
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/hash2222", app), true)
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/rcpt3333/hash2222", app), true)
+	// A short link is recognised where its redirect lands.
+	short := htmlPage(t, "https://short.example.test/t-abcdef1234", app)
+	short.Final = mustURL(t, "https://transfer.example.test/downloads/aaaa1111/hash2222")
+	expectRecognised(t, w, short, true)
+	// The form and the name, without the page data.
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/hash2222",
+		`<html><head><meta property="og:site_name" content="WeTransfer"></head><body><div id="__next"></div></body></html>`), false)
+	// The app, but not a download page: the help centre, or a short link
+	// whose redirect went nowhere.
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/help-center", app), false)
+	expectRecognised(t, w, htmlPage(t, "https://short.example.test/t-abcdef1234", app), false)
+
+	expectShape(t, w, "https://transfer.example.test/downloads/aaaa1111/hash2222", true)
+	expectShape(t, w, "https://transfer.example.test/downloads/aaaa1111/rcpt/hash2222", true)
+	expectShape(t, w, "https://short.example.test/t-abcdef1234", true)
+	expectShape(t, w, "https://download.example.test/eugv/aaaa1111/hash2222", false)
+	expectShape(t, w, "https://transfer.example.test/downloads", false)
+	expectShape(t, w, "https://transfer.example.test/downloads/aaaa1111/rcpt/hash2222/extra", false)
 }
 
 func TestWeTransferReason(t *testing.T) {
