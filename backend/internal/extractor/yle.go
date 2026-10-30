@@ -179,19 +179,9 @@ func (od *yleOndemand) finlandOnly() bool { return strings.EqualFold(od.Region, 
 // master the MPEG-TS that Areena's HLS is.
 func (od *yleOndemand) extension() string {
 	if od.ManifestURL == "" && od.MediaURL != "" {
-		return yleMediaExtension(od.MediaURL)
+		return linkExt(od.MediaURL, ".mp3")
 	}
 	return ".ts"
-}
-
-// yleMediaExtension is an audio file's extension, as its link names it.
-func yleMediaExtension(link string) string {
-	if u, err := url.Parse(link); err == nil {
-		if ext := strings.ToLower(path.Ext(u.Path)); len(ext) > 1 && len(ext) <= 5 {
-			return ext
-		}
-	}
-	return ".mp3"
 }
 
 // yleStates says why a programme in each of the preview's other states is
@@ -278,20 +268,9 @@ func (y *Yle) programme(ctx context.Context, lang, id string) (*Target, string, 
 // resolved; an MP3 is not, and would otherwise be refused only once its
 // transfer starts, as a bare 403.
 func (y *Yle) refusedHere(ctx context.Context, link string, headers httpx.Header) bool {
-	req, err := y.client.NewRequest(ctx, http.MethodGet, link, nil)
-	if err != nil {
-		return false
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	req.Header.Set(httpx.HeaderRange, "bytes=0-0")
-	resp, err := y.client.DoOnce(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusForbidden
+	status, err := y.client.StatusOnce(ctx, http.MethodGet, link,
+		headers.Merge(httpx.Header{httpx.HeaderRange: "bytes=0-0"}))
+	return err == nil && status == http.StatusForbidden
 }
 
 // headers are what the site's own player sends.

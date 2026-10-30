@@ -209,40 +209,35 @@ func (a *ARD) video(ctx context.Context, id string) (*Result, error) {
 // series expands a programme into one file per episode, filed by season when
 // the programme has more than one.
 func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, error) {
-	title, episodes, err := a.episodes(ctx, ref)
+	title, episodes, more, err := a.episodes(ctx, ref, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("ard: %s lists nothing to download", u.Redacted())
 	}
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep ardEpisodeRef) string { return ep.season })
 
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
 	// minutes before a byte moved.
-	files, refusals, _ := resolveListed(ctx, episodes, func(ctx context.Context, ep ardEpisodeRef) (*File, error) {
-		file, _, episodeTitle, err := a.episode(ctx, ep.id)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(episodeTitle, ep.name, ep.id) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return file, nil
+	resolved, note, err := expandSeries(ctx, series[ardEpisodeRef]{
+		site: "ard", noun: "entries", link: u.Redacted(),
+		items: episodes, more: more,
+		label: func(ep ardEpisodeRef) string { return ep.season },
+		resolve: func(ctx context.Context, ep ardEpisodeRef) (*File, error) {
+			file, _, episodeTitle, err := a.episode(ctx, ep.id)
+			if err != nil {
+				return nil, err
+			}
+			file.Name = util.FirstNonEmpty(episodeTitle, ep.name, ep.id) + file.Name
+			return file, nil
+		},
+		unplayable: "the listing names them but no stream is offered",
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("ard: none of the %d entries of %s are playable: %s",
-			len(episodes), u.Redacted(),
-			util.FirstNonEmpty(append(refusals, "the listing names them but no stream is offered")...))
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(title, ref.show), Files: files}, nil
+	return &Result{Title: util.FirstNonEmpty(title, ref.show), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // ardEpisodeRef is one entry of a programme's listing.
@@ -252,27 +247,28 @@ type ardEpisodeRef struct {
 	season string
 }
 
-// episodes names a programme and lists what to download from it.
-func (a *ARD) episodes(ctx context.Context, ref ardRef) (string, []ardEpisodeRef, error) {
+// episodes names a programme and lists what to download from it, up to
+// limit entries a listing, saying whether one went on past that.
+func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (string, []ardEpisodeRef, bool, error) {
 	// A season named in the link is taken on its own, and its name goes in
 	// the job title rather than into a folder below it: two seasons fetched
 	// from two links would otherwise land in one folder, where episode names
 	// that start again at "Folge 1" collide.
 	if ref.season != "" {
-		widget, teasers, err := a.pages(ctx, ref.show, ref.season)
+		widget, teasers, more, err := a.pages(ctx, ref.show, ref.season, limit)
 		if err != nil {
-			return "", nil, err
+			return "", nil, false, err
 		}
-		return ardJoin(ardShowTitle(teasers), widget.Title), ardRefs(teasers, ""), nil
+		return ardJoin(ardShowTitle(teasers), widget.Title), ardRefs(teasers, ""), more, nil
 	}
 
-	first, teasers, err := a.pages(ctx, ref.show, "")
+	first, teasers, more, err := a.pages(ctx, ref.show, "", limit)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	seasons := ardSeasons(teasers)
 	if len(seasons) < 2 {
-		return first.Title, ardRefs(teasers, ""), nil
+		return first.Title, ardRefs(teasers, ""), more, nil
 	}
 
 	// A series with seasons is fetched again, one season at a time, and the
@@ -280,42 +276,46 @@ func (a *ARD) episodes(ctx context.Context, ref ardRef) (string, []ardEpisodeRef
 	// is the only one that names the seasons ("Staffel 2") and the only one
 	// that leaves out the audio-described copies.
 	var refs []ardEpisodeRef
+	seasonsMore := false
 	for _, season := range seasons {
-		widget, seasonTeasers, err := a.pages(ctx, ref.show, season)
+		widget, seasonTeasers, cut, err := a.pages(ctx, ref.show, season, limit)
 		if err != nil {
 			continue // one unreadable season should not lose the others
 		}
+		seasonsMore = seasonsMore || cut
 		// A season with no name of its own still needs a folder, or its
 		// episodes would be written beside the folders of every other season
 		// rather than into one of their own.
 		refs = append(refs, ardRefs(seasonTeasers, util.FirstNonEmpty(widget.Title, "Staffel "+season))...)
 	}
 	if len(refs) == 0 {
-		refs = ardRefs(teasers, "")
+		return first.Title, ardRefs(teasers, ""), more, nil
 	}
-	return first.Title, refs, nil
+	return first.Title, refs, seasonsMore, nil
 }
 
-// pages fetches every page of one listing and returns the first page's widget
-// — which carries the name and the season list — alongside the whole of it.
-func (a *ARD) pages(ctx context.Context, show, season string) (*ardWidget, []ardTeaser, error) {
+// pages fetches every page of one listing, up to limit entries, and returns
+// the first page's widget — which carries the name and the season list —
+// alongside the whole of it, and whether the listing went on past limit.
+func (a *ARD) pages(ctx context.Context, show, season string, limit int) (*ardWidget, []ardTeaser, bool, error) {
 	first, err := a.page(ctx, show, season, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	teasers := first.Teasers
 	// Only totalElements is worth reading out of the pagination block: on
 	// every page after the first, pageNumber and pageSize come back as an
 	// offset and a count instead, so a loop that trusted them would either
 	// stop early or never stop.
-	for n := 1; len(teasers) < first.Pagination.TotalElements && len(teasers) < config.MaxListingVideos; n++ {
+	for n := 1; len(teasers) < first.Pagination.TotalElements && len(teasers) < limit; n++ {
 		next, err := a.page(ctx, show, season, n)
 		if err != nil || len(next.Teasers) == 0 {
 			break
 		}
 		teasers = append(teasers, next.Teasers...)
 	}
-	return first, teasers, nil
+	more := len(teasers) >= limit && len(teasers) < first.Pagination.TotalElements
+	return first, teasers, more, nil
 }
 
 // page fetches one page of a programme's listing, or of one season of it.

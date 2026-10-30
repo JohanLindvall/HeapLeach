@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -277,10 +276,7 @@ segment-2-f2-v1-a1.ts
 // picture. Anything that ranks by resolution downloads one of those, at full
 // quality, and reports a clean finish.
 func TestARDPrefersTheBroadcastSoundtrack(t *testing.T) {
-	var doc ardItem
-	if err := json.Unmarshal([]byte(ardPlayableItem), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[ardItem](t, ardPlayableItem)
 	media := doc.Widgets[0].MediaCollection.Embedded
 
 	best, ok := media.best(ardMimeMP4)
@@ -356,10 +352,7 @@ func TestARDBetterPutsSoundBeforePicture(t *testing.T) {
 // the widget's own `geoblocked` reads false on material the CDN refuses to
 // everybody outside Germany.
 func TestARDRefusalsReadTheRightFlag(t *testing.T) {
-	var doc ardItem
-	if err := json.Unmarshal([]byte(ardGeoBlockedItem), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[ardItem](t, ardGeoBlockedItem)
 	widget := doc.Widgets[0]
 	if widget.Geoblocked {
 		t.Fatal("the fixture no longer reproduces the disagreement it is here for")
@@ -382,10 +375,7 @@ func TestARDRefusalsReadTheRightFlag(t *testing.T) {
 // looked for the stream first would report "offers no stream" — true, and no
 // help to somebody who only has to come back later.
 func TestARDRefusalExplainsAnAgeRating(t *testing.T) {
-	var doc ardItem
-	if err := json.Unmarshal([]byte(ardAgeRatedItem), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[ardItem](t, ardAgeRatedItem)
 	widget := doc.Widgets[0]
 	if widget.MediaCollection != nil {
 		t.Fatal("the fixture no longer reproduces the missing media collection")
@@ -401,10 +391,7 @@ func TestARDRefusalExplainsAnAgeRating(t *testing.T) {
 // window with no end declared, so joining what it lists yields a fragment of
 // the broadcast that looks like a finished file.
 func TestARDRefusesALiveRelay(t *testing.T) {
-	var doc ardItem
-	if err := json.Unmarshal([]byte(ardLiveItem), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[ardItem](t, ardLiveItem)
 	widget := doc.Widgets[0]
 	if widget.MediaCollection.Embedded.Live == nil {
 		t.Fatal("the live block did not parse")
@@ -417,10 +404,7 @@ func TestARDRefusesALiveRelay(t *testing.T) {
 // TestARDPlayableItemIsNotRefused is the other half of those: a perfectly
 // ordinary episode must pass every check.
 func TestARDPlayableItemIsNotRefused(t *testing.T) {
-	var doc ardItem
-	if err := json.Unmarshal([]byte(ardPlayableItem), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[ardItem](t, ardPlayableItem)
 	if reason := doc.Widgets[0].refusal(); reason != "" {
 		t.Errorf("a playable episode was refused: %s", reason)
 	}
@@ -429,11 +413,8 @@ func TestARDPlayableItemIsNotRefused(t *testing.T) {
 // TestARDRefusalReportsAnExpiredLicence covers the remaining shape of an
 // absent media collection, where the timestamp beside it says what happened.
 func TestARDRefusalReportsAnExpiredLicence(t *testing.T) {
-	var widget ardItemWidget
 	body := `{"title":"A Drama","availableTo":"2001-01-01T00:00:00Z","mediaCollection":null}`
-	if err := json.Unmarshal([]byte(body), &widget); err != nil {
-		t.Fatal(err)
-	}
+	widget := decode[ardItemWidget](t, body)
 	if got := widget.refusal(); !ardSays(got, "2001-01-01") {
 		t.Errorf("refusal = %q, want the date its availability ended", got)
 	}
@@ -530,10 +511,7 @@ func TestARDExtensionFallsBackToTheVariant(t *testing.T) {
 // content identifier with a segment appended, which is what the ids decode
 // to.
 func TestARDRefsDropTheAudioDescribedCopies(t *testing.T) {
-	var widget ardWidget
-	if err := json.Unmarshal([]byte(ardShowListing), &widget); err != nil {
-		t.Fatal(err)
-	}
+	widget := decode[ardWidget](t, ardShowListing)
 	if widget.Title != "A Drama" {
 		t.Errorf("title = %q", widget.Title)
 	}
@@ -584,10 +562,7 @@ func TestARDWithoutVariantsLeavesUnrelatedIDsAlone(t *testing.T) {
 // publishes only extracts. Filtering to episodes would leave it empty, and an
 // empty listing is reported as a programme with nothing behind it.
 func TestARDRefsKeepEverythingWhenNothingIsAnEpisode(t *testing.T) {
-	var widget ardWidget
-	if err := json.Unmarshal([]byte(ardMagazineListing), &widget); err != nil {
-		t.Fatal(err)
-	}
+	widget := decode[ardWidget](t, ardMagazineListing)
 	if got := len(ardRefs(widget.Teasers, "")); got != 2 {
 		t.Errorf("got %d entries, want both extracts", got)
 	}
@@ -599,10 +574,7 @@ func TestARDRefsKeepEverythingWhenNothingIsAnEpisode(t *testing.T) {
 // somebody looks for it in the obvious place and concludes the series has one
 // season.
 func TestARDSeasonsAreFoundOnTheEntries(t *testing.T) {
-	var widget ardWidget
-	if err := json.Unmarshal([]byte(ardShowListing), &widget); err != nil {
-		t.Fatal(err)
-	}
+	widget := decode[ardWidget](t, ardShowListing)
 	seasons := ardSeasons(widget.Teasers)
 	if len(seasons) != 2 || seasons[0] != "1" || seasons[1] != "2" {
 		t.Errorf("seasons = %v, want [1 2]", seasons)
@@ -613,10 +585,7 @@ func TestARDSeasonsAreFoundOnTheEntries(t *testing.T) {
 
 	// A programme with no seasons publishes null, and must not be fetched
 	// season by season.
-	var magazine ardWidget
-	if err := json.Unmarshal([]byte(ardMagazineListing), &magazine); err != nil {
-		t.Fatal(err)
-	}
+	magazine := decode[ardWidget](t, ardMagazineListing)
 	if got := ardSeasons(magazine.Teasers); len(got) != 0 {
 		t.Errorf("seasons = %v, want none", got)
 	}
@@ -626,10 +595,7 @@ func TestARDSeasonsAreFoundOnTheEntries(t *testing.T) {
 // title is the season rather than the programme — and which, unlike the flat
 // one, has already left the audio-described copies out.
 func TestARDSeasonListingNamesTheSeason(t *testing.T) {
-	var widget ardWidget
-	if err := json.Unmarshal([]byte(ardSeasonListing), &widget); err != nil {
-		t.Fatal(err)
-	}
+	widget := decode[ardWidget](t, ardSeasonListing)
 	if got := ardJoin(ardShowTitle(widget.Teasers), widget.Title); got != "A Drama - Staffel 2" {
 		t.Errorf("title = %q, want the season named in it", got)
 	}
@@ -643,10 +609,7 @@ func TestARDSeasonListingNamesTheSeason(t *testing.T) {
 // page number and page size were asked for, so a loop believing those would
 // either stop after one page or never stop at all.
 func TestARDPaginationOnlyTotalElementsIsTrustworthy(t *testing.T) {
-	var page ardWidget
-	if err := json.Unmarshal([]byte(ardLaterPage), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[ardWidget](t, ardLaterPage)
 	if page.Pagination.TotalElements != 101 {
 		t.Errorf("totalElements = %d, want 101", page.Pagination.TotalElements)
 	}

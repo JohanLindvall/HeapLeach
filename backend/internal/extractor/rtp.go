@@ -263,6 +263,7 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	// rather than fetching what is already in hand.
 	seen := make(map[string]bool)
 	episodes := rtpEpisodeLinks(root, ref, seen)
+	limit := config.MaxResolvedEpisodes
 	capped := false
 	for page := 2; ; page++ {
 		if page > config.MaxAlbumPages {
@@ -281,7 +282,7 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 			break // past the end of the season, which is how a season ends
 		}
 		episodes = append(episodes, more...)
-		if len(episodes) >= config.MaxListingVideos {
+		if len(episodes) >= limit {
 			capped = true
 			break
 		}
@@ -289,21 +290,24 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("rtpplay: no episodes listed on %s", ref.page)
 	}
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
-	}
+	// The title says where the walk stopped, so the cap is taken here
+	// rather than noted again.
+	episodes = episodes[:min(len(episodes), limit)]
 
 	// One refused episode must not sink the rest, but the reasons are kept:
 	// when every episode is refused it is refused for the same reason, and
 	// RTP's own words for it beat anything concluded here.
-	resolved, refused, _ := resolveEach(ctx, episodes, false, func(ctx context.Context, ep rtpEpisodeRef) (*File, error) {
-		file, _, err := r.episode(ctx, ep.page, ref.program)
-		return file, err
+	resolved, _, err := expandSeries(ctx, series[rtpEpisodeRef]{
+		site: "rtpplay", noun: "episodes", link: ref.page,
+		items: episodes,
+		resolve: func(ctx context.Context, ep rtpEpisodeRef) (*File, error) {
+			file, _, err := r.episode(ctx, ep.page, ref.program)
+			return file, err
+		},
+		unplayable: "the page lists them but none carries a stream",
 	})
-	if len(resolved) == 0 {
-		return nil, fmt.Errorf("rtpplay: none of the %d episodes of %s are playable: %s",
-			len(episodes), ref.page, util.FirstNonEmpty(append(refused,
-				"the page lists them but none carries a stream")...))
+	if err != nil {
+		return nil, err
 	}
 
 	title := util.FirstNonEmpty(rtpTitle(root), ref.program)

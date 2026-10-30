@@ -3,8 +3,6 @@
 package extractor
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -260,10 +258,7 @@ func TestSRFMasterPlaylistsAreToldApart(t *testing.T) {
 // TestSRFPicksTheProgressiveResource covers the choice the host is worth
 // supporting for: a plain file over a playlist, and the larger of two.
 func TestSRFPicksTheProgressiveResource(t *testing.T) {
-	var doc srfComposition
-	if err := json.Unmarshal([]byte(srfProgressive), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[srfComposition](t, srfProgressive)
 	chapter, ok := doc.chapter()
 	if !ok {
 		t.Fatal("the composition named no chapter")
@@ -279,7 +274,7 @@ func TestSRFPicksTheProgressiveResource(t *testing.T) {
 	if got := srfSecure(best.URL); got != "https://download.example.test/world/video/a_20260819_q60.mp4" {
 		t.Errorf("URL = %q, want the https form of the HD file", got)
 	}
-	if got := srfExtension(best.URL); got != ".mp4" {
+	if got := linkExt(best.URL, ".mp4"); got != ".mp4" {
 		t.Errorf("extension = %q, want .mp4", got)
 	}
 
@@ -297,14 +292,11 @@ func TestSRFPicksTheProgressiveResource(t *testing.T) {
 // worse than none when being wrong means silently downloading somebody
 // else's episode — so a chapter offering nothing but those offers nothing.
 func TestSRFPodcastLinksAreNotUsed(t *testing.T) {
-	var chapter srfChapter
-	if err := json.Unmarshal([]byte(`{
+	chapter := decode[srfChapter](t, `{
 		"urn": "urn:srf:video:1", "title": "An Instalment", "date": "2026-08-10T05:02:00+02:00",
 		"podcastSdUrl": "https://media.example.test/world/video/a_20260818_q30.mp4",
 		"podcastHdUrl": "https://media.example.test/world/video/a_20260818_q30.mp4",
-		"resourceList": []}`), &chapter); err != nil {
-		t.Fatal(err)
-	}
+		"resourceList": []}`)
 	if r, ok := chapter.pick(srfProtocolHTTP); ok {
 		t.Errorf("took %q, which is a podcast link rather than a listed resource", r.URL)
 	}
@@ -318,10 +310,7 @@ func TestSRFPodcastLinksAreNotUsed(t *testing.T) {
 // a DRM resource taken by mistake downloads to the end and then plays as
 // noise.
 func TestSRFSkipsWhatCannotBeFetched(t *testing.T) {
-	var doc srfComposition
-	if err := json.Unmarshal([]byte(srfUnfetchable), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[srfComposition](t, srfUnfetchable)
 	chapter, _ := doc.chapter()
 
 	if r, ok := chapter.pick(srfProtocolHTTP); ok {
@@ -336,12 +325,8 @@ func TestSRFSkipsWhatCannotBeFetched(t *testing.T) {
 		t.Errorf("refusal = %q, want the DRM one", got)
 	}
 
-	var tokenOnly srfChapter
-	if err := json.Unmarshal([]byte(`{"resourceList":[
-		{"url":"https://cdn.example.test/hls/a/master.m3u8","protocol":"HLS","quality":"HD","tokenType":"AKAMAI"}]}`),
-		&tokenOnly); err != nil {
-		t.Fatal(err)
-	}
+	tokenOnly := decode[srfChapter](t, `{"resourceList":[
+		{"url":"https://cdn.example.test/hls/a/master.m3u8","protocol":"HLS","quality":"HD","tokenType":"AKAMAI"}]}`)
 	if got := tokenOnly.refusal(); !strings.Contains(got, "Akamai token") {
 		t.Errorf("refusal = %q, want the token one", got)
 	}
@@ -350,12 +335,8 @@ func TestSRFSkipsWhatCannotBeFetched(t *testing.T) {
 // TestSRFUnknownQualityIsStillTaken covers a label the host invents. Ranking
 // it last is right; refusing it would throw away the only rendition there is.
 func TestSRFUnknownQualityIsStillTaken(t *testing.T) {
-	var chapter srfChapter
-	if err := json.Unmarshal([]byte(`{"resourceList":[
-		{"url":"http://download.example.test/a_uhd.mp4","protocol":"HTTP","quality":"UHD","tokenType":"NONE"}]}`),
-		&chapter); err != nil {
-		t.Fatal(err)
-	}
+	chapter := decode[srfChapter](t, `{"resourceList":[
+		{"url":"http://download.example.test/a_uhd.mp4","protocol":"HTTP","quality":"UHD","tokenType":"NONE"}]}`)
 	best, ok := chapter.pick(srfProtocolHTTP)
 	if !ok {
 		t.Fatal("a rendition with an unrecognised label was refused")
@@ -373,10 +354,7 @@ func TestSRFUnknownQualityIsStillTaken(t *testing.T) {
 // checked first reports "offers no stream" — true, unhelpful, and hiding the
 // one fact the user can act on.
 func TestSRFBlockReasonIsReadBeforeAnythingIsChosen(t *testing.T) {
-	var doc srfComposition
-	if err := json.Unmarshal([]byte(srfBlockedChapter), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[srfComposition](t, srfBlockedChapter)
 	chapter, ok := doc.chapter()
 	if !ok {
 		t.Fatal("the composition named no chapter")
@@ -410,25 +388,12 @@ func TestSRFBlockMessages(t *testing.T) {
 	}
 }
 
-// TestSRFBlockedErrorCarriesTheReason covers what a whole show's expansion
-// leans on: several hundred episodes refused for one reason should be
-// reported as that one reason, not as several hundred failures.
-func TestSRFBlockedErrorCarriesTheReason(t *testing.T) {
-	err := &broadcastRefusal{"srf", "urn:srf:video:1", "a reason"}
-	if got := err.Error(); got != "srf: urn:srf:video:1: a reason" {
-		t.Errorf("Error() = %q", got)
-	}
-}
-
 // TestSRFClipResolvesToItsProgramme documents what a segment link can do and
 // what it cannot: the composition is about the programme, the requested urn is
 // a pair of time offsets inside it, and the file that lands on disk is named
 // after the programme because that is what it is.
 func TestSRFClipResolvesToItsProgramme(t *testing.T) {
-	var doc srfComposition
-	if err := json.Unmarshal([]byte(srfClipRequest), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[srfComposition](t, srfClipRequest)
 	chapter, ok := doc.chapter()
 	if !ok {
 		t.Fatal("the composition named no chapter")
@@ -445,19 +410,14 @@ func TestSRFClipResolvesToItsProgramme(t *testing.T) {
 // nothing in the list. One chapter is all these ever carry, so taking it is
 // better than refusing over a field that disagreed with itself.
 func TestSRFChapterFallsBackToTheFirst(t *testing.T) {
-	var doc srfComposition
-	if err := json.Unmarshal([]byte(`{"chapterUrn":"urn:srf:video:elsewhere",
-		"chapterList":[{"urn":"urn:srf:video:1","title":"The only one"}]}`), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[srfComposition](t, `{"chapterUrn":"urn:srf:video:elsewhere",
+		"chapterList":[{"urn":"urn:srf:video:1","title":"The only one"}]}`)
 	chapter, ok := doc.chapter()
 	if !ok || chapter.Title != "The only one" {
 		t.Errorf("chapter = %+v, ok = %v", chapter, ok)
 	}
 
-	if err := json.Unmarshal([]byte(`{"chapterUrn":"urn:srf:video:1","chapterList":[]}`), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc = decode[srfComposition](t, `{"chapterUrn":"urn:srf:video:1","chapterList":[]}`)
 	if _, ok := doc.chapter(); ok {
 		t.Error("an empty chapterList produced a chapter")
 	}
@@ -467,10 +427,7 @@ func TestSRFChapterFallsBackToTheFirst(t *testing.T) {
 // the programme and every clip cut from it, so reading that list queues the
 // same programme four times over.
 func TestSRFEpisodeTakesOnlyTheFullLengthURN(t *testing.T) {
-	var doc srfEpisodeList
-	if err := json.Unmarshal([]byte(srfShowListing), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[srfEpisodeList](t, srfShowListing)
 	if len(doc.EpisodeList) != 2 {
 		t.Fatalf("parsed %d episodes, want 2", len(doc.EpisodeList))
 	}
@@ -486,12 +443,8 @@ func TestSRFEpisodeTakesOnlyTheFullLengthURN(t *testing.T) {
 	}
 
 	// An episode described by its media list alone still resolves.
-	var bare srfEpisode
-	if err := json.Unmarshal([]byte(`{"title":"x","mediaList":[
-		{"urn":"urn:srf:video:9","type":"EPISODE"},{"urn":"urn:srf:video:8","type":"EPISODE"}]}`),
-		&bare); err != nil {
-		t.Fatal(err)
-	}
+	bare := decode[srfEpisode](t, `{"title":"x","mediaList":[
+		{"urn":"urn:srf:video:9","type":"EPISODE"},{"urn":"urn:srf:video:8","type":"EPISODE"}]}`)
 	if got := bare.urn(); got != "urn:srf:video:9" {
 		t.Errorf("urn() = %q, want the first entry", got)
 	}
@@ -616,14 +569,7 @@ func TestSRFExtractProgrammeTakesTheFile(t *testing.T) {
 	const urn = "urn:srf:video:11111111-1111-1111-1111-111111111111"
 	srv := srfServer(t, map[string]string{urn: srfProgressive}, nil)
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/a-show/video/a-title?urn=" + urn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, srfWith(t, srv), "https://www.srf.ch/play/tv/a-show/video/a-title?urn="+urn, Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -662,14 +608,7 @@ func TestSRFExtractFallsBackToASelfContainedPlaylist(t *testing.T) {
 	}`
 	srv := srfServer(t, map[string]string{urn: composition}, nil)
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/a-show/video/a-title?urn=" + urn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, srfWith(t, srv), "https://www.srf.ch/play/tv/a-show/video/a-title?urn="+urn, Options{})
 	file := res.Files[0]
 	if len(file.Segments) != 2 {
 		t.Fatalf("got %d segments, want the media playlist's 2", len(file.Segments))
@@ -732,14 +671,7 @@ func TestSRFExtractCarriesTheAudioDescriptionAsATrack(t *testing.T) {
 	}`
 	srv := srfServer(t, map[string]string{urn: composition}, nil)
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/a-show/video/a-title?urn=" + urn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, srfWith(t, srv), "https://www.srf.ch/play/tv/a-show/video/a-title?urn="+urn, Options{})
 	f := res.Files[0]
 	if !strings.HasSuffix(f.Name, ".mp4") || len(f.Audio) != 2 {
 		t.Fatalf("file = %+v; want the video joined to both renditions of its audio group", f)
@@ -755,11 +687,7 @@ func TestSRFExtractReportsAGeoBlock(t *testing.T) {
 	const urn = "urn:srf:video:22222222-2222-2222-2222-222222222222"
 	srv := srfServer(t, map[string]string{urn: srfBlockedChapter}, nil)
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/a-show/video/a-title?urn=" + urn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := srfWith(t, srv).Extract(context.Background(), u, Options{}); err == nil {
+	if _, err := extract(t, srfWith(t, srv), "https://www.srf.ch/play/tv/a-show/video/a-title?urn="+urn, Options{}); err == nil {
 		t.Fatal("a geo-blocked chapter resolved")
 	} else if !strings.Contains(err.Error(), "Switzerland") {
 		t.Errorf("error = %q, want one that names the country", err)
@@ -782,14 +710,7 @@ func TestSRFExtractSeriesNestsBySeason(t *testing.T) {
 			"urn:srf:video:aaaaaaa1-0000-0000-0000-000000000001", "A Drama", "The First (Staffel 1, Folge 1)"),
 	}, []string{srfShowListing})
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/sendung/a-drama?id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, srfWith(t, srv), "https://www.srf.ch/play/tv/sendung/a-drama?id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Options{})
 	if res.Title != "A Drama" {
 		t.Errorf("Title = %q", res.Title)
 	}
@@ -825,14 +746,7 @@ func TestSRFExtractSeriesLeavesOneSeasonFlat(t *testing.T) {
 			"urn:srf:video:bbbbbbb0-0000-0000-0000-000000000001", "A News Strand vom 20.08.2026"),
 	}, []string{srfUnnumberedListing})
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/sendung/a-strand?id=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, srfWith(t, srv), "https://www.srf.ch/play/tv/sendung/a-strand?id=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Options{})
 	if len(res.Files) != 2 {
 		t.Fatalf("got %d files, want 2", len(res.Files))
 	}
@@ -867,14 +781,7 @@ func TestSRFExtractSeriesFollowsPaging(t *testing.T) {
 		// The repeated page contributes nothing new and must end the walk.
 	}, []string{srfUnnumberedListing, secondPage, srfUnnumberedListing})
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/sendung/a-strand?id=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := srfWith(t, srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, srfWith(t, srv), "https://www.srf.ch/play/tv/sendung/a-strand?id=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Options{})
 	if len(res.Files) != 3 {
 		t.Fatalf("got %d files, want the 3 distinct episodes across both pages", len(res.Files))
 	}
@@ -893,11 +800,7 @@ func TestSRFExtractSeriesReportsWhyNothingIsPlayable(t *testing.T) {
 		"urn:srf:video:aaaaaaa1-0000-0000-0000-000000000001": blocked("urn:srf:video:aaaaaaa1-0000-0000-0000-000000000001"),
 	}, []string{srfShowListing})
 
-	u, err := ParseURL("https://www.srf.ch/play/tv/sendung/a-drama?id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = srfWith(t, srv).Extract(context.Background(), u, Options{})
+	_, err := extract(t, srfWith(t, srv), "https://www.srf.ch/play/tv/sendung/a-drama?id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Options{})
 	if err == nil {
 		t.Fatal("a wholly blocked show resolved")
 	}
@@ -912,11 +815,7 @@ func TestSRFExtractSeriesReportsWhyNothingIsPlayable(t *testing.T) {
 // TestSRFExtractWithoutAURNSaysWhatALinkLooksLike covers the Play section
 // pages that name nothing to download.
 func TestSRFExtractWithoutAURNSaysWhatALinkLooksLike(t *testing.T) {
-	u, err := ParseURL("https://www.srf.ch/play/tv/live")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = NewSRF(nil).Extract(context.Background(), u, Options{})
+	_, err := extract(t, NewSRF(nil), "https://www.srf.ch/play/tv/live", Options{})
 	if err == nil {
 		t.Fatal("a page naming nothing resolved")
 	}

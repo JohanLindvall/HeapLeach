@@ -392,10 +392,7 @@ func TestRTVEPlayableReadsOnlyTheTerritoryFields(t *testing.T) {
 // caller in "ES" whoever asked; the video's own document, for the same id,
 // says false and names the country the answer was really evaluated for.
 func TestRTVEListingAnswersAvailabilityForSpain(t *testing.T) {
-	var listing rtvePage[rtveVideo]
-	if err := json.Unmarshal([]byte(rtveSeasonListing), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing := decode[rtvePage[rtveVideo]](t, rtveSeasonListing)
 	if len(listing.Page.Items) != 2 {
 		t.Fatalf("parsed %d entries, want 2", len(listing.Page.Items))
 	}
@@ -434,10 +431,8 @@ func TestRTVEListingAnswersAvailabilityForSpain(t *testing.T) {
 // the fact worth carrying is the territory the licence was tested against,
 // which the document does supply.
 func TestRTVERefusedNamesTheCountry(t *testing.T) {
-	err := &broadcastRefusal{"rtve", "A Programme - Something", rtveReason("SE")}
-	got := err.Error()
-	if !strings.Contains(got, "SE") || !strings.Contains(got, "A Programme - Something") {
-		t.Errorf("Error() = %q", got)
+	if got := rtveReason("SE"); !strings.Contains(got, "SE") {
+		t.Errorf("rtveReason(SE) = %q", got)
 	}
 	// A document that named no country still has to say something usable.
 	if got := rtveReason(""); !strings.Contains(got, "this country") {
@@ -535,10 +530,7 @@ func TestRTVEProgrammeID(t *testing.T) {
 // page past the end, this API answers with the whole listing again rather
 // than with nothing.
 func TestRTVEListingEnvelope(t *testing.T) {
-	var listing rtvePage[rtveVideo]
-	if err := json.Unmarshal([]byte(rtveSeasonListing), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing := decode[rtvePage[rtveVideo]](t, rtveSeasonListing)
 	if listing.Page.TotalPages != 1 {
 		t.Errorf("totalPages = %d, want 1", listing.Page.TotalPages)
 	}
@@ -553,12 +545,9 @@ func TestRTVEListingEnvelope(t *testing.T) {
 		}
 	}
 
-	var seasons rtvePage[rtveSeason]
 	body := `{"page":{"items":[{"id":40034,"shortTitle":"T1","longTitle":"Temporada 1","orden":1},
 		{"id":40017,"shortTitle":"T2","longTitle":"Temporada 2","orden":2}],"total":2,"totalPages":1}}`
-	if err := json.Unmarshal([]byte(body), &seasons); err != nil {
-		t.Fatal(err)
-	}
+	seasons := decode[rtvePage[rtveSeason]](t, body)
 	if len(seasons.Page.Items) != 2 || seasons.Page.Items[0].ID != 40034 {
 		t.Errorf("seasons = %+v", seasons.Page.Items)
 	}
@@ -567,10 +556,7 @@ func TestRTVEListingEnvelope(t *testing.T) {
 // rtveVideoOf unwraps one video document.
 func rtveVideoOf(t *testing.T, body string) rtveVideo {
 	t.Helper()
-	var doc rtvePage[rtveVideo]
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[rtvePage[rtveVideo]](t, body)
 	if len(doc.Page.Items) == 0 {
 		t.Fatal("the document carries no items")
 	}

@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -164,10 +163,7 @@ vf_m000vers_00000000-0000-0000-0000-000000000000.ism.hlsv2-audio_eng_1=48000-2.t
 // "drm" carries no download URL and must fall through to the stream; nothing
 // may refuse it, and nothing may invent a URL for it either.
 func TestBBCDRMFlagIsNotEncryption(t *testing.T) {
-	var item bbcItem
-	if err := json.Unmarshal([]byte(bbcDRMFlaggedEpisode), &item); err != nil {
-		t.Fatal(err)
-	}
+	item := decode[bbcItem](t, bbcDRMFlaggedEpisode)
 	if item.Download.Type != "drm" {
 		t.Fatalf("fixture no longer carries the flag: %q", item.Download.Type)
 	}
@@ -184,10 +180,7 @@ func TestBBCDRMFlagIsNotEncryption(t *testing.T) {
 // TestBBCBestDownloadPrefersTheLargestPublished covers the other half: where
 // URLs exist, the highest bitrate wins.
 func TestBBCBestDownloadPrefersTheLargestPublished(t *testing.T) {
-	var item bbcItem
-	if err := json.Unmarshal([]byte(bbcDownloadableEpisode), &item); err != nil {
-		t.Fatal(err)
-	}
+	item := decode[bbcItem](t, bbcDownloadableEpisode)
 	variant, ok := item.Download.best()
 	if !ok {
 		t.Fatal("no download was found for an item that publishes three")
@@ -204,14 +197,11 @@ func TestBBCBestDownloadPrefersTheLargestPublished(t *testing.T) {
 // keyed by name rather than listed, so an unranked map iteration would pick a
 // different one each run; the ordinary speech case is three identical copies.
 func TestBBCBestDownloadIsStableAcrossRuns(t *testing.T) {
-	var download bbcDownload
 	body := `{"type":"non_drm","quality_variants":{
 		"low":{"bitrate":128,"file_url":"https://open.live.example.test/low.mp3","file_size":42000000},
 		"medium":{"bitrate":128,"file_url":"https://open.live.example.test/medium.mp3","file_size":42000000},
 		"high":{"bitrate":128,"file_url":"https://open.live.example.test/high.mp3","file_size":42000000}}}`
-	if err := json.Unmarshal([]byte(body), &download); err != nil {
-		t.Fatal(err)
-	}
+	download := decode[bbcDownload](t, body)
 	for i := range 20 {
 		variant, ok := download.best()
 		if !ok || variant.FileURL != "https://open.live.example.test/high.mp3" {
@@ -231,10 +221,7 @@ func TestBBCBestDownloadIgnoresTiersWithNoURL(t *testing.T) {
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			var download bbcDownload
-			if err := json.Unmarshal([]byte(body), &download); err != nil {
-				t.Fatal(err)
-			}
+			download := decode[bbcDownload](t, body)
 			if variant, ok := download.best(); ok {
 				t.Errorf("accepted %+v", variant)
 			}
@@ -243,13 +230,10 @@ func TestBBCBestDownloadIgnoresTiersWithNoURL(t *testing.T) {
 
 	// The highest tier is withheld while a lower one is not: take what there
 	// is rather than concluding the item cannot be downloaded.
-	var download bbcDownload
 	body := `{"type":"non_drm","quality_variants":{
 		"high":{"bitrate":320,"file_url":null,"file_size":65000000},
 		"medium":{"bitrate":128,"file_url":"https://open.live.example.test/medium.mp3","file_size":26000000}}}`
-	if err := json.Unmarshal([]byte(body), &download); err != nil {
-		t.Fatal(err)
-	}
+	download := decode[bbcDownload](t, body)
 	variant, ok := download.best()
 	if !ok || variant.Bitrate != 128 {
 		t.Errorf("got %+v, want the one tier that carries a URL", variant)
@@ -261,10 +245,7 @@ func TestBBCBestDownloadIgnoresTiersWithNoURL(t *testing.T) {
 // letting the skip check believe it would leave a truncated file in place and
 // call the job done.
 func TestBBCDeclaredSizeIsNeverExact(t *testing.T) {
-	var item bbcItem
-	if err := json.Unmarshal([]byte(bbcDownloadableEpisode), &item); err != nil {
-		t.Fatal(err)
-	}
+	item := decode[bbcItem](t, bbcDownloadableEpisode)
 	variant, _ := item.Download.best()
 	if variant.size()%1_000_000 != 0 {
 		t.Errorf("size %d is not the rounded figure the API publishes", variant.size())
@@ -282,10 +263,7 @@ func TestBBCDeclaredSizeIsNeverExact(t *testing.T) {
 // walk. The selector lists a programme's images beside its audio, and a
 // picture downloads to the end and reports success.
 func TestBBCSelectionSkipsTheThumbnailTrack(t *testing.T) {
-	var doc bbcSelection
-	if err := json.Unmarshal([]byte(bbcSelectionDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[bbcSelection](t, bbcSelectionDocument)
 	if got := doc.stream(); got != "https://cdn.example.test/a/master.m3u8" {
 		t.Errorf("chose %q, want the first HTTPS HLS copy of the audio", got)
 	}
@@ -303,10 +281,7 @@ func TestBBCSelectionRejectsWhatCannotBeFetched(t *testing.T) {
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			var doc bbcSelection
-			if err := json.Unmarshal([]byte(body), &doc); err != nil {
-				t.Fatal(err)
-			}
+			doc := decode[bbcSelection](t, body)
 			if got := doc.stream(); got != "" {
 				t.Errorf("accepted %q", got)
 			}
@@ -387,8 +362,8 @@ func TestBBCDownloadExtensionComesFromTheURL(t *testing.T) {
 		"https://open.live.example.test/mediaset/download/vpid/p000ve": ".mp3",
 	}
 	for raw, want := range tests {
-		if got := bbcDownloadExtension(raw); got != want {
-			t.Errorf("bbcDownloadExtension(%q) = %q, want %q", raw, got, want)
+		if got := linkExt(raw, ".mp3"); got != want {
+			t.Errorf("linkExt(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -513,10 +488,7 @@ func TestBBCNameFoldsDateSeparators(t *testing.T) {
 // cheap: a listing row is a playable item, so a brand of downloadable episodes
 // resolves without one further request.
 func TestBBCContainerListingRowsAreCompleteItems(t *testing.T) {
-	var page bbcListing
-	if err := json.Unmarshal([]byte(bbcContainerListing), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[bbcListing](t, bbcContainerListing)
 	if page.Total != 3 || len(page.Data) != 3 {
 		t.Fatalf("total %d, %d rows", page.Total, len(page.Data))
 	}
@@ -563,10 +535,7 @@ func TestBBCItemPIDReadsTheURN(t *testing.T) {
 		`{}`:                "",
 	}
 	for body, want := range tests {
-		var item bbcItem
-		if err := json.Unmarshal([]byte(body), &item); err != nil {
-			t.Fatal(err)
-		}
+		item := decode[bbcItem](t, body)
 		if got := item.pid(); got != want {
 			t.Errorf("pid of %s = %q, want %q", body, got, want)
 		}
@@ -602,11 +571,7 @@ func TestBBCSoundsExtractRefusesWhatItCannotResolve(t *testing.T) {
 		"https://www.bbc.co.uk/sounds/play/live/bbc_radio_four",
 		"https://www.bbc.co.uk/sounds/category/music",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := b.Extract(t.Context(), u, Options{}); err == nil {
+		if _, err := extract(t, b, raw, Options{}); err == nil {
 			t.Errorf("%s resolved to something", raw)
 		}
 	}

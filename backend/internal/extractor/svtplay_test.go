@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -121,11 +120,7 @@ func TestSVTCarriesAudioKeptApartAsTracksOfItsOwn(t *testing.T) {
 
 	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
 	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
-	page, _ := url.Parse("https://www.svtplay.se/video/separate/an-invented-title/")
-	res, err := s.Extract(context.Background(), page, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, s, "https://www.svtplay.se/video/separate/an-invented-title/", Options{})
 	f := res.Files[0]
 	if f.Name != "First Episode.mp4" || f.External != "" || len(f.Segments) != 3 || !strings.HasSuffix(f.Segments[0], "/v-init.mp4") {
 		t.Fatalf("file = %+v; want the video's own segments, its initialisation segment first", f)
@@ -194,8 +189,7 @@ func TestSVTSaysWhyAVideoOffersNoStream(t *testing.T) {
 		"unknown5": "SVT offers no stream for unknown5 (it may no longer be available, or not be yet)",
 		"dashonly": "dashonly offers no usable stream (only dash)",
 	} {
-		page, _ := url.Parse("https://www.svtplay.se/video/" + id + "/an-invented-title")
-		_, err := s.Extract(context.Background(), page, Options{})
+		_, err := extract(t, s, "https://www.svtplay.se/video/"+id+"/an-invented-title", Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %q", id, err, want)
 		}
@@ -247,15 +241,8 @@ func TestSVTProgrammeCardExpandsToItsEpisodes(t *testing.T) {
 		"/video/card123/a-series/3-the-third": {"Episode card123.ts"},
 		"/video/film123/a-film":               {"Episode film123.ts"},
 	} {
-		page, _ := url.Parse("https://www.svtplay.se" + path)
-		res, err := s.Extract(context.Background(), page, Options{})
-		if err != nil {
-			t.Fatalf("%s: %v", path, err)
-		}
-		var names []string
-		for _, f := range res.Files {
-			names = append(names, f.Name)
-		}
+		res := extractOK(t, s, "https://www.svtplay.se"+path, Options{})
+		names := fileNames(res.Files)
 		if strings.Join(names, "|") != strings.Join(want, "|") {
 			t.Errorf("%s: files = %v, want %v", path, names, want)
 		}

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -91,11 +92,6 @@ const (
 	// Fifty is the server's own ceiling: ask for a hundred and it answers
 	// with fifty and says so.
 	abcListenPageSize = 50
-
-	// abcListenMaxEpisodes bounds how many episodes one programme URL expands
-	// to. The listing stops at 250 of its own accord today; this is the
-	// backstop for the day it does not.
-	abcListenMaxEpisodes = 500
 
 	// abcListenTitleSuffix is what the site appends to every page title.
 	abcListenTitleSuffix = " - ABC listen"
@@ -188,7 +184,9 @@ func (a *ABCListen) episode(u *url.URL, doc abcListenDoc) (*Result, error) {
 // time, in the listing's order, and an episode that will not load dropped
 // rather than sinking a job of hundreds.
 func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPage) (*Result, error) {
-	episodes := a.episodes(ctx, u, page.props.Collection)
+	// The listing stops at 250 of its own accord today; the cap is the
+	// backstop for the day it does not.
+	episodes, listed := a.episodes(ctx, u, page.props.Collection, config.MaxResolvedEpisodes)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("abclisten: no episodes listed on %s", u.Redacted())
 	}
@@ -204,6 +202,7 @@ func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPa
 	return &Result{
 		Title: util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)),
 		Files: files,
+		Note:  cappedNote(len(episodes), listed, "episodes"),
 	}, nil
 }
 
@@ -235,7 +234,8 @@ func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem)
 	return []File{file}, nil
 }
 
-// episodes lists a programme's episodes.
+// episodes lists a programme's episodes, up to limit of them, with the
+// total the listing states when it went on past that.
 //
 // The page renders only the first handful and loads the rest from an endpoint
 // of its own as the reader pages through; asked directly that endpoint
@@ -243,7 +243,7 @@ func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem)
 // rendered are kept and paging continues after them, which is what makes the
 // endpoint additive: if it goes away, a programme resolves to the episodes on
 // the page instead of to nothing at all.
-func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCollection) []abcListenItem {
+func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCollection, limit int) ([]abcListenItem, int) {
 	var out []abcListenItem
 	seen := make(map[string]bool)
 	add := func(items []abcListenItem) int {
@@ -261,7 +261,7 @@ func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCol
 	add(coll.Items)
 	total := coll.Pagination.Total
 	endpoint := util.Origin(u) + abcListenEpisodesPath + "/" + strings.Trim(u.EscapedPath(), "/")
-	for len(out) < total && len(out) < abcListenMaxEpisodes {
+	for len(out) < total && len(out) < limit {
 		query := url.Values{
 			"collectionId": {coll.ID},
 			"offset":       {strconv.Itoa(len(out))},
@@ -285,10 +285,10 @@ func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCol
 		}
 	}
 
-	if len(out) > abcListenMaxEpisodes {
-		out = out[:abcListenMaxEpisodes]
+	if len(out) < limit {
+		return out, 0
 	}
-	return out
+	return out[:limit], total
 }
 
 // page fetches one page and reads its JSON island.
@@ -430,21 +430,9 @@ func abcListenGeoBucket(raw string) bool {
 func (a *ABCListen) geoCheck(link string, headers httpx.Header) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
 		target := &Target{URL: link, Headers: headers}
-		req, err := a.client.NewRequest(ctx, http.MethodGet, link, nil)
-		if err != nil {
-			return target, nil
-		}
-		for name, value := range headers {
-			req.Header.Set(name, value)
-		}
-		req.Header.Set(httpx.HeaderRange, "bytes=0-0")
-
-		resp, err := a.client.DoOnce(req)
-		if err != nil {
-			return target, nil
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusForbidden {
+		status, err := a.client.StatusOnce(ctx, http.MethodGet, link,
+			headers.Merge(httpx.Header{httpx.HeaderRange: "bytes=0-0"}))
+		if err == nil && status == http.StatusForbidden {
 			return nil, fmt.Errorf("abclisten: the ABC licenses this recording for "+
 				"Australia only, and its content network refuses %s from anywhere else", link)
 		}

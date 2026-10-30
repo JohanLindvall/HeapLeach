@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -199,14 +198,6 @@ type zdfRef struct {
 	season string
 }
 
-// zdfOutcome is what became of one video: a file, or ZDF's reason for
-// declining it. FanOut drops an error, and the reason is the one part of it
-// worth keeping.
-type zdfOutcome struct {
-	file   *File
-	reason string
-}
-
 // fromPage resolves a page by the videos it links to, for the pages futura
 // describes without listing anything.
 //
@@ -242,59 +233,48 @@ func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach 
 
 // expand resolves a listing's videos into one file each.
 func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRef, reach *zdfReach) (*Result, error) {
-	if len(refs) > config.MaxListingVideos {
-		refs = refs[:config.MaxListingVideos]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(refs, func(ref zdfRef) string { return ref.season })
-
-	outcomes := FanOut(ctx, refs, func(ctx context.Context, ref zdfRef) ([]zdfOutcome, error) {
-		return []zdfOutcome{z.video(ctx, ref, nest, reach)}, nil
+	resolved, note, err := expandSeries(ctx, series[zdfRef]{
+		site: "zdf", noun: "videos", link: u.Redacted(),
+		items: refs,
+		label: func(ref zdfRef) string {
+			if ref.season == "" {
+				return ""
+			}
+			return zdfSeasonFolder(ref.season)
+		},
+		resolve: func(ctx context.Context, ref zdfRef) (*File, error) {
+			return z.video(ctx, ref, reach)
+		},
+		// "each" carries the reason, which is written as a sentence about
+		// one video: when a whole run is refused it is refused the same way
+		// all the way down, and ZDF's words for it beat anything concluded
+		// here.
+		unplayable: "each offers no stream",
 	})
-
-	result := &Result{Title: title}
-	var refused string
-	for _, outcome := range outcomes {
-		switch {
-		case outcome.file != nil:
-			result.Files = append(result.Files, *outcome.file)
-		case refused == "":
-			refused = outcome.reason
-		}
+	if err != nil {
+		return nil, err
 	}
-	if len(result.Files) == 0 {
-		// "each" carries the reason, which is written as a sentence about one
-		// video: when a whole run is refused it is refused the same way all
-		// the way down, and ZDF's words for it beat anything concluded here.
-		return nil, fmt.Errorf("zdf: none of the %d videos on %s can be fetched: each %s",
-			len(refs), u.Redacted(), util.FirstNonEmpty(refused, "offers no stream"))
-	}
-	return result, nil
+	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
 }
 
-// video resolves one listed video. It reports rather than returns its
-// failure, because one withdrawn or region-locked episode must not sink a
-// listing of hundreds.
-func (z *ZDF) video(ctx context.Context, ref zdfRef, nest bool, reach *zdfReach) zdfOutcome {
+// video resolves one listed video. A document that will not load is
+// passed over without a reason, since it says nothing about the others;
+// ZDF's refusal of the video is the reason, as a sentence about each one.
+func (z *ZDF) video(ctx context.Context, ref zdfRef, reach *zdfReach) (*File, error) {
 	doc, err := z.document(ctx, ref.id)
 	if err != nil {
-		// A document that would not load says nothing about the others.
-		return zdfOutcome{}
+		return nil, nil
 	}
 	file, err := z.file(ctx, &doc.Document, reach)
 	if err != nil {
-		return zdfOutcome{reason: err.Error()}
+		return nil, fmt.Errorf("each %w", err)
 	}
 
 	// The listing's own name for a video wins: it is what the page showed,
 	// and for a series it is the episode title where the document's is
 	// occasionally the whole strand's.
 	file.Name = util.FirstNonEmpty(ref.name, doc.Document.Titel, ref.id) + file.Name
-	if nest && ref.season != "" {
-		file.Dir = zdfSeasonFolder(ref.season)
-	}
-	return zdfOutcome{file: file}
+	return file, nil
 }
 
 // file turns a document's rendition list into something to fetch.
@@ -558,18 +538,8 @@ func (r *zdfReach) refuse(ctx context.Context, region, media string) error {
 // says nothing about where this address is, and reading "outside" into it
 // would refuse a download that was going to work.
 func (r *zdfReach) probe(ctx context.Context, media string) bool {
-	req, err := r.client.NewRequest(ctx, http.MethodHead, media, nil)
-	if err != nil {
-		return true
-	}
-	req.Header.Set(httpx.HeaderReferer, zdfRoot+"/")
-
-	resp, err := r.client.DoOnce(req)
-	if err != nil {
-		return true
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode != http.StatusForbidden
+	status, err := r.client.StatusOnce(ctx, http.MethodHead, media, httpx.Referer(zdfRoot+"/"))
+	return err != nil || status != http.StatusForbidden
 }
 
 // zdfResponse is one futura document and whatever it lists.

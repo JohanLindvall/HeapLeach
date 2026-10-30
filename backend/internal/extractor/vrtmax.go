@@ -85,12 +85,6 @@ const (
 	vrtClientHeader = "x-vrt-client-name"
 	vrtClientName   = "WEB"
 
-	// vrtMaxEpisodes bounds how many episodes one programme URL expands to.
-	// VRT's daily strands run to thousands: Thuis alone lists six thousand
-	// across thirty-one seasons, which is a mistake being carried out
-	// efficiently rather than a download.
-	vrtMaxEpisodes = 500
-
 	// vrtTokenLife is assumed when the token service does not say when its
 	// token expires, and vrtTokenMargin is how long before that moment a
 	// fresh one is minted instead.
@@ -249,41 +243,31 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 		return nil, fmt.Errorf("vrtmax: %s lists no episodes "+
 			"(a programme page can outlive the run of the programme on it)", u.Redacted())
 	}
-	// The newest season is listed first, so what a cap drops is the oldest
+
+	// The newest season is listed first, so what the cap drops is the oldest
 	// material and the extras that follow it rather than a slice from the
-	// middle.
-	if len(episodes) > vrtMaxEpisodes {
-		episodes = episodes[:vrtMaxEpisodes]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep vrtEpisodeRef) string { return ep.season })
-
-	// A whole season refused is a whole season refused for one reason, and
-	// VRT's code for it is the only thing the caller can act on.
-	files, refused, failed := resolveListed(ctx, episodes, func(ctx context.Context, ep vrtEpisodeRef) (*File, error) {
-		file, _, episode, err := v.episode(ctx, ep.id)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(ep.name, episode, vrtSlug(ep.id)) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return file, nil
+	// middle: VRT's daily strands run to thousands of episodes across
+	// thirty-odd seasons. A whole season refused is a whole season refused
+	// for one reason, and VRT's code for it is the only thing the caller can
+	// act on.
+	resolved, note, err := expandSeries(ctx, series[vrtEpisodeRef]{
+		site: "vrtmax", noun: "episodes", link: u.Redacted(),
+		items: episodes,
+		label: func(ep vrtEpisodeRef) string { return ep.season },
+		resolve: func(ctx context.Context, ep vrtEpisodeRef) (*File, error) {
+			file, _, episode, err := v.episode(ctx, ep.id)
+			if err != nil {
+				return nil, err
+			}
+			file.Name = util.FirstNonEmpty(ep.name, episode, vrtSlug(ep.id)) + file.Name
+			return file, nil
+		},
+		unplayable: "the listing named them but the player offered no stream",
 	})
-	if len(files) == 0 {
-		reason := "the listing named them but the player offered no stream"
-		switch {
-		case len(refused) > 0:
-			reason = refused[0]
-		case failed != nil:
-			reason = failed.Error()
-		}
-		return nil, fmt.Errorf("vrtmax: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), reason)
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id)), Files: files}, nil
+	return &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id)), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // vrtEpisodeRef is one episode of a programme, with the season it belongs to.

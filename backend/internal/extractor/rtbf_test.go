@@ -176,11 +176,7 @@ func (f *rtbfFake) extractor() *RTBF {
 
 func (f *rtbfFake) extract(t *testing.T, raw string, opts Options) *Result {
 	t.Helper()
-	u, _ := url.Parse(raw)
-	res, err := f.extractor().Extract(context.Background(), u, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, f.extractor(), raw, opts)
 	return res
 }
 
@@ -211,15 +207,10 @@ func TestRTBFReadsAVideoWithTheAudioItReallyHas(t *testing.T) {
 func TestRTBFReadsAPodcastAndRenewsItsSession(t *testing.T) {
 	f := newRTBFFake(t)
 	r := f.extractor()
-	u, _ := url.Parse("https://auvio.rtbf.be/media/un-podcast-invente-episode-1002")
-	if _, err := r.Extract(context.Background(), u, Options{}); err != nil {
-		t.Fatal(err)
-	}
+	const link = "https://auvio.rtbf.be/media/un-podcast-invente-episode-1002"
+	extractOK(t, r, link, Options{})
 	f.stale.Store(true)
-	res, err := r.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, r, link, Options{})
 	if file := res.Files[0]; file.Name != "Un programme inventé - Épisode 1002.mp3" || file.URL != f.srv.URL+"/aod/an-invented-episode.mp3" {
 		t.Errorf("name %q, url %q", file.Name, file.URL)
 	}
@@ -277,8 +268,7 @@ func TestRTBFSaysWhyAMediaCannotBeHad(t *testing.T) {
 		"1008": "live stream",
 		"1009": "it is not on Auvio",
 	} {
-		u, _ := url.Parse("https://auvio.rtbf.be/media/un-programme-invente-" + id)
-		_, err := f.extractor().Extract(context.Background(), u, Options{})
+		_, err := extract(t, f.extractor(), "https://auvio.rtbf.be/media/un-programme-invente-"+id, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v; want it to say %q", id, err, want)
 		}

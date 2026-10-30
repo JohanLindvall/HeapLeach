@@ -74,9 +74,6 @@ const (
 
 	// pbsErrorClass marks the paragraph an error page explains itself in.
 	pbsErrorClass = "error-message"
-
-	// pbsMaxEpisodes bounds how many videos one show URL expands to.
-	pbsMaxEpisodes = 500
 )
 
 // pbsPlayerID finds the numeric id a video page embeds its player with. The
@@ -249,48 +246,47 @@ func (p *PBS) show(ctx context.Context, u *url.URL, slug string) (*Result, error
 	if len(slugs) == 0 {
 		return nil, fmt.Errorf("pbs: no videos listed on %s", u.Redacted())
 	}
-	if len(slugs) > pbsMaxEpisodes {
-		slugs = slugs[:pbsMaxEpisodes]
+	episodes := make([]*pbsEpisode, len(slugs))
+	for i, slug := range slugs {
+		episodes[i] = &pbsEpisode{slug: slug}
 	}
 
 	// Two requests per video, and a show page lists a couple of dozen. Doing
 	// those one after another leaves the job resolving for a minute before a
 	// byte moves; one that will not resolve is skipped, which on this host is
-	// routine rather than exceptional.
-	episodes := FanOut(ctx, slugs, func(ctx context.Context, slug string) ([]pbsEpisode, error) {
-		id, err := p.playerID(ctx, slug)
-		if err != nil {
-			return nil, err
-		}
-		episode, err := p.episode(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		episode.slug = slug
-		return []pbsEpisode{*episode}, nil
+	// routine rather than exceptional. Only a resolved video names its
+	// season, and a show whose page is all specials has none anywhere.
+	resolved, note, err := expandSeries(ctx, series[*pbsEpisode]{
+		site: "pbs", noun: "videos", link: u.Redacted(),
+		items: episodes,
+		label: func(ep *pbsEpisode) string { return ep.season },
+		resolve: func(ctx context.Context, ep *pbsEpisode) (*File, error) {
+			id, err := p.playerID(ctx, ep.slug)
+			if err != nil {
+				return nil, err
+			}
+			episode, err := p.episode(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			episode.slug = ep.slug
+			*ep = *episode
+			file := episode.file
+			file.Name = util.FirstNonEmpty(episode.title, episode.slug) + ".mp4"
+			return &file, nil
+		},
+		unplayable: "PBS answers a title past its availability window with a page saying so, " +
+			"and a show's back catalogue is mostly those",
 	})
-	if len(episodes) == 0 {
-		return nil, fmt.Errorf("pbs: none of the %d videos listed on %s are playable "+
-			"(PBS answers a title past its availability window with a page saying so, "+
-			"and a show's back catalogue is mostly those)", len(slugs), u.Redacted())
+	if err != nil {
+		return nil, err
 	}
 
-	// Only nest by season when there is more than one to tell apart. A show
-	// whose page is all specials has no season anywhere, and a folder named
-	// after nothing helps nobody.
-	nest := nestByLabel(episodes, func(ep pbsEpisode) string { return ep.season })
-
-	result := &Result{Title: slug}
-	for _, episode := range episodes {
-		if result.Title == slug && episode.program != "" {
-			result.Title = episode.program
+	result := &Result{Title: slug, Files: listedFiles(resolved), Note: note}
+	for _, r := range resolved {
+		if result.Title == slug && r.item.program != "" {
+			result.Title = r.item.program
 		}
-		file := episode.file
-		file.Name = util.FirstNonEmpty(episode.title, episode.slug) + ".mp4"
-		if nest {
-			file.Dir = episode.season
-		}
-		result.Files = append(result.Files, file)
 	}
 	return result, nil
 }

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -371,7 +370,7 @@ func (r *RTBF) stream(ctx context.Context, assetID, stem string) (*Target, error
 		}
 		return target, nil
 	case file != "":
-		return &Target{URL: file, Name: stem + rtbfExtension(file), Size: -1, Headers: headers}, nil
+		return &Target{URL: file, Name: stem + linkExt(file, ".mp3"), Size: -1, Headers: headers}, nil
 	case protected:
 		return nil, &broadcastRefusal{"rtbf", stem, "it is DRM-protected"}
 	}
@@ -388,16 +387,6 @@ func (r *RTBF) audioTracks(ctx context.Context, assetID string) int {
 		return 0
 	}
 	return len(record.Audio)
-}
-
-// rtbfExtension is a file's extension, as its link names it.
-func rtbfExtension(link string) string {
-	if u, err := url.Parse(link); err == nil {
-		if ext := strings.ToLower(path.Ext(u.Path)); len(ext) > 1 && len(ext) <= 5 {
-			return ext
-		}
-	}
-	return ".mp3"
 }
 
 // rtbfWidget is one block of a programme's page, or a tab of one.
@@ -489,7 +478,7 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 			case hls != "":
 				ext = ".mp4"
 			case file != "":
-				ext = rtbfExtension(file)
+				ext = linkExt(file, ".mp3")
 			case protected:
 				return nil, &broadcastRefusal{site: "rtbf", reason: "it is DRM-protected"}
 			}

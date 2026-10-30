@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -209,34 +208,32 @@ func (s *SRF) programme(ctx context.Context, urn string) (*Result, error) {
 // series expands a show into one file per episode, filed by season when the
 // show has more than one.
 func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, error) {
-	title, episodes, err := s.episodes(ctx, showURN)
+	title, episodes, more, err := s.episodes(ctx, showURN, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
 
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep srfEpisodeRef) string { return ep.season })
-
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
 	// before a byte moved.
-	files, blocked, _ := resolveListed(ctx, episodes, func(ctx context.Context, ep srfEpisodeRef) (*File, error) {
-		file, name, err := s.chapter(ctx, ep.urn)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(ep.name, name, ep.urn) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return file, nil
+	resolved, note, err := expandSeries(ctx, series[srfEpisodeRef]{
+		site: "srf", noun: "episodes", link: u.Redacted(),
+		items: episodes, more: more,
+		label: func(ep srfEpisodeRef) string { return ep.season },
+		resolve: func(ctx context.Context, ep srfEpisodeRef) (*File, error) {
+			file, name, err := s.chapter(ctx, ep.urn)
+			if err != nil {
+				return nil, err
+			}
+			file.Name = util.FirstNonEmpty(ep.name, name, ep.urn) + file.Name
+			return file, nil
+		},
+		unplayable: "the catalogue lists them but the Integration Layer offers no stream for any of them",
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("srf: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(append(blocked,
-				"the catalogue lists them but the Integration Layer offers no stream for any of them")...))
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(title, showURN), Files: files}, nil
+	return &Result{Title: util.FirstNonEmpty(title, showURN), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // srfEpisodeRef is one episode of a show, with the season it belongs to.
@@ -246,8 +243,10 @@ type srfEpisodeRef struct {
 	season string
 }
 
-// episodes reads a show's episodes, following the listing's own paging.
-func (s *SRF) episodes(ctx context.Context, showURN string) (string, []srfEpisodeRef, error) {
+// episodes reads a show's episodes, following the listing's own paging up
+// to limit of them, and says whether the listing went on past that. A daily
+// strand has thousands of instalments and reaches it every time.
+func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (string, []srfEpisodeRef, bool, error) {
 	next := s.il + srfEpisodesPath + url.PathEscape(showURN) + ".json?" +
 		"pageSize=" + strconv.Itoa(config.FolderPageSize) + "&" + srfVector
 
@@ -256,15 +255,16 @@ func (s *SRF) episodes(ctx context.Context, showURN string) (string, []srfEpisod
 		episodes []srfEpisodeRef
 		seen     = make(map[string]bool)
 	)
-	for next != "" && len(episodes) < config.MaxListingVideos {
+	for next != "" && len(episodes) < limit {
 		var doc srfEpisodeList
 		if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
 			if len(episodes) > 0 {
 				// A page that will not load part-way down a long show still
 				// leaves everything above it worth downloading.
+				next = ""
 				break
 			}
-			return "", nil, fmt.Errorf("srf: episodes of %s: %w", showURN, err)
+			return "", nil, false, fmt.Errorf("srf: episodes of %s: %w", showURN, err)
 		}
 		title = util.FirstNonEmpty(title, doc.Show.Title)
 
@@ -285,20 +285,16 @@ func (s *SRF) episodes(ctx context.Context, showURN string) (string, []srfEpisod
 		if added == 0 {
 			// A listing that keeps answering with what has already been
 			// taken is not paging any more.
+			next = ""
 			break
 		}
 		next = doc.Next
 	}
 
 	if len(episodes) == 0 {
-		return "", nil, fmt.Errorf("srf: %s lists no episodes", showURN)
+		return "", nil, false, fmt.Errorf("srf: %s lists no episodes", showURN)
 	}
-	// The cap is checked between pages, so the last one may carry it past.
-	// A daily strand has thousands of instalments and reaches this every time.
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
-	}
-	return title, episodes, nil
+	return title, episodes, next != "", nil
 }
 
 // chapter resolves one video urn to something downloadable. The returned File
@@ -328,7 +324,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 	// and the response's own Content-Length settles it.
 	if best, ok := chapter.pick(srfProtocolHTTP); ok {
 		return &File{
-			Name:    srfExtension(best.URL),
+			Name:    linkExt(best.URL, ".mp4"),
 			URL:     srfSecure(best.URL),
 			Size:    -1,
 			Headers: headers,
@@ -394,16 +390,6 @@ func srfSecure(raw string) string {
 		return "https://" + rest
 	}
 	return raw
-}
-
-// srfExtension names the container a progressive resource arrives in. SRF
-// serves MP4 and says so in the path; the default exists only so a host that
-// changes its naming still produces a usable filename.
-func srfExtension(raw string) string {
-	if ext := strings.ToLower(path.Ext(util.NameFromURL(raw))); ext != "" {
-		return ext
-	}
-	return ".mp4"
 }
 
 // srfBlockReasons turns the Integration Layer's block tokens into a sentence.

@@ -327,11 +327,14 @@ line in the saved queue.
 - `unpackJS` and `jwSource` (`players.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
-  for DRM and geo refusals in the broadcaster's own words, `resolveListed`,
-  `resolveInTurn` and `resolveEach` for a listing's episodes resolved
-  concurrently or one at a time, in order, `lazyEpisode` and
-  `refreshing` for files re-read at transfer time, and the listing notes. A
-  new broadcaster uses these rather than types of its own.
+  for DRM and geo refusals in the broadcaster's own words, `expandSeries`
+  for a series resolved while it is listed (capped by a request budget, noted
+  where cut, filed by season, one error when nothing plays), beneath it
+  `resolveListed`, `resolveInTurn` and `resolveEach` for a listing's
+  episodes resolved concurrently or one at a time, in order, `lazyEpisode`
+  and `refreshing` for files re-read at transfer time, `linkExt` for an
+  extension read off a link, and the listing notes. A new broadcaster uses
+  these rather than types of its own.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
 - `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its

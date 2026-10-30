@@ -187,31 +187,13 @@ func yleWith(srv *httptest.Server) *Yle {
 	return y
 }
 
-func yleExtract(t *testing.T, srv *httptest.Server, raw string, opts Options) *Result {
-	t.Helper()
-	u, _ := url.Parse(raw)
-	res, err := yleWith(srv).Extract(context.Background(), u, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return res
-}
-
-func yleNames(res *Result) string {
-	var names []string
-	for _, f := range res.Files {
-		names = append(names, strings.TrimPrefix(f.Dir+"/", "/")+f.Name)
-	}
-	return strings.Join(names, "\n")
-}
-
 // A programme is read off the player's preview, named for its series and
 // itself, its subtitles a track of their own, and minted again when the
 // transfer starts. Being marked protected, as most of Areena is, keeps
 // nothing out: the stream says whether it is encrypted.
 func TestYleReadsAProgrammeFromThePlayersPreview(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-1001", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-1001", Options{})
 	f := res.Files[0]
 	if res.Title != "Keksitty sarja - Ensimmäinen jakso" || f.Name != "Keksitty sarja - Ensimmäinen jakso.ts" {
 		t.Errorf("title %q, name %q", res.Title, f.Name)
@@ -227,7 +209,7 @@ func TestYleReadsAProgrammeFromThePlayersPreview(t *testing.T) {
 // An episode of a podcast is one MP3.
 func TestYleReadsAnAudioProgrammeAsItsFile(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/podcastit/1-1002", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/podcastit/1-1002", Options{})
 	f := res.Files[0]
 	if f.Name != "Keksitty sarja - Podcastin jakso.mp3" || f.URL != srv.URL+"/aod/world/an-invented-episode.mp3?hdnts=exp=1~hmac=x" || len(f.Segments) != 0 {
 		t.Errorf("name %q, url %q, segments %v", f.Name, f.URL, f.Segments)
@@ -240,14 +222,14 @@ func TestYleReadsAnAudioProgrammeAsItsFile(t *testing.T) {
 // under, its number with it, when its transfer starts.
 func TestYleListsASeriesBySeason(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-2000", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-2000", Options{})
 	want := strings.Join([]string{
 		"Kausi 2/Keksitty sarja - 1. Jakso 1-2201.ts",
 		"Kausi 1/Keksitty sarja - 1. Jakso 1-2101.ts",
 		"Kausi 1/Keksitty sarja - 2. Jakso 1-2102.ts",
 		"Kausi 1/Keksitty sarja - 3. Jakso 1-2103.ts",
 	}, "\n")
-	if got := yleNames(res); res.Title != "Keksitty sarja" || got != want || res.Note != "" {
+	if got := strings.Join(filePaths(res.Files), "\n"); res.Title != "Keksitty sarja" || got != want || res.Note != "" {
 		t.Fatalf("%q (note %q):\n%s\nwant:\n%s", res.Title, res.Note, got, want)
 	}
 	target, err := res.Files[3].Resolve(context.Background())
@@ -259,13 +241,13 @@ func TestYleListsASeriesBySeason(t *testing.T) {
 // A season's own page offers every season of its series, and lists itself.
 func TestYleListsASeasonAlone(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-2100", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-2100", Options{})
 	want := strings.Join([]string{
 		"Keksitty sarja - 1. Jakso 1-2101.ts",
 		"Keksitty sarja - 2. Jakso 1-2102.ts",
 		"Keksitty sarja - 3. Jakso 1-2103.ts",
 	}, "\n")
-	if got := yleNames(res); res.Title != "Keksitty sarja - Kausi 1" || got != want {
+	if got := strings.Join(filePaths(res.Files), "\n"); res.Title != "Keksitty sarja - Kausi 1" || got != want {
 		t.Errorf("%q:\n%s\nwant:\n%s", res.Title, got, want)
 	}
 }
@@ -274,11 +256,11 @@ func TestYleListsASeasonAlone(t *testing.T) {
 // preview's titles.
 func TestYleReadsTheSwedishSiteInSwedish(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://arenan.yle.fi/1-2100", Options{})
+	res := extractOK(t, yleWith(srv), "https://arenan.yle.fi/1-2100", Options{})
 	if res.Title != "En påhittad serie - Säsong 1" || res.Files[0].Name != "En påhittad serie - 1. Avsnitt 1-2101.ts" {
-		t.Errorf("%q: %s", res.Title, yleNames(res))
+		t.Errorf("%q: %s", res.Title, strings.Join(filePaths(res.Files), "\n"))
 	}
-	res = yleExtract(t, srv, "https://arenan.yle.fi/1-1001", Options{})
+	res = extractOK(t, yleWith(srv), "https://arenan.yle.fi/1-1001", Options{})
 	if res.Title != "En påhittad serie - Första avsnittet" {
 		t.Errorf("title %q", res.Title)
 	}
@@ -289,13 +271,13 @@ func TestYleReadsTheSwedishSiteInSwedish(t *testing.T) {
 // what Yle shows in Finland alone, the note saying so.
 func TestYleLeavesOutWhatASeriesCannotHave(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-3000", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-3000", Options{})
 	want := strings.Join([]string{
 		"Keksitty podcast - 1. Jakso 1-3001.mp3",
 		"Keksitty podcast - 2. Jakso 1-3002.mp3",
 		"Keksitty podcast - 3. Jakso 1-3003.mp3",
 	}, "\n")
-	if got := yleNames(res); got != want {
+	if got := strings.Join(filePaths(res.Files), "\n"); got != want {
 		t.Errorf("%s\nwant:\n%s", got, want)
 	}
 	if note := "1 left out that Yle shows in Finland only; 1 left out: it is no longer on Areena"; res.Note != note {
@@ -307,7 +289,7 @@ func TestYleLeavesOutWhatASeriesCannotHave(t *testing.T) {
 // list states rather than by reading it.
 func TestYleCountsWhatACapLeavesOut(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-3000", Options{limits: Limits{Files: 2}})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-3000", Options{limits: Limits{Files: 2}})
 	if len(res.Files) != 2 || res.Note != "2 of 5 episodes" {
 		t.Errorf("%d files, note %q", len(res.Files), res.Note)
 	}
@@ -324,8 +306,7 @@ func TestYleSaysWhyAProgrammeCannotBeHad(t *testing.T) {
 		"1-1007": errYleFinlandOnly.Error(),
 		"1-9999": "does not exist",
 	} {
-		u, _ := url.Parse("https://areena.yle.fi/" + id)
-		_, err := yleWith(srv).Extract(context.Background(), u, Options{})
+		_, err := extract(t, yleWith(srv), "https://areena.yle.fi/"+id, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v; want it to say %q", id, err, want)
 		}

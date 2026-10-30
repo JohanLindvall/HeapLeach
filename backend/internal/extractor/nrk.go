@@ -55,9 +55,6 @@ const (
 	nrkProgramAPI  = nrkAPI + "/programs/"
 	nrkCatalogAPI  = nrkAPI + "/tv/catalog/series/"
 
-	// nrkMaxEpisodes bounds how many episodes one series URL expands to.
-	nrkMaxEpisodes = 500
-
 	// A series' extra material is a season like any other, except that the
 	// page names it in Norwegian and the API in English.
 	nrkExtraSeason = "ekstramateriale"
@@ -206,34 +203,29 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 			return nil, err
 		}
 	}
-	if len(episodes) > nrkMaxEpisodes {
-		episodes = episodes[:nrkMaxEpisodes]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep nrkEpisodeRef) string { return ep.season })
 
 	// One geo-blocked or expired episode must not sink the rest. The reasons
 	// are kept, though: when every episode is refused it is refused for the
 	// same reason, and NRK's own words for it are better than anything this
 	// could conclude. The episodes are asked for one at a time.
-	files, refused, _ := resolveInTurn(ctx, episodes, func(ctx context.Context, ep nrkEpisodeRef) (*File, error) {
-		file, err := n.episode(ctx, ep.id)
-		if err != nil {
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(ep.name, ep.id) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return file, nil
+	resolved, note, err := expandSeries(ctx, series[nrkEpisodeRef]{
+		site: "nrk", noun: "episodes", link: u.Redacted(),
+		items: episodes, inTurn: true,
+		label: func(ep nrkEpisodeRef) string { return ep.season },
+		resolve: func(ctx context.Context, ep nrkEpisodeRef) (*File, error) {
+			file, err := n.episode(ctx, ep.id)
+			if err != nil {
+				return nil, err
+			}
+			file.Name = util.FirstNonEmpty(ep.name, ep.id) + file.Name
+			return file, nil
+		},
+		unplayable: "the catalogue lists them but the player offers no stream",
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("nrk: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(append(refused,
-				"the catalogue lists them but the player offers no stream")...))
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: util.FirstNonEmpty(title, ref.slug), Files: files}, nil
+	return &Result{Title: util.FirstNonEmpty(title, ref.slug), Files: listedFiles(resolved), Note: note}, nil
 }
 
 // nrkEpisodeRef is one episode of a series, with the season it belongs to.

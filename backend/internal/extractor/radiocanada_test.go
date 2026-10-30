@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -115,8 +114,7 @@ func radioCanadaWith(srv *httptest.Server) *RadioCanada {
 
 func radioCanadaExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
-	u, _ := url.Parse(srv.URL + path)
-	return radioCanadaWith(srv).Extract(context.Background(), u, Options{})
+	return extract(t, radioCanadaWith(srv), srv.URL+path, Options{})
 }
 
 // A video page's own media is the one its data layer names, not the first
@@ -171,10 +169,7 @@ func TestRadioCanadaListsEveryPageOfAProgramme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	for _, f := range res.Files {
-		names = append(names, f.Name)
-	}
+	names := fileNames(res.Files)
 	want := []string{
 		"Un balado inventé - L'épisode 1002 : inventé.ts", "Un balado inventé - L'épisode 1004 : inventé.ts",
 		"Un balado inventé - L'épisode 1006 : inventé.ts", "Un balado inventé - L'épisode 1008 : inventé.ts",
@@ -198,10 +193,7 @@ func TestRadioCanadaListsEverySeason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []string
-	for _, f := range res.Files {
-		got = append(got, f.Dir+"/"+f.Name)
-	}
+	got := filePaths(res.Files)
 	want := "Saison 1 - La première/Un balado à saisons - Un épisode 1012.ts|Saison 2 - La deuxième/Un balado à saisons - Un épisode 1014.ts"
 	if strings.Join(got, "|") != want {
 		t.Errorf("%s\nwant %s", strings.Join(got, "|"), want)
