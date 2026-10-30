@@ -6,18 +6,42 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 ## Player pages: one engine, one row per site
 
-pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop,
-lulustream, vids.st and sendvid are rows of one table in `players.go`, each
-registered as its own `Player` under its own name, in the registry position
-its hand-written extractor had (form order decides `Known`, so the rows are
-registered one by one rather than as a block). A row states its forms and
-recogniser, the canonical page a pasted link is read as (`page`), the media
-referer, and `read`, which fetches the page and returns its title and
-rendition candidates. The engine takes the best (`bestCandidate`), follows a
-playlist to its segments (named by the segments' container) or hands over a
-plain file, and, for a row marked `signed`, reads the page again when the
+pornhub, xhamster, tnaflix, drtuber, pornone, eporner, vidmoly, ok.ru,
+streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid, knuthing and
+noodlemagazine are rows of one table in `players.go`, each registered as its
+own `Player` under its own name, in the registry position its hand-written
+extractor had (form order decides `Known`, so the rows are registered one by
+one rather than as a block). A row states its forms and recogniser, the
+canonical page a pasted link is read as (`page`), the media referer, and
+`read`, which fetches the page and returns its title and rendition
+candidates. The engine takes the best (`bestCandidate`), follows a playlist
+to its segments (named by the segments' container) or hands over a plain
+file, and, for a row marked `signed`, reads the page again when the
 transfer starts. A 404 on the page is reported as the video being gone, for
-every row. New single-video player sites belong in this table.
+every row, keeping the status underneath. New player sites belong in this
+table.
+
+What else a row can ask for:
+
+- **A referer of the read's own.** `playerVideo.referer` replaces the row's
+  for that read: the address of a player only the read found (knuthing's
+  embed), or the page as finally served (noodlemagazine, doodstream). A row
+  with neither sends no Referer (eporner).
+- **`peek`.** Extract learns only the title, and that the video plays; the
+  whole read waits for the transfer and runs again on recovery (`Resolve`
+  and `Refresh`). For a site whose player spends its signature by being
+  read at all (knuthing), or whose links are signed per visit
+  (noodlemagazine). `ext` names such a queued video before it is read.
+- **`listing`.** A listing of the site's videos, by `shape`: either a paged
+  listing `walkListing` reads (`walk`: the first page and the page reader;
+  the engine adds the caps and their notes), or one that pages its own way
+  (`links`, eporner's profile tabs). Each entry is queued unread under its
+  card's title and read like a peeked video.
+- **`live`.** A media playlist without `#EXT-X-ENDLIST` is refused as still
+  being written, since it would finish as a fragment named as the whole;
+  ok.ru serves live streams and lets them through.
+- **`proxyFallback`.** Opts the row's sources and files into proxy recovery
+  (doodstream).
 
 The script-reading rows (streamtape, mixdrop, lulustream) are the most fragile
 extractors here, because each depends on the shape of a script the host can
@@ -28,10 +52,12 @@ them. `unpackJS` reverses the p,a,c,k,e,d packer and is host-neutral.
 only that list is media, since a `file:` key above it can name the seek-bar
 sprite, and a DASH entry is passed over for the HLS beside it.
 
-doodstream stays its own extractor (`doodstream.go`): its token handshake,
-player gate and proxy fallback are not the table's.
-
 ## doodstream
+
+doodstream is a row whose `read` is the whole token handshake, with its
+retries, `RELOAD` handling and stage notes (`doodstream.go`); the row adds
+only `proxyFallback`. `NewDoodStream` builds it for callers outside the
+registry.
 
 doodstream includes the `d000d.com` and `playmogo.com` aliases. An ordinary
 page embedding one of its players is reached by the generic link scanner, and
@@ -125,8 +151,9 @@ knuthing watch pages frame Bunny Stream. Read only the `bunnyframe` embed and
 its `bunny-stream-video` element's `content-src`; thumbnails and sharing
 embeds are not media. Free-video confirmation follows the page's own link for
 that same video once. Refresh the page, embed, HLS segments and AES-128 key on
-each download attempt, keeping the final embed URL as media referer.
-`/videos/<section>` listings start at page one, read only their primary video
+each download attempt, keeping the final embed URL as media referer. The row
+peeks: a pasted video is queued by the watch page's title alone, and its
+player is first opened when the transfer starts. `/videos/<section>` listings start at page one, read only their primary video
 cards, and follow their own pager within the selected section and filters.
 Cards supply queued titles without opening players. The walk is the shared
 `walkListing` (`listing.go`), which reports source and file caps and
@@ -148,8 +175,10 @@ pagination and source or file caps in the job note.
 Cards supply queued titles without opening each player. The watch page's
 `window.playlist` JSON supplies MP4 and HLS renditions, ranked by resolution
 with MP4 preferred on a tie; previews and advertising URLs elsewhere in the
-page are not sources. Media URLs are signed, so every transfer attempt
-reopens its own watch page and uses the final page URL as referer. HLS
+page are not sources. Media URLs are signed, so the row peeks: a pasted
+video's page is read for its title and to see that it plays, and every
+transfer attempt reopens its own watch page and uses the final page URL as
+referer. HLS
 segments, keys and separate tracks are refreshed together. The shared
 browser-style HTTP client reads these pages; a plain curl request can meet
 a Cloudflare challenge instead.
@@ -161,6 +190,15 @@ caller the watch page carries an empty rendition list, and the player's own
 metadata endpoint answers the same way; the embed page, which exists to be
 framed by other sites, carries the identical structure filled in. No session,
 token or player JavaScript is involved.
+
+Its MP4s are ranked by name (`okruRank`: the site names renditions rather
+than measuring them, and an unknown name ranks below every known one), and
+the HLS manifest below them all, taken only when no file is offered. The
+links are signed for the address that asked, so the row is `signed`. A page
+that calls the video OK and lists nothing is asked for again within the
+extraction retry budget; the backend serves such pages for minutes at a
+time. A video the site calls gone says so in the site's words
+(`okruWhyNot`), and an untitled one is named `ok.ru-<id>`.
 
 ## pornone
 
@@ -176,7 +214,11 @@ group of eight hexadecimal digits has to be re-expressed in base 36 and the
 groups joined, with no padding, so a group of zeroes collapses to one digit.
 What comes back is signed with an expiry *and* the requesting address, so it
 is minted through `Resolve` at download time; a profile of a hundred videos
-would otherwise start failing partway down its own queue.
+would otherwise start failing partway down its own queue. The media requests
+carry no Referer. Profile tabs page by path rather than by a pager link, and
+end on a 404, so the row's listing reads them with a walk of its own
+(`listing.links`) rather than `walkListing`; each video is queued unread and
+reopened on its own on recovery.
 
 Two traps, both of which look like working code. The listing lives under
 `streamevents`; the `plister` block beside it is the tab's header and holds no

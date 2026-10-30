@@ -68,7 +68,7 @@ func TestKnuthingRefreshesPlayerPlaylistAndKey(t *testing.T) {
 	origin = srv.URL
 	client := httpx.New("test", "en", 0, time.Second)
 	defer client.CloseIdleConnections()
-	k := NewKnuthing(client)
+	k := NewPlayer(client, &knuthingPlayer)
 	res, err := k.Extract(context.Background(), mustParse(t, origin+"/watch/start.html"), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestKnuthingUnavailablePlayersFail(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
+			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
 			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+"/watch/test.html"), Options{})
 			if err == nil {
 				_, err = res.Files[0].Resolve(context.Background())
@@ -159,8 +159,8 @@ func TestKnuthingPreservesChallenges(t *testing.T) {
 				w.WriteHeader(http.StatusForbidden)
 			}))
 			defer srv.Close()
-			k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
-			_, err := k.resolve(context.Background(), srv.URL+"/watch/test.html")
+			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
+			_, _, err := k.resolve(context.Background(), srv.URL+"/watch/test.html")
 			if _, ok := errors.AsType[*httpx.ChallengeError](err); !ok {
 				t.Fatalf("challenge lost: %v", err)
 			}
@@ -223,7 +223,7 @@ func TestKnuthingListingWalksOnlyItsCardsAndPages(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
+			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
 			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+section+"?page_id=8&last_page=1&sort=top"), Options{})
 			if err != nil {
 				t.Fatal(err)
@@ -292,7 +292,7 @@ func TestKnuthingListingCapsAndPartialPages(t *testing.T) {
 				fmt.Fprint(w, knuthingListingPage(knuthingCard("1", "First", "/watch/first.html")+knuthingCard("2", "Second", "/watch/second.html"), `<a title="Next Page" href="`+html.EscapeString(next)+`">Next</a>`))
 			}))
 			defer srv.Close()
-			k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
+			k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
 			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+"/videos/free?sort=top"), Options{limits: tc.limits})
 			if err != nil {
 				t.Fatal(err)
@@ -315,7 +315,7 @@ func TestKnuthingListingCancellation(t *testing.T) {
 		fmt.Fprint(w, knuthingListingPage(knuthingCard("1", "First", "/watch/first.html"), `<a title="Next Page" href="?page_id=2">Next</a>`))
 	}))
 	defer srv.Close()
-	k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
+	k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
 	if _, err := k.Extract(ctx, mustParse(t, srv.URL+"/videos/free"), Options{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("partial result hid cancellation: %v", err)
 	}

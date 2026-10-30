@@ -26,7 +26,7 @@ func noodleTestClient(t *testing.T) *httpx.Client {
 }
 
 func TestNoodleMagazineRouting(t *testing.T) {
-	n := NewNoodleMagazine(nil)
+	n := NewPlayer(nil, &noodlePlayer)
 	for _, path := range []string{"/", "/video/", "/watch/", "/watch/not-an-id", "/other/search"} {
 		if _, err := n.Extract(context.Background(), mustParse(t, "https://example.test"+path), Options{}); err == nil {
 			t.Errorf("accepted unsupported path %s", path)
@@ -55,7 +55,7 @@ func TestNoodleMagazineRefreshesBestSourceAndFinalReferer(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	n := NewNoodleMagazine(noodleTestClient(t))
+	n := NewPlayer(noodleTestClient(t), &noodlePlayer)
 	res, err := n.Extract(context.Background(), mustParse(t, srv.URL+"/watch/-1_1"), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestNoodleMagazineRefreshesHLSWithKeysAndTracks(t *testing.T) {
 	}))
 	defer srv.Close()
 	origin = srv.URL
-	n := NewNoodleMagazine(noodleTestClient(t))
+	n := NewPlayer(noodleTestClient(t), &noodlePlayer)
 	res, err := n.Extract(context.Background(), mustParse(t, origin+"/watch/1_2"), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestNoodleMagazineRefusesUnavailablePlayers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, tc.doc) }))
 			defer srv.Close()
-			_, err := NewNoodleMagazine(noodleTestClient(t)).Extract(context.Background(), mustParse(t, srv.URL+"/watch/1_2"), Options{})
+			_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(context.Background(), mustParse(t, srv.URL+"/watch/1_2"), Options{})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v, want %s", err, tc.want)
 			}
@@ -198,7 +198,7 @@ func TestNoodleListingWalksOnlySearchCardsAndDefersPlayers(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	n := NewNoodleMagazine(noodleTestClient(t))
+	n := NewPlayer(noodleTestClient(t), &noodlePlayer)
 	res, err := n.Extract(context.Background(), mustParse(t, srv.URL+"/video/harbour%2Blights?p=8&sort=0&hd=1&len=long#results"), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestNoodleListingCapsAndIncompletePages(t *testing.T) {
 				fmt.Fprint(w, noodleListing(noodleCard("/watch/1_1", "First")+noodleCard("/watch/1_2", "Second"), pager))
 			}))
 			defer srv.Close()
-			n := NewNoodleMagazine(noodleTestClient(t))
+			n := NewPlayer(noodleTestClient(t), &noodlePlayer)
 			res, err := n.Extract(context.Background(), mustParse(t, srv.URL+"/video/synthetic"), Options{limits: tc.limits})
 			if err != nil {
 				t.Fatal(err)
@@ -286,7 +286,7 @@ func TestNoodleListingNeverUsesRecommendationsForEmptySearch(t *testing.T) {
 		fmt.Fprint(w, `<span data-i18n="nothing_found">Nothing Found</span><div class="list_videos">`+noodleCard("/watch/9_9", "Unrelated")+`</div>`)
 	}))
 	defer srv.Close()
-	_, err := NewNoodleMagazine(noodleTestClient(t)).Extract(context.Background(), mustParse(t, srv.URL+"/video/synthetic"), Options{})
+	_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(context.Background(), mustParse(t, srv.URL+"/video/synthetic"), Options{})
 	if err == nil || !strings.Contains(err.Error(), "no videos found") {
 		t.Fatalf("empty search became recommendations: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestNoodleListingCancellation(t *testing.T) {
 		fmt.Fprint(w, noodleListing(noodleCard("/watch/1_1", "First"), `<div class="more" data-page="1"></div>`))
 	}))
 	defer srv.Close()
-	_, err := NewNoodleMagazine(noodleTestClient(t)).Extract(ctx, mustParse(t, srv.URL+"/video/synthetic"), Options{})
+	_, err := NewPlayer(noodleTestClient(t), &noodlePlayer).Extract(ctx, mustParse(t, srv.URL+"/video/synthetic"), Options{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("partial listing hid cancellation: %v", err)
 	}

@@ -22,17 +22,20 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// Single-video player pages: one page, one video, and the renditions its
-// player is given, read out of the page or out of the endpoint the player
-// asks. Every such site is one row of the table below, and one engine does
-// the rest: read the page, take the best rendition (bestCandidate), and
-// either follow a playlist down to its segments or hand over the file.
+// Player pages: one page, one video, and the renditions its player is
+// given, read out of the page or out of the endpoint the player asks. Every
+// such site is one row of a table, and one engine does the rest: read the
+// page, take the best rendition (bestCandidate), and either follow a
+// playlist down to its segments or hand over the file. A row can also take
+// a listing of the site's videos, each queued by its card and read the same
+// way when its transfer starts.
 //
 // Most of these sites sign their links for minutes or hours and tie them to
 // the visit that produced them, so a row marked signed is read again when
 // the item's transfer starts: a link signed while it waited in a queue
 // would be spent before its turn came. The page is read again rather than
-// the link reused, segments and key included.
+// the link reused, segments and key included. A row that peeks goes further
+// and reads nothing signed until the transfer starts.
 //
 // The rows that read a player's script are the most fragile extractors in
 // the program: each depends on the exact shape of a script the host can
@@ -57,12 +60,45 @@ type playerSite struct {
 	// page that serves its player. Nil reads the link as it is. An error
 	// says the link names no video.
 	page func(u *url.URL) (string, error)
-	// referer is the Referer every media request carries, given the page.
+	// referer is the Referer every media request carries, given the page,
+	// unless a read names its own (playerVideo.referer). Nil, with none
+	// named, sends no Referer.
 	referer func(page string) string
 	// read fetches the page and reports what its player is given.
 	read func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error)
 	// signed reads the page again when the transfer starts.
 	signed bool
+	// peek, when set, puts the whole read off until the transfer starts,
+	// and reads it again on recovery: Extract learns only the video's
+	// title, and that it plays. For a site whose player spends its
+	// signature by being read at all.
+	peek func(ctx context.Context, client *httpx.Client, page string) (string, error)
+	// ext names a video queued before it is read, a peeked one or a
+	// listing's: ".mp4" when empty.
+	ext string
+	// listing, when set, takes a listing of the site's videos.
+	listing *playerListing
+	// live lets a playlist with no end through, for a site that serves
+	// live streams; anywhere else a playlist still being written is
+	// refused, since it would finish as a fragment named as the whole.
+	live bool
+	// proxyFallback opts the site's sources and files into proxy recovery
+	// after a temporary failure on the normal connection.
+	proxyFallback bool
+}
+
+// playerListing is a row's listing of videos. Each entry is queued under
+// its card's title and read, as a peeked video is, when its transfer
+// starts.
+type playerListing struct {
+	// shape tells a listing from a video.
+	shape func(u *url.URL) bool
+	// walk names a paged listing's first page and how walkListing reads
+	// it, the caps aside.
+	walk func(u *url.URL) (*url.URL, listingWalk)
+	// links, in walk's place, reads a listing that pages in a way of its
+	// own: its entries, its title and its note.
+	links func(ctx context.Context, client *httpx.Client, u *url.URL) ([]listingLink, string, string, error)
 }
 
 // playerVideo is what one reading of a page found.
@@ -72,6 +108,9 @@ type playerVideo struct {
 	// ext names a plain file, ".mp4" when empty. A playlist is named after
 	// the container its segments are.
 	ext string
+	// referer, when set, is the Referer of this read's media requests in
+	// place of the row's: the address of a player only this read found.
+	referer string
 }
 
 // NewPlayer builds the extractor for one row.
@@ -90,8 +129,14 @@ func (p *Player) Shape(u *url.URL) bool { return p.site.shape(u) }
 // Recognise reports whether the probed page is the site's player.
 func (p *Player) Recognise(_ context.Context, page *Page) bool { return p.site.recognise(page) }
 
-// Extract resolves a video page to its best rendition.
-func (p *Player) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+// ProxyFallback reports whether the row opted into proxy recovery.
+func (p *Player) ProxyFallback() bool { return p.site.proxyFallback }
+
+// Extract resolves a video page to its best rendition, or queues a listing.
+func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	if p.site.listing != nil && p.site.listing.shape(u) {
+		return p.list(ctx, u, opts)
+	}
 	page := u.String()
 	if p.site.page != nil {
 		var err error
@@ -99,46 +144,119 @@ func (p *Player) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 			return nil, fmt.Errorf("%s: %w", p.site.name, err)
 		}
 	}
+	if p.site.peek != nil {
+		title, err := p.site.peek(ctx, p.client, page)
+		if err != nil {
+			return nil, p.readError(page, err)
+		}
+		title = util.FirstNonEmpty(title, p.site.name)
+		return &Result{Title: title, Files: []File{p.deferred(page, title)}}, nil
+	}
 	first, title, err := p.resolve(ctx, page)
 	if err != nil {
 		return nil, err
 	}
 	file := first.file("")
 	if p.site.signed {
-		file.Resolve = func(ctx context.Context) (*Target, error) {
+		file = refreshing(first, func(ctx context.Context) (*Target, error) {
 			fresh, _, err := p.resolve(ctx, page)
 			return fresh, err
+		})
+	}
+	file.ProxyFallback = p.site.proxyFallback
+	return &Result{Title: title, Files: []File{file}}, nil
+}
+
+// deferred is a video queued under title and read in full when its
+// transfer starts, and again on recovery rather than whatever listed it.
+func (p *Player) deferred(page, title string) File {
+	resolve := func(ctx context.Context) (*Target, error) {
+		target, _, err := p.resolve(ctx, page)
+		return target, err
+	}
+	return File{Name: title + util.FirstNonEmpty(p.site.ext, ".mp4"), Size: -1,
+		Resolve: resolve, Refresh: resolve, ProxyFallback: p.site.proxyFallback}
+}
+
+// list walks a listing, queueing each video it names unread.
+func (p *Player) list(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	var links []listingLink
+	var title, note string
+	if read := p.site.listing.links; read != nil {
+		var err error
+		if links, title, note, err = read(ctx, p.client, u); err != nil {
+			return nil, fmt.Errorf("%s: %w", p.site.name, err)
+		}
+	} else {
+		first, walk := p.site.listing.walk(u)
+		walk.name = p.site.name
+		walk.limit, walk.limitNote = listingLimit(opts)
+		var err error
+		if links, title, note, err = walkListing(ctx, p.client, first, walk); err != nil {
+			return nil, err
 		}
 	}
-	return &Result{Title: title, Files: []File{file}}, nil
+	res := &Result{Title: title, Note: note}
+	for _, link := range links {
+		res.Files = append(res.Files, p.deferred(link.url, link.title))
+	}
+	return res, nil
 }
 
 // resolve reads the page once and turns its best rendition into a Target.
 func (p *Player) resolve(ctx context.Context, page string) (*Target, string, error) {
 	name := p.site.name
 	video, err := p.site.read(ctx, p.client, page)
-	if httpx.HasStatus(err, http.StatusNotFound) {
-		return nil, "", fmt.Errorf("%s: %s is not there — the site says it was not found or has been removed", name, page)
-	}
 	if err != nil {
-		return nil, "", fmt.Errorf("%s: %w", name, err)
+		return nil, "", p.readError(page, err)
 	}
 	best, ok := bestCandidate(video.candidates)
 	if !ok {
 		return nil, "", fmt.Errorf("%s: no playable rendition on %s (the video may have been removed)", name, page)
 	}
 	title := util.FirstNonEmpty(video.title, name)
-	headers := httpx.Referer(p.site.referer(page))
+	referer := video.referer
+	if referer == "" && p.site.referer != nil {
+		referer = p.site.referer(page)
+	}
+	var headers httpx.Header
+	if referer != "" {
+		headers = httpx.Referer(referer)
+	}
 	if !best.IsHLS {
 		return &Target{URL: best.URL, Name: title + util.FirstNonEmpty(video.ext, ".mp4"), Size: -1,
 			Headers: headers}, title, nil
 	}
+	ResolveNote(ctx, "Reading video playlist")
 	media, err := resolveMediaPlaylist(ctx, p.client, best.URL, headers)
 	if err != nil {
 		return nil, "", fmt.Errorf("%s: %s: %w", name, page, err)
 	}
+	if live, why := hlsLiveEdge(media.Doc); live && !p.site.live {
+		return nil, "", fmt.Errorf("%s: %s: the video's playlist is still being written: %s", name, page, why)
+	}
 	return media.target(best.URL, title+media.extension(), headers), title, nil
 }
+
+// readError is a failed read in the row's name. A 404 on the page is the
+// video being gone, for every row, and still carries its status for the
+// downloader to read.
+func (p *Player) readError(page string, err error) error {
+	if httpx.HasStatus(err, http.StatusNotFound) {
+		return &playerGone{fmt.Sprintf("%s: %s is not there — the site says it was not found or has been removed",
+			p.site.name, page), err}
+	}
+	return fmt.Errorf("%s: %w", p.site.name, err)
+}
+
+// playerGone says a video is gone in words, keeping the reply that said so.
+type playerGone struct {
+	msg string
+	err error
+}
+
+func (e *playerGone) Error() string { return e.msg }
+func (e *playerGone) Unwrap() error { return e.err }
 
 // playerFetch reads a page, sending referer as its Referer.
 func playerFetch(ctx context.Context, client *httpx.Client, page, referer string) (string, error) {
@@ -202,8 +320,9 @@ func pageOrigin(page string) string {
 
 // The player sites, in the order NewRegistry registers them.
 var playerSites = []*playerSite{
-	&pornhubPlayer, &xhamsterPlayer, &tnaflixPlayer, &drtuberPlayer, &pornonePlayer,
-	&vidmolyPlayer, &streamtapePlayer, &mixdropPlayer, &luluPlayer, &vidsPlayer, &sendvidPlayer,
+	&pornhubPlayer, &xhamsterPlayer, &tnaflixPlayer, &drtuberPlayer, &pornonePlayer, &epornerPlayer,
+	&vidmolyPlayer, &okruPlayer, &streamtapePlayer, &doodPlayer, &mixdropPlayer, &luluPlayer, &vidsPlayer,
+	&sendvidPlayer, &knuthingPlayer, &noodlePlayer,
 }
 
 // ---------------------------------------------------------------- pornhub

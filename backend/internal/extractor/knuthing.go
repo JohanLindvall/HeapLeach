@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -17,19 +18,6 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// Knuthing embeds Bunny Stream players. The watch page signs the embed,
-// which supplies an HLS playlist; refresh the whole chain per attempt so a
-// listing can wait in the queue without spending its signatures.
-type Knuthing struct {
-	client *httpx.Client
-}
-
-func NewKnuthing(client *httpx.Client) *Knuthing {
-	return &Knuthing{client: client}
-}
-
-func (k *Knuthing) Name() string { return "knuthing" }
-
 var (
 	// knuthingVideoShape is a watch page or the embedded player.
 	knuthingVideoShape = pathShape(`^/watch/[^/]+\.html$`, `^/embed/[^/]+/?$`)
@@ -42,58 +30,59 @@ var (
 // knuthingTheme is where the site's theme serves its scripts from.
 const knuthingTheme = "/themes/knuthing/"
 
-// Recognises is the inventory's description.
-func (k *Knuthing) Recognises() string {
-	return "watch pages (`/watch/<video>.html`) whose player frame or player block the KNUTHING " +
-		"theme renders, and its video listings (`/videos/<section>`) by their video list"
-}
-
-// Shape reports a watch page, a player or a listing.
-func (k *Knuthing) Shape(u *url.URL) bool { return knuthingVideoShape(u) || knuthingListShape(u) }
-
-// Recognise takes a page rendered by the site's theme by what Extract
-// reads on it: the player frame, or the player block that stands in for it
-// before a free video is confirmed, and a listing's video list.
-func (k *Knuthing) Recognise(_ context.Context, p *Page) bool {
-	listing := knuthingListPage(p.Final) && !strings.HasSuffix(p.Final.Path, "/rss")
-	if !knuthingVideoShape(p.Final) && !listing || !p.Script(knuthingTheme) {
-		return false
-	}
-	if knuthingVideoShape(p.Final) {
-		return p.hasElement(func(n *html.Node) bool { return hasClass(n, "bunnyframe") || hasClass(n, "player-video") })
-	}
-	return p.hasElement(func(n *html.Node) bool { return hasClass(n, "videos-latest-list") })
-}
-
-func (k *Knuthing) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	parts := util.PathSegments(u)
-	if len(parts) == 2 && (parts[0] == "watch" || parts[0] == "embed") {
-		video, err := k.readVideo(ctx, u.String())
-		if err != nil {
-			return nil, err
+// The watch page frames a Bunny Stream player, which it signs, and the
+// player names an HLS playlist. Opening the player spends the signature, so
+// the row peeks: a video is queued by the watch page's title, and the whole
+// chain is read again on each attempt, so a listing can wait in the queue
+// without spending its signatures. The media referer is the player itself.
+var knuthingPlayer = playerSite{
+	name:  "knuthing",
+	shape: func(u *url.URL) bool { return knuthingVideoShape(u) || knuthingListShape(u) },
+	// A page rendered by the site's theme, by what the row reads on it: the
+	// player frame, or the player block that stands in for it before a
+	// free video is confirmed, and a listing's video list.
+	recognise: func(p *Page) bool {
+		listing := knuthingListPage(p.Final) && !strings.HasSuffix(p.Final.Path, "/rss")
+		if !knuthingVideoShape(p.Final) && !listing || !p.Script(knuthingTheme) {
+			return false
 		}
-		return &Result{Title: video.title, Files: []File{k.file(u.String(), video.title)}}, nil
-	}
-	if len(parts) >= 2 && parts[0] == "videos" && parts[len(parts)-1] != "rss" {
-		return k.list(ctx, u, opts)
-	}
-	return nil, fmt.Errorf("knuthing: expected /watch/<video>.html, /embed/<id> or /videos/<section>")
-}
-
-func (k *Knuthing) file(page, title string) File {
-	resolve := func(ctx context.Context) (*Target, error) { return k.resolve(ctx, page) }
-	return File{
-		Name: title + ".ts", Size: -1, Resolve: resolve,
-		// Recovery must reopen this video, not its whole listing.
-		Refresh: resolve,
-	}
+		if knuthingVideoShape(p.Final) {
+			return p.hasElement(func(n *html.Node) bool { return hasClass(n, "bunnyframe") || hasClass(n, "player-video") })
+		}
+		return p.hasElement(func(n *html.Node) bool { return hasClass(n, "videos-latest-list") })
+	},
+	recognises: "watch pages (`/watch/<video>.html`) whose player frame or player block the KNUTHING " +
+		"theme renders, and its video listings (`/videos/<section>`) by their video list",
+	page: func(u *url.URL) (string, error) {
+		if parts := util.PathSegments(u); len(parts) == 2 && (parts[0] == "watch" || parts[0] == "embed") {
+			return u.String(), nil
+		}
+		return "", errors.New("expected /watch/<video>.html, /embed/<id> or /videos/<section>")
+	},
+	peek: func(ctx context.Context, client *httpx.Client, page string) (string, error) {
+		video, err := knuthingWatch(ctx, client, page)
+		if err != nil {
+			return "", err
+		}
+		return video.title, nil
+	},
+	read: knuthingRead,
+	ext:  ".ts",
+	listing: &playerListing{
+		shape: func(u *url.URL) bool {
+			parts := util.PathSegments(u)
+			return len(parts) >= 2 && parts[0] == "videos" && parts[len(parts)-1] != "rss"
+		},
+		walk: knuthingWalk,
+	},
 }
 
 type knuthingVideo struct {
 	title, embed, referer string
 }
 
-func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, error) {
+// knuthingWatch reads the watch page for its title and the player it frames.
+func knuthingWatch(ctx context.Context, client *httpx.Client, raw string) (*knuthingVideo, error) {
 	page, err := url.Parse(raw)
 	if err != nil {
 		return nil, err
@@ -101,9 +90,9 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 	headers := httpx.Referer(util.Origin(page) + "/")
 	for attempt := range 2 {
 		ResolveNote(ctx, "Reading video page")
-		root, final, err := fetchRoot(ctx, k.client, page, headers)
+		root, final, err := fetchRoot(ctx, client, page, headers)
 		if err != nil {
-			return nil, fmt.Errorf("knuthing: fetch video page: %w", err)
+			return nil, fmt.Errorf("fetch video page: %w", err)
 		}
 		frame := findFirst(root, func(n *html.Node) bool {
 			return isElem(n, atom.Iframe) && hasClass(n, "bunnyframe")
@@ -113,7 +102,7 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 				title := util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.Title), util.NameFromURL(final.String()))
 				return &knuthingVideo{title: title, embed: embed.String(), referer: final.String()}, nil
 			}
-			return nil, fmt.Errorf("knuthing: player has no usable embed URL")
+			return nil, fmt.Errorf("player has no usable embed URL")
 		}
 		// Free videos can first offer a confirmation link. Follow only the
 		// link the page supplies, for this same video, and at most once.
@@ -134,24 +123,26 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 		if player := findFirst(root, func(n *html.Node) bool { return hasClass(n, "player-video") }); player != nil {
 			if notice := findFirst(player, func(n *html.Node) bool { return hasClass(n, "video-processing") }); notice != nil {
 				if reason := firstText(notice, atom.H5); reason != "" {
-					return nil, fmt.Errorf("knuthing: %s", reason)
+					return nil, errors.New(reason)
 				}
 			}
 		}
-		return nil, fmt.Errorf("knuthing: no accessible video player (the video may be restricted or removed)")
+		return nil, fmt.Errorf("no accessible video player (the video may be restricted or removed)")
 	}
-	return nil, fmt.Errorf("knuthing: video confirmation did not open a player")
+	return nil, fmt.Errorf("video confirmation did not open a player")
 }
 
-func (k *Knuthing) resolve(ctx context.Context, page string) (*Target, error) {
-	video, err := k.readVideo(ctx, page)
+// knuthingRead reads the watch page and then the player it frames, for the
+// playlist the player names.
+func knuthingRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
+	video, err := knuthingWatch(ctx, client, page)
 	if err != nil {
 		return nil, err
 	}
 	ResolveNote(ctx, "Reading video player")
-	doc, playerURL, err := k.client.GetPage(ctx, video.embed, httpx.Referer(video.referer), nil)
+	doc, playerURL, err := client.GetPage(ctx, video.embed, httpx.Referer(video.referer), nil)
 	if err != nil {
-		return nil, fmt.Errorf("knuthing: fetch player: %w", err)
+		return nil, fmt.Errorf("fetch player: %w", err)
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
@@ -161,47 +152,33 @@ func (k *Knuthing) resolve(ctx context.Context, page string) (*Target, error) {
 		return n.Type == html.ElementNode && (n.Data == "bunny-stream-video" || n.Data == "bunny-stream-video-ads")
 	})
 	if player == nil {
-		return nil, fmt.Errorf("knuthing: no Bunny Stream video in the player")
+		return nil, fmt.Errorf("no Bunny Stream video in the player")
 	}
 	link := webLink(playerURL, attr(player, "content-src"))
 	if link == nil || !strings.EqualFold(path.Ext(link.Path), ".m3u8") {
-		return nil, fmt.Errorf("knuthing: player has no HLS source")
+		return nil, fmt.Errorf("player has no HLS source")
 	}
-	headers := httpx.Referer(playerURL.String())
-	ResolveNote(ctx, "Reading video playlist")
-	media, err := resolveMediaPlaylist(ctx, k.client, link.String(), headers)
-	if err != nil {
-		return nil, fmt.Errorf("knuthing: video playlist: %w", err)
-	}
-	if live, why := hlsLiveEdge(media.Doc); live {
-		return nil, fmt.Errorf("knuthing: video playlist is still being written: %s", why)
-	}
-	return media.target(link.String(), video.title+media.extension(), headers), nil
+	return &playerVideo{
+		title:      video.title,
+		candidates: []mediaCandidate{{URL: link.String(), IsHLS: true}},
+		referer:    playerURL.String(),
+	}, nil
 }
 
-// Listings publish titles on their cards. Opening every watch page here
-// would spend short-lived signatures and hundreds of requests to learn
-// nothing needed by the queue; each file reads its own page when it starts.
-func (k *Knuthing) list(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+// knuthingWalk starts a listing at its first page. Listings publish titles
+// on their cards. Opening every watch page here would spend short-lived
+// signatures and hundreds of requests to learn nothing needed by the
+// queue; each file reads its own page when it starts.
+func knuthingWalk(u *url.URL) (*url.URL, listingWalk) {
 	first := *u
 	first.Fragment = ""
 	query := first.Query()
 	query.Set("page_id", "1")
 	query.Del("last_page")
 	first.RawQuery = query.Encode()
-	limit, limitNote := listingLimit(opts)
-	links, title, note, err := walkListing(ctx, k.client, &first, listingWalk{
-		name: "knuthing", title: strings.Join(util.PathSegments(u)[1:], " - "), none: "listing has no videos",
-		limit: limit, limitNote: limitNote, read: knuthingCards,
-	})
-	if err != nil {
-		return nil, err
+	return &first, listingWalk{
+		title: strings.Join(util.PathSegments(u)[1:], " - "), none: "listing has no videos", read: knuthingCards,
 	}
-	res := &Result{Title: title, Note: note}
-	for _, link := range links {
-		res.Files = append(res.Files, k.file(link.url, link.title))
-	}
-	return res, nil
 }
 
 // knuthingCards reads the page's own video cards, not the sidebar's.

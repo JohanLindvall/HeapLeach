@@ -22,14 +22,10 @@ import (
 
 // DoodStream hands out its link in two steps: the page names a token
 // endpoint, and that endpoint returns a prefix which the player completes
-// with a random tail, the token and a timestamp.
-//
-// It stays apart from the player table (players.go): besides that handshake,
-// a challenge can stand in for its player and a refused address is retried
-// through a proxy, none of which the table's other sites need.
-type DoodStream struct {
-	client *httpx.Client
-}
+// with a random tail, the token and a timestamp. The handshake is the row's
+// read, retries and all; a challenge can stand in for its player, and a
+// refused address is retried through a proxy (proxyFallback). The media
+// referer is the player page as finally served.
 
 var (
 	// doodShape is a player or its landing page, /e/<code> or /d/<code>.
@@ -43,99 +39,79 @@ var (
 // doodPassPath finds the token endpoint the page points at.
 var doodPassPath = regexp.MustCompile(`(/pass_md5/[^'"\s]+)`)
 
-var errDoodReload = errors.New("doodstream: player requested RELOAD")
+var errDoodReload = errors.New("player requested RELOAD")
 
 // doodTailLength is how many random characters the player appends. The value
 // is the player's, not ours: the host checks the total length.
 const doodTailLength = 10
 
-// NewDoodStream builds the doodstream extractor.
-func NewDoodStream(client *httpx.Client) *DoodStream {
-	return &DoodStream{client: client}
-}
-
-func (d *DoodStream) Name() string { return "doodstream" }
-
-// Recognises is the inventory's description.
-func (d *DoodStream) Recognises() string {
-	return "players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its " +
-		"player gate, and landing pages (`/d/<code>`) named DoodStream that frame such a player"
-}
-
-// Shape reports a player or a landing page.
-func (d *DoodStream) Shape(u *url.URL) bool { return doodShape(u) }
-
-// Recognise takes a player by the token endpoint Extract asks, or by the
-// gate that stands in for it until a challenge is passed; and a landing
-// page by the player it frames, under the site's name.
-func (d *DoodStream) Recognise(_ context.Context, p *Page) bool {
-	if !doodShape(p.Final) {
-		return false
-	}
-	if doodPassPath.MatchString(p.Body) || doodChallengePage(p.Body) {
-		return true
-	}
-	return doodLanding(p.Final) && p.Named("DoodStream") && p.frames(doodPlayerFrame)
-}
-
-func (d *DoodStream) ProxyFallback() bool { return true }
-
-// Extract resolves a watch or embed page.
-func (d *DoodStream) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+var doodPlayer = playerSite{
+	name:  "doodstream",
+	shape: doodShape,
+	// A player by the token endpoint read asks, or by the gate that stands
+	// in for it until a challenge is passed; and a landing page by the
+	// player it frames, under the site's name.
+	recognise: func(p *Page) bool {
+		if !doodShape(p.Final) {
+			return false
+		}
+		if doodPassPath.MatchString(p.Body) || doodChallengePage(p.Body) {
+			return true
+		}
+		return doodLanding(p.Final) && p.Named("DoodStream") && p.frames(doodPlayerFrame)
+	},
+	recognises: "players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its " +
+		"player gate, and landing pages (`/d/<code>`) named DoodStream that frame such a player",
 	// The embed page is the one carrying the token endpoint; a /d/ link is
 	// the same video behind a landing page.
-	page := strings.Replace(u.String(), "/d/", "/e/", 1)
-	target, title, err := d.media(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: []File{{
-		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers,
-		ProxyFallback: true,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			fresh, _, err := d.media(ctx, page)
-			return fresh, err
-		},
-	}}}, nil
+	page:          func(u *url.URL) (string, error) { return strings.Replace(u.String(), "/d/", "/e/", 1), nil },
+	read:          doodRead,
+	signed:        true,
+	proxyFallback: true,
 }
 
-func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, error) {
-	var title string
+// NewDoodStream builds the doodstream extractor: its row in the player
+// table.
+func NewDoodStream(client *httpx.Client) *Player { return NewPlayer(client, &doodPlayer) }
+
+// doodRead runs the handshake, again from the player page whenever the
+// token endpoint asks for a reload.
+func doodRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
 	attempt := 0
-	target, err := withExtractRetries(ctx, func() (*Target, error) {
+	video, err := withExtractRetries(ctx, func() (*playerVideo, error) {
 		attempt++
 		note := func(stage string) {
 			ResolveNote(ctx, fmt.Sprintf("Doodstream: %s (%d/%d)", stage, attempt, config.ExtractRetries))
 		}
 		base, err := url.Parse(page)
 		if err != nil {
-			return nil, fmt.Errorf("doodstream: %w", err)
+			return nil, err
 		}
 		note("requesting player")
-		doc, final, err := d.getPage(ctx, page, util.Origin(base)+"/", "player", attempt)
+		doc, final, err := doodGetPage(ctx, client, page, util.Origin(base)+"/", "player", attempt)
 		if err != nil {
-			return nil, fmt.Errorf("doodstream: fetch %s: %w", page, err)
+			return nil, fmt.Errorf("fetch %s: %w", page, err)
 		}
 		page = final.String()
 
 		m := doodPassPath.FindStringSubmatch(doc)
 		if m == nil && doodRefused(doc) {
-			return nil, &RefusedError{Err: fmt.Errorf("doodstream: %s refused the player to this address: %q",
+			return nil, &RefusedError{Err: fmt.Errorf("%s refused the player to this address: %q",
 				final.Hostname(), util.Truncate(strings.TrimSpace(doc), 120))}
 		}
 		if m == nil && doodGone(doc) {
-			return nil, fmt.Errorf("doodstream: video not found on %s: the host has removed it", page)
+			return nil, fmt.Errorf("video not found on %s: the host has removed it", page)
 		}
 		if m == nil {
-			return nil, fmt.Errorf("doodstream: no media token on %s "+
+			return nil, fmt.Errorf("no media token on %s "+
 				"(the video may have been removed, or the page layout changed)", page)
 		}
 		pass := util.Origin(final) + m[1]
 
 		note("requesting media token")
-		prefix, _, err := d.getPage(ctx, pass, page, "token", attempt)
+		prefix, _, err := doodGetPage(ctx, client, pass, page, "token", attempt)
 		if err != nil {
-			return nil, fmt.Errorf("doodstream: fetch media token: %w", err)
+			return nil, fmt.Errorf("fetch media token: %w", err)
 		}
 		prefix = strings.TrimSpace(prefix)
 		if prefix == "RELOAD" {
@@ -144,20 +120,19 @@ func (d *DoodStream) media(ctx context.Context, page string) (*Target, string, e
 			return nil, errDoodReload
 		}
 		if !strings.HasPrefix(prefix, "http") {
-			return nil, fmt.Errorf("doodstream: media token endpoint returned %q", util.Truncate(prefix, 80))
+			return nil, fmt.Errorf("media token endpoint returned %q", util.Truncate(prefix, 80))
 		}
 
 		token := m[1][strings.LastIndex(m[1], "/")+1:]
 		link := prefix + randomToken(doodTailLength) +
 			"?token=" + url.QueryEscape(token) +
 			"&expiry=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-		title = util.FirstNonEmpty(pageTitle(doc), "doodstream")
-		return &Target{URL: link, Name: title + ".mp4", Size: -1, Headers: httpx.Referer(page)}, nil
-	}, func(_ *Target, err error) bool { return errors.Is(err, errDoodReload) })
+		return &playerVideo{title: pageTitle(doc), candidates: []mediaCandidate{{URL: link}}, referer: page}, nil
+	}, func(_ *playerVideo, err error) bool { return errors.Is(err, errDoodReload) })
 	if errors.Is(err, errDoodReload) {
 		err = &TransientError{Err: fmt.Errorf("%w after %d attempts", err, config.ExtractRetries)}
 	}
-	return target, title, err
+	return video, err
 }
 
 // doodRefused recognises the host turning an address away, which is not the

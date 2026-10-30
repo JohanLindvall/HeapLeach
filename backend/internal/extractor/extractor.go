@@ -253,6 +253,27 @@ func (t *Target) file(dir string) File {
 	}
 }
 
+// refreshing is a resolved target as its file, read again by resolve when
+// its transfer starts, for a link signed for less time than a queue can
+// take.
+func refreshing(target *Target, resolve func(context.Context) (*Target, error)) File {
+	file := target.file("")
+	file.Resolve = resolve
+	return file
+}
+
+// signedResult is the one-file result of a host that signs its link on
+// request: signed now, so that a dead link fails the job at once and the
+// queue shows the real name, and signed again by the same call when the
+// transfer starts. The job is named after the file.
+func signedResult(ctx context.Context, sign func(context.Context) (*Target, error)) (*Result, error) {
+	target, err := sign(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: target.Name, Files: []File{refreshing(target, sign)}}, nil
+}
+
 // WaitError is a resolver's way of saying a file cannot be fetched yet,
 // rather than that it failed: Keep2Share, say, makes an address wait the
 // best part of an hour between free downloads. The downloader puts the item
@@ -509,7 +530,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPlayer(client, &tnaflixPlayer),
 		NewPlayer(client, &drtuberPlayer),
 		NewPlayer(client, &pornonePlayer),
-		NewEporner(client),
+		NewPlayer(client, &epornerPlayer),
 		NewPixhost(client),
 		NewImagePond(client),
 		NewSuvobox(client),
@@ -531,15 +552,15 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewCoomerFans(client),
 		NewCeleb(client),
 		NewCum(client),
-		NewOKru(client),
+		NewPlayer(client, &okruPlayer),
 		NewPlayer(client, &streamtapePlayer),
-		NewDoodStream(client),
+		NewPlayer(client, &doodPlayer),
 		NewPlayer(client, &mixdropPlayer),
 		NewPlayer(client, &luluPlayer),
 		NewPlayer(client, &vidsPlayer),
 		NewPlayer(client, &sendvidPlayer),
-		NewKnuthing(client),
-		NewNoodleMagazine(client),
+		NewPlayer(client, &knuthingPlayer),
+		NewPlayer(client, &noodlePlayer),
 	}
 	// Platform families: one extractor covering every install of a piece of
 	// software, named and matched per install where a list is worth having

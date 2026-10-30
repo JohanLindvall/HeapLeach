@@ -92,20 +92,7 @@ func (f *Filester) Extract(ctx context.Context, u *url.URL, opts Options) (*Resu
 		return f.folder(ctx, u, opts)
 	}
 	slug, base := segs[1], util.Origin(u)
-
-	signed, err := f.sign(ctx, base, slug)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{
-		Title: signed.Name,
-		Files: []File{{
-			Name:    signed.Name,
-			URL:     signed.URL,
-			Size:    -1,
-			Resolve: func(ctx context.Context) (*Target, error) { return f.sign(ctx, base, slug) },
-		}},
-	}, nil
+	return signedResult(ctx, func(ctx context.Context) (*Target, error) { return f.sign(ctx, base, slug) })
 }
 
 // sign asks for a fresh token and builds the storage link from it, the way

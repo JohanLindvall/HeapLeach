@@ -5,6 +5,7 @@ package extractor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -18,66 +19,56 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// NoodleMagazine reads watch pages and search listings. Player links are
-// signed per visit, so only titles are queued and each attempt reopens its
-// own watch page, including when recovering on another route.
-type NoodleMagazine struct {
-	client *httpx.Client
-}
-
-func NewNoodleMagazine(client *httpx.Client) *NoodleMagazine {
-	return &NoodleMagazine{client: client}
-}
-
-func (n *NoodleMagazine) Name() string { return "noodlemagazine" }
-
-// noodleListShape is a search listing, /video/<query>.
-var noodleListShape = pathShape(`^/video/[^/]+/?$`)
-
-// Recognises is the inventory's description.
-func (n *NoodleMagazine) Recognises() string {
-	return "watch pages (`/watch/<id>`) named Noodlemagazine carrying the player's `window.playlist`, " +
-		"and search listings (`/video/<query>`) of its video cards"
-}
-
-// Shape reports a watch page or a listing.
-func (n *NoodleMagazine) Shape(u *url.URL) bool { return noodleVideoID(u) != "" || noodleListShape(u) }
-
-// Recognise takes a watch page by the playlist Extract reads, and a
-// listing by the card list it walks, rendered with the site's search
-// script.
-func (n *NoodleMagazine) Recognise(_ context.Context, p *Page) bool {
-	if noodleVideoID(p.Final) != "" {
-		return noodlePlaylist.MatchString(p.Body) && p.Named("noodlemagazine")
-	}
-	return noodleListShape(p.Final) && p.Script("/static/js/search.") &&
-		p.hasElement(func(n *html.Node) bool { return attr(n, "id") == "list_videos" }) &&
-		p.hasElement(func(n *html.Node) bool { return hasClass(n, "item_link") })
-}
-
-func (n *NoodleMagazine) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	if noodleVideoID(u) != "" {
-		video, err := n.readVideo(ctx, u.String())
-		if err != nil {
-			return nil, err
-		}
-		return &Result{Title: video.title, Files: []File{n.file(u.String(), video.title)}}, nil
-	}
-	if parts := util.PathSegments(u); len(parts) == 2 && parts[0] == "video" {
-		return n.list(ctx, u, opts)
-	}
-	return nil, fmt.Errorf("noodlemagazine: expected /watch/<id> or /video/<query>")
-}
-
-func (n *NoodleMagazine) file(page, title string) File {
-	resolve := func(ctx context.Context) (*Target, error) { return n.resolve(ctx, page) }
-	return File{Name: title + ".mp4", Size: -1, Resolve: resolve, Refresh: resolve}
-}
-
 var (
+	// noodleListShape is a search listing, /video/<query>.
+	noodleListShape = pathShape(`^/video/[^/]+/?$`)
 	noodleWatchPath = regexp.MustCompile(`^/watch/(-?\d+_\d+)/?$`)
 	noodlePlaylist  = regexp.MustCompile(`\bwindow\.playlist\s*=\s*`)
 )
+
+// Watch pages and search listings. Player links are signed per visit, so
+// the row peeks: only titles are queued, and each attempt reopens its own
+// watch page, including when recovering on another route. The media
+// referer is the watch page as finally served.
+var noodlePlayer = playerSite{
+	name:  "noodlemagazine",
+	shape: func(u *url.URL) bool { return noodleVideoID(u) != "" || noodleListShape(u) },
+	// A watch page by the playlist read reads, and a listing by the card
+	// list it walks, rendered with the site's search script.
+	recognise: func(p *Page) bool {
+		if noodleVideoID(p.Final) != "" {
+			return noodlePlaylist.MatchString(p.Body) && p.Named("noodlemagazine")
+		}
+		return noodleListShape(p.Final) && p.Script("/static/js/search.") &&
+			p.hasElement(func(n *html.Node) bool { return attr(n, "id") == "list_videos" }) &&
+			p.hasElement(func(n *html.Node) bool { return hasClass(n, "item_link") })
+	},
+	recognises: "watch pages (`/watch/<id>`) named Noodlemagazine carrying the player's `window.playlist`, " +
+		"and search listings (`/video/<query>`) of its video cards",
+	page: func(u *url.URL) (string, error) {
+		if noodleVideoID(u) != "" {
+			return u.String(), nil
+		}
+		return "", errors.New("expected /watch/<id> or /video/<query>")
+	},
+	// The page carries the sources, so reading it is what tells a video
+	// that plays from one that does not; the signed links go unused.
+	peek: func(ctx context.Context, client *httpx.Client, page string) (string, error) {
+		video, err := noodleRead(ctx, client, page)
+		if err != nil {
+			return "", err
+		}
+		return video.title, nil
+	},
+	read: noodleRead,
+	listing: &playerListing{
+		shape: func(u *url.URL) bool {
+			parts := util.PathSegments(u)
+			return len(parts) == 2 && parts[0] == "video"
+		},
+		walk: noodleWalk,
+	},
+}
 
 func noodleVideoID(u *url.URL) string {
 	if m := noodleWatchPath.FindStringSubmatch(u.Path); m != nil {
@@ -86,24 +77,20 @@ func noodleVideoID(u *url.URL) string {
 	return ""
 }
 
-type noodleVideo struct {
-	title, referer string
-	media          mediaCandidate
-}
-
-func (n *NoodleMagazine) readVideo(ctx context.Context, page string) (*noodleVideo, error) {
+// noodleRead reads the watch page's playlist: its MP4 and HLS sources.
+func noodleRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
 	ResolveNote(ctx, "Reading video page")
 	pageURL, err := url.Parse(page)
 	if err != nil {
-		return nil, fmt.Errorf("noodlemagazine: %w", err)
+		return nil, err
 	}
-	doc, final, err := fetchDocument(ctx, n.client, pageURL, nil)
+	doc, final, err := fetchDocument(ctx, client, pageURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("noodlemagazine: fetch video: %w", err)
+		return nil, fmt.Errorf("fetch video: %w", err)
 	}
 	marker := noodlePlaylist.FindStringIndex(doc)
 	if marker == nil {
-		return nil, fmt.Errorf("noodlemagazine: no player on this page (the video may be restricted or removed)")
+		return nil, fmt.Errorf("no player on this page (the video may be restricted or removed)")
 	}
 	var playlist struct {
 		Sources []struct {
@@ -113,7 +100,7 @@ func (n *NoodleMagazine) readVideo(ctx context.Context, page string) (*noodleVid
 		} `json:"sources"`
 	}
 	if err := json.NewDecoder(strings.NewReader(doc[marker[1]:])).Decode(&playlist); err != nil {
-		return nil, fmt.Errorf("noodlemagazine: read player sources: %w", err)
+		return nil, fmt.Errorf("read player sources: %w", err)
 	}
 	var candidates []mediaCandidate
 	for _, source := range playlist.Sources {
@@ -133,57 +120,31 @@ func (n *NoodleMagazine) readVideo(ctx context.Context, page string) (*noodleVid
 		}
 		candidates = append(candidates, mediaCandidate{URL: link.String(), Quality: quality, IsHLS: isHLS})
 	}
-	best, ok := bestCandidate(candidates)
-	if !ok {
-		return nil, fmt.Errorf("noodlemagazine: player has no usable MP4 or HLS sources")
+	if _, ok := bestCandidate(candidates); !ok {
+		return nil, fmt.Errorf("player has no usable MP4 or HLS sources")
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, err
 	}
-	title := util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.H1), noodleVideoID(final))
-	return &noodleVideo{title: title, referer: final.String(), media: best}, nil
+	return &playerVideo{
+		title:      util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.H1), noodleVideoID(final)),
+		candidates: candidates,
+		referer:    final.String(),
+	}, nil
 }
 
-func (n *NoodleMagazine) resolve(ctx context.Context, page string) (*Target, error) {
-	video, err := n.readVideo(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	headers := httpx.Referer(video.referer)
-	if !video.media.IsHLS {
-		return &Target{URL: video.media.URL, Name: video.title + ".mp4", Size: -1, Headers: headers}, nil
-	}
-	ResolveNote(ctx, "Reading video playlist")
-	media, err := resolveMediaPlaylist(ctx, n.client, video.media.URL, headers)
-	if err != nil {
-		return nil, fmt.Errorf("noodlemagazine: video playlist: %w", err)
-	}
-	if live, why := hlsLiveEdge(media.Doc); live {
-		return nil, fmt.Errorf("noodlemagazine: video playlist is still being written: %s", why)
-	}
-	return media.target(video.media.URL, video.title+media.extension(), headers), nil
-}
-
-func (n *NoodleMagazine) list(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+// noodleWalk starts a search at its first page, keeping its filters.
+func noodleWalk(u *url.URL) (*url.URL, listingWalk) {
 	first := *u
 	first.Fragment = ""
 	query := first.Query()
 	query.Del("p")
 	first.RawQuery = query.Encode()
-	limit, limitNote := listingLimit(opts)
-	links, title, note, err := walkListing(ctx, n.client, &first, listingWalk{
-		name: "noodlemagazine", title: strings.ReplaceAll(util.PathSegments(u)[1], "+", " "),
-		none: "no videos found for this search", limit: limit, limitNote: limitNote, read: noodleCards,
-	})
-	if err != nil {
-		return nil, err
+	return &first, listingWalk{
+		title: strings.ReplaceAll(util.PathSegments(u)[1], "+", " "),
+		none:  "no videos found for this search", read: noodleCards,
 	}
-	res := &Result{Title: title, Note: note}
-	for _, link := range links {
-		res.Files = append(res.Files, n.file(link.url, link.title))
-	}
-	return res, nil
 }
 
 // noodleCards reads a search page's cards. An exhausted search serves

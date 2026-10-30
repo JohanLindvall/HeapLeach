@@ -66,23 +66,7 @@ func (t *Turbo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 	}
 	id := segs[len(segs)-1]
 	base := util.Origin(u)
-
-	// Sign once now so the job fails fast on a dead link and so the UI can
-	// show the real filename while the item waits its turn.
-	signed, err := t.sign(ctx, base, id)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{
-		Title: signed.Name,
-		Files: []File{{
-			Name:    signed.Name,
-			URL:     signed.URL,
-			Size:    -1,
-			Headers: signed.Headers,
-			Resolve: func(ctx context.Context) (*Target, error) { return t.sign(ctx, base, id) },
-		}},
-	}, nil
+	return signedResult(ctx, func(ctx context.Context) (*Target, error) { return t.sign(ctx, base, id) })
 }
 
 // sign fetches a fresh signed URL for a video id.

@@ -117,15 +117,6 @@ func lazyEpisode(name, dir string, headers httpx.Header, resolve func(context.Co
 	return File{Name: name, Size: -1, Dir: dir, Headers: headers, Resolve: resolve}
 }
 
-// refreshing is a resolved programme as its file, read again by resolve
-// when its transfer starts, for a stream whose links are signed for less
-// time than a queue can take.
-func refreshing(target *Target, resolve func(context.Context) (*Target, error)) File {
-	file := target.file("")
-	file.Resolve = resolve
-	return file
-}
-
 // listingNote joins what a listing says of itself, leaving out the parts
 // that are empty.
 func listingNote(parts ...string) string {
