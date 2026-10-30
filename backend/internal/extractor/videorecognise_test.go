@@ -42,7 +42,7 @@ func TestVideoRecognition(t *testing.T) {
 		`<script>ytcfg.set({"A":1});var ytInitialPlayerResponse = {};</script></body></html>`
 	cases := []recogniseCase{
 		{
-			name: "youtube", r: NewYouTube(),
+			name: "youtube", r: handoff("youtube"),
 			good: site + "/watch?v=abcdefghijk", wrongForm: site + "/about",
 			page:     ytWatch,
 			unmarked: head("First Clip - YouTube", "og:site_name=YouTube") + "</body></html>",
@@ -93,7 +93,7 @@ func TestVideoRecognition(t *testing.T) {
 			},
 		},
 		{
-			name: "yandex", r: NewYandex(nil),
+			name: "yandex", r: pointerNamed(t, "yandex"),
 			good: site + "/video/preview/1234567890", wrongForm: site + "/video/search",
 			page:      `<html><head><title>Video search</title><script src="/s3/fiji-static/_/runtime.js"></script></head><body><a class="VideoViewer-Source" href="https://clips.example.test/1">x</a></body></html>`,
 			unmarked:  `<html><head><title>Video search</title><script src="/s3/fiji-static/_/runtime.js"></script></head><body></body></html>`,

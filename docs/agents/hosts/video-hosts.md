@@ -176,13 +176,49 @@ disk, one file that each download in turn overwrites. The page's JSON-LD
 states the exact name, and its breadcrumb list is in the same form, so the
 type is checked rather than taking the first name found.
 
-## yandex
+## Pointer pages: yandex, alohatube
 
-yandex is a redirector rather than a host. Its preview pages are search output
-wrapped around somebody else's video, so the extractor finds the source link
-the page carries and hands that to yt-dlp. yt-dlp's own yandex extractor does
-not work, while its extractor for the site the preview points at does;
-following the link ourselves routes around that.
+`pointers.go` is one table for pages whose only job is to point at a video
+hosted elsewhere: yandex's video previews (search output wrapped around
+somebody else's video, the source linked beside the viewer) and alohatube's
+view pages (an index framing another tube's player). Each row reads the
+page's off-site links, likeliest first; `Extract` follows each through
+`Registry.follow`, strictly, and returns the first an extractor here
+resolves. Only when none is recognised — or the only answer was a challenge
+nobody claimed — is the first link handed to yt-dlp, named by
+`ytdlpTitle`.
+
+The order matters both ways. A link a native extractor reads beats yt-dlp:
+the frame alohatube was written for points at a tube whose media endpoint
+yt-dlp no longer gets an answer from. And yt-dlp beats the generic fallback:
+yandex's own yt-dlp extractor does not work, but yt-dlp's extractor for the
+site a preview points at does, and strict following keeps an advert or an
+unknown player from being saved as a page.
+
+Each row is constructed by name (`NewPointer`) where its form sits in the
+registry, since a form shared with another host goes to whichever comes
+first: a preview's `/video/preview/<id>` is also a `/video/...` form that a
+later host claims. `wirePointers` hands every row the registry once it
+exists. "Off-site" is per row: yandex excludes its country domains and
+`yastatic`, alohatube its own domain, since each page links its own furniture
+the same way it links the video.
+
+## Handoffs to yt-dlp
+
+`handoffs.go` is the table of hosts passed whole to yt-dlp (youtube, odysee,
+dailymotion, bilibili, soundcloud, mixcloud, rumble); its type comment says
+why each is. A row normally becomes one `External` item named by
+`ytdlpTitle` (rumble: by its oEmbed endpoint). A row with `expand` asks
+yt-dlp to list the link flat instead (`Handoff.list`), so a playlist,
+channel or set becomes one item per entry, bounded at the source by
+`--playlist-end` one past the file cap, which is how truncation is noticed.
+`expand` is on for youtube, odysee (channels), dailymotion (playlists) and
+soundcloud (sets): each has a collection form and yt-dlp lists it flat in one
+call. Bilibili stays off: a multi-part video lists as a playlist, which
+would split one video into its parts. Entries listed without a title are
+named by their page's slug (`entrySlug`) before their id; a page named by
+its query has no slug, so a YouTube entry falls back to its id and, where it
+names no page at all, is reached through the row's `watch` prefix.
 
 ## Kernel Video Sharing
 
