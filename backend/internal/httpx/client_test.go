@@ -147,7 +147,7 @@ func TestDoStopsWhenTheContextDoes(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if !IsCanceled(err) {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("cancelled request should report cancellation, got %v", err)
 		}
 	case <-time.After(5 * time.Second):

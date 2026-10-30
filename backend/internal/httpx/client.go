@@ -410,7 +410,7 @@ func (c *Client) StatusOnce(ctx context.Context, method, url string, h Header) (
 	if err != nil {
 		return 0, err
 	}
-	applyHeaders(req, h)
+	h.Apply(req)
 	resp, err := c.DoOnce(req)
 	if err != nil {
 		return 0, err
@@ -571,9 +571,4 @@ func retryDelay(attempt int) time.Duration {
 func drain(resp *http.Response) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
-}
-
-// IsCanceled reports whether err is the result of a cancelled context.
-func IsCanceled(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

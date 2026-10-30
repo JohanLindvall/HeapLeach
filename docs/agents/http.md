@@ -9,7 +9,9 @@ it is shared, so apply or `Merge` it, never write to it.
 
 ## Retries and rate limits
 
-`httpx.Client.Do` retries with backoff; `DoOnce` does not. One status is
+`httpx.Client.Do` retries with backoff; `DoOnce` does not, and `StatusOnce`
+is `DoOnce` reduced to the status, for a probe of whether a host serves an
+address at all. One status is
 handled apart from the rest: **429 is waited out, not counted as a failure.**
 A rate limit is the server saying *later*, not *no*, so `Do` honours
 `Retry-After` when the response states one and otherwise backs off from
