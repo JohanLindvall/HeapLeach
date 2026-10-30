@@ -65,9 +65,12 @@ func (e *Emload) Extract(_ context.Context, u *url.URL, _ Options) (*Result, err
 	}
 	page := *u
 	page.Fragment = ""
-	// Discovery must not visit the page before the dispatcher leases a
-	// route. The pasted filename is a hint; Resolve supplies the real name
-	// and the transfer response supplies an exact size.
+	// Nothing here is read from the registry's probe: the download token
+	// and the page's cookies belong to the route the transfer is leased,
+	// so Resolve reads the page afresh there. Viewing the page spends none
+	// of an address's daily allowance; only a download does. The pasted
+	// filename is a hint; Resolve supplies the real name and the transfer
+	// response supplies an exact size.
 	name := parts[len(parts)-1]
 	return &Result{Title: name, Files: []File{{
 		Name: name, Size: -1,

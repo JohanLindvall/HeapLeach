@@ -122,9 +122,11 @@ folder listing (`f`) asks for no links at all.
 ## emload
 
 emload file shares use `/v2/file/<id>[/<filename>]` or the older
-`/file/<id>[/<filename>]`. Discovery uses the URL's filename as a hint and
-defers all requests to `File.Resolve`, after the worker leases an `emload`
-proxy route. The `.free-downloader` carries a percent-encoded storage origin
+`/file/<id>[/<filename>]`. The registry's probe reads the share page once,
+on the normal connection, to recognise it (a page view spends none of the
+daily allowance); discovery then uses the URL's filename as a hint and
+defers every request of its own to `File.Resolve`, after the worker leases
+an `emload` proxy route. The `.free-downloader` carries a percent-encoded storage origin
 (`data-srv`) and the `data-dl` token for `download.php?accesstoken=...`; read
 them afresh on that route, keeping its cookies and the redirected page URL as
 referer through the transfer. The page supplies the final filename; the
