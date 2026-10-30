@@ -313,7 +313,12 @@ type linksStub struct {
 
 func (s *linksStub) Name() string { return "stub" }
 
-func (s *linksStub) Match(u *url.URL) bool { return u.Host == s.host }
+// The stub stands in for a host's extractor, so it is claimed by host, as no
+// real recogniser may be.
+func (s *linksStub) Shape(u *url.URL) bool { return u.Host == s.host }
+func (s *linksStub) Recognise(_ context.Context, p *Page) bool {
+	return p.URL.Host == s.host
+}
 
 func (s *linksStub) Extract(_ context.Context, u *url.URL, opts Options) (*Result, error) {
 	s.mu.Lock()
