@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 
@@ -471,10 +470,6 @@ func TestCheveretoRecognise(t *testing.T) {
 
 // --- against a server --------------------------------------------------------
 
-func cheveretoTestClient() *httpx.Client {
-	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
-}
-
 // TestCheveretoWalksEveryPage covers the pagination end to end, including the
 // stop: the second page's anchor carries no href, so a third request would be
 // the bug this pins.
@@ -496,11 +491,7 @@ func TestCheveretoWalksEveryPage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u := mustParse(t, srv.URL+"/album/holiday.XYZ")
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewChevereto(testClient()), srv.URL+"/album/holiday.XYZ", Options{})
 	if len(res.Files) != 2 {
 		t.Fatalf("resolved %d files, want both pages", len(res.Files))
 	}
@@ -527,11 +518,7 @@ func TestCheveretoStopsWhenAPageRepeats(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u := mustParse(t, srv.URL+"/album/holiday.XYZ")
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewChevereto(testClient()), srv.URL+"/album/holiday.XYZ", Options{})
 	if len(res.Files) != 1 {
 		t.Errorf("resolved %d files, want the one distinct item", len(res.Files))
 	}
@@ -571,11 +558,7 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u := mustParse(t, srv.URL+"/someone/albums")
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewChevereto(testClient()), srv.URL+"/someone/albums", Options{})
 	if len(res.Files) != 2 {
 		t.Fatalf("resolved %d files, want one from each album", len(res.Files))
 	}
@@ -586,10 +569,7 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 	}
 
 	// Every album is a page to read, so the listing cap bounds them.
-	res, err = cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{limits: Limits{Sources: 1}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res = extractOK(t, NewChevereto(testClient()), srv.URL+"/someone/albums", Options{limits: Limits{Sources: 1}})
 	if len(res.Files) != 1 || res.Files[0].Dir != "Summer" || res.Note != "partial — source limit" {
 		t.Errorf("capped: %d files, note %q, want Summer's alone and the source cap's", len(res.Files), res.Note)
 	}
@@ -635,7 +615,7 @@ func TestCheveretoPasswordGate(t *testing.T) {
 	defer srv.Close()
 
 	u := mustParse(t, srv.URL+"/album/locked.XYZ")
-	client := cheveretoTestClient()
+	client := testClient()
 
 	if _, err := cheveretoExtract(context.Background(), client, u, Options{}); !errors.Is(err, ErrPasswordRequired) {
 		t.Fatalf("without a password the error was %v, want ErrPasswordRequired", err)
@@ -675,7 +655,7 @@ func TestCheveretoRecognisedThroughTheRegistry(t *testing.T) {
 		_, _ = io.WriteString(w, cheveretoImageViewer)
 	}))
 	defer srv.Close()
-	reg := NewRegistry(&config.Config{}, cheveretoTestClient())
+	reg := NewRegistry(&config.Config{}, testClient())
 
 	if _, ex, _ := reg.Extract(context.Background(), srv.URL+"/i/impostor.AAA111", Options{}); ex == nil || ex.Name() == "chevereto" {
 		t.Errorf("a page carrying no Chevereto structure went to %v", ex)
@@ -704,7 +684,7 @@ func TestCheveretoRefusesABareDomain(t *testing.T) {
 	defer srv.Close()
 
 	u := mustParse(t, srv.URL+"/")
-	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{}); err == nil {
+	if _, err := cheveretoExtract(context.Background(), testClient(), u, Options{}); err == nil {
 		t.Fatal("a bare domain resolved to something")
 	}
 }

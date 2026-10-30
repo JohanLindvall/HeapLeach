@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
@@ -100,50 +99,27 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 
 	// Every album needs its own page read for the media it holds, and a
 	// profile runs to hundreds; one after another leaves the job resolving
-	// for minutes before a byte moves. resolveOutcomes keeps the profile's
-	// own order however the requests interleave, and an unavailable album
-	// is skipped rather than sinking the rest, its reason kept for when no
-	// album held anything.
-	outcomes := resolveOutcomes(ctx, albums, false, func(ctx context.Context, link string) (eromeAlbum, error) {
+	// for minutes before a byte moves. The expansion keeps the profile's
+	// own order however the requests interleave, stops at the file cap, and
+	// skips an unavailable album rather than sinking the rest, its reason
+	// kept for when no album held anything.
+	expanded := expandSourcesNamed(ctx, albums, opts, func(ctx context.Context, link string) (*Result, error) {
 		albumURL, err := ParseURL(link)
 		if err != nil {
-			return eromeAlbum{}, err
+			return nil, err
 		}
-		album, err := e.album(ctx, albumURL)
-		if err != nil {
-			return eromeAlbum{}, err
-		}
-		// isEromeAlbum has already established the /a/<id> shape, so the
-		// id is there to be read.
-		return eromeAlbum{
-			title: album.Title,
-			id:    util.PathSegments(albumURL)[1],
-			files: album.Files,
-		}, nil
-	})
-	var resolved []eromeAlbum
-	for _, out := range outcomes {
-		if out.err == nil {
-			resolved = append(resolved, out.got)
-		}
-	}
-
-	result := &Result{Title: title, Note: note}
-	folders := eromeFolders(resolved)
-	for i, album := range resolved {
-		for _, file := range album.files {
-			file.Dir = path.Join(file.Dir, folders[i])
-			result.Files = append(result.Files, file)
-		}
-	}
-	if len(result.Files) == 0 {
+		return e.album(ctx, albumURL)
+	}, eromeFolders)
+	if len(expanded.files) == 0 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		refusals, failed := sortOutcomes(outcomes)
-		return nil, noneRead("erome", len(albums), "albums", "profile "+u.Redacted(), refusals, failed)
+		return nil, noneRead("erome", len(albums), "albums", "profile "+u.Redacted(), expanded.refusals, expanded.failed)
 	}
-	return result, nil
+	if expanded.full {
+		note = joinNotes(note, "partial — file limit")
+	}
+	return &Result{Title: title, Files: expanded.files, Note: note}, nil
 }
 
 // profileAlbums walks a profile's pages for the albums they list, up to the
@@ -157,13 +133,9 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (albums []string, title, note string, err error) {
 	headers := httpx.Referer(eromeReferer + "/")
 	first := eromeProfilePage(u, 1)
-	doc, _, err := fetchDocument(ctx, e.client, &first, headers)
+	root, _, err := fetchRoot(ctx, e.client, &first, headers)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("erome: fetch profile: %w", err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("erome: %w", err)
 	}
 
 	// The pages are numbered rather than linked, and the walk asks for one
@@ -210,13 +182,6 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (al
 	return albums, title, note, nil
 }
 
-// eromeAlbum is one of a profile's albums, once its page has been read.
-type eromeAlbum struct {
-	title string
-	id    string
-	files []File
-}
-
 // eromeFolders names the folder each album's files are filed under.
 //
 // The album's own title is what a person recognises, so that is the name.
@@ -229,23 +194,29 @@ type eromeAlbum struct {
 //
 // Only the repeats are qualified. An album whose title is its own keeps
 // exactly the folder it has always had, so a re-run skips what it already
-// holds rather than fetching it again into a renamed one.
-func eromeFolders(albums []eromeAlbum) []string {
+// holds rather than fetching it again into a renamed one. These names
+// predate sourceFolders, whose "[id]" form and case-blind count would
+// rename the repeats, so the host keeps its own.
+func eromeFolders(albums []sourceResult) []string {
 	seen := make(map[string]int, len(albums))
 	for _, album := range albums {
-		seen[album.title]++
+		seen[album.res.Title]++
 	}
 
 	names := make([]string, len(albums))
 	for i, album := range albums {
+		// isEromeAlbum has already established the /a/<id> shape, and the
+		// link parsed to be resolved at all, so the id is there to be read.
+		u, _ := ParseURL(album.link)
+		title, id := album.res.Title, util.PathSegments(u)[1]
 		switch {
-		case album.title == "":
+		case title == "":
 			// Nothing to disambiguate against, and the id is already unique.
-			names[i] = album.id
-		case seen[album.title] > 1:
-			names[i] = sourceFolder(album.title + " " + album.id)
+			names[i] = id
+		case seen[title] > 1:
+			names[i] = sourceFolder(title + " " + id)
 		default:
-			names[i] = sourceFolder(album.title)
+			names[i] = sourceFolder(title)
 		}
 	}
 	return names

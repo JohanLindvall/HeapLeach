@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
@@ -164,7 +163,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 					return pageOf[celebImage]{}, fmt.Errorf("celeb: fetch image page %d: %w", n+1, err)
 				}
 			}
-			return pageOf[celebImage]{items: items, next: n+1 < pages}, nil
+			return pageOf[celebImage]{items: items, next: true, pages: pages}, nil
 		},
 	})
 	if err != nil {
@@ -209,14 +208,10 @@ func (m celebImage) file(referer string) (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("celeb: image %d: %w", m.ID, err)
 	}
-	ext := path.Ext(link.Path)
-	if ext == "" {
-		ext = ".jpg"
-	}
 	return File{
 		// The URL's basename is an opaque token. The image's own id is
 		// shorter, unique and stable across gallery sorts and revisits.
-		Name:    strconv.FormatInt(m.ID, 10) + ext,
+		Name:    strconv.FormatInt(m.ID, 10) + linkExtAsIs(link.String(), ".jpg"),
 		URL:     link.String(),
 		Size:    -1,
 		Headers: httpx.Referer(referer),

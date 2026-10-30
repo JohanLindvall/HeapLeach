@@ -81,7 +81,7 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 		return nil, err
 	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("wordpress: no accessible downloads in %d posts", len(sources))
+		return nil, noneRead("wordpress", len(sources), "posts", page.Redacted(), e.refusals, e.failed)
 	}
 	notes := listingNotes(note, e, len(sources), "posts")
 	if e.partial > 0 {

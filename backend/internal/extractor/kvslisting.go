@@ -76,29 +76,20 @@ func (l kvsListing) fileCap() int {
 var kvsShowingTotal = regexp.MustCompile(`Showing\s+\d+\s*-\s*\d+\s+of\s+(\d+)`)
 
 // kvsListingResult resolves a listing into one file per video, with the
-// note for a listing the cap cut short.
+// note for a listing the cap cut short and for videos that refused.
+//
+// Every video needs its own page read for a media URL, so they are fetched
+// several at a time and a video that will not load is skipped rather than
+// failing a listing of hundreds; when none loads, the first reason says why.
+// A listing with no videos at all is a kvsEmpty.
 func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (*Result, error) {
 	pages, title, note, err := kvsListingWalk(ctx, client, l)
 	if err != nil {
 		return nil, err
 	}
 	if len(pages) == 0 {
-		return nil, fmt.Errorf("%s: %s", kvsLabel, l.empty)
+		return nil, kvsEmpty(l.empty)
 	}
-	res, err := kvsResolvePages(ctx, client, l, pages, title)
-	if err != nil {
-		return nil, err
-	}
-	res.Note = note
-	return res, nil
-}
-
-// kvsResolvePages turns the video pages a walk collected into files.
-//
-// Every video needs its own page read for a media URL, so they are fetched
-// several at a time and a video that will not load is skipped rather than
-// failing a listing of hundreds; when none loads, the first reason says why.
-func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pages []string, title string) (*Result, error) {
 	files, refusals, failed := resolveFiles(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
 		u, err := ParseURL(page)
 		if err != nil {
@@ -116,14 +107,14 @@ func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pa
 		}
 		return nil, noneRead(kvsLabel, len(pages), "videos", l.url, refusals, failed)
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: listingNote(note, refusedNote(refusals))}, nil
 }
 
-// kvsListingPages is kvsListingWalk without its note.
-func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, error) {
-	pages, title, _, err := kvsListingWalk(ctx, client, l)
-	return pages, title, err
-}
+// kvsEmpty is the error for a listing with no videos on it, saying why in
+// the listing's own words.
+type kvsEmpty string
+
+func (e kvsEmpty) Error() string { return kvsLabel + ": " + string(e) }
 
 // kvsListingWalk walks the listing and collects every video page it names,
 // up to the cap, each being a page to read, with the note for a walk the cap

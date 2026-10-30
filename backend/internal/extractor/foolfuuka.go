@@ -419,7 +419,7 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 		return nil, fmt.Errorf("%s: /%s/ has no threads on page %d", a.name, t.board, t.page)
 	}
 
-	files, firstErr := a.expand(ctx, t.board, threads)
+	files, refusals, failed := a.expand(ctx, t.board, threads)
 	if len(files) == 0 {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -428,9 +428,9 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 		// is a fact about the board, while a board none of whose threads
 		// would open is a fact about the archive, and only one of them is
 		// worth trying again later.
-		if firstErr != nil {
-			return nil, fmt.Errorf("%s: /%s/ page %d: none of its threads would open: %w",
-				a.name, t.board, t.page, firstErr)
+		if len(refusals) > 0 || failed != nil {
+			return nil, noneRead(a.name, len(threads), "threads",
+				fmt.Sprintf("/%s/ page %d", t.board, t.page), refusals, failed)
 		}
 		return nil, fmt.Errorf("%s: /%s/ page %d: none of its %d threads holds an attachment",
 			a.name, t.board, t.page, len(threads))
@@ -443,10 +443,10 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 
 // expand reads every thread on an index page, several at a time, in the
 // board's own order (resolveFiles). One thread that will not open leaves the
-// rest; the first failure comes back beside the files for the case where no
-// thread opened at all — see index.
-func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, error) {
-	files, _, failed := resolveFiles(ctx, threads, func(ctx context.Context, num string) ([]File, error) {
+// rest; why comes back beside the files for the case where no thread opened
+// at all — see index.
+func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, []string, error) {
+	return resolveFiles(ctx, threads, func(ctx context.Context, num string) ([]File, error) {
 		entries, err := a.call(ctx, foolFuukaThreadAPI, url.Values{
 			"board": {board}, "num": {num},
 		})
@@ -458,7 +458,6 @@ func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []s
 		// single directory lose which was which.
 		return a.files(entries[0].posts(), num), nil
 	})
-	return files, failed
 }
 
 // search walks a board's search results, up to the file cap.
@@ -485,6 +484,8 @@ func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget, opts O
 			return post.Num.String()
 		},
 		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		// Most matching posts may be text, so the cap counts attachments.
+		weigh: func(posts []foolFuukaPost) int { return len(a.files(posts, "")) },
 		fetch: func(ctx context.Context, n int) (pageOf[foolFuukaPost], error) {
 			query.Set("page", strconv.Itoa(t.page+n))
 			entries, err := a.call(ctx, foolFuukaSearchAPI, query)

@@ -111,6 +111,15 @@ func expandSources(ctx context.Context, registry *Registry, sources []string, op
 // expandSourcesWith also lets a recognised platform read its own posts,
 // without registering every page on that host as a supported source.
 func expandSourcesWith(ctx context.Context, sources []string, opts Options, extract func(context.Context, string) (*Result, error)) expansion {
+	return expandSourcesNamed(ctx, sources, opts, extract, sourceFolders)
+}
+
+// expandSourcesNamed is expandSourcesWith for a host whose sources were
+// filed under names of its own before they came here: folders names the
+// folder of each source resolved, in order, so that everything already
+// downloaded under those names stays where it is.
+func expandSourcesNamed(ctx context.Context, sources []string, opts Options,
+	extract func(context.Context, string) (*Result, error), folders func([]sourceResult) []string) expansion {
 	limit := opts.maxFiles()
 
 	// A few rounds of slots at a time: enough that a slow source holds up
@@ -156,31 +165,41 @@ walk:
 		}
 	}
 
-	// Folders are named after titles, and titles are not unique: a search
-	// on an album index turned up 356 albums under 345 titles, and each pair
-	// sharing one was poured into the same folder. Two different files of
-	// the same name then sat side by side as "(2)" and "(3)", and nothing
-	// said which album either came from. So a title that repeats carries the
-	// source's own id; one that does not keeps its plain name, which is what
-	// every existing download under it is filed as. Compared case-blind,
-	// because the destination may be a filesystem that is.
-	uses := make(map[string]int, len(resolved))
-	for _, r := range resolved {
-		uses[strings.ToLower(sourceFolder(r.res.Title))]++
-	}
-	for _, r := range resolved {
+	names := folders(resolved)
+	for i, r := range resolved {
 		if r.res.Note != "" {
 			e.partial++
 		}
-		folder := sourceFolder(r.res.Title)
-		if uses[strings.ToLower(folder)] > 1 {
-			folder = strings.TrimSpace(folder + " [" + sourceTag(r.link) + "]")
-		}
-		e.files = append(e.files, sourceFiles(r.res, folder)...)
+		e.files = append(e.files, sourceFiles(r.res, names[i])...)
 	}
 	e.used = len(resolved)
 	e.refusals, e.failed = sortOutcomes(failures)
 	return e
+}
+
+// sourceFolders names each source's folder after its title.
+//
+// Titles are not unique: a search on an album index turned up 356 albums
+// under 345 titles, and each pair sharing one was poured into the same
+// folder. Two different files of the same name then sat side by side as
+// "(2)" and "(3)", and nothing said which album either came from. So a
+// title that repeats carries the source's own id; one that does not keeps
+// its plain name, which is what every existing download under it is filed
+// as. Compared case-blind, because the destination may be a filesystem that
+// is.
+func sourceFolders(resolved []sourceResult) []string {
+	uses := make(map[string]int, len(resolved))
+	for _, r := range resolved {
+		uses[strings.ToLower(sourceFolder(r.res.Title))]++
+	}
+	names := make([]string, len(resolved))
+	for i, r := range resolved {
+		names[i] = sourceFolder(r.res.Title)
+		if uses[strings.ToLower(names[i])] > 1 {
+			names[i] = strings.TrimSpace(names[i] + " [" + sourceTag(r.link) + "]")
+		}
+	}
+	return names
 }
 
 // sourceResult is one source resolved, kept whole until every source is in

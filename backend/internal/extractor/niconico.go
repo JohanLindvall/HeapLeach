@@ -414,20 +414,17 @@ type niconicoPage struct {
 func (n *Niconico) list(ctx context.Context, opts Options, label string,
 	page func(context.Context, int) (*niconicoPage, error)) (*Result, error) {
 	var (
-		title           string
-		total, playable int
-		files           []File
-		skipped, gone   int
-		seen            = make(map[string]bool)
+		title         string
+		total         int
+		files         []File
+		skipped, gone int
 	)
 	limit := opts.maxFiles()
 	// The walk stops once the pages read hold as many playable videos as
-	// the file cap: what is left out does not count towards it.
+	// the file cap: what is left out does not count towards it. The note
+	// for the cap is made below, from the total.
 	entries, walkNote, err := walkPages(ctx, pageWalk[niconicoEntry]{
 		fetch: func(ctx context.Context, number int) (pageOf[niconicoEntry], error) {
-			if playable >= limit {
-				return pageOf[niconicoEntry]{end: true}, nil
-			}
 			p, err := page(ctx, number+1)
 			if err != nil {
 				return pageOf[niconicoEntry]{}, err
@@ -435,19 +432,23 @@ func (n *Niconico) list(ctx context.Context, opts Options, label string,
 			title, total = cmp.Or(title, p.title), max(total, p.total)
 			var entries []niconicoEntry
 			for _, e := range p.entries {
-				if e.ID == "" {
-					continue
+				if e.ID != "" {
+					entries = append(entries, e)
 				}
-				entries = append(entries, e)
-				if !seen[e.ID] && !e.gone && !e.IsPaymentRequired {
-					playable++
-				}
-				seen[e.ID] = true
 			}
 			return pageOf[niconicoEntry]{items: entries, next: p.more, end: len(entries) == 0}, nil
 		},
 		key:   func(e niconicoEntry) string { return e.ID },
-		limit: -1,
+		limit: limit,
+		weigh: func(entries []niconicoEntry) int {
+			playable := 0
+			for _, e := range entries {
+				if !e.gone && !e.IsPaymentRequired {
+					playable++
+				}
+			}
+			return playable
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("niconico: %s: %w", label, err)

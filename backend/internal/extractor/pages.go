@@ -23,6 +23,9 @@ type pageOf[T any] struct {
 	// total is how many entries the listing states it holds, when it
 	// states one: the walk ends once the pages have served that many.
 	total int
+	// pages is how many pages the listing states it runs to, when it
+	// states that instead: the walk ends with page pages-1.
+	pages int
 	// note is why the walk ends here though the listing goes on, such as
 	// a next page that cannot be followed. It stands in a quiet walk too.
 	note string
@@ -45,6 +48,13 @@ type pageWalk[T any] struct {
 	// short; a negative limit caps nothing.
 	limit     int
 	limitNote string
+	// weigh, when set, counts the limit in what the entries hold rather
+	// than in entries: the files of posts, of which one may carry several
+	// and another none. It is handed each page's new entries, which are
+	// kept whole; the walk ends at the page that reaches the limit, noted
+	// when that page passes it or the listing goes on, and what is over
+	// the limit is the caller's to cut.
+	weigh func([]T) int
 	// pages caps the pages read, config.MaxAlbumPages when zero.
 	pages int
 	// quiet is a listing whose walk stops where the listing does: a page
@@ -67,9 +77,9 @@ const pageFailed = "\x00page failed"
 // entries in order without repeats, and the note for a walk that stopped
 // short of the listing's end. A first page that fails is an error; a later
 // one ends the walk with what was already read. The walk ends at a page that
-// says so, at the stated total, at a page that adds nothing new — a host
-// that ignores its paging parameter serves page one again — at the limit,
-// or at the page cap. A walk that ended while the caller cancelled is a
+// says so, at the stated total or page count, at a page that adds nothing
+// new — a host that ignores its paging parameter serves page one again — at
+// the limit, or at the page cap. A walk that ended while the caller cancelled is a
 // cancellation, not a partial listing: the page that ended it may have been
 // answered before its request saw the cancellation.
 func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note string, err error) {
@@ -86,7 +96,9 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 		return note
 	}
 	seen := make(map[string]bool)
-	served := 0
+	// served counts the entries the pages carried, and count what the
+	// limit is counted in: entries, or their weight.
+	served, count := 0, 0
 	for n := range pages {
 		if err := ctx.Err(); err != nil {
 			return nil, "", err
@@ -119,13 +131,19 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 				continue
 			}
 			seen[k] = true
-			if len(items) == w.limit {
+			if w.weigh == nil && len(items) == w.limit {
 				return items, w.limitNote, nil
 			}
 			items = append(items, item)
 		}
 		served += len(p.items)
-		if p.end || (p.total > 0 && served >= p.total) {
+		if w.weigh == nil {
+			count = len(items)
+		} else if count += w.weigh(items[before:]); w.limit >= 0 && count > w.limit {
+			note = w.limitNote
+			break
+		}
+		if p.end || (p.total > 0 && served >= p.total) || (p.pages > 0 && n+1 >= p.pages) {
 			note = p.note
 			break
 		}
@@ -137,7 +155,7 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 			note = p.note
 			break
 		}
-		if len(items) == w.limit {
+		if count == w.limit {
 			note = w.limitNote
 			break
 		}

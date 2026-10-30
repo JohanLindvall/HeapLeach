@@ -148,14 +148,17 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 		if limit, limitNote := listingLimit(opts); len(albums) > limit {
 			albums, note = albums[:limit], joinNotes(note, limitNote)
 		}
-		files, refusals, failed := cheveretoExpand(ctx, client, albums, opts)
-		if len(files) == 0 {
+		e := cheveretoExpand(ctx, client, albums, opts)
+		if len(e.files) == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			return nil, noneRead(cheveretoLabel, len(albums), "albums", u.Redacted(), refusals, failed)
+			return nil, noneRead(cheveretoLabel, len(albums), "albums", u.Redacted(), e.refusals, e.failed)
 		}
-		return &Result{Title: listing.title, Files: files, Note: note}, nil
+		if e.full {
+			note = joinNotes(note, "partial — file limit")
+		}
+		return &Result{Title: listing.title, Files: e.files, Note: listingNote(note, refusedNote(e.refusals))}, nil
 	}
 	return cheveretoSingle(root, u, listing.title)
 }
@@ -368,21 +371,28 @@ func cheveretoAlbumLinks(root *html.Node, base *url.URL) []cheveretoAlbum {
 	return out
 }
 
-// cheveretoExpand reads every album a listing pointed at, several at a time.
+// cheveretoExpand reads every album a listing pointed at, several at a time,
+// up to the file cap (expandSourcesWith).
 //
 // The job lists its files in the order the page did however the requests
-// interleave (resolveFiles); an album that will not load is skipped rather
-// than failing a profile of dozens, and why comes back beside the files for
-// when none could be read. Each album's files go in a folder of their own, since two
-// albums by one uploader may well hold the same filenames.
+// interleave; an album that will not load is skipped rather than failing a
+// profile of dozens, and why comes back for when none could be read. Each
+// album's files go in a folder of their own, named after the album, since
+// two albums by one uploader may well hold the same filenames.
 //
 // Nesting is followed one level only. An album inside an album is rare, and
 // recursion here would be unbounded in a way nothing on the page bounds.
 func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []cheveretoAlbum,
-	opts Options) ([]File, []string, error) {
+	opts Options) expansion {
 
-	return resolveFiles(ctx, albums, func(ctx context.Context, album cheveretoAlbum) ([]File, error) {
-		u, err := ParseURL(album.URL)
+	names := make(map[string]string, len(albums))
+	links := make([]string, 0, len(albums))
+	for _, album := range albums {
+		names[album.URL] = album.Name
+		links = append(links, album.URL)
+	}
+	return expandSourcesWith(ctx, links, opts, func(ctx context.Context, link string) (*Result, error) {
+		u, err := ParseURL(link)
 		if err != nil {
 			return nil, err
 		}
@@ -391,11 +401,7 @@ func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []chevere
 			return nil, err
 		}
 		listing := cheveretoWalk(ctx, client, u, root, opts)
-		dir := sourceFolder(util.FirstNonEmpty(album.Name, listing.title))
-		for j := range listing.files {
-			listing.files[j].Dir = dir
-		}
-		return listing.files, nil
+		return &Result{Title: util.FirstNonEmpty(names[link], listing.title), Files: listing.files}, nil
 	})
 }
 

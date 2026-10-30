@@ -116,11 +116,25 @@ func (k *Kemono) extract(ctx context.Context, u *url.URL, root string, opts Opti
 	}
 
 	// The profile states how many posts there are. Without it, the end is
-	// an empty page, or the 400 the API answers an offset past it with.
+	// an empty page, or the 400 the API answers an offset past it with. The
+	// file cap is counted in attachments: a post may carry several, or none.
 	offset := 0
+	attached := make(map[string]bool)
 	all, note, err := walkPages(ctx, pageWalk[kemonoPost]{
 		key:   func(post kemonoPost) string { return post.ID },
 		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		weigh: func(posts []kemonoPost) int {
+			n := 0
+			for _, post := range posts {
+				for _, item := range post.items() {
+					if item.Path != "" && !attached[item.Path] {
+						attached[item.Path] = true
+						n++
+					}
+				}
+			}
+			return n
+		},
 		failed: func(err error) string {
 			if httpx.HasStatus(err, http.StatusBadRequest) {
 				return ""
@@ -158,7 +172,7 @@ func (k *Kemono) filesOf(root string, posts []kemonoPost, group bool) []File {
 		if group {
 			folder = folderName(util.FirstNonEmpty(post.Title, post.ID))
 		}
-		for _, item := range append([]kemonoAttachment{post.File}, post.Attachments...) {
+		for _, item := range post.items() {
 			if item.Path == "" || seen[item.Path] {
 				continue
 			}
@@ -244,6 +258,11 @@ type kemonoPost struct {
 	Title       string             `json:"title"`
 	File        kemonoAttachment   `json:"file"`
 	Attachments []kemonoAttachment `json:"attachments"`
+}
+
+// items is the post's file and its attachments, in the order shown.
+func (p kemonoPost) items() []kemonoAttachment {
+	return append([]kemonoAttachment{p.File}, p.Attachments...)
 }
 
 type kemonoAttachment struct {

@@ -255,12 +255,18 @@ intact. `sources.go` holds what they share:
   the file cap **a source at a time**: an album is taken whole or not at all,
   resolving stops once the cap is reached, and only a first album larger than
   the cap on its own is cut. The note counts the sources actually in the job.
+  An extractor expanding its own albums or posts rather than registry links
+  uses the same fan-out through `expandSourcesWith`, so its cap, folders and
+  refusals behave alike.
 - **The folders.** Each source gets a folder named after its title
   (`sourceFolder`). Titles are not unique, so `expandSources` counts the names
   first and gives a repeated one the source's own id (`sourceTag`), which
   keeps two different files of one name from sitting side by side as "(2)" and
   "(3)". A title that stands alone keeps its plain name, which is what
-  anything already downloaded under it is filed as.
+  anything already downloaded under it is filed as. A host whose repeated
+  titles were filed under a form of its own before this existed keeps that
+  form through `expandSourcesNamed`'s `folders` hook, since renaming them
+  would download them all again.
 - **The note.** "N of M" admits a truncated answer.
 
 ### Walking pages
@@ -275,8 +281,8 @@ intact. `sources.go` holds what they share:
   the limit and its note, and cancellation, which is never a partial listing.
   `walkListing` (`listing.go`) is its adapter for HTML pagers.
 - Each page says how the listing ends, from what the API states: `total` (the
-  count it holds), `end` (an end flag, a missing cursor, or an empty page
-  asked for past the end), or no `next`. Never end on a page shorter than the
+  count it holds), `pages` (the page count it runs to), `end` (an end flag, a
+  missing cursor, or an empty page asked for past the end), or no `next`. Never end on a page shorter than the
   page size asked for: hosts commonly serve fewer than asked without saying
   so. Asking one page past the end is cheap and right where nothing else
   says. A host that ignores its paging parameter serves page one again, which
@@ -289,13 +295,19 @@ intact. `sources.go` holds what they share:
 - Stop **at** the cap rather than collecting everything and truncating: a
   broad search can state tens of thousands of pages. Where every entry costs a
   request at listing time, the cap is `listingLimit` (the lower of the source
-  and file caps); otherwise the file cap.
+  and file caps); otherwise the file cap. Where an entry may hold several
+  files or none — a post, a status, a search hit — `weigh` counts the file
+  cap in what the entries hold rather than in entries, so a page of text
+  posts never uses it up; the page that reaches the cap is kept whole, noted
+  when it passes the cap or the listing goes on, and the registry cuts the
+  files to the cap.
 - Entries that need their own page are then read concurrently through
   `resolveFiles`/`resolveOutcomes` (`resolve.go`, on `FanOut` in
   `fanout.go`), bounded by `config.PageFetchConcurrency`, with results
   collected by index so the job lists files in the site's own order however
   the requests interleave. One that will not load is skipped rather than
-  failing a job of hundreds; when none loads, `noneRead` says why.
+  failing a job of hundreds; when none loads, `noneRead` says why, and when
+  some do, the note says how many the host refused and why (`refusedNote`).
 
 ### Caps
 
@@ -365,7 +377,8 @@ line in the saved queue.
   videos, a profile's posts, albums or galleries), resolved concurrently
   with the files kept in order and the refusals and first failure beside
   them, and the one error, `<site>: none of the <n> <noun> on <where> could
-  be read: <reason>`, for when none could. A listing that needs each item
+  be read: <reason>`, for when none could; when some could, the refusals
+  go in the note (`refusedNote`). A listing that needs each item
   beside what it resolved to uses `resolveOutcomes` and `sortOutcomes`
   directly; `resolveEach` and `expandSeries` share the same outcome
   handling. An item whose host states why it holds nothing (a live stream,
