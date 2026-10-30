@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -227,48 +226,23 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
 	// minutes before a byte moved.
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep ardEpisodeRef) ([]ardResolved, error) {
+	files, refusals, _ := resolveListed(ctx, episodes, func(ctx context.Context, ep ardEpisodeRef) (*File, error) {
 		file, _, episodeTitle, err := a.episode(ctx, ep.id)
 		if err != nil {
-			// One refused episode must not sink the rest, but its reason is
-			// kept: when every episode is refused they are refused for the
-			// same reason, and reporting it once is the only useful answer.
-			if refused, ok := errors.AsType[*ardRefused](err); ok {
-				return []ardResolved{{refusal: refused.reason}}, nil
-			}
 			return nil, err
 		}
 		file.Name = util.FirstNonEmpty(episodeTitle, ep.name, ep.id) + file.Name
 		if nest {
 			file.Dir = ep.season
 		}
-		return []ardResolved{{file: file}}, nil
+		return file, nil
 	})
-
-	result := &Result{Title: util.FirstNonEmpty(title, ref.show)}
-	var refusal string
-	for _, r := range resolved {
-		if r.file == nil {
-			if refusal == "" {
-				refusal = r.refusal
-			}
-			continue
-		}
-		result.Files = append(result.Files, *r.file)
-	}
-	if len(result.Files) == 0 {
+	if len(files) == 0 {
 		return nil, fmt.Errorf("ard: none of the %d entries of %s are playable: %s",
 			len(episodes), u.Redacted(),
-			util.FirstNonEmpty(refusal, "the listing names them but no stream is offered"))
+			util.FirstNonEmpty(append(refusals, "the listing names them but no stream is offered")...))
 	}
-	return result, nil
-}
-
-// ardResolved is what expanding one listing entry produced: a file, or ARD's
-// reason for offering none.
-type ardResolved struct {
-	file    *File
-	refusal string
+	return &Result{Title: util.FirstNonEmpty(title, ref.show), Files: files}, nil
 }
 
 // ardEpisodeRef is one entry of a programme's listing.
@@ -379,7 +353,7 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 
 	widget := doc.Widgets[0]
 	if reason := widget.refusal(); reason != "" {
-		return nil, "", "", &ardRefused{id: id, reason: reason}
+		return nil, "", "", &broadcastRefusal{"ard", id, reason}
 	}
 	media := widget.MediaCollection.Embedded
 	show = util.FirstNonEmpty(widget.Show.Title, media.Meta.SeriesTitle)
@@ -406,18 +380,10 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 	if err != nil {
 		return nil, "", "", fmt.Errorf("ard: %s: %w", id, err)
 	}
-	return &File{
-		// Named off the segments, not the variant URL: ARD's packager builds
-		// manifest paths out of the source file's name, ".mp4.csmil/" over
-		// MPEG-TS parts. See segmentsExtension.
-		Name:       stream.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   stream.Segments,
-		SegmentKey: stream.Key,
-		Audio:      stream.Audio,
-		Subtitles:  stream.Subtitles,
-	}, show, episode, nil
+	// Named off the segments, not the variant URL: ARD's packager builds
+	// manifest paths out of the source file's name, ".mp4.csmil/" over
+	// MPEG-TS parts. See segmentsExtension.
+	return new(stream.file(stream.extension(), headers)), show, episode, nil
 }
 
 // ardJoin names something by its programme and its episode together.
@@ -434,16 +400,6 @@ func ardJoin(show, episode string) string {
 	}
 	return show + " - " + episode
 }
-
-// ardRefused is ARD declining to play something. It is a type rather than a
-// message so that expanding a series can report one reason once instead of
-// the same refusal several hundred times.
-type ardRefused struct {
-	id     string
-	reason string
-}
-
-func (e *ardRefused) Error() string { return "ard: " + e.id + ": " + e.reason }
 
 // ardItem is the item document, which describes one video.
 type ardItem struct {

@@ -531,7 +531,7 @@ func TestRTPTarget(t *testing.T) {
 // TestRTPRefusedCarriesTheReason covers what the season expansion leans on:
 // a whole season refused for one reason should read as that one reason.
 func TestRTPRefusedCarriesTheReason(t *testing.T) {
-	err := &rtpRefused{page: "https://www.rtp.pt/play/p2/e21/x", reason: "DRM protected"}
+	err := &broadcastRefusal{"rtpplay", "https://www.rtp.pt/play/p2/e21/x", "DRM protected"}
 	if got := err.Error(); got != "rtpplay: https://www.rtp.pt/play/p2/e21/x: DRM protected" {
 		t.Errorf("Error() = %q", got)
 	}

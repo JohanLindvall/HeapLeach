@@ -5,7 +5,6 @@ package extractor
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -105,10 +104,7 @@ func (a *Arte) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, 
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: []File{{
-		Name: target.Name, Size: -1, Headers: target.Headers, Segments: target.Segments,
-		SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-	}}}, nil
+	return &Result{Title: title, Files: []File{target.file("")}}, nil
 }
 
 // arteConfig is the part of a programme's configuration read here.
@@ -138,20 +134,13 @@ type arteConfig struct {
 	} `json:"data"`
 }
 
-// arteRefused is a programme ARTE does not show: gone, limited to somewhere
-// else, or live. It is a type so that a collection can leave such
-// programmes out, saying why once, rather than queue them all to fail.
-type arteRefused struct{ title, reason string }
-
-func (e *arteRefused) Error() string { return "arte: " + e.title + ": " + e.reason }
-
 // config reads a programme's configuration and title, refusing what ARTE
 // does not show here.
 func (a *Arte) config(ctx context.Context, lang, id string) (*arteConfig, string, error) {
 	var cfg arteConfig
 	if err := a.client.GetJSON(ctx, a.api+"/config/"+lang+"/"+url.PathEscape(id), arteHeaders(), &cfg); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, "", &arteRefused{title: id, reason: "it is not online: it does not exist, or its time on ARTE is over"}
+			return nil, "", &broadcastRefusal{"arte", id, "it is not online: it does not exist, or its time on ARTE is over"}
 		}
 		return nil, "", fmt.Errorf("arte: %s: %w", id, err)
 	}
@@ -160,11 +149,11 @@ func (a *Arte) config(ctx context.Context, lang, id string) (*arteConfig, string
 	title = cmp.Or(title, id)
 	switch geo := attrs.Restriction.Geoblocking; {
 	case attrs.Error != nil:
-		return nil, "", &arteRefused{title: title, reason: cmp.Or(attrs.Error.Message, attrs.Error.Title, "refused")}
+		return nil, "", &broadcastRefusal{"arte", title, cmp.Or(attrs.Error.Message, attrs.Error.Title, "refused")}
 	case geo.RestrictedArea:
-		return nil, "", &arteRefused{title: title, reason: "it is not shown where this is asked from (ARTE limits it to " + geo.Code + ")"}
+		return nil, "", &broadcastRefusal{"arte", title, "it is not shown where this is asked from (ARTE limits it to " + geo.Code + ")"}
 	case attrs.Live:
-		return nil, "", &arteRefused{title: title, reason: "it is a live broadcast, which has no end to download to"}
+		return nil, "", &broadcastRefusal{"arte", title, "it is a live broadcast, which has no end to download to"}
 	}
 	return &cfg, title, nil
 }
@@ -191,10 +180,7 @@ func (a *Arte) programme(ctx context.Context, lang, id string) (*Target, string,
 	if err != nil {
 		return nil, "", fmt.Errorf("arte: %s: %w", title, err)
 	}
-	return &Target{
-		URL: master, Name: title + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
-	}, title, nil
+	return media.target(master, title+media.extension(), headers), title, nil
 }
 
 // arteHeaders are what the site's own player sends.
@@ -253,11 +239,11 @@ func (a *Arte) collection(ctx context.Context, lang, id string, opts Options) (*
 
 	type checked struct {
 		entry   arteEntry
-		refusal *arteRefused
+		refusal string
 	}
 	results := FanOut(ctx, programmes, func(ctx context.Context, entry arteEntry) ([]checked, error) {
 		_, _, err := a.config(ctx, lang, entry.id)
-		refusal, _ := errors.AsType[*arteRefused](err)
+		refusal, _ := refusalReason(err)
 		return []checked{{entry: entry, refusal: refusal}}, nil
 	})
 	if err := ctx.Err(); err != nil {
@@ -266,10 +252,10 @@ func (a *Arte) collection(ctx context.Context, lang, id string, opts Options) (*
 
 	res := &Result{Title: cmp.Or(title, id)}
 	limit := opts.maxFiles()
-	var refused []*arteRefused
+	var refused []string
 	shown := 0
 	for _, r := range results {
-		if r.refusal != nil {
+		if r.refusal != "" {
 			refused = append(refused, r.refusal)
 			continue
 		}
@@ -280,18 +266,11 @@ func (a *Arte) collection(ctx context.Context, lang, id string, opts Options) (*
 	}
 	if len(res.Files) == 0 {
 		if len(refused) > 0 {
-			return nil, fmt.Errorf("arte: %s: none of its %d programmes can be had: %s", res.Title, len(refused), refused[0].reason)
+			return nil, fmt.Errorf("arte: %s: none of its %d programmes can be had: %s", res.Title, len(refused), refused[0])
 		}
 		return nil, fmt.Errorf("arte: %s lists no programmes", res.Title)
 	}
-	var notes []string
-	if shown > len(res.Files) {
-		notes = append(notes, fmt.Sprintf("%d of %d programmes", len(res.Files), shown))
-	}
-	if len(refused) > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out: %s", len(refused), refused[0].reason))
-	}
-	res.Note = strings.Join(notes, "; ")
+	res.Note = listingNote(cappedNote(len(res.Files), shown, "programmes"), refusedNote(refused))
 	return res, nil
 }
 
@@ -304,7 +283,7 @@ func (a *Arte) playlist(ctx context.Context, lang, id string) (string, []arteEnt
 	var doc arteCollection
 	if err := a.client.GetJSON(ctx, a.api+"/playlist/"+lang+"/"+url.PathEscape(id), arteHeaders(), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return "", nil, &arteRefused{title: "collection " + id, reason: "it is not online: it does not exist, or its time on ARTE is over"}
+			return "", nil, &broadcastRefusal{"arte", "collection " + id, "it is not online: it does not exist, or its time on ARTE is over"}
 		}
 		return "", nil, fmt.Errorf("arte: collection %s: %w", id, err)
 	}
@@ -324,11 +303,8 @@ func (a *Arte) playlist(ctx context.Context, lang, id string) (string, []arteEnt
 // starts: a collection can run to dozens, each a configuration, a master
 // and a playlist for every version.
 func (a *Arte) lazy(lang string, entry arteEntry) File {
-	return File{
-		Name: entry.title + ".mp4", Size: -1, Dir: entry.dir, Headers: arteHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			target, _, err := a.programme(ctx, lang, entry.id)
-			return target, err
-		},
-	}
+	return lazyEpisode(entry.title+".mp4", entry.dir, arteHeaders(), func(ctx context.Context) (*Target, error) {
+		target, _, err := a.programme(ctx, lang, entry.id)
+		return target, err
+	})
 }

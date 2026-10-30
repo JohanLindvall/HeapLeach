@@ -259,50 +259,31 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 	// Only nest by season when there is more than one to tell apart.
 	nest := nestByLabel(episodes, func(ep vrtEpisodeRef) string { return ep.season })
 
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep vrtEpisodeRef) ([]vrtOutcome, error) {
+	// A whole season refused is a whole season refused for one reason, and
+	// VRT's code for it is the only thing the caller can act on.
+	files, refused, failed := resolveListed(ctx, episodes, func(ctx context.Context, ep vrtEpisodeRef) (*File, error) {
 		file, _, episode, err := v.episode(ctx, ep.id)
 		if err != nil {
-			return []vrtOutcome{{err: err}}, nil
+			return nil, err
 		}
 		file.Name = util.FirstNonEmpty(ep.name, episode, vrtSlug(ep.id)) + file.Name
 		if nest {
 			file.Dir = ep.season
 		}
-		return []vrtOutcome{{file: file}}, nil
+		return file, nil
 	})
-
-	result := &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id))}
-	var refused, failed string
-	for _, out := range resolved {
-		refusal, refusedHere := errors.AsType[*vrtRefused](out.err)
+	if len(files) == 0 {
+		reason := "the listing named them but the player offered no stream"
 		switch {
-		case out.file != nil:
-			result.Files = append(result.Files, *out.file)
-		case refusedHere:
-			// A whole season refused is a whole season refused for one
-			// reason, and VRT's code for it is the only thing the caller can
-			// act on. A refusal therefore outranks a transport failure.
-			if refused == "" {
-				refused = vrtReason(refusal.code)
-			}
-		case failed == "" && out.err != nil:
-			failed = out.err.Error()
+		case len(refused) > 0:
+			reason = refused[0]
+		case failed != nil:
+			reason = failed.Error()
 		}
-	}
-	if len(result.Files) == 0 {
 		return nil, fmt.Errorf("vrtmax: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(refused, failed,
-				"the listing named them but the player offered no stream"))
+			len(episodes), u.Redacted(), reason)
 	}
-	return result, nil
-}
-
-// vrtOutcome is what one episode came to: a file, or the reason there is
-// none. FanOut drops an error outright and the reason is the whole point
-// here, so it travels as a value rather than as a failure.
-type vrtOutcome struct {
-	file *File
-	err  error
+	return &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id)), Files: files}, nil
 }
 
 // vrtEpisodeRef is one episode of a programme, with the season it belongs to.
@@ -463,18 +444,8 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 			"so joining its segments would give a silent video", streamID)
 	}
 
-	return &File{
-		Name: stream.extensionOr(playlistExtension(stream.Variant)),
-		// The media document publishes a duration, not a length: nothing here
-		// knows how many bytes the parts add up to until they arrive, and a
-		// Size that is not exact is worse than none at all.
-		Size:       -1,
-		Headers:    headers,
-		Segments:   stream.Segments,
-		SegmentKey: stream.Key,
-		Audio:      stream.Audio,
-		Subtitles:  stream.Subtitles,
-	}, media.Title, util.FirstNonEmpty(page.Title, page.Player.Title), nil
+	return new(stream.file(stream.extensionOr(playlistExtension(stream.Variant)), headers)),
+		media.Title, util.FirstNonEmpty(page.Title, page.Player.Title), nil
 }
 
 // vrtSilent reports a variant whose own segments carry no audio, which
@@ -499,7 +470,7 @@ func (v *VRTMax) media(ctx context.Context, streamID string) (*vrtMedia, error) 
 	var doc vrtMedia
 	if err := v.client.GetJSON(ctx, endpoint, nil, &doc); err != nil {
 		if code := vrtRefusalCode(err); code != "" {
-			return nil, &vrtRefused{code: code}
+			return nil, &broadcastRefusal{site: "vrtmax", reason: vrtReason(code)}
 		}
 		return nil, fmt.Errorf("vrtmax: media for %s: %w", streamID, err)
 	}
@@ -619,17 +590,8 @@ func vrtTitle(programme, episode string) string {
 	return programme + " - " + episode
 }
 
-// vrtRefused is the media service declining to serve something, carrying the
-// code it declined with. It is a type rather than a message so that expanding
-// a whole programme can report the reason once instead of the same line
-// several hundred times.
-type vrtRefused struct {
-	code string
-}
-
-func (e *vrtRefused) Error() string { return "vrtmax: " + vrtReason(e.code) }
-
-// vrtReason puts a refusal code into words, keeping the code beside them.
+// vrtReason puts the media service's refusal code into words, keeping the
+// code beside them. The refusal names no programme, only the code.
 func vrtReason(code string) string {
 	if text, ok := vrtRefusals[code]; ok {
 		return text + " (" + code + ")"

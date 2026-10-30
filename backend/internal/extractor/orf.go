@@ -133,10 +133,7 @@ func (o *ORF) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Title: ep.name(), Files: []File{{
-			Name: target.Name, Size: -1, Headers: target.Headers, Segments: target.Segments,
-			SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		}}}, nil
+		return &Result{Title: ep.name(), Files: []File{target.file("")}}, nil
 	case orfSeries:
 		return o.series(ctx, id, opts)
 	}
@@ -211,14 +208,11 @@ func (o *ORF) stream(ctx context.Context, ep *orfEpisodeDoc) (*Target, error) {
 	if orfGeoProtected(media) {
 		return nil, fmt.Errorf("orf: %s: %w", name, errORFAustriaOnly)
 	}
-	subtitles := media.Subtitles
-	if sub := ep.Embedded.Subtitle; len(subtitles) == 0 && sub != nil && sub.VTTURL != "" {
-		subtitles = []Track{{Segments: []string{sub.VTTURL}, Language: "de", Name: "Deutsch"}}
+	target := media.target(master, name+media.extension(), headers)
+	if sub := ep.Embedded.Subtitle; len(target.Subtitles) == 0 && sub != nil && sub.VTTURL != "" {
+		target.Subtitles = []Track{{Segments: []string{sub.VTTURL}, Language: "de", Name: "Deutsch"}}
 	}
-	return &Target{
-		URL: master, Name: name + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: subtitles,
-	}, nil
+	return target, nil
 }
 
 // orfGeoProtected reports a stream that is the notice ORF shows outside
@@ -299,19 +293,9 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 		}
 		return nil, fmt.Errorf("orf: series %s lists no episodes", id)
 	}
-	res := &Result{Title: cmp.Or(title, "series "+id), Files: files}
-	var notes []string
-	if shown := len(episodes) - drm - austria; shown > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(files), shown))
-	}
-	if austria > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that ORF shows in Austria only", austria))
-	}
-	if drm > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that are DRM-protected", drm))
-	}
-	res.Note = strings.Join(notes, "; ")
-	return res, nil
+	note := listingNote(cappedNote(len(files), len(episodes)-drm-austria, "episodes"),
+		leftOutNote(austria, " that ORF shows in Austria only"), leftOutNote(drm, " that are DRM-protected"))
+	return &Result{Title: cmp.Or(title, "series "+id), Files: files, Note: note}, nil
 }
 
 // orfPageSize is how many episodes a page of a series asks for.
@@ -321,16 +305,13 @@ const orfPageSize = 100
 // starts.
 func (o *ORF) lazy(ep *orfEpisodeDoc) File {
 	id := strconv.FormatInt(ep.ID, 10)
-	return File{
-		Name: ep.name() + ".mp4", Size: -1,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			full, err := o.episode(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			return o.stream(ctx, full)
-		},
-	}
+	return lazyEpisode(ep.name()+".mp4", "", nil, func(ctx context.Context) (*Target, error) {
+		full, err := o.episode(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return o.stream(ctx, full)
+	})
 }
 
 // get fetches one API document, with the site's credentials. Credentials

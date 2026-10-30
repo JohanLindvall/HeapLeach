@@ -130,16 +130,13 @@ func (d *DRTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, 
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Title: stem, Files: []File{{
-			Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
-			SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		}}}, nil
+		return &Result{Title: stem, Files: []File{target.file("")}}, nil
 	case "season":
 		return d.season(ctx, item, opts)
 	case "show":
 		return d.series(ctx, item, opts)
 	case "channel":
-		return nil, &drRefused{title: cmp.Or(strings.TrimSpace(item.Title), id), reason: "it is a live channel, which has no end to download to"}
+		return nil, &broadcastRefusal{"drtv", cmp.Or(strings.TrimSpace(item.Title), id), "it is a live channel, which has no end to download to"}
 	}
 	// A list, an event or another page DR TV composes: as before.
 	return d.handoff.Extract(ctx, u, opts)
@@ -209,12 +206,6 @@ func drSeasonLabel(show string, season *drItem) string {
 	return season.ID
 }
 
-// drRefused is a programme DR TV does not offer for download here: gone,
-// live, DRM-protected, or offered to signed-in viewers alone.
-type drRefused struct{ title, reason string }
-
-func (e *drRefused) Error() string { return "drtv: " + e.title + ": " + e.reason }
-
 // drGone is what DR TV's answer means for an id it does not have.
 const drGone = "it is not on DR TV: removed, expired, or not published yet"
 
@@ -241,7 +232,7 @@ func (d *DRTV) item(ctx context.Context, id string) (*drItem, error) {
 	var item drItem
 	if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id), url.Values{"expand": {"all"}}), drHeaders(), &item); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &drRefused{title: id, reason: drGone}
+			return nil, &broadcastRefusal{"drtv", id, drGone}
 		}
 		return nil, fmt.Errorf("drtv: %s: %w", id, err)
 	}
@@ -273,9 +264,9 @@ func (d *DRTV) videos(ctx context.Context, id, title string) ([]drStream, error)
 		_ = json.Unmarshal([]byte(se.Body), &answer)
 		switch {
 		case answer.Code == 8009:
-			return nil, &drRefused{title: title, reason: "DR TV offers no stream of it without signing in"}
+			return nil, &broadcastRefusal{"drtv", title, "DR TV offers no stream of it without signing in"}
 		case strings.Contains(strings.ToLower(answer.Message), "not found"):
-			return nil, &drRefused{title: title, reason: drGone}
+			return nil, &broadcastRefusal{"drtv", title, drGone}
 		}
 	}
 	return nil, fmt.Errorf("drtv: %s: %w", title, err)
@@ -305,9 +296,9 @@ func (d *DRTV) programme(ctx context.Context, item *drItem, stem string) (*Targe
 	}
 	if chosen == nil {
 		if protected {
-			return nil, &drRefused{title: stem, reason: "it is DRM-protected"}
+			return nil, &broadcastRefusal{"drtv", stem, "it is DRM-protected"}
 		}
-		return nil, &drRefused{title: stem, reason: "DR TV offers no stream of it to download"}
+		return nil, &broadcastRefusal{"drtv", stem, "DR TV offers no stream of it to download"}
 	}
 	headers := drHeaders()
 	media, err := resolveMediaPlaylist(ctx, d.client, chosen.URL, headers)
@@ -317,11 +308,9 @@ func (d *DRTV) programme(ctx context.Context, item *drItem, stem string) (*Targe
 		}
 		return nil, fmt.Errorf("drtv: %s: %w", stem, err)
 	}
-	return &Target{
-		URL: chosen.URL, Name: stem + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: drAudio(media.Audio, chosen.Language),
-		Subtitles: media.Subtitles,
-	}, nil
+	target := media.target(chosen.URL, stem+media.extension(), headers)
+	target.Audio = drAudio(media.Audio, chosen.Language)
+	return target, nil
 }
 
 // drAudio is the one audio track a master's group holds, whatever bitrates
@@ -451,17 +440,9 @@ func (d *DRTV) listing(ctx context.Context, title, show string, entries []drList
 		}
 		return nil, fmt.Errorf("drtv: %s lists nothing DR TV offers now", title)
 	}
-	var notes []string
-	if shown > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(files), shown))
-	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
-	}
-	if denmark > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that DR shows in Denmark only", denmark))
-	}
-	return &Result{Title: title, Files: files, Note: strings.Join(notes, "; ")}, nil
+	note := listingNote(cappedNote(len(files), shown, "episodes"), brokenNote(walkErr),
+		leftOutNote(denmark, " that DR shows in Denmark only"))
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // refusedHere asks for a programme's master, to learn whether DR's CDN
@@ -499,14 +480,11 @@ func (d *DRTV) refusedHere(ctx context.Context, item *drItem) (refused, known bo
 func (d *DRTV) lazy(e *drListed, show string) File {
 	stem := e.item.name(show)
 	id := e.item.ID
-	return File{
-		Name: stem + ".mp4", Size: -1, Dir: e.folder, Headers: drHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			item, err := d.item(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			return d.programme(ctx, item, stem)
-		},
-	}
+	return lazyEpisode(stem+".mp4", e.folder, drHeaders(), func(ctx context.Context) (*Target, error) {
+		item, err := d.item(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return d.programme(ctx, item, stem)
+	})
 }

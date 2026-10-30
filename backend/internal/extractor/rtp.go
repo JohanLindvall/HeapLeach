@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -207,7 +206,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	// it is settled entirely from the page.
 	manifest := rtpManifest(doc, program)
 	if rtpProtected(doc, manifest) {
-		return nil, "", &rtpRefused{page: page, reason: "DRM protected — RTP serves its entertainment " +
+		return nil, "", &broadcastRefusal{"rtpplay", page, "DRM protected — RTP serves its entertainment " +
 			"and fiction under FairPlay and Widevine, which nothing here can decrypt"}
 	}
 
@@ -228,7 +227,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 		// when there is not it says so in words meant for a viewer. Those are
 		// passed through: whether the episode expired, was never published or
 		// is licensed elsewhere is something only RTP knows.
-		return nil, "", &rtpRefused{page: page, reason: util.FirstNonEmpty(rtpUnavailable(root),
+		return nil, "", &broadcastRefusal{"rtpplay", page, util.FirstNonEmpty(rtpUnavailable(root),
 			"the page carries no stream for this programme")}
 	}
 
@@ -237,18 +236,10 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 		return nil, "", fmt.Errorf("rtpplay: %s: %w", page, err)
 	}
 	name := util.FirstNonEmpty(title, program)
-	return &File{
-		// Named off the segments, not the variant URL: RTP's manifests are
-		// nginx-vod-module urlsets, which spell the source MP4s out in the
-		// path of an MPEG-TS stream. See segmentsExtension.
-		Name:       name + media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, name, nil
+	// Named off the segments, not the variant URL: RTP's manifests are
+	// nginx-vod-module urlsets, which spell the source MP4s out in the path
+	// of an MPEG-TS stream. See segmentsExtension.
+	return new(media.file(name+media.extension(), headers)), name, nil
 }
 
 // season expands a programme page into its episodes.
@@ -323,8 +314,8 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 			// One refused episode must not sink the rest, but its reason is
 			// kept: when every episode is refused it is refused for the same
 			// reason, and RTP's own words for it beat anything concluded here.
-			if refusal, ok := errors.AsType[*rtpRefused](out.err); ok && refused == "" {
-				refused = refusal.reason
+			if reason, ok := refusalReason(out.err); ok && refused == "" {
+				refused = reason
 			}
 			continue
 		}
@@ -525,13 +516,3 @@ func rtpUnavailable(root *html.Node) string {
 	}
 	return textOf(n)
 }
-
-// rtpRefused is RTP declining an episode, carrying the reason. It is a type
-// rather than a message so that a season of several hundred can report one
-// reason instead of the same refusal several hundred times.
-type rtpRefused struct {
-	page   string
-	reason string
-}
-
-func (e *rtpRefused) Error() string { return "rtpplay: " + e.page + ": " + e.reason }

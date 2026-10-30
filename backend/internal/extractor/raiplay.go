@@ -5,7 +5,6 @@ package extractor
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -153,34 +152,27 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	}
 	nest := raiNest(entries)
 
-	result := &Result{Title: util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/"))}
-	var refused string
 	// Every entry is four requests deep — the page document, the relinker, the
 	// master playlist and the chosen variant — and a programme routinely lists
 	// several hundred, so they are resolved a few at a time rather than one
-	// after another. FanOut keeps the listing's own order regardless.
-	for _, resolved := range FanOut(ctx, entries, r.resolve) {
-		if resolved.file == nil {
-			// One refused entry must not sink the rest, but its reason is
-			// kept: when every entry is refused they are refused for the same
-			// reason, and Rai's own words for it beat anything concluded here.
-			if refused == "" {
-				refused = resolved.refused
-			}
-			continue
+	// after another.
+	files, refused, _ := resolveListed(ctx, entries, func(ctx context.Context, entry raiEntry) (*File, error) {
+		file, title, err := r.episode(ctx, entry.page)
+		if err != nil {
+			return nil, err
 		}
-		file := *resolved.file
-		if !nest {
-			file.Dir = ""
+		file.Name = util.FirstNonEmpty(entry.name, title) + file.Name
+		if nest {
+			file.Dir = entry.label
 		}
-		result.Files = append(result.Files, file)
-	}
-	if len(result.Files) == 0 {
+		return file, nil
+	})
+	if len(files) == 0 {
 		return nil, fmt.Errorf("raiplay: none of the %d entries of %s are playable: %s",
 			len(entries), u.Redacted(),
-			util.FirstNonEmpty(refused, "Rai offers no stream for any of them"))
+			util.FirstNonEmpty(append(refused, "Rai offers no stream for any of them")...))
 	}
-	return result, nil
+	return &Result{Title: util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/")), Files: files}, nil
 }
 
 // raiEntry is one video a programme lists, with the folder its listing would
@@ -257,33 +249,6 @@ func raiNest(entries []raiEntry) bool {
 	return nestByLabel(entries, func(entry raiEntry) string { return entry.label })
 }
 
-// raiResolved is what expanding one entry produced: a file, or Rai's own words
-// for why there is none.
-//
-// FanOut drops an item whose fetch returned an error, which is the right fate
-// for one bad entry among hundreds — but it would drop the refusal message
-// with it, and from outside Italy that message is the whole answer. So a
-// refusal is reported as a result rather than as an error.
-type raiResolved struct {
-	file    *File
-	refused string
-}
-
-// resolve turns one listed entry into a file, or into Rai's reason for there
-// being none.
-func (r *RaiPlay) resolve(ctx context.Context, entry raiEntry) ([]raiResolved, error) {
-	file, title, err := r.episode(ctx, entry.page)
-	if err != nil {
-		if refusal, ok := errors.AsType[*raiRefused](err); ok {
-			return []raiResolved{{refused: refusal.reason()}}, nil
-		}
-		return nil, err
-	}
-	file.Name = util.FirstNonEmpty(entry.name, title) + file.Name
-	file.Dir = entry.label
-	return []raiResolved{{file: file}}, nil
-}
-
 // episode resolves one video page to a playable segment list. The returned
 // File carries only the extension in Name; the caller supplies the stem, which
 // differs between a standalone video and one entry of a programme.
@@ -326,19 +291,12 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	// below it answer without a token long after it has expired. So these
 	// resolve eagerly, and no File.Resolve is needed to keep a long queue
 	// alive.
-	return &File{
-		// Named off the segments alone: Rai's .csmil packaging puts ".mp4" in
-		// the path of MPEG-TS streams — about half the catalogue — so the
-		// variant URL is not consulted even as a fallback, and a zero variant
-		// leaves the default at ".ts". See segmentsExtension.
-		Name:       media.extensionOr(segmentsExtension(media.Segments, hlsVariant{})),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, title, nil
+	//
+	// Named off the segments alone: Rai's .csmil packaging puts ".mp4" in the
+	// path of MPEG-TS streams — about half the catalogue — so the variant URL
+	// is not consulted even as a fallback, and a zero variant leaves the
+	// default at ".ts". See segmentsExtension.
+	return new(media.file(media.extensionOr(segmentsExtension(media.Segments, hlsVariant{})), headers)), title, nil
 }
 
 // manifest asks the relinker for the playlist behind a content URL, and is
@@ -354,7 +312,7 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 	case !raiEmpty(asset.LicenceServerMap):
 		return "", fmt.Errorf("raiplay: %s is DRM protected", title)
 	case asset.refused():
-		return "", &raiRefused{title: title, message: asset.Description}
+		return "", &broadcastRefusal{"raiplay", title, raiReason(asset.Description)}
 	case link == "":
 		return "", fmt.Errorf("raiplay: %s: the relinker named no stream", title)
 	case !strings.EqualFold(asset.CT, "m3u8"):
@@ -364,25 +322,16 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 	return link, nil
 }
 
-// raiRefused is Rai declining to serve something, carrying its own words for
-// it. It is a type rather than a message so that expanding a whole programme
-// can report the reason once instead of several hundred times.
-type raiRefused struct {
-	title   string
-	message string
-}
-
-func (e *raiRefused) Error() string { return "raiplay: " + e.title + ": " + e.reason() }
-
-// reason is Rai's sentence with what it can mean spelled out beside it.
+// raiReason is Rai's sentence declining to serve something, with what it can
+// mean spelled out beside it.
 //
 // Nothing sharper is available: the geoprotection flags are set on material
 // that plays, login_required correlates with a refusal without deciding it,
 // and the relinker reports "geoprotection":"N" while refusing. Naming one of
 // the three causes would be a guess dressed up as an answer, so all three are
 // named as the possibilities they are.
-func (e *raiRefused) reason() string {
-	said := util.FirstNonEmpty(strings.TrimSpace(e.message), "Rai will not serve this video")
+func raiReason(message string) string {
+	said := util.FirstNonEmpty(strings.TrimSpace(message), "Rai will not serve this video")
 	return said + " (Rai does not say why; the usual causes are a licence limited to " +
 		"Italy, an availability window that has closed, and material that needs a " +
 		"Rai account)"

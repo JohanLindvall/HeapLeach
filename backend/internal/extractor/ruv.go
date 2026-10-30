@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -194,8 +193,8 @@ func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*
 			// reason is kept, though: when every episode is refused they are
 			// refused for the same reason, and saying it once is the whole
 			// point of recognising it.
-			if refusal, ok := errors.AsType[*ruvRefused](err); ok && refused == "" {
-				refused = refusal.message
+			if reason, ok := refusalReason(err); ok && refused == "" {
+				refused = reason
 			}
 			continue
 		}
@@ -223,7 +222,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 	// file has been turned away, the rest need not be asked for.
 	domestic := !strings.EqualFold(ep.Scope, ruvGlobalScope)
 	if domestic && s.outsideIceland {
-		return nil, &ruvRefused{episode: ep.label(), message: ruvDomesticRefusal}
+		return nil, &broadcastRefusal{"ruv", ep.label(), ruvDomesticRefusal}
 	}
 
 	headers := httpx.Referer(ruvRoot + "/")
@@ -245,19 +244,11 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 	if err != nil {
 		if domestic && httpx.HasStatus(err, http.StatusForbidden) {
 			s.outsideIceland = true
-			return nil, &ruvRefused{episode: ep.label(), message: ruvDomesticRefusal}
+			return nil, &broadcastRefusal{"ruv", ep.label(), ruvDomesticRefusal}
 		}
 		return nil, fmt.Errorf("ruv: %s: %w", ep.label(), err)
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // programme fetches a listing, which is the only request this host needs.
@@ -387,16 +378,6 @@ func ruvExtension(file string) string {
 // licensed it and that the refusal was of this address rather than of the
 // request.
 const ruvDomesticRefusal = "RÚV licenses this for Iceland only, and its CDN turned this address away"
-
-// ruvRefused is an episode declined for where the caller is. It is a type
-// rather than a message so that expanding a whole programme can report the
-// reason once instead of once per episode.
-type ruvRefused struct {
-	episode string
-	message string
-}
-
-func (e *ruvRefused) Error() string { return "ruv: " + e.episode + ": " + e.message }
 
 // ruvProgram is a programme and every episode of it, which is the whole of
 // what this host is asked for.

@@ -414,7 +414,7 @@ func TestSRFBlockMessages(t *testing.T) {
 // leans on: several hundred episodes refused for one reason should be
 // reported as that one reason, not as several hundred failures.
 func TestSRFBlockedErrorCarriesTheReason(t *testing.T) {
-	err := &srfBlocked{urn: "urn:srf:video:1", reason: "a reason"}
+	err := &broadcastRefusal{"srf", "urn:srf:video:1", "a reason"}
 	if got := err.Error(); got != "srf: urn:srf:video:1: a reason" {
 		t.Errorf("Error() = %q", got)
 	}

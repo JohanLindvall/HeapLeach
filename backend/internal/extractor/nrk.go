@@ -222,8 +222,8 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 			// Its reason is kept, though: when every episode is refused it
 			// is refused for the same reason, and NRK's own words for it
 			// are better than anything this could conclude.
-			if refusal, ok := errors.AsType[*nrkRefused](err); ok && refused == "" {
-				refused = refusal.message
+			if reason, ok := refusalReason(err); ok && refused == "" {
+				refused = reason
 			}
 			continue
 		}
@@ -356,7 +356,7 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 		return nil, fmt.Errorf("nrk: manifest for %s: %w", id, err)
 	}
 	if !strings.EqualFold(doc.Playability, "playable") {
-		return nil, &nrkRefused{id: id, message: doc.refusal()}
+		return nil, &broadcastRefusal{"nrk", id, doc.refusal()}
 	}
 
 	// stream's refusals are written to follow the programme id as a sentence
@@ -371,15 +371,7 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nrk: %s: %w", id, err)
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // title names a programme, and never fails: a missing title costs a good
@@ -405,17 +397,6 @@ func nrkJoin(series, episode string) string {
 	}
 	return series + " - " + episode
 }
-
-// nrkRefused is NRK declining to play something, carrying its own words for
-// why. It is a type rather than a message so that expanding a whole series
-// can report the reason once instead of the same refusal several hundred
-// times.
-type nrkRefused struct {
-	id      string
-	message string
-}
-
-func (e *nrkRefused) Error() string { return "nrk: " + e.id + ": " + e.message }
 
 // nrkManifest is the part of a playback manifest this needs.
 type nrkManifest struct {

@@ -174,43 +174,25 @@ func (r *RadioCanada) article(ctx context.Context, title, page string) (*Result,
 	case 1:
 		return r.single(ctx, media[0].app, media[0].id, title)
 	}
-	type found struct {
-		file   *File
-		reason string
-	}
-	results := FanOut(ctx, media, func(ctx context.Context, a attached) ([]found, error) {
+	files, reasons, _ := resolveListed(ctx, media, func(ctx context.Context, a attached) (*File, error) {
 		target, err := r.stream(ctx, a.app, a.id, "")
-		if refused, ok := errors.AsType[*radioCanadaRefused](err); ok {
-			return []found{{reason: refused.reason}}, nil
-		}
 		if err != nil {
 			return nil, err
 		}
 		file := r.file(a.app, a.id, target)
-		return []found{{file: &file}}, nil
+		return &file, nil
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	res := &Result{Title: cmp.Or(title, "Radio-Canada")}
-	var reasons []string
-	for _, f := range results {
-		if f.file != nil {
-			res.Files = append(res.Files, *f.file)
-		} else {
-			reasons = append(reasons, f.reason)
-		}
-	}
-	if len(res.Files) == 0 {
+	title = cmp.Or(title, "Radio-Canada")
+	if len(files) == 0 {
 		if len(reasons) > 0 {
-			return nil, fmt.Errorf("radio-canada: %s: none of its %d media can be had: %s", res.Title, len(media), reasons[0])
+			return nil, fmt.Errorf("radio-canada: %s: none of its %d media can be had: %s", title, len(media), reasons[0])
 		}
-		return nil, fmt.Errorf("radio-canada: %s: none of its media could be read", res.Title)
+		return nil, fmt.Errorf("radio-canada: %s: none of its media could be read", title)
 	}
-	if len(reasons) > 0 {
-		res.Note = fmt.Sprintf("%d left out: %s", len(reasons), reasons[0])
-	}
-	return res, nil
+	return &Result{Title: title, Files: files, Note: refusedNote(reasons)}, nil
 }
 
 // radioCanadaText is a string written into the page's data, its escapes
@@ -237,19 +219,10 @@ func (r *RadioCanada) single(ctx context.Context, app, id, stem string) (*Result
 // segments for a day, which a queue can outwait.
 func (r *RadioCanada) file(app, id string, target *Target) File {
 	stem := strings.TrimSuffix(target.Name, path.Ext(target.Name))
-	return File{
-		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
-		SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			return r.stream(ctx, app, id, stem)
-		},
-	}
+	return refreshing(target, func(ctx context.Context) (*Target, error) {
+		return r.stream(ctx, app, id, stem)
+	})
 }
-
-// radioCanadaRefused is a media the API names no stream for.
-type radioCanadaRefused struct{ title, reason string }
-
-func (e *radioCanadaRefused) Error() string { return "radio-canada: " + e.title + ": " + e.reason }
 
 // stream asks the API for a media's stream and resolves it under the name
 // stem, or under the programme and title the API gives it.
@@ -269,7 +242,7 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 		stem = r.name(ctx, app, id)
 	}
 	if answer.URL == "" {
-		return nil, &radioCanadaRefused{title: stem, reason: cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
+		return nil, &broadcastRefusal{"radio-canada", stem, cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
 	}
 	headers := radioCanadaHeaders()
 	master := radioCanadaUnfiltered(answer.URL)
@@ -283,21 +256,17 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 	if err != nil {
 		return nil, fmt.Errorf("radio-canada: %s: %w", stem, err)
 	}
-	audio := media.Audio
-	for i := range audio {
+	for i, audio := range media.Audio {
 		// "audio1_fr" is the packager's, not a name, and the language says
 		// it; "audio0_frdv" is the audio description (vidéodescription).
-		if m := radioCanadaPackagerName.FindStringSubmatch(audio[i].Name); m != nil {
-			audio[i].Name = ""
+		if m := radioCanadaPackagerName.FindStringSubmatch(audio.Name); m != nil {
+			media.Audio[i].Name = ""
 			if strings.HasSuffix(m[1], "dv") {
-				audio[i].Name = "Vidéodescription"
+				media.Audio[i].Name = "Vidéodescription"
 			}
 		}
 	}
-	return &Target{
-		URL: master, Name: stem + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: audio, Subtitles: media.Subtitles,
-	}, nil
+	return media.target(master, stem+media.extension(), headers), nil
 }
 
 var radioCanadaPackagerName = regexp.MustCompile(`^audio[0-9]+_([a-z]+)$`)
@@ -446,14 +415,8 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 		}
 		return nil, errors.New("radio-canada: " + title + " lists no episodes")
 	}
-	var notes []string
-	if listed > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(files), listed))
-	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
-	}
-	return &Result{Title: cmp.Or(seasonTitle, title), Files: files, Note: strings.Join(notes, "; ")}, nil
+	note := listingNote(cappedNote(len(files), listed, "episodes"), brokenNote(walkErr))
+	return &Result{Title: cmp.Or(seasonTitle, title), Files: files, Note: note}, nil
 }
 
 // radioCanadaSeasonsOf is the seasons a programme's page links to, in
@@ -496,10 +459,7 @@ func radioCanadaPageSizeOf(doc string) int {
 
 // lazy is a listed episode, its stream resolved when its transfer starts.
 func (r *RadioCanada) lazy(id, stem, folder string) File {
-	return File{
-		Name: stem + ".ts", Size: -1, Dir: folder, Headers: radioCanadaHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			return r.stream(ctx, "medianet", id, stem)
-		},
-	}
+	return lazyEpisode(stem+".ts", folder, radioCanadaHeaders(), func(ctx context.Context) (*Target, error) {
+		return r.stream(ctx, "medianet", id, stem)
+	})
 }

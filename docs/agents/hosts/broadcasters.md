@@ -6,6 +6,18 @@ is in [media.md](../media.md); what is common to every extractor is in
 [extractors.md](../extractors.md). Where a note says a site's other pages go
 to yt-dlp, the extractor keeps a `Handoff` for them.
 
+The public broadcasters' APIs have nothing in common, so each keeps its own
+extractor, but they share `broadcast.go`. A programme a broadcaster declines
+(gone, live, DRM-protected, licensed elsewhere) is a `broadcastRefusal`
+reading `<site>: <title>: <reason>`, so that a series refused in full says
+why once rather than once an episode; `resolveListed` fans a listing out,
+keeping files in order with the refusals and the first other failure
+beside them, a refusal being the answer a caller can act on. An episode
+resolved at transfer time is `lazyEpisode`, one resolved now and read again
+at transfer time `refreshing`, and a listing's note is assembled from
+`cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
+files and targets through `hlsMedia.file` and `hlsMedia.target` only.
+
 ## vimeo
 
 vimeo is read from the embed player's own configuration (`window.playerConfig`
@@ -43,7 +55,7 @@ programme and its title. A season nested in a series is read into a folder of
 its own. ARTE shows some programmes of a collection in fewer countries than
 others and the listing does not say which, so each programme's configuration
 is read as the collection is (`FanOut`). One not shown here is left out, the
-note giving the reason once (`arteRefused`); one that could not be read for
+note giving the reason once (`broadcastRefusal`); one that could not be read for
 another cause is kept, for its transfer to try again. Their streams are
 resolved when the transfers start.
 
