@@ -84,10 +84,59 @@ func NewImgur(client *httpx.Client) *Imgur { return &Imgur{client: client} }
 
 func (i *Imgur) Name() string { return "imgur" }
 
-func (i *Imgur) Match(u *url.URL) bool {
-	// i.imgur.com serves the bytes, so a link there is already direct and
-	// belongs to the fallback; nothing here would improve on fetching it.
-	return util.HostMatches(u.Host, "imgur.com") && !util.HostMatches(u.Host, imgurMediaHost)
+// imgurShape is a post, an album, an account, a tag or a mirrored
+// subreddit, with or without a post after it. A bare /<id> is every site's
+// navigation too, so it is recognised by its page alone.
+var imgurShape = pathShape(
+	`^/(?:a|gallery)/[^/.]+/?$`,
+	`^/(?:t|r)/[^/]+(?:/[^/]+)?/?$`,
+	`^/user/[^/]+(?:/(?:submitted|favorites))?/?$`,
+)
+
+// Recognises is the inventory's description.
+func (i *Imgur) Recognises() string {
+	return "posts and albums (`/a/<id>`, `/gallery/<slug>-<id>`, `/<id>`) whose page carries `window.postDataJSON` " +
+		"or its own media as og:image, and account, tag and subreddit listings (`/user/<name>`, `/t/<tag>`, `/r/<name>`) " +
+		"whose listing JSON answers"
+}
+
+// Shape reports the forms the extractor reads, bare ids excepted.
+func (i *Imgur) Shape(u *url.URL) bool { return imgurShape(u) }
+
+// Recognise takes a post page carrying the post data postFiles decodes, a
+// single-media page whose og:image is the file the id names (what
+// singleMedia reads), or a named listing whose hit.json — the JSON that
+// listing reads — answers on the page's own origin.
+func (i *Imgur) Recognise(ctx context.Context, p *Page) bool {
+	segs := p.Segments()
+	if !imgurShape(p.Final) && len(segs) != 1 {
+		return false
+	}
+	target := imgurTargetOf(segs)
+	switch {
+	case target.Listing != "":
+		if i.client == nil || !p.Named("Imgur") {
+			return false
+		}
+		endpoint := util.Origin(p.Final) + target.Listing + "/page/0/hit.json?scrolled"
+		return p.Memo(endpoint, func() any {
+			var body struct {
+				Data *[]imgurEntry `json:"data"`
+			}
+			return platformJSON(ctx, i.client, endpoint, nil, &body) && body.Data != nil
+		}).(bool)
+	case target.ID != "":
+		if p.Has(imgurPostData) {
+			return true
+		}
+		media, err := url.Parse(p.Meta("og:image"))
+		if err != nil {
+			return false
+		}
+		name := path.Base(media.Path)
+		return strings.TrimSuffix(name, path.Ext(name)) == target.ID && p.Named("Imgur")
+	}
+	return false
 }
 
 // Extract resolves a post, an album, or a listing of them.
@@ -180,7 +229,7 @@ func (i *Imgur) post(ctx context.Context, id string) (*Result, error) {
 // an id that is not a post.
 func (i *Imgur) postFiles(ctx context.Context, id string) ([]File, string, error) {
 	page := imgurRoot + "/gallery/" + url.PathEscape(id)
-	doc, err := i.client.GetString(ctx, page, httpx.Referer(imgurRoot+"/"))
+	doc, err := i.document(ctx, page)
 	if err != nil {
 		return nil, "", fmt.Errorf("imgur: fetch %s: %w", page, err)
 	}
@@ -209,7 +258,7 @@ func (i *Imgur) postFiles(ctx context.Context, id string) ([]File, string, error
 // exists for.
 func (i *Imgur) singleMedia(ctx context.Context, id string) ([]File, string, error) {
 	page := imgurRoot + "/" + url.PathEscape(id)
-	doc, err := i.client.GetString(ctx, page, httpx.Referer(imgurRoot+"/"))
+	doc, err := i.document(ctx, page)
 	if err != nil {
 		return nil, "", fmt.Errorf("imgur: fetch %s: %w", page, err)
 	}
@@ -219,6 +268,17 @@ func (i *Imgur) singleMedia(ctx context.Context, id string) ([]File, string, err
 	}
 	file := imgurFileOf(link, -1)
 	return []File{file}, file.Name, nil
+}
+
+// document fetches one of the site's pages, reusing the probe when it is
+// the page that was submitted.
+func (i *Imgur) document(ctx context.Context, page string) (string, error) {
+	u, err := url.Parse(page)
+	if err != nil {
+		return "", err
+	}
+	doc, _, err := fetchDocument(ctx, i.client, u, httpx.Referer(imgurRoot+"/"))
+	return doc, err
 }
 
 // imgurFilesOf turns a post's media list into files.

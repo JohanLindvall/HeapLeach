@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,21 +147,68 @@ func TestBandcampReleaseLinks(t *testing.T) {
 	}
 }
 
-func TestBandcampMatch(t *testing.T) {
+func TestBandcampRecognise(t *testing.T) {
 	b := NewBandcamp(nil)
+	bundle := `<script src="/client-bundle/1/trackpipe/global_head-0123.js"></script>`
+	release := strings.Replace(bandcampPageFixture(bandcampAlbumData, ""), "</head>", bundle+"</head>", 1)
+	music := `<html><head><meta property="og:site_name" content="A Band">` + bundle +
+		`</head><body><ol id="music-grid"><li><a href="/album/first">First</a></li></ol></body></html>`
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/album/first-album", release), true)
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/track/first-song", release), true)
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/music", music), true)
+	// A band's front page is its site root, recognised by the page alone.
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/", release), true)
+	// The platform's bundle and the band's name, but no release data: the
+	// platform's own front page, or a merch page.
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/",
+		`<html><head><meta property="og:site_name" content="A Band">`+bundle+`</head></html>`), false)
+	// Release data without the platform's bundle.
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/album/first-album", bandcampPageFixture(bandcampAlbumData, "")), false)
+	// The platform's markup on a page of another form.
+	expectRecognised(t, b, htmlPage(t, "https://a-band.example.test/merch", release), false)
+
 	for raw, want := range map[string]bool{
-		"https://a-band.bandcamp.com/album/first-album":    true,
-		"https://a-band.bandcamp.com/track/first-song":     true,
-		"https://a-band.bandcamp.com/":                     true,
-		"https://a-band.bandcamp.com/music":                true,
-		"https://bandcamp.com/a-listener":                  false,
-		"https://a-band.bandcamp.com/merch":                false,
-		"https://notbandcamp.com/album/x":                  false,
-		"https://a-band.bandcamp.com.example.test/album/x": false,
+		"https://a-band.example.test/album/first-album": true,
+		"https://a-band.example.test/track/first-song":  true,
+		"https://a-band.example.test/music":             true,
+		"https://a-band.example.test/":                  false,
+		"https://a-band.example.test/merch":             false,
+		"https://a-band.example.test/album":             false,
 	} {
-		u, _ := url.Parse(raw)
-		if got := b.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
+		expectShape(t, b, raw, want)
+	}
+}
+
+// A band's front page shows a browser the platform's client challenge, so the
+// page is asked for again as the extractor asks, once, and judged by that.
+func TestBandcampRecognisesThroughTheClientChallenge(t *testing.T) {
+	const challenge = `<!DOCTYPE html><html><head><link href="/_fs-ch-1A2B/assets/styles.css" rel="stylesheet">` +
+		`<title>Client Challenge</title></head><body></body></html>`
+	music := `<html><head><script src="/client-bundle/1/trackpipe/global_head-0123.js"></script></head>` +
+		`<body><ol id="music-grid"></ol></body></html>`
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		if r.UserAgent() == bandcampAgent {
+			_, _ = w.Write([]byte(music))
+			return
 		}
+		_, _ = w.Write([]byte(challenge))
+	}))
+	defer srv.Close()
+	b := NewBandcamp(httpx.New("Mozilla/5.0", "en-US", 0, 5*time.Second))
+	p := htmlPage(t, srv.URL+"/", challenge)
+	for range 2 {
+		if !b.Recognise(t.Context(), p) {
+			t.Fatal("a band's front page behind the client challenge was not recognised")
+		}
+	}
+	if asked.Load() != 1 {
+		t.Errorf("asked %d times, want once", asked.Load())
+	}
+	// The challenge on a page of another form is never asked about.
+	if b.Recognise(t.Context(), htmlPage(t, srv.URL+"/merch", challenge)) || asked.Load() != 1 {
+		t.Error("a challenged page of another form was recognised or cost a request")
 	}
 }

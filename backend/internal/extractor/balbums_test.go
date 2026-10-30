@@ -42,7 +42,7 @@ func balbumsPageHTML(albumHost string, page, pages int, albums ...string) string
 
 // balbumsIndex serves pages and returns an extractor wired to a registry
 // holding only itself and stub, so nothing in the test reaches a real host.
-// The index claims the test server's own host, which is what lets the test
+// The index's own search links have its form, which is what lets the test
 // prove the site's navigation is not followed.
 func balbumsIndex(t *testing.T, stub Extractor, pages map[int]string) (*Balbums, string, func() []string) {
 	t.Helper()
@@ -66,13 +66,8 @@ func balbumsIndex(t *testing.T, stub Extractor, pages map[int]string) (*Balbums,
 	}))
 	t.Cleanup(srv.Close)
 
-	base, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
 	reg := &Registry{fallback: NewDirect(nil)}
 	index := &Balbums{
-		hostSet:  hostSet{base.Hostname()},
 		client:   httpx.New("test-agent", "en-US", 0, 5*time.Second),
 		registry: reg,
 	}
@@ -278,6 +273,22 @@ func TestBalbumsReportsASearchWithNothingInIt(t *testing.T) {
 	if !strings.Contains(err.Error(), "nothing") {
 		t.Errorf("error = %q, want it to name the query", err)
 	}
+}
+
+func TestBalbumsRecognise(t *testing.T) {
+	b := NewBalbums(nil, nil)
+	page := strings.Replace(balbumsPageHTML("albums.example.test", 1, 3, "AAAA"), "<nav>",
+		`<form id="searchForm" method="get" action="/"><input name="search"></form><nav>`, 1)
+	expectRecognised(t, b, htmlPage(t, "https://index.example.test/?search=Driftwood", page), true)
+	// The right form and the index's name, but no search form or page count.
+	expectRecognised(t, b, htmlPage(t, "https://index.example.test/?search=Driftwood",
+		`<html><head><title>Bunkr Albums</title></head><body><p>Nothing here.</p></body></html>`), false)
+	// The index's markup on a page that is not a search.
+	expectRecognised(t, b, htmlPage(t, "https://index.example.test/topalbums", page), false)
+	expectShape(t, b, "https://index.example.test/?search=Driftwood&page=2", true)
+	expectShape(t, b, "https://index.example.test/?search=", false)
+	expectShape(t, b, "https://index.example.test/blog?search=Driftwood", false)
+	expectShape(t, b, "https://index.example.test/", false)
 }
 
 func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {

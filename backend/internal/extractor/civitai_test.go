@@ -70,26 +70,25 @@ func TestCivitaiTargetOf(t *testing.T) {
 		selector string
 		value    string
 	}{
-		{"https://civitai.com/images/12345", civitaiByImage, "12345"},
-		{"https://civitai.com/images/12345?period=AllTime", civitaiByImage, "12345"},
-		{"https://civitai.com/posts/6789", civitaiByPost, "6789"},
-		{"https://civitai.com/posts/6789/a-title-slug", civitaiByPost, "6789"},
-		{"https://civitai.com/user/SomeCreator", civitaiByUser, "SomeCreator"},
-		{"https://civitai.com/user/SomeCreator/images", civitaiByUser, "SomeCreator"},
-		{"https://civitai.com/user/SomeCreator/posts", civitaiByUser, "SomeCreator"},
-		{"https://civitai.com/user/SomeCreator/videos", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/images/12345", civitaiByImage, "12345"},
+		{"https://gallery.example.test/images/12345?period=AllTime", civitaiByImage, "12345"},
+		{"https://gallery.example.test/posts/6789", civitaiByPost, "6789"},
+		{"https://gallery.example.test/posts/6789/a-title-slug", civitaiByPost, "6789"},
+		{"https://gallery.example.test/user/SomeCreator", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/user/SomeCreator/images", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/user/SomeCreator/posts", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/user/SomeCreator/videos", civitaiByUser, "SomeCreator"},
 		// The model endpoint, which is the other route: no selector.
-		{"https://civitai.com/models/4201", "", "4201"},
-		{"https://civitai.com/models/4201/a-model-name", "", "4201"},
+		{"https://gallery.example.test/models/4201", "", "4201"},
+		{"https://gallery.example.test/models/4201/a-model-name", "", "4201"},
 		// Claimed by nobody here.
-		{"https://civitai.com/collections/99", "", ""},
-		{"https://civitai.com/api/download/models/555", "", ""},
-		{"https://civitai.com/user/SomeCreator/models", "", ""},
-		{"https://civitai.com/models/train", "", ""},
-		{"https://civitai.com/images", "", ""},
-		{"https://civitai.com/", "", ""},
+		{"https://gallery.example.test/collections/99", "", ""},
+		{"https://gallery.example.test/api/download/models/555", "", ""},
+		{"https://gallery.example.test/user/SomeCreator/models", "", ""},
+		{"https://gallery.example.test/models/train", "", ""},
+		{"https://gallery.example.test/images", "", ""},
+		{"https://gallery.example.test/", "", ""},
 		{"https://image.civitai.example/keyaaaa/uuid/original=true/x.jpeg", "", ""},
-		{"https://not-civitai.example.test/images/12345", "", ""},
 	}
 
 	c := NewCivitai(nil)
@@ -103,8 +102,8 @@ func TestCivitaiTargetOf(t *testing.T) {
 			if got != nil {
 				t.Errorf("%s was claimed as %+v, want no match", tt.raw, got)
 			}
-			if c.Match(u) {
-				t.Errorf("Match(%s) = true, want false", tt.raw)
+			if c.Shape(u) {
+				t.Errorf("Shape(%s) = true, want false", tt.raw)
 			}
 			continue
 		}
@@ -115,9 +114,63 @@ func TestCivitaiTargetOf(t *testing.T) {
 		if got.selector != tt.selector || got.value != tt.value {
 			t.Errorf("%s -> %q=%q, want %q=%q", tt.raw, got.selector, got.value, tt.selector, tt.value)
 		}
-		if !c.Match(u) {
-			t.Errorf("Match(%s) = false", tt.raw)
+		// A post is read when submitted, but is no shape: /posts/<n> is everywhere.
+		if c.Shape(u) != (tt.selector != civitaiByPost) {
+			t.Errorf("Shape(%s) = %v", tt.raw, c.Shape(u))
 		}
+	}
+}
+
+// TestCivitaiRecognise asks the API the extraction reads, on the page's own
+// origin, and only for a page of the right form that names the site or could
+// not be read at all.
+func TestCivitaiRecognise(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/images" && r.URL.Query().Get("imageId") == "12345":
+			_, _ = io.WriteString(w, `{"items":[{"id":12345,"url":"https://media.example.test/a.jpeg"}],"metadata":{}}`)
+		case r.URL.Path == "/api/v1/models/4201":
+			_, _ = io.WriteString(w, `{"id":4201,"name":"A Model","modelVersions":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := NewCivitai(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	challenged := func(raw string) *Page {
+		p := fixturePage(t, raw, 0, "", "")
+		p.Challenged = true
+		return p
+	}
+	named := `<html><head><title>An Image | Civitai</title></head><body></body></html>`
+
+	image := challenged(srv.URL + "/images/12345")
+	for range 2 {
+		if !c.Recognise(t.Context(), image) {
+			t.Fatal("a challenged image page the API knows was not recognised")
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("asked the API %d times for one page, want once", hits.Load())
+	}
+	if !c.Recognise(t.Context(), htmlPage(t, srv.URL+"/models/4201", named)) {
+		t.Error("a named model page the API knows was not recognised")
+	}
+	// The right form and the name, but the API knows nothing of it.
+	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/999", named)) {
+		t.Error("an image the API does not know was recognised")
+	}
+	// An ordinary page of the right form costs no request at all.
+	before := hits.Load()
+	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345", `<html><title>A photo blog</title></html>`)) || hits.Load() != before {
+		t.Error("an ordinary page of the right form was recognised or cost a request")
+	}
+	// The API answering, for a page of another form.
+	if c.Recognise(t.Context(), challenged(srv.URL+"/collections/12345")) {
+		t.Error("a collection was recognised")
 	}
 }
 

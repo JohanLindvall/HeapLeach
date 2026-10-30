@@ -161,3 +161,22 @@ func TestCoomerFansTitle(t *testing.T) {
 		}
 	}
 }
+
+func TestCoomerFansRecognise(t *testing.T) {
+	c := NewCoomerFans(nil)
+	post := `<html><head><title>a-creator / A post</title></head><body><div class="post-body"><img src="/i/1.jpg"></div></body></html>`
+	profile := `<html><head><title>a-creator posts</title></head><body>` +
+		`<a href="/p/101/212948/onlyfans">A post</a><a class="next" href="?page=2">Next</a></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/p/101/212948/onlyfans", post), true)
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/u/onlyfans/212948/a-creator", profile), true)
+	// The right form, but no post body, or posts of another creator only.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/p/101/212948/onlyfans", profile), false)
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/u/onlyfans/999/someone-else", profile), false)
+	// A post body on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/random-post", post), false)
+
+	expectShape(t, c, "https://fans.example.test/p/101/212948/onlyfans", true)
+	expectShape(t, c, "https://fans.example.test/u/onlyfans/212948/a-creator", true)
+	expectShape(t, c, "https://fans.example.test/u/a-creator", false)
+	expectShape(t, c, "https://fans.example.test/p/101", false)
+}

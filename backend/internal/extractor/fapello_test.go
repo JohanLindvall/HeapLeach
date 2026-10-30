@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,4 +64,24 @@ func TestFapelloExtractWalksAndDeduplicates(t *testing.T) {
 	if pagesServed != 2 {
 		t.Errorf("served %d pages, want 2: the repeat page ends the walk", pagesServed)
 	}
+}
+
+func TestFapelloRecognise(t *testing.T) {
+	f := NewFapello(nil)
+	page := `<html><head><title>A Model Nude - Fapello</title></head><body>` +
+		`<img src="https://cdn.example.test/content/a/-/a-model/1000/a-model_0001_300px.jpg"></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/", page), true)
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/12/", page), true)
+	// The right form and the name, but only another model's media.
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/b-model/", page), false)
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/",
+		`<html><head><title>A Model - Fapello</title></head><body></body></html>`), false)
+	// The model's media on a page of another form, and without the name.
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/videos/x/", page), false)
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/",
+		strings.Replace(page, "Fapello", "A blog", 1)), false)
+
+	expectShape(t, f, "https://models.example.test/a-model/12/", true)
+	expectShape(t, f, "https://models.example.test/a-model/", false)
+	expectShape(t, f, "https://models.example.test/a-model/12", false)
 }

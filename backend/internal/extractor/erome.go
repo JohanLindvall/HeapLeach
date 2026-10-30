@@ -23,7 +23,6 @@ import (
 // CDN checks Referer, and that each item is rendered twice (once for the
 // inline player, once for the lightbox), so the list needs de-duplicating.
 type Erome struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -32,10 +31,38 @@ const eromeReferer = "https://www.erome.com"
 
 // NewErome builds the erome extractor.
 func NewErome(client *httpx.Client) *Erome {
-	return &Erome{hostSet: hostSet{"erome.com"}, client: client}
+	return &Erome{client: client}
 }
 
 func (e *Erome) Name() string { return "erome" }
+
+// eromeAlbumShape is an album link, /a/<id>. A profile is a bare /<user>,
+// which is every site's navigation too, so it is no shape: a profile is
+// recognised by its page alone.
+var eromeAlbumShape = pathShape(`^/a/[A-Za-z0-9]+/?$`)
+
+// Recognises is the inventory's description.
+func (e *Erome) Recognises() string {
+	return "albums (`/a/<id>`) and profiles (`/<user>`) whose page carries the site's album markup " +
+		"(the album title heading and media group, or a profile's album links)"
+}
+
+// Shape reports an album link.
+func (e *Erome) Shape(u *url.URL) bool { return eromeAlbumShape(u) }
+
+// Recognise takes an album page carrying the markup album reads — the
+// album-title heading over the media group — or a profile page listing
+// album links in the site's own markup, under the user-info block.
+func (e *Erome) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	switch {
+	case eromeAlbumShape(p.Final):
+		return p.Has(`class="album-title-page"`, `class="media-group"`)
+	case len(segs) == 1 && !eromeSections[strings.ToLower(segs[0])]:
+		return p.Has(`user-info`, `class="album-link"`) && p.Named("EroMe", "Erome")
+	}
+	return false
+}
 
 // eromeSections are the paths that are not usernames, so a profile is never
 // confused with one of the site's own pages.
@@ -129,7 +156,7 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL) (albums []string,
 	for page := 1; page <= eromeMaxProfilePages && len(albums) < eromeMaxAlbums; page++ {
 		pageURL := eromeProfilePage(u, page)
 
-		doc, err := e.client.GetString(ctx, pageURL.String(), httpx.Referer(eromeReferer+"/"))
+		doc, _, err := fetchDocument(ctx, e.client, &pageURL, httpx.Referer(eromeReferer+"/"))
 		if err != nil {
 			if page == 1 {
 				return nil, "", false, fmt.Errorf("erome: fetch profile: %w", err)
@@ -271,7 +298,7 @@ func isEromeAlbum(raw string) bool {
 
 // album lists every video and image in one album.
 func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
-	doc, err := e.client.GetString(ctx, u.String(), httpx.Referer(eromeReferer+"/"))
+	doc, _, err := fetchDocument(ctx, e.client, u, httpx.Referer(eromeReferer+"/"))
 	if err != nil {
 		// A deleted album is answered with 410 and a full page of the
 		// site's own furniture, which the status error would quote 200

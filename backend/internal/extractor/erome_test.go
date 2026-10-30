@@ -359,3 +359,25 @@ func TestEromeDeletedAlbumIsReportedPlainly(t *testing.T) {
 		t.Errorf("error quotes the page's markup: %q", err)
 	}
 }
+
+func TestEromeRecognise(t *testing.T) {
+	e := NewErome(nil)
+	album := strings.Replace(eromeAlbumPage, "<video>", `<div class="media-group"></div><video>`, 1)
+	profile := `<html><head><title>Someone - EroMe</title></head><body>` +
+		`<div class="col-xs-12 user-info text-center"><h1 class="username">Someone</h1></div>` +
+		`<a class="album-link" href="https://albums.example.test/a/AAAA1111">First</a></body></html>`
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/a/AAAA1111", album), true)
+	// A profile is a bare /<user>, recognised by its page alone.
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/Someone", profile), true)
+	// The right form and the name, but not the album markup.
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/a/AAAA1111", eromeAlbumPage), false)
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/Someone",
+		`<html><head><title>Someone - EroMe</title></head><body></body></html>`), false)
+	// Album markup on a page of another form, and a section that is no user.
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/explore/new", album), false)
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/explore", profile), false)
+
+	expectShape(t, e, "https://albums.example.test/a/AAAA1111", true)
+	expectShape(t, e, "https://albums.example.test/Someone", false)
+	expectShape(t, e, "https://albums.example.test/a/AAAA1111/extra", false)
+}

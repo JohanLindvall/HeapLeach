@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -30,7 +31,6 @@ import (
 // item starts rather than when the page is read. Image links are plain and
 // need no such treatment.
 type CoomerFans struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -44,13 +44,50 @@ const (
 
 // NewCoomerFans builds the coomerfans extractor.
 func NewCoomerFans(client *httpx.Client) *CoomerFans {
-	return &CoomerFans{hostSet: hostSet{"coomerfans.com"}, client: client}
+	return &CoomerFans{client: client}
 }
 
 func (c *CoomerFans) Name() string { return "coomerfans" }
 
+var (
+	// coomerFansProfileShape is a creator's page, /u/<service>/<id>[/<name>].
+	coomerFansProfileShape = pathShape(`^/u/[A-Za-z]+/\d+(?:/[^/]+)?/?$`)
+	// coomerFansPostShape is a post, /p/<post>/<id>/<service>.
+	coomerFansPostShape = pathShape(`^/p/\d+/\d+/[A-Za-z]+/?$`)
+)
+
+// Recognises is the inventory's description.
+func (c *CoomerFans) Recognises() string {
+	return "creator pages (`/u/<service>/<id>/<name>`) listing that creator's `/p/` posts, and posts " +
+		"(`/p/<post>/<id>/<service>`) carrying the `post-body` the media is read from"
+}
+
+// Shape reports a creator's page or a post.
+func (c *CoomerFans) Shape(u *url.URL) bool {
+	return coomerFansProfileShape(u) || coomerFansPostShape(u)
+}
+
+// Recognise takes a post whose page has the post-body coomerFansPost reads,
+// or a creator's page linking posts of that same creator, which is what
+// postLinks collects.
+func (c *CoomerFans) Recognise(_ context.Context, p *Page) bool {
+	switch segs := p.Segments(); {
+	case coomerFansPostShape(p.Final):
+		root := p.HTML()
+		return root != nil && findFirst(root, func(n *html.Node) bool { return hasClass(n, coomerFansBodyClass) }) != nil
+	case coomerFansProfileShape(p.Final):
+		return regexp.MustCompile(`href="[^"]*/p/\d+/` + regexp.QuoteMeta(segs[2]) + `/`).MatchString(p.Body)
+	}
+	return false
+}
+
 // Extract resolves a creator's page or a single post.
 func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+	// The site's random-creator and random-post links redirect to the page
+	// they chose, which is the one recognised and the one to read.
+	if _, final, ok := probedDocument(ctx, u); ok && final.String() != u.String() {
+		u = final
+	}
 	segs := util.PathSegments(u)
 	switch {
 	case len(segs) >= 2 && segs[0] == "p":
@@ -79,7 +116,7 @@ func (c *CoomerFans) post(ctx context.Context, u *url.URL) (*Result, error) {
 // postFiles reads one post page into downloadable files.
 func (c *CoomerFans) postFiles(ctx context.Context, u *url.URL) ([]File, string, error) {
 	page := u.String()
-	doc, err := c.client.GetString(ctx, page, httpx.Referer(coomerFansRoot+"/"))
+	doc, _, err := fetchDocument(ctx, c.client, u, httpx.Referer(coomerFansRoot+"/"))
 	if err != nil {
 		return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", page, err)
 	}
@@ -223,7 +260,11 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL) ([]string, strin
 	)
 
 	for i := 0; i < config.MaxAlbumPages && page != ""; i++ {
-		doc, err := c.client.GetString(ctx, page, httpx.Referer(coomerFansRoot+"/"))
+		pageURL, err := url.Parse(page)
+		if err != nil {
+			break
+		}
+		doc, _, err := fetchDocument(ctx, c.client, pageURL, httpx.Referer(coomerFansRoot+"/"))
 		if err != nil {
 			if i == 0 {
 				return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", page, err)

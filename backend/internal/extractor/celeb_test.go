@@ -273,3 +273,28 @@ func TestCelebImageURL(t *testing.T) {
 		}
 	}
 }
+
+func TestCelebRecognise(t *testing.T) {
+	c := NewCeleb(nil)
+	inertia := func(component string) string {
+		data := html.EscapeString(`{"component":"` + component + `","props":{"creator":{"name":"A Creator","slug":"a-creator-1"}}}`)
+		return `<html><head><title>A Creator - Celeb.st</title></head><body><div id="app" data-page="` + data + `"></div></body></html>`
+	}
+	gallery := "https://gallery.example.test/creator/a-creator-1/images"
+	expectRecognised(t, c, htmlPage(t, gallery, inertia("Creator/Media")), true)
+	expectRecognised(t, c, htmlPage(t, gallery+"/42", inertia("Creator/MediaObject")), true)
+	// A creator's own page answers the app's not-found component; the app's
+	// data-page under the site's name is what is checked there.
+	expectRecognised(t, c, htmlPage(t, "https://gallery.example.test/creator/a-creator-1", inertia("404")), true)
+	// The right form and the name, but not the gallery's props.
+	expectRecognised(t, c, htmlPage(t, gallery, inertia("Feed/Hot")), false)
+	expectRecognised(t, c, htmlPage(t, gallery, `<html><head><title>A Creator - Celeb.st</title></head></html>`), false)
+	// The gallery's props on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://gallery.example.test/feed/hot", inertia("Creator/Media")), false)
+
+	expectShape(t, c, gallery, true)
+	expectShape(t, c, gallery+"/42", true)
+	expectShape(t, c, "https://gallery.example.test/creator/a-creator-1", true)
+	expectShape(t, c, "https://gallery.example.test/creator/a-creator-1/videos", false)
+	expectShape(t, c, "https://gallery.example.test/feed/hot", false)
+}

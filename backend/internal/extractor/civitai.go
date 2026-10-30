@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -88,7 +89,55 @@ func NewCivitai(client *httpx.Client) *Civitai { return &Civitai{client: client}
 
 func (c *Civitai) Name() string { return "civitai" }
 
-func (c *Civitai) Match(u *url.URL) bool { return civitaiTargetOf(u) != nil }
+// Recognises is the inventory's description.
+func (c *Civitai) Recognises() string {
+	return "images, posts, models and user galleries (`/images/<id>`, `/posts/<id>`, `/models/<id>`, `/user/<name>`) " +
+		"whose site's public API answers for that item on the page's own origin"
+}
+
+// Shape reports the forms civitaiTargetOf reads, but for a post: /posts/<n>
+// is every forum's and blog's navigation too, so a post is recognised when
+// submitted rather than singled out among a page's links.
+func (c *Civitai) Shape(u *url.URL) bool {
+	target := civitaiTargetOf(u)
+	return target != nil && target.selector != civitaiByPost
+}
+
+// Recognise asks the public API this extractor reads, on the page's own
+// origin, for the item the URL names. The site's pages sit behind a
+// challenge an anonymous probe rarely passes, so there is usually no page to
+// read; the API is what the extraction depends on anyway. It is asked only
+// for a page of the right form that either names itself or could not be
+// read at all, never for every /images/<n> on the web.
+func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
+	target := civitaiTargetOf(p.Final)
+	if target == nil || c.client == nil || !(p.Challenged || p.Named("Civitai")) {
+		return false
+	}
+	api := util.Origin(p.Final) + "/api/v1"
+	if target.selector == "" {
+		endpoint := api + "/models/" + url.PathEscape(target.value)
+		return p.Memo(endpoint, func() any {
+			var model struct {
+				ID       int64              `json:"id"`
+				Versions *[]json.RawMessage `json:"modelVersions"`
+			}
+			return platformJSON(ctx, c.client, endpoint, nil, &model) && model.ID > 0 && model.Versions != nil
+		}).(bool)
+	}
+	query := url.Values{}
+	query.Set("limit", "1")
+	query.Set("nsfw", civitaiNSFW)
+	query.Set(target.selector, target.value)
+	endpoint := api + "/images?" + query.Encode()
+	return p.Memo(endpoint, func() any {
+		var listing struct {
+			Items    *[]json.RawMessage `json:"items"`
+			Metadata *json.RawMessage   `json:"metadata"`
+		}
+		return platformJSON(ctx, c.client, endpoint, nil, &listing) && listing.Items != nil && listing.Metadata != nil
+	}).(bool)
+}
 
 // civitaiTarget is what one input URL asks for.
 type civitaiTarget struct {
@@ -103,9 +152,6 @@ type civitaiTarget struct {
 // and /api/download/... too, so a model file link still reaches the direct
 // extractor that can fetch it.
 func civitaiTargetOf(u *url.URL) *civitaiTarget {
-	if !util.HostMatches(u.Host, "civitai.com") {
-		return nil
-	}
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {
 		return nil

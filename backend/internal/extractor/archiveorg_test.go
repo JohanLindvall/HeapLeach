@@ -5,11 +5,16 @@ package extractor
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // The fixtures below are hand-written in the shape the metadata API answers
@@ -530,42 +535,69 @@ func TestArchiveCapsTheFileCount(t *testing.T) {
 	}
 }
 
-// TestArchiveMatch keeps the Wayback Machine and the storage nodes out. Both
-// are archive.org subdomains and neither has an identifier to look up; the
-// direct-link fallback already handles them correctly.
-func TestArchiveMatch(t *testing.T) {
+// TestArchiveRecognise takes the archive's item page and file listing by
+// their markup, and leaves the Wayback Machine and the storage nodes out:
+// neither has an item route, and the direct-link fallback handles both.
+func TestArchiveRecognise(t *testing.T) {
 	a := NewArchiveOrg(nil, nil)
-	yes := []string{
-		"https://archive.org/details/a-film",
-		"https://www.archive.org/details/a-film",
-		"https://archive.org/download/a-film/A%20Film.mp4",
-		"https://archive.org./metadata/a-film",
+	item := `<html><head><title>A Film : Free Download : Internet Archive</title></head><body>` +
+		`<ia-topnav></ia-topnav><section class="item-details-metadata"></section></body></html>`
+	listing := `<html><head><title>a-film directory listing</title></head><body><ia-topnav></ia-topnav>` +
+		`<div class="download-directory-listing"><table class="directory-listing-table"></table></div></body></html>`
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/details/a-film", item), true)
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/download/a-film", listing), true)
+	// The right form and the archive's name, but not its item page.
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/details/a-film",
+		`<html><head><title>Internet Archive</title></head><body><ia-topnav></ia-topnav></body></html>`), false)
+	// The item page's markup on a page of another form.
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/about", item), false)
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/web/2020/https://example.test/", item), false)
+
+	for raw, want := range map[string]bool{
+		"https://items.example.test/details/a-film":                  true,
+		"https://items.example.test/download/a-film/A%20Film.mp4":    true,
+		"https://items.example.test/metadata/a-film":                 true,
+		"https://items.example.test/details/a-film/page/n5/mode/2up": true,
+		"https://items.example.test/web/2020/https://example.test/":  false,
+		"https://items.example.test/6/items/a-film/A%20Film.mp4":     false,
+		"https://items.example.test/about":                           false,
+		"https://items.example.test/":                                false,
+	} {
+		expectShape(t, a, raw, want)
 	}
-	no := []string{
-		"https://web.archive.org/web/2020/https://example.test/",
-		"https://ia601607.us.archive.org/6/items/a-film/A%20Film.mp4",
-		"https://dn790009.ca.archive.org/0/items/a-film/A%20Film.mp4",
-		"https://archive.org/about",
-		"https://archive.org/",
-		"https://openlibrary.org/works/OL1W",
+}
+
+// A file inside an item is media, not a page: the metadata API on the
+// URL's own origin settles it, once however many times it is asked.
+func TestArchiveRecognisesAFileByItsMetadata(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/metadata/a-film" {
+			_, _ = w.Write([]byte(`{"metadata":{"identifier":"a-film","mediatype":"movies"},"files":[{"name":"A Film.mp4"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	a := NewArchiveOrg(nil, httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	media := fixturePage(t, srv.URL+"/download/a-film/A%20Film.mp4", http.StatusOK, "video/mp4", "")
+	for range 2 {
+		if !a.Recognise(t.Context(), media) {
+			t.Fatal("a file of a real item was not recognised")
+		}
 	}
-	for _, raw := range yes {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !a.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
+	if hits.Load() != 1 {
+		t.Errorf("asked the metadata API %d times, want once", hits.Load())
 	}
-	for _, raw := range no {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if a.Match(u) {
-			t.Errorf("Match(%q) = true", raw)
-		}
+	if a.Recognise(t.Context(), fixturePage(t, srv.URL+"/download/no-such-item/x.mp4", http.StatusOK, "video/mp4", "")) {
+		t.Error("an identifier the API does not know was recognised")
+	}
+	// An ordinary page of the right form is somebody else's, with no question asked.
+	before := hits.Load()
+	if a.Recognise(t.Context(), htmlPage(t, srv.URL+"/download/setup", "<html><title>Downloads</title></html>")) || hits.Load() != before {
+		t.Error("an ordinary download page was recognised or cost a request")
 	}
 }
 

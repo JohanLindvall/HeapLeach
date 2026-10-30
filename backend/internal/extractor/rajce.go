@@ -21,20 +21,34 @@ import (
 // Rajce reads an album's embedded settings, which contain its entire media
 // list. Images and videos have separate URLs; a video's image is its poster.
 type Rajce struct {
-	hostSet
 	client *httpx.Client
 }
 
 func NewRajce(client *httpx.Client) *Rajce {
-	return &Rajce{hostSet: hostSet{"rajce.idnes.cz", "rajce.net"}, client: client}
+	return &Rajce{client: client}
 }
 
 func (r *Rajce) Name() string { return "rajce" }
 
-var (
-	rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
-	rajceStorage  = regexp.MustCompile(`^img\d+\.(?:rajce\.idnes\.cz|rajce\.net)$`)
-)
+var rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
+
+// rajceShape is an album: /<user>/album/<slug>, optionally with one of its
+// items after it.
+var rajceShape = pathShape(`^/[^/]+/album/[^/]+(?:/\d+)?/?$`)
+
+// Recognises is the inventory's description.
+func (r *Rajce) Recognises() string {
+	return "albums (`/<user>/album/<slug>`) whose page assigns the album's settings, media list included, in a script"
+}
+
+// Shape reports an album link.
+func (r *Rajce) Shape(u *url.URL) bool { return rajceShape(u) }
+
+// Recognise takes an album page whose script assigns the settings object
+// rajceAlbumData decodes, with its legacy_media list.
+func (r *Rajce) Recognise(_ context.Context, p *Page) bool {
+	return rajceShape(p.Final) && rajceSettings.MatchString(p.Body) && p.Has(`"legacy_media"`)
+}
 
 type rajceAlbum struct {
 	Title string        `json:"album_name"`
@@ -53,23 +67,7 @@ type rajceMedium struct {
 }
 
 func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	// hostSet also claims storage subdomains. Keep pasted media links usable
-	// without fetching their bytes as though they were an album document.
-	if rajceStorage.MatchString(strings.ToLower(u.Hostname())) {
-		name := util.NameFromURL(u.String())
-		if name == "" {
-			return nil, fmt.Errorf("rajce: storage URL names no file")
-		}
-		if strings.Contains(u.Path, "/video/") {
-			name = strings.TrimSuffix(name, path.Ext(name)) + ".mp4"
-		}
-		return &Result{Title: name, Files: []File{{
-			Name: name, URL: u.String(), Size: -1,
-			Headers: httpx.Referer("https://www.rajce.idnes.cz/"),
-		}}}, nil
-	}
-
-	doc, page, err := r.client.GetPage(ctx, u.String(), nil, nil)
+	doc, page, err := fetchDocument(ctx, r.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rajce: fetch album: %w", err)
 	}

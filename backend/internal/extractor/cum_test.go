@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -299,10 +298,26 @@ func TestCumRejectsUnsupportedPages(t *testing.T) {
 			t.Errorf("accepted %s", route)
 		}
 	}
-	for raw, want := range map[string]bool{"https://cum.st": true, "https://www.cum.st": true, "https://cum.st.example": false} {
-		u, _ := url.Parse(raw)
-		if got := NewCum(nil).Match(u); got != want {
-			t.Errorf("Match(%s)=%t want=%t", raw, got, want)
-		}
+}
+
+func TestCumRecognise(t *testing.T) {
+	c := NewCum(nil)
+	page := `<html><head><title>Creator "Someone" on a site | OnlyHaven</title></head><body>` +
+		`<script>var env={EDGE_BASE_URLS:"https://edge.example.test"};</script></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42", page), true)
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42/post/7", page), true)
+	// The right form and the name, but no media servers advertised.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42",
+		`<html><head><title>Creator | OnlyHaven</title></head><body></body></html>`), false)
+	// Advertised media servers on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42/comments", page), false)
+	for raw, want := range map[string]bool{
+		"https://fans.example.test/creators/patreon/42":        true,
+		"https://fans.example.test/creators/patreon/42/post/7": true,
+		"https://fans.example.test/creators/patreon":           false,
+		"https://fans.example.test/creators":                   false,
+		"https://fans.example.test/patreon/user/42":            false,
+	} {
+		expectShape(t, c, raw, want)
 	}
 }
