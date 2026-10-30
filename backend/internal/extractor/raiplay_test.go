@@ -589,24 +589,3 @@ func TestRaiRelinkerAsksForJSON(t *testing.T) {
 		}
 	}
 }
-
-// TestRaiMatch keeps the extractor to the pages it resolves. The relinker and
-// the CDNs are hosts of Rai's, but nothing there is a page to paste.
-func TestRaiMatch(t *testing.T) {
-	rai := NewRaiPlay(nil)
-	for raw, want := range map[string]bool{
-		"https://www.raiplay.it/video/2026/08/Un-Programma-ep1-0000.html": true,
-		"https://raiplay.it/programmi/unprogramma":                        true,
-		"https://mediapolisvod.rai.it/relinker/relinkerServlet.htm":       false,
-		"https://www.rai.it/":                  false,
-		"https://raiplay.example.test/video/1": false,
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := rai.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
-}

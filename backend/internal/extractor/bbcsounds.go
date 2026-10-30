@@ -75,16 +75,25 @@ func NewBBCSounds(client *httpx.Client) *BBCSounds { return &BBCSounds{client: c
 
 func (b *BBCSounds) Name() string { return "bbcsounds" }
 
-// Match takes the Sounds section of bbc.co.uk and nothing else on it. The
-// rest of the domain is news, iPlayer and a great deal besides that nothing
-// here resolves, and the two API hosts this talks to are never pasted by
-// anyone.
-func (b *BBCSounds) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "bbc.co.uk") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && strings.EqualFold(segs[0], "sounds")
+// bbcShape is an episode, brand or series: /sounds/<kind>/<pid>.
+var bbcShape = pathShape(`^/sounds/(?:play|brand|series)/[A-Za-z0-9:]+`)
+
+// bbcSoundsBundle is where the Sounds web app is served from.
+const bbcSoundsBundle = "/sounds/web/sounds-web-spa/"
+
+// Recognises is the inventory's description.
+func (b *BBCSounds) Recognises() string {
+	return "episodes, brands and series (`/sounds/play/<pid>`, `/sounds/brand/<pid>`, `/sounds/series/<pid>`) served by the BBC Sounds web app"
+}
+
+// Shape reports an episode, brand or series link.
+func (b *BBCSounds) Shape(u *url.URL) bool { return bbcShape(u) }
+
+// Recognise takes an episode, brand or series page served by the Sounds web
+// app (its bundle path): the page is the app's shell, and what it plays is
+// the programmes API's to say, by the pid in the path.
+func (b *BBCSounds) Recognise(_ context.Context, p *Page) bool {
+	return bbcShape(p.Final) && p.Script(bbcSoundsBundle) && p.Named("BBC Sounds")
 }
 
 // Extract handles one episode, or a brand or series expanded into its

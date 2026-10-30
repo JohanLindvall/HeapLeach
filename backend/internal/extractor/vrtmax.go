@@ -185,16 +185,25 @@ func NewVRTMax(client *httpx.Client) *VRTMax { return &VRTMax{client: client} }
 
 func (v *VRTMax) Name() string { return "vrtmax" }
 
-// Match takes the VRT MAX catalogue and nothing else on vrt.be. The domain
-// also carries the news site, the radio, the sports service and the
-// broadcaster's own pages, none of which this resolves — and claiming them
-// would leave the link harvester treating every navigation link on a VRT page
-// as something to download.
-func (v *VRTMax) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, vrtMaxDomain) {
-		return true
-	}
-	return util.HostMatches(u.Host, vrtDomain) && vrtPageID(u) != ""
+// vrtShape is a programme or episode in the catalogue: /vrtmax/a-z/<programme>/….
+var vrtShape = pathShape(`^/(?:vrtmax|vrtnu)/a-z/[^/]+`)
+
+// vrtShell marks the VRT MAX app: the resources it is served from.
+const vrtShell = "/vrtnu-resources/"
+
+// Recognises is the inventory's description.
+func (v *VRTMax) Recognises() string {
+	return "programmes and episodes (`/vrtmax/a-z/…`) of VRT MAX, served by its app"
+}
+
+// Shape reports a catalogue link.
+func (v *VRTMax) Shape(u *url.URL) bool { return vrtShape(u) }
+
+// Recognise takes a catalogue page served by the VRT MAX app, which ships
+// nothing but its shell (/vrtnu-resources/): the page is the API's to
+// describe, and it is asked by the path.
+func (v *VRTMax) Recognise(_ context.Context, p *Page) bool {
+	return vrtInCatalogue(vrtPath(p.Final)) && len(p.Segments()) > 1 && p.Has(vrtShell) && p.Named("VRT MAX")
 }
 
 // Extract handles a single episode or a whole programme.

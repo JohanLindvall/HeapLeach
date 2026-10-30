@@ -43,7 +43,6 @@ import (
 // Any other page of the site, an article without a player of its own, is
 // still handed to yt-dlp.
 type RadioCanada struct {
-	hostSet
 	client *httpx.Client
 	// api is the media API's base, a field so that tests can stand in for
 	// it.
@@ -55,20 +54,40 @@ const radioCanadaAPIRoot = "https://services.radio-canada.ca/media/"
 
 // radioCanadaRest is the part of the site still handed to yt-dlp.
 var radioCanadaRest = handoffSite{
-	name:    "radio-canada",
-	domains: []string{"radio-canada.ca", "ici.radio-canada.ca"},
-	why:     "only Radio-Canada's videos and OHdio's audio are read natively, not a page like this one",
+	name: "radio-canada",
+	why:  "only Radio-Canada's videos and OHdio's audio are read natively, not a page like this one",
 }
 
 // NewRadioCanada builds the Radio-Canada extractor.
 func NewRadioCanada(client *httpx.Client) *RadioCanada {
 	return &RadioCanada{
-		hostSet: radioCanadaRest.domains, client: client, api: radioCanadaAPIRoot,
-		handoff: &Handoff{hostSet: radioCanadaRest.domains, client: client, site: radioCanadaRest},
+		client: client, api: radioCanadaAPIRoot,
+		handoff: &Handoff{client: client, site: radioCanadaRest},
 	}
 }
 
 func (r *RadioCanada) Name() string { return "radio-canada" }
+
+// radioCanadaShape is a media link (/widgets/mediaconsole/<app>/<id>,
+// …/media-<id>), a news video (/info/videos/<id>/<slug>) or an OHdio
+// programme or episode (/ohdio/<kind>/<id>/<slug>…).
+var radioCanadaShape = pathShape(`/widgets/mediaconsole/[a-z0-9]+/[0-9]+`, `/media-[0-9]+(?:/|$)`,
+	`^/info/videos/[0-9-]+/[^/]+`, `^/ohdio/[a-z-]+/[0-9]+/[^/]+`)
+
+// Recognises is the inventory's description.
+func (r *RadioCanada) Recognises() string {
+	return "pages of ICI Radio-Canada and OHdio whose data layer (`IdsCollection`) names their media, and media console links"
+}
+
+// Shape reports a media, news video or OHdio link.
+func (r *RadioCanada) Shape(u *url.URL) bool { return radioCanadaShape(u) }
+
+// Recognise takes a page of the site by its data layer (IdsCollection),
+// which names the page's own media and is what this reads. A page whose
+// data layer names none is handed to yt-dlp, as before.
+func (r *RadioCanada) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.Has("IdsCollection") && p.Named("Radio-Canada", "ICI Radio-Canada", "Radio-Canada.ca")
+}
 
 var (
 	radioCanadaConsole   = regexp.MustCompile(`/widgets/mediaconsole/([a-z0-9]+)/([0-9]+)`)
@@ -93,7 +112,7 @@ func (r *RadioCanada) Extract(ctx context.Context, u *url.URL, opts Options) (*R
 	if m := radioCanadaMediaPath.FindStringSubmatch(u.Path); m != nil {
 		return r.single(ctx, "medianet", m[1], "")
 	}
-	page, final, err := r.client.GetPage(ctx, u.String(), nil, nil)
+	page, final, err := fetchDocument(ctx, r.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("radio-canada: %s: %w", u.Redacted(), err)
 	}

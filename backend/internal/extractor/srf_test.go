@@ -556,33 +556,6 @@ func TestSRFTarget(t *testing.T) {
 	}
 }
 
-// TestSRFMatch pins the boundary. srf.ch is a news site with a Play section
-// bolted on, and claiming the news articles would promise more than this
-// resolves — but a link anywhere on the host that names a urn outright is one
-// this can answer.
-func TestSRFMatch(t *testing.T) {
-	tests := map[string]bool{
-		"https://www.srf.ch/play/tv/a-show/video/a-title?urn=urn:srf:video:1": true,
-		"https://www.srf.ch/play/tv/sendung/a-show?id=a":                      true,
-		"https://srf.ch/play/tv":                                              true,
-		"https://www.srf.ch/news/a-story?urn=urn:srf:video:1":                 true,
-		"https://www.srf.ch/news/a-story":                                     false,
-		"https://www.srf.ch/":                                                 false,
-		"https://il.srgssr.ch/images/?imageUrl=x":                             false,
-		"https://www.rts.ch/play/tv":                                          false,
-	}
-	ex := NewSRF(nil)
-	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := ex.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
-}
-
 // srfServer answers the two endpoints from fixtures, with the playlists
 // rewritten to point at itself. compositions is keyed by urn.
 func srfServer(t *testing.T, compositions map[string]string, listings []string) *httptest.Server {

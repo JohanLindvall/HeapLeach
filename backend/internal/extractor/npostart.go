@@ -126,22 +126,22 @@ func NewNPOStart(client *httpx.Client) *NPOStart { return &NPOStart{client: clie
 
 func (n *NPOStart) Name() string { return "npo" }
 
-// Match takes the catch-up service and the domain it used to live on.
-//
-// npo.nl carries the corporation's own pages beside the player, and this
-// resolves none of them, so only paths under /start are claimed — leaving
-// the rest to the fallback, which will at least say something true about
-// them. npostart.nl is claimed whole: every address on it was a player link,
-// and every one of them redirects.
-func (n *NPOStart) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, "npostart.nl") {
-		return true
-	}
-	if !util.HostMatches(u.Host, "npo.nl") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && segs[0] == npoStartPath
+// npoShape is a player or series link under /start.
+var npoShape = pathShape(`^/start/(?:afspelen|serie)/[^/]+`)
+
+// Recognises is the inventory's description.
+func (n *NPOStart) Recognises() string {
+	return "episodes and series (`/start/afspelen/<slug>`, `/start/serie/<slug>`) of NPO Start, served by its app"
+}
+
+// Shape reports a player or series link.
+func (n *NPOStart) Shape(u *url.URL) bool { return npoShape(u) }
+
+// Recognise takes a player or series page served by the NPO Start app,
+// whose bundle lives under /start/_next/: the page is a shell, and the
+// episodes are the API's to list.
+func (n *NPOStart) Recognise(_ context.Context, p *Page) bool {
+	return npoShape(p.Final) && p.Script("/start/_next/") && p.Named("NPO Start")
 }
 
 // Extract handles a single episode, one season, or a whole series.
@@ -228,7 +228,7 @@ func npoRoute(u *url.URL) npoTarget {
 // which is the same answer a browser following the link would arrive at, and
 // saves this from having to know the redirector in between.
 func (n *NPOStart) canonical(ctx context.Context, u *url.URL) (*url.URL, error) {
-	doc, err := n.client.GetString(ctx, u.String(), httpx.Referer(npoRoot))
+	doc, _, err := fetchDocument(ctx, n.client, u, httpx.Referer(npoRoot))
 	if err != nil {
 		return nil, fmt.Errorf("npo: fetch %s: %w", u.Redacted(), err)
 	}

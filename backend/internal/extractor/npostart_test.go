@@ -586,29 +586,3 @@ func TestNPODate(t *testing.T) {
 		}
 	}
 }
-
-// TestNPOMatchLeavesTheCorporateSiteAlone covers the one thing Match has to
-// get right: npo.nl is the broadcaster's whole web presence, and claiming
-// all of it would mean failing on pages the fallback would have handled.
-func TestNPOMatchLeavesTheCorporateSiteAlone(t *testing.T) {
-	npo := NewNPOStart(nil)
-	tests := map[string]bool{
-		"https://npo.nl/start":                     true,
-		"https://npo.nl/start/serie/een-serie":     true,
-		"https://www.npo.nl/start/afspelen/een_12": true,
-		"https://www.npostart.nl/een-serie/XX_1":   true,
-		"https://npo.nl/":                          false,
-		"https://npo.nl/overons/jaarverslag.pdf":   false,
-		"https://npo.nl/npo3":                      false,
-		"https://npo-example.nl/start/serie/x":     false,
-	}
-	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := npo.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
-}

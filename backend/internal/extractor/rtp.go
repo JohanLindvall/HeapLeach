@@ -123,15 +123,28 @@ func NewRTPPlay(client *httpx.Client) *RTPPlay { return &RTPPlay{client: client}
 
 func (r *RTPPlay) Name() string { return "rtpplay" }
 
-// Match takes rtp.pt paths under /play. The rest of the domain is the
-// broadcaster's news site and its radio station pages, which share nothing
-// with this but the host.
-func (r *RTPPlay) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "rtp.pt") {
+// rtpEpisodeLink is a link to an episode, as a season page lists them.
+var rtpEpisodeLink = regexp.MustCompile(`/play/p[0-9]+/e[0-9]+`)
+
+// Recognises is the inventory's description.
+func (r *RTPPlay) Recognises() string {
+	return "episodes and seasons (`/play/p<id>[/e<id>]`) of RTP Play, whose page carries its player or its episode list"
+}
+
+// Shape reports an episode or season link.
+func (r *RTPPlay) Shape(u *url.URL) bool { return rtpTarget(u).program != "" }
+
+// Recognise takes an episode page carrying RTP's player configuration, or
+// a season page listing its episodes, which is what each is read by.
+func (r *RTPPlay) Recognise(_ context.Context, p *Page) bool {
+	ref := rtpTarget(p.Final)
+	if ref.program == "" || !p.Named("RTP Play") {
 		return false
 	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && strings.EqualFold(segs[0], "play")
+	if ref.episode != "" {
+		return p.Has("RTPPlayer")
+	}
+	return rtpEpisodeLink.MatchString(p.Body)
 }
 
 // Extract handles one episode or one season.
@@ -180,7 +193,7 @@ func rtpTarget(u *url.URL) rtpRef {
 // so a standalone episode can use it as the job title too.
 func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, string, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := r.client.GetString(ctx, page, headers)
+	doc, err := broadcastPage(ctx, r.client, page, headers)
 	if err != nil {
 		return nil, "", fmt.Errorf("rtpplay: fetch %s: %w", page, err)
 	}
@@ -250,7 +263,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 // is in the selector the reader can already see.
 func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := r.client.GetString(ctx, ref.page, headers)
+	doc, err := broadcastPage(ctx, r.client, ref.page, headers)
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: fetch %s: %w", ref.page, err)
 	}

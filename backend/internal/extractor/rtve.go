@@ -108,17 +108,20 @@ func NewRTVE(client *httpx.Client) *RTVE { return &RTVE{client: client} }
 
 func (r *RTVE) Name() string { return "rtve" }
 
-// Match takes the site itself and nothing below it. The catalogue and the
-// media live on subdomains of the same name — api.rtve.es, ztnr.rtve.es, the
-// numbered origins the media lists point at — and a link to one of those is a
-// plain rangeable file that the direct extractor handles better than this
-// would. A path this cannot read is left alone for the same reason.
-func (r *RTVE) Match(u *url.URL) bool {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host != "rtve.es" && host != "www.rtve.es" {
-		return false
-	}
-	return rtveTarget(u) != (rtveRef{})
+// Recognises is the inventory's description.
+func (r *RTVE) Recognises() string {
+	return "videos and programmes (`/play/videos/…`, `/v/<id>`) of RTVE Play, whose page names its asset or programme id"
+}
+
+// Shape reports a video or programme link.
+func (r *RTVE) Shape(u *url.URL) bool { return rtveTarget(u) != rtveRef{} }
+
+// Recognise takes a video or programme page of RTVE Play that names what
+// it plays: the player's asset id (data-idasset), or the programme's id in
+// the catalogue requests it defers, which a programme is read by.
+func (r *RTVE) Recognise(_ context.Context, p *Page) bool {
+	return r.Shape(p.Final) && (p.Has("data-idasset") || rtveProgrammeID.MatchString(p.Body)) &&
+		p.Named("RTVE.es", "RTVE Play", "RTVE")
 }
 
 // Extract handles a single video or a programme, which expands to everything
@@ -279,7 +282,7 @@ type rtveOutcome struct {
 // carries it — the path names the programme by slug, and the catalogue is
 // keyed by number.
 func (r *RTVE) programme(ctx context.Context, u *url.URL) (string, error) {
-	doc, err := r.client.GetString(ctx, u.String(), httpx.Referer(rtveRoot+"/"))
+	doc, _, err := fetchDocument(ctx, r.client, u, httpx.Referer(rtveRoot+"/"))
 	if err != nil {
 		return "", fmt.Errorf("rtve: fetch %s: %w", u.Redacted(), err)
 	}

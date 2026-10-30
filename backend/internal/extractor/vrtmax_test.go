@@ -525,47 +525,6 @@ func TestVRTMaxPageID(t *testing.T) {
 	}
 }
 
-// TestVRTMaxMatch guards the narrowness of the claim. vrt.be is also the news
-// site, the radio and the broadcaster's own pages; claiming the domain whole
-// would have the link harvester treat every navigation link on a VRT page as
-// something to download.
-func TestVRTMaxMatch(t *testing.T) {
-	v := NewVRTMax(nil)
-	matched := []string{
-		"https://www.vrt.be/vrtmax/a-z/a-programme/",
-		"https://WWW.VRT.BE/vrtmax/a-z/a-programme/",
-		"https://www.vrt.be/vrtnu/a-z/a-programme/",
-		"https://www.vrtmax.be/a-z/a-programme/",
-		"https://vrtmax.be/",
-	}
-	for _, raw := range matched {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !v.Match(u) {
-			t.Errorf("%s was not matched", raw)
-		}
-	}
-
-	unmatched := []string{
-		"https://www.vrt.be/vrtnws/nl/2026/01/01/a-story/",
-		"https://www.vrt.be/",
-		"https://radio1.be/",
-		"https://sporza.be/nl/",
-		"https://notvrt.be.example.test/vrtmax/a-z/a-programme/",
-	}
-	for _, raw := range unmatched {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if v.Match(u) {
-			t.Errorf("%s was matched", raw)
-		}
-	}
-}
-
 // TestVRTMaxTitle covers naming a lone episode, which lands in the download
 // directory with no folder above it to say what it belongs to.
 func TestVRTMaxTitle(t *testing.T) {

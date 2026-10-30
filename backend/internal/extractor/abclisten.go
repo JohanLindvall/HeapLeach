@@ -69,10 +69,9 @@ type ABCListen struct {
 const (
 	abcListenRoot = "https://www.abc.net.au"
 
-	// abcListenSection is the one part of abc.net.au this claims. The domain
-	// carries the whole broadcaster — the news site, iview, the education
-	// pages — and matching it wholesale would promise far more than this
-	// resolves.
+	// abcListenSection is the one part of the site this recognises. The
+	// news site shares this very page framework, JSON island and all, so
+	// the section is what keeps its pages out.
 	abcListenSection = "listen"
 
 	// abcListenIsland is the id of the JSON document the page is rendered
@@ -111,15 +110,24 @@ func NewABCListen(client *httpx.Client) *ABCListen { return &ABCListen{client: c
 
 func (a *ABCListen) Name() string { return "abclisten" }
 
-// Match takes abc.net.au under /listen and nothing else on the domain. iview
-// is a subdomain of it and the news site shares this very page framework, but
-// neither carries the document this reads.
-func (a *ABCListen) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "abc.net.au") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && segs[0] == abcListenSection
+// abcListenShape is a programme or one of its episodes.
+var abcListenShape = pathShape(`^/listen/programs/[^/]+`)
+
+// Recognises is the inventory's description.
+func (a *ABCListen) Recognises() string {
+	return "episodes and programmes (`/listen/programs/…`) of ABC listen, by the page props its `__NEXT_DATA__` island carries"
+}
+
+// Shape reports a programme or episode link.
+func (a *ABCListen) Shape(u *url.URL) bool { return abcListenShape(u) }
+
+// Recognise takes a page of the listen section carrying the JSON island
+// (__NEXT_DATA__ with its pageProps) that this reads episodes and listings
+// out of.
+func (a *ABCListen) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	return len(segs) > 1 && segs[0] == abcListenSection && p.Has(`id="`+abcListenIsland+`"`, `"pageProps"`) &&
+		p.Named("ABC listen")
 }
 
 // Extract handles one episode or a whole programme. Which of the two a URL is
@@ -285,7 +293,7 @@ func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCol
 
 // page fetches one page and reads its JSON island.
 func (a *ABCListen) page(ctx context.Context, link string) (*abcListenPage, error) {
-	doc, err := a.client.GetString(ctx, link, httpx.Referer(abcListenRoot+"/"))
+	doc, err := broadcastPage(ctx, a.client, link, httpx.Referer(abcListenRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("abclisten: fetch %s: %w", link, err)
 	}

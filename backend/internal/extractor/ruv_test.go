@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -471,20 +470,6 @@ func TestRUVExtension(t *testing.T) {
 	for raw, want := range tests {
 		if got := ruvExtension(raw); got != want {
 			t.Errorf("ruvExtension(%s) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-func TestRUVMatch(t *testing.T) {
-	r := NewRUV(nil)
-	for _, host := range []string{"ruv.is", "www.ruv.is", "RUV.IS", "spilari.nyr.ruv.is"} {
-		if !r.Match(&url.URL{Scheme: "https", Host: host, Path: "/sjonvarp/spila/a/1"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{"ruv.example.test", "notruv.is", "ruv.is.example.test"} {
-		if r.Match(&url.URL{Scheme: "https", Host: host, Path: "/sjonvarp/spila/a/1"}) {
-			t.Errorf("%s was matched", host)
 		}
 	}
 }

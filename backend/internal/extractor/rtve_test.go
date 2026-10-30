@@ -505,43 +505,6 @@ func TestRTVETarget(t *testing.T) {
 	}
 }
 
-// TestRTVEMatch guards the two ways this Match could be wrong. The site's own
-// pages are the whole of it: the catalogue and the media sit on subdomains of
-// the same name, and a link to one of those is a plain rangeable file the
-// direct extractor serves better than this would.
-func TestRTVEMatch(t *testing.T) {
-	r := NewRTVE(nil)
-	for _, raw := range []string{
-		"https://www.rtve.es/play/videos/a-programme/an-episode/1000001/",
-		"https://rtve.es/play/videos/a-programme/",
-		"https://WWW.RTVE.ES/v/1000001/",
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !r.Match(u) {
-			t.Errorf("%s was not matched", raw)
-		}
-	}
-	for _, raw := range []string{
-		"https://api.rtve.es/api/videos/1000001.json",
-		"https://ztnr.rtve.es/ztnr/movil/thumbnail/rtveplayw/videos/1000001.png",
-		"https://media.rtve.es/resources/a/b/1.mp4",
-		"https://www.rtve.es/noticias/20260822/something/1000001.shtml",
-		"https://www.rtve.es/play/audios/a-programme/an-episode/1000001/",
-		"https://notrtve.es.example.test/play/videos/a-programme/",
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if r.Match(u) {
-			t.Errorf("%s was matched", raw)
-		}
-	}
-}
-
 // TestRTVEProgrammeID covers reading a programme's number off its page. The
 // page lists no episodes of its own — the browser fetches those afterwards —
 // so the number survives only in the URLs of those deferred requests, and two

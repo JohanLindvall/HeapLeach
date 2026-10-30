@@ -244,14 +244,12 @@ func TestPBSTargetOf(t *testing.T) {
 		"https://player.pbs.org/widget/partnerplayer/3100000001/": {id: "3100000001"},
 
 		// Claimed by nobody here.
-		"https://www.pbs.org/":                        {},
-		"https://www.pbs.org/video/":                  {},
-		"https://www.pbs.org/newshour/":               {},
-		"https://urs.pbs.org/redirect/abc123/":        {},
-		"https://ga.pbs-video.pbs.org/p/-/sid/a.mp4":  {},
-		"https://player.pbs.org/portalplayer/":        {},
-		"https://not-pbs.example.test/video/a-slug/":  {},
-		"https://www.pbs.org.example.test/video/a-b/": {},
+		"https://www.pbs.org/":                       {},
+		"https://www.pbs.org/video/":                 {},
+		"https://www.pbs.org/newshour/":              {},
+		"https://urs.pbs.org/redirect/abc123/":       {},
+		"https://ga.pbs-video.pbs.org/p/-/sid/a.mp4": {},
+		"https://player.pbs.org/portalplayer/":       {},
 	}
 	for raw, want := range tests {
 		u, err := ParseURL(raw)

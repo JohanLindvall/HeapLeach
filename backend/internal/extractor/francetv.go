@@ -48,7 +48,6 @@ import (
 // whole programmes are listed beside them. Anything else on france.tv,
 // such as a live channel's page, is still handed to yt-dlp.
 type FranceTV struct {
-	hostSet
 	client *httpx.Client
 	// api is the player API's base, a field so that tests can stand in for
 	// it.
@@ -60,20 +59,39 @@ const francetvAPIRoot = "https://k7.ftven.fr/videos/"
 
 // francetvRest is the part of france.tv still handed to yt-dlp.
 var francetvRest = handoffSite{
-	name:    "francetv",
-	domains: []string{"france.tv"},
-	why:     "only france.tv's programmes and their listings are read natively, not a page like this one",
+	name: "francetv",
+	why:  "only france.tv's programmes and their listings are read natively, not a page like this one",
 }
 
 // NewFranceTV builds the france.tv extractor.
 func NewFranceTV(client *httpx.Client) *FranceTV {
 	return &FranceTV{
-		hostSet: francetvRest.domains, client: client, api: francetvAPIRoot,
-		handoff: &Handoff{hostSet: francetvRest.domains, client: client, site: francetvRest},
+		client: client, api: francetvAPIRoot,
+		handoff: &Handoff{client: client, site: francetvRest},
 	}
 }
 
 func (f *FranceTV) Name() string { return "francetv" }
+
+// francetvShape is a video page (/…/<id>-<slug>.html) or a programme's
+// every video (/…/toutes-les-videos/).
+var francetvShape = pathShape(`/[0-9]{6,}-[^/]+\.html$`, `/toutes-les-videos/?$`)
+
+// Recognises is the inventory's description.
+func (f *FranceTV) Recognises() string {
+	return "video pages (`/…/<id>-<slug>.html`) and programme listings of france.tv whose flight data names `video_factory_id`s"
+}
+
+// Shape reports a video page or a programme's every video.
+func (f *FranceTV) Shape(u *url.URL) bool { return francetvShape(u) }
+
+// Recognise takes a page whose flight data names the player's video ids
+// (video_factory_id), which is what this resolves: a video page, known by
+// its form when its title names only the video, or a programme's page.
+func (f *FranceTV) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.Has("video_factory_id") &&
+		(p.Named("France TV") || francetvContentID.MatchString(p.Final.Path))
+}
 
 var (
 	francetvContentID = regexp.MustCompile(`/([0-9]+)-[^/]*\.html$`)
@@ -86,7 +104,7 @@ var (
 // Extract reads a video page into its file, a programme's page into one
 // file a programme, and hands anything else on france.tv to yt-dlp.
 func (f *FranceTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	page, err := f.client.GetString(ctx, u.String(), nil)
+	page, _, err := fetchDocument(ctx, f.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("francetv: %s: %w", u.Redacted(), err)
 	}

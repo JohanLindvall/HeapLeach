@@ -591,46 +591,6 @@ func TestBBCIsLive(t *testing.T) {
 	}
 }
 
-// TestBBCSoundsMatch pins the routing. The Sounds section is claimed and the
-// rest of bbc.co.uk is not: news, iPlayer and the World Service site all live
-// on the same domain and none of them resolves here.
-func TestBBCSoundsMatch(t *testing.T) {
-	b := NewBBCSounds(nil)
-	matched := []string{
-		"https://www.bbc.co.uk/sounds/play/m000epis",
-		"https://bbc.co.uk/sounds/brand/b000brnd",
-		"https://www.bbc.co.uk/sounds/series/p000sers",
-		"https://WWW.BBC.CO.UK/Sounds/Play/m000epis",
-		"https://www.bbc.co.uk/sounds",
-	}
-	for _, raw := range matched {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !b.Match(u) {
-			t.Errorf("%s was not matched", raw)
-		}
-	}
-
-	unmatched := []string{
-		"https://www.bbc.co.uk/news/articles/abcdefghijko",
-		"https://www.bbc.co.uk/iplayer/episode/m000epis",
-		"https://www.bbc.co.uk/programmes/m000epis",
-		"https://www.bbc.com/sounds/play/m000epis",
-		"https://notbbc.co.uk.example.test/sounds/play/m000epis",
-	}
-	for _, raw := range unmatched {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if b.Match(u) {
-			t.Errorf("%s was matched", raw)
-		}
-	}
-}
-
 // TestBBCSoundsExtractRefusesWhatItCannotResolve covers the shapes that must
 // fail before a request is made: nothing here fetches anything, so a nil
 // client is enough.

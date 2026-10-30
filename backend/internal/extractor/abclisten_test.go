@@ -580,29 +580,6 @@ func TestABCListenProgrammeSurvivesAListingFailure(t *testing.T) {
 
 // --------------------------------------------------------------- matching
 
-func TestABCListenMatch(t *testing.T) {
-	tests := map[string]bool{
-		"https://www.abc.net.au/listen":                                   true,
-		"https://www.abc.net.au/listen/programs/a-programme":              true,
-		"https://abc.net.au/listen/programs/a-programme/an-episode/12345": true,
-		// The domain is the whole broadcaster. None of these is ours.
-		"https://www.abc.net.au/news/2026-08-22/a-story/12345": false,
-		"https://iview.abc.net.au/show/a-show":                 false,
-		"https://www.abc.net.au/":                              false,
-		"https://listen.example.test/listen/programs/a":        false,
-	}
-	ex := &ABCListen{}
-	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := ex.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
-}
-
 // TestABCListenNameKeepsTheId is the naming rule on its own, including what
 // it does when half of it is missing.
 func TestABCListenNameKeepsTheId(t *testing.T) {

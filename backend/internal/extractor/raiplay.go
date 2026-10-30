@@ -57,7 +57,6 @@ import (
 // page document, which is proper UTF-8; the refusal sentence is ASCII and
 // survives intact.
 type RaiPlay struct {
-	hostSet
 	client *httpx.Client
 }
 
@@ -82,10 +81,27 @@ const (
 
 // NewRaiPlay builds the RaiPlay extractor.
 func NewRaiPlay(client *httpx.Client) *RaiPlay {
-	return &RaiPlay{hostSet: hostSet{"raiplay.it"}, client: client}
+	return &RaiPlay{client: client}
 }
 
 func (r *RaiPlay) Name() string { return "raiplay" }
+
+// raiShape is a video page or a programme.
+var raiShape = pathShape(`^/video/.+\.html$`, `^/programmi/[^/]+`)
+
+// Recognises is the inventory's description.
+func (r *RaiPlay) Recognises() string {
+	return "videos (`/video/….html`) and programmes (`/programmi/<name>`) of RaiPlay, whose page mounts its `rai-player`"
+}
+
+// Shape reports a video page or a programme.
+func (r *RaiPlay) Shape(u *url.URL) bool { return raiShape(u) }
+
+// Recognise takes a video or programme page mounting RaiPlay's player
+// element, whose JSON document is what this reads.
+func (r *RaiPlay) Recognise(_ context.Context, p *Page) bool {
+	return raiShape(p.Final) && p.HasAny("<rai-player", "data-path-id=") && p.Named("RaiPlay")
+}
 
 // Extract handles a single video or a programme, which expands to every
 // episode and clip the programme lists.
