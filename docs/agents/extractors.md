@@ -51,9 +51,9 @@ address says nothing of another's), shared by concurrent callers, kept for
 `config.PageCacheTTL`, and never keeping a failure or a challenge. An
 extractor that reads the submitted page whole uses `fetchDocument`, which
 hands it the probed document instead of fetching again; any extra request a
-recogniser makes goes through `Page.Memo`, keyed by what it asks, so
-several recognisers asking one origin's API share one answer. An extractor
-that reads an endpoint a recogniser may already have asked tries
+recogniser makes goes through `memo(p, key, …)` (`pageJSON` for an API
+question), keyed by what it asks, so several recognisers asking one
+origin's API share one answer. An extractor that reads an endpoint a recogniser may already have asked tries
 `askedJSON` first: it hands back that answer, and asks nothing when no
 recogniser did, so the extractor's own request, with its retries, is never
 preceded by a bounded probe of the same thing. A link whose
@@ -193,13 +193,13 @@ an HTML shell, and partial results report counts.
 
 Most platforms are recognised in the probed page itself. When the page cannot
 say — challenged, not OK, empty, or a proof-of-work interstitial served with
-200 (`pageSilent`) — a recogniser whose URL form matched may ask the page's
+200 (`Page.Silent`) — a recogniser whose URL form matched may ask the page's
 own origin a bounded, single-attempt question instead (`pageJSON`, memoised
 per page, so every recogniser asking the same endpoint shares one answer):
 pixeldrain file metadata, booru post records, FoolFuuka archive records,
 Kemono creator profiles, MediaWiki siteinfo, PeerTube's config. An extractor
-then reads the memoised answers back through `probedPage` instead of asking
-again. Positive identification commits to an extractor, whose errors must be
+then reads the memoised answers back through `probed` and `askedJSON`
+instead of asking again. Positive identification commits to an extractor, whose errors must be
 returned rather than falling back to saving the page shell.
 
 Keep forms that are this broad out of `Shape` where they would make ordinary
