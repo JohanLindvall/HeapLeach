@@ -61,13 +61,15 @@ refusal.
 
 There is one logger key. `httpx.WithLogger` sets it and
 `extractor.WithLogger` is the same call, so a job's extraction log gets a
-debug line for each response: host, status, type, length, server and
-Cloudflare markers, with no body, cookies or path. A client from `Streaming()`
-(the downloader's) logs none of these, because a segmented video means
-thousands of responses and a transfer reports its own failures. Extraction
-writes about one line per request. Most jobs write a handful, and a listing of
-a few hundred pages writes a few hundred. Keep any new per-request record at
-debug level.
+debug line for each response that went wrong (an error status or a
+challenge): host, status, type, length, server and Cloudflare markers, with
+no body, cookies or path. Responses that went right are not recorded: a
+listing reads hundreds of pages, and the Logs panel holds a thousand lines
+across every job. `httpx.WithResponseLog` records every response, for a stage
+being diagnosed request by request (the DoodStream player handshake). A
+client from `Streaming()` (the downloader's) logs none of these, because a
+segmented video means thousands of responses and a transfer reports its own
+failures. Keep any new per-request record at debug level.
 
 ## Short certificate chains
 

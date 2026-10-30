@@ -890,13 +890,21 @@ func TestResponsesAreLoggedOutsideTransfers(t *testing.T) {
 
 	var out strings.Builder
 	log := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	ctx := WithLogger(context.Background(), log)
+	ctx := WithResponseLog(context.Background(), log)
 	c := testClient(t, 0)
 	if _, err := c.GetString(ctx, srv.URL, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(out.String(), "http: response"); n != 1 {
 		t.Fatalf("logged %d response lines, want one:\n%s", n, out.String())
+	}
+	// The ordinary job logger keeps only what went wrong.
+	out.Reset()
+	if _, err := c.GetString(WithLogger(context.Background(), log), srv.URL, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a job's logger recorded a response that went right:\n%s", out.String())
 	}
 	// A transfer's client stays quiet: a segmented video is thousands of
 	// responses, and the transfer reports its own failures.

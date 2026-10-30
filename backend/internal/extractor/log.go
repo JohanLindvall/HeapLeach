@@ -11,8 +11,8 @@ import (
 
 // WithLogger carries the caller's log level, output and job fields through
 // concurrent and nested extraction without changing the process-wide logger.
-// It shares httpx's key, so the requests an extraction makes log their
-// responses (at debug) to the same job.
+// It shares httpx's key, so the requests an extraction makes log the
+// responses that went wrong (at debug) to the same job.
 func WithLogger(ctx context.Context, log *slog.Logger) context.Context {
 	return httpx.WithLogger(ctx, log)
 }

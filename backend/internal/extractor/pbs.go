@@ -411,7 +411,7 @@ func (p *PBS) probe(ctx context.Context, link string) (final *url.URL, mediaType
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", 0, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
+		return nil, "", 0, httpx.NewStatusError(resp)
 	}
 
 	size = knownSize(resp.ContentLength)
