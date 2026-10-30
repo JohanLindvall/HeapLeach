@@ -375,8 +375,10 @@ line in the saved queue.
   downloads are already filed under it.
 - `walkTree` (`tree.go`): a share's nested folders, depth first in the
   host's order, with the depth, folder and file caps, one folder per child
-  through `sourceFolder`, and an unreadable subfolder reported as partial.
-  A host supplies only the reader for one folder.
+  through `sourceFolder` (`treeDir`), and an unreadable subfolder reported
+  as partial. A host supplies only the reader for one folder; one that pages
+  a folder adds its listing's note with `treeWalk.partial` and may stop
+  reading past `treeWalk.room()`.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
 - `walkPages` (`pages.go`), above, for any paged listing, and its HTML
@@ -387,9 +389,14 @@ line in the saved queue.
   cannot be followed ("partial — invalid next page"). Options cover the rest:
   a first page the caller already read (`root`), a fetch of its own (`fetch`,
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
-  (`anyRedirect`), and the engine's `quiet` and `failed`. `listingNotes`
-  (`sources.go`) builds the job note of a listing expanded into its
-  sources.
+  (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
+  that singles out one failure returns `pageFailed` for the rest, leaving
+  their note to the walk. `listingNotes` (`sources.go`) builds the job note
+  of a listing expanded into its sources.
+- `expandSources` keeps, beside the files, the refusals and first failure of
+  the sources that did not resolve (`expansion.refusals`, `failed`), so a
+  page none of whose sources resolved says why through `noneRead`; a link no
+  extractor recognised is counted apart (`unrecognised`), never a failure.
 - `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
   playlist or target as a File, every field carried over.
 - `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,

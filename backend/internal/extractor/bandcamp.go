@@ -277,7 +277,8 @@ func (p *bandcampPage) folder() string {
 	if p.kind == "track" {
 		album = p.album
 	}
-	return path.Join(bandcampSegment(p.artist), bandcampSegment(album))
+	// A slash in a title is part of the title, not a folder.
+	return path.Join(sourceFolder(p.artist), sourceFolder(album))
 }
 
 // files lists every track the page will stream.
@@ -327,12 +328,6 @@ func (b *Bandcamp) stream(ctx context.Context, link string, id int64) (*Target, 
 		}
 	}
 	return nil, fmt.Errorf("bandcamp: track %d is no longer streamable from %s", id, link)
-}
-
-// bandcampSegment keeps a name from being read as a path: a slash in a title
-// is part of the title, not a folder.
-func bandcampSegment(s string) string {
-	return strings.NewReplacer("/", "_", `\`, "_").Replace(strings.TrimSpace(s))
 }
 
 // bandcampReleaseLinks collects the releases a /music page lists, in its

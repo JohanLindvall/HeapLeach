@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -50,7 +49,7 @@ func rajceTestServer(t *testing.T, handler http.HandlerFunc) (*Rajce, *url.URL) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewRajce(httpx.New("test-agent", "en-US", 0, 5*time.Second)), u
+	return NewRajce(testClient()), u
 }
 
 func TestRajceAlbumPhotosAndVideos(t *testing.T) {

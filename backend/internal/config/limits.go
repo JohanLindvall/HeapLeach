@@ -448,6 +448,14 @@ const (
 	// Metadata probes must finish even if a helper stops responding.
 	ProbeTimeout    = 2 * time.Minute
 	HelperWaitDelay = 5 * time.Second
+
+	// AIAMaxHops bounds how many missing certificate issuers are fetched
+	// for one chain. One is the ordinary case: the server sent its
+	// certificate and nothing else, and the intermediate it left out leads
+	// straight to a root. AIAMaxBytes bounds one fetched certificate; real
+	// ones are a couple of kilobytes.
+	AIAMaxHops  = 3
+	AIAMaxBytes = 64 << 10
 )
 
 // Server tuning.
@@ -637,18 +645,12 @@ const (
 	// HEAPLEACH_MAX_SOURCES (-max-sources) sets it.
 	MaxExpandedSources = 500
 
-	// MaxDirectoryDepth bounds recursion into a directory listing that
-	// links to itself, directly or through a symlink. A visited set catches
-	// the simple loop; this catches the rest.
+	// MaxDirectoryDepth bounds recursion into an open directory listing
+	// that links to itself, directly or through a symlink. A visited set
+	// catches the simple loop; this catches the rest, whose every traversal
+	// has a fresh, longer URL. How many directories and files a walk takes
+	// are the user's source and file limits, as for any folder share.
 	MaxDirectoryDepth = 12
-
-	// MaxAutoindexDepth and MaxAutoindexDirs bound a walk of an open
-	// directory listing. Depth is the same guard as MaxDirectoryDepth; the
-	// directory count is the one that matters in practice, since a shallow
-	// tree can still be very wide.
-	// What a walk may return is the listing cap, whatever it is set to.
-	MaxAutoindexDepth = MaxDirectoryDepth
-	MaxAutoindexDirs  = 500
 
 	// MaxResolvedEpisodes bounds how many episodes of a broadcaster's
 	// series are resolved while it is listed. Each costs a request or
@@ -698,6 +700,31 @@ const (
 	// first line, so this only has to survive a byte-order mark and some
 	// whitespace.
 	ManifestSniffBytes = 1 << 10
+
+	// FeedSniffBytes is how much of a body is examined to decide whether
+	// it is a feed at all. The root element is within the first few hundred
+	// bytes of any real one; anything past this is a document that opens
+	// with something else entirely.
+	FeedSniffBytes = 8 << 10
+
+	// MaxKVSAlternates bounds the numbered alternate renditions a KVS page
+	// is read for. Installs list a handful at most; the bound is against a
+	// malformed page, not against any real one.
+	MaxKVSAlternates = 6
+
+	// MaxFolderNameRunes is how long a folder named after a title may be.
+	// A title is free text, and a rambling one should not become a
+	// rambling folder.
+	MaxFolderNameRunes = 80
+
+	// GofileSecretTTL is how long a recovered gofile signing secret is kept
+	// when its script says nothing useful about it, and GofileSecretMinTTL
+	// and GofileSecretMaxTTL the bounds any answer it does give is held
+	// to. The floor stops a no-store header turning every link into another
+	// fetch; the ceiling stops a year-long max-age outliving a rotation.
+	GofileSecretTTL    = time.Hour
+	GofileSecretMinTTL = 5 * time.Minute
+	GofileSecretMaxTTL = 12 * time.Hour
 )
 
 // Terminal display tuning, for runs that download straight to disk.

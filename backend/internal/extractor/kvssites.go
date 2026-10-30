@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -32,11 +33,6 @@ import (
 type KVS struct {
 	client *httpx.Client
 }
-
-// kvsMaxAlternates bounds the numbered alternate renditions a page is read
-// for. Installs list a handful at most; the bound is against a malformed
-// page, not against any real one.
-const kvsMaxAlternates = 6
 
 // kvsLabel names every install: the software, since the extractor is not
 // any one site's.
@@ -202,7 +198,7 @@ func kvsRenditions(vars map[string]string) ([]mediaCandidate, error) {
 		out      []mediaCandidate
 		firstErr error
 	)
-	for i := 0; i <= kvsMaxAlternates; i++ {
+	for i := 0; i <= config.MaxKVSAlternates; i++ {
 		key := "video_url"
 		if i > 0 {
 			key = "video_alt_url"

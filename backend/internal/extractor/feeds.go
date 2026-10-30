@@ -52,12 +52,6 @@ type Feeds struct {
 // for it, so this is worth stating rather than leaving at */*.
 const feedAccept = "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8"
 
-// feedSniffLimit bounds how much of a body is examined to decide whether it
-// is a feed at all. The root element is within the first few hundred bytes of
-// any real one; anything past this is a document that opens with something
-// else entirely.
-const feedSniffLimit = 8 << 10
-
 // NewFeeds builds the syndication-feed extractor.
 func NewFeeds(client *httpx.Client) *Feeds { return &Feeds{client: client} }
 
@@ -106,7 +100,7 @@ func (f *Feeds) Recognise(_ context.Context, p *Page) bool {
 	// Only the head of the body is ever read to decide, so only that much is
 	// copied.
 	return p.OK() && p.Body != "" &&
-		feedish(p.Header.Get(httpx.HeaderContentType), []byte(p.Body[:min(len(p.Body), feedSniffLimit)]))
+		feedish(p.Header.Get(httpx.HeaderContentType), []byte(p.Body[:min(len(p.Body), config.FeedSniffBytes)]))
 }
 
 // Extract reads the feed and lists its enclosures.
@@ -197,7 +191,7 @@ func feedish(contentType string, body []byte) bool {
 // element, or "" when there is none to read. The namespace is ignored: Atom
 // declares one and RSS does not, and neither fact is worth acting on.
 func feedRoot(body []byte) string {
-	dec := feedDecoder(body[:min(len(body), feedSniffLimit)])
+	dec := feedDecoder(body[:min(len(body), config.FeedSniffBytes)])
 	for {
 		tok, err := dec.Token()
 		if err != nil {

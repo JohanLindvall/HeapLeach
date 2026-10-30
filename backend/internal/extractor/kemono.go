@@ -125,7 +125,7 @@ func (k *Kemono) extract(ctx context.Context, u *url.URL, root string, opts Opti
 			if httpx.HasStatus(err, http.StatusBadRequest) {
 				return ""
 			}
-			return "partial — could not fetch next page"
+			return pageFailed
 		},
 		fetch: func(ctx context.Context, _ int) (pageOf[kemonoPost], error) {
 			posts, err := k.posts(ctx, root, service, creator, offset)

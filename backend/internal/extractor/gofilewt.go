@@ -58,16 +58,6 @@ var (
 	gofileSecretShape = regexp.MustCompile(`^[0-9a-f]{10,40}$`)
 )
 
-// How long a recovered secret is kept when the script says nothing useful
-// about it, and the bounds any answer it does give is held to. The floor
-// stops a no-store header turning every link into another fetch; the ceiling
-// stops a year-long max-age outliving a rotation.
-const (
-	gofileSecretTTL    = time.Hour
-	gofileSecretMinTTL = 5 * time.Minute
-	gofileSecretMaxTTL = 12 * time.Hour
-)
-
 // ensureSecret returns the secret to sign with, recovering it from gofile's
 // own script when what is held has expired.
 //
@@ -101,7 +91,7 @@ func (g *Gofile) ensureSecret(ctx context.Context) (string, error) {
 	if err != nil {
 		// Falling back is what the pinned copy is for. Holding it briefly
 		// keeps a failing script from being re-read once per link.
-		g.secret, g.secretUntil = g.fallback, now.Add(gofileSecretMinTTL)
+		g.secret, g.secretUntil = g.fallback, now.Add(config.GofileSecretMinTTL)
 		return g.secret, nil
 	}
 	g.secret, g.secretUntil = secret, until
@@ -162,7 +152,7 @@ func (g *Gofile) fetchSecret(ctx context.Context) (string, time.Time, error) {
 // there because a served answer is advice, not a promise.
 func gofileFreshUntil(header http.Header, now time.Time) time.Time {
 	clamp := func(d time.Duration) time.Time {
-		return now.Add(min(max(d, gofileSecretMinTTL), gofileSecretMaxTTL))
+		return now.Add(min(max(d, config.GofileSecretMinTTL), config.GofileSecretMaxTTL))
 	}
 
 	control := strings.ToLower(header.Get(httpx.HeaderCacheControl))
@@ -181,7 +171,7 @@ func gofileFreshUntil(header http.Header, now time.Time) time.Time {
 			return clamp(when.Sub(now))
 		}
 	}
-	return clamp(gofileSecretTTL)
+	return clamp(config.GofileSecretTTL)
 }
 
 // gofileMaxAge reads the max-age a Cache-Control header states.

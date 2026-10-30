@@ -103,8 +103,7 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 
 	e := expandSources(ctx, b.registry, albums, opts)
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("balbums: none of the %d albums matching %q could be resolved "+
-			"(they may all have been taken down)", len(albums), query)
+		return nil, noneRead("balbums", len(albums), "albums", fmt.Sprintf("the search for %q", query), e.refusals, e.failed)
 	}
 	return &Result{
 		Title: query,

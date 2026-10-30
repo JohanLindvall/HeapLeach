@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -67,7 +66,7 @@ func balbumsIndex(t *testing.T, stub Extractor, pages map[int]string) (*Balbums,
 
 	reg := &Registry{fallback: NewDirect(nil)}
 	index := &Balbums{
-		client:   httpx.New("test-agent", "en-US", 0, 5*time.Second),
+		client:   testClient(),
 		registry: reg,
 	}
 	reg.extractors = []Extractor{index, stub}

@@ -68,6 +68,14 @@ func (w *treeWalk) note(reason string) {
 	}
 }
 
+// partial adds a "partial — …" note a folder's own listing came back with,
+// such as walkPages', once; an empty note adds nothing.
+func (w *treeWalk) partial(note string) {
+	if note != "" {
+		w.note(strings.TrimPrefix(note, "partial — "))
+	}
+}
+
 // room is how many more files the walk may take. A list function that pages
 // may stop reading once it holds more than this: the walk keeps what fits
 // and says the rest was cut.

@@ -20,7 +20,8 @@ would turn one search into a walk of the whole catalogue. The pages go through
 the shared `walkListing` as a quiet, numbered listing: its reader names the
 next page by number and stops at the stated last page, however short, or the
 cap, and a page that is missing or adds nothing is where the results end, not
-a partial job.
+a partial job. When none of the albums found resolves, the error is
+`noneRead`'s, naming the first album's refusal or failure.
 
 ## coomerfans
 
@@ -45,8 +46,8 @@ signed. File names use the image id and extension, since the URL's basename is
 an opaque token. A pasted later gallery page starts from page one, and the
 walk follows the page count the first page states. A gallery that comes back
 short of the creator's stated image count — a cap, a repeated page, a later
-page that failed — says "N of M images" in `Result.Note`, leaving the
-creator's folder name stable.
+page that failed — says "N of M images" in `Result.Note` beside the walk's own
+note for what stopped it, leaving the creator's folder name stable.
 
 ## cum.st
 
@@ -127,7 +128,8 @@ naming itself (`bandcampAgent`) gets the real page. So every request there
 overrides the client's browser User-Agent. The page's `data-tralbum` carries
 the band, the release and per track its number, title and a `mp3-128` link
 signed for a day, minted through `Resolve`. Tracks are filed
-`<band>/<album>/NN - title.mp3`; a track page's album is only in `data-embed`.
+`<band>/<album>/NN - title.mp3`, the band and album each one folder through
+`sourceFolder`; a track page's album is only in `data-embed`.
 A band's front page answers 403 whatever the agent, so a discography is read
 from `/music` — which also carries a `data-tralbum`, empty and of no
 `item_type`, so the kind is what separates it from a band whose `/music` is

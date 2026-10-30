@@ -60,12 +60,14 @@ const mediaWikiCategoryBatch2 = `{
 
 // mediaWikiSubcats answers the subcategory listing. The child names its own
 // parent, because a category graph loops and a walk that does not remember
-// where it has been never finishes.
+// where it has been never finishes; and one child will not list, which the
+// walk leaves out and says so.
 const mediaWikiSubcats = `{
   "batchcomplete": true,
   "query": {"categorymembers": [
     {"pageid": 11, "ns": 14, "title": "Category:Stone bridges"},
-    {"pageid": 12, "ns": 14, "title": "Category:Synthetic bridges"}
+    {"pageid": 12, "ns": 14, "title": "Category:Synthetic bridges"},
+    {"pageid": 13, "ns": 14, "title": "Category:Nonexistent"}
   ]}
 }`
 
@@ -205,7 +207,7 @@ func testMediaWiki(t *testing.T) *MediaWiki {
 	t.Helper()
 	// No interval: the courtesy spacing is for real hosts, and a second
 	// between requests would be the whole runtime of this file.
-	return &MediaWiki{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return &MediaWiki{client: testClient()}
 }
 
 func mediaWikiExtract(t *testing.T, m *MediaWiki, raw string) (*Result, error) {
@@ -296,7 +298,13 @@ func TestMediaWikiCategoryDepth(t *testing.T) {
 	// all means that loop was not followed.
 	if deep.Files[2].Name != "Old stone.jpg" {
 		t.Errorf("files are %v, want the subcategory's file sorted in among the rest",
-			mediaWikiNames(deep.Files))
+			fileNames(deep.Files))
+	}
+	if deep.Note != mediaWikiSkipped {
+		t.Errorf("note = %q, want the subcategory that would not list said", deep.Note)
+	}
+	if shallow.Note != "" {
+		t.Errorf("note = %q without ?depth=, want none", shallow.Note)
 	}
 }
 
@@ -343,7 +351,7 @@ func TestMediaWikiArticle(t *testing.T) {
 		t.Errorf("title = %q, want the article's own", res.Title)
 	}
 	if len(res.Files) != 2 {
-		t.Fatalf("got %d files, want both images the page uses: %v", len(res.Files), mediaWikiNames(res.Files))
+		t.Fatalf("got %d files, want both images the page uses: %v", len(res.Files), fileNames(res.Files))
 	}
 }
 
@@ -428,7 +436,7 @@ func TestMediaWikiAsksAboutAnUnknownPrefix(t *testing.T) {
 	}
 	// A category, resolved as one, despite nothing here knowing German.
 	if len(res.Files) != 3 {
-		t.Fatalf("got %d files, want the category's 3: %v", len(res.Files), mediaWikiNames(res.Files))
+		t.Fatalf("got %d files, want the category's 3: %v", len(res.Files), fileNames(res.Files))
 	}
 }
 
@@ -495,7 +503,7 @@ func TestMediaWikiTakesTheTitleFromThePage(t *testing.T) {
 // namespace, and only once however often the page is consulted.
 func TestMediaWikiRecogniseChallengedThroughTheAPI(t *testing.T) {
 	srv, calls := mediaWikiServer(t)
-	m := NewMediaWiki(httpx.New("test", "en", 0, time.Second))
+	m := NewMediaWiki(testClient())
 	challenged := func(path string) *Page { return challengedPage(t, srv.URL+path) }
 	p := challenged("/wiki/Category:Synthetic_bridges")
 	for range 2 {
@@ -684,13 +692,4 @@ func TestMediaWikiPaceSpacesCallsOut(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 20*time.Millisecond {
 		t.Errorf("an unrelated wiki waited %s on another's pacing", elapsed)
 	}
-}
-
-// mediaWikiNames renders a file list for a failure message.
-func mediaWikiNames(files []File) []string {
-	names := make([]string, 0, len(files))
-	for _, f := range files {
-		names = append(names, f.Name)
-	}
-	return names
 }
