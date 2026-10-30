@@ -21,6 +21,12 @@ import (
 // Each instance is a fresh origin whose page answers with a refusal, as a
 // challenged one does: recognition must then reach the extractor through the
 // platform's API, retaining original files, headers and transfer pacing.
+// platformRegistry is the whole registry over a client that does not retry,
+// for a test extracting from its own server.
+func platformRegistry() *Registry {
+	return NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+}
+
 func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
 	for _, tc := range []struct {
 		name, page, api, body, file string
@@ -71,8 +77,7 @@ func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
-			client := httpx.New("test-agent", "en-US", 0, time.Second)
-			res, _, err := NewRegistry(&config.Config{}, client).Extract(context.Background(), srv.URL+tc.page, Options{})
+			res, _, err := platformRegistry().Extract(context.Background(), srv.URL+tc.page, Options{})
 			if err != nil || res == nil {
 				t.Fatalf("extract: %v, %v", res, err)
 			}
@@ -122,7 +127,7 @@ func TestPlatformFoolFuukaBoardAndSearch(t *testing.T) {
 				fmt.Fprint(w, foolFuukaThreadJSON)
 			}))
 			defer srv.Close()
-			reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+			reg := platformRegistry()
 			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{})
 			if err != nil || ex.Name() != "foolfuuka" || len(res.Files) != 4 {
 				t.Fatalf("archive = %v via %v, %v", res, ex, err)
@@ -154,7 +159,7 @@ func TestPlatformHTMLIdentification(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
-			reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+			reg := platformRegistry()
 			res, ex, err := reg.Extract(context.Background(), srv.URL+tc.page, Options{})
 			if err != nil || res == nil || len(res.Files) == 0 || strings.HasPrefix(res.Files[0].URL, srv.URL) {
 				t.Fatalf("HTML platform = %v via %v, %v", res, ex, err)
@@ -171,7 +176,7 @@ func TestPlatformKVSFailedPlayerDoesNotFollowRelatedVideos(t *testing.T) {
 		fmt.Fprint(w, doc)
 	}))
 	defer srv.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+	reg := platformRegistry()
 	res, ex, err := reg.Extract(context.Background(), srv.URL+"/watch/sample", Options{})
 	if err == nil || res != nil || ex == nil || ex.Name() != "kvs" {
 		t.Fatalf("broken identified player fell through: %v via %v, %v", res, ex, err)
@@ -181,7 +186,7 @@ func TestPlatformKVSFailedPlayerDoesNotFollowRelatedVideos(t *testing.T) {
 // The forms a link alone is followed for stay specific: the paths every site
 // has are recognised only once fetched, never singled out on a page.
 func TestPlatformDetectionDoesNotBroadenKnownLinks(t *testing.T) {
-	reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+	reg := platformRegistry()
 	for _, path := range []string{"/", "/about", "/wiki/Article", "/b/", "/search/sample/", "/home"} {
 		if ex, known := reg.Known(mustParse(t, "https://example.test"+path)); known {
 			t.Errorf("ordinary navigation %s claimed by %s before inspecting content", path, ex.Name())
@@ -215,7 +220,7 @@ func TestPlatformKemonoCreatorAndPost(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+			reg := platformRegistry()
 			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{})
 			if err != nil || res == nil || len(res.Files) != 1 || ex.Name() != "kemono" {
 				t.Fatalf("extract = %v via %v, %v", res, ex, err)
@@ -232,7 +237,7 @@ func TestPlatformKemonoCreatorAndPost(t *testing.T) {
 
 func TestPlatformMediaWikiArticle(t *testing.T) {
 	srv, _ := mediaWikiServer(t)
-	reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+	reg := platformRegistry()
 	res, ex, err := reg.Extract(context.Background(), srv.URL+"/wiki/Synthetic_article", Options{})
 	if err != nil || res == nil || len(res.Files) == 0 || strings.HasPrefix(res.Files[0].URL, srv.URL) || ex.Name() != "mediawiki" {
 		t.Fatalf("article was not resolved through the wiki API: %v via %v, %v", res, ex, err)
@@ -261,7 +266,7 @@ func TestPlatformKVSListings(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+			reg := platformRegistry()
 			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{limits: Limits{Files: 1}})
 			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != kvsHighDirect || ex.Name() != "kvs" {
 				t.Fatalf("listing = %v via %v, %v", res, ex, err)
@@ -288,7 +293,7 @@ func TestPlatformUnrelatedPagesFallThrough(t *testing.T) {
 			}))
 			defer srv.Close()
 			u := mustParse(t, srv.URL+route)
-			reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+			reg := platformRegistry()
 			res, ex, err := reg.Extract(context.Background(), u.String(), Options{})
 			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != u.String() || ex.Name() != "direct" {
 				t.Fatalf("false positive: %v via %v, %v", res, ex, err)
@@ -311,7 +316,7 @@ func TestPlatformIdentifiedFailureDoesNotSavePage(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
+	reg := platformRegistry()
 	res, ex, err := reg.Extract(context.Background(), srv.URL+"/sample/user/creator", Options{})
 	if err == nil || res != nil || ex.Name() != "kemono" {
 		t.Fatalf("empty identified creator should fail, got %v via %v, %v", res, ex, err)
@@ -349,7 +354,7 @@ func TestPlatformProbeIsBoundedAndDoesNotRetry(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, _, err := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second)).Extract(ctx, "https://example.test/posts/42", Options{})
+	res, _, err := platformRegistry().Extract(ctx, "https://example.test/posts/42", Options{})
 	if res != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled detection = %v, %v", res, err)
 	}

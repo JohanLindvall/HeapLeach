@@ -63,10 +63,7 @@ func TestFilesterFolderPaginationAndDeferredSigning(t *testing.T) {
 	}))
 	defer srv.Close()
 	f := NewFilester(httpx.New("test", "en", 0, time.Second))
-	res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/example?page=9"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, f, srv.URL+"/f/example?page=9", Options{})
 	var names []string
 	var sizes []int64
 	for _, file := range res.Files {
@@ -229,10 +226,7 @@ func TestFilesterFolderLimitsAndPartialPages(t *testing.T) {
 			}))
 			defer srv.Close()
 			f := NewFilester(httpx.New("test", "en", 0, time.Second))
-			res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/example"), Options{limits: Limits{Files: tc.limit}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			res := extractOK(t, f, srv.URL+"/f/example", Options{limits: Limits{Files: tc.limit}})
 			if len(res.Files) != tc.files || pages.Load() != int32(tc.pages) || !strings.Contains(res.Note, tc.note) || (tc.note == "" && res.Note != "") || res.Title != "Example & Friends" {
 				t.Fatalf("result=%+v pages=%d", res, pages.Load())
 			}

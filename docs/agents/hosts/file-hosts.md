@@ -3,6 +3,23 @@
 Notes on hosts that store uploaded files. The shared machinery they use is in
 [extractors.md](../extractors.md).
 
+## Nested folders
+
+gofile, mediafire, pixeldrain and filester folder shares are trees, and each
+walks its tree through `walkTree` (`tree.go`); the host supplies only a
+function that reads one folder into its entries, in the host's own order. The
+walk is what bounds them all alike: folders deeper than
+`config.MaxFolderDepth` are not read, a folder reached twice is read once, no
+more folders are read than the user's source limit and no more files are
+taken than the user's file limit. A subfolder's directory is its label
+through `sourceFolder`, so a label with a slash in it is one folder, falling
+back to the folder's id where the label makes no name. A subfolder that cannot
+be read is left out rather than failing the share, and every cut — a limit or
+an unreadable folder — is a "partial — …" note. An error reading the root, or
+one the reader wraps in `treeStop` (filester's password gate), fails the job.
+mega builds its tree from one listing and autoindex crawls a server's own
+pages, so neither goes through it.
+
 ## bunkr
 
 bunkr's links are signed for about twenty minutes, so files resolve through
@@ -58,6 +75,10 @@ to rotate to, and a busy server stops at `config.BusyRetryLimit`. A busy
 storage server answers with the site's HTML shell and a `Content-Length` that
 agrees, which `rejectWebPage` catches ([transfers.md](../transfers.md)).
 
+The root folder is read in `Extract`, where a stale account token is renewed;
+subfolders are read by the tree walk ([above](#nested-folders)) with the same
+token and password, so a subfolder that refuses either is noted and left out.
+
 ## pixeldrain
 
 pixeldrain counts connections rather than files. An anonymous caller is
@@ -71,6 +92,12 @@ transfers. `Files` is deliberately left unset: what the host allows is not
 published, so nothing guesses at it and the downloader learns the rest by
 being refused (connection-count limits in [transfers.md](../transfers.md)).
 nova.storage runs the same software and shares this pacing.
+
+A `/d/<id>` share is a directory of somebody's filesystem. The root's stat
+answers whether it is a file or a directory, and a directory is walked one
+stat per subdirectory ([above](#nested-folders)), each child addressed by
+appending its name to the path just proved to work rather than by the node's
+own path, which is relative to a filesystem the share may not open onto.
 
 ## mega
 
@@ -171,10 +198,12 @@ Folder shares use `/f/<id>`. `filesterfolder.go` reads only `filesGrid` cards:
 their `onclick` names the file page, `data-name` preserves the original name,
 and `data-size` is an exact byte count, unlike the rounded visible size. It
 starts at page one, follows the folder's own next-page links, deduplicates
-files, and walks `subfoldersGrid` links with relative destination directories.
-File, folder, depth and page limits bound the walk; incomplete results add a
-note without changing the folder title. Discovery never signs individual
-files.
+files, and walks `subfoldersGrid` links through the shared tree walk
+([above](#nested-folders)). Paging stays inside the folder reader, which stops
+asking for pages once it holds more files than the walk has room for, and
+whose page budget (`config.MaxAlbumPages`) spans the whole walk; incomplete
+results add a note without changing the folder title. Discovery never signs
+individual files.
 
 The password form requires its nonce and a base64-encoded UTF-8 envelope of
 `password|Unix milliseconds|nonce`. Unlocking sets `folder_access_token`,

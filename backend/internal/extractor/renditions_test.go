@@ -2,7 +2,9 @@
 
 package extractor
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestRankIn(t *testing.T) {
 	order := []string{"best", "good", "fair"}

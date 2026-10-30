@@ -312,7 +312,7 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
-- The `Player` engine (`players.go`): a video site is a `playerSite` row
+- The `Player` engine (`players.go`, its rows in `playersites.go`): a video site is a `playerSite` row
   (its forms, recognition, canonical page and a reader returning the
   candidate renditions, with a per-read referer when the player needs its
   own), registered with `NewPlayer` at the position where its form order
@@ -324,7 +324,7 @@ line in the saved queue.
   video site as a row, not an extractor.
 - `refreshing` and `signedResult` (`extractor.go`): a file whose link is
   signed per visit, resolved now and signed again when its transfer starts.
-- `unpackJS` and `jwSource` (`players.go`): the p,a,c,k,e,d packer reversed,
+- `unpackJS` and `jwSource` (`jsdecode.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
   for DRM and geo refusals in the broadcaster's own words, `expandSeries`
@@ -343,6 +343,12 @@ line in the saved queue.
 - `linkExt` (`html.go`): the extension a link's file name carries,
   lowercased, read off the path's last element (so a trailing slash still
   names it), with a fallback where it names none.
+  `linkExtAsIs` (`links.go`) keeps the link's own spelling, for a host whose
+  downloads are already filed under it.
+- `walkTree` (`tree.go`): a share's nested folders, depth first in the
+  host's order, with the depth, folder and file caps, one folder per child
+  through `sourceFolder`, and an unreadable subfolder reported as partial.
+  A host supplies only the reader for one folder.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
 - `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its
@@ -358,7 +364,7 @@ line in the saved queue.
   the job note of a listing expanded into its sources.
 - `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
   playlist or target as a File, every field carried over.
-- `rankIn` (`rank.go`): a name's place in a quality ladder, ignoring case,
+- `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,
   with the caller choosing the value for a name not on it.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.

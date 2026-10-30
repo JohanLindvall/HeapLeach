@@ -54,7 +54,7 @@ embeds, the media a radio-canada article attaches — cuts what it asks to
 cap to the registry. A listing of lazy episodes that costs only its pages
 (radio-canada's programmes) cuts nothing itself.
 
-A rendition's place in a quality ladder is `rankIn` (`rank.go`), each caller
+A rendition's place in a quality ladder is `rankIn` (`renditions.go`), each caller
 saying where an unknown name lands. A file's extension read off its link is
 `linkExt` (`html.go`), read off the link's last path element, lowercased,
 with the broadcaster's usual container as fallback. A

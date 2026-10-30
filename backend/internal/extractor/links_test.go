@@ -56,10 +56,7 @@ func linksSweep(t *testing.T, doc string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, doc)
 	return linksCandidates(root, base)
 }
 
@@ -608,6 +605,20 @@ func TestPartialNoteAdmitsOnlyWhatACapDropped(t *testing.T) {
 	for _, c := range cases {
 		if got := partialNote("links", c.e, c.found, c.capped); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestLinkExtAsIsKeepsTheLinksSpelling(t *testing.T) {
+	tests := map[string]string{
+		"https://s1.example.test/v/abcdefghijkl.mp4?t=TOKEN": ".mp4",
+		"https://s1.example.test/v/abcdefghijkl.MKV":         ".MKV",
+		"https://s1.example.test/v/abcdefghijkl.1080p/":      ".1080p",
+		"https://s1.example.test/v/abcdefghijkl":             ".mp4",
+	}
+	for link, want := range tests {
+		if got := linkExtAsIs(link, ".mp4"); got != want {
+			t.Errorf("linkExtAsIs(%s) = %q, want %q", link, got, want)
 		}
 	}
 }

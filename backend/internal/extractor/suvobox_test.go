@@ -34,10 +34,7 @@ func TestSuvoboxAlbum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(suvoboxAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, suvoboxAlbumPage)
 
 	res, err := suvoboxAlbum(root, u)
 	if err != nil {
@@ -70,10 +67,7 @@ func TestSuvoboxAlbum(t *testing.T) {
 
 func TestSuvoboxAlbumWithoutTilesIsAnError(t *testing.T) {
 	u, _ := url.Parse("https://www.suvobox.com/a/abcd")
-	root, err := parseHTML(`<html><body><p>gone</p></body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, `<html><body><p>gone</p></body></html>`)
 	if _, err := suvoboxAlbum(root, u); err == nil {
 		t.Fatal("an album with no tiles resolved to something")
 	}

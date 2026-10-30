@@ -65,10 +65,7 @@ const imagePondDirectVideoPage = `<!DOCTYPE html><html><head>
 // settling for the poster frame the metadata offers beside it.
 func TestImagePondMediaLinkTakesTheDirectRoute(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/abc123")
-	root, err := parseHTML(imagePondDirectVideoPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondDirectVideoPage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://www.imagepond.net/i/abc123/direct"
@@ -81,14 +78,11 @@ func TestImagePondMediaLinkTakesTheDirectRoute(t *testing.T) {
 // stored file rather than being rerouted through /direct.
 func TestImagePondMediaLinkStillPrefersAPlayerElement(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/abc123")
-	root, err := parseHTML(`<html><head>
+	root := mustParseDoc(t, `<html><head>
 		<meta property="og:video" content="https://www.imagepond.net/i/abc123/direct" />
 		</head><body>
 		<video data-src="https://media.imagepond.net/media/videos/SomeClipName_abc123.mov"></video>
 		</body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/videos/SomeClipName_abc123.mov"
@@ -101,10 +95,7 @@ func TestImagePondMediaLinkStillPrefersAPlayerElement(t *testing.T) {
 // link must not divert it away from the file its metadata names.
 func TestImagePondMediaLinkLeavesAnImagePageAlone(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/xyz789")
-	root, err := parseHTML(imagePondImagePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondImagePage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/images/AStillPicture_xyz789.jpg"
@@ -156,10 +147,7 @@ func TestImagePondMediaLinkPrefersThePlayerOverTheMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(imagePondVideoPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondVideoPage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/videos/SomeClipName_abc123.mov"
@@ -173,10 +161,7 @@ func TestImagePondMediaLinkPrefersThePlayerOverTheMetadata(t *testing.T) {
 // metadata that names the item rather than by scanning for a hosted image.
 func TestImagePondMediaLinkFindsTheImageNotTheLogo(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/xyz789")
-	root, err := parseHTML(imagePondImagePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondImagePage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/images/AStillPicture_xyz789.jpg"
@@ -187,13 +172,10 @@ func TestImagePondMediaLinkFindsTheImageNotTheLogo(t *testing.T) {
 
 func TestImagePondMediaLinkIgnoresEverythingElse(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/abc123")
-	root, err := parseHTML(`<html><body>
+	root := mustParseDoc(t, `<html><body>
 		<img src="https://ads.example.test/banner.jpg">
 		<video data-src="https://ads.example.test/preroll.mp4"></video>
 	</body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got := imagePondMediaLink(root, base); got != "" {
 		t.Errorf("media link = %q, want none: nothing on the page is hosted media", got)
 	}
@@ -236,12 +218,7 @@ func imagePondServer(t *testing.T, page string) (*ImagePond, string) {
 // segment is the same word for every video on the site.
 func TestImagePondExtractNamesTheDirectRoute(t *testing.T) {
 	ip, base := imagePondServer(t, imagePondDirectVideoPage)
-	u, _ := ParseURL(base + "/i/abc123")
-
-	res, err := ip.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, ip, base+"/i/abc123", Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -265,12 +242,7 @@ func TestImagePondExtractDoesNotNameAFileDirect(t *testing.T) {
 		<meta property="og:video" content="https://www.imagepond.net/i/abc123/direct" />
 		</head><body></body></html>`
 	ip, base := imagePondServer(t, page)
-	u, _ := ParseURL(base + "/i/a-clip-slug")
-
-	res, err := ip.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, ip, base+"/i/a-clip-slug", Options{})
 	if res.Files[0].Name == imagePondDirectSegment {
 		t.Fatal("the file was named after the route rather than the item")
 	}
@@ -364,10 +336,7 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
 
 func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
 	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
-	root, err := parseHTML(imagePondAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondAlbumPage)
 
 	files := imagePondAlbumFiles(root, base, func(page, code string) func(context.Context) (*Target, error) {
 		return func(context.Context) (*Target, error) { return &Target{URL: page + "#" + code}, nil }
@@ -441,10 +410,7 @@ func TestImagePondCardLinkReadsTheAlpineExpression(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root, err := parseHTML("<html><body>" + tc.markup + "</body></html>")
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := mustParseDoc(t, "<html><body>"+tc.markup+"</body></html>")
 			a := findFirst(root, func(n *html.Node) bool { return isElem(n, atom.A) })
 			if a == nil {
 				t.Fatal("no anchor in the fixture")

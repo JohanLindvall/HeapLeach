@@ -100,10 +100,7 @@ func autoindexParse(t *testing.T, doc, base string) ([]autoindexEntry, *url.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, doc)
 	b := autoindexBase(u)
 	if !autoindexIsListing(root, b) {
 		t.Fatalf("%s was not recognised as a directory listing", base)
@@ -254,10 +251,7 @@ func TestAutoindexRecognisesAListing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			root, err := parseHTML(tc.doc)
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := mustParseDoc(t, tc.doc)
 			if got := autoindexIsListing(root, autoindexBase(u)); got != tc.want {
 				t.Errorf("autoindexIsListing = %v, want %v", got, tc.want)
 			}
@@ -374,21 +368,11 @@ func TestAutoindexRecognise(t *testing.T) {
 // ------------------------------------------------------------- crawling
 
 // autoindexServer serves a fixed set of listings, and 404s anything else.
+// It counts every request.
 func autoindexServer(t *testing.T, pages map[string]string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		doc, ok := pages[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, doc)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &hits
+	srv, hits := fakeSite(t, sitePages("text/html", pages))
+	return srv, &hits.asked
 }
 
 func autoindexTestExtractor() *Autoindex {

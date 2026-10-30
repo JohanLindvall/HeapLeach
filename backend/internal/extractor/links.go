@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 
@@ -296,4 +297,16 @@ func linksCandidates(root *html.Node, base *url.URL) []string {
 		}
 	})
 	return out
+}
+
+// linkExtAsIs is linkExt for a host whose downloads are already filed
+// under the extension exactly as its links spell it, case and length alone:
+// lowercasing or bounding it would rename them, and the next run would
+// download everything again. The extension a media link's filename carries,
+// or fallback where it carries none.
+func linkExtAsIs(link, fallback string) string {
+	if ext := path.Ext(util.NameFromURL(link)); ext != "" {
+		return ext
+	}
+	return fallback
 }

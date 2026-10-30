@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -110,70 +109,72 @@ func (s *filesterSession) resolve(ctx context.Context, slug string) (*Target, er
 	return s.f.sign(ctx, util.Origin(s.u), slug)
 }
 
-type filesterFolderWalk struct {
-	f     *Filester
-	opts  Options
-	res   *Result
-	seen  map[string]bool
-	pages int
-}
-
 func (f *Filester) folder(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	w := &filesterFolderWalk{f: f, opts: opts, res: &Result{}, seen: make(map[string]bool)}
-	if err := w.collect(ctx, u, "", 0); err != nil {
+	first := filesterFolderURL(u)
+	res := &Result{}
+	l := &filesterLister{f: f, opts: opts}
+	if err := walkTree(ctx, opts, res, filesterFolderKey(first), first, l.list); err != nil {
 		return nil, err
 	}
-	if len(w.res.Files) == 0 {
+	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("filester: no files found in this folder")
 	}
-	return w.res, nil
+	return res, nil
 }
 
-func (w *filesterFolderWalk) note(reason string) {
-	if w.res.Note == "" {
-		w.res.Note = "partial — " + reason
-	} else if !strings.Contains(w.res.Note, reason) {
-		w.res.Note += "; " + reason
-	}
-}
-
-func (w *filesterFolderWalk) collect(ctx context.Context, u *url.URL, dir string, depth int) error {
+// filesterFolderURL is a folder's first page: its link without a fragment or
+// page number.
+func filesterFolderURL(u *url.URL) *url.URL {
 	first := *u
 	first.Fragment = ""
 	query := first.Query()
 	query.Del("page")
 	first.RawQuery = query.Encode()
-	key := util.Origin(&first) + strings.TrimRight(first.Path, "/")
-	if w.seen[key] {
-		return nil
-	}
-	if depth >= config.MaxFolderDepth || len(w.seen) >= w.opts.maxSources() {
-		w.note("folder limit")
-		return nil
-	}
-	w.seen[key] = true
+	return &first
+}
+
+// filesterFolderKey identifies a folder however it was linked.
+func filesterFolderKey(u *url.URL) string {
+	return util.Origin(u) + strings.TrimRight(u.Path, "/")
+}
+
+// filesterLister reads folders for walkTree, a page at a time. The page
+// budget is the whole walk's, so it lives here rather than in one folder.
+type filesterLister struct {
+	f     *Filester
+	opts  Options
+	pages int
+}
+
+func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, depth int) ([]treeItem[*url.URL], error) {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
-	session := &filesterSession{f: w.f, u: &first, password: w.opts.Password, jar: jar}
-	page := &first
+	session := &filesterSession{f: l.f, u: first, password: l.opts.Password, jar: jar}
+	page := first
 	seenFiles := make(map[string]bool)
-	var subfolders []*html.Node
+	var (
+		items      []treeItem[*url.URL]
+		subfolders []*html.Node
+	)
 	for index := 0; ; index++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
-		if w.pages >= config.MaxAlbumPages {
+		if l.pages >= config.MaxAlbumPages {
 			w.note("page limit")
-			return nil
+			break
 		}
 		ResolveNote(ctx, fmt.Sprintf("Reading folder page %d", index+1))
-		w.pages++
+		l.pages++
 		root, err := session.page(ctx, page)
 		if err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return nil, ctx.Err()
 			}
-			if errors.Is(err, ErrPasswordRequired) || (depth == 0 && index == 0) {
-				return err
+			if errors.Is(err, ErrPasswordRequired) {
+				return nil, treeStop{err}
+			}
+			if depth == 0 && index == 0 {
+				return nil, err
 			}
 			w.note("could not read a folder page")
 			break
@@ -182,14 +183,14 @@ func (w *filesterFolderWalk) collect(ctx context.Context, u *url.URL, dir string
 		folders := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "subfoldersGrid" })
 		if grid == nil && folders == nil {
 			if depth == 0 && index == 0 {
-				return fmt.Errorf("filester: no folder listing on this page")
+				return nil, fmt.Errorf("filester: no folder listing on this page")
 			}
 			w.note("folder listing missing from a page")
 			break
 		}
 		if index == 0 {
 			if depth == 0 {
-				w.res.Title = util.FirstNonEmpty(firstText(root, atom.H1), util.PathSegments(u)[1])
+				w.res.Title = util.FirstNonEmpty(firstText(root, atom.H1), util.PathSegments(first)[1])
 			}
 			if folders != nil {
 				subfolders = findAll(folders, func(n *html.Node) bool {
@@ -197,14 +198,14 @@ func (w *filesterFolderWalk) collect(ctx context.Context, u *url.URL, dir string
 				})
 			}
 		}
-		before := len(w.res.Files)
+		before := len(items)
 		if grid != nil {
 			for _, card := range findAll(grid, func(n *html.Node) bool { return hasClass(n, "file-item") }) {
 				link := attr(card, "href")
 				if match := filesterCardLinkRE.FindStringSubmatch(attr(card, "onclick")); match != nil {
 					link = match[1]
 				}
-				fileURL := filesterChildURL(&first, link, "d")
+				fileURL := filesterChildURL(first, link, "d")
 				if fileURL == nil {
 					w.note("unavailable files")
 					continue
@@ -214,64 +215,53 @@ func (w *filesterFolderWalk) collect(ctx context.Context, u *url.URL, dir string
 					continue
 				}
 				seenFiles[slug] = true
-				if len(w.res.Files) == w.opts.maxFiles() {
-					w.note("file limit")
-					return nil
-				}
-				size, err := strconv.ParseInt(attr(card, "data-size"), 10, 64)
-				if err != nil || size < 0 {
-					size = -1
-				}
-				w.res.Files = append(w.res.Files, File{
+				items = append(items, treeItem[*url.URL]{File: &File{
 					Name: util.FirstNonEmpty(attr(card, "data-name"), textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "file-name") }), slug),
-					Size: size,
-					Dir:  dir,
+					Size: parsedSize(attr(card, "data-size")),
 					Resolve: func(ctx context.Context) (*Target, error) {
 						return session.resolve(ctx, slug)
 					},
-				})
+				}})
+				if len(items) > w.room() {
+					// One more than fits proves the folder holds more: the
+					// walk keeps what fits and says so.
+					return items, nil
+				}
 			}
 		}
 		next, invalid := filesterNextPage(root, page, index+1)
 		if invalid {
 			w.note("invalid next page")
 		}
-		if index > 0 && len(w.res.Files) == before {
+		if index > 0 && len(items) == before {
 			w.note("repeated or empty page")
 			break
 		}
 		if next == nil {
 			break
 		}
-		if len(w.res.Files) == w.opts.maxFiles() {
+		if len(items) >= w.room() {
 			w.note("file limit")
-			return nil
+			return items, nil
 		}
 		page = next
 	}
 	for _, folder := range subfolders {
-		child := filesterChildURL(&first, attr(folder, "href"), "f")
+		child := filesterChildURL(first, attr(folder, "href"), "f")
 		if child == nil {
 			w.note("unavailable subfolders")
 			continue
 		}
-		if w.seen[util.Origin(child)+strings.TrimRight(child.Path, "/")] {
-			continue
-		}
-		if len(w.res.Files) == w.opts.maxFiles() {
-			w.note("file limit")
-			break
-		}
-		name := util.FirstNonEmpty(textOfFirst(folder, func(n *html.Node) bool { return hasClass(n, "subfolder-name") }), util.PathSegments(child)[1])
-		name = sourceFolder(util.Unescape(name))
-		if name == "" || name == "." || name == ".." {
-			name = util.PathSegments(child)[1]
-		}
-		if err := w.collect(ctx, child, path.Join(dir, name), depth+1); err != nil {
-			return err
-		}
+		child = filesterFolderURL(child)
+		id := util.PathSegments(child)[1]
+		items = append(items, treeItem[*url.URL]{
+			Folder:   child,
+			Key:      filesterFolderKey(child),
+			Name:     util.Unescape(textOfFirst(folder, func(n *html.Node) bool { return hasClass(n, "subfolder-name") })),
+			Fallback: id,
+		})
 	}
-	return ctx.Err()
+	return items, nil
 }
 
 func filesterSameFolder(a, b *url.URL) bool {

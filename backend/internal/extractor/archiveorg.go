@@ -677,7 +677,8 @@ func (f archiveFile) restricted() bool {
 	return strings.EqualFold(strings.TrimSpace(string(f.Private)), "true")
 }
 
-// size is the exact length, or -1 when the entry carried none.
+// size is the exact length, or -1 when the entry carried none. Not
+// parsedSize: the archive lists empty files, and 0 is their exact length.
 func (f archiveFile) size() int64 {
 	n, err := strconv.ParseInt(strings.TrimSpace(string(f.Size)), 10, 64)
 	if err != nil || n < 0 {

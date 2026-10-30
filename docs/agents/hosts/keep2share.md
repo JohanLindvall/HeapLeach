@@ -1,6 +1,6 @@
 # Keep2Share (with FileBoom) and the CAPTCHA reader
 
-`keep2share.go`, `keep2shareocr.go` and `voyeurking.go` in
+`keep2share.go` and `voyeurking.go` in
 `internal/extractor`, and `internal/captcha`. Keep2Share, on its own hosts
 and on FileBoom's, is a per-address service: each address gets one free
 download at a time, which is what the proxy pool is for. How routes are leased, scored and cooled is in

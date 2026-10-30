@@ -10,13 +10,15 @@ import (
 	"strings"
 )
 
-// Shared helpers for tube sites.
+// Renditions: the same video offered at several qualities, and choosing
+// among them.
 //
-// These all work the same way: the player configuration sits in the page,
-// listing the same video at several qualities, and the links carry a
-// signature that expires. So the page is parsed for candidates, the best is
-// taken, and resolution is deferred to download time so a link cannot go
-// stale while the item waits in the queue.
+// A player page lists the same video at several qualities, and its links
+// carry a signature that expires. So the page is parsed for candidates, the
+// best is taken, and resolution is deferred to download time so a link
+// cannot go stale while the item waits in the queue. A ladder of named
+// qualities, where a site names rather than numbers them, is read with
+// rankIn.
 
 // mediaCandidate is one rendition of a video.
 type mediaCandidate struct {
@@ -114,4 +116,15 @@ func matchesAnyHost(link string, hints []string) bool {
 		}
 	}
 	return false
+}
+
+// rankIn is name's place in order, compared without regard to case, or
+// unknown when order does not hold it. Where an unknown name lands is each
+// caller's to say: last (len(order)) for an ordering that still takes it,
+// or -1 for one read as an allow-list or with the best at the end.
+func rankIn(order []string, name string, unknown int) int {
+	if i := slices.IndexFunc(order, func(known string) bool { return strings.EqualFold(name, known) }); i >= 0 {
+		return i
+	}
+	return unknown
 }

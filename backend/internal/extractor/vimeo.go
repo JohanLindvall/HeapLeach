@@ -108,7 +108,7 @@ func (v *Vimeo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 		return nil, fmt.Errorf("vimeo: no video id in %s "+
 			"(a link to a channel or a profile names no single video)", u.Redacted())
 	}
-	player := vimeoPlayerURLAt(v.player, id, hash)
+	player := vimeoPlayerURL(v.player, id, hash)
 	video, err := v.read(ctx, player, "")
 	if err != nil {
 		return nil, err
@@ -297,12 +297,9 @@ func vimeoLive(cfg *vimeoConfig) bool {
 	return len(raw) > 0 && !bytes.Equal(raw, []byte("null"))
 }
 
-// vimeoPlayerURL builds the embed URL, carrying the unlisted hash when the
-// link had one.
-func vimeoPlayerURL(id, hash string) string { return vimeoPlayerURLAt(vimeoPlayerRoot, id, hash) }
-
-// vimeoPlayerURLAt builds it under another root.
-func vimeoPlayerURLAt(root, id, hash string) string {
+// vimeoPlayerURL builds the embed URL under root (vimeoPlayerRoot, or a
+// test's server), carrying the unlisted hash when the link had one.
+func vimeoPlayerURL(root, id, hash string) string {
 	player := root + url.PathEscape(id)
 	if hash != "" {
 		player += "?h=" + url.QueryEscape(hash)

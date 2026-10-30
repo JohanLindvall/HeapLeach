@@ -35,11 +35,7 @@ func TestFileJumpKeepsStableDownloadEndpointAndRoundedSize(t *testing.T) {
 	defer srv.Close()
 	f := NewFileJump(httpx.New("test-agent", "en-US", 0, time.Second))
 	for _, suffix := range []string{"", "/", "/download", "/content"} {
-		u, _ := url.Parse(srv.URL + "/s/test-share" + suffix + "?access=download#preview")
-		res, err := f.Extract(context.Background(), u, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		res := extractOK(t, f, srv.URL+"/s/test-share"+suffix+"?access=download#preview", Options{})
 		if res.Title != "First & Second.mp4" || len(res.Files) != 1 {
 			t.Fatalf("lost share metadata: %+v", res)
 		}

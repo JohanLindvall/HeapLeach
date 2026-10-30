@@ -8,7 +8,7 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 pornhub, xhamster, tnaflix, drtuber, pornone, eporner, vidmoly, ok.ru,
 streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid, knuthing and
-noodlemagazine are rows of one table in `players.go`, each registered as its
+noodlemagazine are rows of one table in `playersites.go`, run by the engine in `players.go`, each registered as its
 own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
 one rather than as a block). A row states its forms and recogniser, the

@@ -180,10 +180,10 @@ func (m *Mediafire) Recognise(_ context.Context, p *Page) bool {
 }
 
 // Extract resolves either a single file page or a folder share.
-func (m *Mediafire) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (m *Mediafire) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) > 1 && segs[0] == "folder" {
-		return m.extractFolder(ctx, segs[1])
+		return m.extractFolder(ctx, segs[1], opts)
 	}
 
 	page := u.String()
@@ -253,57 +253,45 @@ func (m *Mediafire) filePage(ctx context.Context, page string) (link, name strin
 // extractFolder lists a folder share through mediafire's own API, which
 // answers with the file names, sizes and page links in one request per
 // chunk — far cheaper than walking the folder's HTML.
-func (m *Mediafire) extractFolder(ctx context.Context, key string) (*Result, error) {
+func (m *Mediafire) extractFolder(ctx context.Context, key string, opts Options) (*Result, error) {
 	res := &Result{Title: key}
 	if info, err := m.folderInfo(ctx, key); err == nil && info != "" {
 		res.Title = info
 	}
-	if err := m.collectFolder(ctx, key, "", 0, res); err != nil {
+	if err := walkTree(ctx, opts, res, key, key, m.listFolder); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// collectFolder appends one folder's files to res and recurses into its
-// subfolders.
-func (m *Mediafire) collectFolder(ctx context.Context, key, dir string, depth int, res *Result) error {
+// listFolder reads one folder's files and subfolders for walkTree.
+func (m *Mediafire) listFolder(ctx context.Context, _ *treeWalk, key string, _ int) ([]treeItem[string], error) {
 	files, folders, err := m.folderContent(ctx, key)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	items := make([]treeItem[string], 0, len(files)+len(folders))
 	for _, f := range files {
 		page := util.FirstNonEmpty(f.Links.NormalDownload,
 			mediafireRoot+"/file/"+url.PathEscape(f.QuickKey))
-		size, convErr := strconv.ParseInt(f.Size, 10, 64)
-		if convErr != nil {
-			size = -1
-		}
 		name := util.FirstNonEmpty(f.Filename, util.NameFromURL(page))
-		res.Files = append(res.Files, File{
+		items = append(items, treeItem[string]{File: &File{
 			Name:    name,
-			Dir:     dir,
-			Size:    size,
+			Size:    parsedSize(f.Size),
 			Headers: httpx.Referer(page),
 			// Every file in a folder needs its own page read for a link,
 			// so none of them is resolved until it starts.
 			Resolve: m.resolver(page, name),
-		})
-	}
-	if depth >= config.MaxFolderDepth {
-		return nil
+		}})
 	}
 	for _, sub := range folders {
-		if sub.FolderKey == "" {
-			continue
+		if sub.FolderKey != "" {
+			// A subfolder without a name keeps its files in its parent's
+			// directory.
+			items = append(items, treeItem[string]{Folder: sub.FolderKey, Key: sub.FolderKey, Name: sub.Name})
 		}
-		next := dir
-		if sub.Name != "" {
-			next = strings.TrimPrefix(dir+"/"+sub.Name, "/")
-		}
-		// One unreadable subfolder should not sink the whole job.
-		_ = m.collectFolder(ctx, sub.FolderKey, next, depth+1, res)
 	}
-	return nil
+	return items, nil
 }
 
 // mediafireFile and mediafireFolder are the entries a folder listing holds.
