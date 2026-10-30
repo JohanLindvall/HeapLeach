@@ -88,9 +88,6 @@ const (
 	// for. Above it the API silently caps rather than failing, but asking
 	// for what is allowed keeps the number of requests honest.
 	mediaWikiPageSize = 500
-
-	// mediaWikiInterval spaces out calls to one wiki's API.
-	mediaWikiInterval = time.Second
 )
 
 // mediaWikiAPIPaths are where installs put api.php, most likely first.
@@ -166,7 +163,7 @@ var mediaWikiNewestPages = map[string]bool{"newfiles": true, "newimages": true}
 
 // NewMediaWiki builds the MediaWiki extractor.
 func NewMediaWiki(client *httpx.Client) *MediaWiki {
-	return &MediaWiki{client: client, interval: mediaWikiInterval}
+	return &MediaWiki{client: client, interval: config.MediaWikiInterval}
 }
 
 func (m *MediaWiki) Name() string { return "mediawiki" }

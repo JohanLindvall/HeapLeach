@@ -63,6 +63,8 @@ choice, and a change in either direction breaks one of them:
 - It is keyed on the **job's source**, not the item's URL, because several
   hosts hand out signed media links that expire between runs. Hashing those
   would change the name every time and resume nothing.
+  `jobSourceLocked` is that lookup, the item's own URL only where the job has
+  no source, for the worker, `startedOnDisk` and the host key alike.
 
 Collisions are handled by `Manager.claimPart`: the same URL queued twice gets
 the deterministic name for whichever transfer claims it first, and the random

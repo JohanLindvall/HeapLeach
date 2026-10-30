@@ -58,7 +58,7 @@ type listingWalk struct {
 	// root is the first page, already fetched and parsed by the caller,
 	// which has then said for itself what failing to read it means.
 	root *html.Node
-	// fetch reads a page in place of fetchDocument with the first page as
+	// fetch reads a page in place of fetchRoot with the first page as
 	// referer, and reports no progress for it. What it cannot read or
 	// parse is a page that could not be fetched.
 	fetch func(ctx context.Context, page, first *url.URL) (*html.Node, *url.URL, error)
@@ -109,7 +109,6 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 			pages[key(page)] = true
 			var (
 				root  *html.Node
-				doc   string
 				final *url.URL
 				err   error
 			)
@@ -120,10 +119,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 				root, final, err = w.fetch(ctx, page, first)
 			default:
 				ResolveNote(ctx, fmt.Sprintf("Reading listing page %d", n+1))
-				doc, final, err = fetchDocument(ctx, client, page, httpx.Referer(first.String()))
-			}
-			if err == nil && root == nil {
-				root, err = parseHTML(doc)
+				root, final, err = fetchRoot(ctx, client, page, httpx.Referer(first.String()))
 			}
 			if err != nil {
 				if n == 0 {

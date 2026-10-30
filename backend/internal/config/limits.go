@@ -584,6 +584,9 @@ const (
 	// CumPageSize matches the creator site's own post-list request size.
 	CumPageSize = 50
 
+	// MediaWikiInterval spaces out calls to one wiki's API.
+	MediaWikiInterval = time.Second
+
 	// ThrottleMinWait keeps a rate-limited reader from spinning through
 	// sub-millisecond sleeps when the limit is very low.
 	ThrottleMinWait = 5 * time.Millisecond

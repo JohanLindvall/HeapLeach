@@ -260,6 +260,28 @@ func TestFilesterSubfoldersKeepDirectoriesAndStopCycles(t *testing.T) {
 	}
 }
 
+func TestFilesterFolderOfOnlySubfoldersIsWhole(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/f/root":
+			fmt.Fprint(w, `<h1>Example &amp; Friends</h1><div id="filesGrid"></div><div id="subfoldersGrid">`+
+				`<a class="subfolder-item" href="/f/child"><span class="subfolder-name">Child</span></a>`+
+				`<a class="subfolder-item" href="/f/gone"><span class="subfolder-name">Gone</span></a></div>`)
+		case "/f/child":
+			fmt.Fprint(w, filesterTestListing(filesterTestCard("first", "First.mp4", "100"), ""))
+		case "/f/gone":
+			fmt.Fprint(w, `<h1>Unavailable</h1>`)
+		default:
+			t.Errorf("unexpected page: %s", r.URL)
+		}
+	}))
+	defer srv.Close()
+	res := extractOK(t, NewFilester(testClient()), srv.URL+"/f/root", Options{})
+	if len(res.Files) != 1 || res.Files[0].Dir != "Child" || res.Note != "partial — folder listing missing from a page" {
+		t.Fatalf("result=%+v", res)
+	}
+}
+
 func TestFilesterFolderRejectsMissingAndMalformedPages(t *testing.T) {
 	for _, doc := range []string{
 		`<h1>Not found</h1>`,

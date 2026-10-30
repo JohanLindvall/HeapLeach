@@ -145,104 +145,109 @@ type filesterLister struct {
 }
 
 func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, depth int) ([]treeItem[*url.URL], error) {
+	budget := config.MaxAlbumPages - l.pages
+	if budget <= 0 {
+		w.note("page limit")
+		return nil, nil
+	}
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	session := &filesterSession{f: l.f, u: first, password: l.opts.Password, jar: jar}
+	room := w.room()
 	page := first
 	seenFiles := make(map[string]bool)
 	var (
-		items      []treeItem[*url.URL]
 		subfolders []*html.Node
+		locked     error
 	)
-	for index := 0; ; index++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if l.pages >= config.MaxAlbumPages {
-			w.note("page limit")
-			break
-		}
-		ResolveNote(ctx, fmt.Sprintf("Reading folder page %d", index+1))
-		l.pages++
-		root, err := session.page(ctx, page)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+	cards, note, err := walkPages(ctx, pageWalk[filesterCard]{
+		key:   func(c filesterCard) string { return c.slug },
+		limit: room + 1,
+		pages: budget,
+		fetch: func(ctx context.Context, n int) (pageOf[filesterCard], error) {
+			ResolveNote(ctx, fmt.Sprintf("Reading folder page %d", n+1))
+			l.pages++
+			root, err := session.page(ctx, page)
+			if err != nil {
+				return pageOf[filesterCard]{}, err
 			}
+			grid := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "filesGrid" })
+			folders := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "subfoldersGrid" })
+			if grid == nil && folders == nil {
+				if n == 0 {
+					return pageOf[filesterCard]{}, errFilesterNoListing
+				}
+				return pageOf[filesterCard]{stop: "partial — folder listing missing from a page"}, nil
+			}
+			if n == 0 {
+				if depth == 0 {
+					w.res.Title = util.FirstNonEmpty(firstText(root, atom.H1), util.PathSegments(first)[1])
+				}
+				if folders != nil {
+					subfolders = findAll(folders, func(n *html.Node) bool {
+						return isElem(n, atom.A) && hasClass(n, "subfolder-item")
+					})
+				}
+			}
+			var p pageOf[filesterCard]
+			if grid != nil {
+				for _, card := range findAll(grid, func(n *html.Node) bool { return hasClass(n, "file-item") }) {
+					c, ok := filesterCardOf(session, first, card)
+					if !ok {
+						w.note("unavailable files")
+						continue
+					}
+					seenFiles[c.slug] = true
+					p.items = append(p.items, c)
+				}
+			}
+			next, invalid := filesterNextPage(root, page, n+1)
+			if invalid {
+				p.note = "partial — invalid next page"
+			}
+			// A first page without a usable next link is the whole folder,
+			// and an empty one is a folder of only subfolders, not a repeat.
+			p.next, p.end = next != nil, n == 0 && next == nil
+			if p.next && len(seenFiles) >= room {
+				// Files enough to fill the walk, and more pages: none of
+				// theirs could be taken, so the walk says the limit cut it.
+				p.next, p.note = false, "partial — file limit"
+			}
+			page = next
+			return p, nil
+		},
+		failed: func(err error) string {
 			if errors.Is(err, ErrPasswordRequired) {
-				return nil, treeStop{err}
+				locked = err
+				return ""
 			}
-			if depth == 0 && index == 0 {
-				return nil, err
-			}
-			w.note("could not read a folder page")
-			break
-		}
-		grid := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "filesGrid" })
-		folders := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "subfoldersGrid" })
-		if grid == nil && folders == nil {
-			if depth == 0 && index == 0 {
-				return nil, fmt.Errorf("filester: no folder listing on this page")
-			}
-			w.note("folder listing missing from a page")
-			break
-		}
-		if index == 0 {
-			if depth == 0 {
-				w.res.Title = util.FirstNonEmpty(firstText(root, atom.H1), util.PathSegments(first)[1])
-			}
-			if folders != nil {
-				subfolders = findAll(folders, func(n *html.Node) bool {
-					return isElem(n, atom.A) && hasClass(n, "subfolder-item")
-				})
-			}
-		}
-		before := len(items)
-		if grid != nil {
-			for _, card := range findAll(grid, func(n *html.Node) bool { return hasClass(n, "file-item") }) {
-				link := attr(card, "href")
-				if match := filesterCardLinkRE.FindStringSubmatch(attr(card, "onclick")); match != nil {
-					link = match[1]
-				}
-				fileURL := filesterChildURL(first, link, "d")
-				if fileURL == nil {
-					w.note("unavailable files")
-					continue
-				}
-				slug := util.PathSegments(fileURL)[1]
-				if seenFiles[slug] {
-					continue
-				}
-				seenFiles[slug] = true
-				items = append(items, treeItem[*url.URL]{File: &File{
-					Name: util.FirstNonEmpty(attr(card, "data-name"), textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "file-name") }), slug),
-					Size: parsedSize(attr(card, "data-size")),
-					Resolve: func(ctx context.Context) (*Target, error) {
-						return session.resolve(ctx, slug)
-					},
-				}})
-				if len(items) > w.room() {
-					// One more than fits proves the folder holds more: the
-					// walk keeps what fits and says so.
-					return items, nil
-				}
-			}
-		}
-		next, invalid := filesterNextPage(root, page, index+1)
-		if invalid {
-			w.note("invalid next page")
-		}
-		if index > 0 && len(items) == before {
-			w.note("repeated or empty page")
-			break
-		}
-		if next == nil {
-			break
-		}
-		if len(items) >= w.room() {
-			w.note("file limit")
-			return items, nil
-		}
-		page = next
+			return "partial — could not read a folder page"
+		},
+	})
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return nil, err
+	case errors.Is(err, ErrPasswordRequired):
+		return nil, treeStop{err}
+	case locked != nil:
+		return nil, treeStop{locked}
+	case err != nil && depth == 0:
+		return nil, err
+	case errors.Is(err, errFilesterNoListing):
+		w.note("folder listing missing from a page")
+		return nil, nil
+	case err != nil:
+		w.note("could not read a folder page")
+		return nil, nil
+	}
+	w.partial(note)
+	items := make([]treeItem[*url.URL], 0, len(cards)+len(subfolders))
+	for _, c := range cards {
+		items = append(items, treeItem[*url.URL]{File: c.file})
+	}
+	if len(cards) > room {
+		// One more than fits proves the folder holds more: the walk keeps
+		// what fits and says so, and no subfolder's files could fit.
+		return items, nil
 	}
 	for _, folder := range subfolders {
 		child := filesterChildURL(first, attr(folder, "href"), "f")
@@ -260,6 +265,35 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 		})
 	}
 	return items, nil
+}
+
+var errFilesterNoListing = errors.New("filester: no folder listing on this page")
+
+// filesterCard is one file card of a folder page, keyed by its slug.
+type filesterCard struct {
+	slug string
+	file *File
+}
+
+// filesterCardOf reads a file card, signing its file only when resolved;
+// false is a card whose link is not a file page on the folder's host.
+func filesterCardOf(session *filesterSession, first *url.URL, card *html.Node) (filesterCard, bool) {
+	link := attr(card, "href")
+	if match := filesterCardLinkRE.FindStringSubmatch(attr(card, "onclick")); match != nil {
+		link = match[1]
+	}
+	fileURL := filesterChildURL(first, link, "d")
+	if fileURL == nil {
+		return filesterCard{}, false
+	}
+	slug := util.PathSegments(fileURL)[1]
+	return filesterCard{slug: slug, file: &File{
+		Name: util.FirstNonEmpty(attr(card, "data-name"), textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "file-name") }), slug),
+		Size: parsedSize(attr(card, "data-size")),
+		Resolve: func(ctx context.Context) (*Target, error) {
+			return session.resolve(ctx, slug)
+		},
+	}}, true
 }
 
 func filesterSameFolder(a, b *url.URL) bool {

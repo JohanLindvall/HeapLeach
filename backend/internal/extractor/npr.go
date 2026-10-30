@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -240,11 +239,7 @@ func nprSize(rawURL string) int64 {
 	if err != nil || !strings.EqualFold(u.Hostname(), nprStore) {
 		return -1
 	}
-	n, err := strconv.ParseInt(u.Query().Get(nprSizeParam), 10, 64)
-	if err != nil || n <= 0 {
-		return -1
-	}
-	return n
+	return parsedSize(u.Query().Get(nprSizeParam))
 }
 
 // nprPageTitle names the job after the page. The social metadata carries the
