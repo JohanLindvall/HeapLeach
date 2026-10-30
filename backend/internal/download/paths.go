@@ -239,10 +239,7 @@ func partNames(name, source, id string) [2]string {
 // holds nothing.
 func (m *Manager) startedOnDisk(it *Item) bool {
 	m.mu.Lock()
-	name, rel, id, source := SafeName(it.Name), it.Dir, it.ID, it.URL
-	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
-		source = job.Source
-	}
+	name, rel, id, source := SafeName(it.Name), it.Dir, it.ID, m.jobSourceLocked(it)
 	m.mu.Unlock()
 	root, err := os.OpenRoot(m.DownloadDir())
 	if err != nil {

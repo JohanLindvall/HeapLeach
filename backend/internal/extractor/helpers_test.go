@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -111,22 +113,47 @@ type sitePage struct {
 // extractor under test.
 type siteHits struct {
 	asked, served atomic.Int32
+
+	mu   sync.Mutex
+	uris []string
+}
+
+// requested is every request's path and query, in the order asked.
+func (h *siteHits) requested() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.uris)
 }
 
 // fakeSite serves pages by path and 404s anything else.
 func fakeSite(t *testing.T, pages map[string]sitePage) (*httptest.Server, *siteHits) {
+	return fakeSiteBy(t, sitePath, pages)
+}
+
+// fakeSiteBy is fakeSite with pages keyed by key, such as
+// (*url.URL).RequestURI for pages told apart by their query.
+func fakeSiteBy(t *testing.T, key func(*url.URL) string, pages map[string]sitePage) (*httptest.Server, *siteHits) {
 	t.Helper()
 	hits := &siteHits{}
-	srv := httptest.NewServer(fakeSiteHandler(pages, hits))
+	srv := httptest.NewServer(fakeSiteHandlerBy(key, pages, hits))
 	t.Cleanup(srv.Close)
 	return srv, hits
 }
 
+func sitePath(u *url.URL) string { return u.Path }
+
 // fakeSiteHandler is fakeSite's handler, for a test that guards it.
 func fakeSiteHandler(pages map[string]sitePage, hits *siteHits) http.Handler {
+	return fakeSiteHandlerBy(sitePath, pages, hits)
+}
+
+func fakeSiteHandlerBy(key func(*url.URL) string, pages map[string]sitePage, hits *siteHits) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.asked.Add(1)
-		page, ok := pages[r.URL.Path]
+		hits.mu.Lock()
+		hits.uris = append(hits.uris, r.URL.RequestURI())
+		hits.mu.Unlock()
+		page, ok := pages[key(r.URL)]
 		if !ok {
 			http.NotFound(w, r)
 			return

@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"slices"
+	"net/url"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,32 +57,16 @@ func voyeurKingIndexHTML(next string, slugs ...string) string {
 
 func voyeurKingTestIndex(t *testing.T, pages map[string]string, k *keep2ShareService) (*Registry, *VoyeurKing, string, func() []string) {
 	t.Helper()
-	var mu sync.Mutex
-	var asked []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		asked = append(asked, r.URL.RequestURI())
-		mu.Unlock()
-		if doc, ok := pages[r.URL.RequestURI()]; ok {
-			fmt.Fprint(w, doc)
-		} else {
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
-	reg := &Registry{client: client, fallback: NewDirect(client)}
-	v := NewVoyeurKing(client, reg)
 	shell := keep2ShareShell(t, k.label)
 	for path, doc := range pages {
 		pages[path] = strings.ReplaceAll(doc, "https://files.example.test", shell)
 	}
+	srv, hits := fakeSiteBy(t, (*url.URL).RequestURI, sitePages("text/html; charset=utf-8", pages))
+	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	reg := &Registry{client: client, fallback: NewDirect(client)}
+	v := NewVoyeurKing(client, reg)
 	reg.extractors = []Extractor{v, k.ex}
-	return reg, v, srv.URL, func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return slices.Clone(asked)
-	}
+	return reg, v, srv.URL, hits.requested
 }
 
 func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {

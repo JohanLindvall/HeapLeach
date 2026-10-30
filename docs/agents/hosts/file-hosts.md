@@ -18,7 +18,8 @@ be read is left out rather than failing the share, and every cut — a limit or
 an unreadable folder — is a "partial — …" note. An error reading the root, or
 one the reader wraps in `treeStop` (filester's password gate), fails the job.
 
-A folder that is itself paged — gofile's pages, mediafire's chunks — is read
+A folder that is itself paged — gofile's pages, mediafire's chunks,
+filester's folder pages — is read
 through `walkPages`, and a listing that stopped short (the page cap, a later
 page that failed, a page that added nothing) is put on the walk's note with
 `treeWalk.partial`. The reader stops reading once the folder's files exceed
@@ -218,11 +219,16 @@ their `onclick` names the file page, `data-name` preserves the original name,
 and `data-size` is an exact byte count, unlike the rounded visible size. It
 starts at page one, follows the folder's own next-page links, deduplicates
 files, and walks `subfoldersGrid` links through the shared tree walk
-([above](#nested-folders)). Paging stays inside the folder reader, which stops
-asking for pages once it holds more files than the walk has room for, and
-whose page budget (`config.MaxAlbumPages`) spans the whole walk; incomplete
-results add a note without changing the folder title. Discovery never signs
-individual files.
+([above](#nested-folders)). Each folder's pages go through `walkPages`, keyed
+by file slug, which stops asking once the folder holds as many files as the
+walk has room for and more pages remain. The page budget
+(`config.MaxAlbumPages`) spans the whole walk rather than one folder, so each
+folder is given what earlier folders left. A first page without a next link is
+the whole folder, so one holding only subfolders is no empty page. A first
+page that fails or carries no listing fails the share at the root and is a
+note deeper down; a password refusal on any page fails it outright.
+Incomplete results add a note without changing the folder title. Discovery
+never signs individual files.
 
 The password form requires its nonce and a base64-encoded UTF-8 envelope of
 `password|Unix milliseconds|nonce`. Unlocking sets `folder_access_token`,

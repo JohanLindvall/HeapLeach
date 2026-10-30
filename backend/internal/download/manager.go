@@ -412,6 +412,9 @@ func (m *Manager) stillOnDisk(finished map[string]finishedFile) map[string]finis
 // destination. Added to rather than replaced, so a job read again before an
 // earlier reading lands keeps the record. Caller holds mu.
 func finishedLocked(job *Job) {
+	saved := func(it *Item) finishedFile {
+		return finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+	}
 	var renamed []*Item
 	for _, it := range job.Items {
 		if it.Status != StatusDone || it.Path == "" {
@@ -420,7 +423,7 @@ func finishedLocked(job *Job) {
 		if job.finished == nil {
 			job.finished = make(map[string]finishedFile)
 		}
-		job.finished[destinationKey(it.Dir, it.Name)] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+		job.finished[destinationKey(it.Dir, it.Name)] = saved(it)
 		if it.listed != "" && it.listed != it.Name {
 			renamed = append(renamed, it)
 		}
@@ -430,7 +433,7 @@ func finishedLocked(job *Job) {
 	for _, it := range renamed {
 		key := destinationKey(it.Dir, it.listed)
 		if _, taken := job.finished[key]; !taken {
-			job.finished[key] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+			job.finished[key] = saved(it)
 		}
 	}
 }
@@ -756,10 +759,19 @@ func (m *Manager) hostKeyLocked(it *Item) string {
 	if it.URL != "" {
 		return hostOf(it.URL)
 	}
-	if job, ok := m.jobs[it.JobID]; ok && job.Source != "" {
-		return hostOf(job.Source)
+	if source := m.jobSourceLocked(it); source != "" {
+		return hostOf(source)
 	}
 	return ""
+}
+
+// jobSourceLocked is the URL the user submitted for an item's job, or the
+// item's own URL where the job has none. Caller holds mu.
+func (m *Manager) jobSourceLocked(it *Item) string {
+	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
+		return job.Source
+	}
+	return it.URL
 }
 
 // itemHostLocked names the host an item is actually talking to, which is
@@ -1331,13 +1343,7 @@ func (m *Manager) ClearFinished() int {
 			kept = append(kept, id)
 			continue
 		}
-		job.canceled = true
-		if job.cancel != nil {
-			job.cancel()
-		}
-		for _, it := range job.Items {
-			cancelItemLocked(it)
-		}
+		cancelJobLocked(job)
 		delete(m.jobs, id)
 		removed++
 	}

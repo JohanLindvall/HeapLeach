@@ -87,10 +87,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// submitted — because the item's own URL is often a signed link that
 	// expires between runs, and a key that changes every run cannot resume
 	// anything.
-	source := it.URL
-	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
-		source = job.Source
-	}
+	source := m.jobSourceLocked(it)
 	isPlaylist := len(it.Segments) > 0
 	withAudio := isPlaylist && len(it.Audio) > 0
 	external := it.External
