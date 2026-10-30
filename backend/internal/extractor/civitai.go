@@ -107,11 +107,13 @@ func (c *Civitai) Shape(u *url.URL) bool {
 // origin, for the item the URL names. The site's pages sit behind a
 // challenge an anonymous probe rarely passes, so there is usually no page to
 // read; the API is what the extraction depends on anyway. It is asked only
-// for a page of the right form that either names itself or could not be
-// read at all, never for every /images/<n> on the web.
+// for a page of the right form that names itself, is the site's Next.js
+// app (its item pages are titled after the item and the uploader alone, with
+// no site name), or could not be read at all — never for every /images/<n>
+// on the web.
 func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 	target := civitaiTargetOf(p.Final)
-	if target == nil || c.client == nil || !(p.Challenged || p.Named("Civitai")) {
+	if target == nil || c.client == nil || !(p.Challenged || p.Named("Civitai") || civitaiApp(p)) {
 		return false
 	}
 	api := util.Origin(p.Final) + "/api/v1"
@@ -138,6 +140,12 @@ func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 // civitaiModelOn is a model's API endpoint on u's origin.
 func civitaiModelOn(u *url.URL, id string) string {
 	return util.Origin(u) + "/api/v1/models/" + url.PathEscape(id)
+}
+
+// civitaiApp reports the Next.js app the site's pages are: its data island
+// and its bundles. Only a gate before the API is asked, which decides.
+func civitaiApp(p *Page) bool {
+	return p.Has(`id="__NEXT_DATA__"`) && p.Script("/_next/static/")
 }
 
 // civitaiTarget is what one input URL asks for.

@@ -168,6 +168,18 @@ func TestCivitaiRecognise(t *testing.T) {
 	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345", `<html><title>A photo blog</title></html>`)) || hits.Load() != before {
 		t.Error("an ordinary page of the right form was recognised or cost a request")
 	}
+	// An item page titled after the item and its uploader alone: the app's
+	// data island and bundles are what lead to the API, which then decides.
+	app := `<html><head><title>Image posted by Someone</title><script src="/_next/static/chunks/a.js"></script></head>` +
+		`<body><script id="__NEXT_DATA__" type="application/json">{}</script></body></html>`
+	if !c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345", app)) {
+		t.Error("an unnamed app page the API knows was not recognised")
+	}
+	before = hits.Load()
+	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345",
+		`<html><head><script src="/_next/static/chunks/a.js"></script></head><body></body></html>`)) || hits.Load() != before {
+		t.Error("another Next.js page of the right form was recognised or cost a request")
+	}
 	// The API answering, for a page of another form.
 	if c.Recognise(t.Context(), challenged(srv.URL+"/collections/12345")) {
 		t.Error("a collection was recognised")
