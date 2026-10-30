@@ -112,7 +112,7 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 			}
 			seen[att.SHA256] = true
 			if len(res.Files) == opts.maxFiles() {
-				res.Note = "partial — file limit"
+				res.Note = fileLimitNote
 				break
 			}
 			file, err := att.file(edges, final.String())
@@ -151,7 +151,7 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 	offset, total, invalid := 0, 0, false
 	posts, note, err := walkPages(ctx, pageWalk[cumPost]{
 		key:   func(post cumPost) string { return post.ID },
-		limit: opts.maxSources(), limitNote: "partial — source limit",
+		limit: opts.maxSources(), limitNote: sourceLimitNote,
 		failed: func(error) string { return "partial — could not read the next post page" },
 		fetch: func(ctx context.Context, n int) (pageOf[cumPost], error) {
 			ResolveNote(ctx, fmt.Sprintf("Reading creator posts, page %d", n+1))
@@ -188,7 +188,7 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 		note = joinNotes(note, "partial — invalid posts in listing")
 	}
 	if note == "" {
-		note = partial(cappedNote(len(posts), total, "posts"))
+		note = cappedNote(len(posts), total, "posts")
 	}
 	res.Note = note
 	for _, post := range posts {
@@ -205,7 +205,7 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 			}
 			seenAttachments[att.SHA256] = true
 			if len(res.Files) == opts.maxFiles() {
-				res.Note = joinNotes(res.Note, "partial — file limit")
+				res.Note = joinNotes(res.Note, fileLimitNote)
 				return cumCreatorResult(res)
 			}
 			res.Files = append(res.Files, File{

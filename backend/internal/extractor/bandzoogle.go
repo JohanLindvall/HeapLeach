@@ -104,7 +104,7 @@ func bandzoogleParse(ctx context.Context, client *httpx.Client, doc string, u *u
 	var pending []string
 	files, note, err := walkPages(ctx, pageWalk[File]{
 		key:   func(f File) string { return f.URL },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[File], error) {
 			page := root
 			if n > 0 {

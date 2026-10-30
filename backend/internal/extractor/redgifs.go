@@ -112,7 +112,7 @@ func (r *RedGifs) single(ctx context.Context, id string) (*Result, error) {
 func (r *RedGifs) user(ctx context.Context, name string, opts Options) (*Result, error) {
 	items, note, err := walkPages(ctx, pageWalk[redgifsItem]{
 		key:   func(item redgifsItem) string { return item.ID },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[redgifsItem], error) {
 			var payload struct {
 				Gifs  []redgifsItem `json:"gifs"`

@@ -376,7 +376,7 @@ func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string,
 		key: func(post booruPost) string {
 			return cmp.Or(post.ID.String(), post.fileURL(site), post.MD5)
 		},
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[booruPost], error) {
 			posts, total, err := b.posts(ctx, site, tags, single, n, apiHeaders)
 			if err != nil {

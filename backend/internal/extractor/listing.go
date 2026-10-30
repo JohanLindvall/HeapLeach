@@ -14,7 +14,8 @@ import (
 )
 
 // listingLink is one entry of a paged listing: the page it links to, its
-// title when the card names one, and the key that tells repeats apart.
+// title when the card names one, and the key that tells repeats apart — its
+// URL when empty.
 type listingLink struct {
 	key, url, title string
 }
@@ -81,9 +82,9 @@ type listingWalk struct {
 // lower of the source and file caps, with the note naming which one.
 func listingLimit(opts Options) (int, string) {
 	if opts.maxFiles() < opts.maxSources() {
-		return opts.maxFiles(), "partial — file limit"
+		return opts.maxFiles(), fileLimitNote
 	}
-	return opts.maxSources(), "partial — source limit"
+	return opts.maxSources(), sourceLimitNote
 }
 
 // walkListing follows a listing from first through the pages its pager
@@ -99,7 +100,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 	}
 	pages := make(map[string]bool)
 	links, note, err = walkPages(ctx, pageWalk[listingLink]{
-		key:   func(link listingLink) string { return link.key },
+		key:   func(link listingLink) string { return cmp.Or(link.key, link.url) },
 		limit: w.limit, limitNote: w.limitNote, quiet: w.quiet, failed: w.failed,
 		fetch: func(ctx context.Context, n int) (pageOf[listingLink], error) {
 			const repeated = "partial — repeated page"
@@ -152,7 +153,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 				title = cmp.Or(p.title, title)
 			}
 			if p.badNext {
-				p.next, p.note = nil, "partial — invalid next page"
+				p.next, p.note = nil, invalidNextNote
 			}
 			page = p.next
 			return pageOf[listingLink]{items: p.links, next: p.next != nil, note: p.note}, nil
@@ -165,6 +166,15 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 		return nil, "", "", fmt.Errorf("%s: %s", w.name, w.none)
 	}
 	return links, title, note, nil
+}
+
+// listingURLs is the pages a listing's links point to, in order.
+func listingURLs(links []listingLink) []string {
+	urls := make([]string, 0, len(links))
+	for _, link := range links {
+		urls = append(urls, link.url)
+	}
+	return urls
 }
 
 // fetchAsAsked is a listingWalk fetch for a listing that reads each page
@@ -191,7 +201,7 @@ func webLink(base *url.URL, ref string) *url.URL {
 	if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return nil
 	}
-	u.Fragment = ""
+	u.Fragment, u.RawFragment = "", ""
 	return u
 }
 

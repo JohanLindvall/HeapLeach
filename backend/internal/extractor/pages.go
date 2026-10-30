@@ -116,7 +116,7 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 				note = w.failed(err)
 			}
 			if note == pageFailed {
-				note = own("partial — could not fetch next page")
+				note = own(couldNotFetchNote)
 			}
 			break
 		}

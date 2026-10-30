@@ -110,7 +110,7 @@ func walkFolder[F any](ctx context.Context, w *treeWalk, list treeList[F], folde
 		if item.File != nil {
 			if w.room() <= 0 {
 				w.full = true
-				w.note("file limit")
+				w.note(fileLimit)
 				return nil
 			}
 			f := *item.File
@@ -123,7 +123,7 @@ func walkFolder[F any](ctx context.Context, w *treeWalk, list treeList[F], folde
 		}
 		if w.room() <= 0 {
 			w.full = true
-			w.note("file limit")
+			w.note(fileLimit)
 			return nil
 		}
 		if depth+1 >= config.MaxFolderDepth || len(w.seen) >= w.opts.maxSources() {

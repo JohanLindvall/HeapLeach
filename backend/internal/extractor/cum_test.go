@@ -167,7 +167,7 @@ func TestCumCreatorCapsFiltersAndPartialPages(t *testing.T) {
 		{name: "photos", filter: "photos", files: 2, pages: 2},
 		{name: "all", files: 4, pages: 2},
 		{name: "exact file cap", limits: Limits{Files: 4}, files: 4, pages: 2},
-		{name: "repeat", later: "repeat", files: 3, pages: 2, note: "partial"},
+		{name: "repeat", later: "repeat", files: 3, pages: 2, note: "2 of 3 posts"},
 		{name: "empty", later: "empty", files: 3, pages: 2, note: "repeated or empty"},
 		{name: "failed", later: "fail", files: 3, pages: 2, note: "could not read"},
 		{name: "malformed", later: "malformed", files: 3, pages: 2, note: "could not read"},

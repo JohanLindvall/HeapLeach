@@ -123,7 +123,7 @@ func (k *Kemono) extract(ctx context.Context, u *url.URL, root string, opts Opti
 	attached := make(map[string]bool)
 	all, note, err := walkPages(ctx, pageWalk[kemonoPost]{
 		key:   func(post kemonoPost) string { return post.ID },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		weigh: func(posts []kemonoPost) int {
 			n := 0
 			for _, post := range posts {
@@ -145,7 +145,7 @@ func (k *Kemono) extract(ctx context.Context, u *url.URL, root string, opts Opti
 		fetch: func(ctx context.Context, _ int) (pageOf[kemonoPost], error) {
 			posts, err := k.posts(ctx, root, service, creator, offset)
 			offset += len(posts)
-			return pageOf[kemonoPost]{items: posts, next: true, end: len(posts) == 0 || (total > 0 && offset >= total)}, err
+			return pageOf[kemonoPost]{items: posts, next: true, end: len(posts) == 0, total: total}, err
 		},
 	})
 	if err != nil {

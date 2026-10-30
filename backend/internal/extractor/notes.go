@@ -17,6 +17,18 @@ const partialPrefix = "partial — "
 // noteSeparator stands between the parts of a note.
 const noteSeparator = "; "
 
+// The reasons a listing most often stops short for: bare, as a tree walk's
+// note takes them, and as whole notes.
+const (
+	fileLimit   = "file limit"
+	sourceLimit = "source limit"
+
+	fileLimitNote     = partialPrefix + fileLimit
+	sourceLimitNote   = partialPrefix + sourceLimit
+	invalidNextNote   = partialPrefix + "invalid next page"
+	couldNotFetchNote = partialPrefix + "could not fetch next page"
+)
+
 // joinNotes joins the parts of a note: "; " between them, an empty part left
 // out, and a part the note already holds not repeated (a part may itself be
 // a joined note, whose parts count one by one). A note says "partial — " once,
@@ -74,13 +86,20 @@ func resolvedNote(used, listed int, noun string) string {
 	return fmt.Sprintf("%d of %d %s resolved", used, listed, noun)
 }
 
-// leftOutNote says n items were left out, and why, or nothing when none
-// were. why reads on from "left out": ": <reason>" or " that ...".
-func leftOutNote(n int, why string) string {
+// countNote says there are n of what, in the caller's words — "3 album
+// items unavailable" — or nothing when there are none. The words stand as
+// given whatever n is.
+func countNote(n int, what string) string {
 	if n == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%d left out%s", n, why)
+	return fmt.Sprintf("%d %s", n, what)
+}
+
+// leftOutNote says n items were left out, and why, or nothing when none
+// were. why reads on from "left out": ": <reason>" or " that ...".
+func leftOutNote(n int, why string) string {
+	return countNote(n, "left out"+why)
 }
 
 // reasonCount is a reason and how many times it came up.

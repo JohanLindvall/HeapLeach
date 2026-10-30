@@ -151,7 +151,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	pages := max(1, p.Pages)
 	images, note, err := walkPages(ctx, pageWalk[celebImage]{
 		key:   func(m celebImage) string { return strconv.FormatInt(m.ID, 10) },
-		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[celebImage], error) {
 			items := p.Media
 			if n > 0 {

@@ -93,7 +93,7 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 			continue
 		}
 		if len(res.Files) == opts.maxFiles() {
-			notes = append(notes, "partial — file limit")
+			notes = append(notes, fileLimitNote)
 			break
 		}
 		seen["url:"+file.URL] = true
@@ -107,10 +107,7 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("rajce: album has no downloadable photos or videos (it may be empty or restricted)")
 	}
 	notes = append(notes, cappedNote(len(res.Files), album.Count, "files"))
-	if unavailable > 0 {
-		notes = append(notes, fmt.Sprintf("%d album items unavailable", unavailable))
-	}
-	res.Note = joinNotes(notes...)
+	res.Note = joinNotes(append(notes, countNote(unavailable, "album items unavailable"))...)
 	return res, nil
 }
 
@@ -150,12 +147,10 @@ func (m rajceMedium) file(page *url.URL) (File, bool) {
 	} else if m.Type != "photo" {
 		return File{}, false
 	}
-	ref = strings.TrimSpace(ref)
-	u, err := page.Parse(ref)
-	if ref == "" || err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	u := webLink(page, ref)
+	if u == nil {
 		return File{}, false
 	}
-	u.Fragment, u.RawFragment = "", ""
 	name := cmp.Or(m.Filename, util.NameFromURL(u.String()))
 	if name == "" {
 		return File{}, false

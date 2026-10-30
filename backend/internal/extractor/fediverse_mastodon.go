@@ -159,7 +159,7 @@ func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string
 	until := ""
 	return walkPages(ctx, pageWalk[mastodonStatus]{
 		key:   func(status mastodonStatus) string { return status.ID },
-		limit: opts.maxFiles(), limitNote: "partial — file limit", pages: config.MaxTimelinePages,
+		limit: opts.maxFiles(), limitNote: fileLimitNote, pages: config.MaxTimelinePages,
 		weigh: func(statuses []mastodonStatus) int { return len(mastodonFiles(statuses)) },
 		fetch: func(ctx context.Context, _ int) (pageOf[mastodonStatus], error) {
 			batch, err := f.mastodonStatuses(ctx, root, accountID, until, pixelfed)

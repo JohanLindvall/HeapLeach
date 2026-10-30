@@ -152,13 +152,13 @@ func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]
 	)
 	links, title, note, err := walkListing(ctx, client, first, listingWalk{
 		name: kvsLabel, title: l.title(root), quiet: true, root: root,
-		limit: l.fileCap(), limitNote: "partial — file limit",
+		limit: l.fileCap(), limitNote: fileLimitNote,
 		fetch: fetchAsAsked(client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {
 			page++
 			var p listingPage
 			for _, link := range kvsListingVideos(root, l.url) {
-				p.links = append(p.links, listingLink{key: link, url: link})
+				p.links = append(p.links, listingLink{url: link})
 				seen[link] = true
 			}
 			switch {
@@ -190,11 +190,7 @@ func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]
 	if err != nil {
 		return nil, "", "", err
 	}
-	pages := make([]string, 0, len(links))
-	for _, link := range links {
-		pages = append(pages, link.url)
-	}
-	return pages, title, note, nil
+	return listingURLs(links), title, note, nil
 }
 
 // kvsAsyncNext builds the request the site's own script would send for the

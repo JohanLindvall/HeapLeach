@@ -192,7 +192,7 @@ func (a *Autoindex) crawl(ctx context.Context, u *url.URL, opts Options) (*Resul
 	res.Files = autoindexFlatten(root, nil)
 	if len(res.Files) > budget.maxFiles {
 		res.Files = res.Files[:budget.maxFiles]
-		w.note("file limit")
+		w.note(fileLimit)
 	}
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("autoindex: %s lists no files", root.base.Redacted())
@@ -212,7 +212,7 @@ type autoindexBudget struct {
 func (b *autoindexBudget) spent() string {
 	switch {
 	case b.files >= b.maxFiles:
-		return "file limit"
+		return fileLimit
 	case b.dirs >= b.maxDirs:
 		return "folder limit"
 	}

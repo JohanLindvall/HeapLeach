@@ -291,7 +291,7 @@ func partialNote(noun string, e expansion, found int, capped bool) string {
 func expansionNote(walk string, e expansion, listed int, noun string) string {
 	limit := ""
 	if e.full {
-		limit = "partial — file limit"
+		limit = fileLimitNote
 	}
 	return joinNotes(walk, limit, resolvedNote(e.used, listed, noun))
 }
