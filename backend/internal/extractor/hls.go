@@ -9,15 +9,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -570,25 +567,9 @@ func resolveAudio(ctx context.Context, client *httpx.Client, renditions []hlsRen
 
 // Relative playlist references belong to the response URL after redirects.
 func fetchPlaylist(ctx context.Context, client *httpx.Client, rawURL string, headers httpx.Header) (string, *url.URL, error) {
-	req, err := client.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	body, resp, err := client.Fetch(ctx, rawURL, headers)
 	if err != nil {
 		return "", nil, err
-	}
-	headers.Apply(req)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
-	if err != nil {
-		return "", nil, err
-	}
-	if len(body) > config.MaxResponseBytes {
-		return "", nil, fmt.Errorf("playlist exceeds %d bytes", config.MaxResponseBytes)
 	}
 	doc := string(body)
 	if !hlsManifestBody(doc) {

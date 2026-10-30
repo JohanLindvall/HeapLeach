@@ -5,7 +5,6 @@ package extractor
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -116,26 +115,10 @@ func (g *Gofile) signatureRejected() error {
 // fetchSecret reads the signing secret out of gofile's own script, and says
 // how long the answer may be reused.
 func (g *Gofile) fetchSecret(ctx context.Context) (string, time.Time, error) {
-	req, err := g.client.NewRequest(ctx, http.MethodGet, g.scriptURL, nil)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	httpx.Referer(gofileRoot + "/").Apply(req)
-
-	resp, err := g.client.Do(req)
+	body, resp, err := g.client.Fetch(ctx, g.scriptURL, httpx.Referer(gofileRoot+"/"))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("fetch signing script: %w", err)
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("read signing script: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", time.Time{}, fmt.Errorf("fetch signing script: %s", resp.Status)
-	}
-
 	secret, err := gofileSecretFrom(string(body))
 	if err != nil {
 		return "", time.Time{}, err

@@ -327,7 +327,6 @@ func (g *Gofile) ensureToken(ctx context.Context, force bool) (string, error) {
 		Status string `json:"status"`
 		Data   struct {
 			Token string `json:"token"`
-			Tier  string `json:"tier"`
 		} `json:"data"`
 	}
 	err := g.client.PostJSON(ctx, gofileAPI+"/accounts",
@@ -378,10 +377,6 @@ type gofileEnvelope struct {
 	Status   string        `json:"status"`
 	Data     gofileContent `json:"data"`
 	Metadata struct {
-		TotalCount  int  `json:"totalCount"`
-		TotalPages  int  `json:"totalPages"`
-		Page        int  `json:"page"`
-		PageSize    int  `json:"pageSize"`
 		HasNextPage bool `json:"hasNextPage"`
 	} `json:"metadata"`
 }
@@ -396,9 +391,7 @@ type gofileContent struct {
 	Size           int64                    `json:"size"`
 	Link           string                   `json:"link"`
 	MimeType       string                   `json:"mimetype"`
-	ChildrenCount  int                      `json:"childrenCount"`
 	Servers        []string                 `json:"servers"`
-	ServerSelected string                   `json:"serverSelected"`
 	ChildrenIDs    []string                 `json:"childrenIds"`
 	Children       map[string]gofileContent `json:"children"`
 	Password       json.RawMessage          `json:"password"`

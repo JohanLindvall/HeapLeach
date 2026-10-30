@@ -195,7 +195,6 @@ type redgifsItem struct {
 		HD string `json:"hd"`
 		SD string `json:"sd"`
 	} `json:"urls"`
-	UserName string  `json:"userName"`
 	Duration float64 `json:"duration"`
 }
 

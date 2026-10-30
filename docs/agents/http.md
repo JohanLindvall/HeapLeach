@@ -35,6 +35,40 @@ Two traps:
   and burns the whole budget unless it states `Retry-After: 0`. A suite that
   suddenly takes a minute instead of three seconds is this, not a hang.
 
+## Reading a response
+
+`Client.Fetch` is the GET that reads a whole body: the client's defaults with
+the caller's headers over them, `Do`'s retries, and a non-2xx answer returned
+as a `StatusError`. A body over `config.MaxResponseBytes` is an error, never
+cut short, because a truncated script or playlist parses as something it is
+not. It hands back the response with its body read and closed, for its
+headers and for `resp.Request.URL`, the address after redirects that relative
+references resolve against. `GetPage` is `Fetch` with `Navigate` under the
+caller's headers; a playlist or script is fetched with `Fetch` itself, since
+it is not a page being navigated to.
+
+Build a refusal with `NewStatusError(resp)`, not a `StatusError` literal. It
+keeps the code, status, headers and the first `config.ErrorBodySample` bytes
+of the body, which is where hosts say why: the downloader reads a connection
+limit out of it, and mega's quota out of the headers. It names the address the
+caller asked for, without a password, not one a redirect led to, which is
+often a signed link. `Do` builds one from the last retryable answer, so an
+exhausted budget still quotes the host's reason. A body already read whole
+(`Bytes`, `GetPage`) is kept whole, because some extractors decode a JSON
+refusal.
+
+## Response logs
+
+There is one logger key. `httpx.WithLogger` sets it and
+`extractor.WithLogger` is the same call, so a job's extraction log gets a
+debug line for each response: host, status, type, length, server and
+Cloudflare markers, with no body, cookies or path. A client from `Streaming()`
+(the downloader's) logs none of these, because a segmented video means
+thousands of responses and a transfer reports its own failures. Extraction
+writes about one line per request. Most jobs write a handful, and a listing of
+a few hundred pages writes a few hundred. Keep any new per-request record at
+debug level.
+
 ## Short certificate chains
 
 **A short certificate chain is completed, not refused** (`aia.go`). Some

@@ -205,7 +205,7 @@ func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, 
 		if wait, stated := retryAfter(resp); stated {
 			until = time.Now().Add(wait)
 		}
-		err := &StatusError{Code: code, Status: resp.Status, URL: req.URL.Redacted(), Header: resp.Header}
+		err := NewStatusError(resp)
 		report(code, 0, err, until)
 		resp.Body.Close()
 		return nil, &RouteError{err}

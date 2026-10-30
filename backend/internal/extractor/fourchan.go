@@ -80,7 +80,6 @@ func (f *FourChan) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 
 	var payload struct {
 		Posts []struct {
-			No       int64  `json:"no"`
 			Subject  string `json:"sub"`
 			Time     int64  `json:"tim"`
 			Filename string `json:"filename"`

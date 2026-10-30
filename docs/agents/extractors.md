@@ -340,8 +340,9 @@ line in the saved queue.
   signed page at transfer time. A row may `peek` (read only the title now
   and everything at transfer time), take a `listing` of its videos (through
   `walkListing`, or a walk of its own), refuse playlists still being written
-  (`finished`), and opt into proxy recovery (`proxyFallback`). Add a new
-  video site as a row, not an extractor.
+  (`finished`), and opt into proxy recovery (`proxyFallback`, which
+  `Registry.Extract` reads off the `*Player`; no other extractor opts a
+  source in). Add a new video site as a row, not an extractor.
 - `refreshing` and `signedResult` (`extractor.go`): a file whose link is
   signed per visit, resolved now and signed again when its transfer starts.
 - `unpackJS` and `jwSource` (`jsdecode.go`): the p,a,c,k,e,d packer reversed,

@@ -419,7 +419,7 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawUR
 	case ranged && resp.StatusCode == http.StatusOK:
 		return nil, fmt.Errorf("%s: asked for bytes %d-%d: %w", req.URL.Redacted(), first, last, errRangeIgnored)
 	case resp.StatusCode != http.StatusOK:
-		return nil, statusError(req.URL, resp)
+		return nil, httpx.NewStatusError(resp)
 	}
 	if err := rejectWebPage(resp, "segment.ts"); err != nil {
 		return nil, err
