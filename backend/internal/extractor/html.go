@@ -77,15 +77,19 @@ func findAll(root *html.Node, pred func(*html.Node) bool) []*html.Node {
 	return out
 }
 
-// findFirst returns the first node matching pred, or nil.
+// findFirst returns the first node matching pred, or nil. It stops at the
+// first match: recognisers ask this of every unrecognised page, and most of
+// what they look for sits in the head.
 func findFirst(root *html.Node, pred func(*html.Node) bool) *html.Node {
-	var found *html.Node
-	walk(root, func(n *html.Node) {
-		if found == nil && pred(n) {
-			found = n
+	if pred(root) {
+		return root
+	}
+	for c := root.FirstChild; c != nil; c = c.NextSibling {
+		if found := findFirst(c, pred); found != nil {
+			return found
 		}
-	})
-	return found
+	}
+	return nil
 }
 
 // textOf returns the collapsed text content of a subtree.

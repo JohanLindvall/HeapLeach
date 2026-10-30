@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -77,7 +76,7 @@ var (
 	// vimeoPlayerShape is the player page, /video/<id>.
 	vimeoPlayerShape = pathShape(`^/video/[0-9]{3,}/?$`)
 	// vimeoPlayerMeta is the player a watch page offers for embedding.
-	vimeoPlayerMeta = regexp.MustCompile(`^/video/[0-9]+`)
+	vimeoPlayerMeta = pathShape(`^/video/[0-9]+`)
 )
 
 // Recognises is the inventory's description.

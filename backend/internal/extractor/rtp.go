@@ -193,7 +193,7 @@ func rtpTarget(u *url.URL) rtpRef {
 // so a standalone episode can use it as the job title too.
 func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, string, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := broadcastPage(ctx, r.client, page, headers)
+	doc, err := fetchPage(ctx, r.client, page, headers)
 	if err != nil {
 		return nil, "", fmt.Errorf("rtpplay: fetch %s: %w", page, err)
 	}
@@ -263,7 +263,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 // is in the selector the reader can already see.
 func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := broadcastPage(ctx, r.client, ref.page, headers)
+	doc, err := fetchPage(ctx, r.client, ref.page, headers)
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: fetch %s: %w", ref.page, err)
 	}

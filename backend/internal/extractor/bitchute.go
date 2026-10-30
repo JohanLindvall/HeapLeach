@@ -102,7 +102,7 @@ var (
 	// bitchuteShape is a video, its embed, or a channel.
 	bitchuteShape = pathShape(`^/(?:video|embed|channel)/[A-Za-z0-9_-]+/?$`)
 	// bitchuteEmbed is the player a video page offers for embedding.
-	bitchuteEmbed = regexp.MustCompile(`^/embed/[A-Za-z0-9_-]+`)
+	bitchuteEmbed = pathShape(`^/embed/[A-Za-z0-9_-]+`)
 )
 
 // bitchuteBundle is the web app's own script bundle.

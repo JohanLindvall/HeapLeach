@@ -144,10 +144,8 @@ func (a *ArchiveOrg) Recognise(ctx context.Context, p *Page) bool {
 		return false
 	}
 	endpoint := util.Origin(p.URL) + "/metadata/" + url.PathEscape(id)
-	return p.Memo(endpoint, func() any {
-		var doc archiveDoc
-		return platformJSON(ctx, a.client, endpoint, nil, &doc) && doc.Metadata.Identifier != ""
-	}).(bool)
+	var doc archiveDoc
+	return pageJSON(ctx, p, a.client, endpoint, nil, &doc) && doc.Metadata.Identifier != ""
 }
 
 // Extract resolves an item, or one named file within it.

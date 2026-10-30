@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -62,11 +61,13 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 // a binary response must never be read as a page, even when its signed URL
 // has no extension.
 func (d *Direct) document(ctx context.Context, u *url.URL) (string, *url.URL, bool) {
-	if p := probedPage(ctx, u); p != nil && p.Err == nil && p.Status == http.StatusOK && p.Body != "" {
-		if !mediaPageIsHTMLType(p.MediaType()) {
-			return "", nil, false
+	if p := probed(ctx, u); p != nil {
+		if doc, ok := p.Document(); ok {
+			if !mediaPageIsHTMLType(p.MediaType()) {
+				return "", nil, false
+			}
+			return doc, p.Final, true
 		}
-		return p.Body, p.Final, true
 	}
 	return mediaPageFetchURL(ctx, d.client, u)
 }
@@ -87,7 +88,7 @@ func fileLinkSources(registry *Registry, candidates []string) []string {
 			continue
 		}
 		ex, known := registry.Known(u)
-		if !known || ex.Name() == "direct" || ex.Name() == linksScheme {
+		if !known || ex.Name() == linksScheme {
 			continue
 		}
 		key := link

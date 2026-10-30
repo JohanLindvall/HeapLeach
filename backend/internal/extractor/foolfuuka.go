@@ -148,7 +148,7 @@ func (f *FoolFuuka) Recognise(ctx context.Context, p *Page) bool {
 	if strings.HasPrefix(p.Generator(), "foolfuuka") && p.Script(foolFuukaAssets) {
 		return true
 	}
-	return f.Shape(p.Final) && pageSilent(p) && foolFuukaAnswers(ctx, p, f.client, p.Final)
+	return f.Shape(p.Final) && p.Silent() && foolFuukaAnswers(ctx, p, f.client, p.Final)
 }
 
 // foolFuukaAnswers asks only the API corresponding to the route. A post

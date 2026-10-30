@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +49,7 @@ var (
 	// redgifsShape is a clip, its player, or a user's clips.
 	redgifsShape = pathShape(`^/(?:watch|ifr)/[A-Za-z]+/?$`, `^/users/[^/]+/?$`)
 	// redgifsPlayer is the player a clip's page offers for embedding.
-	redgifsPlayer = regexp.MustCompile(`^/ifr/[A-Za-z]+`)
+	redgifsPlayer = pathShape(`^/ifr/[A-Za-z]+`)
 )
 
 // redgifsBundle is the path the app's client data script is served under.

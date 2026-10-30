@@ -104,7 +104,7 @@ func (a *Autoindex) Recognise(_ context.Context, p *Page) bool {
 
 // Extract crawls the directory the URL names.
 func (a *Autoindex) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	if p := probedPage(ctx, u); p != nil && p.OK() && p.Final.String() != u.String() {
+	if p := probed(ctx, u); p != nil && p.OK() && p.Final.String() != u.String() {
 		u = p.Final // a redirect added the slash, or moved the directory
 	}
 	return a.crawl(ctx, u, opts.maxFiles())

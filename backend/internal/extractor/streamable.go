@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -87,7 +86,7 @@ var (
 	// the extractor reports no form of its own and is found by its pages.
 	streamablePage = pathShape(`^/(?:[eost]/)?[0-9a-z]{4,10}/?$`)
 	// streamablePlayer is the player a watch page offers for embedding.
-	streamablePlayer = regexp.MustCompile(`^/[eot]/[0-9a-z]+`)
+	streamablePlayer = pathShape(`^/[eot]/[0-9a-z]+`)
 )
 
 // Recognises is the inventory's description.

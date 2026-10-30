@@ -143,7 +143,7 @@ func (b *Booru) Recognise(ctx context.Context, p *Page) bool {
 
 // Extract resolves a tag search, or a single post, into files.
 func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	p := probedPage(ctx, u)
+	p := probed(ctx, u)
 	if p == nil {
 		p = probePage(ctx, b.client, u)
 	}
@@ -273,7 +273,7 @@ func booruMarked(p *Page) bool {
 func booruDetect(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) *booruSite {
 	candidates := booruCandidates(u)
 	marked := booruMarked(p)
-	if len(candidates) == 0 || (!marked && !pageSilent(p)) {
+	if len(candidates) == 0 || (!marked && !p.Silent()) {
 		return nil
 	}
 	segs := util.PathSegments(u)

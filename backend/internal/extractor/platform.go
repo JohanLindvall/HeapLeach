@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -57,37 +56,12 @@ func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint strin
 	if client == nil || p == nil {
 		return false
 	}
-	raw, _ := p.Memo("json "+endpoint, func() any {
+	raw := memo(p, "json "+endpoint, func() json.RawMessage {
 		var raw json.RawMessage
 		if !platformJSON(ctx, client, endpoint, headers, &raw) {
-			return json.RawMessage(nil)
+			return nil
 		}
 		return raw
-	}).(json.RawMessage)
+	})
 	return len(raw) > 0 && json.Unmarshal(raw, out) == nil
-}
-
-// pageSilent reports a page with nothing of the site's own to read: a WAF
-// challenge stood in for it, it failed or answered with an error, it is no
-// document, or it is a proof-of-work interstitial served with a 200. Only
-// then may a recogniser whose URL form matched ask the origin's own API
-// instead of reading the page.
-func pageSilent(p *Page) bool {
-	return p.Challenged || !p.OK() || p.Body == "" || p.Script(antiBotScriptPath)
-}
-
-// antiBotScriptPath is where the common proof-of-work bot check serves its
-// script from, on whichever site deploys it.
-const antiBotScriptPath = "/.within.website/"
-
-// probedPage is the page the registry probed for u, carried in ctx, or nil
-// when there is none for this URL. An extractor reads it for what its
-// recogniser already established — an API that answered, a document — so
-// that nothing is asked twice.
-func probedPage(ctx context.Context, u *url.URL) *Page {
-	p, _ := ctx.Value(pageKey{}).(*Page)
-	if p == nil || p.URL == nil || p.URL.String() != u.String() {
-		return nil
-	}
-	return p
 }

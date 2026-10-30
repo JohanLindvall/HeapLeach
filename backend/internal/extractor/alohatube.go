@@ -97,9 +97,7 @@ func (a *AlohaTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 	// only yt-dlp knows — is reported as such rather than downloaded as a
 	// page.
 	for _, frame := range frames {
-		strict := opts
-		strict.strict = true
-		res, _, err := a.registry.Extract(ctx, frame, strict)
+		res, _, err := a.registry.follow(ctx, frame, opts)
 		if errors.Is(err, errUnrecognised) {
 			continue
 		}

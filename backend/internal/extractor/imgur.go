@@ -119,12 +119,10 @@ func (i *Imgur) Recognise(ctx context.Context, p *Page) bool {
 			return false
 		}
 		endpoint := util.Origin(p.Final) + target.Listing + "/page/0/hit.json?scrolled"
-		return p.Memo(endpoint, func() any {
-			var body struct {
-				Data *[]imgurEntry `json:"data"`
-			}
-			return platformJSON(ctx, i.client, endpoint, nil, &body) && body.Data != nil
-		}).(bool)
+		var body struct {
+			Data *[]imgurEntry `json:"data"`
+		}
+		return pageJSON(ctx, p, i.client, endpoint, nil, &body) && body.Data != nil
 	case target.ID != "":
 		if p.Has(imgurPostData) {
 			return true

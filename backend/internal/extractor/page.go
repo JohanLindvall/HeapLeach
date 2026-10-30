@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -45,11 +47,25 @@ type Page struct {
 	// Err is the fetch's failure, if it failed.
 	Err error
 
-	once sync.Once
-	root *html.Node
+	// parsed is filled once, on first use: the document and what every
+	// recogniser asks of its head, read in one pass, since each unrecognised
+	// page is offered to every recogniser in turn.
+	parseOnce sync.Once
+	parsed    pageIndex
 
 	memoMu sync.Mutex
 	memo   map[string]*memoEntry
+}
+
+// pageIndex is what one pass over the document collects.
+type pageIndex struct {
+	root *html.Node
+	// meta maps each meta name and property to its first element's content.
+	meta  map[string]string
+	title string
+	// scripts are the paths of the scripts the document loads.
+	scripts []string
+	names   []string
 }
 
 type memoEntry struct {
@@ -57,11 +73,12 @@ type memoEntry struct {
 	value any
 }
 
-// Memo runs compute once per page and key, however many recognisers ask:
-// a bounded probe of the page's origin (platformJSON) that several
-// extractors would make is made once, and its answer shared. Concurrent
-// callers wait for the first.
-func (p *Page) Memo(key string, compute func() any) any {
+// memo runs compute once per page and key, however many recognisers ask:
+// a bounded probe of the page's origin that several extractors would make
+// is made once, and its answer shared. Concurrent callers wait for the
+// first. Keys are namespaced by what is asked ("json <endpoint>"), and a key
+// is only ever asked for one type.
+func memo[T any](p *Page, key string, compute func() T) T {
 	p.memoMu.Lock()
 	if p.memo == nil {
 		p.memo = map[string]*memoEntry{}
@@ -73,7 +90,8 @@ func (p *Page) Memo(key string, compute func() any) any {
 	}
 	p.memoMu.Unlock()
 	e.once.Do(func() { e.value = compute() })
-	return e.value
+	v, _ := e.value.(T)
+	return v
 }
 
 // pageCache keeps recently probed pages so that one URL is fetched once:
@@ -81,14 +99,17 @@ func (p *Page) Memo(key string, compute func() any) any {
 // at transfer time and a link several sources share all ask the same
 // question. Entries are keyed by route as well as URL, since a page fetched
 // through one egress address says nothing about what another is served,
-// and a probe that failed or met a challenge is never kept.
+// and a probe that failed or met a challenge is never kept. It is bounded by
+// the bytes of the bodies it holds as well as by age, oldest dropped first.
 type pageCache struct {
 	mu      sync.Mutex
-	entries map[string]*pageCacheEntry
-	order   []string
+	entries map[string]*list.Element
+	order   list.List // of *pageCacheEntry, oldest first
+	bytes   int
 }
 
 type pageCacheEntry struct {
+	key     string
 	ready   chan struct{}
 	page    *Page
 	fetched time.Time
@@ -98,42 +119,69 @@ type pageCacheEntry struct {
 // at a time and reusing a good answer for config.PageCacheTTL.
 func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
 	key := httpx.RouteID(ctx) + " " + u.String()
-	c.mu.Lock()
-	if c.entries == nil {
-		c.entries = map[string]*pageCacheEntry{}
-	}
-	if e := c.entries[key]; e != nil {
+	for {
+		c.mu.Lock()
+		if c.entries == nil {
+			c.entries = map[string]*list.Element{}
+		}
+		c.expireLocked()
+		el := c.entries[key]
+		if el == nil {
+			break
+		}
+		e := el.Value.(*pageCacheEntry)
 		c.mu.Unlock()
 		select {
 		case <-e.ready:
 		case <-ctx.Done():
 			return &Page{URL: u, Final: u, Err: ctx.Err()}
 		}
-		if e.page != nil && time.Since(e.fetched) < config.PageCacheTTL {
+		if e.page != nil {
 			return e.page
 		}
-		c.mu.Lock()
-		if c.entries[key] == e {
-			delete(c.entries, key)
-		}
-		c.mu.Unlock()
-		return c.get(ctx, client, u)
+		// The probe this caller waited for failed and was dropped: ask
+		// again rather than share a failure.
 	}
-	e := &pageCacheEntry{ready: make(chan struct{})}
-	c.entries[key] = e
-	c.order = append(c.order, key)
-	for len(c.order) > config.PageCacheEntries {
-		delete(c.entries, c.order[0])
-		c.order = c.order[1:]
-	}
+	e := &pageCacheEntry{key: key, ready: make(chan struct{})}
+	c.entries[key] = c.order.PushBack(e)
 	c.mu.Unlock()
 
 	p := probePage(ctx, client, u)
+	c.mu.Lock()
 	if p.Err == nil && !p.Challenged {
 		e.page, e.fetched = p, time.Now()
+		c.bytes += len(p.Body)
+		for c.bytes > config.PageCacheBytes && c.order.Len() > 1 {
+			c.removeLocked(c.order.Front())
+		}
+	} else if el := c.entries[key]; el != nil && el.Value == e {
+		c.removeLocked(el)
 	}
+	c.mu.Unlock()
 	close(e.ready)
 	return p
+}
+
+// expireLocked drops entries older than the cache's time to live. A probe
+// still in flight has no fetch time and is left alone.
+func (c *pageCache) expireLocked() {
+	for el := c.order.Front(); el != nil; {
+		next := el.Next()
+		if e := el.Value.(*pageCacheEntry); e.page != nil && time.Since(e.fetched) >= config.PageCacheTTL {
+			c.removeLocked(el)
+		}
+		el = next
+	}
+}
+
+func (c *pageCache) removeLocked(el *list.Element) {
+	e := c.order.Remove(el).(*pageCacheEntry)
+	if c.entries[e.key] == el {
+		delete(c.entries, e.key)
+	}
+	if e.page != nil {
+		c.bytes -= len(e.page.Body)
+	}
 }
 
 // probePage fetches a URL as a browser navigating to it would, reading the
@@ -193,22 +241,39 @@ func withPage(ctx context.Context, p *Page) context.Context {
 	return context.WithValue(ctx, pageKey{}, p)
 }
 
-// probedDocument returns the page the registry already fetched for u, when it
-// is a successful document; u may be the submitted URL or where it
-// redirected. ok is false whenever the extractor must fetch it itself:
-// another URL, a failure, or a body the probe did not read.
-func probedDocument(ctx context.Context, u *url.URL) (doc string, final *url.URL, ok bool) {
+// probed is the page the registry probed for u, carried in ctx, or nil when
+// there is none for this URL. Either end of the redirect chain will do: an
+// extractor that rebuilds the canonical address the submitted link
+// redirected to is asking for the same page.
+func probed(ctx context.Context, u *url.URL) *Page {
 	p, _ := ctx.Value(pageKey{}).(*Page)
-	if p == nil || p.Err != nil || p.Status != http.StatusOK || p.Body == "" {
-		return "", nil, false
+	if p == nil || u == nil {
+		return nil
 	}
-	// Either end of the redirect chain will do: an extractor that rebuilds
-	// the canonical address the submitted link redirected to is asking for
-	// the same document.
 	if want := u.String(); p.URL.String() != want && p.Final.String() != want {
+		return nil
+	}
+	return p
+}
+
+// Document is the page's body when it is a successful document of its own,
+// the only kind an extractor may read instead of fetching.
+func (p *Page) Document() (string, bool) {
+	if p == nil || p.Err != nil || p.Status != http.StatusOK || p.Body == "" {
+		return "", false
+	}
+	return p.Body, true
+}
+
+// probedDocument returns the page the registry already fetched for u, when it
+// is a successful document. ok is false whenever the extractor must fetch it
+// itself: another URL, a failure, or a body the probe did not read.
+func probedDocument(ctx context.Context, u *url.URL) (doc string, final *url.URL, ok bool) {
+	p := probed(ctx, u)
+	if doc, ok = p.Document(); !ok {
 		return "", nil, false
 	}
-	return p.Body, p.Final, true
+	return doc, p.Final, true
 }
 
 // fetchDocument is GetPage for the submitted URL that reuses the registry's
@@ -220,6 +285,34 @@ func fetchDocument(ctx context.Context, client *httpx.Client, u *url.URL, header
 		return doc, final, nil
 	}
 	return client.GetPage(ctx, u.String(), headers, nil)
+}
+
+// fetchPage is fetchDocument for a link held as a string.
+func fetchPage(ctx context.Context, client *httpx.Client, link string, headers httpx.Header) (string, error) {
+	u, err := url.Parse(link)
+	if err != nil {
+		return "", err
+	}
+	doc, _, err := fetchDocument(ctx, client, u, headers)
+	return doc, err
+}
+
+// fetchRoot is fetchDocument parsed: the probe's own tree when it is reused,
+// so a document read to recognise it is not parsed a second time.
+func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*html.Node, *url.URL, error) {
+	if p := probed(ctx, u); p != nil {
+		if _, ok := p.Document(); ok {
+			if root := p.HTML(); root != nil {
+				return root, p.Final, nil
+			}
+		}
+	}
+	doc, final, err := client.GetPage(ctx, u.String(), headers, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	root, err := parseHTML(doc)
+	return root, final, err
 }
 
 // OK reports whether the page answered with content of its own.
@@ -241,14 +334,73 @@ func (p *Page) IsHTML() bool {
 	return p.Body != "" && (mediaPageIsHTMLType(kind) || kind == "" && strings.Contains(p.Body[:min(len(p.Body), 1024)], "<"))
 }
 
-// HTML is the parsed document, or nil when the body is not one.
-func (p *Page) HTML() *html.Node {
-	p.once.Do(func() {
-		if p.IsHTML() {
-			p.root, _ = parseHTML(p.Body)
+// Silent reports a page with nothing of the site's own to read: a WAF
+// challenge stood in for it, it failed or answered with an error, it is
+// empty, or it is a proof-of-work interstitial served with a 200. Only then
+// may a recogniser whose URL form matched ask the origin's own API instead
+// of reading the page.
+func (p *Page) Silent() bool {
+	return p.Challenged || !p.OK() || p.Body == "" || p.Script(antiBotScriptPath)
+}
+
+// antiBotScriptPath is where the common proof-of-work bot check serves its
+// script from, on whichever site deploys it.
+const antiBotScriptPath = "/.within.website/"
+
+// index parses the document once and reads its head in the same pass.
+func (p *Page) index() *pageIndex {
+	p.parseOnce.Do(func() {
+		if !p.IsHTML() {
+			return
+		}
+		root, err := parseHTML(p.Body)
+		if err != nil {
+			return
+		}
+		x := &p.parsed
+		x.root, x.meta = root, map[string]string{}
+		walk(root, func(n *html.Node) {
+			switch {
+			case isElem(n, atom.Meta):
+				content := strings.TrimSpace(attr(n, "content"))
+				for _, key := range []string{attr(n, "property"), attr(n, "name")} {
+					if _, seen := x.meta[key]; key != "" && !seen {
+						x.meta[key] = content
+					}
+				}
+			case isElem(n, atom.Title):
+				if x.title == "" {
+					x.title = strings.TrimSpace(textOf(n))
+				}
+			case isElem(n, atom.Script):
+				if src, err := url.Parse(attr(n, "src")); err == nil && src.Path != "" {
+					x.scripts = append(x.scripts, src.Path)
+				}
+			}
+		})
+		for _, key := range []string{"og:site_name", "application-name", "apple-mobile-web-app-title"} {
+			if v := x.meta[key]; v != "" {
+				x.names = append(x.names, v)
+			}
+		}
+		if x.title != "" {
+			parts := titleSeparators.Split(x.title, -1)
+			x.names = append(x.names, parts[0])
+			if len(parts) > 1 {
+				x.names = append(x.names, parts[len(parts)-1])
+			}
 		}
 	})
-	return p.root
+	return &p.parsed
+}
+
+// HTML is the parsed document, or nil when the body is not one.
+func (p *Page) HTML() *html.Node { return p.index().root }
+
+// hasElement reports whether the document has an element the test accepts.
+func (p *Page) hasElement(test func(n *html.Node) bool) bool {
+	root := p.HTML()
+	return root != nil && findFirst(root, test) != nil
 }
 
 // Has reports whether the body contains every one of the fragments.
@@ -266,33 +418,18 @@ func (p *Page) Has(fragments ...string) bool {
 
 // HasAny reports whether the body contains at least one of the fragments.
 func (p *Page) HasAny(fragments ...string) bool {
-	for _, f := range fragments {
-		if p.Has(f) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(fragments, func(f string) bool { return p.Has(f) })
 }
 
 // Meta is a meta element's content by name or property.
-func (p *Page) Meta(key string) string {
-	if root := p.HTML(); root != nil {
-		return metaContent(root, key)
-	}
-	return ""
-}
+func (p *Page) Meta(key string) string { return p.index().meta[key] }
 
 // Generator is the generator meta tag, lower case: what software made the
 // page, by its own account.
 func (p *Page) Generator() string { return strings.ToLower(p.Meta("generator")) }
 
 // Title is the document's title, trimmed.
-func (p *Page) Title() string {
-	if root := p.HTML(); root != nil {
-		return strings.TrimSpace(firstText(root, atom.Title))
-	}
-	return ""
-}
+func (p *Page) Title() string { return p.index().title }
 
 // titleSeparators split a title into the page's own name and the site's.
 var titleSeparators = regexp.MustCompile(`\s+[-|—–·:»]{1,2}\s+`)
@@ -302,50 +439,50 @@ var titleSeparators = regexp.MustCompile(`\s+[-|—–·:»]{1,2}\s+`)
 // title. A site's own name is the steadiest thing its pages carry — bundles
 // are renamed with every deploy, while the name is on the root, on every
 // content page and on its error pages alike.
-func (p *Page) Names() []string {
-	var names []string
-	for _, key := range []string{"og:site_name", "application-name", "apple-mobile-web-app-title"} {
-		if v := p.Meta(key); v != "" {
-			names = append(names, v)
-		}
-	}
-	if title := p.Title(); title != "" {
-		parts := titleSeparators.Split(title, -1)
-		names = append(names, parts[0])
-		if len(parts) > 1 {
-			names = append(names, parts[len(parts)-1])
-		}
-	}
-	return names
+func (p *Page) Names() []string { return p.index().names }
+
+// namedBy reports whether one of the page's names for its site, trimmed,
+// passes the test.
+func (p *Page) namedBy(test func(name string) bool) bool {
+	return slices.ContainsFunc(p.Names(), func(name string) bool { return test(strings.TrimSpace(name)) })
 }
 
 // Named reports whether the page calls its site any of the names, ignoring
 // case and surrounding space.
 func (p *Page) Named(names ...string) bool {
-	for _, have := range p.Names() {
-		for _, want := range names {
-			if strings.EqualFold(strings.TrimSpace(have), want) {
-				return true
-			}
-		}
-	}
-	return false
+	return p.namedBy(func(have string) bool {
+		return slices.ContainsFunc(names, func(want string) bool { return strings.EqualFold(have, want) })
+	})
+}
+
+// namedPrefix reports whether one of the page's names for its site begins
+// with the prefix, ignoring case: for a site whose name carries a varying
+// tail, as "<Name> ex <old name>" does.
+func (p *Page) namedPrefix(prefix string) bool {
+	return p.namedBy(func(name string) bool {
+		return len(name) >= len(prefix) && strings.EqualFold(name[:len(prefix)], prefix)
+	})
 }
 
 // Script reports whether the document loads a script whose path contains
 // the fragment. Only the path is compared, never the host it is served from.
 func (p *Page) Script(fragment string) bool {
-	root := p.HTML()
-	if root == nil {
-		return false
-	}
-	return findFirst(root, func(n *html.Node) bool {
-		if !isElem(n, atom.Script) {
-			return false
-		}
-		src, err := url.Parse(attr(n, "src"))
-		return err == nil && strings.Contains(src.Path, fragment)
-	}) != nil
+	return slices.ContainsFunc(p.index().scripts, func(path string) bool { return strings.Contains(path, fragment) })
+}
+
+// playerMetaKeys are the meta tags a video page names its embeddable player
+// in. A site's own player is the steadiest structural fact a watch page
+// carries: it is what every other site embeds, so it survives redesigns of
+// the page around it.
+var playerMetaKeys = []string{"twitter:player", "og:video:url", "og:video:secure_url", "og:video"}
+
+// playerMeta reports whether the page names a player whose URL has the
+// form; only its path, query and fragment are read.
+func (p *Page) playerMeta(form func(*url.URL) bool) bool {
+	return slices.ContainsFunc(playerMetaKeys, func(key string) bool {
+		u, err := url.Parse(p.Meta(key))
+		return err == nil && u.Path != "" && form(u)
+	})
 }
 
 // Segments are the final URL's path segments.
@@ -367,4 +504,11 @@ func pathShape(patterns ...string) func(*url.URL) bool {
 		}
 		return false
 	}
+}
+
+// pathQueryShape is pathShape for a form that names its query too: the
+// pattern is matched against the escaped path, "?" and the raw query.
+func pathQueryShape(pattern string) func(*url.URL) bool {
+	re := regexp.MustCompile(pattern)
+	return func(u *url.URL) bool { return re.MatchString(u.EscapedPath() + "?" + u.RawQuery) }
 }

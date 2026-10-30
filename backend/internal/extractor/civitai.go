@@ -117,26 +117,22 @@ func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 	api := util.Origin(p.Final) + "/api/v1"
 	if target.selector == "" {
 		endpoint := api + "/models/" + url.PathEscape(target.value)
-		return p.Memo(endpoint, func() any {
-			var model struct {
-				ID       int64              `json:"id"`
-				Versions *[]json.RawMessage `json:"modelVersions"`
-			}
-			return platformJSON(ctx, c.client, endpoint, nil, &model) && model.ID > 0 && model.Versions != nil
-		}).(bool)
+		var model struct {
+			ID       int64              `json:"id"`
+			Versions *[]json.RawMessage `json:"modelVersions"`
+		}
+		return pageJSON(ctx, p, c.client, endpoint, nil, &model) && model.ID > 0 && model.Versions != nil
 	}
 	query := url.Values{}
 	query.Set("limit", "1")
 	query.Set("nsfw", civitaiNSFW)
 	query.Set(target.selector, target.value)
 	endpoint := api + "/images?" + query.Encode()
-	return p.Memo(endpoint, func() any {
-		var listing struct {
-			Items    *[]json.RawMessage `json:"items"`
-			Metadata *json.RawMessage   `json:"metadata"`
-		}
-		return platformJSON(ctx, c.client, endpoint, nil, &listing) && listing.Items != nil && listing.Metadata != nil
-	}).(bool)
+	var listing struct {
+		Items    *[]json.RawMessage `json:"items"`
+		Metadata *json.RawMessage   `json:"metadata"`
+	}
+	return pageJSON(ctx, p, c.client, endpoint, nil, &listing) && listing.Items != nil && listing.Metadata != nil
 }
 
 // civitaiTarget is what one input URL asks for.

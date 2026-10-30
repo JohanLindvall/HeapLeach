@@ -72,7 +72,7 @@ func (k *Kemono) Recognise(ctx context.Context, p *Page) bool {
 		findFirst(root, func(n *html.Node) bool { return isElem(n, atom.Div) && attr(n, "id") == "root" }) != nil {
 		return true
 	}
-	return pageSilent(p) && kemonoProfile(ctx, p, k.client, p.Final)
+	return p.Silent() && kemonoProfile(ctx, p, k.client, p.Final)
 }
 
 // kemonoProfile asks for the creator's profile, whose service and id must

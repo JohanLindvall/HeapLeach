@@ -83,12 +83,7 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	if err != nil {
 		return nil, err
 	}
-	// Each source is followed for the form of its link, so one whose page
-	// nobody recognises — removed, or never a page of that kind — is
-	// skipped rather than downloaded as a page.
-	followed := opts
-	followed.strict = true
-	e := expandSources(ctx, v.registry, sources, followed)
+	e := expandSources(ctx, v.registry, sources, opts)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -227,9 +222,7 @@ func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Resu
 	}
 	// The file host is told by what its page shows, like any other link:
 	// a link only shaped like one of theirs is not good enough.
-	strict := opts
-	strict.strict = true
-	res, ex, err := v.registry.Extract(ctx, link.String(), strict)
+	res, ex, err := v.registry.follow(ctx, link.String(), opts)
 	if err == nil && (ex == nil || (ex.Name() != "keep2share" && ex.Name() != "fileboom")) {
 		err = fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
 	}

@@ -102,12 +102,7 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 		return nil, fmt.Errorf("balbums: nothing matches %q", query)
 	}
 
-	// Each source is followed for the form of its link, so one whose page
-	// nobody recognises — removed, or never a page of that kind — is
-	// skipped rather than downloaded as a page.
-	followed := opts
-	followed.strict = true
-	e := expandSources(ctx, b.registry, albums, followed)
+	e := expandSources(ctx, b.registry, albums, opts)
 	if len(e.files) == 0 {
 		return nil, fmt.Errorf("balbums: none of the %d albums matching %q could be resolved "+
 			"(they may all have been taken down)", len(albums), query)

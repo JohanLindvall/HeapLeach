@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"regexp"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -181,16 +180,16 @@ var handoffSites = []handoffSite{
 var (
 	odyseeShape   = pathShape(`^/@[^/]+(?:/[^/]+)?/?$`, `^/(?:%24|\$)/embed/[^/]+`, `^/[^/@$][^/]*:[0-9a-f]+/?$`)
 	odyseeChannel = pathShape(`^/@[^/]+/?$`)
-	odyseeEmbed   = regexp.MustCompile(`^/(?:%24|\$)/embed/`)
+	odyseeEmbed   = pathShape(`^/(?:%24|\$)/embed/`)
 
 	dailymotionShape = pathShape(`^/(?:video|playlist)/x[0-9a-z]+/?$`, `^/embed/video/x[0-9a-z]+/?$`)
 
 	bilibiliShape  = pathShape(`^(?:/en)?/video/(?:BV[0-9A-Za-z]{10}|av[0-9]+)/?$`, `^/bangumi/play/(?:ep|ss)[0-9]+/?$`)
-	bilibiliPlayer = regexp.MustCompile(`^/player\.html\?(?:.*&)?(?:bvid|aid)=`)
+	bilibiliPlayer = pathQueryShape(`^/player\.html\?(?:.*&)?(?:bvid|aid)=`)
 
 	soundcloudShape  = pathShape(`^/[^/]+/sets/[^/]+/?$`)
 	soundcloudPage   = pathShape(`^/[^/]+/[^/]+/?$`, `^/[^/]+/sets/[^/]+/?$`)
-	soundcloudWidget = regexp.MustCompile(`^/player/`)
+	soundcloudWidget = pathShape(`^/player/`)
 
 	mixcloudShape = func(*url.URL) bool { return false }
 	mixcloudPage  = pathShape(`^/[^/]+/[^/]+/$`)
@@ -217,15 +216,13 @@ func (h *Handoff) rumbleKnows(ctx context.Context, p *Page) bool {
 		return false
 	}
 	endpoint := util.Origin(p.Final) + rumbleOEmbedPath + "?" + url.Values{"url": {p.Final.String()}}.Encode()
-	return p.Memo(endpoint, func() any {
-		var out struct {
-			Type         string `json:"type"`
-			ProviderName string `json:"provider_name"`
-			HTML         string `json:"html"`
-		}
-		return platformJSON(ctx, h.client, endpoint, nil, &out) &&
-			strings.HasPrefix(strings.ToLower(out.ProviderName), "rumble") && out.HTML != ""
-	}).(bool)
+	var out struct {
+		Type         string `json:"type"`
+		ProviderName string `json:"provider_name"`
+		HTML         string `json:"html"`
+	}
+	return pageJSON(ctx, p, h.client, endpoint, nil, &out) &&
+		strings.HasPrefix(strings.ToLower(out.ProviderName), "rumble") && out.HTML != ""
 }
 
 // Recognises is the inventory's description.

@@ -86,14 +86,22 @@ func (b *Bandcamp) Recognise(ctx context.Context, p *Page) bool {
 	if b.client == nil || p.Title() != bandcampChallengeTitle || !p.Has(bandcampChallengeAssets) {
 		return false
 	}
-	link := p.Final.String()
-	return p.Memo("bandcamp-agent "+link, func() any {
+	doc := memo(p, bandcampAgentKey, func() string {
 		ctx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
 		defer cancel()
-		doc, err := b.client.GetString(ctx, link, bandcampHeaders())
-		return err == nil && bandcampMarked(&Page{URL: p.Final, Final: p.Final, Body: doc})
-	}).(bool)
+		doc, err := b.client.GetString(ctx, p.Final.String(), bandcampHeaders())
+		if err != nil {
+			return ""
+		}
+		return doc
+	})
+	return doc != "" && bandcampMarked(&Page{URL: p.Final, Final: p.Final, Body: doc})
 }
+
+// bandcampAgentKey memoises, on a challenged probe, the page as fetched
+// under the extractor's own agent, so that Extract reads that document
+// rather than the challenge or a third fetch.
+const bandcampAgentKey = "bandcamp-agent"
 
 // The client challenge a browser is shown in place of a page: its title,
 // and the path its assets are served under.
@@ -169,13 +177,14 @@ func (b *Bandcamp) page(ctx context.Context, link string) (*html.Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bandcamp: %w", err)
 	}
-	doc, _, err := fetchDocument(ctx, b.client, u, bandcampHeaders())
+	if p := probed(ctx, u); p != nil && p.Title() == bandcampChallengeTitle {
+		if doc := memo(p, bandcampAgentKey, func() string { return "" }); doc != "" {
+			return parseHTML(doc)
+		}
+	}
+	root, _, err := fetchRoot(ctx, b.client, u, bandcampHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("bandcamp: fetch %s: %w", link, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("bandcamp: parse %s: %w", link, err)
 	}
 	return root, nil
 }

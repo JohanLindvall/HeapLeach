@@ -597,14 +597,14 @@ func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 // identify probes the URL and returns the first extractor that recognises
 // the page, or the fallback.
 func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) {
-	if !probeWorthy(u) {
-		if _, ok := r.Known(u); !ok {
-			return r.fallback, &Page{URL: u, Final: u}
-		}
+	if !probeWorthy(u) && !r.claims(u) {
+		return r.fallback, &Page{URL: u, Final: u}
 	}
-	p := &Page{URL: u, Final: u, Err: errors.New("no client to probe with")}
+	var p *Page
 	if r.client != nil {
 		p = r.pages.get(ctx, r.client, u)
+	} else {
+		p = &Page{URL: u, Final: u, Err: errNoProbe}
 	}
 	for _, e := range r.extractors {
 		if e.Recognise(ctx, p) {
@@ -613,6 +613,16 @@ func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) 
 	}
 	return r.fallback, p
 }
+
+// claims reports whether any extractor's form claims the URL.
+func (r *Registry) claims(u *url.URL) bool {
+	_, ok := r.Known(u)
+	return ok
+}
+
+// errNoProbe is the page of a registry built without a client, as tests
+// build one.
+var errNoProbe = errors.New("no client to probe with")
 
 // probeWorthy reports whether a URL could be a page, by the extension its
 // path ends in: none, or one a page is served under. A link that names a
@@ -623,11 +633,10 @@ func probeWorthy(u *url.URL) bool {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return true
 	}
-	segs := util.PathSegments(u)
-	if len(segs) == 0 || strings.HasSuffix(u.Path, "/") {
+	if strings.Trim(u.Path, "/") == "" || strings.HasSuffix(u.Path, "/") {
 		return true
 	}
-	ext := strings.ToLower(path.Ext(segs[len(segs)-1]))
+	ext := strings.ToLower(path.Ext(u.Path))
 	switch ext {
 	case "", ".html", ".htm", ".shtml", ".xhtml", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl":
 		return true
@@ -639,6 +648,15 @@ func probeWorthy(u *url.URL) bool {
 
 // fileExtension is an extension that names a file type.
 var fileExtension = regexp.MustCompile(`^\.[a-z][a-z0-9]{0,4}$`)
+
+// follow extracts a link chosen for the form of its link — a source on a
+// page, a frame, a file a listing names — strictly: a page that turns out to
+// be no extractor's is errUnrecognised, never handed to the fallback to be
+// saved as a page.
+func (r *Registry) follow(ctx context.Context, link string, opts Options) (*Result, Extractor, error) {
+	opts.strict = true
+	return r.Extract(ctx, link, opts)
+}
 
 // errUnrecognised reports a source that had a supported form but whose page
 // no extractor recognised: navigation that merely looked like a download.

@@ -185,7 +185,7 @@ func TestPageMemoComputesOnce(t *testing.T) {
 	p := &Page{}
 	var calls atomic.Int32
 	for range 3 {
-		if got := p.Memo("k", func() any { calls.Add(1); return 7 }); got != 7 {
+		if got := memo(p, "k", func() int { calls.Add(1); return 7 }); got != 7 {
 			t.Fatalf("memo = %v", got)
 		}
 	}

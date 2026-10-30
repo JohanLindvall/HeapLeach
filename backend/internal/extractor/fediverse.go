@@ -228,7 +228,7 @@ func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error
 		return cached, nil
 	}
 
-	if p := probedPage(ctx, u); p != nil {
+	if p := probed(ctx, u); p != nil {
 		if name, ok := f.nodeInfo(ctx, p, u); ok && name != "" {
 			f.remember(host, name)
 			return name, nil

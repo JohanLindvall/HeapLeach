@@ -111,7 +111,7 @@ func (f *Feeds) Recognise(_ context.Context, p *Page) bool {
 func (f *Feeds) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	// The probe that recognised the feed already read it, whole unless it
 	// ran past the response bound.
-	if p := probedPage(ctx, u); p != nil && f.Recognise(ctx, p) && len(p.Body) < config.MaxResponseBytes {
+	if p := probed(ctx, u); p != nil && f.Recognise(ctx, p) && len(p.Body) < config.MaxResponseBytes {
 		return feedResult([]byte(p.Body), u, opts.maxFiles())
 	}
 	body, contentType, err := f.fetch(ctx, u)

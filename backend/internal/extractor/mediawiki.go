@@ -208,7 +208,7 @@ func (m *MediaWiki) Recognise(ctx context.Context, p *Page) bool {
 		}) != nil) {
 		return true
 	}
-	if !explicit || !m.Shape(p.Final) || !pageSilent(p) {
+	if !explicit || !m.Shape(p.Final) || !p.Silent() {
 		return false
 	}
 	for _, api := range mediaWikiCandidates(p.Final, "") {
@@ -283,7 +283,7 @@ func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 		// An install with an article path of its own (/w/<title>, or none
 		// at all) cannot be read off the URL, but its page says which
 		// title it is in the configuration it hands its scripts.
-		if p := probedPage(ctx, u); p != nil {
+		if p := probed(ctx, u); p != nil {
 			if match := mediaWikiPageName.FindStringSubmatch(p.Body); match != nil {
 				if raw, err := strconv.Unquote(`"` + match[1] + `"`); err == nil {
 					if name := mediaWikiClean(raw); name != "" {
@@ -672,7 +672,7 @@ func (m *MediaWiki) resolveSite(ctx context.Context, u *url.URL) (mediaWikiSite,
 	// The probed page may have advertised its API, or a challenge in front
 	// of it may have had the API asked already; either answer is kept on
 	// the page.
-	if p := probedPage(ctx, u); p != nil {
+	if p := probed(ctx, u); p != nil {
 		for _, api := range mediaWikiCandidates(p.Final, mediaWikiAdvertised(p)) {
 			if site, ok := mediaWikiAsk(ctx, p, m.client, api); ok {
 				return site, nil

@@ -97,12 +97,9 @@ type expansion struct {
 // still worth having.
 func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) expansion {
 	// Each source was chosen for the form of its link, so a page that turns
-	// out to be no extractor's is navigation and is dropped, never handed to
-	// the fallback to be saved as a page.
-	strict := opts
-	strict.strict = true
+	// out to be no extractor's is navigation and is dropped.
 	return expandSourcesWith(ctx, sources, opts, func(ctx context.Context, link string) (*Result, error) {
-		res, _, err := registry.Extract(ctx, link, strict)
+		res, _, err := registry.follow(ctx, link, opts)
 		return res, err
 	})
 }

@@ -325,8 +325,11 @@ const (
 	// to share a fetch; short enough that a page re-read later is fetched
 	// again, since a re-read is usually asking because the page changed.
 	PageCacheTTL = time.Minute
-	// PageCacheEntries bounds the pages kept, oldest dropped first.
-	PageCacheEntries = 256
+	// PageCacheBytes bounds the bodies of the pages kept, oldest dropped
+	// first. Parsed documents ride along with their pages, at several times
+	// a body's size, which is why this is a fraction of what one job's
+	// listing might otherwise hold.
+	PageCacheBytes = 32 << 20
 
 	// MaxSegmentBytes caps one playlist part, which is assembled in memory
 	// before being appended in order. Set far above any real part — those

@@ -112,7 +112,7 @@ func (p *Pixeldrain) Recognise(ctx context.Context, page *Page) bool {
 	if page.HTML() != nil && page.Script(pixeldrainViewerPath) && page.Has(pixeldrainAPIGlobal) {
 		return true
 	}
-	return pageSilent(page) && pixeldrainAnswers(ctx, page, p.client, page.Final)
+	return page.Silent() && pixeldrainAnswers(ctx, page, p.client, page.Final)
 }
 
 // pixeldrainAnswers recognises a compatible install by its file, list or

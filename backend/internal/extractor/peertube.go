@@ -124,7 +124,7 @@ func (p *PeerTube) Recognise(ctx context.Context, page *Page) bool {
 		findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "my-app" }) != nil {
 		return true
 	}
-	return pageSilent(page) && peerTubeIsInstance(ctx, page, p.client, page.Final)
+	return page.Silent() && peerTubeIsInstance(ctx, page, p.client, page.Final)
 }
 
 // Extract resolves a video, channel, account or playlist page.

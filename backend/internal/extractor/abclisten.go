@@ -293,7 +293,7 @@ func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCol
 
 // page fetches one page and reads its JSON island.
 func (a *ABCListen) page(ctx context.Context, link string) (*abcListenPage, error) {
-	doc, err := broadcastPage(ctx, a.client, link, httpx.Referer(abcListenRoot+"/"))
+	doc, err := fetchPage(ctx, a.client, link, httpx.Referer(abcListenRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("abclisten: fetch %s: %w", link, err)
 	}
