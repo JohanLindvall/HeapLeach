@@ -6,44 +6,78 @@ Notes on individual hosts are in [`hosts/`](hosts/), indexed
 
 ## The contract
 
-`extractor.Extractor` is `Name/Match/Extract`. `Registry.Find` walks the
-registered hosts and falls back to `Direct`, which matches everything — so it
-**never returns nil**. Register new hosts in `NewRegistry`.
+`extractor.Extractor` is `Name/Extract`, and every registered extractor is
+also a `Recogniser` (`Shape/Recognise`) and a `Describer` (`Recognises`).
+Register new extractors in `NewRegistry`; the first to recognise a page
+takes it, so order matters where two could.
+
+### Dispatch is by page, never by host
+
+No extractor claims a domain. `Registry.Extract` probes the submitted URL
+(`page.go`: one bounded GET, redirects followed, the body read only when it
+is text) and offers the `Page` to each `Recognise` in turn; nothing claims it
+and `Direct` takes it. A site that moves domain, or an install nobody listed,
+reaches the right code because the code recognises what it serves. Host
+names may still appear as operational constants (API bases, CDN hosts,
+referers, `Pace` groups), never as the reason an extractor was chosen.
+`TestRecognitionNeverReadsTheHost` fails the build if a `Shape` or
+`Recognise` reads a URL's host, and `expectRecognised`/`expectShape`
+(`recognise_test.go`) re-run each fixture with the page served from an
+unrelated host.
+
+Recognition is **deep**: `Recognise` checks the URL's form *and* page content
+the extractor's own logic depends on (the player configuration, embedded
+JSON, script or DOM structure it parses). The site's name (`Page.Named`) is
+never enough alone; a pure app shell pairs it with a structural marker such
+as the bundle it loads (`Page.Script`). Each test carries a negative fixture
+with the right form and name but without the marker. When the page cannot
+say (a challenge stood in for it, or the HTML is an empty shell) a bounded
+origin request (`platformJSON`) may decide, but only after the form matched,
+since every unrecognised page is offered to every recogniser.
+
+`Shape` is the half that needs no fetch: the link's path, query and
+fragment. `Registry.Known` uses it for link discovery (the harvester, the
+page scanner, the index extractors), and `Guess` for a job's label before it
+is read. A link followed for its form is extracted strictly
+(`Options.strict`): if its page turns out to be no extractor's, it is dropped
+as navigation (`errUnrecognised`) rather than handed to the fallback. Keep
+forms specific enough that a site's own navigation does not turn into a
+probe per link.
+
+### Fetching a page once
+
+Probes go through `pageCache`: per route (a page fetched through one egress
+address says nothing of another's), shared by concurrent callers, kept for
+`config.PageCacheTTL`, and never keeping a failure or a challenge. An
+extractor that reads the submitted page whole uses `fetchDocument`, which
+hands it the probed document instead of fetching again; any extra request a
+recogniser makes goes through `Page.Memo`, keyed by what it asks, so
+several recognisers asking one origin's API share one answer. A link whose
+path names a non-page file and matches no `Shape` skips the probe
+(`probeWorthy`): probing would download the start of the file the fallback
+is about to fetch.
 
 ### The supported-site inventory
 
-The supported-site table in README.md is **generated** from the registry by
-`make hosts`, between two markers, and `make hosts-check` fails CI when the
-file and the code disagree — so edit the extractor, never that table. Adding a
-host is one line in `NewRegistry` plus `make hosts` in the same commit.
-The inventory is collapsed on the front page; its markers stay in README.md.
-The explanatory URL-format table lives in `docs/supported-links.md` and is
-maintained separately because it documents behavior, not registry membership.
-`hosts-check` regenerates into a copy and compares it with README.md as it
-stands, so it judges the working tree whatever else is in flight there; in CI
-the tree is the commit, which is what makes a regeneration that was never
-committed fail the build.
-
-`SiteLister` is the optional half of the contract. An extractor that claims a
-plain list of domains embeds a `hostSet` (`hosts.go`): one declaration that
-answers both `Match` and `Sites`, so the inventory cannot disagree with the
-matcher, and `catalogue_test.go` checks that every host so declared routes
-back to the extractor declaring it. Only an extractor whose `Match` is more
-than a host list — a section of a domain, a wildcard TLD, a document shape —
-writes `Sites()` by hand, in `catalogue.go`; one that skips it altogether must
-be named for its domain, since the catalogue then uses the name as the site.
+The inventory in README.md is **generated** from the registry by `make
+hosts`, between two markers, and `make hosts-check` fails CI when the file
+and the code disagree — so edit the extractor's `Recognises`, never that
+table. Adding an extractor is one line in `NewRegistry` plus `make hosts` in
+the same commit. The inventory is collapsed on the front page; its markers
+stay in README.md. The explanatory URL-format table lives in
+`docs/supported-links.md` and is maintained separately because it documents
+behavior, not registry membership. `hosts-check` regenerates into a copy and
+compares it with README.md as it stands, so it judges the working tree
+whatever else is in flight there; in CI the tree is the commit, which is
+what makes a regeneration that was never committed fail the build.
 
 ### Platform families
 
-Some extractors cover software that many operators run rather than one site.
-Their families are named in `config/config.go` (`FamilyKVS`, `FamilyPeerTube`,
-`FamilyChevereto`, `FamilyFoolFuuka`, `FamilyFediverse`, `FamilyMediaWiki`,
-`FamilyBandzoogle`). A compiled-in install list can only trail such a
-platform, so `HEAPLEACH_EXTRA_HOSTS` adds installs at runtime, and it is the
-one setting that names hosts rather than tuning behaviour. It reads
-`family:host,host;family:host`; the legacy `HEAPLEACH_KVS_HOSTS` is honoured
-as the `kvs` family. The generic fallback also recognises several platforms at
-a URL nobody registered ([below](#platform-detection)).
+Some extractors cover software that many operators run rather than one site
+(KVS, PeerTube, Chevereto, FoolFuuka, the fediverse, MediaWiki, Bandzoogle,
+the booru engines). Each is one recogniser keyed on the software's own
+fingerprint, so there is no install list to keep and no setting to extend
+one.
 
 ### How a host may be used: `Pace`
 
