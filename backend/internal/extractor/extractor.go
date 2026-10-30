@@ -220,6 +220,16 @@ type Target struct {
 	Discard func()
 }
 
+// file is the File a resolved Target describes, in the directory dir: what
+// an extractor that resolves eagerly lists, where one deferring resolution
+// would return the Target from Resolve.
+func (t *Target) file(dir string) File {
+	return File{
+		Name: t.Name, URL: t.URL, Size: t.Size, Dir: dir, Headers: t.Headers,
+		Segments: t.Segments, SegmentKey: t.SegmentKey, Audio: t.Audio, Subtitles: t.Subtitles,
+	}
+}
+
 // WaitError is a resolver's way of saying a file cannot be fetched yet,
 // rather than that it failed: Keep2Share, say, makes an address wait the
 // best part of an hour between free downloads. The downloader puts the item

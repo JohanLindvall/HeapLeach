@@ -98,11 +98,7 @@ func darkGramResult(client *httpx.Client, page *url.URL, root *html.Node, opts O
 				if live, why := hlsLiveEdge(media.Doc); live {
 					return nil, fmt.Errorf("darkgram: video playlist is still being written: %s", why)
 				}
-				return &Target{
-					URL: link, Name: stem + media.extension(), Size: -1,
-					Headers: headers, Segments: media.Segments, SegmentKey: media.Key,
-					Audio: media.Audio, Subtitles: media.Subtitles,
-				}, nil
+				return media.target(link, stem+media.extension(), headers), nil
 			}
 		}
 		res.Files = append(res.Files, file)

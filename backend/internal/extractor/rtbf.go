@@ -226,14 +226,6 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	return &Result{Title: stem, Files: []File{target.file("")}}, nil
 }
 
-// file is a target as the file it resolves to.
-func (t *Target) file(dir string) File {
-	return File{
-		Name: t.Name, URL: t.URL, Size: t.Size, Dir: dir, Headers: t.Headers, Segments: t.Segments,
-		SegmentKey: t.SegmentKey, Audio: t.Audio, Subtitles: t.Subtitles,
-	}
-}
-
 // rtbfPlay is Red Bee's answer to a request to play: the formats a media
 // is offered in, or why it is not.
 type rtbfPlay struct {

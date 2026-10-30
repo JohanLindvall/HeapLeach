@@ -302,17 +302,9 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 		if err != nil {
 			return nil, "", fmt.Errorf("%s: %s: %w", peerTubeLabel, title, err)
 		}
-		return []File{{
-			// Current instances serve fragmented MP4 and older ones MPEG-TS;
-			// the segments say which. See segmentsExtension.
-			Name:       title + media.extension(),
-			Size:       -1,
-			Headers:    headers,
-			Segments:   media.Segments,
-			SegmentKey: media.Key,
-			Audio:      media.Audio,
-			Subtitles:  media.Subtitles,
-		}}, title, nil
+		// Current instances serve fragmented MP4 and older ones MPEG-TS; the
+		// segments say which. See segmentsExtension.
+		return []File{media.file(title+media.extension(), headers)}, title, nil
 	}
 
 	return nil, "", peerTubeNoMedia(video)

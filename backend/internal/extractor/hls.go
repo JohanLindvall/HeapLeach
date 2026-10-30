@@ -496,6 +496,25 @@ func resolveSubtitles(ctx context.Context, client *httpx.Client, renditions []hl
 // extension names the container the downloaded file will be in: an MP4 when
 // the audio is joined to the video, which ffmpeg writes, and otherwise
 // whatever the segments are (segmentsExtension).
+// file is the playlist as a File named name: its segments, key, audio and
+// subtitles all carried over, as resolveMediaPlaylist requires. A playlist
+// has no length until every part is fetched, so Size is unknown.
+func (m *hlsMedia) file(name string, headers httpx.Header) File {
+	return File{
+		Name: name, Size: -1, Headers: headers,
+		Segments: m.Segments, SegmentKey: m.Key, Audio: m.Audio, Subtitles: m.Subtitles,
+	}
+}
+
+// target is the playlist as a freshly resolved Target, for a resolver that
+// reads a signed playlist again at transfer time.
+func (m *hlsMedia) target(link, name string, headers httpx.Header) *Target {
+	return &Target{
+		URL: link, Name: name, Size: -1, Headers: headers,
+		Segments: m.Segments, SegmentKey: m.Key, Audio: m.Audio, Subtitles: m.Subtitles,
+	}
+}
+
 func (m *hlsMedia) extension() string {
 	return m.extensionOr(segmentsExtension(m.Segments, m.Variant))
 }

@@ -129,19 +129,7 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 	}
 
 	name := hlsName(u)
-	return &Result{Title: name, Files: []File{{
-		Name: name + media.extension(),
-		// A playlist has no length until every part has been fetched, and
-		// guessing one from the durations would be a number the skip-what-is-
-		// already-downloaded check could act on.
-		Size:      -1,
-		Headers:   headers,
-		Segments:  media.Segments,
-		Audio:     media.Audio,
-		Subtitles: media.Subtitles,
-		// An AES-128 playlist is decrypted as its segments land.
-		SegmentKey: media.Key,
-	}}}, nil
+	return &Result{Title: name, Files: []File{media.file(name+media.extension(), headers)}}, nil
 }
 
 // hlsLiveEdge reports whether a media playlist is still being written, and if
