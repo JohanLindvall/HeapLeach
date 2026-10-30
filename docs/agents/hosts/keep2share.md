@@ -126,7 +126,8 @@ concurrency limit.
 
 voyeurking hosts nothing: it is an index of K2S and FileBoom files. Category
 and collection pages expose their video links and `rel="next"` pager in HTML,
-and pagination stays within the same listing type and slug. A video's file
+and pagination stays within the same listing type and slug. The walk is the
+shared `walkListing` (`listing.go`), with its partial-listing notes. A video's file
 link lives in the flattened React Router data table. Read only the primary
 route's `video.file`: the same table also contains related videos and player
 assets. Expansion goes through the registry, so the host's deferred resolver

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -107,7 +109,7 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 			return isElem(n, atom.Iframe) && hasClass(n, "bunnyframe")
 		})
 		if frame != nil {
-			if embed := knuthingLink(final, attr(frame, "src")); embed != nil {
+			if embed := webLink(final, attr(frame, "src")); embed != nil {
 				title := util.FirstNonEmpty(metaContent(root, "og:title"), firstText(root, atom.Title), util.NameFromURL(final.String()))
 				return &knuthingVideo{title: title, embed: embed.String(), referer: final.String()}, nil
 			}
@@ -118,9 +120,8 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 		if attempt == 0 && final.Query().Get("limitprompt") != "true" {
 			var confirm *url.URL
 			for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
-				link := knuthingLink(final, attr(a, "href"))
-				if link != nil && link.Scheme == final.Scheme && strings.EqualFold(link.Host, final.Host) &&
-					link.Path == final.Path && link.Query().Get("limitprompt") == "true" {
+				link := webLink(final, attr(a, "href"))
+				if link != nil && sameSite(link, final) && link.Path == final.Path && link.Query().Get("limitprompt") == "true" {
 					confirm = link
 					break
 				}
@@ -162,7 +163,7 @@ func (k *Knuthing) resolve(ctx context.Context, page string) (*Target, error) {
 	if player == nil {
 		return nil, fmt.Errorf("knuthing: no Bunny Stream video in the player")
 	}
-	link := knuthingLink(playerURL, attr(player, "content-src"))
+	link := webLink(playerURL, attr(player, "content-src"))
 	if link == nil || !strings.EqualFold(path.Ext(link.Path), ".m3u8") {
 		return nil, fmt.Errorf("knuthing: player has no HLS source")
 	}
@@ -175,22 +176,110 @@ func (k *Knuthing) resolve(ctx context.Context, page string) (*Target, error) {
 	if live, why := hlsLiveEdge(media.Doc); live {
 		return nil, fmt.Errorf("knuthing: video playlist is still being written: %s", why)
 	}
-	return &Target{
-		URL: link.String(), Name: video.title + media.extension(), Size: -1,
-		Headers: headers, Segments: media.Segments, SegmentKey: media.Key,
-		Audio: media.Audio, Subtitles: media.Subtitles,
-	}, nil
+	return media.target(link.String(), video.title+media.extension(), headers), nil
 }
 
-func knuthingLink(base *url.URL, ref string) *url.URL {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return nil
+// Listings publish titles on their cards. Opening every watch page here
+// would spend short-lived signatures and hundreds of requests to learn
+// nothing needed by the queue; each file reads its own page when it starts.
+func (k *Knuthing) list(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	first := *u
+	first.Fragment = ""
+	query := first.Query()
+	query.Set("page_id", "1")
+	query.Del("last_page")
+	first.RawQuery = query.Encode()
+	limit, limitNote := listingLimit(opts)
+	links, title, note, err := walkListing(ctx, k.client, &first, listingWalk{
+		name: "knuthing", title: strings.Join(util.PathSegments(u)[1:], " - "), none: "listing has no videos",
+		limit: limit, limitNote: limitNote, read: knuthingCards,
+	})
+	if err != nil {
+		return nil, err
 	}
-	u, err := base.Parse(ref)
-	if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return nil
+	res := &Result{Title: title, Note: note}
+	for _, link := range links {
+		res.Files = append(res.Files, k.file(link.url, link.title))
 	}
-	u.Fragment = ""
-	return u
+	return res, nil
+}
+
+// knuthingCards reads the page's own video cards, not the sidebar's.
+func knuthingCards(root *html.Node, page, first *url.URL) listingPage {
+	content := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "container_content" })
+	if content == nil {
+		content = root
+	}
+	listing := findFirst(content, func(n *html.Node) bool { return hasClass(n, "videos-latest-list") })
+	if listing == nil {
+		return listingPage{missing: true}
+	}
+	p := listingPage{title: textOfFirst(content, func(n *html.Node) bool { return hasClass(n, "page_head") })}
+	for _, card := range findAll(listing, func(n *html.Node) bool { return hasClass(n, "video-wrapper") }) {
+		for _, a := range findAll(card, func(n *html.Node) bool { return isElem(n, atom.A) }) {
+			link := webLink(page, attr(a, "href"))
+			if link == nil || !sameSite(link, first) {
+				continue
+			}
+			if parts := util.PathSegments(link); len(parts) == 2 && parts[0] == "watch" {
+				p.links = append(p.links, listingLink{
+					key: util.FirstNonEmpty(attr(card, "data-id"), link.Path), url: link.String(),
+					title: util.FirstNonEmpty(firstText(card, atom.H4), util.NameFromURL(link.String())),
+				})
+				break
+			}
+		}
+	}
+	p.next, p.note = knuthingNext(content, page, first)
+	return p
+}
+
+// Follow the listing's pager, keeping its section and filters. Numeric
+// links provide a fallback for translated Next Page labels; the last-page
+// shortcut never substitutes for the next page.
+func knuthingNext(root *html.Node, page, first *url.URL) (*url.URL, string) {
+	pager := findFirst(root, func(n *html.Node) bool { return hasClass(n, "pagination") })
+	if pager == nil {
+		return nil, ""
+	}
+	current, _ := strconv.Atoi(page.Query().Get("page_id"))
+	current = max(1, current)
+	var fallback *url.URL
+	for _, a := range findAll(pager, func(n *html.Node) bool { return isElem(n, atom.A) }) {
+		explicit := strings.EqualFold(attr(a, "title"), "Next Page") || slices.Contains(strings.Fields(attr(a, "rel")), "next")
+		link := webLink(page, attr(a, "href"))
+		number := 0
+		if link != nil {
+			number, _ = strconv.Atoi(link.Query().Get("page_id"))
+		}
+		if !explicit && number != current+1 {
+			continue
+		}
+		valid := link != nil && sameSite(link, first) && samePath(link, first) && number == current+1
+		if valid {
+			query := link.Query()
+			filters := first.Query()
+			filters.Del("page_id")
+			filters.Del("last_page")
+			for key, values := range query {
+				if key != "page_id" && key != "last_page" && !slices.Equal(values, filters[key]) {
+					valid = false
+				}
+			}
+			for key, values := range filters {
+				query[key] = values
+			}
+			link.RawQuery = query.Encode()
+		}
+		if explicit {
+			if !valid {
+				return nil, "partial — invalid next page"
+			}
+			return link, ""
+		}
+		if valid {
+			fallback = link
+		}
+	}
+	return fallback, ""
 }

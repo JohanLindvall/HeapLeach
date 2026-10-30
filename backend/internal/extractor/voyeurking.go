@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -119,87 +118,57 @@ func voyeurKingListing(u *url.URL) bool {
 }
 
 func (v *VoyeurKing) list(ctx context.Context, first *url.URL, limit int) (sources []string, title, note string, err error) {
-	seen, pages := make(map[string]bool), make(map[string]bool)
-	page := first
-	listing := util.PathSegments(first)
-	title = listing[1]
-	for n := range config.MaxAlbumPages {
-		if pages[page.String()] {
-			return sources, title, "partial — repeated page", nil
-		}
-		pages[page.String()] = true
-		doc, _, fetchErr := fetchDocument(ctx, v.client, page, httpx.Referer(first.String()))
-		if fetchErr != nil {
-			if ctx.Err() != nil {
-				return nil, "", "", ctx.Err()
-			}
-			if n == 0 {
-				return nil, "", "", fmt.Errorf("voyeurking: fetch listing: %w", fetchErr)
-			}
-			return sources, title, "partial — could not fetch next page", nil
-		}
-		root, parseErr := parseHTML(doc)
-		if parseErr != nil {
-			return nil, "", "", parseErr
-		}
-		main := findFirst(root, func(node *html.Node) bool { return isElem(node, atom.Main) })
-		if main == nil {
-			if n > 0 {
-				return sources, title, "partial — listing is missing on next page", nil
-			}
-			return nil, "", "", fmt.Errorf("voyeurking: listing is missing")
-		}
-		if n == 0 {
-			title = util.FirstNonEmpty(firstText(main, atom.H1), title)
-		}
-		before := len(sources)
-		var next *url.URL
-		for _, a := range findAll(main, func(node *html.Node) bool { return isElem(node, atom.A) }) {
-			link, linkErr := page.Parse(strings.TrimSpace(attr(a, "href")))
-			isNext := strings.Contains(" "+attr(a, "rel")+" ", " next ")
-			if linkErr != nil || link.User != nil || link.Scheme != first.Scheme || !strings.EqualFold(link.Host, first.Host) {
-				if isNext {
-					note = "partial — invalid next page"
-				}
-				continue
-			}
-			link.Fragment = ""
-			segs := util.PathSegments(link)
-			if isNext {
-				if voyeurKingListing(link) && segs[0] == listing[0] && segs[1] == listing[1] {
-					next = link
-				} else {
-					note = "partial — invalid next page"
-				}
-			}
-			if len(segs) != 2 || segs[0] != "video" {
-				continue
-			}
-			// The thumbnail and title both link to the same page. Tracking
-			// queries and fragments do not make them different videos.
-			link.Path = strings.TrimRight(link.Path, "/")
-			link.RawPath, link.RawQuery = "", ""
-			if seen[link.String()] {
-				continue
-			}
-			seen[link.String()] = true
-			if len(sources) == limit {
-				return sources, title, "partial — source limit", nil
-			}
-			sources = append(sources, link.String())
-		}
-		if next == nil {
-			return sources, title, note, nil
-		}
-		if len(sources) == before {
-			return sources, title, "partial — repeated or empty page", nil
-		}
-		if len(sources) == limit {
-			return sources, title, "partial — source limit", nil
-		}
-		page = next
+	section := util.PathSegments(first)
+	links, title, note, err := walkListing(ctx, v.client, first, listingWalk{
+		name: "voyeurking", title: section[1], none: "listing has no videos",
+		limit: limit, limitNote: "partial — source limit",
+		read: func(root *html.Node, page, first *url.URL) listingPage {
+			return voyeurKingCards(root, page, first, section)
+		},
+	})
+	for _, link := range links {
+		sources = append(sources, link.url)
 	}
-	return sources, title, "partial — page limit", nil
+	return sources, title, note, err
+}
+
+// voyeurKingCards reads a listing page's <main>: its video links, and its
+// rel=next link within the same listing type and slug.
+func voyeurKingCards(root *html.Node, page, first *url.URL, section []string) listingPage {
+	main := findFirst(root, func(node *html.Node) bool { return isElem(node, atom.Main) })
+	if main == nil {
+		return listingPage{missing: true}
+	}
+	p := listingPage{title: firstText(main, atom.H1)}
+	invalid := false
+	for _, a := range findAll(main, func(node *html.Node) bool { return isElem(node, atom.A) }) {
+		link := webLink(page, attr(a, "href"))
+		isNext := strings.Contains(" "+attr(a, "rel")+" ", " next ")
+		if link == nil || !sameSite(link, first) {
+			invalid = invalid || isNext
+			continue
+		}
+		segs := util.PathSegments(link)
+		if isNext {
+			if voyeurKingListing(link) && segs[0] == section[0] && segs[1] == section[1] {
+				p.next = link
+			} else {
+				invalid = true
+			}
+		}
+		if len(segs) != 2 || segs[0] != "video" {
+			continue
+		}
+		// The thumbnail and title both link to the same page. Tracking
+		// queries and fragments do not make them different videos.
+		link.Path = strings.TrimRight(link.Path, "/")
+		link.RawPath, link.RawQuery = "", ""
+		p.links = append(p.links, listingLink{key: link.String(), url: link.String()})
+	}
+	if p.next == nil && invalid {
+		p.note = "partial — invalid next page"
+	}
+	return p
 }
 
 func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

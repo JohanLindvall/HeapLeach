@@ -117,7 +117,7 @@ func (n *NoodleMagazine) readVideo(ctx context.Context, page string) (*noodleVid
 	}
 	var candidates []mediaCandidate
 	for _, source := range playlist.Sources {
-		link := noodleLink(final, source.File)
+		link := webLink(final, source.File)
 		if link == nil {
 			continue
 		}
@@ -150,32 +150,86 @@ func (n *NoodleMagazine) resolve(ctx context.Context, page string) (*Target, err
 	if err != nil {
 		return nil, err
 	}
-	target := &Target{URL: video.media.URL, Name: video.title + ".mp4", Size: -1, Headers: httpx.Referer(video.referer)}
-	if video.media.IsHLS {
-		ResolveNote(ctx, "Reading video playlist")
-		media, err := resolveMediaPlaylist(ctx, n.client, video.media.URL, target.Headers)
-		if err != nil {
-			return nil, fmt.Errorf("noodlemagazine: video playlist: %w", err)
-		}
-		if live, why := hlsLiveEdge(media.Doc); live {
-			return nil, fmt.Errorf("noodlemagazine: video playlist is still being written: %s", why)
-		}
-		target.Name = video.title + media.extension()
-		target.Segments, target.SegmentKey = media.Segments, media.Key
-		target.Audio, target.Subtitles = media.Audio, media.Subtitles
+	headers := httpx.Referer(video.referer)
+	if !video.media.IsHLS {
+		return &Target{URL: video.media.URL, Name: video.title + ".mp4", Size: -1, Headers: headers}, nil
 	}
-	return target, nil
+	ResolveNote(ctx, "Reading video playlist")
+	media, err := resolveMediaPlaylist(ctx, n.client, video.media.URL, headers)
+	if err != nil {
+		return nil, fmt.Errorf("noodlemagazine: video playlist: %w", err)
+	}
+	if live, why := hlsLiveEdge(media.Doc); live {
+		return nil, fmt.Errorf("noodlemagazine: video playlist is still being written: %s", why)
+	}
+	return media.target(video.media.URL, video.title+media.extension(), headers), nil
 }
 
-func noodleLink(base *url.URL, ref string) *url.URL {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return nil
+func (n *NoodleMagazine) list(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	first := *u
+	first.Fragment = ""
+	query := first.Query()
+	query.Del("p")
+	first.RawQuery = query.Encode()
+	limit, limitNote := listingLimit(opts)
+	links, title, note, err := walkListing(ctx, n.client, &first, listingWalk{
+		name: "noodlemagazine", title: strings.ReplaceAll(util.PathSegments(u)[1], "+", " "),
+		none: "no videos found for this search", limit: limit, limitNote: limitNote, read: noodleCards,
+	})
+	if err != nil {
+		return nil, err
 	}
-	link, err := base.Parse(ref)
-	if err != nil || link.Hostname() == "" || link.User != nil || (link.Scheme != "https" && link.Scheme != "http") {
-		return nil
+	res := &Result{Title: title, Note: note}
+	for _, link := range links {
+		res.Files = append(res.Files, n.file(link.url, link.title))
 	}
-	link.Fragment = ""
-	return link
+	return res, nil
+}
+
+// noodleCards reads a search page's cards. An exhausted search serves
+// unrelated "Watching now" cards in a class=list_videos container: only
+// id=list_videos is this search.
+func noodleCards(root *html.Node, page, _ *url.URL) listingPage {
+	listing := findFirst(root, func(n *html.Node) bool { return attr(n, "id") == "list_videos" })
+	if listing == nil {
+		empty := findFirst(root, func(n *html.Node) bool { return attr(n, "data-i18n") == "nothing_found" }) != nil
+		return listingPage{end: empty, missing: !empty}
+	}
+	p := listingPage{title: firstText(root, atom.H1)}
+	for _, card := range findAll(listing, func(n *html.Node) bool { return hasClass(n, "item") }) {
+		for _, a := range findAll(card, func(n *html.Node) bool { return isElem(n, atom.A) && hasClass(n, "item_link") }) {
+			link := webLink(page, attr(a, "href"))
+			if link == nil || !sameSite(link, page) || noodleVideoID(link) == "" {
+				continue
+			}
+			id := noodleVideoID(link)
+			title := util.FirstNonEmpty(textOfFirst(card, func(n *html.Node) bool { return hasClass(n, "title") }), attr(card, "data-video-title-base"), id)
+			p.links = append(p.links, listingLink{key: id, url: link.String(), title: title})
+			break
+		}
+	}
+	p.next, p.note = noodleNext(root, page)
+	return p
+}
+
+// The "more" control supplies the zero-based page index. GET renders the
+// same results as the player's POST, with a fresh pager; preserve the search
+// path's escaping and every filter when advancing it.
+func noodleNext(root *html.Node, page *url.URL) (*url.URL, string) {
+	control := findFirst(root, func(n *html.Node) bool {
+		return hasClass(n, "more") && !hasAttr(n, "hidden") && attr(n, "data-action") == ""
+	})
+	if control == nil {
+		return nil, ""
+	}
+	query := page.Query()
+	current, _ := strconv.Atoi(query.Get("p"))
+	next, err := strconv.Atoi(attr(control, "data-page"))
+	if err != nil || next <= 0 || next != current+1 {
+		return nil, "partial — invalid next page"
+	}
+	link := *page
+	query.Set("p", strconv.Itoa(next))
+	link.RawQuery = query.Encode()
+	return &link, ""
 }
