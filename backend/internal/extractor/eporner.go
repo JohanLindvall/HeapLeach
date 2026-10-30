@@ -351,53 +351,57 @@ type epornerVideo struct {
 // epornerProfile walks a profile tab for the videos it lists.
 func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL) ([]listingLink, string, string, error) {
 	user, tab, _ := epornerProfileOf(util.PathSegments(u))
-	videos, declared, err := epornerProfileVideos(ctx, client, u, user, tab)
+	links, declared, err := epornerProfileVideos(ctx, client, u, user, tab)
 	if err != nil {
 		return nil, "", "", err
 	}
-	if len(videos) == 0 {
+	if len(links) == 0 {
 		return nil, "", "", fmt.Errorf("%s lists no videos under %s", user, tab)
 	}
-	links := make([]listingLink, 0, len(videos))
-	for _, v := range videos {
-		links = append(links, listingLink{url: v.Page, title: v.Title})
-	}
-	return links, epornerProfileTitle(user, tab), epornerProfileNote(len(videos), declared), nil
+	return links, epornerProfileTitle(user, tab), epornerProfileNote(len(links), declared), nil
 }
 
-// epornerProfileVideos pages through a profile tab, collecting what it lists
-// and the total the tab claims to hold.
-func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL, user, tab string) ([]epornerVideo, int, error) {
-	var videos []epornerVideo
-	declared := 0
-	seen := make(map[string]bool)
-
-	for page := 1; page <= epornerMaxProfilePages && len(videos) < epornerMaxVideos; page++ {
-		link := epornerProfilePage(u, user, tab, page)
-		doc, err := fetchPage(ctx, client, link, httpx.Referer(epornerRoot+"/"))
-		if err != nil {
-			if page == 1 {
-				return nil, 0, fmt.Errorf("fetch profile: %w", err)
-			}
-			// Asking past the last page is how the walk finds its end: the
-			// listing answers 404 rather than an empty page. A short walk
-			// is caught by the declared count, not by trusting this.
-			break
-		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, 0, err
-		}
-		if page == 1 {
-			declared = epornerDeclaredCount(root, tab)
-		}
-		found := epornerListing(root, link, seen)
-		videos = append(videos, found...)
-		if len(found) == 0 {
-			break
-		}
+// epornerProfileVideos pages through a profile tab by number, collecting
+// what it lists and the total the tab claims to hold. Asking past the last
+// page is how the walk finds its end — the listing answers 404 rather than
+// an empty page — so the walk is quiet: a short one is caught by the
+// declared count, not by trusting how it stopped.
+func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL, user, tab string) ([]listingLink, int, error) {
+	headers := httpx.Referer(epornerRoot + "/")
+	first, err := url.Parse(epornerProfilePage(u, user, tab, 1))
+	if err != nil {
+		return nil, 0, err
 	}
-	return videos, declared, nil
+	root, err := fetchPageRoot(ctx, client, first.String(), headers)
+	if err != nil {
+		return nil, 0, fmt.Errorf("fetch profile: %w", err)
+	}
+	declared := epornerDeclaredCount(root, tab)
+	seen := make(map[string]bool)
+	page, total := 1, 0
+	links, _, _, err := walkListing(ctx, client, first, listingWalk{
+		name: "eporner", limit: -1, quiet: true, anyRedirect: true, root: root,
+		fetch: func(ctx context.Context, next, _ *url.URL) (*html.Node, *url.URL, error) {
+			root, err := fetchPageRoot(ctx, client, next.String(), headers)
+			return root, next, err
+		},
+		read: func(root *html.Node, at, _ *url.URL) listingPage {
+			found := epornerListing(root, at.String(), seen)
+			if len(found) == 0 {
+				return listingPage{end: true}
+			}
+			var lp listingPage
+			for _, v := range found {
+				lp.links = append(lp.links, listingLink{key: v.Page, url: v.Page, title: v.Title})
+			}
+			page, total = page+1, total+len(found)
+			if page <= epornerMaxProfilePages && total < epornerMaxVideos {
+				lp.next, _ = url.Parse(epornerProfilePage(u, user, tab, page))
+			}
+			return lp
+		},
+	})
+	return links, declared, err
 }
 
 // epornerListingClass marks the profile's own list. The page also carries a

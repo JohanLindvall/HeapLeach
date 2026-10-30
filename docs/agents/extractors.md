@@ -336,7 +336,15 @@ line in the saved queue.
   audio and subtitles ([media.md](media.md)).
 - `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its
   page cap, per-page note, redirect and repeated-page checks, dedupe, caps and
-  partial notes. A new paged listing supplies only the reader for one page.
+  partial notes. A new paged listing supplies only the reader for one page,
+  which also names the next page for a listing paged by number. Options cover
+  the rest: a first page the caller already read (`root`), a fetch of its own
+  (`fetch`, `fetchAsAsked`), page identity (`key`), redirects judged by the
+  reader (`anyRedirect`), and `quiet` for a listing whose end is found by
+  asking past it — a 404 or an empty page there is the end, not a partial
+  listing, so the walk adds no note of its own and `failed` maps the
+  failures that are one (a rate limit). `listingNotes` (`sources.go`) builds
+  the job note of a listing expanded into its sources.
 - `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
   playlist or target as a File, every field carried over.
 - `rankIn` (`rank.go`): a name's place in a quality ladder, ignoring case,

@@ -35,7 +35,7 @@ What else a row can ask for:
 - **`listing`.** A listing of the site's videos, by `shape`: either a paged
   listing `walkListing` reads (`walk`: the first page and the page reader;
   the engine adds the caps and their notes), or one that pages its own way
-  (`links`, eporner's profile tabs). Each entry is queued unread under its
+  (`links`). Each entry is queued unread under its
   card's title and read like a peeked video.
 - **`finished`.** A media playlist without `#EXT-X-ENDLIST` is refused as
   still being written, since it would finish as a fragment named as the
@@ -228,8 +228,11 @@ tiles, so anything choosing a container by what precedes a tile rather than
 what contains it finds nothing. And a profile also shows a sidebar of the same
 tiles plus unrelated ones, so scraping every `/video-` link on the page
 collects entries the tab does not own. The tab states its own total, which is
-what `epornerProfileTitle` compares against, so a short walk says so instead
-of passing for a whole one.
+what `epornerProfileNote` compares against, so a short walk says so instead
+of passing for a whole one. The pages are numbered, and asking past the last
+answers 404, so the profile is a quiet `walkListing` that names each next
+page by number: the stated total, not how the walk stopped, decides whether
+the listing came back whole.
 
 Titles need `epornerTitle` rather than the shared `trimSiteSuffix`, which cuts
 at the *first* `" - "`. Titles here carry that separator themselves in a
