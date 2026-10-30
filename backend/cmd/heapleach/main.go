@@ -340,12 +340,12 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.IntVar(&cfg.CaptchaConcurrency, "captcha-concurrency", cfg.CaptchaConcurrency,
 		fmt.Sprintf("CAPTCHAs read at once, each in a model session of its own (0 is the default, %d; at most %d)",
 			config.DefaultCaptchaConcurrency, config.MaxCaptchaConcurrency))
-	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share, FileBoom, EMLOAD, MEGA once this address's quota is used up, and WAF challenge recovery on any host")
+	flags.BoolVar(&cfg.Proxies, "proxies", cfg.Proxies, "use proxy routes for Keep2Share (with FileBoom), EMLOAD, MEGA once this address's quota is used up, and WAF challenge recovery on any host")
 	flags.StringVar(&cfg.ProxyDB, "proxy-db", cfg.ProxyDB, "Bolt database for proxy inventory and health")
 	flags.StringVar(&cfg.ProxyType, "proxy-type", cfg.ProxyType,
 		"protocol download proxies are drawn from: any, socks or http (socks and http leave the direct connection out)")
 	proxyTypes := flags.String("proxy-types", config.FormatProxyTypes(cfg.ProxyTypes),
-		"a protocol per proxy group, overriding -proxy-type: keep2share=socks,fileboom=socks,cloudflare=any")
+		"a protocol per proxy group, overriding -proxy-type: keep2share=socks,mega=http,cloudflare=any")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,
 		fmt.Sprintf("connections to split a slow file across (1-%d)", config.MaxStreams))

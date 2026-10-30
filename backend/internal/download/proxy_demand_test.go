@@ -54,25 +54,25 @@ func TestProxyDiscoverySharesConcurrencyAcrossServices(t *testing.T) {
 	m := busyManager(t)
 	attachPool(t, m, []string{"http://proxy.example.test:80"})
 	job := addProxyFiles(m, 4, nil)
-	job.Items[1].pace = &extractor.Pace{Group: "fileboom", PerRoute: true, Files: 1}
+	job.Items[1].pace = &extractor.Pace{Group: "emload", PerRoute: true, Files: 1}
 	job.Items[3].pace = job.Items[1].pace
 	m.proxyEnabled, m.limit = true, 3
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	want := m.proxyDemandLocked()
-	if want["keep2share"] != 2 || want["fileboom"] != 1 {
+	if want["keep2share"] != 2 || want["emload"] != 1 {
 		t.Fatalf("one concurrency budget must serve both queues: %v", want)
 	}
-	// A direct K2S worker drains only K2S; FileBoom can still use proxies.
+	// A direct K2S worker drains only K2S; EMLOAD can still use proxies.
 	m.running, m.hostActive["group:keep2share"] = 1, 1
 	want = m.proxyDemandLocked()
-	if want["keep2share"] != 0 || want["fileboom"] != 2 {
-		t.Fatalf("direct K2S blocked FileBoom demand: %v", want)
+	if want["keep2share"] != 0 || want["emload"] != 2 {
+		t.Fatalf("direct K2S blocked EMLOAD demand: %v", want)
 	}
 	// Another service's lease cannot conceal that unleased K2S transfer.
-	m.running, m.proxyRunning["fileboom"] = 2, 1
+	m.running, m.proxyRunning["emload"] = 2, 1
 	if !m.hostFullLocked(job.Items[0]) {
-		t.Fatal("FileBoom's active proxy concealed an unleased K2S transfer")
+		t.Fatal("EMLOAD's active proxy concealed an unleased K2S transfer")
 	}
 	m.running = 0
 	clear(m.proxyRunning)

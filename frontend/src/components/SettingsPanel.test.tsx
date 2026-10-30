@@ -83,7 +83,7 @@ it('shows measured and live throughput, scoring and success, and pages on the se
   expect(host.textContent).toContain('3.0 MB/s now');
   expect(host.textContent).toContain('90%');
   expect(host.querySelector('tbody')!.textContent).toContain('17');
-  expect(host.textContent).toContain('K2S · FileBoom · EMLOAD · MEGA · WAF recovery');
+  expect(host.textContent).toContain('K2S · EMLOAD · MEGA · WAF recovery');
   expect(button('Previous').disabled).toBe(true);
   vi.mocked(fetchProxies).mockResolvedValue({ ...inventory, offset: 50 });
   await act(async () => { button('Next').click(); });
@@ -91,8 +91,6 @@ it('shows measured and live throughput, scoring and success, and pages on the se
   expect(button('Next').disabled).toBe(true);
   expect(host.textContent).toContain('51–51 of 51');
   const service = host.querySelector<HTMLSelectElement>('[aria-label="Proxy service"]')!;
-  await act(async () => { service.value = 'fileboom'; service.dispatchEvent(new Event('change', { bubbles: true })); });
-  expect(fetchProxies).toHaveBeenLastCalledWith(expect.objectContaining({ site: 'fileboom', offset: 0 }), expect.any(AbortSignal));
   await act(async () => { service.value = 'emload'; service.dispatchEvent(new Event('change', { bubbles: true })); });
   expect(fetchProxies).toHaveBeenLastCalledWith(expect.objectContaining({ site: 'emload', offset: 0 }), expect.any(AbortSignal));
   await act(async () => { service.value = 'mega'; service.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -194,8 +192,8 @@ it('holds every proxy group, or one alone, to a protocol', async () => {
 
   await render({ ...snapshot, proxyType: 'socks', proxyTypes: { keep2share: 'http' } });
   expect(select('#proxy-type-keep2share').value).toBe('http');
-  expect(select('#proxy-type-fileboom').value).toBe('');
-  expect(select('#proxy-type-fileboom').options[0]!.textContent).toBe('Same as all · SOCKS only');
+  expect(select('#proxy-type-emload').value).toBe('');
+  expect(select('#proxy-type-emload').options[0]!.textContent).toBe('Same as all · SOCKS only');
   await choose('#proxy-type-keep2share', '');
   expect(updateSettings).toHaveBeenLastCalledWith({ proxyTypes: { keep2share: '' } });
   await choose('#proxy-type-emload', 'http');

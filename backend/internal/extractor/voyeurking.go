@@ -223,7 +223,7 @@ func (v *VoyeurKing) video(ctx context.Context, u *url.URL, opts Options) (*Resu
 	// The file host is told by what its page shows, like any other link:
 	// a link only shaped like one of theirs is not good enough.
 	res, ex, err := v.registry.follow(ctx, link.String(), opts)
-	if err == nil && (ex == nil || (ex.Name() != "keep2share" && ex.Name() != "fileboom")) {
+	if _, k2s := ex.(*Keep2Share); err == nil && !k2s {
 		err = fmt.Errorf("voyeurking: video file is not hosted by K2S or FileBoom")
 	}
 	if err != nil {

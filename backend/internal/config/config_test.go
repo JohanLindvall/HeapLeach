@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -220,7 +221,7 @@ func TestPrepareValidates(t *testing.T) {
 		{"blank directory", func(c *Config) { c.DownloadDir = "   " }, "directory"},
 		{"unknown proxy protocol", func(c *Config) { c.ProxyType = "tor" }, "proxy type"},
 		{"protocol for no proxy group", func(c *Config) { c.ProxyTypes = map[string]string{"elsewhere": ProxyTypeSOCKS} }, "proxy types"},
-		{"unknown protocol for a group", func(c *Config) { c.ProxyTypes = map[string]string{"fileboom": "tor"} }, "proxy types"},
+		{"unknown protocol for a group", func(c *Config) { c.ProxyTypes = map[string]string{"emload": "tor"} }, "proxy types"},
 	}
 	for _, tc := range cases {
 		cfg := base()
@@ -580,11 +581,35 @@ func TestProxyTypesFromTheEnvironment(t *testing.T) {
 		t.Errorf("written back as %q", got)
 	}
 
-	for _, bad := range []string{"keep2share=tor", "elsewhere=socks", "keep2share", "fileboom="} {
+	for _, bad := range []string{"keep2share=tor", "elsewhere=socks", "keep2share", "emload="} {
 		t.Setenv("HEAPLEACH_PROXY_TYPES", bad)
 		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "HEAPLEACH_PROXY_TYPES") {
 			t.Errorf("%q: err = %v, want it refused and named", bad, err)
 		}
+	}
+}
+
+// A group's former name is read as the group it joined, wherever a protocol
+// is given: a group named both ways keeps the protocol under its own name.
+func TestProxyTypesReadAFormerGroupAsTheOneItJoined(t *testing.T) {
+	for raw, want := range map[string]map[string]string{
+		"fileboom=socks":                 {"keep2share": ProxyTypeSOCKS},
+		"FileBoom=http,mega=any":         {"keep2share": ProxyTypeHTTP, "mega": ProxyTypeAny},
+		"fileboom=socks,keep2share=http": {"keep2share": ProxyTypeHTTP},
+		"keep2share=http,fileboom=socks": {"keep2share": ProxyTypeHTTP},
+	} {
+		got, err := ParseProxyTypes(raw)
+		if err != nil || !maps.Equal(got, want) {
+			t.Errorf("%q read as %v, err %v; want %v", raw, got, err, want)
+		}
+	}
+	cfg := &Config{DownloadDir: t.TempDir(), Concurrency: 4, Streams: 8, StallTimeout: time.Minute,
+		ProxyTypes: map[string]string{"fileboom": ProxyTypeSOCKS}}
+	if err := cfg.Prepare(); err != nil || !maps.Equal(cfg.ProxyTypes, map[string]string{"keep2share": ProxyTypeSOCKS}) {
+		t.Errorf("prepared as %v, err %v; want the group it joined", cfg.ProxyTypes, err)
+	}
+	if group, ok := ProxyGroup("fileboom"); !ok || group != "keep2share" || slices.Contains(ProxyGroups, "fileboom") {
+		t.Errorf("former group is %q %t, groups %v", group, ok, ProxyGroups)
 	}
 }
 

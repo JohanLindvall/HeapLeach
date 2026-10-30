@@ -1,9 +1,9 @@
-# Keep2Share, FileBoom and the CAPTCHA reader
+# Keep2Share (with FileBoom) and the CAPTCHA reader
 
 `keep2share.go`, `keep2shareocr.go` and `voyeurking.go` in
-`internal/extractor`, and `internal/captcha`. Keep2Share and FileBoom are
-per-address services: each address gets one free download at a time, which is
-what the proxy pool is for. How routes are leased, scored and cooled is in
+`internal/extractor`, and `internal/captcha`. Keep2Share, on its own hosts
+and on FileBoom's, is a per-address service: each address gets one free
+download at a time, which is what the proxy pool is for. How routes are leased, scored and cooled is in
 [proxies.md](../proxies.md).
 
 ## The free-download flow
@@ -113,25 +113,38 @@ The item counts route attempts independently of its retry budget, including
 dead proxies that cost no retry, and appends the connection attempt to active
 notes so successive `requesting CAPTCHA (1/3)` attempts visibly differ.
 
-## FileBoom
+## Two hosts, one extractor
 
-fileboom on `fboom.me` shares this implementation with its own `/api/v2` base,
-label and `Pace.Group`. The API namespaces are separate: a FileBoom file ID
-cannot be resolved through K2S. Each instance keeps its own tickets and
-address cooldowns. Proxy statistics and admission limits are per service too,
-with one transfer per address per service under the manager's shared live
-concurrency limit.
+FileBoom (`fboom.me`) serves the same app shell and the same `/api/v2` free
+flow as Keep2Share, so one extractor, `keep2share`, takes both. Its
+`services` are the hosts (`keep2ShareService`: label, `/api/v2` base and the
+newer files API), and the name a file link's page gives itself picks one:
+`Recognise` needs the shell and one of the names, and `Extract` asks the API
+of the host its probed page names (probing the page itself when called
+without one, and refusing a page that names neither). A link's form cannot
+tell the hosts apart; only the page can.
+
+Each host keeps its own address cooldowns (one host's wait between free
+downloads says nothing of the other's), notes and log lines carry its label,
+and API errors are prefixed with its name in lower case. Pacing is one
+`Pace.Group`, `keep2share`: one free download per address across both hosts,
+one proxy group, one set of proxy statistics. A setting that still names the
+former `fileboom` group is read as `keep2share` (see
+[proxies.md](../proxies.md)).
+
+Page sources deduplicate a K2S file link by file ID across both hosts and
+their aliases (`fileLinkSources`).
 
 ## voyeurking
 
-voyeurking hosts nothing: it is an index of K2S and FileBoom files. Category
+voyeurking hosts nothing: it is an index of K2S files on either host. Category
 and collection pages expose their video links and `rel="next"` pager in HTML,
 and pagination stays within the same listing type and slug. A video's file
 link lives in the flattened React Router data table. Read only the primary
 route's `video.file`: the same table also contains related videos and player
 assets. Expansion goes through the registry, so the host's deferred resolver
 and per-route pacing reach the downloader intact. The listing pages use the
-ordinary HTTP client; only the K2S and FileBoom transfers use the proxy pool.
+ordinary HTTP client; only the K2S transfers use the proxy pool.
 
 ## The CAPTCHA reader
 

@@ -129,12 +129,12 @@ func TestProxyStartupDefaultsAndFlagOverrides(t *testing.T) {
 func TestProxyTypeFlagsOverrideTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_DIR", t.TempDir())
 	t.Setenv("HEAPLEACH_PROXY_TYPE", "http")
-	t.Setenv("HEAPLEACH_PROXY_TYPES", "fileboom=any")
+	t.Setenv("HEAPLEACH_PROXY_TYPES", "fileboom=any") // a former group, read as the one it joined
 	cfg, err := loadConfig(nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProxyType != config.ProxyTypeHTTP || !maps.Equal(cfg.ProxyTypes, map[string]string{"fileboom": config.ProxyTypeAny}) {
+	if cfg.ProxyType != config.ProxyTypeHTTP || !maps.Equal(cfg.ProxyTypes, map[string]string{"keep2share": config.ProxyTypeAny}) {
 		t.Errorf("from the environment: %q %v", cfg.ProxyType, cfg.ProxyTypes)
 	}
 	cfg, err = loadConfig([]string{"-proxy-type", "SOCKS", "-proxy-types", "keep2share=http"}, io.Discard)

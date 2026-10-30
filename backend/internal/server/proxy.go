@@ -20,6 +20,11 @@ func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	values := r.URL.Query()
 	q := proxy.Query{Search: values.Get("search"), Status: values.Get("status"), Sort: values.Get("sort"), Site: values.Get("site")}
+	// A former group's name, from a page loaded before the groups merged,
+	// asks for the group it is now part of.
+	if group, ok := config.ProxyGroup(q.Site); ok {
+		q.Site = group
+	}
 	if q.Site != "" && !slices.Contains(proxy.Services(), q.Site) {
 		writeError(w, http.StatusBadRequest, "invalid proxy service")
 		return
