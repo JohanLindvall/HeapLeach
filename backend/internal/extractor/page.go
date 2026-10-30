@@ -194,11 +194,18 @@ func withPage(ctx context.Context, p *Page) context.Context {
 }
 
 // probedDocument returns the page the registry already fetched for u, when it
-// is a successful document. ok is false whenever the extractor must fetch it
-// itself: another URL, a failure, or a body the probe did not read.
+// is a successful document; u may be the submitted URL or where it
+// redirected. ok is false whenever the extractor must fetch it itself:
+// another URL, a failure, or a body the probe did not read.
 func probedDocument(ctx context.Context, u *url.URL) (doc string, final *url.URL, ok bool) {
 	p, _ := ctx.Value(pageKey{}).(*Page)
-	if p == nil || p.URL.String() != u.String() || p.Err != nil || p.Status != http.StatusOK || p.Body == "" {
+	if p == nil || p.Err != nil || p.Status != http.StatusOK || p.Body == "" {
+		return "", nil, false
+	}
+	// Either end of the redirect chain will do: an extractor that rebuilds
+	// the canonical address the submitted link redirected to is asking for
+	// the same document.
+	if want := u.String(); p.URL.String() != want && p.Final.String() != want {
 		return "", nil, false
 	}
 	return p.Body, p.Final, true

@@ -702,14 +702,20 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	// by what that route was served rather than by the challenge the first
 	// one met.
 	read := func(ctx context.Context) (Extractor, *Result, error) {
-		ctx, challenge := httpx.CaptureChallenges(ctx)
+		// The probe's own challenge is not the extraction's: a recogniser
+		// may claim a challenged page by its form and an open API, and the
+		// extractor it chose then goes on without the page. Only what that
+		// extractor meets counts. A challenged page nobody claimed is the
+		// read's answer as it stands, rather than one for the fallback to
+		// fetch into again.
 		ex, page := r.identify(ctx, u)
+		if ex == r.fallback && page.Challenged {
+			return ex, nil, page.Err
+		}
 		if strict && ex == r.fallback {
-			if page.Challenged {
-				return ex, nil, page.Err
-			}
 			return ex, nil, fmt.Errorf("%s: %w", u.Redacted(), errUnrecognised)
 		}
+		ctx, challenge := httpx.CaptureChallenges(ctx)
 		res, err := ex.Extract(withPage(ctx, page), u, opts)
 		if ctx.Err() == nil && challenge() != nil {
 			return ex, nil, challenge()

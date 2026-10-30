@@ -62,11 +62,6 @@ import (
 // mean resolving the collection here, which is the work these hosts were
 // handed over to avoid.
 type Handoff struct {
-	// hostSet is set only by an extractor not yet moved to recognition that
-	// hands part of its site over; the handoffs registered on their own
-	// are recognised by their pages and leave it empty.
-	// TODO(generic-dispatch): remove with the last such caller.
-	hostSet
 	client *httpx.Client
 	site   handoffSite
 }
@@ -74,11 +69,6 @@ type Handoff struct {
 // handoffSite is one host passed over whole.
 type handoffSite struct {
 	name string
-	// domains is the host list of a handoff still claimed by host, as part
-	// of an extractor not yet moved to recognition. The sites below are
-	// recognised by their pages instead and leave it empty.
-	// TODO(generic-dispatch): remove once no caller sets it.
-	domains []string
 	// shape is the URL forms the site's media and collections have, for the
 	// link scanner; recognise says whether a probed page is the site's,
 	// by what the page carries that yt-dlp goes on to read; recognises
