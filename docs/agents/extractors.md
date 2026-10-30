@@ -312,10 +312,21 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
+- The `Player` engine (`players.go`): a single-video player page is a
+  `playerSite` row (its forms, recognition, canonical page and a reader
+  returning the candidate renditions), registered with `NewPlayer` at the
+  position where its form order matters. The engine picks the rendition,
+  follows a playlist and re-reads a signed page at transfer time. Add a new
+  player site as a row, not an extractor.
 - `refetchedVideo` (`tube.go`): a single video whose link is signed per visit,
-  re-read when its transfer starts.
-- `unpackJS` (`streamhosts.go`): reverses the p,a,c,k,e,d packer,
-  host-neutral.
+  re-read when its transfer starts, for a page the player engine does not fit.
+- `unpackJS` and `jwSource` (`players.go`): the p,a,c,k,e,d packer reversed,
+  and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
+- `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
+  for DRM and geo refusals in the broadcaster's own words, `resolveListed`
+  for a listing's episodes resolved concurrently in order, `lazyEpisode` and
+  `refreshing` for files re-read at transfer time, and the listing notes. A
+  new broadcaster uses these rather than types of its own.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
 - `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its
@@ -367,7 +378,7 @@ Two conventions worth keeping to when writing one:
 | --- | --- |
 | [hosts/file-hosts.md](hosts/file-hosts.md) | bunkr, gofile, pixeldrain, mega, emload, filejump, filester, suvobox, pixhost, imagepond |
 | [hosts/keep2share.md](hosts/keep2share.md) | keep2share, fileboom, voyeurking, and the CAPTCHA reader (`internal/captcha`) |
-| [hosts/video-hosts.md](hosts/video-hosts.md) | doodstream, streamtape, mixdrop, lulustream, vids.st, sendvid, knuthing, noodlemagazine, ok.ru, pornone, eporner, Kernel Video Sharing; pointer pages (yandex, alohatube); the yt-dlp handoffs (youtube, odysee, dailymotion, bilibili, soundcloud, mixcloud, rumble) |
+| [hosts/video-hosts.md](hosts/video-hosts.md) | the player rows (pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop, lulustream, vids.st, sendvid), doodstream, knuthing, noodlemagazine, ok.ru, eporner, Kernel Video Sharing; pointer pages (yandex, alohatube); the yt-dlp handoffs (youtube, odysee, dailymotion, bilibili, soundcloud, mixcloud, rumble) |
 | [hosts/broadcasters.md](hosts/broadcasters.md) | vimeo, arte, orf, svtplay, yle, drtv, rtbf, francetv, radio-canada, niconico |
 | [hosts/collections.md](hosts/collections.md) | balbums, coomerfans, celeb.st, cum.st, erome, rajce, bandcamp, bandzoogle |
 
