@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -82,8 +83,8 @@ func TestProxyZeroByteStallsPenaliseTheRouteAndRetry(t *testing.T) {
 				return target, nil
 			})
 			it := job.Items[0]
-			row := pool.Page("keep2share", proxy.Query{Search: stuck.URL}).Rows[0]
-			it.route = pool.Acquire("keep2share", row.ID, 1)
+			row := pool.Page(config.GroupKeep2Share, proxy.Query{Search: stuck.URL}).Rows[0]
+			it.route = pool.Acquire(config.GroupKeep2Share, row.ID, 1)
 			if it.route == nil || it.route.ID() != row.ID {
 				t.Fatal("did not acquire the stalled proxy")
 			}
@@ -103,12 +104,12 @@ func TestProxyZeroByteStallsPenaliseTheRouteAndRetry(t *testing.T) {
 			if calls.Load() != 1 || it.downloaded.Load() != 0 || it.proxyRetries != 1 || it.preferredRoute != "" {
 				t.Fatalf("calls=%d bytes=%d retries=%d preferred=%q", calls.Load(), it.downloaded.Load(), it.proxyRetries, it.preferredRoute)
 			}
-			row = pool.Page("keep2share", proxy.Query{Search: stuck.URL}).Rows[0]
+			row = pool.Page(config.GroupKeep2Share, proxy.Query{Search: stuck.URL}).Rows[0]
 			if row.Status != "cooling" || row.Requests != 1 || row.SuccessRate != 0 || row.Active != 0 || !row.CooldownUntil.After(time.Now()) {
 				t.Fatalf("stalled proxy was not penalised exactly once and released: %+v", row)
 			}
 
-			it.route = pool.Acquire("keep2share", row.ID, 1)
+			it.route = pool.Acquire(config.GroupKeep2Share, row.ID, 1)
 			if it.route == nil || it.route.ID() == row.ID {
 				t.Fatal("a stalled proxy was selected again despite an available alternative")
 			}
@@ -170,7 +171,7 @@ func TestProxyBufferingWithinStallTimeoutIsNotPenalised(t *testing.T) {
 				return target, nil
 			})
 			it := job.Items[0]
-			it.route = pool.Acquire("keep2share", "", 1)
+			it.route = pool.Acquire(config.GroupKeep2Share, "", 1)
 			if it.route == nil {
 				t.Fatal("no proxy route available")
 			}
@@ -183,7 +184,7 @@ func TestProxyBufferingWithinStallTimeoutIsNotPenalised(t *testing.T) {
 			if err != nil || !bytes.Equal(got, payload) {
 				t.Fatalf("downloaded %q: %v", got, err)
 			}
-			row := pool.Page("keep2share", proxy.Query{}).Rows[0]
+			row := pool.Page(config.GroupKeep2Share, proxy.Query{}).Rows[0]
 			if row.Status != "available" || row.SuccessRate != 1 || row.Active != 0 || !row.CooldownUntil.IsZero() {
 				t.Fatalf("buffering penalised a working proxy: %+v", row)
 			}

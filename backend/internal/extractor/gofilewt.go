@@ -130,9 +130,7 @@ func (g *Gofile) fetchSecret(ctx context.Context) (string, time.Time, error) {
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	for header, value := range httpx.Referer(gofileRoot + "/") {
-		req.Header.Set(header, value)
-	}
+	httpx.Referer(gofileRoot + "/").Apply(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -167,7 +165,7 @@ func gofileFreshUntil(header http.Header, now time.Time) time.Time {
 		return now.Add(min(max(d, gofileSecretMinTTL), gofileSecretMaxTTL))
 	}
 
-	control := strings.ToLower(header.Get("Cache-Control"))
+	control := strings.ToLower(header.Get(httpx.HeaderCacheControl))
 	if strings.Contains(control, "no-store") || strings.Contains(control, "no-cache") {
 		return clamp(0) // as short as this is willing to go
 	}

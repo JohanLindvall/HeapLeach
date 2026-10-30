@@ -198,9 +198,7 @@ func probePage(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
 		p.Err = err
 		return p
 	}
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
-	req.Header.Set(httpx.HeaderSecFetchDest, "document")
-	req.Header.Set(httpx.HeaderSecFetchMode, "navigate")
+	httpx.Navigate.Apply(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		p.Err = err

@@ -18,7 +18,7 @@ import (
 // interval, with the files moving bytes and those still looking for a route.
 func TestRouteAttemptsAreSummarizedOncePerInterval(t *testing.T) {
 	m := busyManager(t)
-	k2s, other := &extractor.Pace{Group: "keep2share", PerRoute: true}, &extractor.Pace{Group: "emload", PerRoute: true}
+	k2s, other := &extractor.Pace{Group: config.GroupKeep2Share, PerRoute: true}, &extractor.Pace{Group: config.GroupEmload, PerRoute: true}
 	for _, tc := range []struct {
 		pace *extractor.Pace
 		err  error

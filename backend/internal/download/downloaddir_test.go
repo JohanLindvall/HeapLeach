@@ -93,16 +93,13 @@ func TestQueuedTransfersFollowTheNewDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(moved, "file.bin")); err == nil {
-			got, err := os.ReadFile(filepath.Join(moved, "file.bin"))
-			if err != nil || !bytes.Equal(got, payload) {
-				t.Fatalf("file at the new destination is wrong: %v", err)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	target := filepath.Join(moved, "file.bin")
+	waitFor(t, 20*time.Second, func() bool {
+		_, err := os.Stat(target)
+		return err == nil
+	})
+	got, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("file at the new destination is wrong: %v", err)
 	}
-	t.Fatalf("nothing arrived in %s", moved)
 }

@@ -41,6 +41,18 @@ const (
 	HeaderSecFetchDest = "Sec-Fetch-Dest"
 	HeaderSecFetchMode = "Sec-Fetch-Mode"
 	HeaderSecFetchSite = "Sec-Fetch-Site"
+
+	// Response headers, most of them set by the server on what it serves.
+	HeaderAccelBuffering        = "X-Accel-Buffering"
+	HeaderAllow                 = "Allow"
+	HeaderCacheControl          = "Cache-Control"
+	HeaderContentEncoding       = "Content-Encoding"
+	HeaderContentLength         = "Content-Length"
+	HeaderContentSecurityPolicy = "Content-Security-Policy"
+	HeaderContentTypeOptions    = "X-Content-Type-Options"
+	HeaderFrameOptions          = "X-Frame-Options"
+	HeaderReferrerPolicy        = "Referrer-Policy"
+	HeaderVary                  = "Vary"
 )
 
 // Common header values.

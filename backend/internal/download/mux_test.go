@@ -5,7 +5,6 @@ package download
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -130,10 +129,7 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 // own or, named with no URI, carried in the video's own segments.
 func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 	ffmpeg := requireFFmpeg(t)
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	requireFFprobe(t)
 
 	origin := t.TempDir()
 	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
@@ -212,29 +208,8 @@ func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 				t.Errorf("recorded path = %q", path)
 			}
 
-			out, err := exec.Command(ffprobe, "-v", "error", "-show_streams", "-print_format", "json",
-				filepath.Join(m.cfg.DownloadDir, "Show.mp4")).Output()
-			if err != nil {
-				t.Fatal(err)
-			}
-			var probe struct {
-				Streams []struct {
-					CodecType   string  `json:"codec_type"`
-					StartTime   float64 `json:"start_time,string"`
-					Disposition struct {
-						Default int `json:"default"`
-					} `json:"disposition"`
-					Tags struct {
-						Language    string `json:"language"`
-						HandlerName string `json:"handler_name"`
-					} `json:"tags"`
-				} `json:"streams"`
-			}
-			if err := json.Unmarshal(out, &probe); err != nil {
-				t.Fatal(err)
-			}
 			var got []string
-			for _, s := range probe.Streams {
+			for _, s := range ffprobeStreams(t, filepath.Join(m.cfg.DownloadDir, "Show.mp4")) {
 				got = append(got, fmt.Sprintf("%s %s %q default=%d", s.CodecType, s.Tags.Language,
 					s.Tags.HandlerName, s.Disposition.Default))
 				// Every input starts at zero here, so all of the output should.
@@ -294,10 +269,7 @@ func cmafRendition(t *testing.T, ffmpeg, origin, base, name string, input ...str
 // it; the joined file keeps it, and starts at zero as a whole.
 func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 	ffmpeg := requireFFmpeg(t)
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	requireFFprobe(t)
 	dir := t.TempDir()
 	video, audio := filepath.Join(dir, "clip.part"), filepath.Join(dir, "clip.audio1.part")
 	run(t, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
@@ -307,18 +279,9 @@ func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=2",
 		"-c:a", "aac", "-output_ts_offset", "10.5", "-f", "mpegts", audio)
 	starts := func(path string) []float64 {
-		out, err := exec.Command(ffprobe, "-v", "error", "-show_entries", "stream=start_time",
-			"-of", "csv=p=0", path).Output()
-		if err != nil {
-			t.Fatal(err)
-		}
 		var times []float64
-		for field := range strings.FieldsSeq(string(out)) {
-			value, err := strconv.ParseFloat(strings.TrimSuffix(field, ","), 64)
-			if err != nil {
-				t.Fatalf("start time %q: %v", field, err)
-			}
-			times = append(times, value)
+		for _, s := range ffprobeStreams(t, path) {
+			times = append(times, s.StartTime)
 		}
 		return times
 	}

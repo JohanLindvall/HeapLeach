@@ -61,7 +61,7 @@ func addProxyFiles(m *Manager, count int, resolve func(context.Context) (*extrac
 	m.order = append(m.order, job.ID)
 	for i := range count {
 		it := m.newItem(job, extractor.File{Name: fmt.Sprintf("file-%d.bin", i), Size: -1,
-			Resolve: resolve, Pace: &extractor.Pace{Files: 1, Streams: 1, Group: "keep2share", PerRoute: true}}, "", i)
+			Resolve: resolve, Pace: &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}}, "", i)
 		job.Items = append(job.Items, it)
 		m.queue = append(m.queue, it)
 	}
@@ -238,11 +238,11 @@ func TestProxyCooldownRotatesAndDoesNotConsumeAnotherWorker(t *testing.T) {
 	if attempted.Load() != 2 {
 		t.Fatalf("attempts=%d", attempted.Load())
 	}
-	lease := pool.Acquire("keep2share", "", 1)
+	lease := pool.Acquire(config.GroupKeep2Share, "", 1)
 	if lease == nil {
 		t.Fatal("successful route was not released")
 	}
-	if pool.Acquire("keep2share", "", 1) != nil {
+	if pool.Acquire(config.GroupKeep2Share, "", 1) != nil {
 		t.Fatal("cooldown was lost")
 	}
 	lease.Release()
@@ -280,7 +280,7 @@ func TestARefusedAddressRetriesTheFileOnAnotherRoute(t *testing.T) {
 	if attempts.Load() != 2 {
 		t.Fatalf("attempts=%d, want the refusal and one more route", attempts.Load())
 	}
-	lease := pool.Acquire("keep2share", "", 1)
+	lease := pool.Acquire(config.GroupKeep2Share, "", 1)
 	if lease == nil {
 		t.Fatal("the route that served the file was not released")
 	}
@@ -288,12 +288,12 @@ func TestARefusedAddressRetriesTheFileOnAnotherRoute(t *testing.T) {
 	if _, wasRefused := refused.Load(lease.ID()); wasRefused {
 		t.Error("the refusing route was offered again straight away")
 	}
-	if pool.Acquire("keep2share", "", 1) != nil {
+	if pool.Acquire(config.GroupKeep2Share, "", 1) != nil {
 		t.Error("the refusing route was not held back")
 	}
 	// For the best part of an hour, not the minute of an ordinary refusal:
 	// asked again soon, it refuses again, after another CAPTCHA.
-	for _, row := range pool.Page("keep2share", proxy.Query{Status: "cooling"}).Rows {
+	for _, row := range pool.Page(config.GroupKeep2Share, proxy.Query{Status: "cooling"}).Rows {
 		if left := time.Until(row.CooldownUntil); left < 50*time.Minute {
 			t.Errorf("the refusing route is held back for %s; want about an hour", left.Round(time.Minute))
 		}
@@ -327,7 +327,7 @@ func TestProxyTransportFailureRetriesOnAnotherRoute(t *testing.T) {
 func TestUnavailableProxyRoutesDoNotBlockOtherHosts(t *testing.T) {
 	m := busyManager(t)
 	pool := attachPool(t, m, []string{"http://proxy.example.test:8000"})
-	lease := pool.Acquire("keep2share", "", 1)
+	lease := pool.Acquire(config.GroupKeep2Share, "", 1)
 	defer lease.Release()
 	job := addProxyFiles(m, 2, nil)
 	m.mu.Lock()
@@ -368,7 +368,7 @@ func TestCancelReleasesRouteWithoutCoolingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return !job.Items[0].inFlight })
-	lease := pool.Acquire("keep2share", "", 1)
+	lease := pool.Acquire(config.GroupKeep2Share, "", 1)
 	if lease == nil {
 		t.Fatal("cancelled download leaked or penalised its route")
 	}

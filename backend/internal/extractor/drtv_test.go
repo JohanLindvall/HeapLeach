@@ -11,9 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestDRLink(t *testing.T) {
@@ -170,7 +167,7 @@ func drFakeSite(t *testing.T) *httptest.Server {
 }
 
 func drWith(srv *httptest.Server) *DRTV {
-	d := NewDRTV(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	d := NewDRTV(testClient())
 	d.api = srv.URL + "/api"
 	return d
 }

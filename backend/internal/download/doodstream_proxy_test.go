@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -61,9 +62,9 @@ func TestSourceRecoveryRedrawsBrokenProxiesBeyondTheRetryBudget(t *testing.T) {
 	if err != nil || res == nil || len(res.Files) != 1 {
 		t.Fatalf("source failed before reaching a working proxy: result=%+v err=%v", res, err)
 	}
-	if requests.Load() != 5 || pool.Page("cloudflare", proxy.Query{}).Summary.Cooling != 3 ||
-		pool.Page("cloudflare", proxy.Query{}).Summary.Active != 0 {
-		t.Fatalf("requests=%d inventory=%+v", requests.Load(), pool.Page("cloudflare", proxy.Query{}).Summary)
+	if requests.Load() != 5 || pool.Page(config.GroupWAF, proxy.Query{}).Summary.Cooling != 3 ||
+		pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active != 0 {
+		t.Fatalf("requests=%d inventory=%+v", requests.Load(), pool.Page(config.GroupWAF, proxy.Query{}).Summary)
 	}
 	if notes[len(notes)-1] != "Doodstream: requesting media token (1/3) — connection attempt 5" {
 		t.Fatalf("proxy redraws were not visible: %v", notes)
@@ -168,7 +169,7 @@ func TestDoodProxyTimeoutRecovery(t *testing.T) {
 						}
 					}
 				}
-				page := pool.Page("cloudflare", proxy.Query{})
+				page := pool.Page(config.GroupWAF, proxy.Query{})
 				wantPlayers, wantCooling, wantConnects := tc.failures+1, int(tc.failures), int32(0)
 				if !tc.headers {
 					wantConnects = tc.failures
@@ -184,7 +185,7 @@ func TestDoodProxyTimeoutRecovery(t *testing.T) {
 						t.Fatalf("silent proxy did not receive exactly one transport penalty: %+v", row)
 					}
 				}
-				if pool.Page("keep2share", proxy.Query{}).Summary.Cooling != wantCooling {
+				if pool.Page(config.GroupKeep2Share, proxy.Query{}).Summary.Cooling != wantCooling {
 					t.Fatal("silent proxies remained available for other services")
 				}
 			})
@@ -268,7 +269,7 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if pool.Page("cloudflare", proxy.Query{}).Summary.Active != 0 {
+			if pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active != 0 {
 				t.Fatal("healthy direct extraction used a proxy")
 			}
 			failed.Store(true)
@@ -328,7 +329,7 @@ func TestSourceProgressIncludesRetryAttemptAndClearsAfterCancellation(t *testing
 	if err := m.CancelJob(id); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, time.Second, func() bool { return pool.Page("cloudflare", proxy.Query{}).Summary.Active == 0 })
+	waitFor(t, time.Second, func() bool { return pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active == 0 })
 	if job := m.Snapshot().Jobs[0]; job.Note != "" || job.Status != StatusCanceled {
 		t.Fatalf("canceled source retained retry progress: %+v", job)
 	}
@@ -354,7 +355,7 @@ func TestSourceRecoveryKeepsTemporaryFailuresBoundedAndPermanentErrorsFinal(t *t
 				attempts++
 				return nil, tc.err
 			}, tc.err)
-			if !errors.Is(err, tc.err) || attempts != tc.attempts || pool.Page("cloudflare", proxy.Query{}).Summary.Active != 0 {
+			if !errors.Is(err, tc.err) || attempts != tc.attempts || pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active != 0 {
 				t.Fatalf("attempts=%d want=%d err=%v", attempts, tc.attempts, err)
 			}
 		})

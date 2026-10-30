@@ -92,11 +92,7 @@ func TestWithoutPackedAudioTag(t *testing.T) {
 // sound would break off for 32 ms at every segment. The first tag stays, as
 // the track's start is read from it.
 func TestPackedAudioKeepsOnlyItsFirstTag(t *testing.T) {
-	ffmpeg := requireFFmpeg(t)
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	ffmpeg, ffprobe := requireFFmpeg(t), requireFFprobe(t)
 	origin := t.TempDir()
 	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
 	defer srv.Close()
@@ -140,12 +136,8 @@ func TestPackedAudioKeepsOnlyItsFirstTag(t *testing.T) {
 		"-map", "0:a", "-f", "null", "-").CombinedOutput(); err != nil || len(out) > 0 {
 		t.Errorf("decoding the joined sound: %v %s", err, out)
 	}
-	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size",
-		"-of", "csv=p=0", joined).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	samples := strings.Fields(string(out))
+	samples := strings.Fields(run(t, ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size",
+		"-of", "csv=p=0", joined))
 	if len(samples) != len(frames)/frame {
 		t.Errorf("%d samples, want a frame each: %d", len(samples), len(frames)/frame)
 	}
@@ -155,21 +147,7 @@ func TestPackedAudioKeepsOnlyItsFirstTag(t *testing.T) {
 		}
 	}
 
-	out, err = exec.Command(ffprobe, "-v", "error", "-show_entries", "stream=codec_type,start_time", "-of", "csv=p=0", joined).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	starts := map[string]float64{}
-	for line := range strings.Lines(string(out)) {
-		// An AC-3 stream's line ends in an empty field of its own.
-		fields := strings.Split(strings.TrimSpace(line), ",")
-		if len(fields) < 2 {
-			continue
-		}
-		if start, err := strconv.ParseFloat(fields[1], 64); err == nil {
-			starts[fields[0]] = start
-		}
-	}
+	starts := startsByKind(t, joined)
 	if diff := starts["audio"] - starts["video"]; diff < 0.45 || diff > 0.55 {
 		t.Errorf("audio starts %.3fs after the video (%v); want the 0.5s its first tag says", diff, starts)
 	}
@@ -179,10 +157,7 @@ func TestPackedAudioKeepsOnlyItsFirstTag(t *testing.T) {
 // beside a TS video that keeps its own timestamps.
 func TestJoiningPlacesPackedAudioOnTheVideosTimeline(t *testing.T) {
 	ffmpeg := requireFFmpeg(t)
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	requireFFprobe(t)
 	dir := t.TempDir()
 	video, aac, audio := filepath.Join(dir, "clip.part"), filepath.Join(dir, "clip.aac"), filepath.Join(dir, "clip.audio1.part")
 	run(t, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
@@ -200,23 +175,8 @@ func TestJoiningPlacesPackedAudioOnTheVideosTimeline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	starts := func(path string) map[string]float64 {
-		t.Helper()
-		out, err := exec.Command(ffprobe, "-v", "error", "-show_entries", "stream=codec_type,start_time", "-of", "csv=p=0", path).Output()
-		if err != nil {
-			t.Fatal(err)
-		}
-		found := map[string]float64{}
-		for line := range strings.Lines(string(out)) {
-			kind, value, _ := strings.Cut(strings.TrimSpace(line), ",")
-			if start, err := strconv.ParseFloat(value, 64); err == nil {
-				found[kind] = start
-			}
-		}
-		return found
-	}
 	// The muxer starts the picture a little after the offset asked for.
-	want := 10.5 - starts(video)["video"]
+	want := 10.5 - startsByKind(t, video)["video"]
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4"}
@@ -228,10 +188,20 @@ func TestJoiningPlacesPackedAudioOnTheVideosTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := starts(joined)
+	got := startsByKind(t, joined)
 	if diff := got["audio"] - got["video"]; diff < want-0.05 || diff > want+0.05 {
 		t.Errorf("audio starts %.3fs after the video (%v); want the %.3fs its tag says", diff, got, want)
 	}
+}
+
+// startsByKind is when a file's last stream of each kind starts.
+func startsByKind(t *testing.T, path string) map[string]float64 {
+	t.Helper()
+	starts := map[string]float64{}
+	for _, s := range ffprobeStreams(t, path) {
+		starts[s.CodecType] = s.StartTime
+	}
+	return starts
 }
 
 // A video whose frames are presented before they are decoded has its decode

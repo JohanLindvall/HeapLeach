@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -569,7 +568,7 @@ func luluSite(t *testing.T) (*httptest.Server, *atomic.Int32) {
 
 func TestLuluStreamFollowsThePackedPlayerToEncryptedSegments(t *testing.T) {
 	srv, pages := luluSite(t)
-	l := NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), &luluPlayer)
+	l := NewPlayer(testClient(), &luluPlayer)
 
 	u, _ := url.Parse(srv.URL + "/e/abcd1234wxyz")
 	res, err := l.Extract(context.Background(), u, Options{})
@@ -645,7 +644,7 @@ func vidsExtract(t *testing.T, raw string) (*Result, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), &vidsPlayer).Extract(context.Background(), u, Options{})
+	return NewPlayer(testClient(), &vidsPlayer).Extract(context.Background(), u, Options{})
 }
 
 func TestVidsStTakesTheUploadedFileAsItIs(t *testing.T) {
@@ -743,7 +742,7 @@ func sendvidExtract(t *testing.T, raw string) (*Result, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), &sendvidPlayer).Extract(context.Background(), u, Options{})
+	return NewPlayer(testClient(), &sendvidPlayer).Extract(context.Background(), u, Options{})
 }
 
 func TestSendvidTakesThePlayersSignedSourceAndSignsItAgainLater(t *testing.T) {
@@ -872,7 +871,7 @@ func TestPlayerEngineOptions(t *testing.T) {
 					return &playerVideo{title: "First Clip", candidates: playerLink(srv.URL + tc.link), referer: tc.readReferer}, nil
 				},
 			}
-			p := NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), site)
+			p := NewPlayer(testClient(), site)
 			res, err := p.Extract(context.Background(), mustParse(t, "https://player.example.test/v/1"), Options{})
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -906,7 +905,7 @@ func TestPlayerGoneKeepsTheStatus(t *testing.T) {
 		_, err := playerFetch(ctx, client, page, page)
 		return nil, err
 	}}
-	_, err := NewPlayer(httpx.New("test-agent", "en-US", 0, 5*time.Second), site).
+	_, err := NewPlayer(testClient(), site).
 		Extract(context.Background(), mustParse(t, srv.URL+"/v/1"), Options{})
 	if err == nil || !strings.Contains(err.Error(), "is not there") || !httpx.HasStatus(err, http.StatusNotFound) {
 		t.Fatalf("err = %v, want a gone video still carrying its 404", err)

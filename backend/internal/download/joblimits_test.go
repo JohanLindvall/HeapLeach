@@ -362,7 +362,7 @@ func TestAHeldJobsFilesWantNoRoutes(t *testing.T) {
 	m := busyManager(t)
 	m.proxyEnabled = true
 	m.limit = 8
-	pace := &extractor.Pace{Group: "keep2share", PerRoute: true}
+	pace := &extractor.Pace{Group: config.GroupKeep2Share, PerRoute: true}
 	job := addTestJob(m, "held", "http://127.0.0.1:1", 3, 1<<20)
 	m.mu.Lock()
 	for _, it := range job.Items {
@@ -370,7 +370,7 @@ func TestAHeldJobsFilesWantNoRoutes(t *testing.T) {
 	}
 	wanted := func() (bool, int) {
 		m.routeWanted = nil
-		return m.routeWantedLocked("keep2share"), m.proxyDemandLocked()["keep2share"]
+		return m.routeWantedLocked(config.GroupKeep2Share), m.proxyDemandLocked()[config.GroupKeep2Share]
 	}
 	if extra, demand := wanted(); !extra || demand != 3 {
 		m.mu.Unlock()
@@ -394,7 +394,7 @@ func TestAFileQueuedBehindTheLimitWantsNoRoute(t *testing.T) {
 	job := addTestJob(m, "waiting", "http://127.0.0.1:1", 1, 1<<20)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	job.Items[0].pace = &extractor.Pace{Group: "keep2share", PerRoute: true}
+	job.Items[0].pace = &extractor.Pace{Group: config.GroupKeep2Share, PerRoute: true}
 	for _, tc := range []struct {
 		running int
 		paused  bool
@@ -407,7 +407,7 @@ func TestAFileQueuedBehindTheLimitWantsNoRoute(t *testing.T) {
 		m.running = tc.running
 		m.throttle.setPaused(tc.paused)
 		m.routeWanted = nil
-		if got := m.routeWantedLocked("keep2share"); got != tc.want {
+		if got := m.routeWantedLocked(config.GroupKeep2Share); got != tc.want {
 			t.Errorf("%d of %d running, paused %v: wanted %v; want %v", tc.running, m.limit, tc.paused, got, tc.want)
 		}
 	}

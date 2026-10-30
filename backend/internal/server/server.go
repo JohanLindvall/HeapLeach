@@ -16,6 +16,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/logstore"
 )
 
@@ -100,10 +101,10 @@ func (s *Server) Handler() http.Handler {
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'")
-		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set(httpx.HeaderContentTypeOptions, "nosniff")
+		w.Header().Set(httpx.HeaderFrameOptions, "DENY")
+		w.Header().Set(httpx.HeaderContentSecurityPolicy, "frame-ancestors 'none'; base-uri 'self'; object-src 'none'")
+		w.Header().Set(httpx.HeaderReferrerPolicy, "no-referrer")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -115,7 +116,7 @@ func spaHandler(assets fs.FS) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
+			w.Header().Set(httpx.HeaderAllow, "GET, HEAD")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -137,9 +138,9 @@ func spaHandler(assets fs.FS) http.Handler {
 		// Vite fingerprints everything under /assets, so those are
 		// immutable; the entry document must never be cached.
 		if strings.HasPrefix(name, "assets/") {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			w.Header().Set(httpx.HeaderCacheControl, "public, max-age=31536000, immutable")
 		} else {
-			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set(httpx.HeaderCacheControl, "no-cache")
 		}
 		files.ServeHTTP(w, r)
 	})
@@ -151,8 +152,8 @@ func serveIndex(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 		http.Error(w, "frontend not built", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
+	w.Header().Set(httpx.HeaderCacheControl, "no-cache")
 	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(body))
 }
 

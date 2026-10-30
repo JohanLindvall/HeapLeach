@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -91,21 +90,18 @@ func (m *Manager) ApplySettings(s Settings) error {
 	if s.SpeedLimit != nil && *s.SpeedLimit < 0 {
 		return fmt.Errorf("speed limit cannot be negative, got %d", *s.SpeedLimit)
 	}
-	if s.ProxyType != nil && !config.ValidProxyType(*s.ProxyType) {
-		return fmt.Errorf("proxy type must be any, socks or http, got %q", *s.ProxyType)
+	if s.ProxyType != nil {
+		if err := config.CheckProxyType(*s.ProxyType); err != nil {
+			return err
+		}
 	}
 	if s.ProxyTypes != nil {
 		// A group's former name is read as the group it is now part of.
-		kinds, _ := config.CanonicalProxyTypes(*s.ProxyTypes)
-		s.ProxyTypes = &kinds
-		for group, kind := range kinds {
-			if !config.IsProxyGroup(group) {
-				return fmt.Errorf("%q is not a proxy group (%s)", group, strings.Join(config.ProxyGroups, ", "))
-			}
-			if kind != "" && !config.ValidProxyType(kind) {
-				return fmt.Errorf("proxy type for %s must be any, socks or http, got %q", group, kind)
-			}
+		kinds, err := config.CheckProxyTypes(*s.ProxyTypes)
+		if err != nil {
+			return err
 		}
+		s.ProxyTypes = &kinds
 	}
 	var dir string
 	if s.DownloadDir != nil {

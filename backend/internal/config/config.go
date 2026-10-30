@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -173,17 +174,17 @@ func FromEnv() (*Config, error) {
 		c.Proxies = enabled
 	}
 	warnRetiredSettings()
-	if _, set := os.LookupEnv(envPrefix + "PROXY_ENDPOINTS"); !set {
+	if _, set := envSet("PROXY_ENDPOINTS"); !set {
 		c.ProxyEndpoints = []string{"direct"}
 	}
-	if _, set := os.LookupEnv(envPrefix + "PROXY_FEEDS"); set {
+	if _, set := envSet("PROXY_FEEDS"); set {
 		c.ProxyFeeds = envList("PROXY_FEEDS")
 	}
 
 	// An explicitly empty state path disables persistence; env's usual
 	// empty-means-default rule cannot represent that choice.
-	if value, set := os.LookupEnv(envPrefix + "STATE"); set {
-		c.StateFile = strings.TrimSpace(value)
+	if value, set := envSet("STATE"); set {
+		c.StateFile = value
 	} else if c.StateFile != "" {
 		c.LegacyStateFile = strings.TrimSuffix(c.StateFile, ".zst")
 	}
@@ -220,12 +221,8 @@ func FromEnv() (*Config, error) {
 		}
 	}
 
-	if v := env("STALL_TIMEOUT", ""); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("%sSTALL_TIMEOUT: %w", envPrefix, err)
-		}
-		c.StallTimeout = d
+	if c.StallTimeout, err = envDuration("STALL_TIMEOUT", c.StallTimeout); err != nil {
+		return nil, err
 	}
 
 	if enabled, set := EnvBool("DEBUG"); set {
@@ -387,15 +384,14 @@ func (c *Config) Prepare() error {
 	if c.ProxyType == "" {
 		c.ProxyType = ProxyTypeAny
 	}
-	if !ValidProxyType(c.ProxyType) {
-		return fmt.Errorf("proxy type must be any, socks or http, got %q", c.ProxyType)
+	if err := CheckProxyType(c.ProxyType); err != nil {
+		return err
 	}
-	for group, kind := range c.ProxyTypes {
-		if _, known := ProxyGroup(group); !known || !ValidProxyType(kind) {
-			return fmt.Errorf("proxy types: %q=%q is not a proxy group and a protocol", group, kind)
-		}
+	types, err := CheckProxyTypes(c.ProxyTypes)
+	if err != nil {
+		return fmt.Errorf("proxy types: %w", err)
 	}
-	c.ProxyTypes, _ = CanonicalProxyTypes(c.ProxyTypes)
+	c.ProxyTypes = types
 	if c.ProxyDB != "" {
 		// A disabled pool can be enabled through the live settings later.
 		var err error
@@ -632,6 +628,13 @@ func LookupEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(envPrefix + name))
 }
 
+// envSet returns a setting's value, trimmed, and whether it is set at all,
+// for settings where set but empty means something of its own.
+func envSet(name string) (string, bool) {
+	value, set := os.LookupEnv(envPrefix + name)
+	return strings.TrimSpace(value), set
+}
+
 func env(name, def string) string {
 	if v := LookupEnv(name); v != "" {
 		return v
@@ -685,6 +688,18 @@ func envInt(name string, def int) (int, error) {
 		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
 	}
 	return n, nil
+}
+
+func envDuration(name string, def time.Duration) (time.Duration, error) {
+	v := LookupEnv(name)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
+	}
+	return d, nil
 }
 
 // envSize reads a byte count that may carry a unit — 5MB, 10GiB — since a
@@ -777,14 +792,40 @@ func ParseProxyTypes(raw string) (map[string]string, error) {
 	for _, field := range splitList(raw) {
 		group, kind, ok := strings.Cut(field, "=")
 		group, kind = strings.ToLower(strings.TrimSpace(group)), strings.ToLower(strings.TrimSpace(kind))
-		if _, known := ProxyGroup(group); !ok || !known || !ValidProxyType(kind) {
+		if !ok || kind == "" {
 			return nil, fmt.Errorf("%q is not a proxy group (%s) and a protocol (any, socks or http)",
 				field, strings.Join(ProxyGroups, ", "))
 		}
 		types[group] = kind
 	}
-	types, _ = CanonicalProxyTypes(types)
-	return types, nil
+	return CheckProxyTypes(types)
+}
+
+// CheckProxyType returns an error unless kind is a protocol a proxy group
+// can be held to.
+func CheckProxyType(kind string) error {
+	if !ValidProxyType(kind) {
+		return fmt.Errorf("proxy type must be any, socks or http, got %q", kind)
+	}
+	return nil
+}
+
+// CheckProxyTypes returns types with each former group's name read as the
+// group it is now part of (CanonicalProxyTypes), or an error naming the
+// first entry, in name order, that is not a proxy group with a protocol.
+// An empty protocol passes: the group follows the others, as it would
+// unnamed. The wording is what /api/settings answers with.
+func CheckProxyTypes(types map[string]string) (map[string]string, error) {
+	kinds, _ := CanonicalProxyTypes(types)
+	for _, group := range slices.Sorted(maps.Keys(kinds)) {
+		if !IsProxyGroup(group) {
+			return nil, fmt.Errorf("%q is not a proxy group (%s)", group, strings.Join(ProxyGroups, ", "))
+		}
+		if kind := kinds[group]; kind != "" && !ValidProxyType(kind) {
+			return nil, fmt.Errorf("proxy type for %s must be any, socks or http, got %q", group, kind)
+		}
+	}
+	return kinds, nil
 }
 
 // FormatProxyTypes writes protocols per proxy group as ParseProxyTypes reads

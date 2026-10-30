@@ -12,17 +12,18 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // handleEvents starts with a complete snapshot, then streams changed rows.
 // The manager replaces dropped patches with complete snapshots.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
-	h.Set("Content-Type", "text/event-stream; charset=utf-8")
-	h.Set("Cache-Control", "no-cache, no-transform")
+	h.Set(httpx.HeaderContentType, "text/event-stream; charset=utf-8")
+	h.Set(httpx.HeaderCacheControl, "no-cache, no-transform")
 	h.Set("Connection", "keep-alive")
 	// Tell nginx and friends not to buffer the stream.
-	h.Set("X-Accel-Buffering", "no")
+	h.Set(httpx.HeaderAccelBuffering, "no")
 
 	rc := http.NewResponseController(w)
 	// The stream is long-lived; the per-write deadlines still apply.
@@ -117,19 +118,19 @@ func writeSSE(out io.Writer, gz *gzip.Writer, rc *http.ResponseController, prefi
 // compressor when the client would rather have it plain.
 func compressed(w http.ResponseWriter, r *http.Request) (io.Writer, *gzip.Writer) {
 	// Negotiation affects both variants, including the uncompressed one.
-	w.Header().Add("Vary", "Accept-Encoding")
+	w.Header().Add(httpx.HeaderVary, httpx.HeaderAcceptEncoding)
 	if !acceptsGzip(r) {
 		return w, nil
 	}
 	h := w.Header()
-	h.Set("Content-Encoding", "gzip")
+	h.Set(httpx.HeaderContentEncoding, "gzip")
 	gz := gzip.NewWriter(w)
 	return gz, gz
 }
 
 // acceptsGzip reports whether the client will take a compressed reply.
 func acceptsGzip(r *http.Request) bool {
-	for part := range strings.SplitSeq(r.Header.Get("Accept-Encoding"), ",") {
+	for part := range strings.SplitSeq(r.Header.Get(httpx.HeaderAcceptEncoding), ",") {
 		name, params, _ := strings.Cut(part, ";")
 		if !strings.EqualFold(strings.TrimSpace(name), "gzip") {
 			continue

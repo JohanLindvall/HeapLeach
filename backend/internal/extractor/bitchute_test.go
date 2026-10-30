@@ -13,9 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // Nothing here came off bitchute. The endpoints are reproduced from their
@@ -97,7 +94,7 @@ func (s *bitchuteStub) start(t *testing.T) *BitChute {
 	return &BitChute{
 		// No retries: a 404 from this stub is an answer, not a hiccup, and
 		// a test should not wait out a backoff to see it.
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
+		client: testClient(),
 		api:    srv.URL + "/api/beta",
 		site:   srv.URL,
 	}

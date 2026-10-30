@@ -29,7 +29,11 @@ from `Snapshot()` or `CurrentSettings()`.
 The package's tests build managers with `testManager` (`helpers_test.go`),
 whose function argument tunes the configuration before anything is built from
 it, and read the queue through `jobView`, `findItem`, `countStatus` and
-`waitForStatus`. A test's own differences — retries, timings, whether it calls
+`waitForStatus`; it waits with `waitFor`, not a loop of its own. Tests that
+need the media tools skip without them through `requireFFmpeg` and
+`requireFFprobe`, run a tool with `run`, and read a result's streams with
+`ffprobeStreams`, the tests' own reading of ffprobe kept apart from
+`probeMedia` so a test cannot share the mistake it should catch. A test's own differences — retries, timings, whether it calls
 `Start()` — stay at the test. Accessors the code itself never needs, such as
 `hostGate.quiet` or `throttle.take`, live in `testonly_test.go`.
 

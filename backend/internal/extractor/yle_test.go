@@ -12,9 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestYleLink(t *testing.T) {
@@ -181,7 +178,7 @@ func yleFakeSite(t *testing.T) *httptest.Server {
 }
 
 func yleWith(srv *httptest.Server) *Yle {
-	y := NewYle(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	y := NewYle(testClient())
 	y.player = srv.URL + "/v1/preview/"
 	y.site = map[string]string{"fin": srv.URL, "swe": srv.URL + "/sv"}
 	return y

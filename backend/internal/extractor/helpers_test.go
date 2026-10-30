@@ -6,11 +6,18 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // Helpers shared by the package's tests: the boilerplate around decoding a
 // fixture, running one extraction and reading what came back, written once
 // so a test states only what it checks.
+
+// testClient is a client for fixture servers. It retries nothing, so a test
+// expecting a refusal gets one at once.
+func testClient() *httpx.Client { return httpx.New("test-agent", "en-US", 0, 5*time.Second) }
 
 // decode reads a JSON fixture into a T, failing the test when it does not
 // parse.

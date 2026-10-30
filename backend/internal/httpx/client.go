@@ -360,7 +360,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			drain(resp)
 			lastErr = &StatusError{Code: resp.StatusCode, Status: resp.Status, URL: req.URL.Redacted()}
 			if attempt < c.maxRetries {
-				if err := util.SleepCtx(req.Context(), max(wait, retryDelay(attempt))); err != nil {
+				if err := util.SleepCtx(req.Context(), max(wait, RetryDelay(attempt))); err != nil {
 					return nil, err
 				}
 				continue
@@ -376,7 +376,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			// EOF`, so a prefix here printed every address twice.
 			return nil, lastErr
 		}
-		if err := util.SleepCtx(req.Context(), retryDelay(attempt)); err != nil {
+		if err := util.SleepCtx(req.Context(), RetryDelay(attempt)); err != nil {
 			return nil, err
 		}
 	}
@@ -562,8 +562,10 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 	return 0, false
 }
 
-// retryDelay is the backoff between attempts at a single request.
-func retryDelay(attempt int) time.Duration {
+// RetryDelay is the wait after a single request's failed try, counted from
+// 0. Extractors that retry an answer rather than a request back off by it
+// too, so both share one schedule.
+func RetryDelay(attempt int) time.Duration {
 	return util.Backoff(attempt, config.RequestRetryBase, config.RequestRetryMax)
 }
 

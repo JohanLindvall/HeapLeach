@@ -101,7 +101,7 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 				return false
 			}
 		}
-		return m.proxyRunning["keep2share"] == 0
+		return m.proxyRunning[config.GroupKeep2Share] == 0
 	})
 }
 
@@ -193,7 +193,7 @@ func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 		}
 	}
 	job.Items[0].route.Cooldown(time.Now().Add(time.Hour))
-	if page := m.ProxyPage(proxy.Query{Site: "emload"}); !page.Rows[0].CooldownUntil.IsZero() {
+	if page := m.ProxyPage(proxy.Query{Site: config.GroupEmload}); !page.Rows[0].CooldownUntil.IsZero() {
 		t.Fatal("K2S cooldown appeared in EMLOAD inventory")
 	}
 }

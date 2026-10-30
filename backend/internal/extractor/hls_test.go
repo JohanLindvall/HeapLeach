@@ -10,9 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // A master playlist in the shape that made this worth fixing: the variants
@@ -262,7 +259,7 @@ func TestAudioCarriedInTheVideoIsListedBesideTheTracksApart(t *testing.T) {
 		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\na.ts\n#EXT-X-ENDLIST\n")
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 
 	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/master.m3u8", nil)
 	if err != nil {
@@ -313,7 +310,7 @@ func TestSubtitlesComeWithTheVariantThatNamesThem(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 
 	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/master.m3u8", nil)
 	if err != nil {
@@ -340,7 +337,7 @@ func TestEncryptedPlaylistsComeWithTheirKey(t *testing.T) {
 			"\n#EXTINF:6,\na.ts\n#EXT-X-ENDLIST\n")
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 
 	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/index.m3u8", nil)
 	if err != nil || media.Key == nil || media.Key.URI != srv.URL+"/key" {

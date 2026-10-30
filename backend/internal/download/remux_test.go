@@ -5,6 +5,7 @@ package download
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,7 +51,7 @@ func TestRemuxNeverReEncodes(t *testing.T) {
 			source := filepath.Join(dir, "clip.ts")
 			buildTS(t, ffmpeg, source, tc.audioArgs, tc.extraArgs)
 
-			before := probeStreams(t, ffmpeg, source)
+			before := probeStreams(t, source)
 			manager := &Manager{log: testLogger()}
 			result := manager.remuxToMP4(context.Background(), source)
 
@@ -74,7 +75,7 @@ func TestRemuxNeverReEncodes(t *testing.T) {
 				t.Error("the transport stream was left behind after a successful conversion")
 			}
 
-			after := probeStreams(t, ffmpeg, result)
+			after := probeStreams(t, result)
 			if len(after) != len(before) {
 				t.Fatalf("stream count changed: %v -> %v", before, after)
 			}
@@ -105,7 +106,7 @@ func TestRemuxKeepsBestStreams(t *testing.T) {
 		"-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
 		"-f", "mpegts", source)
 
-	before := probeStreams(t, ffmpeg, source)
+	before := probeStreams(t, source)
 	if len(before) != 3 {
 		t.Fatalf("fixture has %d streams, want 3", len(before))
 	}
@@ -116,7 +117,7 @@ func TestRemuxKeepsBestStreams(t *testing.T) {
 		t.Fatal("did not convert a stream set MP4 can hold")
 	}
 
-	after := probeStreams(t, ffmpeg, result)
+	after := probeStreams(t, result)
 	if len(after) != 2 {
 		t.Fatalf("kept %v, want one video and one audio track", after)
 	}
@@ -223,7 +224,7 @@ func TestRemuxKeepsBestOfEachLanguage(t *testing.T) {
 		t.Fatal("did not convert")
 	}
 
-	languages := probeLanguages(t, ffmpeg, result, "audio")
+	languages := probeLanguages(t, result, "audio")
 	if len(languages) != 2 {
 		t.Fatalf("kept %d audio tracks %v, want one per language (eng, swe)", len(languages), languages)
 	}
@@ -241,30 +242,10 @@ func TestRemuxKeepsBestOfEachLanguage(t *testing.T) {
 }
 
 // probeLanguages lists the language tag of each stream of a kind.
-func probeLanguages(t *testing.T, ffmpeg, path, kind string) []string {
+func probeLanguages(t *testing.T, path, kind string) []string {
 	t.Helper()
-	ffprobe := filepath.Join(filepath.Dir(ffmpeg), "ffprobe")
-	if _, err := os.Stat(ffprobe); err != nil {
-		ffprobe = "ffprobe"
-	}
-	out, err := exec.Command(ffprobe, "-v", "error", "-show_streams",
-		"-print_format", "json", path).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var probe struct {
-		Streams []struct {
-			CodecType string `json:"codec_type"`
-			Tags      struct {
-				Language string `json:"language"`
-			} `json:"tags"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &probe); err != nil {
-		t.Fatal(err)
-	}
 	var languages []string
-	for _, s := range probe.Streams {
+	for _, s := range ffprobeStreams(t, path) {
 		if s.CodecType == kind {
 			languages = append(languages, s.Tags.Language)
 		}
@@ -283,6 +264,15 @@ func requireFFmpeg(t *testing.T) string {
 	return path
 }
 
+func requireFFprobe(t *testing.T) string {
+	t.Helper()
+	path, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	return path
+}
+
 func buildTS(t *testing.T, ffmpeg, target string, audioArgs, extraArgs []string) {
 	t.Helper()
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
@@ -295,37 +285,57 @@ func buildTS(t *testing.T, ffmpeg, target string, audioArgs, extraArgs []string)
 	run(t, ffmpeg, args...)
 }
 
-func run(t *testing.T, name string, args ...string) {
+// run runs a command to completion, failing the test with what it wrote to
+// stderr if it fails, and returns what it wrote to stdout.
+func run(t *testing.T, name string, args ...string) string {
 	t.Helper()
-	if out, err := exec.Command(name, args...).CombinedOutput(); err != nil {
-		t.Fatalf("%s: %v\n%s", filepath.Base(name), err, out)
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		var stderr []byte
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+			stderr = exit.Stderr
+		}
+		t.Fatalf("%s: %v\n%s%s", filepath.Base(name), err, out, stderr)
 	}
+	return string(out)
+}
+
+// probedStream is a stream as ffprobe -show_streams reports it, with the
+// fields these tests read. It is the tests' own reading, kept apart from
+// probeMedia's so a test cannot agree with the code it checks by sharing
+// its mistake.
+type probedStream struct {
+	CodecName   string  `json:"codec_name"`
+	CodecType   string  `json:"codec_type"`
+	StartTime   float64 `json:"start_time,string"`
+	Disposition struct {
+		Default int `json:"default"`
+	} `json:"disposition"`
+	Tags struct {
+		Language    string `json:"language"`
+		HandlerName string `json:"handler_name"`
+	} `json:"tags"`
+}
+
+// ffprobeStreams lists the streams of a media file.
+func ffprobeStreams(t *testing.T, path string) []probedStream {
+	t.Helper()
+	out := run(t, requireFFprobe(t), "-v", "error", "-show_streams", "-print_format", "json", path)
+	var probe struct {
+		Streams []probedStream `json:"streams"`
+	}
+	if err := json.Unmarshal([]byte(out), &probe); err != nil {
+		t.Fatalf("ffprobe %s: %v", filepath.Base(path), err)
+	}
+	return probe.Streams
 }
 
 // probeStreams lists each stream's codec, so re-encoding would show up.
-func probeStreams(t *testing.T, ffmpeg, path string) []string {
+func probeStreams(t *testing.T, path string) []string {
 	t.Helper()
-	ffprobe := filepath.Join(filepath.Dir(ffmpeg), "ffprobe")
-	if _, err := os.Stat(ffprobe); err != nil {
-		ffprobe = "ffprobe"
-	}
-	out, err := exec.Command(ffprobe, "-v", "error", "-show_streams",
-		"-print_format", "json", path).Output()
-	if err != nil {
-		t.Fatalf("ffprobe %s: %v", filepath.Base(path), err)
-	}
-	var probe struct {
-		Streams []struct {
-			CodecName string `json:"codec_name"`
-			CodecType string `json:"codec_type"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &probe); err != nil {
-		t.Fatal(err)
-	}
 	var streams []string
-	for _, s := range probe.Streams {
-		streams = append(streams, strings.Join([]string{s.CodecType, s.CodecName}, ":"))
+	for _, s := range ffprobeStreams(t, path) {
+		streams = append(streams, s.CodecType+":"+s.CodecName)
 	}
 	return streams
 }

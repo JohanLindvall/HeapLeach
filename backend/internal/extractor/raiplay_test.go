@@ -10,9 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // raiAkamaiPlaylist is RaiPlay's commonest master playlist, and the reason
@@ -229,7 +226,7 @@ func TestRaiMultiaudioPlaylistComesWithItsAudio(t *testing.T) {
 		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg-1.ts\n#EXTINF:6,\nseg-2.ts\n#EXT-X-ENDLIST\n")
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/12345_,1800,2400/playlist.m3u8", nil)
 	if err != nil {
 		t.Fatal(err)

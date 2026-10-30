@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -345,7 +344,7 @@ func pbsEncodings(t *testing.T) (root, hls, mp4 string) {
 }
 
 func newTestPBS() *PBS {
-	return &PBS{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return &PBS{client: testClient()}
 }
 
 // TestPBSProgressiveProbesRatherThanIndexes covers the encoding walk. Which

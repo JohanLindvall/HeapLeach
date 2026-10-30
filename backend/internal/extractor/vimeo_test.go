@@ -13,9 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestVimeoVideoID(t *testing.T) {
@@ -115,7 +112,7 @@ func vimeoPage(view int, title, request string) string {
 }
 
 func vimeoWith(srv *httptest.Server) *Vimeo {
-	v := NewVimeo(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	v := NewVimeo(testClient())
 	v.player = srv.URL + "/video/"
 	return v
 }

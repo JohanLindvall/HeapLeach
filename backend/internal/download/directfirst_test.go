@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -38,8 +39,8 @@ func overQuota(w http.ResponseWriter, left string) {
 }
 
 var (
-	directFirstPace = &extractor.Pace{Group: "mega", Files: 1, PerRoute: true, DirectFirst: true}
-	routedQuotaPace = &extractor.Pace{Group: "mega", Files: 1, PerRoute: true}
+	directFirstPace = &extractor.Pace{Group: config.GroupMega, Files: 1, PerRoute: true, DirectFirst: true}
+	routedQuotaPace = &extractor.Pace{Group: config.GroupMega, Files: 1, PerRoute: true}
 )
 
 func addQuotaFile(m *Manager, size int64, pace *extractor.Pace, resolve func(context.Context) (*extractor.Target, error)) *Item {
@@ -182,7 +183,7 @@ func TestARouteWhoseQuotaIsSpentIsHeldBackAndTheFileGoesOn(t *testing.T) {
 	m.Start()
 	m.signal()
 	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return it.Status == StatusDone })
-	cooling := pool.Page("mega", proxy.Query{Status: "cooling"})
+	cooling := pool.Page(config.GroupMega, proxy.Query{Status: "cooling"})
 	if cooling.Total != 1 {
 		t.Fatalf("%d routes cooling; want the one whose quota is used up", cooling.Total)
 	}

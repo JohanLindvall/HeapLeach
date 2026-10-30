@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 )
 
@@ -16,7 +17,7 @@ func TestProxyDiscoveryDemandTracksRunnableCapacity(t *testing.T) {
 	check := func(want int) {
 		t.Helper()
 		m.mu.Lock()
-		got := m.proxyDemandLocked()["keep2share"]
+		got := m.proxyDemandLocked()[config.GroupKeep2Share]
 		m.mu.Unlock()
 		if got != want {
 			t.Fatalf("proxy demand=%d, want %d", got, want)
@@ -26,13 +27,13 @@ func TestProxyDiscoveryDemandTracksRunnableCapacity(t *testing.T) {
 	// Two workers on other hosts leave two places for K2S.
 	m.running = 2
 	check(2)
-	m.proxyRunning["keep2share"] = 1
-	m.hostActive["group:keep2share"] = 1
+	m.proxyRunning[config.GroupKeep2Share] = 1
+	m.hostActive[groupKey(config.GroupKeep2Share)] = 1
 	check(3)
 	// A resumed direct transfer must drain before proxies can help.
-	m.hostActive["group:keep2share"] = 2
+	m.hostActive[groupKey(config.GroupKeep2Share)] = 2
 	check(0)
-	m.hostActive["group:keep2share"] = 1
+	m.hostActive[groupKey(config.GroupKeep2Share)] = 1
 	job.Items[0].Status = StatusCanceled
 	job.Items[1].notBefore = time.Now().Add(time.Hour)
 	job.Items[2].pace = &extractor.Pace{Group: "other", PerRoute: true}
@@ -54,23 +55,23 @@ func TestProxyDiscoverySharesConcurrencyAcrossServices(t *testing.T) {
 	m := busyManager(t)
 	attachPool(t, m, []string{"http://proxy.example.test:80"})
 	job := addProxyFiles(m, 4, nil)
-	job.Items[1].pace = &extractor.Pace{Group: "emload", PerRoute: true, Files: 1}
+	job.Items[1].pace = &extractor.Pace{Group: config.GroupEmload, PerRoute: true, Files: 1}
 	job.Items[3].pace = job.Items[1].pace
 	m.proxyEnabled, m.limit = true, 3
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	want := m.proxyDemandLocked()
-	if want["keep2share"] != 2 || want["emload"] != 1 {
+	if want[config.GroupKeep2Share] != 2 || want[config.GroupEmload] != 1 {
 		t.Fatalf("one concurrency budget must serve both queues: %v", want)
 	}
 	// A direct K2S worker drains only K2S; EMLOAD can still use proxies.
-	m.running, m.hostActive["group:keep2share"] = 1, 1
+	m.running, m.hostActive[groupKey(config.GroupKeep2Share)] = 1, 1
 	want = m.proxyDemandLocked()
-	if want["keep2share"] != 0 || want["emload"] != 2 {
+	if want[config.GroupKeep2Share] != 0 || want[config.GroupEmload] != 2 {
 		t.Fatalf("direct K2S blocked EMLOAD demand: %v", want)
 	}
 	// Another service's lease cannot conceal that unleased K2S transfer.
-	m.running, m.proxyRunning["emload"] = 2, 1
+	m.running, m.proxyRunning[config.GroupEmload] = 2, 1
 	if !m.hostFullLocked(job.Items[0]) {
 		t.Fatal("EMLOAD's active proxy concealed an unleased K2S transfer")
 	}

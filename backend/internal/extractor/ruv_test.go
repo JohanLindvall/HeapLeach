@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -229,7 +228,7 @@ func TestRUVResolvesAPlaylistToSegments(t *testing.T) {
 	srv, _ := ruvCDN(t, nil)
 	prog := ruvDecode(t, ruvSeries(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	file, err := session.file(context.Background(), prog.Episodes[0])
 	if err != nil {
 		t.Fatalf("file: %v", err)
@@ -258,7 +257,7 @@ func TestRUVDomesticIsRefusedInWords(t *testing.T) {
 	srv, seen := ruvCDN(t, map[string]bool{"/lokad/": true})
 	prog := ruvDecode(t, ruvDomestic(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	_, err := session.file(context.Background(), prog.Episodes[0])
 	if err == nil {
 		t.Fatal("an Iceland-only episode resolved from outside Iceland")
@@ -295,7 +294,7 @@ func TestRUVGlobalFailureIsNotAGeoBlock(t *testing.T) {
 	srv, _ := ruvCDN(t, map[string]bool{"/opid/": true})
 	prog := ruvDecode(t, ruvSeries(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	_, err := session.file(context.Background(), prog.Episodes[0])
 	if err == nil {
 		t.Fatal("a refused playlist resolved anyway")
@@ -316,7 +315,7 @@ func TestRUVDomesticIsTriedRatherThanPreJudged(t *testing.T) {
 	srv, seen := ruvCDN(t, nil) // a CDN that serves everyone, i.e. Iceland
 	prog := ruvDecode(t, ruvDomestic(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	file, err := session.file(context.Background(), prog.Episodes[0])
 	if err != nil {
 		t.Fatalf("an Iceland-only episode was refused from inside Iceland: %v", err)
@@ -543,12 +542,6 @@ func ruvDecode(t *testing.T, body string) *ruvProgram {
 		t.Fatal(err)
 	}
 	return prog
-}
-
-// ruvTestClient retries nothing, so a test expecting a refusal gets one at
-// once.
-func ruvTestClient() *httpx.Client {
-	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
 }
 
 // ruvCDN serves the master playlist for any /<scope>/<id>/<id>.m3u8 and the

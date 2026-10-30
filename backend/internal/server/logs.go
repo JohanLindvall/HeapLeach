@@ -5,10 +5,12 @@ package server
 import (
 	"net/http"
 	"strconv"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set(httpx.HeaderCacheControl, "no-store")
 	if s.logs == nil {
 		writeError(w, http.StatusServiceUnavailable, "Service logs are unavailable.")
 		return

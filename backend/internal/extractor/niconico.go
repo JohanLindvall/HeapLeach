@@ -346,9 +346,7 @@ func (n *Niconico) grant(ctx context.Context, id string, watch *niconicoWatch) (
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptJSON)
 	req.Header.Set("X-Access-Right-Key", watch.key)
-	for name, value := range niconicoAPIHeaders() {
-		req.Header.Set(name, value)
-	}
+	niconicoAPIHeaders().Apply(req)
 	resp, err := n.client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("niconico: %s: ask for the stream: %w", id, err)

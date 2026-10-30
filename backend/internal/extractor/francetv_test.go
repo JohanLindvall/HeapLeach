@@ -10,9 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // The video ids a fake france.tv knows.
@@ -118,7 +115,7 @@ func francetvFakeSite(t *testing.T) *httptest.Server {
 }
 
 func francetvWith(srv *httptest.Server) *FranceTV {
-	f := NewFranceTV(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFranceTV(testClient())
 	f.api = srv.URL + "/videos/"
 	return f
 }

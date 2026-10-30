@@ -574,9 +574,7 @@ func fetchPlaylist(ctx context.Context, client *httpx.Client, rawURL string, hea
 	if err != nil {
 		return "", nil, err
 	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
+	headers.Apply(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", nil, err

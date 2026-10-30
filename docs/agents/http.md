@@ -5,11 +5,15 @@ common values live in `headers.go` (`httpx.Header`, `httpx.Referer`,
 `httpx.RefererOrigin`). `Header.Apply` sets a header map on a request, and
 `httpx.Navigate` is what a browser sends with a page it navigates to (HTML
 asked for, and the `Sec-Fetch-Dest`/`Sec-Fetch-Mode` pair some hosts check);
-it is shared, so apply or `Merge` it, never write to it.
+it is shared, so apply or `Merge` it, never write to it. The response header
+names the server sets (`HeaderCacheControl`, `HeaderVary` and the like) live
+there too.
 
 ## Retries and rate limits
 
-`httpx.Client.Do` retries with backoff; `DoOnce` does not, and `StatusOnce`
+`httpx.Client.Do` retries with backoff (`httpx.RetryDelay`, which the
+extractors' `withExtractRetries` shares, so a re-asked answer waits as a
+failed request would); `DoOnce` does not, and `StatusOnce`
 is `DoOnce` reduced to the status, for a probe of whether a host serves an
 address at all. One status is
 handled apart from the rest: **429 is waited out, not counted as a failure.**

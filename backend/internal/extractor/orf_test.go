@@ -13,9 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestORFLink(t *testing.T) {
@@ -111,7 +108,7 @@ func orfFakeSite(t *testing.T) (*httptest.Server, *atomic.Int32) {
 }
 
 func orfWith(srv *httptest.Server) *ORF {
-	o := NewORF(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	o := NewORF(testClient())
 	o.site = srv.URL + "/"
 	return o
 }

@@ -12,9 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // streamableReadyDoc is a finished video in the shape the API serves, cut to
@@ -267,7 +264,7 @@ func streamableServer(t *testing.T, status int, body string) (*Streamable, *atom
 	}))
 	t.Cleanup(srv.Close)
 	return &Streamable{
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
+		client: testClient(),
 		api:    srv.URL + "/videos/",
 	}, &hits
 }

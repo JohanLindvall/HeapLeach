@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -248,7 +247,7 @@ const oembedPayload = `{
 func testHandoff(t *testing.T, oembed string) *Handoff {
 	t.Helper()
 	return &Handoff{
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
+		client: testClient(),
 		site:   handoffSite{name: "rumble", why: "testing", oembed: oembed},
 	}
 }

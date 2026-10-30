@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
@@ -146,10 +147,10 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 				if directChallenges.Load() != 1 || proxyRequests.Load() == 0 || proxyChallenges.Load() != tc.refusals {
 					t.Fatalf("direct challenges=%d proxy requests=%d proxy challenges=%d", directChallenges.Load(), proxyRequests.Load(), proxyChallenges.Load())
 				}
-				if pool.Page("cloudflare", proxy.Query{}).Summary.Cooling != 1+int(tc.refusals) {
+				if pool.Page(config.GroupWAF, proxy.Query{}).Summary.Cooling != 1+int(tc.refusals) {
 					t.Fatal("challenged addresses were not cooled")
 				}
-				if pool.Page("keep2share", proxy.Query{}).Summary.Cooling != 0 {
+				if pool.Page(config.GroupKeep2Share, proxy.Query{}).Summary.Cooling != 0 {
 					t.Fatal("Cloudflare challenge penalised another service")
 				}
 			}

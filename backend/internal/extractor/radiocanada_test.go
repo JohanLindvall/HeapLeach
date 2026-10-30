@@ -10,9 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // radioCanadaFakeSite stands in for Radio-Canada: pages naming their own
@@ -107,7 +104,7 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 }
 
 func radioCanadaWith(srv *httptest.Server) *RadioCanada {
-	r := NewRadioCanada(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	r := NewRadioCanada(testClient())
 	r.api = srv.URL + "/media/"
 	return r
 }

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
@@ -75,10 +76,10 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			})
 			pool := attachPool(t, m, []string{slow.URL, fast.URL})
 			ids := make(map[string]string)
-			for _, row := range pool.Page("keep2share", proxy.Query{}).Rows {
+			for _, row := range pool.Page(config.GroupKeep2Share, proxy.Query{}).Rows {
 				ids[row.URL] = row.ID
 			}
-			warm := pool.Acquire("keep2share", ids[fast.URL], 1)
+			warm := pool.Acquire(config.GroupKeep2Share, ids[fast.URL], 1)
 			if warm == nil {
 				t.Fatal("could not measure the alternative route")
 			}
@@ -131,7 +132,7 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			} else if it.Status != StatusCanceled || resolutions.Load() != 1 {
 				t.Fatalf("cancellation started another transfer: status=%s resolutions=%d", it.Status, resolutions.Load())
 			}
-			page := pool.Page("keep2share", proxy.Query{})
+			page := pool.Page(config.GroupKeep2Share, proxy.Query{})
 			if page.Summary.Active != 0 || page.Summary.Cooling != 0 {
 				t.Fatalf("handoff leaked leases or penalised cancellation: %+v", page.Summary)
 			}

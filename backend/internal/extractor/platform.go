@@ -27,9 +27,7 @@ func platformJSON(ctx context.Context, client *httpx.Client, endpoint string, he
 		return false
 	}
 	req.Header.Set(httpx.HeaderAccept, httpx.ContentTypeJSON)
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
+	headers.Apply(req)
 	resp, err := client.DoOnce(req)
 	if err != nil {
 		return false

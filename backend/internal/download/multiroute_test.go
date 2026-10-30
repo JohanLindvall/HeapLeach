@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -88,7 +89,7 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 	}
 	r.pool = attachPool(t, r.m, urls)
 	for i, u := range urls {
-		ids[i] = r.pool.Page("keep2share", proxy.Query{Search: u}).Rows[0].ID
+		ids[i] = r.pool.Page(config.GroupKeep2Share, proxy.Query{Search: u}).Rows[0].ID
 	}
 	r.ids, r.urls = ids, urls
 	for i, id := range ids {
@@ -211,7 +212,7 @@ func (r *routeRig) add(name string, hold func(ctx context.Context, route string)
 				Size: int64(len(r.payload))}, nil
 		},
 		Refused: quotaRefused,
-		Pace:    &extractor.Pace{Files: 1, Streams: 1, Group: "keep2share", PerRoute: true}}, "", 0)
+		Pace:    &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}}, "", 0)
 	job.Items = append(job.Items, it)
 	r.m.queue = append(r.m.queue, it)
 	r.m.signal()
@@ -384,7 +385,7 @@ func TestAnExtraStreamWhoseQuotaIsSpentHoldsItsRouteBack(t *testing.T) {
 	if tries == 0 {
 		t.Fatal("no extra stream tried the route whose quota is used up")
 	}
-	cooling := r.pool.Page("keep2share", proxy.Query{Status: "cooling"}).Rows
+	cooling := r.pool.Page(config.GroupKeep2Share, proxy.Query{Status: "cooling"}).Rows
 	if len(cooling) != 1 || cooling[0].ID != r.ids[1] {
 		t.Fatalf("cooling %+v; want the route whose quota is used up alone", cooling)
 	}
@@ -493,7 +494,7 @@ func TestTwoDownloadsNeverShareAnExit(t *testing.T) {
 		t.Fatalf("second.bin came through %v; want the route with an exit of its own", got)
 	}
 	r.m.mu.Lock()
-	shared := r.m.routeOutcomes[routeOutcome{"keep2share", "shared"}]
+	shared := r.m.routeOutcomes[routeOutcome{config.GroupKeep2Share, "shared"}]
 	r.m.mu.Unlock()
 	if shared == 0 {
 		t.Fatal("no attempt was turned away from the shared exit")
@@ -525,7 +526,7 @@ func TestARouteAnsweringWithoutAnAddressIsShelved(t *testing.T) {
 	if got := r.servedBy("clip.bin"); got[r.ids[1]] == 0 {
 		t.Fatalf("served %v; want the working route", got)
 	}
-	if row := r.pool.Page("keep2share", proxy.Query{Search: r.urls[0]}).Rows; len(row) != 1 || row[0].Status != "cooling" {
+	if row := r.pool.Page(config.GroupKeep2Share, proxy.Query{Search: r.urls[0]}).Rows; len(row) != 1 || row[0].Status != "cooling" {
 		t.Fatalf("the broken route: %+v; want it shelved", row)
 	}
 	if it.proxyRetries != 0 {
@@ -542,7 +543,7 @@ func TestAnEchoOutageDoesNotStopDownloads(t *testing.T) {
 	it := r.add("clip.bin", nil)
 	r.m.Start()
 	r.waitDone(60*time.Second, it)
-	if row := r.pool.Page("keep2share", proxy.Query{Search: r.urls[0]}).Rows; len(row) != 1 || row[0].Status == "cooling" {
+	if row := r.pool.Page(config.GroupKeep2Share, proxy.Query{Search: r.urls[0]}).Rows; len(row) != 1 || row[0].Status == "cooling" {
 		t.Fatalf("the route: %+v; want it not blamed for the outage", row)
 	}
 }
@@ -562,7 +563,7 @@ func TestASilentExtraStreamGivesUpItsRange(t *testing.T) {
 	if got := r.servedBy("clip.bin"); got[r.ids[1]] == 0 || got[r.ids[1]] > 1<<20 {
 		t.Fatalf("served %v; want the silent route's few bytes and the rest through the other", got)
 	}
-	if row := r.pool.Page("keep2share", proxy.Query{Search: r.urls[1]}).Rows; len(row) != 1 || row[0].Status != "cooling" {
+	if row := r.pool.Page(config.GroupKeep2Share, proxy.Query{Search: r.urls[1]}).Rows; len(row) != 1 || row[0].Status != "cooling" {
 		t.Fatalf("the silent route: %+v; want it held back", row)
 	}
 }
@@ -608,8 +609,8 @@ func TestTheItemsRouteIsCreditedOnlyWithItsOwnBytes(t *testing.T) {
 	m := busyManager(t)
 	route := proxyServer(t, "127.0.0.2", func(http.ResponseWriter, *http.Request) {}).URL
 	pool := attachPool(t, m, []string{route})
-	row := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]
-	lease := pool.Acquire("keep2share", row.ID, 1)
+	row := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0]
+	lease := pool.Acquire(config.GroupKeep2Share, row.ID, 1)
 	if lease == nil {
 		t.Fatal("no route")
 	}
@@ -622,7 +623,7 @@ func TestTheItemsRouteIsCreditedOnlyWithItsOwnBytes(t *testing.T) {
 	m.jobs["job"] = &Job{ID: "job", Items: []*Item{it}}
 	m.sampleLocked(now)
 	m.mu.Unlock()
-	got := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].Throughput
+	got := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0].Throughput
 	if want := float64(1<<20) / 6; math.Abs(got-want) > want/100 {
 		t.Fatalf("the route is credited %.0f B/s; want its own %.0f", got, want)
 	}

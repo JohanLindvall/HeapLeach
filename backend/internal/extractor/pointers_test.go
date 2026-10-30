@@ -9,10 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // pointerNamed is the pointer site of that name, with no client or registry
@@ -184,7 +182,7 @@ func TestPointerResolvesThroughTheRegistry(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 	reg := &Registry{fallback: NewDirect(nil)}
 	reg.extractors = []Extractor{stubExtractor{hostClaim: "tube.example.test", title: "a synthetic clip"}}
 	p := &Pointer{client: client, registry: reg, site: pointerNamed(t, "alohatube").site}
@@ -209,7 +207,7 @@ func TestPointerReportsAPageThatPointsNowhere(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := &Pointer{client: httpx.New("test-agent", "en-US", 0, 5*time.Second), site: pointerNamed(t, "yandex").site}
+	p := &Pointer{client: testClient(), site: pointerNamed(t, "yandex").site}
 	u, err := url.Parse(srv.URL + "/video/preview/1234567890")
 	if err != nil {
 		t.Fatal(err)

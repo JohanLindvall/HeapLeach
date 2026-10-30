@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -168,7 +167,7 @@ func newRTBFFake(t *testing.T) *rtbfFake {
 }
 
 func (f *rtbfFake) extractor() *RTBF {
-	r := NewRTBF(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	r := NewRTBF(testClient())
 	r.bff = f.srv.URL + "/bff"
 	r.exposure = f.srv.URL + "/exposure"
 	return r

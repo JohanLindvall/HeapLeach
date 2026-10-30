@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -207,8 +206,6 @@ const srfUnnumberedListing = `{
       "fullLengthUrn": "urn:srf:video:bbbbbbb0-0000-0000-0000-000000000001" }
   ]
 }`
-
-func srfTestClient() *httpx.Client { return httpx.New("test-agent", "en-US", 0, 5*time.Second) }
 
 // TestSRFMasterPlaylistsAreToldApart pins the claim the whole extractor is
 // arranged around: SRF serves both shapes, and only one of them can be joined
@@ -558,7 +555,7 @@ func srfServer(t *testing.T, compositions map[string]string, listings []string) 
 
 func srfWith(t *testing.T, srv *httptest.Server) *SRF {
 	t.Helper()
-	return &SRF{client: srfTestClient(), il: srv.URL + "/il"}
+	return &SRF{client: testClient(), il: srv.URL + "/il"}
 }
 
 // TestSRFExtractProgrammeTakesTheFile is the whole progressive path end to

@@ -10,9 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // TestSVTBestManifest pins the rendition choice: plain MPEG-TS HLS first,
@@ -118,7 +115,7 @@ func TestSVTCarriesAudioKeptApartAsTracksOfItsOwn(t *testing.T) {
 	srv = httptest.NewServer(mux)
 	defer srv.Close()
 
-	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	s := NewSVTPlay(testClient())
 	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
 	res := extractOK(t, s, "https://www.svtplay.se/video/separate/an-invented-title/", Options{})
 	f := res.Files[0]
@@ -178,7 +175,7 @@ func TestSVTSaysWhyAVideoOffersNoStream(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	s := NewSVTPlay(testClient())
 	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
 
 	for id, want := range map[string]string{
@@ -233,7 +230,7 @@ func TestSVTProgrammeCardExpandsToItsEpisodes(t *testing.T) {
 	})
 	srv = httptest.NewServer(mux)
 	defer srv.Close()
-	s := NewSVTPlay(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	s := NewSVTPlay(testClient())
 	s.api, s.graphql = srv.URL+"/api/", srv.URL+"/graphql"
 
 	for path, want := range map[string][]string{

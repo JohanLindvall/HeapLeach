@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -117,7 +116,7 @@ func niconicoSite(t *testing.T) (*httptest.Server, *[][]string) {
 }
 
 func niconicoWith(srv *httptest.Server) *Niconico {
-	n := NewNiconico(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	n := NewNiconico(testClient())
 	n.watch, n.api = srv.URL+"/watch/", srv.URL
 	return n
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"slices"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -132,7 +131,7 @@ func (m *Manager) restoreSettingsLocked(s *savedSettings) {
 	if saved != nil && maps.Equal(configured, m.cfg.ProxyTypes) {
 		kinds := make(map[string]string)
 		for group, kind := range saved {
-			if slices.Contains(config.ProxyGroups, group) && config.ValidProxyType(kind) {
+			if config.IsProxyGroup(group) && config.ValidProxyType(kind) {
 				kinds[group] = kind
 			}
 		}

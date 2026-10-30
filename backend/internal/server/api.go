@@ -14,6 +14,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/download"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // handleHealth is a liveness probe for container orchestration.
@@ -228,11 +229,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	return true
 }
 
+// jsonHeaders marks a reply as JSON of the moment: live state must never be
+// served stale by an intermediary.
+func jsonHeaders(h http.Header) {
+	h.Set(httpx.HeaderContentType, "application/json; charset=utf-8")
+	h.Set(httpx.HeaderContentTypeOptions, "nosniff")
+	h.Set(httpx.HeaderCacheControl, "no-store")
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// Live state must never be served stale by an intermediary.
-	w.Header().Set("Cache-Control", "no-store")
+	jsonHeaders(w.Header())
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }
@@ -253,19 +259,17 @@ func writeJSONMaybeCompressed(w http.ResponseWriter, r *http.Request, status int
 	}
 
 	h := w.Header()
-	h.Set("Content-Type", "application/json; charset=utf-8")
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Cache-Control", "no-store")
-	h.Add("Vary", "Accept-Encoding")
+	jsonHeaders(h)
+	h.Add(httpx.HeaderVary, httpx.HeaderAcceptEncoding)
 
 	if len(payload) < compressibleJSON || !acceptsGzip(r) {
-		h.Set("Content-Length", strconv.Itoa(len(payload)))
+		h.Set(httpx.HeaderContentLength, strconv.Itoa(len(payload)))
 		w.WriteHeader(status)
 		_, _ = w.Write(payload)
 		return
 	}
 
-	h.Set("Content-Encoding", "gzip")
+	h.Set(httpx.HeaderContentEncoding, "gzip")
 	w.WriteHeader(status)
 	gz := gzip.NewWriter(w)
 	defer gz.Close()
