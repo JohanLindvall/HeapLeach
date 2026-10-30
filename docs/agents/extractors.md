@@ -318,6 +318,11 @@ line in the saved queue.
   host-neutral.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
+- `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its
+  page cap, per-page note, redirect and repeated-page checks, dedupe, caps and
+  partial notes. A new paged listing supplies only the reader for one page.
+- `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
+  playlist or target as a File, every field carried over.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
 - `fixturePage`, `htmlPage`, `expectRecognised` and `expectShape`
   (`recognise_test.go`): recognition fixtures, checked from an unrelated host
