@@ -305,7 +305,8 @@ func TestWordPressKeepsNamedExtractorPrecedence(t *testing.T) {
 	named := &linksStub{host: u.Host, title: "Dedicated extraction", files: 1}
 	reg.extractors = append(reg.extractors, named)
 	res, ex, err := reg.Extract(context.Background(), base+"/category/example/", Options{})
-	if err != nil || ex != named || !strings.HasPrefix(res.Title, "Dedicated extraction") || len(asked()) != 0 {
+	// The one request allowed is the registry's probe of the page.
+	if err != nil || ex != named || !strings.HasPrefix(res.Title, "Dedicated extraction") || len(asked()) > 1 {
 		t.Fatalf("WordPress intercepted a named extractor: result=%+v err=%v requests=%v", res, err, asked())
 	}
 }

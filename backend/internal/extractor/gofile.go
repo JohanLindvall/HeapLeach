@@ -38,7 +38,6 @@ import (
 // expires the next link is refused here rather than sent — one wrong secret
 // costs one request, not one per link in the queue.
 type Gofile struct {
-	hostSet
 	client   *httpx.Client
 	fallback string
 	lang     string
@@ -88,7 +87,6 @@ const (
 // NewGofile builds the gofile extractor.
 func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 	return &Gofile{
-		hostSet:   hostSet{"gofile.io"},
 		client:    client,
 		fallback:  cfg.GofileSecret,
 		lang:      cfg.Language,
@@ -97,6 +95,22 @@ func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 }
 
 func (g *Gofile) Name() string { return "gofile" }
+
+// gofileShape is a share link: /d/<code>.
+var gofileShape = pathShape(`^/d/[A-Za-z0-9]+/?$`)
+
+// Recognises is the inventory's description.
+func (g *Gofile) Recognises() string { return "share links (`/d/<code>`) on the Gofile app" }
+
+// Shape reports a share link.
+func (g *Gofile) Shape(u *url.URL) bool { return gofileShape(u) }
+
+// Recognise takes a share link served by the site's app shell, which names
+// itself on every path: the folder is fetched by the app afterwards, so the
+// shell is all a share link ever answers with, deleted or not.
+func (g *Gofile) Recognise(_ context.Context, p *Page) bool {
+	return gofileShape(p.Final) && p.Named("Gofile")
+}
 
 // Extract resolves a share code into its files, walking nested folders.
 func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

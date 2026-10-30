@@ -193,10 +193,10 @@ func TestBandzoogleTakesItsHostsFromTheEnvironment(t *testing.T) {
 	if len(sites) != 2 {
 		t.Fatalf("built %d extractors, want 2", len(sites))
 	}
-	if !sites[0].Match(mustURL(t, "https://aband.example.test/music")) {
+	if !legacyMatch(sites[0], mustURL(t, "https://aband.example.test/music")) {
 		t.Error("a named install does not match its own host")
 	}
-	if sites[0].Match(mustURL(t, "https://elsewhere.example.test/music")) {
+	if legacyMatch(sites[0], mustURL(t, "https://elsewhere.example.test/music")) {
 		t.Error("an install matched a host nobody named")
 	}
 	if got := sites[0].Name(); got != "aband" {

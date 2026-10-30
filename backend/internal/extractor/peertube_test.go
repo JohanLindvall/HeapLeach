@@ -361,10 +361,10 @@ func TestPeerTubeSitesNameAndMatchTheirHosts(t *testing.T) {
 		}
 		seen[name] = host
 
-		if !sites[i].Match(&url.URL{Scheme: "https", Host: host, Path: "/w/x"}) {
+		if !legacyMatch(sites[i], &url.URL{Scheme: "https", Host: host, Path: "/w/x"}) {
 			t.Errorf("%s did not match its own host", host)
 		}
-		if sites[i].Match(&url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
+		if legacyMatch(sites[i], &url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
 			t.Errorf("%s matched an unrelated host", host)
 		}
 	}
@@ -637,7 +637,7 @@ func TestPeerTubeExtraHosts(t *testing.T) {
 
 	matched := false
 	for _, site := range sites {
-		if site.Match(u) {
+		if legacyMatch(site, u) {
 			matched = true
 		}
 	}

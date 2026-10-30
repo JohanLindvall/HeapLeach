@@ -131,7 +131,7 @@ func render(catalogue []extractor.HostInfo) string {
 		"they reach is open-ended:\n\n")
 	b.WriteString("| Extractor | Recognises |\n|---|---|\n")
 	for _, host := range shaped {
-		fmt.Fprintf(&b, "| `%s` | %s |\n", host.Name, shapeOf(host.Name))
+		fmt.Fprintf(&b, "| `%s` | %s |\n", host.Name, describe(host))
 	}
 	return b.String()
 }
@@ -139,6 +139,14 @@ func render(catalogue []extractor.HostInfo) string {
 // shapeOf describes what an open-ended extractor keys off. Kept here rather
 // than in the extractor, which has no business carrying documentation prose,
 // and short enough that a missing entry is obvious.
+// describe is the extractor's own account where it gives one.
+func describe(host extractor.HostInfo) string {
+	if host.Recognises != "" {
+		return host.Recognises
+	}
+	return shapeOf(host.Name)
+}
+
 func shapeOf(name string) string {
 	switch name {
 	case "links":

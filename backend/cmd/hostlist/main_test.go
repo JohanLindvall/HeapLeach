@@ -93,7 +93,7 @@ func TestEveryShapeExtractorIsDescribed(t *testing.T) {
 		if !host.ByShape {
 			continue
 		}
-		if shapeOf(host.Name) == shapeOf("\x00no such extractor") {
+		if describe(host) == shapeOf("\x00no such extractor") {
 			t.Errorf("%s matches by shape but shapeOf has nothing to say about it", host.Name)
 		}
 	}

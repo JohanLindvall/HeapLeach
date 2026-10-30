@@ -29,7 +29,7 @@ func TestHandoffMatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, site := range sites {
-			if site.Match(u) {
+			if legacyMatch(site, u) {
 				return site.Name()
 			}
 		}

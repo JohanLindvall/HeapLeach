@@ -511,11 +511,11 @@ func TestFoolFuukaSitesNameAndMatchTheirHosts(t *testing.T) {
 		}
 		for _, domain := range site.domains {
 			u := &url.URL{Scheme: "https", Host: domain, Path: "/a/thread/1/"}
-			if !sites[i].Match(u) {
+			if !legacyMatch(sites[i], u) {
 				t.Errorf("%s did not match its own domain %s", site.name, domain)
 			}
 		}
-		if sites[i].Match(&url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
+		if legacyMatch(sites[i], &url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
 			t.Errorf("%s matched an unrelated host", site.name)
 		}
 	}
@@ -531,7 +531,7 @@ func TestFoolFuukaAliasResolvesAgainstItsArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, ex := range sites {
-		if !ex.Match(u) {
+		if !legacyMatch(ex, u) {
 			continue
 		}
 		ff, ok := ex.(*FoolFuuka)

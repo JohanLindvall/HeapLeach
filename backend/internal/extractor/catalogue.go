@@ -45,6 +45,15 @@ type HostInfo struct {
 	// shape instead of a fixed set of hosts, and so covers an open-ended
 	// set — a fact worth stating rather than rendering as a blank cell.
 	ByShape bool
+	// Recognises is the extractor's own account of the pages it takes.
+	Recognises string
+}
+
+// Describer is how a recognising extractor says, for the inventory, what it
+// takes: the pages, by the forms and markers it recognises them by. Every
+// Recogniser implements it.
+type Describer interface {
+	Recognises() string
 }
 
 // Catalogue reports every registered extractor and the sites it covers,
@@ -53,8 +62,15 @@ func (r *Registry) Catalogue() []HostInfo {
 	out := make([]HostInfo, 0, len(r.extractors))
 	for _, e := range r.extractors {
 		info := HostInfo{Name: e.Name()}
+		if d, ok := e.(Describer); ok {
+			info.Recognises = d.Recognises()
+		}
 		lister, ok := e.(SiteLister)
+		_, recognised := e.(Recogniser)
 		switch {
+		case recognised && !ok:
+			// Recognised by its pages, wherever they are served.
+			info.ByShape = true
 		case !ok:
 			// No list to give: the name is the host.
 			info.Sites = []string{e.Name()}

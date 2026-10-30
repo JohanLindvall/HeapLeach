@@ -300,7 +300,7 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 		ID:        newID(),
 		Source:    u.String(),
 		Title:     u.Hostname() + u.Path,
-		Host:      m.reg.Find(u).Name(),
+		Host:      m.reg.Guess(u),
 		Password:  password,
 		CreatedAt: time.Now(),
 		limiter:   newThrottle(0),

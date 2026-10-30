@@ -152,10 +152,10 @@ func TestKVSSitesNameAndMatchTheirHosts(t *testing.T) {
 			t.Errorf("%s is named %q, want %q", host, got, name)
 		}
 		u := &url.URL{Scheme: "https", Host: "www." + host, Path: "/videos/1/x/"}
-		if !sites[i].Match(u) {
+		if !legacyMatch(sites[i], u) {
 			t.Errorf("%s did not match its own host", host)
 		}
-		if sites[i].Match(&url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
+		if legacyMatch(sites[i], &url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
 			t.Errorf("%s matched an unrelated host", host)
 		}
 	}

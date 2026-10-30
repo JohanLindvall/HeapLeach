@@ -60,6 +60,9 @@ func TestCatalogueCoversEveryExtractorHonestly(t *testing.T) {
 		if _, ok := e.(SiteLister); ok {
 			continue
 		}
+		if _, ok := e.(Recogniser); ok {
+			continue
+		}
 		if !strings.Contains(e.Name(), ".") {
 			t.Errorf("%q implements no Sites and is not named for its domain, so the "+
 				"inventory would advertise the label as the host", e.Name())
@@ -90,7 +93,7 @@ func TestEveryDeclaredHostRoutesToItsExtractor(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !e.Match(u) {
+				if !legacyMatch(e, u) {
 					t.Errorf("%s declares %s but does not match %s", e.Name(), host, raw)
 				}
 				if got := reg.Find(u); got != e {

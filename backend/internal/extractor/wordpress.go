@@ -473,7 +473,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 // recovering through proxies while the category still has no queued files.
 func wordPressLinkedSource(ctx context.Context, registry *Registry, link string, opts Options) (*Result, error) {
 	u, _ := url.Parse(link)
-	log := extractionLogger(ctx).With("source", u.Redacted(), "extractor", registry.Find(u).Name())
+	log := extractionLogger(ctx).With("source", u.Redacted(), "extractor", registry.Guess(u))
 	ctx = WithLogger(ctx, log)
 	progress := WithResolveNote(ctx, func(note string) {
 		log.DebugContext(ctx, "wordpress: linked source progress", "stage", note)

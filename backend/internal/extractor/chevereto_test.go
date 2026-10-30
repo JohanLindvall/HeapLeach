@@ -489,14 +489,14 @@ func TestCheveretoMatch(t *testing.T) {
 		if !ok {
 			t.Fatalf("no extractor named %q was built", want)
 		}
-		if !ex.Match(u) {
+		if !legacyMatch(ex, u) {
 			t.Errorf("%s did not match %q", want, raw)
 		}
 	}
 
 	other, _ := url.Parse("https://nobody.example.test/i/AAA111")
 	for _, site := range sites {
-		if site.Match(other) {
+		if legacyMatch(site, other) {
 			t.Errorf("%s matched an unrelated host", site.Name())
 		}
 	}
@@ -515,7 +515,7 @@ func TestCheveretoAcceptsExtraHosts(t *testing.T) {
 	}
 	var matched Extractor
 	for _, site := range NewCheveretoSites(cfg, nil) {
-		if site.Match(u) {
+		if legacyMatch(site, u) {
 			matched = site
 		}
 	}

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -316,14 +318,37 @@ func (r *Result) Label() string {
 	return r.Title + " (" + r.Note + ")"
 }
 
-// Extractor resolves one family of URLs.
+// Extractor resolves one family of pages.
 type Extractor interface {
-	// Name is the short host label shown in the UI.
+	// Name is the short label shown in the UI.
 	Name() string
-	// Match reports whether this extractor handles the URL.
-	Match(u *url.URL) bool
 	// Extract resolves the URL into downloadable files. opts may be zero.
 	Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error)
+}
+
+// Recogniser is how an extractor claims a URL without naming its host.
+//
+// Nothing in either method may depend on the URL's host. The registry
+// fetches the page first (probePage) and gives it to each extractor's
+// Recognise in turn; the first to claim it extracts it. So an extractor is
+// chosen by what the site serves — its name, its player, its bundle, its API
+// answering — and a site that moves domain, or an install nobody listed,
+// still reaches the right code.
+type Recogniser interface {
+	// Shape reports whether the URL has a form this extractor reads, by its
+	// path, query and fragment. It is all the link scanner has to go on
+	// before fetching, so it decides which links on a page are worth a
+	// probe; a link of the right form that turns out to be someone else's
+	// page is dropped after its probe. Report false for forms too common to
+	// single out — the site root, a bare slug — rather than turn every
+	// navigation link into a request.
+	Shape(u *url.URL) bool
+	// Recognise reports whether the probed page is one this extractor
+	// reads. It may make a bounded request of its own (platformJSON) when
+	// the page cannot say — a challenge stood in for it, say — but only once
+	// the URL's form has made the answer likely: every unrecognised page is
+	// offered to every extractor.
+	Recognise(ctx context.Context, p *Page) bool
 }
 
 // ProxyFallback opts a source into the manager's temporary-failure recovery.
@@ -347,6 +372,11 @@ type Options struct {
 	// ancestors is local to one expansion path, so independent sources can
 	// resolve concurrently without sharing a mutable visited set.
 	ancestors []string
+	// strict marks a source followed for the form of its link: a page that
+	// no extractor recognises is navigation, and is reported as
+	// errUnrecognised rather than handed to the fallback. It applies to that
+	// one URL, never to what its extractor goes on to resolve.
+	strict bool
 }
 
 // Limits bound what one submitted URL may expand to. Zero in either means
@@ -378,10 +408,12 @@ func (o Options) maxFiles() int {
 // ErrPasswordRequired signals that the content is gated behind a password.
 var ErrPasswordRequired = errors.New("this link is password protected: supply the password and retry")
 
-// Registry dispatches a URL to the first extractor that matches.
+// Registry dispatches a URL to the first extractor that recognises its page.
 type Registry struct {
 	extractors []Extractor
 	fallback   Extractor
+	// client probes pages for identification.
+	client *httpx.Client
 	// limits is what every extraction through this registry is bounded by.
 	limits Limits
 }
@@ -497,6 +529,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 
 	direct := NewDirect(client)
 	reg := &Registry{
+		client:   client,
 		fallback: direct,
 		limits:   Limits{Sources: cfg.MaxSources, Files: cfg.MaxFiles},
 	}
@@ -522,7 +555,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	return reg
 }
 
-// Hosts lists the supported host labels, for the startup log.
+// Hosts lists the supported labels, for the startup log.
 func (r *Registry) Hosts() []string {
 	names := make([]string, 0, len(r.extractors))
 	for _, e := range r.extractors {
@@ -531,28 +564,115 @@ func (r *Registry) Hosts() []string {
 	return names
 }
 
-// Find returns the extractor for a URL. It never returns nil: unrecognised
-// hosts get the direct-link extractor.
-func (r *Registry) Find(u *url.URL) Extractor {
-	ex, _ := r.Known(u)
-	return ex
+// Guess names the extractor a URL's form points to, before anything is
+// fetched: a label for a job not yet read. Extraction decides for real.
+func (r *Registry) Guess(u *url.URL) string {
+	if ex, ok := r.Known(u); ok {
+		return ex.Name()
+	}
+	return r.fallback.Name()
 }
 
-// Known returns the extractor for a URL and whether a host actually claimed
-// it, as opposed to the fallback matching it the way it matches everything.
+// Known returns the first extractor whose URL form the link has, and
+// whether there was one, as opposed to the fallback that takes everything.
 //
-// Find cannot answer that, and the link harvester needs it answered: it reads
-// a page full of links of which a handful are downloads and the rest are
-// navigation, and "is this a host we support" is the only thing separating
-// the two.
+// The link harvester and the page scanner need that answered without a
+// fetch: a page full of links of which a handful are downloads and the rest
+// navigation, and the form of the link is all there is to separate them.
+// The answer is a candidate, not a verdict; Extract probes the page and may
+// find it is no extractor's.
 func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 	for _, e := range r.extractors {
-		if e.Match(u) {
+		if shapeOf(e, u) {
 			return e, true
 		}
 	}
 	return r.fallback, false
 }
+
+// identify probes the URL and returns the first extractor that recognises
+// the page, or the fallback.
+func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) {
+	// Fetched on the first extractor that needs to see it. Only the
+	// transitional host matchers can answer without it.
+	var p *Page
+	page := func() *Page {
+		if p == nil {
+			if r.client == nil {
+				p = &Page{URL: u, Final: u, Err: errors.New("no client to probe with")}
+			} else {
+				p = probePage(ctx, r.client, u)
+			}
+		}
+		return p
+	}
+	if !probeWorthy(u) {
+		if ex, ok := r.Known(u); ok {
+			if _, legacy := ex.(legacyMatcher); legacy {
+				return ex, &Page{URL: u, Final: u}
+			}
+		} else {
+			return r.fallback, &Page{URL: u, Final: u}
+		}
+	}
+	for _, e := range r.extractors {
+		switch m := e.(type) {
+		case Recogniser:
+			if m.Recognise(ctx, page()) {
+				return e, p
+			}
+		case legacyMatcher:
+			if m.Match(u) {
+				return e, &Page{URL: u, Final: u}
+			}
+		}
+	}
+	return r.fallback, page()
+}
+
+// legacyMatcher is an extractor not yet moved to recognition: it still
+// claims URLs by host. TODO(generic-dispatch): remove once none is left.
+type legacyMatcher interface{ Match(u *url.URL) bool }
+
+func shapeOf(e Extractor, u *url.URL) bool {
+	switch e := e.(type) {
+	case Recogniser:
+		return e.Shape(u)
+	case legacyMatcher:
+		return e.Match(u)
+	}
+	return false
+}
+
+// probeWorthy reports whether a URL could be a page, by the extension its
+// path ends in: none, or one a page is served under. A link that names a
+// file of some other kind, and that no extractor's form claims, is the
+// fallback's without a fetch; the probe would only download the start of
+// the very file the fallback is about to download.
+func probeWorthy(u *url.URL) bool {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return true
+	}
+	segs := util.PathSegments(u)
+	if len(segs) == 0 || strings.HasSuffix(u.Path, "/") {
+		return true
+	}
+	ext := strings.ToLower(path.Ext(segs[len(segs)-1]))
+	switch ext {
+	case "", ".html", ".htm", ".shtml", ".xhtml", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl":
+		return true
+	}
+	// Only something that reads as a file type counts: a slug such as
+	// "part-2.0" or "v1.5" names a page whose title has a dot in it.
+	return !fileExtension.MatchString(ext)
+}
+
+// fileExtension is an extension that names a file type.
+var fileExtension = regexp.MustCompile(`^\.[a-z][a-z0-9]{0,4}$`)
+
+// errUnrecognised reports a source that had a supported form but whose page
+// no extractor recognised: navigation that merely looked like a download.
+var errUnrecognised = errors.New("no extractor recognises this page")
 
 // Extract parses rawURL and resolves it.
 func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*Result, Extractor, error) {
@@ -563,32 +683,55 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	if err != nil {
 		return nil, nil, err
 	}
-	ex := r.Find(u)
+	label := r.Guess(u)
 	if slices.Contains(opts.ancestors, u.String()) {
-		return nil, ex, fmt.Errorf("%s: recursive source link", ex.Name())
+		return nil, nil, fmt.Errorf("%s: recursive source link", label)
 	}
 	if len(opts.ancestors) >= config.MaxExtractionDepth {
-		return nil, ex, fmt.Errorf("%s: source nesting exceeds %d levels", ex.Name(), config.MaxExtractionDepth)
+		return nil, nil, fmt.Errorf("%s: source nesting exceeds %d levels", label, config.MaxExtractionDepth)
 	}
 	opts.ancestors = append(slices.Clone(opts.ancestors), u.String())
 	if opts.limits == (Limits{}) {
 		opts.limits = r.limits
 	}
-	read := func(ctx context.Context) (*Result, error) {
+	strict := opts.strict
+	opts.strict = false
+	// The page is identified afresh on every read, so that a read recovered
+	// through another route, or a file refreshed at transfer time, is judged
+	// by what that route was served rather than by the challenge the first
+	// one met.
+	read := func(ctx context.Context) (Extractor, *Result, error) {
 		ctx, challenge := httpx.CaptureChallenges(ctx)
-		res, err := ex.Extract(ctx, u, opts)
-		if ctx.Err() == nil && challenge() != nil {
-			return nil, challenge()
+		ex, page := r.identify(ctx, u)
+		if strict && ex == r.fallback {
+			if page.Challenged {
+				return ex, nil, page.Err
+			}
+			return ex, nil, fmt.Errorf("%s: %w", u.Redacted(), errUnrecognised)
 		}
+		res, err := ex.Extract(withPage(ctx, page), u, opts)
+		if ctx.Err() == nil && challenge() != nil {
+			return ex, nil, challenge()
+		}
+		return ex, res, err
+	}
+	reread := func(ctx context.Context) (*Result, error) {
+		_, res, err := read(ctx)
 		return res, err
 	}
-	res, err := read(ctx)
+	ex, res, err := read(ctx)
 	recovered := false
 	_, challenged := errors.AsType[*httpx.ChallengeError](err)
 	fallback, optedIn := ex.(ProxyFallback)
 	if err != nil && httpx.RouteID(ctx) == "" && (challenged || (optedIn && fallback.ProxyFallback())) {
 		if recover, ok := ctx.Value(challengeRecoveryKey{}).(ChallengeRecovery); ok {
-			res, err = recover(ctx, read, err)
+			res, err = recover(ctx, func(ctx context.Context) (*Result, error) {
+				got, res, err := read(ctx)
+				if err == nil {
+					ex = got
+				}
+				return res, err
+			}, err)
 			recovered = err == nil
 		}
 	}
@@ -606,7 +749,7 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 		res.Files[i].Name = util.TitleName(util.Unescape(res.Files[i].Name))
 		res.Files[i].Dir = util.Unescape(res.Files[i].Dir)
 		if res.Files[i].Refresh == nil {
-			res.Files[i].Refresh = refreshFile(read, res.Files[i], len(res.Files) == 1)
+			res.Files[i].Refresh = refreshFile(reread, res.Files[i], len(res.Files) == 1)
 		}
 		if recovered {
 			res.Files[i].Resolve = res.Files[i].Refresh
