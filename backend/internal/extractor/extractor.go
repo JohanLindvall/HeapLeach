@@ -475,10 +475,9 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewNPR(client),
 		NewABCListen(client),
 		NewBBCSounds(client),
-		NewYouTube(),
 		NewVimeo(client),
 		NewNiconico(client),
-		NewYandex(client),
+		NewPointer(client, "yandex"),
 		NewBooru(client),
 		NewFourChan(client),
 		NewRedGifs(client),
@@ -557,11 +556,11 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// otherwise be routed to that host's extractor, which would try to
 	// fetch "links://..." and fail on the scheme.
 	reg.extractors = append([]Extractor{NewLinks(client, reg)}, extractors...)
-	// The aggregator hosts nothing either, and resolves the frame it finds
-	// through the registry for the same reason, so it is wired the same way
-	// once the registry exists. It claims one host, so its position among
-	// the rest does not matter.
-	reg.extractors = append(reg.extractors, NewAlohaTube(client, reg))
+	// The pages that only point at a video elsewhere host nothing either,
+	// and resolve what they point at through the registry for the same
+	// reason, so they are handed it once it exists.
+	reg.extractors = append(reg.extractors, NewPointer(client, "alohatube"))
+	wirePointers(reg)
 	// The album index hosts nothing either, and resolves each result the
 	// same way, so it is wired once the registry exists for the same reason.
 	reg.extractors = append(reg.extractors, NewBalbums(client, reg))
