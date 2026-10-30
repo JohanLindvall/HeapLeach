@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -62,10 +61,7 @@ func TestEpornerVideoID(t *testing.T) {
 		{"/profile/Someone/uploaded-videos/", ""},
 	}
 	for _, c := range cases {
-		u, err := url.Parse("https://www.eporner.com" + c.path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, "https://www.eporner.com"+c.path)
 		if got := epornerVideoID(util.PathSegments(u)); got != c.want {
 			t.Errorf("epornerVideoID(%q) = %q, want %q", c.path, got, c.want)
 		}
@@ -89,10 +85,7 @@ func TestEpornerProfileOf(t *testing.T) {
 		{"/video-Aa1Bb2Cc3/slug/", "", "", false},
 	}
 	for _, c := range cases {
-		u, err := url.Parse("https://www.eporner.com" + c.path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, "https://www.eporner.com"+c.path)
 		user, tab, ok := epornerProfileOf(util.PathSegments(u))
 		if ok != c.ok || user != c.user || tab != c.tab {
 			t.Errorf("epornerProfileOf(%q) = (%q,%q,%t), want (%q,%q,%t)",
@@ -104,10 +97,7 @@ func TestEpornerProfileOf(t *testing.T) {
 // The tab lives in the path, so it has to be carried onto every page: a walk
 // that drops it lists a different tab at a plausible-looking count.
 func TestEpornerProfilePage(t *testing.T) {
-	u, err := url.Parse("https://de.eporner.com/profile/Someone/uploaded-videos/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://de.eporner.com/profile/Someone/uploaded-videos/")
 	if got, want := epornerProfilePage(u, "Someone", "uploaded-videos", 1),
 		"https://de.eporner.com/profile/Someone/uploaded-videos/"; got != want {
 		t.Errorf("page 1 = %q, want %q", got, want)
@@ -201,10 +191,7 @@ const epornerProfileMarkup = `<!DOCTYPE html><html><head><title>Someone's upload
 </div></div></div></div></body></html>`
 
 func TestEpornerListingIgnoresWhatTheTabDoesNotOwn(t *testing.T) {
-	root, err := parseHTML(epornerProfileMarkup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, epornerProfileMarkup)
 	got := epornerListing(root, "https://www.eporner.com/profile/Someone/uploaded-videos/", map[string]bool{})
 	want := []epornerVideo{
 		{Page: "https://www.eporner.com/video-Sidebar001/first-clip/", Title: "First Clip"},
@@ -228,10 +215,7 @@ func TestEpornerListingIgnoresWhatTheTabDoesNotOwn(t *testing.T) {
 
 // A video already collected on an earlier page is not collected again.
 func TestEpornerListingSkipsWhatWasAlreadySeen(t *testing.T) {
-	root, err := parseHTML(epornerProfileMarkup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, epornerProfileMarkup)
 	seen := map[string]bool{"Sidebar001": true, "Second002": true}
 	got := epornerListing(root, "https://www.eporner.com/profile/Someone/uploaded-videos/", seen)
 	if len(got) != 1 || got[0].Title != "Third Clip" {
@@ -242,10 +226,7 @@ func TestEpornerListingSkipsWhatWasAlreadySeen(t *testing.T) {
 // The count is what stops a short walk passing for a whole one, so it has to
 // come from the tab's own heading — a profile also states somebody else's.
 func TestEpornerDeclaredCount(t *testing.T) {
-	root, err := parseHTML(epornerProfileMarkup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, epornerProfileMarkup)
 	if got := epornerDeclaredCount(root, "uploaded-videos"); got != 5 {
 		t.Errorf("uploaded-videos count = %d, want 5", got)
 	}
@@ -344,14 +325,7 @@ func TestEpornerVideoEndToEnd(t *testing.T) {
 	srv, pageHits := epornerServer(t, 5)
 	e := epornerUnderTest(t)
 
-	u, err := url.Parse(srv.URL + "/video-Made0001Up/a-made-up-clip/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, e, srv.URL+"/video-Made0001Up/a-made-up-clip/", Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -390,14 +364,7 @@ func TestEpornerProfileEndToEnd(t *testing.T) {
 	srv, pageHits := epornerServer(t, 4)
 	e := epornerUnderTest(t)
 
-	u, err := url.Parse(srv.URL + "/profile/Someone/uploaded-videos/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, e, srv.URL+"/profile/Someone/uploaded-videos/", Options{})
 	want := []string{"First Clip.mp4", "Second Clip.mp4", "Third Clip.mp4", "Fourth Clip.mp4"}
 	if len(res.Files) != len(want) {
 		t.Fatalf("got %d files, want %d: %+v", len(res.Files), len(want), res.Files)
@@ -436,14 +403,7 @@ func TestEpornerProfileEndToEnd(t *testing.T) {
 func TestEpornerProfileSaysWhenItCameBackShort(t *testing.T) {
 	srv, _ := epornerServer(t, 9)
 	e := epornerUnderTest(t)
-	u, err := url.Parse(srv.URL + "/profile/Someone/uploaded-videos/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, e, srv.URL+"/profile/Someone/uploaded-videos/", Options{})
 	// The shortfall is the job's note, and the title — which names the
 	// folder — stays the profile's, so a later complete run files alongside.
 	if want := "Someone (uploaded videos) (partial — 4 of 9)"; res.Label() != want {
@@ -467,11 +427,8 @@ func TestEpornerUnavailableVideo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/video-Made0001Up/gone/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = epornerUnderTest(t).Extract(context.Background(), u, Options{})
+	u := mustParse(t, srv.URL+"/video-Made0001Up/gone/")
+	_, err := epornerUnderTest(t).Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("an unavailable video resolved without error")
 	}
@@ -487,11 +444,8 @@ func TestEpornerPageWithoutAPlayer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/video-Made0001Up/gone/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = epornerUnderTest(t).Extract(context.Background(), u, Options{})
+	u := mustParse(t, srv.URL+"/video-Made0001Up/gone/")
+	_, err := epornerUnderTest(t).Extract(context.Background(), u, Options{})
 	if err == nil || !strings.Contains(err.Error(), "player configuration") {
 		t.Errorf("error = %v, want it to name the missing player configuration", err)
 	}

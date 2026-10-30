@@ -24,13 +24,6 @@ type Fapello struct {
 	client *httpx.Client
 }
 
-const (
-	// fapelloMaxPages bounds the walk; paging past the end wraps back to
-	// the first page rather than returning nothing, so the real stop
-	// condition is a page that adds nothing new.
-	fapelloMaxPages = 200
-)
-
 // fapelloThumbSuffix marks a listing thumbnail.
 var fapelloThumbSuffix = regexp.MustCompile(`_\d+px(\.[A-Za-z0-9]+)$`)
 
@@ -91,7 +84,7 @@ func fapelloMedia(model string) *regexp.Regexp {
 }
 
 // Extract walks a model's pages and collects everything of theirs.
-func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (f *Fapello) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) == 0 {
 		return nil, fmt.Errorf("fapello: %s names no model", u.Redacted())
@@ -106,53 +99,46 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	// Media lives on the shared content host and always names the model.
 	ownMedia := fapelloMedia(model)
 
-	seen := make(map[string]bool)
-	var files []File
-
-	for page := 1; page <= fapelloMaxPages; page++ {
-		target := base + "/" + url.PathEscape(model) + "/"
-		if page > 1 {
-			target += "page-" + strconv.Itoa(page) + "/"
-		}
-
-		targetURL, err := url.Parse(target)
-		if err != nil {
-			return nil, fmt.Errorf("fapello: %w", err)
-		}
-		doc, _, err := fetchDocument(ctx, f.client, targetURL, headers)
-		if err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("fapello: fetch %s: %w", target, err)
+	// Paging past the last page wraps back to the first rather than
+	// returning nothing, so the end is a page that adds nothing new, and
+	// the walk is a quiet one.
+	files, note, err := walkPages(ctx, pageWalk[File]{
+		key:   func(f File) string { return f.URL },
+		limit: opts.maxFiles(), limitNote: "partial — file limit", quiet: true,
+		fetch: func(ctx context.Context, n int) (pageOf[File], error) {
+			target := base + "/" + url.PathEscape(model) + "/"
+			if n > 0 {
+				target += "page-" + strconv.Itoa(n+1) + "/"
 			}
-			break
-		}
-
-		var added int
-		for _, link := range ownMedia.FindAllString(doc, -1) {
-			full := fapelloFullSize(link)
-			if seen[full] {
-				continue
+			targetURL, err := url.Parse(target)
+			if err != nil {
+				return pageOf[File]{}, fmt.Errorf("fapello: %w", err)
 			}
-			seen[full] = true
-			added++
-			files = append(files, File{
-				Name:    util.NameFromURL(full),
-				URL:     full,
-				Size:    -1,
-				Headers: headers,
-			})
-		}
-		// Paging past the last page wraps to the first, so a page that
-		// contributes nothing means the walk is over.
-		if added == 0 {
-			break
-		}
+			doc, _, err := fetchDocument(ctx, f.client, targetURL, headers)
+			if err != nil {
+				return pageOf[File]{}, fmt.Errorf("fapello: fetch %s: %w", target, err)
+			}
+			var files []File
+			for _, link := range ownMedia.FindAllString(doc, -1) {
+				full := fapelloFullSize(link)
+				files = append(files, File{
+					Name:    util.NameFromURL(full),
+					URL:     full,
+					Size:    -1,
+					Headers: headers,
+				})
+			}
+			return pageOf[File]{items: files, next: true}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if len(files) == 0 {
 		return nil, fmt.Errorf("fapello: found no media for %q", model)
 	}
-	return &Result{Title: model, Files: files}, nil
+	return &Result{Title: model, Files: files, Note: note}, nil
 }
 
 // fapelloFullSize turns a listing thumbnail into the full-size file.

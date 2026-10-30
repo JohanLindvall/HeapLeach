@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -145,64 +144,44 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("celeb: page does not contain an image gallery")
 	}
 
-	seen := make(map[int64]bool)
-	items := p.Media
+	// The page states how many pages the gallery has; the first is the
+	// page itself, the rest come from the API.
+	api := util.Origin(&pageURL) + "/api/v1/creator/" +
+		url.PathEscape(util.FirstNonEmpty(p.Creator.Slug, segs[1])) + "/media"
 	pages := max(1, p.Pages)
-	limit := opts.maxFiles()
-	for pageNo := 1; pageNo <= pages; pageNo++ {
-		if err := ctx.Err(); err != nil {
+	images, note, err := walkPages(ctx, pageWalk[celebImage]{
+		key:   func(m celebImage) string { return strconv.FormatInt(m.ID, 10) },
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, n int) (pageOf[celebImage], error) {
+			items := p.Media
+			if n > 0 {
+				params := url.Values{"page": {strconv.Itoa(n + 1)}, "mediaType": {"media"}}
+				if sort := query.Get("sort"); sort != "" {
+					params.Set("sort", sort)
+				}
+				items = nil
+				if err := c.client.GetJSON(ctx, api+"?"+params.Encode(), httpx.Referer(page), &items); err != nil {
+					return pageOf[celebImage]{}, fmt.Errorf("celeb: fetch image page %d: %w", n+1, err)
+				}
+			}
+			return pageOf[celebImage]{items: items, next: n+1 < pages}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, image := range images {
+		file, err := image.file(page)
+		if err != nil {
 			return nil, err
 		}
-		before := len(res.Files)
-		for _, item := range items {
-			if seen[item.ID] {
-				continue
-			}
-			if len(res.Files) == limit {
-				res.Note = "partial — file limit"
-				break
-			}
-			file, err := item.file(page)
-			if err != nil {
-				return nil, err
-			}
-			seen[item.ID] = true
-			res.Files = append(res.Files, file)
-		}
-		if res.Note != "" {
-			break
-		}
-		// A repeated or unexpectedly empty page must not loop or pass for
-		// a complete gallery. The count below makes the shortfall visible.
-		if len(res.Files) == before {
-			res.Note = "partial — pagination stopped"
-			break
-		}
-		if pageNo == pages {
-			break
-		}
-		if len(res.Files) == limit {
-			res.Note = "partial — file limit"
-			break
-		}
-		if pageNo == config.MaxAlbumPages {
-			res.Note = "partial — page limit"
-			break
-		}
-		api := util.Origin(&pageURL) + "/api/v1/creator/" +
-			url.PathEscape(util.FirstNonEmpty(p.Creator.Slug, segs[1])) + "/media"
-		params := url.Values{"page": {strconv.Itoa(pageNo + 1)}, "mediaType": {"media"}}
-		if sort := query.Get("sort"); sort != "" {
-			params.Set("sort", sort)
-		}
-		items = nil
-		if err := c.client.GetJSON(ctx, api+"?"+params.Encode(), httpx.Referer(page), &items); err != nil {
-			return nil, fmt.Errorf("celeb: fetch image page %d: %w", pageNo+1, err)
-		}
+		res.Files = append(res.Files, file)
 	}
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("celeb: no images found")
 	}
+	// A gallery that came up short says by how much, whatever stopped it.
+	res.Note = note
 	if p.Creator.ImageCount > len(res.Files) {
 		res.Note = fmt.Sprintf("%d of %d images", len(res.Files), p.Creator.ImageCount)
 	}

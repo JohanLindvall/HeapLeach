@@ -39,10 +39,7 @@ const coomerFansPostPage = `<html><head><title>a-creator / A post with two thing
 </body></html>`
 
 func TestCoomerFansPostSeparatesVideoFromImage(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/p/1/2/onlyfans")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://coomerfans.com/p/1/2/onlyfans")
 	title, media, err := coomerFansPost(coomerFansPostPage, base)
 	if err != nil {
 		t.Fatalf("coomerFansPost: %v", err)
@@ -72,10 +69,7 @@ func TestCoomerFansPostSeparatesVideoFromImage(t *testing.T) {
 // a whole gallery of other creators below the post: only what is inside the
 // post body belongs to this job.
 func TestCoomerFansPostIgnoresTheRestOfThePage(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/p/1/2/onlyfans")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://coomerfans.com/p/1/2/onlyfans")
 	_, media, err := coomerFansPost(coomerFansPostPage, base)
 	if err != nil {
 		t.Fatal(err)
@@ -88,10 +82,7 @@ func TestCoomerFansPostIgnoresTheRestOfThePage(t *testing.T) {
 }
 
 func TestCoomerFansPostReportsAMissingBody(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/p/1/2/onlyfans")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://coomerfans.com/p/1/2/onlyfans")
 	if _, _, err := coomerFansPost("<html><body>Not found</body></html>", base); err == nil {
 		t.Fatal("a page with no post body was accepted")
 	}
@@ -128,34 +119,24 @@ func TestCoomerFansIsPost(t *testing.T) {
 }
 
 func TestCoomerFansNextPage(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/u/onlyfans/212948/a-creator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := parseHTML(`<div class="pagination">
+	base := mustParse(t, "https://coomerfans.com/u/onlyfans/212948/a-creator")
+	root := mustParseDoc(t, `<div class="pagination">
 		<a href="/u/onlyfans/212948/a-creator?page=1">1</a>
 		<a class="next" href="/u/onlyfans/212948/a-creator?page=2">next</a>
 	</div>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	const want = "https://coomerfans.com/u/onlyfans/212948/a-creator?page=2"
 	if got := coomerFansNextPage(root, base); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	last, err := parseHTML(`<div class="pagination"><a href="?page=5">5</a></div>`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	last := mustParseDoc(t, `<div class="pagination"><a href="?page=5">5</a></div>`)
 	if got := coomerFansNextPage(last, base); got != "" {
 		t.Errorf("the last page offered %q, want nothing to follow", got)
 	}
 }
 
 // A creator's pages are walked through their next links, and the listing
-// ends quietly where it does: at a page that is not there, or at one that
-// only repeats what was already listed.
+// ends quietly where it does, at a page that is not there.
 func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
 	page := func(next string, posts ...string) string {
 		var b strings.Builder
@@ -178,14 +159,6 @@ func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
 			"":  page("?page=2", "11", "12"),
 			"2": page("?page=3", "12", "13"),
 		}, []string{"11", "12", "13"}, ""},
-		{"nothing new", map[string]string{
-			"":  page("?page=2", "11", "12"),
-			"2": page("?page=3", "12", "11"),
-			"3": page("", "14"),
-		}, []string{"11", "12"}, "3"},
-		{"no next link", map[string]string{
-			"": page("", "11"),
-		}, []string{"11"}, "2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -203,8 +176,7 @@ func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
 			}))
 			defer srv.Close()
 			c := NewCoomerFans(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-			u, _ := ParseURL(srv.URL + "/u/onlyfans/1/a-creator")
-			links, title, err := c.postLinks(context.Background(), u)
+			links, title, err := c.postLinks(context.Background(), mustParse(t, srv.URL+"/u/onlyfans/1/a-creator"))
 			if err != nil || title != "a-creator" || len(links) != len(tc.want) {
 				t.Fatalf("links=%v title=%q err=%v", links, title, err)
 			}

@@ -121,32 +121,31 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget) (*Resu
 		title = "@" + fediHandle(t.handle, u.Hostname())
 	}
 
-	var views []lemmyPostView
-	for page := 1; page <= config.MaxTimelinePages; page++ {
-		query := url.Values{}
-		query.Set(key, t.handle)
-		query.Set("limit", strconv.Itoa(fediLemmyPageSize))
-		query.Set("page", strconv.Itoa(page))
-		query.Set("sort", "New")
+	// Pages are asked for until one comes back empty. Lemmy 1.0 replaces
+	// page numbers with a cursor, and an instance that ignores a parameter
+	// it no longer knows hands back the first page again, which adds
+	// nothing and so ends the walk.
+	views, note, err := walkPages(ctx, pageWalk[lemmyPostView]{
+		key:   func(view lemmyPostView) string { return strconv.FormatInt(view.Post.ID, 10) },
+		limit: -1, pages: config.MaxTimelinePages,
+		fetch: func(ctx context.Context, n int) (pageOf[lemmyPostView], error) {
+			query := url.Values{}
+			query.Set(key, t.handle)
+			query.Set("limit", strconv.Itoa(fediLemmyPageSize))
+			query.Set("page", strconv.Itoa(n+1))
+			query.Set("sort", "New")
 
-		var payload struct {
-			Posts []lemmyPostView `json:"posts"`
-		}
-		if err := client.get(ctx, route, query, &payload); err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("fediverse: read %s: %w", title, err)
+			var payload struct {
+				Posts []lemmyPostView `json:"posts"`
 			}
-			break
-		}
-		// Lemmy 1.0 replaces page numbers with a cursor, and an instance that
-		// ignores a parameter it no longer knows would hand back the first
-		// page for ever. Stopping once a page adds nothing new is what makes
-		// that one wasted request instead of an endless loop.
-		before := len(views)
-		lemmyAppend(&views, payload.Posts)
-		if len(views) == before || len(payload.Posts) < fediLemmyPageSize {
-			break
-		}
+			if err := client.get(ctx, route, query, &payload); err != nil {
+				return pageOf[lemmyPostView]{}, fmt.Errorf("fediverse: read %s: %w", title, err)
+			}
+			return pageOf[lemmyPostView]{items: payload.Posts, next: true, end: len(payload.Posts) == 0}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	files := lemmyFiles(views)
@@ -154,21 +153,7 @@ func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget) (*Resu
 		return nil, fmt.Errorf("fediverse: %s has no image or video submissions among its most "+
 			"recent %d posts", title, config.MaxTimelinePages*fediLemmyPageSize)
 	}
-	return &Result{Title: title, Files: files}, nil
-}
-
-// lemmyAppend adds the posts of a page that are not held already.
-func lemmyAppend(views *[]lemmyPostView, page []lemmyPostView) {
-	seen := make(map[int64]bool, len(*views))
-	for _, view := range *views {
-		seen[view.Post.ID] = true
-	}
-	for _, view := range page {
-		if !seen[view.Post.ID] {
-			seen[view.Post.ID] = true
-			*views = append(*views, view)
-		}
-	}
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // lemmyFiles keeps the submissions that are a file rather than a page.

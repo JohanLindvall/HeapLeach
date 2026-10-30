@@ -155,9 +155,7 @@ func voyeurKingCards(root *html.Node, page, first *url.URL, section []string) li
 		link.RawPath, link.RawQuery = "", ""
 		p.links = append(p.links, listingLink{key: link.String(), url: link.String()})
 	}
-	if p.next == nil && invalid {
-		p.note = "partial — invalid next page"
-	}
+	p.badNext = p.next == nil && invalid
 	return p
 }
 

@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -93,10 +92,7 @@ func TestCivitaiTargetOf(t *testing.T) {
 
 	c := NewCivitai(nil)
 	for _, tt := range tests {
-		u, err := url.Parse(tt.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tt.raw)
 		got := civitaiTargetOf(u)
 		if tt.value == "" {
 			if got != nil {
@@ -193,10 +189,7 @@ func TestCivitaiQueryLiftsMatureFiltering(t *testing.T) {
 	raw := civitaiQuery("https://civitai.example/api/v1/images",
 		&civitaiTarget{selector: civitaiByUser, value: "Some Creator"})
 
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("built an unparsable query %q: %v", raw, err)
-	}
+	u := mustParse(t, raw)
 	query := u.Query()
 	if query.Get("nsfw") != civitaiNSFW {
 		t.Errorf("nsfw = %q, want %q — without it the listing silently hides mature items",
@@ -298,10 +291,10 @@ func TestCivitaiWalkFollowsTheCursorAndDropsTheRepeat(t *testing.T) {
 		{body: civitaiCursorPage([]int{3, 4}, "")},
 	})
 
-	items, err := civitaiTestClient().walk(context.Background(),
-		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator")
-	if err != nil {
-		t.Fatalf("walk: %v", err)
+	items, note, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{})
+	if err != nil || note != "" {
+		t.Fatalf("walk: %v, note %q", err, note)
 	}
 
 	var got []int64
@@ -332,36 +325,40 @@ func TestCivitaiWalkWaitsOutTheOverload(t *testing.T) {
 		{body: civitaiCursorPage([]int{3, 4}, "")},
 	})
 
-	items, err := civitaiTestClient().walk(context.Background(),
-		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator")
-	if err != nil {
-		t.Fatalf("walk: %v", err)
+	items, note, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{})
+	if err != nil || note != "" {
+		t.Fatalf("walk: %v, note %q", err, note)
 	}
 	if len(items) != 4 {
 		t.Errorf("collected %d items, want all 4 — the overload is transient, not the end", len(items))
 	}
 }
 
-// TestCivitaiWalkFailsRatherThanTruncate is the other half of the same
+// TestCivitaiWalkSaysAnOverloadCutItShort is the other half of the same
 // behaviour, and the more important one: a search that stays overloaded must
 // not look like a listing that ended. Half a gallery reported as a whole one
-// is a failure nobody can see.
-func TestCivitaiWalkFailsRatherThanTruncate(t *testing.T) {
+// is a failure nobody can see, so it is marked partial; an overloaded first
+// page has nothing to show and fails.
+func TestCivitaiWalkSaysAnOverloadCutItShort(t *testing.T) {
 	cs := newCivitaiServer(t, []civitaiResponse{
 		{body: civitaiCursorPage([]int{1, 2}, "2|999")},
 		{status: http.StatusServiceUnavailable},
 	})
 
-	items, err := civitaiTestClient().walk(context.Background(),
-		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator")
-	if err == nil {
-		t.Fatalf("a listing cut short by an overload returned %d items and no error", len(items))
-	}
-	if items != nil {
-		t.Errorf("returned %d items alongside the error, want nothing partial", len(items))
+	items, note, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{})
+	if err != nil || len(items) != 2 || note != "partial — the image search stayed overloaded" {
+		t.Fatalf("a listing cut short by an overload returned %d items, note %q, err %v", len(items), note, err)
 	}
 	if n := cs.requests.Load(); n < 3 {
 		t.Errorf("gave up after %d requests, want the overload retried", n)
+	}
+
+	cs = newCivitaiServer(t, []civitaiResponse{{status: http.StatusServiceUnavailable}})
+	if items, _, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{}); err == nil {
+		t.Fatalf("an overloaded first page returned %d items and no error", len(items))
 	}
 }
 
@@ -384,10 +381,7 @@ func TestCivitaiNextPageStaysOnTheHost(t *testing.T) {
 // becomes: the id names the file, the URL is untouched, and nothing about
 // this host needs the machinery the awkward ones do.
 func TestCivitaiFilesAreNamedByIDAndFetchedAtFullSize(t *testing.T) {
-	var page civitaiListing
-	if err := json.Unmarshal([]byte(civitaiListingPage), &page); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	page := decode[civitaiListing](t, civitaiListingPage)
 
 	want := []struct {
 		name string
@@ -478,10 +472,7 @@ const civitaiModelPayload = `{
 // TestCivitaiModelFilesGroupByVersion covers the endpoint the image listing
 // cannot stand in for, and the naming that has to work without an id field.
 func TestCivitaiModelFilesGroupByVersion(t *testing.T) {
-	var model civitaiModel
-	if err := json.Unmarshal([]byte(civitaiModelPayload), &model); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	model := decode[civitaiModel](t, civitaiModelPayload)
 
 	files := civitaiModelFiles(&model)
 	if len(files) != 3 {

@@ -91,11 +91,6 @@ const (
 
 	// mediaWikiInterval spaces out calls to one wiki's API.
 	mediaWikiInterval = time.Second
-
-	// mediaWikiMaxCategories bounds a recursive walk by the categories
-	// visited rather than only by the files found, because a tree of empty
-	// container categories costs requests while finding nothing to stop it.
-	mediaWikiMaxCategories = 200
 )
 
 // mediaWikiAPIPaths are where installs put api.php, most likely first.
@@ -314,7 +309,7 @@ func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 
 	switch kind {
 	case mediaWikiCategory:
-		return m.category(ctx, site, u, title, opts.maxFiles())
+		return m.category(ctx, site, u, title, opts)
 	case mediaWikiFilePage:
 		return m.filePage(ctx, site, title)
 	case mediaWikiSpecial:
@@ -334,10 +329,16 @@ func (m *MediaWiki) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 // and the edges loop back — so descending by accident turns a category of
 // forty pictures into a job of forty thousand. Adding ?depth=<n> to the URL
 // is how that is asked for, which the wiki itself ignores and this reads.
-func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL, title string, limit int) (*Result, error) {
+//
+// The categories visited are bounded by the source cap as well as the files
+// found by the file cap, because a tree of empty container categories costs
+// requests while finding nothing to stop it.
+func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL, title string, opts Options) (*Result, error) {
 	var (
+		limit   = opts.maxFiles()
 		depth   = mediaWikiDepth(u)
 		files   []File
+		note    string
 		queue   = []string{title}
 		seen    = map[string]bool{title: true}
 		visited int
@@ -349,10 +350,11 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 	for level := 0; level <= depth && len(queue) > 0 && len(files) < limit; level++ {
 		var next []string
 		for _, category := range queue {
-			if visited++; visited > mediaWikiMaxCategories {
+			if visited++; visited > opts.maxSources() {
+				note = joinNotes(note, "partial — source limit")
 				break
 			}
-			batch, err := m.list(ctx, site, mediaWikiCategoryQuery(category), limit-len(files), listed)
+			batch, listNote, err := m.list(ctx, site, mediaWikiCategoryQuery(category), limit-len(files), listed)
 			if err != nil {
 				// The category the user named is the job; a subcategory
 				// that will not answer is one branch of many.
@@ -361,12 +363,12 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 				}
 				continue
 			}
-			files = append(files, batch...)
+			files, note = append(files, batch...), joinNotes(note, listNote)
 			if len(files) >= limit {
 				break
 			}
 			if level < depth {
-				subs, err := m.subcategories(ctx, site, category)
+				subs, err := m.subcategories(ctx, site, category, opts)
 				if err != nil {
 					continue
 				}
@@ -388,32 +390,34 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 		}
 		return nil, fmt.Errorf("mediawiki: %s holds no files, %d levels down", title, depth)
 	}
-	return &Result{Title: mediaWikiName(title), Files: mediaWikiOrdered(files)}, nil
+	return &Result{Title: mediaWikiName(title), Files: mediaWikiOrdered(files), Note: note}, nil
 }
 
-// subcategories lists one category's child categories.
-func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title string) ([]string, error) {
+// subcategories lists one category's child categories, as many as the walk
+// may still visit.
+func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title string, opts Options) ([]string, error) {
 	query := mediaWikiQuery()
 	query.Set("list", "categorymembers")
 	query.Set("cmtitle", title)
 	query.Set("cmtype", "subcat")
 	query.Set("cmlimit", strconv.Itoa(mediaWikiPageSize))
 
-	var out []string
-	for range config.MaxAlbumPages {
-		resp, err := m.call(ctx, site.api, query)
-		if err != nil {
-			return nil, err
-		}
-		for _, member := range resp.Query.CategoryMembers {
-			out = append(out, member.Title)
-		}
-		if len(resp.Continue) == 0 || len(out) >= mediaWikiMaxCategories {
-			break
-		}
-		mediaWikiAdvance(query, resp.Continue)
-	}
-	return out, nil
+	subs, _, err := walkPages(ctx, pageWalk[string]{
+		key: func(sub string) string { return sub }, limit: opts.maxSources(), quiet: true,
+		fetch: func(ctx context.Context, _ int) (pageOf[string], error) {
+			resp, err := m.call(ctx, site.api, query)
+			if err != nil {
+				return pageOf[string]{}, err
+			}
+			out := make([]string, 0, len(resp.Query.CategoryMembers))
+			for _, member := range resp.Query.CategoryMembers {
+				out = append(out, member.Title)
+			}
+			mediaWikiAdvance(query, resp.Continue)
+			return pageOf[string]{items: out, next: true, end: len(resp.Continue) == 0}, nil
+		},
+	})
+	return subs, err
 }
 
 // article resolves every image an article uses.
@@ -427,14 +431,14 @@ func (m *MediaWiki) article(ctx context.Context, site mediaWikiSite, title strin
 	query.Set("titles", title)
 	query.Set("gimlimit", strconv.Itoa(mediaWikiPageSize))
 
-	files, err := m.list(ctx, site, query, limit, nil)
+	files, note, err := m.list(ctx, site, query, limit, nil)
 	if err != nil {
 		return nil, err
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("mediawiki: %s uses no images", title)
 	}
-	return &Result{Title: title, Files: mediaWikiOrdered(files)}, nil
+	return &Result{Title: title, Files: mediaWikiOrdered(files), Note: note}, nil
 }
 
 // filePage resolves one File: page to the file it describes.
@@ -442,7 +446,7 @@ func (m *MediaWiki) filePage(ctx context.Context, site mediaWikiSite, title stri
 	query := mediaWikiFileQuery()
 	query.Set("titles", title)
 
-	files, err := m.list(ctx, site, query, 1, nil)
+	files, _, err := m.list(ctx, site, query, 1, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +484,7 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 		query.Set("gaidir", "older") // newest first
 	}
 
-	files, err := m.list(ctx, site, query, limit, nil)
+	files, note, err := m.list(ctx, site, query, limit, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -492,52 +496,54 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 		// Left in the order it arrived rather than sorted by name, which is
 		// the one listing here where the order carries something: the
 		// batches come newest first, and that is what was asked for.
-		return &Result{Title: label + " newest files", Files: files}, nil
+		return &Result{Title: label + " newest files", Files: files, Note: note}, nil
 	}
-	return &Result{Title: label + " files", Files: mediaWikiOrdered(files)}, nil
+	return &Result{Title: label + " files", Files: mediaWikiOrdered(files), Note: note}, nil
 }
 
 // --------------------------------------------------------------- the call
 
-// list runs one paginated query to its end, or to the point where enough
-// files have been found.
+// list runs one paginated query to its end, following the continuation the
+// API hands back, or to the point where enough has been found.
 //
 // The cap is a first instalment rather than a refusal: a category of forty
 // thousand is a real thing to point at, and handing back the first several
 // thousand of them downloads, where an error downloads nothing.
 //
-// seen carries the titles already taken, so a caller walking several
-// listings can share one; nil starts afresh.
-func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Values, budget int, seen map[string]bool) ([]File, error) {
+// The walk is of the pages the query names, red links included, so that a
+// batch holding no file is no batch that adds nothing. seen carries the
+// titles already taken as files, so a caller walking several listings can
+// share one; nil starts afresh.
+func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Values, budget int, seen map[string]bool) ([]File, string, error) {
 	query := maps.Clone(params)
 	if seen == nil {
 		seen = make(map[string]bool)
 	}
-	var files []File
-
-	for page := 0; page < config.MaxAlbumPages && len(files) < budget; page++ {
-		resp, err := m.call(ctx, site.api, query)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range resp.Query.Pages {
-			file, ok := mediaWikiFileOf(p)
-			if !ok || seen[p.Title] {
-				continue
+	pages, note, err := walkPages(ctx, pageWalk[mediaWikiPage]{
+		key:   func(p mediaWikiPage) string { return p.Title },
+		limit: budget, limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, _ int) (pageOf[mediaWikiPage], error) {
+			resp, err := m.call(ctx, site.api, query)
+			if err != nil {
+				return pageOf[mediaWikiPage]{}, err
 			}
-			seen[p.Title] = true
-			files = append(files, file)
-		}
-		if len(resp.Continue) == 0 {
-			break
-		}
-		mediaWikiAdvance(query, resp.Continue)
+			mediaWikiAdvance(query, resp.Continue)
+			return pageOf[mediaWikiPage]{items: resp.Query.Pages, next: true, end: len(resp.Continue) == 0}, nil
+		},
+	})
+	if err != nil {
+		return nil, "", err
 	}
-
-	if len(files) > budget {
-		files = files[:budget]
+	var files []File
+	for _, p := range pages {
+		file, ok := mediaWikiFileOf(p)
+		if !ok || seen[p.Title] {
+			continue
+		}
+		seen[p.Title] = true
+		files = append(files, file)
 	}
-	return files, nil
+	return files, note, nil
 }
 
 // call performs one API request, waiting for this wiki's turn first.

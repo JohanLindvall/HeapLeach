@@ -157,8 +157,10 @@ func TestCumCreatorCapsFiltersAndPartialPages(t *testing.T) {
 		limits                    Limits
 		files, pages              int
 	}{
-		{name: "file cap", limits: Limits{Files: 1}, files: 1, pages: 1, note: "file limit"},
-		{name: "file boundary", limits: Limits{Files: 3}, files: 3, pages: 1, note: "file limit"},
+		// The file cap is held to the posts the listing gave, which the
+		// source cap bounds, so both pages are read.
+		{name: "file cap", limits: Limits{Files: 1}, files: 1, pages: 2, note: "file limit"},
+		{name: "file boundary", limits: Limits{Files: 3}, files: 3, pages: 2, note: "file limit"},
 		{name: "source cap", limits: Limits{Sources: 1}, files: 2, pages: 1, note: "source limit"},
 		{name: "source boundary", limits: Limits{Sources: 2}, files: 3, pages: 1, note: "source limit"},
 		{name: "videos", filter: "videos", files: 2, pages: 2},

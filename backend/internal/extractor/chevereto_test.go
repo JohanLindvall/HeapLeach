@@ -18,7 +18,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"golang.org/x/net/html"
 )
 
 // Nothing here came off a live install. The fixtures are written from the
@@ -106,24 +105,6 @@ func cheveretoPage(title, tiles, nextHref, more string) string {
 </body></html>`, title, tiles, more, href)
 }
 
-func cheveretoBase(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
-}
-
-func cheveretoParse(t *testing.T, doc string) *html.Node {
-	t.Helper()
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
 // TestCheveretoItemsReadTheMetadataNotTheThumbnail is the central claim: one
 // listing fetch yields the full-size link, the stored filename and an exact
 // length, none of which the visible markup carries.
@@ -133,7 +114,7 @@ func TestCheveretoItemsReadTheMetadataNotTheThumbnail(t *testing.T) {
 			cheveretoTile(cheveretoObjectV4, ` data-size="90210"`, "https://cdn.example.test/BBB222.th.jpg"),
 		"", "")
 
-	files := cheveretoItems(cheveretoParse(t, doc), cheveretoBase(t, "https://pics.example.test/album/holiday.XYZ"))
+	files := cheveretoItems(mustParseDoc(t, doc), mustParse(t, "https://pics.example.test/album/holiday.XYZ"))
 	if len(files) != 2 {
 		t.Fatalf("read %d files, want 2", len(files))
 	}
@@ -162,7 +143,7 @@ func TestCheveretoSizeIsRefusedWhenItDescribesAnotherFile(t *testing.T) {
 	doc := cheveretoPage("clips",
 		cheveretoTile(cheveretoObjectVideo, "", "https://cdn.example.test/CCC333.th.jpg"), "", "")
 
-	files := cheveretoItems(cheveretoParse(t, doc), cheveretoBase(t, "https://pics.example.test/album/clips.XYZ"))
+	files := cheveretoItems(mustParseDoc(t, doc), mustParse(t, "https://pics.example.test/album/clips.XYZ"))
 	if len(files) != 1 {
 		t.Fatalf("read %d files, want 1", len(files))
 	}
@@ -206,7 +187,7 @@ func TestCheveretoAlbumLinksHandleBothVersions(t *testing.T) {
 	doc = strings.Replace(doc, `data-type="album" data-id="V4"`,
 		`data-type="album" data-id="V4" data-name="Summer 2026"`, 1)
 
-	albums := cheveretoAlbumLinks(cheveretoParse(t, doc), cheveretoBase(t, "https://pics.example.test/user/someone/albums"))
+	albums := cheveretoAlbumLinks(mustParseDoc(t, doc), mustParse(t, "https://pics.example.test/user/someone/albums"))
 	if len(albums) != 2 {
 		t.Fatalf("found %d albums, want 2 (and never the image tile)", len(albums))
 	}
@@ -222,27 +203,24 @@ func TestCheveretoAlbumLinksHandleBothVersions(t *testing.T) {
 // printed on the last page as well, without an href; matching the element
 // alone would walk the final page over and over to the page cap.
 func TestCheveretoNextPageNeedsAnHref(t *testing.T) {
-	base := cheveretoBase(t, "https://pics.example.test/album/holiday.XYZ")
+	base := mustParse(t, "https://pics.example.test/album/holiday.XYZ")
 
-	withNext := cheveretoParse(t, cheveretoPage("a", "", "?page=2&seek=ZZZ", ""))
+	withNext := mustParseDoc(t, cheveretoPage("a", "", "?page=2&seek=ZZZ", ""))
 	if got := cheveretoNextPage(withNext, base); got != "https://pics.example.test/album/holiday.XYZ?page=2&seek=ZZZ" {
 		t.Errorf("next page = %q, want the anchor's own href", got)
 	}
 
-	last := cheveretoParse(t, cheveretoPage("a", "", "", ""))
+	last := mustParseDoc(t, cheveretoPage("a", "", "", ""))
 	if got := cheveretoNextPage(last, base); got != "" {
 		t.Errorf("next page = %q on the last page, want none: the anchor there has no href", got)
 	}
 }
 
 func TestCheveretoPageAtKeepsTheQueryAndDropsTheCursor(t *testing.T) {
-	base := cheveretoBase(t, "https://pics.example.test/album/x.XYZ?sort=date_desc&seek=ABC&page=1")
+	base := mustParse(t, "https://pics.example.test/album/x.XYZ?sort=date_desc&seek=ABC&page=1")
 	got := cheveretoPageAt(base, 3)
 
-	u, err := url.Parse(got)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, got)
 	query := u.Query()
 	if query.Get("page") != "3" {
 		t.Errorf("page = %q, want 3", query.Get("page"))
@@ -256,11 +234,11 @@ func TestCheveretoPageAtKeepsTheQueryAndDropsTheCursor(t *testing.T) {
 }
 
 func TestCheveretoHasMore(t *testing.T) {
-	full := cheveretoParse(t, cheveretoPage("a", "", "", `<div class="content-listing-loading"></div>`))
+	full := mustParseDoc(t, cheveretoPage("a", "", "", `<div class="content-listing-loading"></div>`))
 	if !cheveretoHasMore(full) {
 		t.Error("a page carrying the marker reported no more")
 	}
-	short := cheveretoParse(t, cheveretoPage("a", "", "", ""))
+	short := mustParseDoc(t, cheveretoPage("a", "", "", ""))
 	if cheveretoHasMore(short) {
 		t.Error("a page without the marker reported more")
 	}
@@ -301,8 +279,8 @@ const cheveretoImageViewer = `<!DOCTYPE html><html><head>
 </body></html>`
 
 func TestCheveretoSingleReadsTheVideoNotItsPosterFrame(t *testing.T) {
-	root := cheveretoParse(t, cheveretoVideoViewer)
-	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/a-clip.CCC333"), "a clip")
+	root := mustParseDoc(t, cheveretoVideoViewer)
+	res, err := cheveretoSingle(root, mustParse(t, "https://pics.example.test/i/a-clip.CCC333"), "a clip")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,8 +297,8 @@ func TestCheveretoSingleReadsTheVideoNotItsPosterFrame(t *testing.T) {
 }
 
 func TestCheveretoSingleReadsTheOriginalNotTheRendition(t *testing.T) {
-	root := cheveretoParse(t, cheveretoImageViewer)
-	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/holiday.AAA111"), "holiday")
+	root := mustParseDoc(t, cheveretoImageViewer)
+	res, err := cheveretoSingle(root, mustParse(t, "https://pics.example.test/i/holiday.AAA111"), "holiday")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,10 +315,10 @@ func TestCheveretoSingleReadsTheOriginalNotTheRendition(t *testing.T) {
 // metadata is missing: the element is all there is, and it is the rendition,
 // so the marker has to come out of the name.
 func TestCheveretoSingleFallsBackToTheViewerAndStrips(t *testing.T) {
-	root := cheveretoParse(t, `<html><body><div id="image-viewer">
+	root := mustParseDoc(t, `<html><body><div id="image-viewer">
 	  <img class="media" src="https://cdn.example.test/AAA111.md.png"></div></body></html>`)
 
-	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/holiday.AAA111"), "")
+	res, err := cheveretoSingle(root, mustParse(t, "https://pics.example.test/i/holiday.AAA111"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,13 +334,13 @@ func TestCheveretoSingleFallsBackToTheViewerAndStrips(t *testing.T) {
 // an empty profile from resolving to the operator's cover art or a user's
 // avatar, both of which such pages publish as og:image.
 func TestCheveretoSingleRefusesAPageShowingNoItem(t *testing.T) {
-	root := cheveretoParse(t, `<!DOCTYPE html><html><head>
+	root := mustParseDoc(t, `<!DOCTYPE html><html><head>
 	  <meta name="generator" content="Chevereto 3">
 	  <meta property="og:title" content="Free image hosting">
 	  <meta property="og:image" content="https://pics.example.test/content/images/system/home_cover.png">
 	  </head><body><div class="content-listing"></div></body></html>`)
 
-	if _, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/explore/recent"), ""); err == nil {
+	if _, err := cheveretoSingle(root, mustParse(t, "https://pics.example.test/explore/recent"), ""); err == nil {
 		t.Fatal("a page with no viewer resolved to its own cover image")
 	}
 }
@@ -465,10 +443,7 @@ func TestCheveretoPagePath(t *testing.T) {
 		"https://pics.example.test/i/AAA111.png":      false,
 	}
 	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := cheveretoPagePath(u); got != want {
 			t.Errorf("cheveretoPagePath(%q) = %v, want %v", raw, got, want)
 		}
@@ -521,10 +496,7 @@ func TestCheveretoWalksEveryPage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/album/holiday.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/album/holiday.XYZ")
 	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -555,10 +527,7 @@ func TestCheveretoStopsWhenAPageRepeats(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/album/holiday.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/album/holiday.XYZ")
 	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -602,10 +571,7 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/someone/albums")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/someone/albums")
 	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -659,17 +625,14 @@ func TestCheveretoPasswordGate(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/album/locked.XYZ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/album/locked.XYZ")
 	client := cheveretoTestClient()
 
 	if _, err := cheveretoExtract(context.Background(), client, u, Options{}); !errors.Is(err, ErrPasswordRequired) {
 		t.Fatalf("without a password the error was %v, want ErrPasswordRequired", err)
 	}
 
-	_, err = cheveretoExtract(context.Background(), client, u, Options{Password: "wrong"})
+	_, err := cheveretoExtract(context.Background(), client, u, Options{Password: "wrong"})
 	if err == nil {
 		t.Fatal("a wrong password resolved the album")
 	}
@@ -731,10 +694,7 @@ func TestCheveretoRefusesABareDomain(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+"/")
 	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{}); err == nil {
 		t.Fatal("a bare domain resolved to something")
 	}

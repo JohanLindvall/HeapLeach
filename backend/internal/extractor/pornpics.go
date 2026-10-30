@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -129,7 +128,7 @@ func (p *PornPics) Extract(ctx context.Context, u *url.URL, opts Options) (*Resu
 	if pornpicsIsGallery(u) {
 		return p.gallery(ctx, u)
 	}
-	return p.listing(ctx, u, opts.maxFiles())
+	return p.listing(ctx, u, opts)
 }
 
 // ---------------------------------------------------------------- gallery
@@ -185,8 +184,9 @@ func pornpicsGallery(doc string, u *url.URL) (*Result, error) {
 // ---------------------------------------------------------------- listing
 
 // listing expands a category, tag, pornstar or channel page into every
-// gallery it lists, and every gallery into its images.
-func (p *PornPics) listing(ctx context.Context, u *url.URL, limit int) (*Result, error) {
+// gallery it lists, up to the source cap, and every gallery into its images,
+// up to the file cap.
+func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	root, _, err := fetchRoot(ctx, p.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: fetch %s: %w", u.Redacted(), err)
@@ -194,52 +194,36 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, limit int) (*Result,
 
 	// The one fetch answers both questions: the galleries the page shows
 	// without asking for more, and how to ask for more.
-	links := pornpicsGalleryLinks(root, u)
-	if len(links) == 0 {
+	first := pornpicsGalleryLinks(root, u)
+	if len(first) == 0 {
 		return nil, fmt.Errorf("pornpics: %s lists no galleries — a gallery, category, "+
 			"tag, pornstar or channel page is what this expands", u.Redacted())
 	}
 	pager := pornpicsPagerFor(root, u)
 
-	var (
-		files []File
-		seen  = make(map[string]bool)
-	)
-	for page := range config.MaxAlbumPages {
-		fresh := make([]string, 0, len(links))
-		for _, link := range links {
-			if !seen[link] {
-				seen[link] = true
-				fresh = append(fresh, link)
+	// A listing run past its end tends to answer with what it already gave
+	// rather than with nothing, so a block that adds nothing is the end
+	// whatever it said, and the walk is a quiet one.
+	links, note, _ := walkPages(ctx, pageWalk[string]{
+		key:   func(link string) string { return link },
+		limit: opts.maxSources(), limitNote: "partial — source limit", quiet: true,
+		fetch: func(ctx context.Context, n int) (pageOf[string], error) {
+			if n == 0 {
+				return pageOf[string]{items: first, next: true}, nil
 			}
-		}
-		// A listing run past its end tends to answer with what it already
-		// gave rather than with nothing, so a block that adds nothing is the
-		// end whatever it said.
-		if len(fresh) == 0 {
-			break
-		}
-		files = append(files, p.expand(ctx, fresh)...)
-
-		// Checked before asking for the next block rather than after: a block
-		// is five hundred galleries, and there is no sense in opening them to
-		// throw the files away.
-		if len(files) >= limit {
-			files = pornpicsTrim(files, limit)
-			break
-		}
-		next, blockErr := p.block(ctx, pager(pornpicsFirstOffset+page*pornpicsPageSize), u)
-		if blockErr != nil {
-			break // a later block failing still leaves the earlier ones
-		}
-		links = next
+			links, err := p.block(ctx, pager(pornpicsFirstOffset+(n-1)*pornpicsPageSize), u)
+			return pageOf[string]{items: links, next: true, end: len(links) == 0}, err
+		},
+	})
+	files := p.expand(ctx, links)
+	if len(files) > opts.maxFiles() {
+		files, note = pornpicsTrim(files, opts.maxFiles()), joinNotes(note, "partial — file limit")
 	}
-
 	if len(files) == 0 {
 		return nil, fmt.Errorf("pornpics: none of the galleries listed on %s could be read",
 			u.Redacted())
 	}
-	return &Result{Title: pornpicsTitle(root, u), Files: files}, nil
+	return &Result{Title: pornpicsTitle(root, u), Files: files, Note: note}, nil
 }
 
 // pornpicsTrim cuts a listing down to the file ceiling on a gallery boundary.
@@ -280,7 +264,7 @@ func (p *PornPics) expand(ctx context.Context, links []string) []File {
 			return nil, err
 		}
 		for i := range res.Files {
-			res.Files[i].Dir = res.Title
+			res.Files[i].Dir = sourceFolder(res.Title)
 		}
 		return res.Files, nil
 	})

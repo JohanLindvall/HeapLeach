@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 
@@ -86,14 +85,14 @@ const bunkrAlbumPage = `<html><body>
 </body></html>`
 
 func TestBunkrAlbumEntries(t *testing.T) {
-	root, err := parseHTML(bunkrAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, _ := url.Parse("https://bunkr.example/a/AAAA")
+	root := mustParseDoc(t, bunkrAlbumPage)
+	base := mustParse(t, "https://bunkr.example/a/AAAA")
 
 	b := NewBunkr(nil)
-	files := b.albumEntries(root, base, make(map[string]bool))
+	var files []File
+	for _, e := range b.albumEntries(root, base) {
+		files = append(files, e.file)
+	}
 	if len(files) != 2 {
 		t.Fatalf("read %d entries, want 2 (the repeat folded, the FAQ ignored)", len(files))
 	}
@@ -145,10 +144,7 @@ const bunkrServingPage = `<html><body>
 </body></html>`
 
 func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
-	root, err := parseHTML(bunkrMaintenancePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bunkrMaintenancePage)
 	got := bunkrUnavailable(root)
 	if got == "" {
 		t.Fatal("a disabled download control was read as a page offering a download")
@@ -166,10 +162,7 @@ func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
 // A page that will serve the file must not be read as a refusal, and a
 // disabled control that is not the download must not be mistaken for one.
 func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
-	root, err := parseHTML(bunkrServingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bunkrServingPage)
 	if got := bunkrUnavailable(root); got != "" {
 		t.Errorf("a servable page was refused: %q", got)
 	}
@@ -177,32 +170,22 @@ func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
 
 // The fact is worth reporting even when the page says nothing about why.
 func TestBunkrUnavailableWithoutAnExplanation(t *testing.T) {
-	root, err := parseHTML(
+	root := mustParseDoc(t,
 		`<html><body><button class="ic-download-01" disabled></button></body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got := bunkrUnavailable(root); got == "" {
 		t.Error("a disabled download control with no tooltip reported nothing at all")
 	}
 }
 
 func TestLastAlbumPage(t *testing.T) {
-	root, err := parseHTML(bunkrAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := lastAlbumPage(root); got != 3 {
+	if got := lastAlbumPage(mustParseDoc(t, bunkrAlbumPage)); got != 3 {
 		t.Errorf("last page = %d, want 3", got)
 	}
 }
 
 func TestBunkrLinkLabel(t *testing.T) {
-	root, err := parseHTML(`<a href="/f/x"><img alt="from the alt"></a>` +
+	root := mustParseDoc(t, `<a href="/f/x"><img alt="from the alt"></a>`+
 		`<a id="second" href="/f/y">from the text</a>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	anchors := findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) })
 	if len(anchors) != 2 {
 		t.Fatalf("parsed %d anchors, want 2", len(anchors))

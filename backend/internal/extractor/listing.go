@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -25,10 +24,13 @@ type listingPage struct {
 	links []listingLink
 	// title is the listing's own, read off its first page.
 	title string
-	// next is the following page, and note why there is none when the
-	// pager offered one that cannot be followed. For a missing page, note
-	// says why in place of the walk's own words.
-	next *url.URL
+	// next is the following page. badNext marks a pager that offers one
+	// which cannot be followed — off the listing, or not the page after
+	// this one — which ends the walk as "partial — invalid next page".
+	next    *url.URL
+	badNext bool
+	// note is why a missing page is missing, in place of the walk's own
+	// words.
 	note string
 	// missing marks a page without its listing; end one that says the
 	// listing has nothing more, which is no failure.
@@ -69,13 +71,9 @@ type listingWalk struct {
 	// missing is the error for a first page without its listing, in place
 	// of "no video listing on this page".
 	missing string
-	// quiet is a listing whose walk stops where the listing does: a page
-	// that adds nothing, one read twice, the page cap, a later page that
-	// fails or lacks its listing. It is no partial listing, so the walk
-	// adds no note of its own; read's notes and limitNote still stand.
-	quiet bool
-	// failed is the note for a later page that could not be fetched, in
-	// place of the walk's own, or of none when quiet.
+	// quiet and failed are walkPages' own: a listing whose walk stops
+	// where the listing does, and the note for a later page that fails.
+	quiet  bool
 	failed func(error) string
 }
 
@@ -89,128 +87,82 @@ func listingLimit(opts Options) (int, string) {
 }
 
 // walkListing follows a listing from first through the pages its pager
-// links, up to config.MaxAlbumPages, and returns its entries in order
-// without repeats, its title and the note for a walk that stopped short.
-// A first page that fails, redirects elsewhere or has no listing is an
-// error; a later one ends the walk with what was already read. A walk that
-// ended while the caller cancelled is a cancellation, not a partial
-// listing: the page that ended it may have been answered before its
-// request saw the cancellation.
+// links, as walkPages walks it, and returns its entries, its title and the
+// note for a walk that stopped short. A first page that fails, redirects
+// elsewhere or has no listing is an error; a later one ends the walk with
+// what was already read.
 func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w listingWalk) (links []listingLink, title, note string, err error) {
 	title, page := w.title, first
 	key := w.key
 	if key == nil {
 		key = (*url.URL).String
 	}
-	// stop is the walk's own note for ending early, which a quiet listing
-	// does not take.
-	stop := func(note string) string {
-		if w.quiet {
-			return ""
-		}
-		return note
-	}
-	seen, pages := make(map[string]bool), make(map[string]bool)
-	for n := range config.MaxAlbumPages {
-		if err := ctx.Err(); err != nil {
-			return nil, "", "", err
-		}
-		if pages[key(page)] {
-			note = stop("partial — repeated page")
-			break
-		}
-		pages[key(page)] = true
-		var (
-			root  *html.Node
-			doc   string
-			final *url.URL
-			err   error
-		)
-		switch {
-		case n == 0 && w.root != nil:
-			root, final = w.root, page
-		case w.fetch != nil:
-			root, final, err = w.fetch(ctx, page, first)
-		default:
-			ResolveNote(ctx, fmt.Sprintf("Reading listing page %d", n+1))
-			doc, final, err = fetchDocument(ctx, client, page, httpx.Referer(first.String()))
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, "", "", ctx.Err()
+	pages := make(map[string]bool)
+	links, note, err = walkPages(ctx, pageWalk[listingLink]{
+		key:   func(link listingLink) string { return link.key },
+		limit: w.limit, limitNote: w.limitNote, quiet: w.quiet, failed: w.failed,
+		fetch: func(ctx context.Context, n int) (pageOf[listingLink], error) {
+			const repeated = "partial — repeated page"
+			if pages[key(page)] {
+				return pageOf[listingLink]{stop: repeated}, nil
+			}
+			pages[key(page)] = true
+			var (
+				root  *html.Node
+				doc   string
+				final *url.URL
+				err   error
+			)
+			switch {
+			case n == 0 && w.root != nil:
+				root, final = w.root, page
+			case w.fetch != nil:
+				root, final, err = w.fetch(ctx, page, first)
+			default:
+				ResolveNote(ctx, fmt.Sprintf("Reading listing page %d", n+1))
+				doc, final, err = fetchDocument(ctx, client, page, httpx.Referer(first.String()))
+			}
+			if err == nil && root == nil {
+				root, err = parseHTML(doc)
+			}
+			if err != nil {
+				if n == 0 {
+					return pageOf[listingLink]{}, fmt.Errorf("%s: fetch listing: %w", w.name, err)
+				}
+				return pageOf[listingLink]{}, err
+			}
+			if key(final) != key(page) && pages[key(final)] {
+				return pageOf[listingLink]{stop: repeated}, nil
+			}
+			pages[key(final)] = true
+			if n == 0 {
+				if !w.anyRedirect && !samePath(final, first) {
+					return pageOf[listingLink]{}, fmt.Errorf("%s: listing redirected to another page", w.name)
+				}
+				first = final
+			} else if !w.anyRedirect && (!sameSite(final, page) || !samePath(final, page) || final.RawQuery != page.RawQuery) {
+				return pageOf[listingLink]{stop: "partial — next page redirected to another listing"}, nil
+			}
+			p := w.read(root, final, first)
+			switch {
+			case p.end:
+				return pageOf[listingLink]{end: true}, nil
+			case p.missing && n == 0:
+				return pageOf[listingLink]{}, fmt.Errorf("%s: %s", w.name, util.FirstNonEmpty(w.missing, "no video listing on this page"))
+			case p.missing:
+				return pageOf[listingLink]{stop: "partial — listing is missing on next page", note: p.note}, nil
 			}
 			if n == 0 {
-				return nil, "", "", fmt.Errorf("%s: fetch listing: %w", w.name, err)
+				title = util.FirstNonEmpty(p.title, title)
 			}
-			if w.failed != nil {
-				note = w.failed(err)
-			} else {
-				note = stop("partial — could not fetch next page")
+			if p.badNext {
+				p.next, p.note = nil, "partial — invalid next page"
 			}
-			break
-		}
-		if key(final) != key(page) && pages[key(final)] {
-			note = stop("partial — repeated page")
-			break
-		}
-		pages[key(final)] = true
-		if n == 0 {
-			if !w.anyRedirect && !samePath(final, first) {
-				return nil, "", "", fmt.Errorf("%s: listing redirected to another page", w.name)
-			}
-			first = final
-		} else if !w.anyRedirect && (!sameSite(final, page) || !samePath(final, page) || final.RawQuery != page.RawQuery) {
-			note = stop("partial — next page redirected to another listing")
-			break
-		}
-		if root == nil {
-			if root, err = parseHTML(doc); err != nil {
-				return nil, "", "", err
-			}
-		}
-		p := w.read(root, final, first)
-		if p.end {
-			break
-		}
-		if p.missing {
-			if n == 0 {
-				return nil, "", "", fmt.Errorf("%s: %s", w.name, util.FirstNonEmpty(w.missing, "no video listing on this page"))
-			}
-			note = util.FirstNonEmpty(p.note, stop("partial — listing is missing on next page"))
-			break
-		}
-		if n == 0 {
-			title = util.FirstNonEmpty(p.title, title)
-		}
-		before := len(links)
-		for _, link := range p.links {
-			if seen[link.key] {
-				continue
-			}
-			seen[link.key] = true
-			if len(links) == w.limit {
-				return links, title, w.limitNote, nil
-			}
-			links = append(links, link)
-		}
-		if len(links) == before {
-			note = stop("partial — repeated or empty page")
-			break
-		}
-		if p.next == nil {
-			note = p.note
-			break
-		}
-		if len(links) == w.limit {
-			note = w.limitNote
-			break
-		}
-		if n == config.MaxAlbumPages-1 {
-			note = stop("partial — page limit")
-		}
-		page = p.next
-	}
-	if err := ctx.Err(); err != nil {
+			page = p.next
+			return pageOf[listingLink]{items: p.links, next: p.next != nil, note: p.note}, nil
+		},
+	})
+	if err != nil {
 		return nil, "", "", err
 	}
 	if len(links) == 0 && w.none != "" {

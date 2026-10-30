@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 
@@ -28,12 +29,6 @@ type Kemono struct {
 
 // kemonoScrapeAccept is the header the sites themselves ask scrapers to use.
 const kemonoScrapeAccept = "text/css"
-
-// kemonoPageSize is the fixed page stride of their post listing.
-const (
-	kemonoPageSize = 50
-	kemonoMaxPages = 40
-)
 
 // NewKemono builds the kemono/coomer extractor.
 func NewKemono(client *httpx.Client) *Kemono { return &Kemono{client: client} }
@@ -94,18 +89,18 @@ func kemonoProfile(ctx context.Context, p *Page, client *httpx.Client) bool {
 
 // Extract handles a creator (/​<service>/user/<id>) or a single post, on
 // whichever site the link names.
-func (k *Kemono) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	return k.extract(ctx, u, util.Origin(u))
+func (k *Kemono) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	return k.extract(ctx, u, util.Origin(u), opts)
 }
 
-func (k *Kemono) extract(ctx context.Context, u *url.URL, root string) (*Result, error) {
+func (k *Kemono) extract(ctx context.Context, u *url.URL, root string, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) < 3 || segs[1] != "user" {
 		return nil, fmt.Errorf("kemono: %s is not a creator or post link", u.Redacted())
 	}
 	service, creator := segs[0], segs[2]
 
-	name := k.creatorName(ctx, root, service, creator)
+	name, total := k.creator(ctx, root, service, creator)
 
 	// /<service>/user/<id>/post/<postId>
 	if len(segs) >= 5 && segs[3] == "post" {
@@ -120,25 +115,32 @@ func (k *Kemono) extract(ctx context.Context, u *url.URL, root string) (*Result,
 		return &Result{Title: util.FirstNonEmpty(post.Title, name), Files: files}, nil
 	}
 
-	var all []kemonoPost
-	for page := range kemonoMaxPages {
-		posts, err := k.posts(ctx, root, service, creator, page*kemonoPageSize)
-		if err != nil {
-			if page == 0 {
-				return nil, err
+	// The profile states how many posts there are. Without it, the end is
+	// an empty page, or the 400 the API answers an offset past it with.
+	offset := 0
+	all, note, err := walkPages(ctx, pageWalk[kemonoPost]{
+		key:   func(post kemonoPost) string { return post.ID },
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		failed: func(err error) string {
+			if httpx.HasStatus(err, http.StatusBadRequest) {
+				return ""
 			}
-			break
-		}
-		all = append(all, posts...)
-		if len(posts) < kemonoPageSize {
-			break
-		}
+			return "partial — could not fetch next page"
+		},
+		fetch: func(ctx context.Context, _ int) (pageOf[kemonoPost], error) {
+			posts, err := k.posts(ctx, root, service, creator, offset)
+			offset += len(posts)
+			return pageOf[kemonoPost]{items: posts, next: true, end: len(posts) == 0 || (total > 0 && offset >= total)}, err
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
 	files := k.filesOf(root, all, true)
 	if len(files) == 0 {
 		return nil, fmt.Errorf("kemono: %s has no downloadable attachments", u.Redacted())
 	}
-	return &Result{Title: name, Files: files}, nil
+	return &Result{Title: name, Files: files, Note: note}, nil
 }
 
 // filesOf flattens posts into downloadable entries, optionally filing each
@@ -210,18 +212,20 @@ func (k *Kemono) post(ctx context.Context, root, service, creator, id string) (k
 	return direct, nil
 }
 
-// creatorName looks up a display name, falling back to the id.
-func (k *Kemono) creatorName(ctx context.Context, root, service, creator string) string {
+// creator looks up a display name, falling back to the id, and how many
+// posts the creator has, 0 when the profile does not say.
+func (k *Kemono) creator(ctx context.Context, root, service, creator string) (name string, posts int) {
 	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/profile",
 		root, url.PathEscape(service), url.PathEscape(creator))
 
 	var profile struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Posts int    `json:"post_count"`
 	}
 	if err := k.get(ctx, endpoint, root, &profile); err == nil && profile.Name != "" {
-		return profile.Name
+		return profile.Name, profile.Posts
 	}
-	return service + "-" + creator
+	return service + "-" + creator, 0
 }
 
 // get performs an API request with the header these sites ask for.

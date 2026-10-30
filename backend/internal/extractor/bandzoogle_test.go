@@ -103,10 +103,7 @@ func bandzoogleServer(t *testing.T, body string) *httptest.Server {
 
 func TestBandzoogleReadsEveryTrackOnce(t *testing.T) {
 	base := mustURL(t, "https://aband.example.test/")
-	root, err := parseHTML(bandzooglePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bandzooglePage)
 
 	files, artist := bandzoogleTracks(root, base)
 	if artist != "A Band Name" {
@@ -306,10 +303,7 @@ func TestBandzoogleNumber(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root, err := parseHTML("<html><body>" + tc.markup + "</body></html>")
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := mustParseDoc(t, "<html><body>"+tc.markup+"</body></html>")
 			a := findFirst(root, isBandzoogleTrack)
 			if a == nil {
 				t.Fatal("no track anchor in the fixture")
@@ -327,10 +321,7 @@ func TestBandzoogleNumber(t *testing.T) {
 // was not done: an "01" from each album sitting side by side.
 func TestBandzoogleFoldersTracksByAlbum(t *testing.T) {
 	base := mustURL(t, "https://aband.example.test/")
-	root, err := parseHTML(bandzooglePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bandzooglePage)
 	files, _ := bandzoogleTracks(root, base)
 
 	byDir := map[string][]string{}

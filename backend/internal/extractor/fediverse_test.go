@@ -57,10 +57,7 @@ func TestFediverseTargetShapes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.raw, func(t *testing.T) {
-			u, err := ParseURL(tc.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
+			u := mustParse(t, tc.raw)
 			got := fediTargetOf(u)
 			if got == nil {
 				t.Fatal("not recognised as a fediverse link")
@@ -89,10 +86,7 @@ func TestFediverseTargetRefusesOtherShapes(t *testing.T) {
 		"https://example.test/@alice@nodot",
 		"https://example.test/users/alice/statuses/1",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := fediTargetOf(u); got != nil {
 			t.Errorf("%s was taken as a %d for %q", raw, got.kind, got.handle)
 		}
@@ -106,10 +100,7 @@ func TestFediverseTargetRefusesOtherShapes(t *testing.T) {
 // pixelfed-shaped entry here is the evidence — so it has to be read, and read
 // from the right link.
 func TestFediverseNodeInfoHref(t *testing.T) {
-	instance, err := ParseURL("https://example.test/@alice")
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := mustParse(t, "https://example.test/@alice")
 
 	tests := []struct {
 		name  string
@@ -235,10 +226,7 @@ const mastodonFixture = `[
 ]`
 
 func TestMastodonFiles(t *testing.T) {
-	var statuses []mastodonStatus
-	if err := json.Unmarshal([]byte(mastodonFixture), &statuses); err != nil {
-		t.Fatal(err)
-	}
+	statuses := decode[[]mastodonStatus](t, mastodonFixture)
 
 	files := mastodonFiles(statuses)
 	want := []struct{ name, link string }{
@@ -304,12 +292,12 @@ func TestFediverseExtractsAMastodonAccount(t *testing.T) {
 	if res.Title != "@alice@127.0.0.1" {
 		t.Errorf("title = %q, want the account's canonical handle", res.Title)
 	}
-	// A full page, then a short one that ends the walk.
-	if len(res.Files) != fediMastodonPageSize+2 {
-		t.Fatalf("found %d files, want %d", len(res.Files), fediMastodonPageSize+2)
+	// A full page, a short one, and the empty one that ends the walk.
+	if len(res.Files) != fediMastodonPageSize+2 || res.Note != "" {
+		t.Fatalf("found %d files, note %q, want %d", len(res.Files), res.Note, fediMastodonPageSize+2)
 	}
-	if len(asked) != 2 || asked[0] != "" || asked[1] == "" {
-		t.Fatalf("paged with max_id %q, want an unqualified first page then an older one", asked)
+	if len(asked) != 3 || asked[0] != "" || asked[1] != "1001" || asked[2] != "999" {
+		t.Fatalf("paged with max_id %q, want an unqualified first page then older ones", asked)
 	}
 	if res.Files[0].Name != "1040_1.jpg" {
 		t.Errorf("first file is %q, want the newest status's attachment", res.Files[0].Name)
@@ -317,12 +305,16 @@ func TestFediverseExtractsAMastodonAccount(t *testing.T) {
 }
 
 // mastodonPage answers one page of the timeline above: a full page of
-// statuses with one attachment each, and then a short one whose ids carry on
-// below where the first left off.
+// statuses with one attachment each, then a short one whose ids carry on
+// below where the first left off, then nothing.
 func mastodonPage(maxID string) string {
 	high, count := 1040, fediMastodonPageSize
-	if maxID != "" {
+	switch maxID {
+	case "":
+	case "1001":
 		high, count = 1000, 2
+	default:
+		count = 0
 	}
 	items := make([]string, 0, count)
 	for i := range count {
@@ -521,12 +513,9 @@ const lemmyFixture = `{"posts": [
 ]}`
 
 func TestLemmyFiles(t *testing.T) {
-	var payload struct {
+	payload := decode[struct {
 		Posts []lemmyPostView `json:"posts"`
-	}
-	if err := json.Unmarshal([]byte(lemmyFixture), &payload); err != nil {
-		t.Fatal(err)
-	}
+	}](t, lemmyFixture)
 
 	files := lemmyFiles(payload.Posts)
 	want := []struct{ name, link string }{
@@ -573,6 +562,10 @@ func TestFediverseExtractsALemmyCommunity(t *testing.T) {
 					t.Errorf("asked for community %q, want pics", got)
 				}
 				pages = append(pages, query.Get("page"))
+				if query.Get("page") != "1" {
+					writeJSON(w, `{"posts":[]}`)
+					return true
+				}
 				writeJSON(w, lemmyFixture)
 				return true
 			})
@@ -584,10 +577,10 @@ func TestFediverseExtractsALemmyCommunity(t *testing.T) {
 			if len(res.Files) != 4 {
 				t.Fatalf("found %d files, want the 4 media submissions", len(res.Files))
 			}
-			// The fixture is shorter than a page, so one request is the whole
-			// listing.
-			if len(pages) != 1 || pages[0] != "1" {
-				t.Errorf("asked for pages %q, want just the first", pages)
+			// The fixture is shorter than a page, which says nothing on its
+			// own: the empty page after it is the end.
+			if len(pages) != 2 || pages[0] != "1" || res.Note != "" {
+				t.Errorf("asked for pages %q, note %q, want the first and the empty one", pages, res.Note)
 			}
 		})
 	}
@@ -655,10 +648,7 @@ const misskeyFixture = `[
 ]`
 
 func TestMisskeyFiles(t *testing.T) {
-	var notes []misskeyNote
-	if err := json.Unmarshal([]byte(misskeyFixture), &notes); err != nil {
-		t.Fatal(err)
-	}
+	notes := decode[[]misskeyNote](t, misskeyFixture)
 
 	files := misskeyFiles(notes)
 	if len(files) != 2 {
@@ -746,8 +736,8 @@ func TestFediverseExtractsMisskeyNotes(t *testing.T) {
 	if len(res.Files) != fediMisskeyPageSize+1 {
 		t.Fatalf("found %d files, want %d", len(res.Files), fediMisskeyPageSize+1)
 	}
-	if len(untils) != 2 || untils[0] != "" || untils[1] == "" {
-		t.Errorf("paged with untilId %q, want a first page then an older one", untils)
+	if len(untils) != 3 || untils[0] != "" || untils[1] != "note900" || untils[2] != "note899" {
+		t.Errorf("paged with untilId %q, want a first page then older ones", untils)
 	}
 }
 
@@ -755,8 +745,12 @@ func TestFediverseExtractsMisskeyNotes(t *testing.T) {
 // page carrying on below where the first left off.
 func misskeyPage(until string) string {
 	high, count := 999, fediMisskeyPageSize
-	if until != "" {
+	switch until {
+	case "":
+	case "note900":
 		high, count = 899, 1
+	default:
+		count = 0
 	}
 	items := make([]string, 0, count)
 	for i := range count {
@@ -820,10 +814,7 @@ func readBody(r *http.Request) []byte {
 func fediExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
 	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, err := url.Parse(srv.URL + path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, srv.URL+path)
 	if !f.Shape(u) {
 		t.Fatalf("%s is not of a fediverse form", u)
 	}

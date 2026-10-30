@@ -76,7 +76,7 @@ func TestSzurubooruFetch(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	site := &booruSite{name: "szuru", root: srv.URL, api: apiSzurubooru}
-	files, err := testBooru(t).fetch(context.Background(), site, "a_tag", "")
+	files, _, err := testBooru(t).fetch(context.Background(), site, "a_tag", "", Options{})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSzurubooruSinglePostDoesNotPage(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	site := &booruSite{name: "szuru", root: srv.URL, api: apiSzurubooru}
-	if _, err := testBooru(t).fetch(context.Background(), site, "id:93155", "93155"); err != nil {
+	if _, _, err := testBooru(t).fetch(context.Background(), site, "id:93155", "93155", Options{}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if calls != 1 {
@@ -157,21 +157,27 @@ const gelbooru01PostPage = `<!DOCTYPE html><html><head><title>A Board</title></h
 <div id="similar"><span class="thumb"><a id="p159000" href="index.php?page=post&amp;s=view&amp;id=159000"><img src="https://thumbs.example.test/aboard/thumbnails//158/thumbnail_ffffffffffffffffffffffffffffffffffffffff.jpg"/></a></span></div>
 </div></body></html>`
 
+// A board's listing pages until a page holds no posts: a page holding fewer
+// than twenty is not the end on its own.
 func TestGelbooru01Listing(t *testing.T) {
-	var asked string
+	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked = r.URL.RequestURI()
+		asked = append(asked, r.URL.RequestURI())
+		if r.URL.Query().Get("pid") != "0" {
+			_, _ = io.WriteString(w, `<html><body><div class="content"></div></body></html>`)
+			return
+		}
 		_, _ = io.WriteString(w, gelbooru01ListPage)
 	}))
 	t.Cleanup(srv.Close)
 
 	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
-	files, err := testBooru(t).fetch(context.Background(), site, "dress", "")
+	files, _, err := testBooru(t).fetch(context.Background(), site, "dress", "", Options{})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
-	if want := "/index.php?page=post&pid=0&s=list&tags=dress"; asked != want {
+	if want := "/index.php?page=post&pid=0&s=list&tags=dress,/index.php?page=post&pid=20&s=list&tags=dress"; strings.Join(asked, ",") != want {
 		t.Errorf("asked for %q, want %q", asked, want)
 	}
 	if len(files) != 3 {
@@ -191,26 +197,6 @@ func TestGelbooru01Listing(t *testing.T) {
 	// A listing states no size, and a guess would be worse than none.
 	if files[0].Size != -1 {
 		t.Errorf("size = %d, want -1 for a length the board never stated", files[0].Size)
-	}
-}
-
-// TestGelbooru01ListingStopsAtAShortPage guards the paging arithmetic: a
-// board's page holds twenty, so a page holding fewer is the last one. Getting
-// this wrong against the API families' hundred would page forever.
-func TestGelbooru01ListingStopsAtAShortPage(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		_, _ = io.WriteString(w, gelbooru01ListPage)
-	}))
-	t.Cleanup(srv.Close)
-
-	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
-	if _, err := testBooru(t).fetch(context.Background(), site, "dress", ""); err != nil {
-		t.Fatalf("fetch: %v", err)
-	}
-	if calls != 1 {
-		t.Errorf("made %d requests for a page of 3 posts, want 1", calls)
 	}
 }
 
@@ -241,9 +227,12 @@ func TestGelbooru01KeepsWhatItGot(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
-	files, err := testBooru(t).fetch(context.Background(), site, "dress", "")
+	files, note, err := testBooru(t).fetch(context.Background(), site, "dress", "", Options{})
 	if err != nil {
 		t.Fatalf("a refused second page threw away the first: %v", err)
+	}
+	if note != "partial — could not fetch next page" {
+		t.Errorf("note = %q, want the walk cut short said so", note)
 	}
 	if len(files) != gelbooru01PageSize {
 		t.Errorf("kept %d files, want the %d the board did answer with", len(files), gelbooru01PageSize)
@@ -263,7 +252,7 @@ func TestBooruFirstPageFailureIsAnError(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
-	if _, err := testBooru(t).fetch(context.Background(), site, "dress", ""); err == nil {
+	if _, _, err := testBooru(t).fetch(context.Background(), site, "dress", "", Options{}); err == nil {
 		t.Fatal("a board that answered nothing resolved to something")
 	}
 }
@@ -277,7 +266,7 @@ func TestGelbooru01SinglePost(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
-	files, err := testBooru(t).fetch(context.Background(), site, "id:159110", "159110")
+	files, _, err := testBooru(t).fetch(context.Background(), site, "id:159110", "159110", Options{})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -349,10 +338,7 @@ func TestBooruParseTargetNewFamilies(t *testing.T) {
 		{raw: "https://example.test/index.php", api: apiGelbooru01},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		site := &booruSite{name: "test", root: "https://example.test", api: tc.api}
 		tags, post, listing := site.parseTarget(u)
 		if tags != tc.wantTags || post != tc.wantPost || listing != tc.wantListing {

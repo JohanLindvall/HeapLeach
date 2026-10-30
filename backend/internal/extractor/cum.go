@@ -145,94 +145,75 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 	}
 	res := &Result{Title: util.FirstNonEmpty(profile.DisplayName, profile.Name, service+"-"+creator)}
 	params := cumPostQuery(query)
-	seen := make(map[string]bool)
-	offset, total := 0, 0
-	for pageNo := 0; pageNo < config.MaxAlbumPages; pageNo++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		ResolveNote(ctx, fmt.Sprintf("Reading creator posts, page %d", pageNo+1))
-		params.Set("o", strconv.Itoa(offset))
-		params.Set("n", strconv.Itoa(min(config.CumPageSize, opts.maxSources()-len(seen))))
-		var batch struct {
-			Total *int      `json:"total"`
-			Posts []cumPost `json:"posts"`
-		}
-		err := c.client.GetJSON(ctx, base+"/posts?"+params.Encode(), headers, &batch)
-		if err == nil && (batch.Total == nil || *batch.Total < 0 || batch.Posts == nil) {
-			err = fmt.Errorf("cum: invalid post listing")
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+	// The listing states its total; offset counts what it has served, the
+	// posts it lists wrongly too.
+	offset, total, invalid := 0, 0, false
+	posts, note, err := walkPages(ctx, pageWalk[cumPost]{
+		key:   func(post cumPost) string { return post.ID },
+		limit: opts.maxSources(), limitNote: "partial — source limit",
+		failed: func(error) string { return "partial — could not read the next post page" },
+		fetch: func(ctx context.Context, n int) (pageOf[cumPost], error) {
+			ResolveNote(ctx, fmt.Sprintf("Reading creator posts, page %d", n+1))
+			params.Set("o", strconv.Itoa(offset))
+			params.Set("n", strconv.Itoa(config.CumPageSize))
+			var batch struct {
+				Total *int      `json:"total"`
+				Posts []cumPost `json:"posts"`
 			}
-			if pageNo == 0 {
-				return nil, err
+			err := c.client.GetJSON(ctx, base+"/posts?"+params.Encode(), headers, &batch)
+			if err == nil && (batch.Total == nil || *batch.Total < 0 || batch.Posts == nil) {
+				err = fmt.Errorf("cum: invalid post listing")
 			}
-			res.Note = "partial — could not read the next post page"
-			break
-		}
-		total = *batch.Total
-		before := len(seen)
-		for _, post := range batch.Posts {
-			if post.ID == "" || post.Service != service {
-				res.Note = "partial — invalid posts in listing"
+			if err != nil {
+				return pageOf[cumPost]{}, err
+			}
+			total = *batch.Total
+			offset += len(batch.Posts)
+			valid := make([]cumPost, 0, len(batch.Posts))
+			for _, post := range batch.Posts {
+				if post.ID == "" || post.Service != service {
+					invalid = true
+					continue
+				}
+				valid = append(valid, post)
+			}
+			return pageOf[cumPost]{items: valid, next: true, end: offset >= total}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if invalid {
+		note = joinNotes(note, "partial — invalid posts in listing")
+	}
+	if note == "" && len(posts) < total {
+		note = fmt.Sprintf("partial — %d of %d posts", len(posts), total)
+	}
+	res.Note = note
+	for _, post := range posts {
+		postURL := util.Origin(page) + "/creators/" + url.PathEscape(service) + "/" + url.PathEscape(creator) + "/post/" + url.PathEscape(post.ID)
+		loader := &cumPostLoader{c: c, base: base, service: service, id: post.ID, referer: postURL, edges: edges}
+		seenAttachments := make(map[string]bool)
+		for _, att := range post.Attachments {
+			if !cumAttachmentKind(att.Kind, params.Get("type")) || seenAttachments[att.SHA256] {
 				continue
 			}
-			if seen[post.ID] {
+			if !cumValidHash(att.SHA256) {
+				res.Note = joinNotes(res.Note, "partial — invalid attachments in listing")
 				continue
 			}
-			if len(seen) == opts.maxSources() {
-				res.Note = "partial — source limit"
+			seenAttachments[att.SHA256] = true
+			if len(res.Files) == opts.maxFiles() {
+				res.Note = joinNotes(res.Note, "partial — file limit")
 				return cumCreatorResult(res)
 			}
-			seen[post.ID] = true
-			postURL := util.Origin(page) + "/creators/" + url.PathEscape(service) + "/" + url.PathEscape(creator) + "/post/" + url.PathEscape(post.ID)
-			loader := &cumPostLoader{c: c, base: base, service: service, id: post.ID, referer: postURL, edges: edges}
-			seenAttachments := make(map[string]bool)
-			for _, att := range post.Attachments {
-				if !cumAttachmentKind(att.Kind, params.Get("type")) || seenAttachments[att.SHA256] {
-					continue
-				}
-				if !cumValidHash(att.SHA256) {
-					res.Note = "partial — invalid attachments in listing"
-					continue
-				}
-				seenAttachments[att.SHA256] = true
-				if len(res.Files) == opts.maxFiles() {
-					res.Note = "partial — file limit"
-					return cumCreatorResult(res)
-				}
-				res.Files = append(res.Files, File{
-					Name: att.name(""), Size: -1,
-					Dir: cumPostFolder(post.Title, post.ID),
-					Resolve: func(ctx context.Context) (*Target, error) {
-						return loader.resolve(ctx, att.SHA256)
-					},
-				})
-			}
-		}
-		offset += len(batch.Posts)
-		if offset >= total {
-			if len(seen) < total && res.Note == "" {
-				res.Note = fmt.Sprintf("partial — %d of %d posts", len(seen), total)
-			}
-			break
-		}
-		if len(seen) == before {
-			res.Note = "partial — repeated or empty post page"
-			break
-		}
-		if len(res.Files) == opts.maxFiles() {
-			res.Note = "partial — file limit"
-			break
-		}
-		if len(seen) == opts.maxSources() {
-			res.Note = "partial — source limit"
-			break
-		}
-		if pageNo == config.MaxAlbumPages-1 {
-			res.Note = "partial — page limit"
+			res.Files = append(res.Files, File{
+				Name: att.name(""), Size: -1,
+				Dir: cumPostFolder(post.Title, post.ID),
+				Resolve: func(ctx context.Context) (*Target, error) {
+					return loader.resolve(ctx, att.SHA256)
+				},
+			})
 		}
 	}
 	return cumCreatorResult(res)
@@ -410,8 +391,8 @@ func (a cumAttachment) file(edges []string, referer string) (File, error) {
 			continue
 		}
 		size := int64(-1)
-		if variant.Bytes != nil && *variant.Bytes >= 0 {
-			size = *variant.Bytes
+		if variant.Bytes != nil {
+			size = knownSize(*variant.Bytes)
 		}
 		links := make([]string, 0, len(edges))
 		for _, edge := range edges {

@@ -35,7 +35,6 @@ const (
 	redgifsRoot     = "https://www.redgifs.com"
 	redgifsTokenTTL = time.Hour
 	redgifsPageSize = 80
-	redgifsMaxPages = 25
 )
 
 // NewRedGifs builds the redgifs extractor.
@@ -76,7 +75,7 @@ func (r *RedGifs) Recognise(_ context.Context, p *Page) bool {
 
 // Extract handles a single item (/watch/<id>) or a user's whole feed
 // (/users/<name>).
-func (r *RedGifs) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (r *RedGifs) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {
 		return nil, fmt.Errorf("redgifs: %s is not a watch or user link", u.Redacted())
@@ -84,7 +83,7 @@ func (r *RedGifs) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 
 	switch strings.ToLower(segs[0]) {
 	case "users":
-		return r.user(ctx, segs[1])
+		return r.user(ctx, segs[1], opts)
 	case "watch", "ifr":
 		return r.single(ctx, segs[1])
 	default:
@@ -107,35 +106,39 @@ func (r *RedGifs) single(ctx context.Context, id string) (*Result, error) {
 	return &Result{Title: payload.Gif.name(), Files: []File{file}}, nil
 }
 
-// user pages through everything one account has posted.
-func (r *RedGifs) user(ctx context.Context, name string) (*Result, error) {
+// user pages through everything one account has posted, to the page count
+// the API states.
+func (r *RedGifs) user(ctx context.Context, name string, opts Options) (*Result, error) {
+	items, note, err := walkPages(ctx, pageWalk[redgifsItem]{
+		key:   func(item redgifsItem) string { return item.ID },
+		limit: opts.maxFiles(), limitNote: "partial — file limit",
+		fetch: func(ctx context.Context, n int) (pageOf[redgifsItem], error) {
+			var payload struct {
+				Gifs  []redgifsItem `json:"gifs"`
+				Pages int           `json:"pages"`
+			}
+			path := fmt.Sprintf("/users/%s/search?order=new&count=%d&page=%d",
+				url.PathEscape(name), redgifsPageSize, n+1)
+			if err := r.call(ctx, path, &payload); err != nil {
+				return pageOf[redgifsItem]{}, fmt.Errorf("redgifs: user %s: %w", name, err)
+			}
+			end := len(payload.Gifs) == 0 || (payload.Pages > 0 && n+1 >= payload.Pages)
+			return pageOf[redgifsItem]{items: payload.Gifs, next: true, end: end}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	var files []File
-	for page := 1; page <= redgifsMaxPages; page++ {
-		var payload struct {
-			Gifs  []redgifsItem `json:"gifs"`
-			Pages int           `json:"pages"`
-		}
-		path := fmt.Sprintf("/users/%s/search?order=new&count=%d&page=%d",
-			url.PathEscape(name), redgifsPageSize, page)
-		if err := r.call(ctx, path, &payload); err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("redgifs: user %s: %w", name, err)
-			}
-			break
-		}
-		for _, item := range payload.Gifs {
-			if file, ok := item.file(); ok {
-				files = append(files, file)
-			}
-		}
-		if len(payload.Gifs) == 0 || (payload.Pages > 0 && page >= payload.Pages) {
-			break
+	for _, item := range items {
+		if file, ok := item.file(); ok {
+			files = append(files, file)
 		}
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("redgifs: user %s has no downloadable media", name)
 	}
-	return &Result{Title: name, Files: files}, nil
+	return &Result{Title: name, Files: files, Note: note}, nil
 }
 
 // call performs an authenticated request, minting a token when needed and

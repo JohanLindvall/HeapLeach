@@ -208,17 +208,18 @@ func knuthingCards(root *html.Node, page, first *url.URL) listingPage {
 			}
 		}
 	}
-	p.next, p.note = knuthingNext(content, page, first)
+	p.next, p.badNext = knuthingNext(content, page, first)
 	return p
 }
 
 // Follow the listing's pager, keeping its section and filters. Numeric
 // links provide a fallback for translated Next Page labels; the last-page
-// shortcut never substitutes for the next page.
-func knuthingNext(root *html.Node, page, first *url.URL) (*url.URL, string) {
+// shortcut never substitutes for the next page. An explicit next link that
+// leaves the listing is an invalid next page.
+func knuthingNext(root *html.Node, page, first *url.URL) (next *url.URL, invalid bool) {
 	pager := findFirst(root, func(n *html.Node) bool { return hasClass(n, "pagination") })
 	if pager == nil {
-		return nil, ""
+		return nil, false
 	}
 	current, _ := strconv.Atoi(page.Query().Get("page_id"))
 	current = max(1, current)
@@ -249,15 +250,15 @@ func knuthingNext(root *html.Node, page, first *url.URL) (*url.URL, string) {
 			}
 			link.RawQuery = query.Encode()
 		}
+		if explicit && !valid {
+			return nil, true
+		}
 		if explicit {
-			if !valid {
-				return nil, "partial — invalid next page"
-			}
-			return link, ""
+			return link, false
 		}
 		if valid {
 			fallback = link
 		}
 	}
-	return fallback, ""
+	return fallback, false
 }

@@ -4,16 +4,13 @@ package extractor
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -230,72 +227,49 @@ func TestImgurTargetOf(t *testing.T) {
 		"/search/x/y":                {},
 	}
 	for raw, want := range tests {
-		u, err := url.Parse("https://imgur.com" + raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, "https://imgur.com"+raw)
 		if got := imgurTargetOf(util.PathSegments(u)); got != want {
 			t.Errorf("imgurTargetOf(%q) = %+v, want %+v", raw, got, want)
 		}
 	}
 }
 
-// TestImgurPageWalkStops pins the three ways a listing ends, because the one
-// that is easy to miss is a listing that never says it has ended: the mirrored
-// subreddit feeds answer a page past the end with the first page again, and a
-// walk that only stopped at an empty array would page through them forever.
-func TestImgurPageWalkStops(t *testing.T) {
-	page := func(hashes ...string) []imgurEntry {
-		out := make([]imgurEntry, 0, len(hashes))
-		for _, h := range hashes {
-			out = append(out, imgurEntry{Hash: h, Ext: ".jpg", Size: 1})
+// TestImgurListingEntriesStop pins the ways a listing ends, because the one
+// that is easy to miss is a listing that never says it has ended: the
+// mirrored subreddit feeds answer a page past the end with the first page
+// again, and a walk that only stopped at an empty array would page through
+// them forever. A tag feed never ends, and the listing cap bounds it.
+func TestImgurListingEntriesStop(t *testing.T) {
+	row := func(hash string) string { return `{"hash":"` + hash + `","ext":".jpg","size":1}` }
+	pages := map[string]string{
+		"0": row("aaa1111") + "," + row("bbb2222") + `,{"hash":""},` + row("aaa1111"),
+		"1": row("bbb2222") + "," + row("ccc3333"),
+	}
+	for _, tc := range []struct {
+		name  string
+		after string // what every page after the second answers
+		limit int
+		rows  int
+		note  string
+	}{
+		{name: "empty page", after: "", rows: 3},
+		{name: "first page again", after: pages["0"], rows: 3},
+		{name: "capped", after: pages["0"], limit: 2, rows: 2, note: "partial — source limit"},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			page := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/t/cats/page/"), "/hit.json")
+			body, ok := pages[page]
+			if !ok {
+				body = tc.after
+			}
+			_, _ = w.Write([]byte(`{"data":[` + body + `]}`))
+		}))
+		i := NewImgur(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+		entries, note, err := i.listingEntries(t.Context(), nil, srv.URL, "/t/cats", Options{limits: Limits{Sources: tc.limit}})
+		srv.Close()
+		if err != nil || len(entries) != tc.rows || note != tc.note {
+			t.Errorf("%s: rows=%d note=%q err=%v", tc.name, len(entries), note, err)
 		}
-		return out
-	}
-
-	walk := imgurPageWalk{seen: make(map[string]bool)}
-	if !walk.add(page("aaa1111", "bbb2222", "", "aaa1111")) {
-		t.Fatal("a first page with new rows ended the walk")
-	}
-	if len(walk.entries) != 2 {
-		t.Fatalf("kept %d rows, want 2: the blank and the repeat are not rows", len(walk.entries))
-	}
-	if !walk.add(page("bbb2222", "ccc3333")) {
-		t.Fatal("a page carrying one new row ended the walk")
-	}
-	if len(walk.entries) != 3 {
-		t.Fatalf("kept %d rows, want 3", len(walk.entries))
-	}
-	// The whole first page again, which is how a mirrored subreddit answers
-	// once it has run out.
-	if walk.add(page("aaa1111", "bbb2222")) {
-		t.Error("a page that repeated what was already seen did not end the walk")
-	}
-	if walk.add(nil) {
-		t.Error("an empty page did not end the walk")
-	}
-}
-
-// TestImgurPageWalkIsBounded covers the tag feeds, which simply keep answering
-// with older posts. Each row naming a post costs a request to expand, so the
-// ceiling has to be on rows rather than on pages.
-func TestImgurPageWalkIsBounded(t *testing.T) {
-	walk := imgurPageWalk{seen: make(map[string]bool)}
-	for n := 0; ; n++ {
-		rows := make([]imgurEntry, 60)
-		for r := range rows {
-			rows[r] = imgurEntry{Hash: fmt.Sprintf("p%d-%d", n, r), IsAlbum: true}
-		}
-		if !walk.add(rows) {
-			break
-		}
-		if n > config.MaxListingPosts {
-			t.Fatal("the walk never stopped")
-		}
-	}
-	if len(walk.entries) < config.MaxListingPosts {
-		t.Errorf("stopped at %d rows, want at least the %d ceiling",
-			len(walk.entries), config.MaxListingPosts)
 	}
 }
 

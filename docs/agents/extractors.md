@@ -265,17 +265,36 @@ intact. `sources.go` holds what they share:
 
 ### Walking pages
 
-- Pages are fetched concurrently with `FanOut` (`fanout.go`), bounded by
-  `config.PageFetchConcurrency`, with results collected by index so the job
-  lists files in the site's own order however the requests interleave. A page
-  that will not load is skipped rather than failing a job of hundreds.
+- Every paged listing that is not a broadcaster's series or a folder tree
+  walks through `walkPages` (`pages.go`). The caller's `fetch` reads page *n*
+  and keeps the cursor, offset or page number in its own closure; the engine
+  owns the rest, once: a first page that fails is the caller's error as it
+  stands and a later one a partial listing (or quiet, or the `failed` hook's
+  note), entries deduplicated by `key`, a page that adds nothing ends the
+  walk, the page cap (`config.MaxAlbumPages` unless `pages` says otherwise),
+  the limit and its note, and cancellation, which is never a partial listing.
+  `walkListing` (`listing.go`) is its adapter for HTML pagers.
+- Each page says how the listing ends, from what the API states: `total` (the
+  count it holds), `end` (an end flag, a missing cursor, or an empty page
+  asked for past the end), or no `next`. Never end on a page shorter than the
+  page size asked for: hosts commonly serve fewer than asked without saying
+  so. Asking one page past the end is cheap and right where nothing else
+  says. A host that ignores its paging parameter serves page one again, which
+  adds nothing and ends the walk.
+- A listing whose end is found by asking past it — a 404, an empty page, the
+  first page again — is `quiet`: the walk adds no note of its own there, and
+  `failed` maps the failures that are a cut (a rate limit). `stop` marks a
+  page that is not the listing's (missing, repeated, redirected) and `note` a
+  reason the walk ends early, such as a next page that cannot be followed.
 - Stop **at** the cap rather than collecting everything and truncating: a
-  broad search can state tens of thousands of pages.
-- Follow a listing by the count it states and by what each page adds, never by
-  the page size asked for. Hosts commonly serve fewer than asked without
-  saying so, or ignore a paging parameter and serve page one again, which
-  reads as the end of a one-page listing. Deduplicate, and stop on a page that
-  adds nothing.
+  broad search can state tens of thousands of pages. Where every entry costs a
+  request at listing time, the cap is `listingLimit` (the lower of the source
+  and file caps); otherwise the file cap.
+- Entries that need their own page are then read concurrently with `FanOut`
+  (`fanout.go`), bounded by `config.PageFetchConcurrency`, with results
+  collected by index so the job lists files in the site's own order however
+  the requests interleave. One that will not load is skipped rather than
+  failing a job of hundreds.
 
 ### Caps
 
@@ -351,17 +370,17 @@ line in the saved queue.
   A host supplies only the reader for one folder.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
-- `walkListing` and `webLink` (`listing.go`): a paged HTML listing, with its
-  page cap, per-page note, redirect and repeated-page checks, dedupe, caps and
-  partial notes. A new paged listing supplies only the reader for one page,
-  which also names the next page for a listing paged by number. Options cover
-  the rest: a first page the caller already read (`root`), a fetch of its own
-  (`fetch`, `fetchAsAsked`), page identity (`key`), redirects judged by the
-  reader (`anyRedirect`), and `quiet` for a listing whose end is found by
-  asking past it — a 404 or an empty page there is the end, not a partial
-  listing, so the walk adds no note of its own and `failed` maps the
-  failures that are one (a rate limit). `listingNotes` (`sources.go`) builds
-  the job note of a listing expanded into its sources.
+- `walkPages` (`pages.go`), above, for any paged listing, and its HTML
+  adapter `walkListing` with `webLink` (`listing.go`): redirect, missing-page
+  and repeated-page checks on top of the engine. A new paged listing supplies
+  only the reader for one page, which also names the next page for a listing
+  paged by number, and sets `badNext` when the pager offers a next page that
+  cannot be followed ("partial — invalid next page"). Options cover the rest:
+  a first page the caller already read (`root`), a fetch of its own (`fetch`,
+  `fetchAsAsked`), page identity (`key`), redirects judged by the reader
+  (`anyRedirect`), and the engine's `quiet` and `failed`. `listingNotes`
+  (`sources.go`) builds the job note of a listing expanded into its
+  sources.
 - `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
   playlist or target as a File, every field carried over.
 - `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,

@@ -160,7 +160,9 @@ func TestVoyeurKingListingsHandOffDeferredFiles(t *testing.T) {
 	}
 }
 
-func TestVoyeurKingLimitsAndPartialListings(t *testing.T) {
+// The walk itself is the shared walker's; what is the site's own is the
+// caps it is held to and which next pages it will follow.
+func TestVoyeurKingLimitsAndInvalidNextPages(t *testing.T) {
 	for _, section := range []string{"categories", "collection"} {
 		t.Run(section, func(t *testing.T) {
 			prefix := "/" + section + "/example"
@@ -171,13 +173,10 @@ func TestVoyeurKingLimitsAndPartialListings(t *testing.T) {
 			for _, tc := range []struct {
 				name, next, note string
 				limits           Limits
-				secondPage       bool
 				files, requests  int
 			}{
 				{name: "source limit", next: prefix + "/page/2", limits: Limits{Sources: 1}, note: "source limit", files: 1, requests: 2},
 				{name: "file limit", limits: Limits{Files: 1}, note: "file limit", files: 1, requests: 3},
-				{name: "next page failed", next: prefix + "/page/2", note: "could not fetch next page", files: 2, requests: 4},
-				{name: "repeated page", next: prefix + "/page/2", secondPage: true, note: "repeated", files: 2, requests: 4},
 				{name: "other listing", next: "/" + section + "/unrelated/page/2", note: "invalid next page", files: 2, requests: 3},
 				{name: "other listing type", next: other, note: "invalid next page", files: 2, requests: 3},
 				{name: "other host", next: "https://unrelated.example.test" + prefix + "/page/2", note: "invalid next page", files: 2, requests: 3},
@@ -188,9 +187,6 @@ func TestVoyeurKingLimitsAndPartialListings(t *testing.T) {
 						prefix:          voyeurKingIndexHTML(tc.next, "first", "second"),
 						"/video/first":  voyeurKingVideoHTML("first", "First", "https://files.example.test/file/first"),
 						"/video/second": voyeurKingVideoHTML("second", "Second", "https://files.example.test/file/second"),
-					}
-					if tc.secondPage {
-						pages[prefix+"/page/2"] = voyeurKingIndexHTML(prefix+"/page/2", "first", "second")
 					}
 					reg, _, base, asked := voyeurKingTestIndex(t, pages, k)
 					res, _, err := reg.Extract(context.Background(), base+prefix, Options{limits: tc.limits})

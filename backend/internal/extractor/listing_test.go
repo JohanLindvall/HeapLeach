@@ -68,6 +68,9 @@ func TestWalkListing(t *testing.T) {
 		// quiet walks the listing as one that ends where it stops, with a
 		// failed hook naming a rate limit.
 		quiet bool
+		// cancel is the page whose request cancels the walk as it is
+		// answered.
+		cancel int
 	}{
 		{name: "complete", items: 3, body: func(n int) string {
 			if n == 1 {
@@ -162,6 +165,9 @@ func TestWalkListing(t *testing.T) {
 		{name: "quiet cap keeps its note", quiet: true, limit: 2, items: 2, note: "partial — source limit", body: func(int) string {
 			return listPage("?page=2", "a", "b", "c")
 		}},
+		{name: "cancelled", cancel: 2, failed: context.Canceled.Error(), body: func(n int) string {
+			return listPage("?page="+strconv.Itoa(n+1), strconv.Itoa(n))
+		}},
 		{name: "first page missing", failed: "test: no video listing on this page", body: func(int) string {
 			return "<p>gone</p>"
 		}},
@@ -174,12 +180,17 @@ func TestWalkListing(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/elsewhere" {
 					fmt.Fprint(w, listPage("", "z"))
 					return
 				}
 				n, _ := strconv.Atoi(r.URL.Query().Get("page"))
+				if tc.cancel != 0 && max(n, 1) == tc.cancel {
+					cancel()
+				}
 				switch body := tc.body(max(n, 1)); body {
 				case "":
 					http.NotFound(w, r)
@@ -209,7 +220,7 @@ func TestWalkListing(t *testing.T) {
 					return ""
 				}
 			}
-			links, title, note, err := walkListing(context.Background(), httpx.New("test", "en", 0, time.Second), mustParse(t, srv.URL+"/list"), walk)
+			links, title, note, err := walkListing(ctx, httpx.New("test", "en", 0, time.Second), mustParse(t, srv.URL+"/list"), walk)
 			if tc.failed != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.failed) {
 					t.Fatalf("err = %v, want %q", err, tc.failed)
@@ -223,6 +234,67 @@ func TestWalkListing(t *testing.T) {
 				t.Fatalf("items=%d title=%q note=%q", len(links), title, note)
 			}
 		})
+	}
+}
+
+// TestWalkPages covers what the engine owns beyond walkListing's pages: a
+// stated total, an end page, a stop page and its note, and a failed hook.
+func TestWalkPages(t *testing.T) {
+	errGone := fmt.Errorf("gone")
+	for _, tc := range []struct {
+		name  string
+		pages []pageOf[string]
+		quiet bool
+		items string
+		note  string
+		asked int
+	}{
+		{name: "stated total", pages: []pageOf[string]{
+			{items: []string{"a", "b"}, next: true, total: 3}, {items: []string{"c"}, next: true, total: 3}, {items: []string{"d"}},
+		}, items: "a,b,c", asked: 2},
+		{name: "a short page goes on", pages: []pageOf[string]{
+			{items: []string{"a", "b"}, next: true}, {items: []string{"c"}, next: true}, {end: true},
+		}, items: "a,b,c", asked: 3},
+		{name: "end page takes its items", pages: []pageOf[string]{
+			{items: []string{"a"}, next: true}, {items: []string{"a", "b"}, end: true},
+		}, items: "a,b", asked: 2},
+		{name: "last page note", pages: []pageOf[string]{
+			{items: []string{"a"}, note: "partial — invalid next page"},
+		}, quiet: true, items: "a", note: "partial — invalid next page", asked: 1},
+		{name: "stop page", pages: []pageOf[string]{
+			{items: []string{"a"}, next: true}, {items: []string{"b"}, stop: "partial — redirected"},
+		}, items: "a", note: "partial — redirected", asked: 2},
+		{name: "quiet stop page keeps its own note", pages: []pageOf[string]{
+			{items: []string{"a"}, next: true}, {stop: "partial — redirected", note: "partial — gone"},
+		}, quiet: true, items: "a", note: "partial — gone", asked: 2},
+		{name: "failed hook", pages: []pageOf[string]{
+			{items: []string{"a"}, next: true}, {},
+		}, items: "a", note: "partial — gone", asked: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asked := 0
+			items, note, err := walkPages(context.Background(), pageWalk[string]{
+				key: func(s string) string { return s }, limit: -1, quiet: tc.quiet,
+				failed: func(err error) string { return "partial — " + err.Error() },
+				fetch: func(_ context.Context, n int) (pageOf[string], error) {
+					asked++
+					p := tc.pages[n]
+					if p.items == nil && !p.end && p.stop == "" {
+						return p, errGone
+					}
+					return p, nil
+				},
+			})
+			if err != nil || strings.Join(items, ",") != tc.items || note != tc.note || asked != tc.asked {
+				t.Fatalf("items=%v note=%q asked=%d err=%v", items, note, asked, err)
+			}
+		})
+	}
+	if _, _, err := walkPages(context.Background(), pageWalk[string]{
+		key: func(s string) string { return s }, limit: -1,
+		fetch: func(context.Context, int) (pageOf[string], error) { return pageOf[string]{}, errGone },
+	}); err != errGone {
+		t.Fatalf("first page failure = %v, want it as it stands", err)
 	}
 }
 
@@ -285,7 +357,7 @@ func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
 	}))
 	defer srv.Close()
 	client := httpx.New("test", "en", 0, time.Second)
-	root, _ := parseHTML(`<h1>Owned</h1><div id="list"><a href="/item/a">a</a></div><a rel="next" href="/list?page=2">Next</a>`)
+	root := mustParseDoc(t, `<h1>Owned</h1><div id="list"><a href="/item/a">a</a></div><a rel="next" href="/list?page=2">Next</a>`)
 	key := func(u *url.URL) string {
 		k := *u
 		q := k.Query()
@@ -305,7 +377,7 @@ func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
 		t.Fatalf("asked %v", asked)
 	}
 
-	empty, _ := parseHTML(`<h1>Nothing</h1><div id="list"></div>`)
+	empty := mustParseDoc(t, `<h1>Nothing</h1><div id="list"></div>`)
 	links, title, note, err = walkListing(context.Background(), client, mustParse(t, srv.URL+"/list"), listingWalk{
 		name: "test", limit: -1, quiet: true, read: testListingPage, root: empty,
 	})

@@ -18,17 +18,18 @@ so the walk trusts the stated page count and a page that adds nothing, never
 the parameter. Without the shared self-exclusion, the site's own navigation
 would turn one search into a walk of the whole catalogue. The pages go through
 the shared `walkListing` as a quiet, numbered listing: its reader names the
-next page by number and stops at the stated last page or the cap, and a page
-that is missing or adds nothing is where the results end, not a partial job.
+next page by number and stops at the stated last page, however short, or the
+cap, and a page that is missing or adds nothing is where the results end, not
+a partial job.
 
 ## coomerfans
 
 A creator's page on coomerfans lists posts but keeps the media on each post's
 own page, and the listing cannot be worked from instead: a post holding a
 video shows no thumbnail there at all. So every post is opened, through
-`FanOut`. The creator's pages are walked by `walkListing` as a quiet listing:
-the listing states no length, so a later page that fails or adds nothing ends
-it without a note.
+`FanOut`. The creator's pages are walked by `walkListing` as a quiet listing
+following its next links: the listing states no length, so a later page that
+fails or adds nothing ends it without a note.
 
 ## celeb.st
 
@@ -39,8 +40,10 @@ the full-size image; thumbnails, avatars and single-image pages' `moreMedia`
 recommendations are separate. URLs are base64 plus repeating XOR, as decoded
 by the site's player, and the resulting image endpoint is stable rather than
 signed. File names use the image id and extension, since the URL's basename is
-an opaque token. A pasted later gallery page starts from page one; file and
-page caps and repeated pages are reported in `Result.Note`, leaving the
+an opaque token. A pasted later gallery page starts from page one, and the
+walk follows the page count the first page states. A gallery that comes back
+short of the creator's stated image count — a cap, a repeated page, a later
+page that failed — says "N of M images" in `Result.Note`, leaving the
 creator's folder name stable.
 
 ## cum.st
@@ -68,12 +71,14 @@ folders include their ids so repeated titles and changed caps cannot merge
 them. Individual post input reads full metadata immediately.
 
 Listings start at offset zero, request `config.CumPageSize` records, and
-advance by the count returned, checking both `total` and newly seen post ids.
-The `pp*` search, sort, tag, duration and media filters are carried to the API;
-photo, video and audio filters also select the matching attachments within
-mixed posts. Only the posts tab is supported. Source/file/page limits,
-repeated pages and failed later pages produce an incomplete-result note.
-Posts with no attachments contribute no files.
+advance by the count returned, ending at the stated `total`; a page of no new
+post ids ends the walk too. The source cap bounds the posts and the file cap
+the attachments queued from them. The `pp*` search, sort, tag, duration and
+media filters are carried to the API; photo, video and audio filters also
+select the matching attachments within mixed posts. Only the posts tab is
+supported. Source/file/page limits, repeated pages, failed later pages and a
+listing short of its `total` produce an incomplete-result note. Posts with no
+attachments contribute no files.
 
 ## erome
 
@@ -85,11 +90,12 @@ the right-looking count. And albums are foldered by title, which is not
 unique: two albums sharing a title would collide into one folder, which looks
 like lost files that did in fact download. `eromeFolders` appends the album id
 only to titles that actually repeat, so the ordinary case keeps clean names. A
-walk that hits a rate limit it cannot outwait returns what it got, and
-`eromeProfileNote` marks the job "partial — rate limited" rather than letting
-it pass for complete; the mark is a note, not part of the title, so the folder
+walk that hits a rate limit it cannot outwait returns what it got, and its
+`failed` hook marks the job "partial — rate limited" rather than letting it
+pass for complete; the mark is a note, not part of the title, so the folder
 stays put. The profile is a quiet, numbered `walkListing`: any other failed
-page is the end of the profile, and the album cap is checked a page at a time.
+page is the end of the profile. Every album costs a request of its own, so
+the albums are held to `listingLimit`.
 
 ## rajce
 
@@ -137,4 +143,6 @@ anchor carries the title, the artist and the audio path, so nothing is read
 from the surrounding markup, which differs from one band's site to the next.
 The audio path redirects to storage signed for a couple of hours, minted per
 request, so the player link is what goes on the `File`; the signed one would
-go stale in a long queue.
+go stale in a long queue. A track list shows twenty and says whether it has
+more (`data-load-more`, `data-offset`); each continuation it names is a page
+of `walkPages`, read until no list says it has more.

@@ -249,18 +249,15 @@ func TestKnuthingListingWalksOnlyItsCardsAndPages(t *testing.T) {
 	}
 }
 
-func TestKnuthingListingCapsAndPartialPages(t *testing.T) {
+// The walk itself is the shared walker's; what is the site's own is the
+// listing cap it is held to and which next pages it will follow.
+func TestKnuthingListingCapsAndInvalidNextPages(t *testing.T) {
 	for _, tc := range []struct {
-		name, second, next, note string
-		limits                   Limits
-		files, pages             int
+		name, next, note string
+		limits           Limits
+		files, pages     int
 	}{
 		{name: "source-cap", limits: Limits{Sources: 1}, files: 1, pages: 1, note: "source limit"},
-		{name: "file-cap", limits: Limits{Files: 1}, files: 1, pages: 1, note: "file limit"},
-		{name: "exact-cap", limits: Limits{Sources: 2}, files: 2, pages: 1, note: "source limit"},
-		{name: "repeat", second: "repeat", files: 2, pages: 2, note: "repeated or empty"},
-		{name: "missing", second: "missing", files: 2, pages: 2, note: "listing is missing"},
-		{name: "failed", second: "failed", files: 2, pages: 2, note: "could not fetch"},
 		{name: "other-section", next: "/videos/latest?page_id=2", files: 2, pages: 1, note: "invalid next page"},
 		{name: "other-origin", next: "https://other.example.test/videos/free?page_id=2", files: 2, pages: 1, note: "invalid next page"},
 		{name: "other-filter", next: "?page_id=2&sort=oldest", files: 2, pages: 1, note: "invalid next page"},
@@ -269,21 +266,10 @@ func TestKnuthingListingCapsAndPartialPages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				n := calls.Add(1)
-				if r.URL.Path != "/videos/free" || n > 2 {
+				if calls.Add(1) > 1 || r.URL.Path != "/videos/free" {
 					t.Errorf("walk escaped its listing or did not stop: %s", r.URL)
 					http.NotFound(w, r)
 					return
-				}
-				if n == 2 {
-					switch tc.second {
-					case "missing":
-						fmt.Fprint(w, "<html>Listing gone</html>")
-						return
-					case "failed":
-						http.NotFound(w, r)
-						return
-					}
 				}
 				next := tc.next
 				if next == "" {
@@ -301,22 +287,5 @@ func TestKnuthingListingCapsAndPartialPages(t *testing.T) {
 				t.Fatalf("result=%+v, pages=%d", res, calls.Load())
 			}
 		})
-	}
-}
-
-func TestKnuthingListingCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page_id") == "2" {
-			cancel()
-			return
-		}
-		fmt.Fprint(w, knuthingListingPage(knuthingCard("1", "First", "/watch/first.html"), `<a title="Next Page" href="?page_id=2">Next</a>`))
-	}))
-	defer srv.Close()
-	k := NewPlayer(httpx.New("test", "en", 0, time.Second), &knuthingPlayer)
-	if _, err := k.Extract(ctx, mustParse(t, srv.URL+"/videos/free"), Options{}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("partial result hid cancellation: %v", err)
 	}
 }

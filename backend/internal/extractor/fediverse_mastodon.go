@@ -87,7 +87,7 @@ func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pix
 	}
 	title := "@" + fediHandle(util.FirstNonEmpty(account.Acct, account.Username, t.handle), u.Hostname())
 
-	statuses, err := f.mastodonTimeline(ctx, root, account.ID, "", pixelfed)
+	statuses, note, err := f.mastodonTimeline(ctx, root, account.ID, pixelfed)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (f *Fediverse) mastodon(ctx context.Context, u *url.URL, t *fediTarget, pix
 		return nil, fmt.Errorf("fediverse: %s has attached no media to its most recent %d posts",
 			title, config.MaxTimelinePages*stride)
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // mastodonPaging picks the base and the page stride for the dialect in hand.
@@ -147,46 +147,49 @@ func (f *Fediverse) mastodonLookup(ctx context.Context, root, handle string) (*m
 // mastodonTimeline pages back through an account's media posts.
 //
 // max_id is exclusive and the listing is newest first, so each page asks for
-// what precedes the last id of the one before. A page that comes back short,
-// or that hands back the id it was given, ends the walk — as does the cap,
-// which is what stops an account with a decade of posts resolving for
-// minutes. only_media is what keeps that cap spent on posts there is
-// something to fetch from rather than on a year of conversation. A page after
-// the first that fails is not fatal: what has already been collected is still
-// worth queueing.
-func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID, until string, pixelfed bool) ([]mastodonStatus, error) {
-	api, pageSize := mastodonPaging(pixelfed)
-
-	var all []mastodonStatus
-	for page := range config.MaxTimelinePages {
-		query := url.Values{}
-		query.Set("limit", strconv.Itoa(pageSize))
-		query.Set("only_media", "true")
-		if until != "" {
-			query.Set("max_id", until)
-		}
-		endpoint := fmt.Sprintf("%s%s/accounts/%s/statuses?%s",
-			root, api, url.PathEscape(accountID), query.Encode())
-
-		var batch []mastodonStatus
-		if err := f.client.GetJSON(ctx, endpoint, fediHeaders(root), &batch); err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("fediverse: read the account's posts: %w", err)
+// what precedes the last id of the one before. An empty page ends the walk,
+// as does a page that adds nothing, and the timeline page cap, which is what
+// stops an account with a decade of posts resolving for minutes. only_media
+// is what keeps that cap spent on posts there is something to fetch from
+// rather than on a year of conversation. A page after the first that fails
+// is not fatal: what has already been collected is still worth queueing.
+func (f *Fediverse) mastodonTimeline(ctx context.Context, root, accountID string, pixelfed bool) ([]mastodonStatus, string, error) {
+	until := ""
+	return walkPages(ctx, pageWalk[mastodonStatus]{
+		key:   func(status mastodonStatus) string { return status.ID },
+		limit: -1, pages: config.MaxTimelinePages,
+		fetch: func(ctx context.Context, _ int) (pageOf[mastodonStatus], error) {
+			batch, err := f.mastodonStatuses(ctx, root, accountID, until, pixelfed)
+			if err != nil {
+				return pageOf[mastodonStatus]{}, err
 			}
-			break
-		}
-		if len(batch) == 0 {
-			break
-		}
-		all = append(all, batch...)
+			if len(batch) == 0 {
+				return pageOf[mastodonStatus]{end: true}, nil
+			}
+			until = batch[len(batch)-1].ID
+			return pageOf[mastodonStatus]{items: batch, next: until != ""}, nil
+		},
+	})
+}
 
-		next := batch[len(batch)-1].ID
-		if next == "" || next == until || len(batch) < pageSize {
-			break
-		}
-		until = next
+// mastodonStatuses reads one page of an account's media posts, those that
+// precede until when it is set.
+func (f *Fediverse) mastodonStatuses(ctx context.Context, root, accountID, until string, pixelfed bool) ([]mastodonStatus, error) {
+	api, pageSize := mastodonPaging(pixelfed)
+	query := url.Values{}
+	query.Set("limit", strconv.Itoa(pageSize))
+	query.Set("only_media", "true")
+	if until != "" {
+		query.Set("max_id", until)
 	}
-	return all, nil
+	endpoint := fmt.Sprintf("%s%s/accounts/%s/statuses?%s",
+		root, api, url.PathEscape(accountID), query.Encode())
+
+	var batch []mastodonStatus
+	if err := f.client.GetJSON(ctx, endpoint, fediHeaders(root), &batch); err != nil {
+		return nil, fmt.Errorf("fediverse: read the account's posts: %w", err)
+	}
+	return batch, nil
 }
 
 // mastodonOne fetches a single post.
@@ -206,7 +209,7 @@ func (f *Fediverse) mastodonOne(ctx context.Context, root string, t *fediTarget,
 		if err != nil || id == ^uint64(0) {
 			return nil, fmt.Errorf("fediverse: %q is not a pixelfed post id", t.id)
 		}
-		statuses, err := f.mastodonTimeline(ctx, root, account.ID, strconv.FormatUint(id+1, 10), true)
+		statuses, err := f.mastodonStatuses(ctx, root, account.ID, strconv.FormatUint(id+1, 10), true)
 		if err != nil {
 			return nil, err
 		}
