@@ -313,17 +313,17 @@ func TestGelbooru01Image(t *testing.T) {
 	}
 }
 
-// A board's label comes from its host, so a booru.org board is named for its
-// own subdomain.
-func TestBooruLabel(t *testing.T) {
+// An install's label comes from its host, so a booru.org board is named for
+// its own subdomain.
+func TestHostLabel(t *testing.T) {
 	for host, want := range map[string]string{
 		"example.booru.org":    "example",
 		"www.aboard.example":   "aboard",
 		"aboard.example.test":  "aboard",
 		"AnotherBoard.Example": "anotherboard",
 	} {
-		if got := booruLabel(host); got != want {
-			t.Errorf("booruLabel(%q) = %q, want %q", host, got, want)
+		if got := hostLabel(host); got != want {
+			t.Errorf("hostLabel(%q) = %q, want %q", host, got, want)
 		}
 	}
 }
@@ -406,8 +406,10 @@ func TestBooruRecognise(t *testing.T) {
 	b := testBooru(t)
 
 	marked := htmlPage(t, srv.URL+"/posts/42", booruRailsPost)
-	if !b.Recognise(context.Background(), marked) || !b.Recognise(context.Background(), marked) {
-		t.Fatal("a marked post whose API answers was not recognised")
+	for range 2 {
+		if !b.Recognise(context.Background(), marked) {
+			t.Fatal("a marked post whose API answers was not recognised")
+		}
 	}
 	if n := apiCalls.Load(); n != 1 {
 		t.Errorf("the API was asked %d times for one page, want once", n)
@@ -427,9 +429,7 @@ func TestBooruRecognise(t *testing.T) {
 		t.Error("a marked page of the wrong form was recognised")
 	}
 	// A challenge in front of the page: the API alone decides.
-	challenged := fixturePage(t, srv.URL+"/posts/42", http.StatusForbidden, "text/html", "")
-	challenged.Challenged = true
-	if !b.Recognise(context.Background(), challenged) {
+	if !b.Recognise(context.Background(), challengedPage(t, srv.URL+"/posts/42")) {
 		t.Error("a challenged post whose API answers was not recognised")
 	}
 	// Without a client nothing is asked, and a marked page alone is not

@@ -169,11 +169,10 @@ func (m *Mediafire) Recognise(_ context.Context, p *Page) bool {
 	}
 	switch {
 	case mediafireFileShape(p.Final):
-		root := p.HTML()
-		return root != nil && findFirst(root, func(n *html.Node) bool {
+		return p.hasElement(func(n *html.Node) bool {
 			return isElem(n, atom.A) && attr(n, "id") == mediafireButtonID &&
 				(attr(n, "href") != "" || attr(n, mediafireScrambled) != "")
-		}) != nil
+		})
 	case mediafireFolderShape(p.Final):
 		return p.Has(mediafireFolderMarker)
 	}
@@ -220,13 +219,9 @@ func (m *Mediafire) filePage(ctx context.Context, page string) (link, name strin
 	if err != nil {
 		return "", "", fmt.Errorf("mediafire: %w", err)
 	}
-	doc, _, err := fetchDocument(ctx, m.client, pageURL, httpx.Referer(mediafireRoot+"/"))
+	root, _, err := fetchRoot(ctx, m.client, pageURL, httpx.Referer(mediafireRoot+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("mediafire: fetch %s: %w", page, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", "", fmt.Errorf("mediafire: parse %s: %w", page, err)
 	}
 
 	button := findFirst(root, func(n *html.Node) bool {
@@ -442,10 +437,9 @@ func (g *GoogleDrive) Recognise(_ context.Context, p *Page) bool {
 	if p.Script(driveViewerBundle) && p.Named("Google Drive") {
 		return true
 	}
-	root := p.HTML()
-	return root != nil && findFirst(root, func(n *html.Node) bool {
+	return p.hasElement(func(n *html.Node) bool {
 		return isElem(n, atom.Form) && attr(n, "id") == driveFormID
-	}) != nil
+	})
 }
 
 // Extract resolves a share link to the download endpoint.

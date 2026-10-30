@@ -104,7 +104,10 @@ func (f *Feeds) Shape(u *url.URL) bool {
 // type or its root element, whatever URL served it: a feed has no host or
 // path of its own.
 func (f *Feeds) Recognise(_ context.Context, p *Page) bool {
-	return p.OK() && p.Body != "" && feedish(p.Header.Get(httpx.HeaderContentType), []byte(p.Body))
+	// Only the head of the body is ever read to decide, so only that much is
+	// copied.
+	return p.OK() && p.Body != "" &&
+		feedish(p.Header.Get(httpx.HeaderContentType), []byte(p.Body[:min(len(p.Body), feedSniffLimit)]))
 }
 
 // Extract reads the feed and lists its enclosures.

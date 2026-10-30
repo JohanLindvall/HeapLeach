@@ -70,25 +70,21 @@ func (s *Suvobox) Shape(u *url.URL) bool { return suvoboxAlbumShape(u) || suvobo
 // or, on a file page, the site's own download button for that file, the
 // ?dl=1 form of its path, which is what says the id is a stored file here.
 func (s *Suvobox) Recognise(_ context.Context, p *Page) bool {
-	root := p.HTML()
-	if root == nil {
-		return false
-	}
 	switch {
 	case suvoboxAlbumShape(p.Final):
-		return findFirst(root, func(n *html.Node) bool {
+		return p.hasElement(func(n *html.Node) bool {
 			return isElem(n, atom.A) && hasClass(n, suvoboxTileClass) &&
 				suvoboxFileID(resolveRef(p.Final, attr(n, "href"))) != ""
-		}) != nil
+		})
 	case suvoboxFileShape(p.Final):
 		want := p.Final.EscapedPath()
-		return findFirst(root, func(n *html.Node) bool {
+		return p.hasElement(func(n *html.Node) bool {
 			if !isElem(n, atom.A) {
 				return false
 			}
 			link, err := p.Final.Parse(attr(n, "href"))
 			return err == nil && link.EscapedPath() == want && link.Query().Get("dl") == "1"
-		}) != nil
+		})
 	}
 	return false
 }
@@ -101,13 +97,9 @@ func (s *Suvobox) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 			u.Redacted())
 	}
 
-	doc, _, err := fetchDocument(ctx, s.client, u, httpx.Referer(suvoboxRoot+"/"))
+	root, _, err := fetchRoot(ctx, s.client, u, httpx.Referer(suvoboxRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("suvobox: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("suvobox: parse %s: %w", u.Redacted(), err)
 	}
 
 	if segs[0] == "a" {

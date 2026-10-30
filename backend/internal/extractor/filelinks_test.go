@@ -147,8 +147,8 @@ func TestPlainPageScansOtherRegisteredHostsWithoutCrawlingHTML(t *testing.T) {
 	}))
 	defer srv.Close()
 	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
-	albums := &linksStub{host: "albums.example.test", files: 2, title: "Album"}
-	encrypted := &linksStub{host: "encrypted.example.test", files: 1, title: "Encrypted"}
+	albums := &linksStub{hostClaim: "albums.example.test", files: 2, title: "Album"}
+	encrypted := &linksStub{hostClaim: "encrypted.example.test", files: 1, title: "Encrypted"}
 	reg.extractors = append(reg.extractors, albums, encrypted)
 	res, _, err := reg.Extract(context.Background(), srv.URL+"/thread.html", Options{})
 	if err != nil {

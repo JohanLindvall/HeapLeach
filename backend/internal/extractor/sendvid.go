@@ -81,16 +81,12 @@ func (s *Sendvid) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 
 // media reads the page's title and its current signed link.
 func (s *Sendvid) media(ctx context.Context, page, id string) (title, link string, err error) {
-	doc, err := fetchPage(ctx, s.client, page, nil)
+	root, err := fetchPageRoot(ctx, s.client, page, nil)
 	if httpx.HasStatus(err, http.StatusNotFound) {
 		return "", "", fmt.Errorf("sendvid: video %s is not there — the site says it was not found or has been removed", id)
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("sendvid: fetch %s: %w", page, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", "", fmt.Errorf("sendvid: %s: %w", page, err)
 	}
 	pageURL, _ := url.Parse(page)
 	if link = resolveRef(pageURL, sendvidSource(root)); link == "" {

@@ -71,7 +71,8 @@ type handoffSite struct {
 	// shape is the URL forms the site's media and collections have, for the
 	// link scanner; recognise says whether a probed page is the site's,
 	// by what the page carries that yt-dlp goes on to read; recognises
-	// describes both for the inventory.
+	// describes both for the inventory. Every site sets both functions, one
+	// with no form worth scanning for included.
 	shape      func(u *url.URL) bool
 	recognise  func(ctx context.Context, h *Handoff, p *Page) bool
 	recognises string
@@ -229,11 +230,11 @@ func (h *Handoff) rumbleKnows(ctx context.Context, p *Page) bool {
 func (h *Handoff) Recognises() string { return h.site.recognises }
 
 // Shape reports the site's URL forms worth a probe.
-func (h *Handoff) Shape(u *url.URL) bool { return h.site.shape != nil && h.site.shape(u) }
+func (h *Handoff) Shape(u *url.URL) bool { return h.site.shape(u) }
 
 // Recognise reports whether the probed page is the site's.
 func (h *Handoff) Recognise(ctx context.Context, p *Page) bool {
-	return h.site.recognise != nil && h.site.recognise(ctx, h, p)
+	return h.site.recognise(ctx, h, p)
 }
 
 // NewHandoffs builds one extractor per host, so each is recognised by its

@@ -63,21 +63,17 @@ func (b *Bunkr) Shape(u *url.URL) bool { return bunkrFileShape(u) || bunkrAlbumS
 // at least one card linking to a file page. The site moves between domains
 // often enough that these, rather than any name, are what identify it.
 func (b *Bunkr) Recognise(_ context.Context, p *Page) bool {
-	root := p.HTML()
-	if root == nil {
-		return false
-	}
 	switch {
 	case bunkrFileShape(p.Final):
-		return findFirst(root, func(n *html.Node) bool {
+		return p.hasElement(func(n *html.Node) bool {
 			return n.Type == html.ElementNode && attr(n, "data-file-id") != ""
-		}) != nil
+		})
 	case bunkrAlbumShape(p.Final):
-		return findFirst(root, func(n *html.Node) bool {
+		return p.hasElement(func(n *html.Node) bool {
 			return hasClass(n, "theItem") && findFirst(n, func(a *html.Node) bool {
 				return isElem(a, atom.A) && isBunkrFilePage(resolveRef(p.Final, attr(a, "href")))
 			}) != nil
-		}) != nil
+		})
 	}
 	return false
 }
@@ -219,13 +215,9 @@ func (b *Bunkr) albumPage(ctx context.Context, u *url.URL, page int) (*html.Node
 	}
 	target.RawQuery = query.Encode()
 
-	doc, _, err := fetchDocument(ctx, b.client, &target, httpx.Referer(util.Origin(u)+"/"))
+	root, _, err := fetchRoot(ctx, b.client, &target, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("bunkr: fetch album page %d: %w", page, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("bunkr: %w", err)
 	}
 	return root, nil
 }
@@ -332,13 +324,9 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 // pageInfo scrapes a file page for its numeric id, display name and the
 // download host that serves it.
 func (b *Bunkr) pageInfo(ctx context.Context, u *url.URL) (id, name, dlHost string, err error) {
-	doc, _, err := fetchDocument(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
+	root, _, err := fetchRoot(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return "", "", "", fmt.Errorf("bunkr: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", "", "", fmt.Errorf("bunkr: %w", err)
 	}
 
 	// Asked before anything is read off the page, because everything else on

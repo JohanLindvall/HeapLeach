@@ -307,7 +307,7 @@ func TestWordPressKeepsNamedExtractorPrecedence(t *testing.T) {
 		"/category/example/": wordPressIndexHTML("", "/first/"),
 	})
 	u, _ := url.Parse(base)
-	named := &linksStub{host: u.Host, title: "Dedicated extraction", files: 1}
+	named := &linksStub{hostClaim: hostClaim(u.Host), title: "Dedicated extraction", files: 1}
 	reg.extractors = append(reg.extractors, named)
 	res, ex, err := reg.Extract(context.Background(), base+"/category/example/", Options{})
 	// The one request allowed is the registry's probe of the page.
@@ -322,7 +322,7 @@ func TestWordPressHandsOtherHostLinksAndOptionsToRegistry(t *testing.T) {
 		"/first/": wordPressPostHTML("First", `<iframe src="https://albums.example.test/collection"></iframe>
 <a href="https://unknown.example.test/navigation">Unsupported navigation</a>`),
 	})
-	albums := &linksStub{host: "albums.example.test", title: "Collection", files: 2}
+	albums := &linksStub{hostClaim: "albums.example.test", title: "Collection", files: 2}
 	reg.extractors = append(reg.extractors, albums)
 	res, _, err := reg.Extract(context.Background(), base+"/category/example/", Options{Password: "example-password"})
 	if err != nil || len(res.Files) != 2 || res.Note != "" {

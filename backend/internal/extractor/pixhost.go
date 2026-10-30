@@ -61,18 +61,14 @@ func (p *Pixhost) Shape(u *url.URL) bool { return pixhostGalleryShape(u) || pixh
 // thumbnails, which name the stored image by their path, and a viewer's
 // full-size image element.
 func (p *Pixhost) Recognise(_ context.Context, page *Page) bool {
-	root := page.HTML()
-	if root == nil {
-		return false
-	}
 	img := func(test func(n *html.Node, path string) bool) bool {
-		return findFirst(root, func(n *html.Node) bool {
+		return page.hasElement(func(n *html.Node) bool {
 			if !isElem(n, atom.Img) {
 				return false
 			}
 			src, err := url.Parse(attr(n, "src"))
 			return err == nil && test(n, src.Path)
-		}) != nil
+		})
 	}
 	switch {
 	case pixhostGalleryShape(page.Final):
@@ -92,13 +88,9 @@ func (p *Pixhost) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		return nil, fmt.Errorf("pixhost: %s names no gallery or image", u.Redacted())
 	}
 
-	doc, _, err := fetchDocument(ctx, p.client, u, httpx.Referer(pixhostRoot+"/"))
+	root, _, err := fetchRoot(ctx, p.client, u, httpx.Referer(pixhostRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("pixhost: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("pixhost: parse %s: %w", u.Redacted(), err)
 	}
 
 	switch segs[0] {

@@ -315,6 +315,16 @@ func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers ht
 	return root, final, err
 }
 
+// fetchPageRoot is fetchRoot for a link held as a string.
+func fetchPageRoot(ctx context.Context, client *httpx.Client, link string, headers httpx.Header) (*html.Node, error) {
+	u, err := url.Parse(link)
+	if err != nil {
+		return nil, err
+	}
+	root, _, err := fetchRoot(ctx, client, u, headers)
+	return root, err
+}
+
 // OK reports whether the page answered with content of its own.
 func (p *Page) OK() bool { return p.Err == nil && p.Status >= 200 && p.Status < 300 }
 
@@ -482,6 +492,19 @@ func (p *Page) playerMeta(form func(*url.URL) bool) bool {
 	return slices.ContainsFunc(playerMetaKeys, func(key string) bool {
 		u, err := url.Parse(p.Meta(key))
 		return err == nil && u.Path != "" && form(u)
+	})
+}
+
+// frames reports whether the document frames a page whose URL, resolved
+// against the page's own, has the form. A landing page that wraps a player
+// is recognised by the player it frames.
+func (p *Page) frames(form func(*url.URL) bool) bool {
+	return p.hasElement(func(n *html.Node) bool {
+		if !isElem(n, atom.Iframe) {
+			return false
+		}
+		src, err := p.Final.Parse(attr(n, "src"))
+		return err == nil && form(src)
 	})
 }
 

@@ -198,17 +198,16 @@ func (m *MediaWiki) Shape(u *url.URL) bool {
 // asked of the API instead, but only for a form that names a namespace,
 // since an article path alone is too common to probe for.
 func (m *MediaWiki) Recognise(ctx context.Context, p *Page) bool {
-	title, explicit := mediaWikiTitle(p.Final)
-	if title == "" {
+	if title, _ := mediaWikiTitle(p.Final); title == "" {
 		return false
 	}
-	if root := p.HTML(); root != nil && strings.HasPrefix(p.Generator(), "mediawiki") &&
-		(p.Has(mediaWikiRLConf) || findFirst(root, func(n *html.Node) bool {
+	if strings.HasPrefix(p.Generator(), "mediawiki") &&
+		(p.Has(mediaWikiRLConf) || p.hasElement(func(n *html.Node) bool {
 			return n.DataAtom == atom.Body && hasClass(n, "mediawiki")
-		}) != nil) {
+		})) {
 		return true
 	}
-	if !explicit || !m.Shape(p.Final) || !p.Silent() {
+	if !m.Shape(p.Final) || !p.Silent() {
 		return false
 	}
 	for _, api := range mediaWikiCandidates(p.Final, "") {

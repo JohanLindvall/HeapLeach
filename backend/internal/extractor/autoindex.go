@@ -245,13 +245,9 @@ func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) {
 // read fetches one directory and fills in its files and subdirectories.
 func (a *Autoindex) read(ctx context.Context, node *autoindexNode) error {
 	page := node.base.String()
-	doc, _, err := fetchDocument(ctx, a.client, node.base, httpx.Referer(util.Origin(node.base)+"/"))
+	root, _, err := fetchRoot(ctx, a.client, node.base, httpx.Referer(util.Origin(node.base)+"/"))
 	if err != nil {
 		return fmt.Errorf("autoindex: fetch %s: %w", node.base.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return fmt.Errorf("autoindex: parse %s: %w", node.base.Redacted(), err)
 	}
 	if !autoindexIsListing(root, node.base) {
 		return fmt.Errorf("autoindex: %s is a web page, not a directory listing", node.base.Redacted())

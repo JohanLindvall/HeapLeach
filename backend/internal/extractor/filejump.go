@@ -46,12 +46,8 @@ func (f *FileJump) Recognise(_ context.Context, p *Page) bool {
 	if !fileJumpShape(p.Final) || len(parts) < 2 {
 		return false
 	}
-	root := p.HTML()
-	if root == nil {
-		return false
-	}
 	want := "/s/" + parts[1] + "/download"
-	return findFirst(root, func(a *html.Node) bool {
+	return p.hasElement(func(a *html.Node) bool {
 		if !isElem(a, atom.A) || hasAttr(a, "disabled") || attr(a, "aria-disabled") == "true" {
 			return false
 		}
@@ -59,7 +55,7 @@ func (f *FileJump) Recognise(_ context.Context, p *Page) bool {
 		// origin only with the page's own.
 		link, err := p.Final.Parse(strings.TrimSpace(attr(a, "href")))
 		return err == nil && link.Path == want && util.Origin(link) == util.Origin(p.Final)
-	}) != nil
+	})
 }
 
 func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -70,13 +66,9 @@ func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 	}
 	page := *u
 	page.Path, page.RawPath, page.Fragment = "/s/"+parts[1], "", ""
-	doc, _, err := fetchDocument(ctx, f.client, &page, httpx.Referer(util.Origin(&page)+"/"))
+	root, _, err := fetchRoot(ctx, f.client, &page, httpx.Referer(util.Origin(&page)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("filejump: fetch share: %w", err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, err
 	}
 	var download string
 	for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {

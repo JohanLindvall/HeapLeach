@@ -9,8 +9,6 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // Turbo resolves turbo.cr video links (/embed/<id>, /d/<id>, /f/<id>).
@@ -57,14 +55,7 @@ func (t *Turbo) Recognise(_ context.Context, p *Page) bool {
 	if p.Has(turboSignPath) {
 		return true
 	}
-	root := p.HTML()
-	return root != nil && findFirst(root, func(n *html.Node) bool {
-		if !isElem(n, atom.Iframe) {
-			return false
-		}
-		src, err := p.Final.Parse(attr(n, "src"))
-		return err == nil && src.Path == "/embed/"+segs[1]
-	}) != nil
+	return p.frames(func(src *url.URL) bool { return src.Path == "/embed/"+segs[1] })
 }
 
 // Extract produces a single lazily-signed entry.

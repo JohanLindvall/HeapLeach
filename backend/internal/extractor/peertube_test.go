@@ -331,9 +331,7 @@ func TestPeerTubeRecognise(t *testing.T) {
 	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa",
 		`<html><head><title>A Video - Example Tube</title><meta property="og:platform" content="PeerTube"></head><body></body></html>`), false)
 	// A challenge with no client to ask the API through says nothing.
-	challenged := fixturePage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa", http.StatusForbidden, "text/html", "")
-	challenged.Challenged = true
-	expectRecognised(t, p, challenged, false)
+	expectRecognised(t, p, challengedPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa"), false)
 
 	expectShape(t, p, "https://tube.example.test/w/p/aaaaaaaaaaaaaaaaaaaaaa", true)
 	expectShape(t, p, "https://tube.example.test/a/someone", true)
@@ -457,7 +455,7 @@ func TestPeerTubeExplain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := peerTubeExplain(tc.status, "example", "an-id")
+			err := peerTubeExplain(tc.status, "an-id")
 			if err == nil {
 				t.Fatal("a refusal was turned into no error at all")
 			}
@@ -467,8 +465,8 @@ func TestPeerTubeExplain(t *testing.T) {
 			if tc.wantText != "" && !strings.Contains(err.Error(), tc.wantText) {
 				t.Errorf("error %q does not mention %q", err, tc.wantText)
 			}
-			if !strings.HasPrefix(err.Error(), "example:") {
-				t.Errorf("error %q does not open with the instance's label", err)
+			if !strings.HasPrefix(err.Error(), peerTubeLabel+":") {
+				t.Errorf("error %q does not open with the extractor's label", err)
 			}
 		})
 	}
@@ -502,7 +500,7 @@ func TestPeerTubeNoMedia(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := peerTubeNoMedia(peerTubeDecodeVideo(t, tc.doc), "example")
+			err := peerTubeNoMedia(peerTubeDecodeVideo(t, tc.doc))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.want)
 			}
@@ -604,9 +602,7 @@ func TestPeerTubeRecogniseCostsNothingOffTheInstanceRoutes(t *testing.T) {
 		"https://nobody.example.test/videos/12345/a-clip/",
 		"https://nobody.example.test/",
 	} {
-		page := fixturePage(t, raw, http.StatusForbidden, "text/html", "")
-		page.Challenged = true
-		if p.Recognise(t.Context(), page) {
+		if p.Recognise(t.Context(), challengedPage(t, raw)) {
 			t.Errorf("%s was recognised", raw)
 		}
 	}

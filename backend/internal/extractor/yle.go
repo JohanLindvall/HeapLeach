@@ -455,7 +455,7 @@ var (
 
 // page reads an item's page off the site.
 func (y *Yle) page(ctx context.Context, lang, id string) (*ylePage, error) {
-	html, err := y.client.GetString(ctx, y.site[lang]+"/"+url.PathEscape(id), nil)
+	html, err := fetchPage(ctx, y.client, y.site[lang]+"/"+url.PathEscape(id), nil)
 	if err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
 			return nil, fmt.Errorf("yle: %s does not exist", id)

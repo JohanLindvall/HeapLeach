@@ -152,7 +152,7 @@ var (
 	// doodLanding is the landing page, which frames the player.
 	doodLanding = pathShape(`^/d/[0-9a-z]{6,}/?$`)
 	// doodPlayerFrame is the player a landing page frames.
-	doodPlayerFrame = regexp.MustCompile(`^/e/[0-9a-z]{6,}`)
+	doodPlayerFrame = pathShape(`^/e/[0-9a-z]{6,}`)
 )
 
 // doodPassPath finds the token endpoint the page points at.
@@ -190,13 +190,7 @@ func (d *DoodStream) Recognise(_ context.Context, p *Page) bool {
 	if doodPassPath.MatchString(p.Body) || doodChallengePage(p.Body) {
 		return true
 	}
-	return doodLanding(p.Final) && p.Named("DoodStream") && p.hasElement(func(n *html.Node) bool {
-		if !isElem(n, atom.Iframe) {
-			return false
-		}
-		src, err := url.Parse(attr(n, "src"))
-		return err == nil && doodPlayerFrame.MatchString(src.EscapedPath())
-	})
+	return doodLanding(p.Final) && p.Named("DoodStream") && p.frames(doodPlayerFrame)
 }
 
 func (d *DoodStream) ProxyFallback() bool { return true }
@@ -381,12 +375,8 @@ func (m *MixDrop) Recognise(_ context.Context, p *Page) bool {
 	if p.Has(mixdropCore) {
 		return true
 	}
-	return mixdropLanding(p.Final) && p.Named("MixDrop") && p.hasElement(func(n *html.Node) bool {
-		if !isElem(n, atom.Iframe) {
-			return false
-		}
-		src, err := url.Parse(attr(n, "src"))
-		return err == nil && strings.HasPrefix(src.EscapedPath(), "/e/")
+	return mixdropLanding(p.Final) && p.Named("MixDrop") && p.frames(func(src *url.URL) bool {
+		return strings.HasPrefix(src.EscapedPath(), "/e/")
 	})
 }
 

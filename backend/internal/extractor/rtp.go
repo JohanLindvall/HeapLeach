@@ -263,13 +263,9 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 // is in the selector the reader can already see.
 func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := fetchPage(ctx, r.client, ref.page, headers)
+	root, err := fetchPageRoot(ctx, r.client, ref.page, headers)
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: fetch %s: %w", ref.page, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("rtpplay: %s: %w", ref.page, err)
 	}
 
 	// The rendered page is page one of the listing, so the walk starts at two

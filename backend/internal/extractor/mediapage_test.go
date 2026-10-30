@@ -535,13 +535,23 @@ func mediaPageClient() *httpx.Client {
 	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
 }
 
+// sniffMediaPage is the generic fallback's reading of a page no extractor
+// claimed, with no registry behind it: only the media sniff can answer.
+func sniffMediaPage(t *testing.T, link string) (*Result, bool) {
+	t.Helper()
+	res, err := NewDirect(mediaPageClient()).pageSniff(context.Background(), mustParse(t, link), Options{})
+	if err != nil {
+		t.Fatalf("%s: %v", link, err)
+	}
+	return res, res != nil
+}
+
 func TestMediaPageSniffResolvesAPage(t *testing.T) {
 	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
 		"/watch/an-interview": {kind: "text/html; charset=utf-8", body: mediaPagePlayerHTML},
 	})
 
-	res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/watch/an-interview"))
+	res, ok := sniffMediaPage(t, srv.URL+"/watch/an-interview")
 	if !ok {
 		t.Fatal("a page with a player on it was not recognised")
 	}
@@ -574,8 +584,7 @@ func TestMediaPageSniffLeavesAURLThatNamesAFile(t *testing.T) {
 		"/downloads/clip.mp4": {kind: "text/html; charset=utf-8", body: mediaPagePlayerHTML},
 	})
 
-	if _, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/downloads/clip.mp4")); ok {
+	if _, ok := sniffMediaPage(t, srv.URL+"/downloads/clip.mp4"); ok {
 		t.Error("a URL naming a file was sniffed as a page")
 	}
 	if n := hits.Load(); n != 0 {
@@ -591,8 +600,7 @@ func TestMediaPageSniffLeavesWhatIsNotServedAsHTML(t *testing.T) {
 		"/get/abc123": {kind: "video/mp4", body: mediaPagePlayerHTML},
 	})
 
-	if _, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/get/abc123")); ok {
+	if _, ok := sniffMediaPage(t, srv.URL+"/get/abc123"); ok {
 		t.Error("a response the host called a video was parsed as a page")
 	}
 }
@@ -607,8 +615,7 @@ func TestMediaPageSniffFallsThroughQuietly(t *testing.T) {
 	})
 
 	for _, path := range []string{"/about", "/missing", "/gone"} {
-		if res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-			mustParse(t, srv.URL+path)); ok {
+		if res, ok := sniffMediaPage(t, srv.URL+path); ok {
 			t.Errorf("%s produced %+v, want a quiet no", path, res)
 		}
 	}
@@ -640,8 +647,7 @@ func TestMediaPageSniffResolvesAPlaylist(t *testing.T) {
 		"/hls/720/media.m3u8": {kind: "application/vnd.apple.mpegurl", body: media},
 	})
 
-	res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/watch/a-live-set"))
+	res, ok := sniffMediaPage(t, srv.URL+"/watch/a-live-set")
 	if !ok {
 		t.Fatal("a page offering a playlist was not recognised")
 	}
@@ -681,8 +687,7 @@ func TestMediaPageSniffThroughJWPlayer(t *testing.T) {
 	jwPlayerMediaAPI = srv.URL + "/v2/media/"
 	t.Cleanup(func() { jwPlayerMediaAPI = restore })
 
-	res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/talks/a-talk"))
+	res, ok := sniffMediaPage(t, srv.URL+"/talks/a-talk")
 	if !ok {
 		t.Fatal("a page embedding the player was not resolved")
 	}

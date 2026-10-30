@@ -72,13 +72,19 @@ func (y *YouTube) Shape(u *url.URL) bool { return youtubeShape(u) }
 // first redirected to a consent page instead; that page is recognised by
 // its own consent form, and judged by the page it says it will continue to.
 func (y *YouTube) Recognise(_ context.Context, p *Page) bool {
-	if p.Has(`name="set_ytc"`) {
-		next, err := url.Parse(p.Final.Query().Get("continue"))
-		return err == nil && youtubeShape(next)
+	// The forms are settled before the body is searched, so a page of
+	// neither costs no scan of it.
+	if next, err := url.Parse(p.Final.Query().Get("continue")); err == nil && youtubeShape(next) &&
+		p.Has(youtubeConsent) {
+		return true
 	}
 	return youtubeShape(p.Final) && p.Has("ytcfg.set") &&
-		p.HasAny("ytInitialPlayerResponse", "ytInitialData", "embedded_player_response")
+		p.HasAny("ytInitialPlayerResponse", "ytInitialData", "embedded_player_response") &&
+		!p.Has(youtubeConsent)
 }
+
+// youtubeConsent marks the consent form a visitor may be shown first.
+const youtubeConsent = `name="set_ytc"`
 
 // Extract names the video, or every video of a playlist, leaving the actual
 // download to the helper script.

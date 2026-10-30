@@ -302,7 +302,7 @@ const cheveretoImageViewer = `<!DOCTYPE html><html><head>
 
 func TestCheveretoSingleReadsTheVideoNotItsPosterFrame(t *testing.T) {
 	root := cheveretoParse(t, cheveretoVideoViewer)
-	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/a-clip.CCC333"), "chevereto", "a clip")
+	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/a-clip.CCC333"), "a clip")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestCheveretoSingleReadsTheVideoNotItsPosterFrame(t *testing.T) {
 
 func TestCheveretoSingleReadsTheOriginalNotTheRendition(t *testing.T) {
 	root := cheveretoParse(t, cheveretoImageViewer)
-	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/holiday.AAA111"), "chevereto", "holiday")
+	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/holiday.AAA111"), "holiday")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestCheveretoSingleFallsBackToTheViewerAndStrips(t *testing.T) {
 	root := cheveretoParse(t, `<html><body><div id="image-viewer">
 	  <img class="media" src="https://cdn.example.test/AAA111.md.png"></div></body></html>`)
 
-	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/holiday.AAA111"), "chevereto", "")
+	res, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/i/holiday.AAA111"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestCheveretoSingleRefusesAPageShowingNoItem(t *testing.T) {
 	  <meta property="og:image" content="https://pics.example.test/content/images/system/home_cover.png">
 	  </head><body><div class="content-listing"></div></body></html>`)
 
-	if _, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/explore/recent"), "chevereto", ""); err == nil {
+	if _, err := cheveretoSingle(root, cheveretoBase(t, "https://pics.example.test/explore/recent"), ""); err == nil {
 		t.Fatal("a page with no viewer resolved to its own cover image")
 	}
 }
@@ -438,7 +438,7 @@ func TestCheveretoFingerprint(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := cheveretoFingerprint(cheveretoParse(t, tc.doc), tc.doc); got != tc.want {
+			if got := cheveretoFingerprint(htmlPage(t, "https://pics.example.test/i/a-clip", tc.doc)); got != tc.want {
 				t.Errorf("cheveretoFingerprint = %v, want %v", got, tc.want)
 			}
 		})
@@ -525,7 +525,7 @@ func TestCheveretoWalksEveryPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{})
+	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +559,7 @@ func TestCheveretoStopsWhenAPageRepeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{})
+	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +606,7 @@ func TestCheveretoExpandsAProfilesAlbums(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{})
+	res, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,11 +665,11 @@ func TestCheveretoPasswordGate(t *testing.T) {
 	}
 	client := cheveretoTestClient()
 
-	if _, err := cheveretoExtract(context.Background(), client, u, "chevereto", Options{}); !errors.Is(err, ErrPasswordRequired) {
+	if _, err := cheveretoExtract(context.Background(), client, u, Options{}); !errors.Is(err, ErrPasswordRequired) {
 		t.Fatalf("without a password the error was %v, want ErrPasswordRequired", err)
 	}
 
-	_, err = cheveretoExtract(context.Background(), client, u, "chevereto", Options{Password: "wrong"})
+	_, err = cheveretoExtract(context.Background(), client, u, Options{Password: "wrong"})
 	if err == nil {
 		t.Fatal("a wrong password resolved the album")
 	}
@@ -677,7 +677,7 @@ func TestCheveretoPasswordGate(t *testing.T) {
 		t.Error("a refused password was reported as no password having been given")
 	}
 
-	res, err := cheveretoExtract(context.Background(), client, u, "chevereto", Options{Password: password})
+	res, err := cheveretoExtract(context.Background(), client, u, Options{Password: password})
 	if err != nil {
 		t.Fatalf("the right password did not unlock the album: %v", err)
 	}
@@ -735,7 +735,7 @@ func TestCheveretoRefusesABareDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, "chevereto", Options{}); err == nil {
+	if _, err := cheveretoExtract(context.Background(), cheveretoTestClient(), u, Options{}); err == nil {
 		t.Fatal("a bare domain resolved to something")
 	}
 }

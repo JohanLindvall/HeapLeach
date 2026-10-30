@@ -69,7 +69,6 @@ const (
 	vrtGraphQL  = vrtRoot + "/vrtnu-api/graphql/public/v1"
 	vrtMediaAPI = "https://media-services-public.vrt.be/vualto-video-aggregator-web/rest/external/v2/"
 
-	vrtDomain    = "vrt.be"
 	vrtMaxDomain = "vrtmax.be"
 
 	// vrtSection is where the catalogue sits under vrt.be, and what a

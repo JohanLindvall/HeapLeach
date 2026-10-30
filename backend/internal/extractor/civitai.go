@@ -116,7 +116,7 @@ func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 	}
 	api := util.Origin(p.Final) + "/api/v1"
 	if target.selector == "" {
-		endpoint := api + "/models/" + url.PathEscape(target.value)
+		endpoint := civitaiModelOn(p.Final, target.value)
 		var model struct {
 			ID       int64              `json:"id"`
 			Versions *[]json.RawMessage `json:"modelVersions"`
@@ -133,6 +133,11 @@ func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 		Metadata *json.RawMessage   `json:"metadata"`
 	}
 	return pageJSON(ctx, p, c.client, endpoint, nil, &listing) && listing.Items != nil && listing.Metadata != nil
+}
+
+// civitaiModelOn is a model's API endpoint on u's origin.
+func civitaiModelOn(u *url.URL, id string) string {
+	return util.Origin(u) + "/api/v1/models/" + url.PathEscape(id)
 }
 
 // civitaiTarget is what one input URL asks for.
@@ -188,7 +193,7 @@ func (c *Civitai) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 			"(/posts/<id>), a model (/models/<id>) or a user gallery (/user/<name>)", u.Redacted())
 	}
 	if target.selector == "" {
-		return c.model(ctx, target.value)
+		return c.model(ctx, u, target.value)
 	}
 
 	items, err := c.listing(ctx, target)
@@ -303,12 +308,15 @@ func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, e
 
 // model reads a model's showcase images, which the image listing cannot
 // reach: its modelId parameter is accepted and answers with nothing.
-func (c *Civitai) model(ctx context.Context, id string) (*Result, error) {
-	endpoint := civitaiAPI + "/models/" + url.PathEscape(id)
-
+// The recogniser's answer for the probed page is read when it asked.
+func (c *Civitai) model(ctx context.Context, u *url.URL, id string) (*Result, error) {
 	var payload civitaiModel
-	if err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload); err != nil {
-		return nil, fmt.Errorf("civitai: model %s: %w", id, err)
+	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, c.client, civitaiModelOn(p.Final, id), &payload) {
+		payload = civitaiModel{}
+		endpoint := civitaiAPI + "/models/" + url.PathEscape(id)
+		if err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload); err != nil {
+			return nil, fmt.Errorf("civitai: model %s: %w", id, err)
+		}
 	}
 	files := civitaiModelFiles(&payload)
 	if len(files) == 0 {

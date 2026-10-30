@@ -187,13 +187,9 @@ func pornpicsGallery(doc string, u *url.URL) (*Result, error) {
 // listing expands a category, tag, pornstar or channel page into every
 // gallery it lists, and every gallery into its images.
 func (p *PornPics) listing(ctx context.Context, u *url.URL, limit int) (*Result, error) {
-	doc, _, err := fetchDocument(ctx, p.client, u, nil)
+	root, _, err := fetchRoot(ctx, p.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("pornpics: parse %s: %w", u.Redacted(), err)
 	}
 
 	// The one fetch answers both questions: the galleries the page shows

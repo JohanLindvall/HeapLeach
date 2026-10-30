@@ -49,10 +49,9 @@ func (e *Emload) Recognise(_ context.Context, p *Page) bool {
 	if !emloadShape(p.Final) {
 		return false
 	}
-	root := p.HTML()
-	return root != nil && findFirst(root, func(n *html.Node) bool {
+	return p.hasElement(func(n *html.Node) bool {
 		return hasClass(n, "dl-file") || hasClass(n, "nofile") || hasClass(n, "_filepassw")
-	}) != nil
+	})
 }
 
 func (e *Emload) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {

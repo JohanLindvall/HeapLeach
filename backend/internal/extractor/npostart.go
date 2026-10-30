@@ -228,13 +228,9 @@ func npoRoute(u *url.URL) npoTarget {
 // which is the same answer a browser following the link would arrive at, and
 // saves this from having to know the redirector in between.
 func (n *NPOStart) canonical(ctx context.Context, u *url.URL) (*url.URL, error) {
-	doc, _, err := fetchDocument(ctx, n.client, u, httpx.Referer(npoRoot))
+	root, _, err := fetchRoot(ctx, n.client, u, httpx.Referer(npoRoot))
 	if err != nil {
 		return nil, fmt.Errorf("npo: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("npo: parse %s: %w", u.Redacted(), err)
 	}
 	landed := metaContent(root, "og:url")
 	if landed == "" {

@@ -62,28 +62,11 @@ import (
 // would have run anyway, so a page this cannot read is no worse off than
 // before.
 
-// mediaPageSniff resolves a URL that is shaped like a page rather than a
-// file, when the page turns out to carry media. The bool reports whether it
-// found anything; there is no error, because an error here means only "not
-// this, then".
-func mediaPageSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, bool) {
-	if path.Ext(u.Path) != "" {
-		return nil, false // a URL that names a file is a file
-	}
-
-	doc, ok := mediaPageFetch(ctx, client, u)
-	if !ok {
-		return nil, false
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, false
-	}
-	return mediaPageResult(ctx, client, u, root, doc)
-}
-
-// mediaPageResult also serves the generic fallback after it has checked the
-// same document for file-host links, avoiding another page fetch.
+// mediaPageResult resolves a URL that is shaped like a page rather than a
+// file, when its document turns out to carry media. The bool reports whether it found
+// anything; there is no error, because an error here means only "not this,
+// then". The generic fallback calls it after it has checked the same
+// document for file-host links, avoiding another page fetch.
 func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node, doc string) (*Result, bool) {
 	found, ok := mediaPageFind(ctx, client, root, doc, u)
 	if !ok {
@@ -159,19 +142,14 @@ func mediaPageFind(ctx context.Context, client *httpx.Client, root *html.Node, d
 	return mediaPageLinkedData(root, u)
 }
 
-// mediaPageFetch reads the page, and only once the host has agreed it is one.
+// mediaPageFetchURL reads the page, and only once the host has agreed it is
+// one. It retains the final URL, so a redirected site resolves relative post
+// links and pagination against the page actually received.
 //
 // The content type is taken from the response headers and the body is read
 // only afterwards. That ordering is the whole point: an extensionless URL is
 // as likely to be a signed media link as a page, and one that answers
 // video/mp4 costs an aborted request here rather than a download.
-func mediaPageFetch(ctx context.Context, client *httpx.Client, u *url.URL) (string, bool) {
-	doc, _, ok := mediaPageFetchURL(ctx, client, u)
-	return doc, ok
-}
-
-// mediaPageFetchURL retains the final URL, so a redirected site resolves
-// relative post links and pagination against the page actually received.
 func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (string, *url.URL, bool) {
 	req, err := client.NewRequest(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

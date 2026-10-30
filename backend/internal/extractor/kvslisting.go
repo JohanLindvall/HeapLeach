@@ -76,15 +76,15 @@ func (l kvsListing) fileCap() int {
 var kvsShowingTotal = regexp.MustCompile(`Showing\s+\d+\s*-\s*\d+\s+of\s+(\d+)`)
 
 // kvsListingResult resolves a listing into one file per video.
-func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing, label string) (*Result, error) {
-	pages, title, err := kvsListingPages(ctx, client, l, label)
+func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (*Result, error) {
+	pages, title, err := kvsListingPages(ctx, client, l)
 	if err != nil {
 		return nil, err
 	}
 	if len(pages) == 0 {
-		return nil, fmt.Errorf("%s: %s", label, l.empty)
+		return nil, fmt.Errorf("%s: %s", kvsLabel, l.empty)
 	}
-	return kvsResolvePages(ctx, client, l, pages, title, label)
+	return kvsResolvePages(ctx, client, l, pages, title)
 }
 
 // kvsResolvePages turns the video pages a walk collected into files.
@@ -92,13 +92,13 @@ func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing, l
 // Every video needs its own page read for a media URL, so they are fetched
 // several at a time and a video that will not load is skipped rather than
 // failing a listing of hundreds.
-func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pages []string, title, label string) (*Result, error) {
+func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pages []string, title string) (*Result, error) {
 	files := FanOut(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
 		u, err := ParseURL(page)
 		if err != nil {
 			return nil, err
 		}
-		res, err := kvsExtract(ctx, client, u, label)
+		res, err := kvsExtract(ctx, client, u)
 		if err != nil {
 			return nil, err
 		}
@@ -106,13 +106,13 @@ func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pa
 	})
 	if len(files) == 0 {
 		return nil, fmt.Errorf("%s: none of the %d videos on %s could be resolved",
-			label, len(pages), l.url)
+			kvsLabel, len(pages), l.url)
 	}
 	return &Result{Title: title, Files: files}, nil
 }
 
 // kvsListingPages walks the listing and collects every video page it names.
-func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, label string) ([]string, string, error) {
+func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, error) {
 	var (
 		pages   []string
 		title   string
@@ -135,7 +135,7 @@ func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, la
 			doc, err = client.GetString(ctx, target, httpx.Referer(l.url))
 			if err != nil {
 				if page == 1 {
-					return nil, "", fmt.Errorf("%s: fetch %s: %w", label, l.url, err)
+					return nil, "", fmt.Errorf("%s: fetch %s: %w", kvsLabel, l.url, err)
 				}
 				break // a later page failing still leaves the earlier ones
 			}

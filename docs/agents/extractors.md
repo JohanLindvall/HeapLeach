@@ -52,7 +52,11 @@ address says nothing of another's), shared by concurrent callers, kept for
 extractor that reads the submitted page whole uses `fetchDocument`, which
 hands it the probed document instead of fetching again; any extra request a
 recogniser makes goes through `Page.Memo`, keyed by what it asks, so
-several recognisers asking one origin's API share one answer. A link whose
+several recognisers asking one origin's API share one answer. An extractor
+that reads an endpoint a recogniser may already have asked tries
+`askedJSON` first: it hands back that answer, and asks nothing when no
+recogniser did, so the extractor's own request, with its retries, is never
+preceded by a bounded probe of the same thing. A link whose
 path names a non-page file and matches no `Shape` skips the probe
 (`probeWorthy`): probing would download the start of the file the fallback
 is about to fetch.

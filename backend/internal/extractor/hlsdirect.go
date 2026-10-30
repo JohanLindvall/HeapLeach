@@ -85,7 +85,7 @@ func (h *HLSDirect) Shape(u *url.URL) bool {
 // manifest by its extension even where the probe could not read it: the
 // form is unmistakable, and the fallback would save the manifest as a file.
 func (h *HLSDirect) Recognise(_ context.Context, p *Page) bool {
-	if p.Header != nil && hlsManifestType(p.Header.Get(httpx.HeaderContentType)) {
+	if hlsManifestType(p.MediaType()) {
 		return true
 	}
 	if p.OK() && hlsManifestBody(p.Body[:min(len(p.Body), config.ManifestSniffBytes)]) {

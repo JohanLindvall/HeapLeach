@@ -138,7 +138,7 @@ func (b *Booru) Shape(u *url.URL) bool { return len(booruCandidates(u)) > 0 }
 // markup, and whose API then answers; or, where the page cannot say, whose
 // API answers alone.
 func (b *Booru) Recognise(ctx context.Context, p *Page) bool {
-	return b.Shape(p.Final) && booruDetect(ctx, p, b.client, p.Final) != nil
+	return booruDetect(ctx, p, b.client, p.Final) != nil
 }
 
 // Extract resolves a tag search, or a single post, into files.
@@ -236,15 +236,14 @@ func booruCandidates(u *url.URL) []booruAPI {
 // booruMarked reports whether a page carries a board's own markup: the
 // structure one of the families renders, which no ordinary page shares.
 func booruMarked(p *Page) bool {
-	root := p.HTML()
-	if root == nil {
+	if p.HTML() == nil {
 		return false
 	}
 	if p.Has("Post.register") || p.Has(`data-uris`) || strings.HasPrefix(p.Generator(), "booru-on-rails") ||
 		p.Script("js/app.min.js") && p.Script("js/vendor.min.js") {
 		return true
 	}
-	return findFirst(root, func(n *html.Node) bool {
+	return p.hasElement(func(n *html.Node) bool {
 		switch {
 		case n.DataAtom == atom.Body:
 			// The Rails boards' posts controller.
@@ -257,7 +256,7 @@ func booruMarked(p *Page) bool {
 			return attr(n, "id") == "image-container" || hasClass(n, "image-show-container")
 		}
 		return false
-	}) != nil
+	})
 }
 
 // booruDetect works out which board family a page belongs to, or nil.
@@ -277,7 +276,7 @@ func booruDetect(ctx context.Context, p *Page, client *httpx.Client, u *url.URL)
 		return nil
 	}
 	segs := util.PathSegments(u)
-	name := booruLabel(u.Hostname())
+	name := hostLabel(u.Hostname())
 	for _, api := range candidates {
 		if ctx.Err() != nil {
 			return nil
@@ -318,13 +317,6 @@ func booruDetect(ctx context.Context, p *Page, client *httpx.Client, u *url.URL)
 		}
 	}
 	return nil
-}
-
-// booruLabel names a board by its host's first label, which for a booru.org
-// board is the board's own subdomain.
-func booruLabel(host string) string {
-	label, _, _ := strings.Cut(strings.TrimPrefix(strings.ToLower(host), "www."), ".")
-	return label
 }
 
 // parseTarget pulls a tag query or a single post id out of a URL, and

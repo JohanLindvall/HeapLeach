@@ -48,6 +48,9 @@ const bandcampAgent = "HeapLeach"
 // bandcampStream is the one format served without a purchase.
 const bandcampStream = "mp3-128"
 
+// bandcampDomain is where the bands without a domain of their own live.
+const bandcampDomain = "bandcamp.com"
+
 // NewBandcamp builds the bandcamp extractor.
 func NewBandcamp(client *httpx.Client) *Bandcamp { return &Bandcamp{client: client} }
 
@@ -334,7 +337,7 @@ func bandcampReleaseLinks(root *html.Node, u *url.URL) []string {
 		link := resolveRef(u, ref)
 		lu, err := url.Parse(link)
 		// A band on a domain of its own lists releases on that domain.
-		if err != nil || !(strings.EqualFold(lu.Host, u.Host) || strings.HasSuffix(strings.ToLower(lu.Hostname()), ".bandcamp.com")) {
+		if err != nil || !(strings.EqualFold(lu.Host, u.Host) || util.HostMatches(lu.Host, bandcampDomain)) {
 			return
 		}
 		segs := util.PathSegments(lu)

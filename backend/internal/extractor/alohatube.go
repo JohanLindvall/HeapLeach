@@ -72,10 +72,9 @@ func (a *AlohaTube) Recognise(_ context.Context, p *Page) bool {
 	if !alohaShape(p.Final) || !p.Has("<iframe", "allowfullscreen") || !p.Named("Aloha Tube") {
 		return false
 	}
-	root := p.HTML()
-	return root != nil && findFirst(root, func(n *html.Node) bool {
+	return p.hasElement(func(n *html.Node) bool {
 		return isElem(n, atom.Iframe) && hasAttr(n, "allowfullscreen") && alohaOffsite(resolveRef(p.Final, attr(n, "src"))) != ""
-	}) != nil
+	})
 }
 
 // Extract finds the embedded player and resolves it where it lives.

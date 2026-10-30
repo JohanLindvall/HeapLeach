@@ -109,20 +109,20 @@ func (p *Pixeldrain) Recognise(ctx context.Context, page *Page) bool {
 	if !pixeldrainShape(page.Final) {
 		return false
 	}
-	if page.HTML() != nil && page.Script(pixeldrainViewerPath) && page.Has(pixeldrainAPIGlobal) {
+	if page.Script(pixeldrainViewerPath) && page.Has(pixeldrainAPIGlobal) {
 		return true
 	}
-	return page.Silent() && pixeldrainAnswers(ctx, page, p.client, page.Final)
+	return page.Silent() && pixeldrainAnswers(ctx, page, p.client)
 }
 
 // pixeldrainAnswers recognises a compatible install by its file, list or
-// filesystem metadata for the id the URL names.
-func pixeldrainAnswers(ctx context.Context, page *Page, client *httpx.Client, u *url.URL) bool {
-	segs := util.PathSegments(u)
+// filesystem metadata for the id the page's URL names.
+func pixeldrainAnswers(ctx context.Context, page *Page, client *httpx.Client) bool {
+	segs := page.Segments()
 	if len(segs) < 2 {
 		return false
 	}
-	origin := util.Origin(u)
+	origin := util.Origin(page.Final)
 	validFile := func(f pixeldrainFile) bool {
 		return f.ID != "" && f.Name != "" && f.MimeType != ""
 	}

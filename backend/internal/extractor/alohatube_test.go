@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"context"
 	"net/url"
 	"testing"
 )
@@ -106,16 +105,4 @@ func TestAlohaTubeResolvesAKnownFrameThroughTheRegistry(t *testing.T) {
 	} else if got.Title != "a synthetic clip" {
 		t.Errorf("title %q, want the frame host's own", got.Title)
 	}
-}
-
-// stubExtractor stands in for whichever host a frame points at.
-type stubExtractor struct {
-	hostClaim
-	title string
-}
-
-func (s stubExtractor) Name() string { return "stub" }
-
-func (s stubExtractor) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
-	return &Result{Title: s.title, Files: []File{{Name: s.title + ".mp4", URL: u.String(), Size: -1}}}, nil
 }

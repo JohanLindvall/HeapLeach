@@ -120,16 +120,16 @@ func (p *PeerTube) Recognise(ctx context.Context, page *Page) bool {
 	if !p.Shape(page.Final) {
 		return false
 	}
-	if root := page.HTML(); root != nil && page.Has(peerTubeConfigGlobal) &&
-		findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "my-app" }) != nil {
+	if page.Has(peerTubeConfigGlobal) &&
+		page.hasElement(func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "my-app" }) {
 		return true
 	}
-	return page.Silent() && peerTubeIsInstance(ctx, page, p.client, page.Final)
+	return page.Silent() && peerTubeIsInstance(ctx, page, p.client)
 }
 
 // Extract resolves a video, channel, account or playlist page.
 func (p *PeerTube) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return peerTubeExtract(ctx, p.client, u, peerTubeLabel, opts)
+	return peerTubeExtract(ctx, p.client, u, opts)
 }
 
 // ------------------------------------------------------------------ routes
@@ -223,24 +223,24 @@ func peerTubeTrimMatrix(seg string) string {
 
 // peerTubeExtract resolves any instance URL against the API at its own
 // origin.
-func peerTubeExtract(ctx context.Context, client *httpx.Client, u *url.URL, label string, opts Options) (*Result, error) {
+func peerTubeExtract(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
 	route := peerTubeParseRoute(u)
 	switch route.Kind {
 	case peerTubeVideoPage:
-		files, title, err := peerTubeVideoFiles(ctx, client, u, route.ID, label, opts)
+		files, title, err := peerTubeVideoFiles(ctx, client, u, route.ID, opts)
 		if err != nil {
 			return nil, err
 		}
 		return &Result{Title: title, Files: files}, nil
 	case peerTubeChannelPage:
-		return peerTubeListingResult(ctx, client, u, "/video-channels/"+url.PathEscape(route.ID), "channel", label, opts)
+		return peerTubeListingResult(ctx, client, u, "/video-channels/"+url.PathEscape(route.ID), "channel", opts)
 	case peerTubeAccountPage:
-		return peerTubeListingResult(ctx, client, u, "/accounts/"+url.PathEscape(route.ID), "account", label, opts)
+		return peerTubeListingResult(ctx, client, u, "/accounts/"+url.PathEscape(route.ID), "account", opts)
 	case peerTubePlaylistPage:
-		return peerTubeListingResult(ctx, client, u, "/video-playlists/"+url.PathEscape(route.ID), "playlist", label, opts)
+		return peerTubeListingResult(ctx, client, u, "/video-playlists/"+url.PathEscape(route.ID), "playlist", opts)
 	}
 	return nil, fmt.Errorf("%s: %s is none of a video (/w/<id>), a channel (/c/<handle>), "+
-		"an account (/a/<handle>) or a playlist (/w/p/<id>)", label, u.Redacted())
+		"an account (/a/<handle>) or a playlist (/w/p/<id>)", peerTubeLabel, u.Redacted())
 }
 
 // peerTubeAPI is the API root for the instance a URL belongs to.
@@ -280,9 +280,9 @@ func peerTubeFileHeaders(u *url.URL, mediaURL, password string) httpx.Header {
 // A video is one file: the best rendition, named after the video and the
 // rendition's own label so it is obvious afterwards what was taken.
 func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
-	id, label string, opts Options) ([]File, string, error) {
+	id string, opts Options) ([]File, string, error) {
 
-	video, err := peerTubeFetchVideo(ctx, client, u, id, label, opts)
+	video, err := peerTubeFetchVideo(ctx, client, u, id, opts)
 	if err != nil {
 		return nil, "", err
 	}
@@ -300,7 +300,7 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 		headers := peerTubeFileHeaders(u, playlist, opts.Password)
 		media, err := resolveMediaPlaylist(ctx, client, playlist, headers)
 		if err != nil {
-			return nil, "", fmt.Errorf("%s: %s: %w", label, title, err)
+			return nil, "", fmt.Errorf("%s: %s: %w", peerTubeLabel, title, err)
 		}
 		return []File{{
 			// Current instances serve fragmented MP4 and older ones MPEG-TS;
@@ -315,7 +315,7 @@ func peerTubeVideoFiles(ctx context.Context, client *httpx.Client, u *url.URL,
 		}}, title, nil
 	}
 
-	return nil, "", peerTubeNoMedia(video, label)
+	return nil, "", peerTubeNoMedia(video)
 }
 
 // peerTubeFileFor turns the chosen rendition into the file to queue.
@@ -343,12 +343,12 @@ func peerTubeFileFor(u *url.URL, title string, best peerTubeCandidate, password 
 // the full UUID and the short one — are accepted by this one path, so the
 // route parser never has to tell them apart.
 func peerTubeFetchVideo(ctx context.Context, client *httpx.Client, u *url.URL,
-	id, label string, opts Options) (*peerTubeVideo, error) {
+	id string, opts Options) (*peerTubeVideo, error) {
 
 	endpoint := peerTubeAPI(u) + "/videos/" + url.PathEscape(id)
 	var video peerTubeVideo
 	if err := client.GetJSON(ctx, endpoint, peerTubeAPIHeaders(u, opts.Password), &video); err != nil {
-		return nil, peerTubeExplain(err, label, id)
+		return nil, peerTubeExplain(err, id)
 	}
 	return &video, nil
 }
@@ -360,36 +360,36 @@ func peerTubeFetchVideo(ctx context.Context, client *httpx.Client, u *url.URL,
 // does. The instance names the real reason in the body, using its own
 // documented error codes, so that is what is read — and only when it is
 // absent does the wording fall back to listing the possibilities.
-func peerTubeExplain(err error, label, id string) error {
+func peerTubeExplain(err error, id string) error {
 	status, ok := errors.AsType[*httpx.StatusError](err)
 	if !ok {
-		return fmt.Errorf("%s: %s: %w", label, id, err)
+		return fmt.Errorf("%s: %s: %w", peerTubeLabel, id, err)
 	}
 	switch {
 	case strings.Contains(status.Body, peerTubeErrNeedsPassword):
-		return fmt.Errorf("%s: %w", label, ErrPasswordRequired)
+		return fmt.Errorf("%s: %w", peerTubeLabel, ErrPasswordRequired)
 	case strings.Contains(status.Body, peerTubeErrWrongPassword):
-		return fmt.Errorf("%s: the password was not accepted for %s", label, id)
+		return fmt.Errorf("%s: the password was not accepted for %s", peerTubeLabel, id)
 	case status.Code == http.StatusNotFound:
 		return fmt.Errorf("%s: %s does not exist on this instance (it may have been deleted, "+
-			"or it may live on another one)", label, id)
+			"or it may live on another one)", peerTubeLabel, id)
 	case status.Code == http.StatusUnauthorized, status.Code == http.StatusForbidden:
 		return fmt.Errorf("%s: %s is not available to anonymous callers "+
-			"(it may be private, password protected, or blocked here)", label, id)
+			"(it may be private, password protected, or blocked here)", peerTubeLabel, id)
 	}
-	return fmt.Errorf("%s: %s: %w", label, id, err)
+	return fmt.Errorf("%s: %s: %w", peerTubeLabel, id, err)
 }
 
 // peerTubeNoMedia explains a video record that carries nothing to fetch.
-func peerTubeNoMedia(video *peerTubeVideo, label string) error {
+func peerTubeNoMedia(video *peerTubeVideo) error {
 	name := util.FirstNonEmpty(strings.TrimSpace(video.Name), "this video")
 	switch {
 	case video.IsLive:
-		return fmt.Errorf("%s: %q is a live stream, which has no finished file to fetch", label, name)
+		return fmt.Errorf("%s: %q is a live stream, which has no finished file to fetch", peerTubeLabel, name)
 	case video.State.Label != "" && !strings.EqualFold(video.State.Label, "Published"):
-		return fmt.Errorf("%s: %q is not ready yet (%s)", label, name, video.State.Label)
+		return fmt.Errorf("%s: %q is not ready yet (%s)", peerTubeLabel, name, video.State.Label)
 	}
-	return fmt.Errorf("%s: %q lists no media file (the instance may still be transcoding it)", label, name)
+	return fmt.Errorf("%s: %q lists no media file (the instance may still be transcoding it)", peerTubeLabel, name)
 }
 
 // peerTubeCandidate is one rendition, from either of the two lists a video
@@ -498,17 +498,17 @@ func peerTubeFileName(title string, candidate peerTubeCandidate) string {
 // collected by index, which keeps the job in the order the site listed it
 // however the requests interleave.
 func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL,
-	ownerPath, kind, label string, opts Options) (*Result, error) {
+	ownerPath, kind string, opts Options) (*Result, error) {
 
 	headers := peerTubeAPIHeaders(u, opts.Password)
 	base := peerTubeAPI(u) + ownerPath
 
-	ids, err := peerTubeListVideos(ctx, client, base+"/videos", headers, label, kind)
+	ids, err := peerTubeListVideos(ctx, client, base+"/videos", headers, kind)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("%s: this %s lists no videos", label, kind)
+		return nil, fmt.Errorf("%s: this %s lists no videos", peerTubeLabel, kind)
 	}
 
 	title := peerTubeOwnerName(ctx, client, base, headers)
@@ -516,7 +516,7 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 		title = strings.Trim(u.Path, "/")
 	}
 
-	files := peerTubeExpand(ctx, client, u, ids, label, opts)
+	files := peerTubeExpand(ctx, client, u, ids, opts)
 	// Expansion skips a video it cannot read, which is right for one bad
 	// entry and wrong for a cancelled run: every remaining video would be
 	// "skipped" and the job would look like a complete, much shorter
@@ -552,7 +552,7 @@ func peerTubeOwnerName(ctx context.Context, client *httpx.Client, endpoint strin
 // because a listing run past its end tends to answer with its last page
 // again rather than with nothing.
 func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint string,
-	headers httpx.Header, label, kind string) ([]string, error) {
+	headers httpx.Header, kind string) ([]string, error) {
 
 	var ids []string
 	seen := make(map[string]bool)
@@ -568,7 +568,7 @@ func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint stri
 		var page peerTubeListing
 		if err := client.GetJSON(ctx, endpoint+"?"+query.Encode(), headers, &page); err != nil {
 			if start == 0 {
-				return nil, fmt.Errorf("%s: read this %s: %w", label, kind, err)
+				return nil, fmt.Errorf("%s: read this %s: %w", peerTubeLabel, kind, err)
 			}
 			break // a later page failing still leaves the earlier ones
 		}
@@ -596,10 +596,10 @@ func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint stri
 // channel of hundreds — where a single entry may be a live stream, or still
 // transcoding — the rest are still worth having.
 func peerTubeExpand(ctx context.Context, client *httpx.Client, u *url.URL,
-	ids []string, label string, opts Options) []File {
+	ids []string, opts Options) []File {
 
 	return FanOut(ctx, ids, func(ctx context.Context, id string) ([]File, error) {
-		files, _, err := peerTubeVideoFiles(ctx, client, u, id, label, opts)
+		files, _, err := peerTubeVideoFiles(ctx, client, u, id, opts)
 		return files, err
 	})
 }
@@ -611,11 +611,11 @@ func peerTubeExpand(ctx context.Context, client *httpx.Client, u *url.URL,
 // else, and a version string is proof the answer came from the software
 // rather than from a catch-all that returns JSON for any path. The answer is
 // kept on the probed page, so it is asked once however often it is wanted.
-func peerTubeIsInstance(ctx context.Context, page *Page, client *httpx.Client, u *url.URL) bool {
+func peerTubeIsInstance(ctx context.Context, page *Page, client *httpx.Client) bool {
 	var cfg struct {
 		ServerVersion string `json:"serverVersion"`
 	}
-	return pageJSON(ctx, page, client, peerTubeAPI(u)+"/config", httpx.Referer(util.Origin(u)+"/"), &cfg) &&
+	return pageJSON(ctx, page, client, peerTubeAPI(page.Final)+"/config", httpx.Referer(util.Origin(page.Final)+"/"), &cfg) &&
 		strings.TrimSpace(cfg.ServerVersion) != ""
 }
 

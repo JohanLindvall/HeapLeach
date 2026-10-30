@@ -63,7 +63,24 @@ func (f *Fapello) Recognise(_ context.Context, p *Page) bool {
 	if len(segs) != 1 && !fapelloShape(p.Final) {
 		return false
 	}
-	return p.Named("Fapello") && fapelloMedia(segs[0]).MatchString(p.Body)
+	return p.Named("Fapello") && fapelloLinksMedia(p.Body, segs[0])
+}
+
+// fapelloContentLink is a link into the content tree, capturing what follows
+// it.
+var fapelloContentLink = regexp.MustCompile(`https?://[a-z0-9.-]+/content/([^"'\\ <>]+)`)
+
+// fapelloLinksMedia reports what fapelloMedia matches without compiling it
+// per page: a link into the content tree with the model's folder inside it,
+// and something after the folder.
+func fapelloLinksMedia(body, model string) bool {
+	folder := "/" + model + "/"
+	for _, m := range fapelloContentLink.FindAllStringSubmatch(body, -1) {
+		if rest := m[1]; strings.Contains(rest[:len(rest)-1], folder) {
+			return true
+		}
+	}
+	return false
 }
 
 // fapelloMedia matches a link to the model's own media: the content tree

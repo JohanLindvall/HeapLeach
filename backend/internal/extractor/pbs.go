@@ -236,11 +236,7 @@ func (p *PBS) show(ctx context.Context, u *url.URL, slug string) (*Result, error
 	page := pbsRoot + "/show/" + url.PathEscape(slug) + "/"
 	// The page probed to recognise the show is this one when the link was
 	// the show's own; anything longer is read at the show's address.
-	doc, _, ok := probedDocument(ctx, u)
-	var err error
-	if !ok || strings.TrimSuffix(u.Path, "/") != "/show/"+slug {
-		doc, err = p.client.GetString(ctx, page, nil)
-	}
+	doc, err := fetchPage(ctx, p.client, page, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pbs: fetch %s: %w", u.Redacted(), err)
 	}
@@ -333,7 +329,7 @@ func pbsVideoSlugs(doc string, base *url.URL) []string {
 // catalogue that maps a slug to one is the endpoint that wants credentials.
 func (p *PBS) playerID(ctx context.Context, slug string) (string, error) {
 	page := pbsRoot + "/video/" + url.PathEscape(slug) + "/"
-	doc, err := p.client.GetString(ctx, page, nil)
+	doc, err := fetchPage(ctx, p.client, page, nil)
 	if err != nil {
 		return "", fmt.Errorf("pbs: fetch %s: %w", page, err)
 	}

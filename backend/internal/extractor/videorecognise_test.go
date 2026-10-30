@@ -14,46 +14,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// recogniseCase is one extractor's recognition, pinned on invented pages: a
-// page of the right form carrying the marker, the same form named for the
-// site but without the marker, and the marked page under a wrong form.
-type recogniseCase struct {
-	name                  string
-	r                     Recogniser
-	good, wrongForm       string // URLs
-	page, unmarked        string // bodies
-	shapes, notShapes     []string
-	extraGood, extraWrong []*recogniseExtra
-}
-
-type recogniseExtra struct{ url, body string }
-
-func (c recogniseCase) run(t *testing.T) {
-	t.Run(c.name, func(t *testing.T) {
-		expectRecognised(t, c.r, htmlPage(t, c.good, c.page), true)
-		expectRecognised(t, c.r, htmlPage(t, c.good, c.unmarked), false)
-		if c.wrongForm != "" {
-			expectRecognised(t, c.r, htmlPage(t, c.wrongForm, c.page), false)
-		}
-		expectRecognised(t, c.r, htmlPage(t, c.good, `<html><head><title>A blog</title></head></html>`), false)
-		for _, e := range c.extraGood {
-			expectRecognised(t, c.r, htmlPage(t, e.url, e.body), true)
-		}
-		for _, e := range c.extraWrong {
-			expectRecognised(t, c.r, htmlPage(t, e.url, e.body), false)
-		}
-		for _, u := range c.shapes {
-			expectShape(t, c.r, u, true)
-		}
-		for _, u := range c.notShapes {
-			expectShape(t, c.r, u, false)
-		}
-		if d, ok := c.r.(Describer); !ok || d.Recognises() == "" {
-			t.Error("no description for the inventory")
-		}
-	})
-}
-
 // head builds a document head from a title and meta elements, key=value.
 func head(title string, metas ...string) string {
 	var b strings.Builder

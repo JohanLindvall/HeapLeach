@@ -54,9 +54,9 @@ func (p *PornHub) Recognises() string {
 func (p *PornHub) Shape(u *url.URL) bool { return pornhubShape(u) }
 
 // Recognise takes a video page by the player configuration Extract reads.
-func (pr *PornHub) Recognise(_ context.Context, p *Page) bool {
-	return pornhubShape(p.Final) && pornhubFlashvars.MatchString(p.Body) && p.Has("mediaDefinitions") &&
-		p.Named("Pornhub")
+func (p *PornHub) Recognise(_ context.Context, page *Page) bool {
+	return pornhubShape(page.Final) && page.Has("flashvars_", "mediaDefinitions") &&
+		pornhubFlashvars.MatchString(page.Body) && page.Named("Pornhub")
 }
 
 // Extract resolves a video page to its best rendition.
@@ -269,8 +269,8 @@ func (p *PornOne) Shape(u *url.URL) bool { return pornoneShape(u) }
 
 // Recognise takes a video page by the renditions Extract reads: <source>
 // elements whose files are named with the size the encoder wrote.
-func (po *PornOne) Recognise(_ context.Context, p *Page) bool {
-	return pornoneShape(p.Final) && p.namedPrefix("PornOne") && p.hasElement(func(n *html.Node) bool {
+func (p *PornOne) Recognise(_ context.Context, page *Page) bool {
+	return pornoneShape(page.Final) && page.namedPrefix("PornOne") && page.hasElement(func(n *html.Node) bool {
 		return isElem(n, atom.Source) && pornoneDimensions.MatchString(attr(n, "src"))
 	})
 }
@@ -286,13 +286,9 @@ func (p *PornOne) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 }
 
 func (p *PornOne) best(ctx context.Context, page string) (string, mediaCandidate, error) {
-	doc, err := fetchPage(ctx, p.client, page, httpx.Referer(pornoneRoot+"/"))
+	root, err := fetchPageRoot(ctx, p.client, page, httpx.Referer(pornoneRoot+"/"))
 	if err != nil {
 		return "", mediaCandidate{}, fmt.Errorf("pornone: fetch %s: %w", page, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", mediaCandidate{}, fmt.Errorf("pornone: %s: %w", page, err)
 	}
 	best, ok := bestCandidate(pornoneRenditions(root))
 	if !ok {

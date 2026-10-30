@@ -118,11 +118,10 @@ func (i *Imgur) Recognise(ctx context.Context, p *Page) bool {
 		if i.client == nil || !p.Named("Imgur") {
 			return false
 		}
-		endpoint := util.Origin(p.Final) + target.Listing + "/page/0/hit.json?scrolled"
 		var body struct {
 			Data *[]imgurEntry `json:"data"`
 		}
-		return pageJSON(ctx, p, i.client, endpoint, nil, &body) && body.Data != nil
+		return pageJSON(ctx, p, i.client, imgurListingPage(util.Origin(p.Final), target.Listing, 0), nil, &body) && body.Data != nil
 	case target.ID != "":
 		if p.Has(imgurPostData) {
 			return true
@@ -142,7 +141,7 @@ func (i *Imgur) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 	target := imgurTargetOf(util.PathSegments(u))
 	switch {
 	case target.Listing != "":
-		return i.listing(ctx, target)
+		return i.listing(ctx, probed(ctx, u), target)
 	case target.ID != "":
 		return i.post(ctx, target.ID)
 	}
@@ -361,8 +360,8 @@ func imgurUsableLink(link string) bool {
 // ----------------------------------------------------------------- listings
 
 // listing resolves an account, a tag or a mirrored subreddit.
-func (i *Imgur) listing(ctx context.Context, target imgurTarget) (*Result, error) {
-	entries, err := i.listingEntries(ctx, target.Listing)
+func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget) (*Result, error) {
+	entries, err := i.listingEntries(ctx, probe, target.Listing)
 	if err != nil {
 		return nil, err
 	}
@@ -384,27 +383,37 @@ func (i *Imgur) listing(ctx context.Context, target imgurTarget) (*Result, error
 // so the JSON decode failing on the first page is what "no such account or
 // tag" looks like, and the decode error carries the shell's opening bytes to
 // say so. A later page failing leaves the posts already collected intact,
-// which is worth more than the few at the end.
-func (i *Imgur) listingEntries(ctx context.Context, base string) ([]imgurEntry, error) {
+// which is worth more than the few at the end. The first page is the one
+// the recogniser asked for the probed page, when it did.
+func (i *Imgur) listingEntries(ctx context.Context, probe *Page, base string) ([]imgurEntry, error) {
 	walk := imgurPageWalk{seen: make(map[string]bool)}
 
 	for page := range config.MaxAlbumPages {
-		endpoint := fmt.Sprintf("%s%s/page/%d/hit.json?scrolled", imgurRoot, base, page)
+		endpoint := imgurListingPage(imgurRoot, base, page)
 
 		var body struct {
 			Data []imgurEntry `json:"data"`
 		}
-		if err := i.client.GetJSON(ctx, endpoint, httpx.Referer(imgurRoot+"/"), &body); err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("imgur: fetch %s: %w", endpoint, err)
+		asked := page == 0 && probe != nil &&
+			askedJSON(ctx, probe, i.client, imgurListingPage(util.Origin(probe.Final), base, 0), &body)
+		if !asked {
+			if err := i.client.GetJSON(ctx, endpoint, httpx.Referer(imgurRoot+"/"), &body); err != nil {
+				if page == 0 {
+					return nil, fmt.Errorf("imgur: fetch %s: %w", endpoint, err)
+				}
+				break
 			}
-			break
 		}
 		if !walk.add(body.Data) {
 			break
 		}
 	}
 	return walk.entries, nil
+}
+
+// imgurListingPage is the JSON for one page of a listing on an origin.
+func imgurListingPage(origin, base string, page int) string {
+	return fmt.Sprintf("%s%s/page/%d/hit.json?scrolled", origin, base, page)
 }
 
 // imgurPageWalk accumulates a listing's rows and decides when it has ended.

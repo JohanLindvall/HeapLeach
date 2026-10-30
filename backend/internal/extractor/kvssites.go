@@ -69,9 +69,16 @@ func (k *KVS) Shape(u *url.URL) bool {
 // extraction reads is the evidence, whatever the path, since installs rename
 // their sections.
 func (k *KVS) Recognise(_ context.Context, p *Page) bool {
+	if len(p.Segments()) == 0 || !p.HasAny(kvsMarkers...) {
+		return false
+	}
 	root := p.HTML()
-	return root != nil && len(p.Segments()) > 0 && kvsFingerprint(root, p.Body)
+	return root != nil && kvsFingerprint(root, p.Body)
 }
+
+// kvsMarkers are the literals every part of the fingerprint contains, one
+// of which the body must carry before the document is walked for it.
+var kvsMarkers = []string{"license_code", "kt_player", "list_videos"}
 
 // kvsFingerprint reports the platform's own structure. A generic flashvars
 // object or a videos container is insufficient: KVS identifies itself
@@ -82,9 +89,12 @@ func kvsFingerprint(root *html.Node, doc string) bool {
 	if vars, err := parseFlashvars(doc); err == nil && vars["license_code"] != "" {
 		return true
 	}
+	// An inline call is looked for only where the document has one at all,
+	// rather than by reading out every script's text.
+	inline := strings.Contains(doc, "kt_player(")
 	return findFirst(root, func(n *html.Node) bool {
 		if n.DataAtom == atom.Script {
-			return strings.Contains(attr(n, "src"), "/kt_player.") || strings.Contains(textOf(n), "kt_player(")
+			return strings.Contains(attr(n, "src"), "/kt_player.") || inline && strings.Contains(textOf(n), "kt_player(")
 		}
 		if id := attr(n, "id"); strings.HasPrefix(id, "list_videos_") {
 			// The platform renders a block as its container and, inside
@@ -108,7 +118,7 @@ func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	} else if query, listing, ok := kvsSearchPath(u); ok {
 		l = kvsListingForSearch(query, listing)
 	} else {
-		return kvsBrowse(ctx, k.client, u, kvsLabel, opts.maxFiles())
+		return kvsBrowse(ctx, k.client, u, opts.maxFiles())
 	}
 	l.limit = opts.maxFiles()
 	if l.url == u.String() {
@@ -116,32 +126,32 @@ func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 			l.first = doc
 		}
 	}
-	return kvsListingResult(ctx, k.client, l, kvsLabel)
+	return kvsListingResult(ctx, k.client, l)
 }
 
 // kvsExtract fetches a video page and resolves it. Everything needed is
 // inline in the page, so one request resolves a video.
-func kvsExtract(ctx context.Context, client *httpx.Client, u *url.URL, label string) (*Result, error) {
+func kvsExtract(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, error) {
 	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
-		return nil, fmt.Errorf("%s: fetch %s: %w", label, u.Redacted(), err)
+		return nil, fmt.Errorf("%s: fetch %s: %w", kvsLabel, u.Redacted(), err)
 	}
-	return kvsResult(doc, u, label)
+	return kvsResult(doc, u)
 }
 
 // kvsResult turns a fetched page into a result, and is where the host-shaped
 // error messages come from. Kept apart from the fetch so it can be tested
 // against a page rather than a site.
-func kvsResult(doc string, u *url.URL, label string) (*Result, error) {
+func kvsResult(doc string, u *url.URL) (*Result, error) {
 	vars, err := parseFlashvars(doc)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w (the video may be private or removed, "+
-			"or this host may not run the player this handles)", label, err)
+			"or this host may not run the player this handles)", kvsLabel, err)
 	}
 
 	renditions, err := kvsRenditions(vars)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", label, err)
+		return nil, fmt.Errorf("%s: %w", kvsLabel, err)
 	}
 	// KVS serves plain files. An install that has moved to an adaptive
 	// stream is reported rather than handled: saving the playlist under the
@@ -157,9 +167,9 @@ func kvsResult(doc string, u *url.URL, label string) (*Result, error) {
 	if !ok {
 		if len(renditions) > 0 {
 			return nil, fmt.Errorf("%s: this page offers only an adaptive stream, "+
-				"which this host is not expected to and so is not handled", label)
+				"which this host is not expected to and so is not handled", kvsLabel)
 		}
-		return nil, fmt.Errorf("%s: no media URL in the player configuration", label)
+		return nil, fmt.Errorf("%s: no media URL in the player configuration", kvsLabel)
 	}
 
 	title := util.FirstNonEmpty(

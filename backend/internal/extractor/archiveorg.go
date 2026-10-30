@@ -143,9 +143,13 @@ func (a *ArchiveOrg) Recognise(ctx context.Context, p *Page) bool {
 		// An ordinary page of the right form that is not the archive's.
 		return false
 	}
-	endpoint := util.Origin(p.URL) + "/metadata/" + url.PathEscape(id)
 	var doc archiveDoc
-	return pageJSON(ctx, p, a.client, endpoint, nil, &doc) && doc.Metadata.Identifier != ""
+	return pageJSON(ctx, p, a.client, archiveMetadataOn(p.URL, id), nil, &doc) && doc.Metadata.Identifier != ""
+}
+
+// archiveMetadataOn is the metadata endpoint for an item on u's origin.
+func archiveMetadataOn(u *url.URL, id string) string {
+	return util.Origin(u) + "/metadata/" + url.PathEscape(id)
 }
 
 // Extract resolves an item, or one named file within it.
@@ -156,10 +160,15 @@ func (a *ArchiveOrg) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 			"(expected /details/<identifier>)", u.Redacted())
 	}
 
-	link := archiveMetadataAPI + url.PathEscape(id)
+	// The recogniser may have asked the metadata API already, for the page
+	// it probed; that answer is the one to read.
 	var doc archiveDoc
-	if err := a.client.GetJSON(ctx, link, nil, &doc); err != nil {
-		return nil, fmt.Errorf("archive.org: fetch %s: %w", link, err)
+	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, a.client, archiveMetadataOn(p.URL, id), &doc) {
+		doc = archiveDoc{}
+		link := archiveMetadataAPI + url.PathEscape(id)
+		if err := a.client.GetJSON(ctx, link, nil, &doc); err != nil {
+			return nil, fmt.Errorf("archive.org: fetch %s: %w", link, err)
+		}
 	}
 	return archiveResult(&doc, id, selector, a.formats, opts.maxFiles())
 }

@@ -50,7 +50,7 @@ func TestKVSResultPicksTheLargestRendition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := kvsResult(kvsPage(), u, "example")
+	res, err := kvsResult(kvsPage(), u)
 	if err != nil {
 		t.Fatalf("kvsResult: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestKVSResultFallsBackToTheOnlyRendition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := kvsResult(page, u, "example")
+	res, err := kvsResult(page, u)
 	if err != nil {
 		t.Fatalf("kvsResult: %v", err)
 	}
@@ -103,12 +103,12 @@ func TestKVSResultReportsAPageWithNoPlayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = kvsResult("<html><body>This video has been removed.</body></html>", u, "example")
+	_, err = kvsResult("<html><body>This video has been removed.</body></html>", u)
 	if err == nil {
 		t.Fatal("a page with no player configuration was accepted")
 	}
-	if !strings.Contains(err.Error(), "example") {
-		t.Errorf("error %q does not name the host", err)
+	if !strings.Contains(err.Error(), kvsLabel) {
+		t.Errorf("error %q does not name the extractor", err)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestKVSResultKeepsASignedLinkWhole(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, postfix := range []string{".mp4", ""} {
-		res, err := kvsResult(kvsSignedPage(postfix), u, "example")
+		res, err := kvsResult(kvsSignedPage(postfix), u)
 		if err != nil {
 			t.Fatalf("postfix %q: kvsResult: %v", postfix, err)
 		}
@@ -240,7 +240,7 @@ func TestKVSResultPrefersARenditionLabelledHQOverANumberedOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := kvsResult(page, u, "example")
+	res, err := kvsResult(page, u)
 	if err != nil {
 		t.Fatalf("kvsResult: %v", err)
 	}

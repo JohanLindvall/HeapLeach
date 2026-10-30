@@ -50,6 +50,8 @@ func NewCoomerFans(client *httpx.Client) *CoomerFans {
 func (c *CoomerFans) Name() string { return "coomerfans" }
 
 var (
+	// coomerFansPostLink is a link to a post, capturing the creator's id.
+	coomerFansPostLink = regexp.MustCompile(`href="[^"]*?/p/\d+/(\d+)/`)
 	// coomerFansProfileShape is a creator's page, /u/<service>/<id>[/<name>].
 	coomerFansProfileShape = pathShape(`^/u/[A-Za-z]+/\d+(?:/[^/]+)?/?$`)
 	// coomerFansPostShape is a post, /p/<post>/<id>/<service>.
@@ -73,10 +75,13 @@ func (c *CoomerFans) Shape(u *url.URL) bool {
 func (c *CoomerFans) Recognise(_ context.Context, p *Page) bool {
 	switch segs := p.Segments(); {
 	case coomerFansPostShape(p.Final):
-		root := p.HTML()
-		return root != nil && findFirst(root, func(n *html.Node) bool { return hasClass(n, coomerFansBodyClass) }) != nil
+		return p.hasElement(func(n *html.Node) bool { return hasClass(n, coomerFansBodyClass) })
 	case coomerFansProfileShape(p.Final):
-		return regexp.MustCompile(`href="[^"]*/p/\d+/` + regexp.QuoteMeta(segs[2]) + `/`).MatchString(p.Body)
+		for _, m := range coomerFansPostLink.FindAllStringSubmatch(p.Body, -1) {
+			if m[1] == segs[2] {
+				return true
+			}
+		}
 	}
 	return false
 }

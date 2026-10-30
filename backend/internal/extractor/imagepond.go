@@ -80,8 +80,7 @@ func (i *ImagePond) Name() string { return "imagepond" }
 var (
 	imagePondItemShape  = pathShape(`^/i/[^/]+/?$`)
 	imagePondAlbumShape = pathShape(`^/a/[^/]+/?$`)
-	// imagePondItemPath is a viewer page's path, which album cards link to.
-	imagePondItemPath = regexp.MustCompile(`^/i/[^/]+$`)
+
 	// imagePondMediaPath is a stored file's path on the media host, or the
 	// site's /i/<code>/direct route to one.
 	imagePondMediaPath = regexp.MustCompile(`^/media/(images|videos)/[^/]+$|^/i/[^/]+/direct$`)
@@ -105,23 +104,22 @@ func (i *ImagePond) Recognise(_ context.Context, p *Page) bool {
 	if root == nil || !p.Named("ImagePond") {
 		return false
 	}
-	pathOf := func(raw string) string {
-		u, err := p.Final.Parse(strings.TrimSpace(raw))
+	resolved := func(raw string) *url.URL {
+		u, err := url.Parse(resolveRef(p.Final, raw))
 		if err != nil {
-			return ""
+			return &url.URL{}
 		}
-		return u.Path
+		return u
 	}
+	media := func(raw string) bool { return imagePondMediaPath.MatchString(resolved(raw).Path) }
 	switch {
 	case imagePondItemShape(p.Final):
-		for _, key := range []string{"og:video", "og:image"} {
-			if imagePondMediaPath.MatchString(pathOf(metaContent(root, key))) {
-				return true
-			}
+		if media(p.Meta("og:video")) || media(p.Meta("og:image")) {
+			return true
 		}
 		return findFirst(root, func(n *html.Node) bool {
 			return (isElem(n, atom.Video) || isElem(n, atom.Source)) &&
-				(imagePondMediaPath.MatchString(pathOf(attr(n, "data-src"))) || imagePondMediaPath.MatchString(pathOf(attr(n, "src"))))
+				(media(attr(n, "data-src")) || media(attr(n, "src")))
 		}) != nil
 	case imagePondAlbumShape(p.Final):
 		return findFirst(root, func(a *html.Node) bool {
@@ -134,7 +132,7 @@ func (i *ImagePond) Recognise(_ context.Context, p *Page) bool {
 					candidates = append(candidates, m[1])
 				}
 				for _, c := range candidates {
-					if c != "" && imagePondItemPath.MatchString(pathOf(c)) {
+					if c != "" && imagePondItemShape(resolved(c)) {
 						return true
 					}
 				}
@@ -211,13 +209,9 @@ func (i *ImagePond) item(ctx context.Context, u *url.URL, code string) (*Result,
 // name the page states. Shared by the single-item route and an album's
 // per-item resolver, which need exactly the same hop.
 func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (link, name string, err error) {
-	doc, _, err := fetchDocument(ctx, i.client, u, httpx.Referer(imagePondRoot+"/"))
+	root, _, err := fetchRoot(ctx, i.client, u, httpx.Referer(imagePondRoot+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("imagepond: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", "", fmt.Errorf("imagepond: parse %s: %w", u.Redacted(), err)
 	}
 
 	link = imagePondMediaLink(root, u)
@@ -269,13 +263,9 @@ func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (lin
 // doing that fetch per item at download time beats doing every one of them
 // before the first byte moves.
 func (i *ImagePond) album(ctx context.Context, u *url.URL, code string) (*Result, error) {
-	doc, _, err := fetchDocument(ctx, i.client, u, httpx.Referer(imagePondRoot+"/"))
+	root, _, err := fetchRoot(ctx, i.client, u, httpx.Referer(imagePondRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("imagepond: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("imagepond: parse %s: %w", u.Redacted(), err)
 	}
 
 	files := imagePondAlbumFiles(root, u, i.resolver)

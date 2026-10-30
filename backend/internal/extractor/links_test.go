@@ -299,7 +299,9 @@ func TestLinksMatchIsPrefixOnly(t *testing.T) {
 // linksStub stands in for the registry's real hosts, so an end-to-end harvest
 // can be tested without a live one.
 type linksStub struct {
-	host  string
+	// The stub stands in for a host's extractor, so it is claimed by host,
+	// as no real recogniser may be.
+	hostClaim
 	files int
 	// title is what the source calls itself, and so what its folder is named.
 	title string
@@ -312,14 +314,6 @@ type linksStub struct {
 }
 
 func (s *linksStub) Name() string { return "stub" }
-
-// The stub stands in for a host's extractor, so it is claimed by host, as no
-// real recogniser may be.
-func (s *linksStub) Shape(u *url.URL) bool { return u.Host == s.host }
-func (s *linksStub) Recognise(_ context.Context, p *Page) bool {
-	return p.URL.Host == s.host
-}
-func (s *linksStub) Recognises() string { return "the test host " + s.host }
 
 func (s *linksStub) Extract(_ context.Context, u *url.URL, opts Options) (*Result, error) {
 	s.mu.Lock()
@@ -338,7 +332,7 @@ func (s *linksStub) Extract(_ context.Context, u *url.URL, opts Options) (*Resul
 			// A host that signs its links resolves them per attempt, and that
 			// closure has to reach the downloader intact.
 			Resolve: func(context.Context) (*Target, error) {
-				return &Target{URL: "https://" + s.host + u.Path + "/signed/" + name, Name: name}, nil
+				return &Target{URL: "https://" + string(s.hostClaim) + u.Path + "/signed/" + name, Name: name}, nil
 			},
 		})
 	}
@@ -376,7 +370,7 @@ func linksExtract(t *testing.T, harvester *Links, raw string, opts Options) (*Re
 // feature: files in the page's order, one folder per source, dead links
 // skipped rather than fatal, and every resolver still attached.
 func TestLinksExtractGroupsEverySourceIntoItsOwnFolder(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 2, title: "Album / Two", fail: "/dead"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 2, title: "Album / Two", fail: "/dead"}
 	page := `<html><head><title>Thread | Board</title></head><body>
 	<a href="https://files.example.test/first">one</a>
 	<a href="https://files.example.test/dead">gone</a>
@@ -443,7 +437,7 @@ func TestLinksExtractGroupsEverySourceIntoItsOwnFolder(t *testing.T) {
 // what the aggregator forums answer an anonymous fetch with. Reported as
 // "nothing to download" it would look like an empty thread.
 func TestLinksExtractReportsAPageWithNothingOnIt(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 1, title: "Album"}
 	page := `<html><body><h1>Log in</h1>
 	<a href="/login">Log in</a> <a href="/register">Register</a></body></html>`
 
@@ -462,7 +456,7 @@ func TestLinksExtractReportsAPageWithNothingOnIt(t *testing.T) {
 func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 	const posted = config.MaxExpandedSources + 100
 
-	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 1, title: "Album"}
 	var page strings.Builder
 	page.WriteString(`<html><head><title>Big thread</title></head><body>`)
 	for i := range posted {
@@ -493,7 +487,7 @@ func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 func TestLinksExtractStopsAtASourceBoundary(t *testing.T) {
 	const each = config.MaxListingFiles/2 + 100
 
-	stub := &linksStub{host: "files.example.test", files: each, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: each, title: "Album"}
 	page := `<html><head><title>Two big albums</title></head><body>
 	<a href="https://files.example.test/one">one</a>
 	<a href="https://files.example.test/two">two</a>
@@ -520,7 +514,7 @@ func TestLinksExtractStopsAtASourceBoundary(t *testing.T) {
 // A first source larger than the cap on its own is the one case cut inside:
 // leaving the job empty would help nobody.
 func TestLinksExtractCutsALoneSourceLargerThanTheCap(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 130, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 130, title: "Album"}
 	page := `<html><head><title>One huge album</title></head><body>
 	<a href="https://files.example.test/one">one</a>
 	</body></html>`
@@ -538,7 +532,7 @@ func TestLinksExtractCutsALoneSourceLargerThanTheCap(t *testing.T) {
 // Resolving stops once the cap is reached, rather than resolving every
 // source and throwing most of the files away.
 func TestLinksExtractStopsResolvingAtTheCap(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 10, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 10, title: "Album"}
 	var page strings.Builder
 	page.WriteString(`<html><head><title>Long thread</title></head><body>`)
 	for i := range 100 {
@@ -565,7 +559,7 @@ func TestLinksExtractStopsResolvingAtTheCap(t *testing.T) {
 // TestLinksExtractRefusesAStackedPrefix stops the one input that would make
 // the harvester call itself.
 func TestLinksExtractRefusesAStackedPrefix(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 1, title: "Album"}
 	harvester, raw := linksHarvester(t, "<html></html>", stub)
 
 	_, err := linksExtract(t, harvester, "links:"+raw, Options{})

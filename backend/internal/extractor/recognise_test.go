@@ -41,15 +41,26 @@ func htmlPage(t *testing.T, rawURL, body string) *Page {
 	return fixturePage(t, rawURL, http.StatusOK, "text/html; charset=utf-8", body)
 }
 
+// challengedPage is what a probe met at rawURL when a WAF challenge stood in
+// for the page: nothing of the site's own to read.
+func challengedPage(t *testing.T, rawURL string) *Page {
+	t.Helper()
+	p := fixturePage(t, rawURL, http.StatusForbidden, "text/html", "")
+	p.Challenged = true
+	return p
+}
+
+// moveHost is u served from an unrelated host.
+func moveHost(u *url.URL) *url.URL {
+	moved := *u
+	moved.Host = "moved.example.test"
+	return &moved
+}
+
 // rehosted is the same page served from somewhere else entirely.
 func rehosted(t *testing.T, p *Page) *Page {
 	t.Helper()
-	move := func(u *url.URL) *url.URL {
-		moved := *u
-		moved.Host = "moved.example.test"
-		return &moved
-	}
-	return &Page{URL: move(p.URL), Final: move(p.Final), Status: p.Status, Header: p.Header,
+	return &Page{URL: moveHost(p.URL), Final: moveHost(p.Final), Status: p.Status, Header: p.Header,
 		Body: p.Body, Challenged: p.Challenged, Err: p.Err}
 }
 
@@ -76,11 +87,49 @@ func expectShape(t *testing.T, r Recogniser, rawURL string, want bool) {
 	if got := r.Shape(u); got != want {
 		t.Errorf("Shape(%s) = %v, want %v", rawURL, got, want)
 	}
-	moved := *u
-	moved.Host = "moved.example.test"
-	if got := r.Shape(&moved); got != want {
+	if got := r.Shape(moveHost(u)); got != want {
 		t.Errorf("Shape(%s, rehosted) = %v, want %v", rawURL, got, want)
 	}
+}
+
+// recogniseCase is one extractor's recognition, pinned on invented pages: a
+// page of the right form carrying the marker, the same form named for the
+// site but without the marker, and the marked page under a wrong form.
+type recogniseCase struct {
+	name                  string
+	r                     Recogniser
+	good, wrongForm       string // URLs
+	page, unmarked        string // bodies
+	shapes, notShapes     []string
+	extraGood, extraWrong []*recogniseExtra
+}
+
+type recogniseExtra struct{ url, body string }
+
+func (c recogniseCase) run(t *testing.T) {
+	t.Run(c.name, func(t *testing.T) {
+		expectRecognised(t, c.r, htmlPage(t, c.good, c.page), true)
+		expectRecognised(t, c.r, htmlPage(t, c.good, c.unmarked), false)
+		if c.wrongForm != "" {
+			expectRecognised(t, c.r, htmlPage(t, c.wrongForm, c.page), false)
+		}
+		expectRecognised(t, c.r, htmlPage(t, c.good, `<html><head><title>A blog</title></head></html>`), false)
+		for _, e := range c.extraGood {
+			expectRecognised(t, c.r, htmlPage(t, e.url, e.body), true)
+		}
+		for _, e := range c.extraWrong {
+			expectRecognised(t, c.r, htmlPage(t, e.url, e.body), false)
+		}
+		for _, u := range c.shapes {
+			expectShape(t, c.r, u, true)
+		}
+		for _, u := range c.notShapes {
+			expectShape(t, c.r, u, false)
+		}
+		if d, ok := c.r.(Describer); !ok || d.Recognises() == "" {
+			t.Error("no description for the inventory")
+		}
+	})
 }
 
 // TestRecognitionNeverReadsTheHost holds the package to its dispatch rule
@@ -201,3 +250,16 @@ type hostClaim string
 func (h hostClaim) Shape(u *url.URL) bool                     { return u.Host == string(h) || u.Hostname() == string(h) }
 func (h hostClaim) Recognise(_ context.Context, p *Page) bool { return h.Shape(p.URL) }
 func (h hostClaim) Recognises() string                        { return "the test host " + string(h) }
+
+// stubExtractor stands in for whichever host a link points at, answering
+// every link with one file under the same title.
+type stubExtractor struct {
+	hostClaim
+	title string
+}
+
+func (s stubExtractor) Name() string { return "stub" }
+
+func (s stubExtractor) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
+	return &Result{Title: s.title, Files: []File{{Name: s.title + ".mp4", URL: u.String(), Size: -1}}}, nil
+}

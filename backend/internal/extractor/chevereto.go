@@ -109,13 +109,12 @@ func (c *Chevereto) Shape(u *url.URL) bool { return cheveretoPagePath(u) }
 // structure. The routes are renameable, so the path beyond that is not
 // asked; the front page names nothing to download.
 func (c *Chevereto) Recognise(_ context.Context, p *Page) bool {
-	root := p.HTML()
-	return root != nil && len(p.Segments()) > 0 && cheveretoFingerprint(root, p.Body)
+	return len(p.Segments()) > 0 && p.HTML() != nil && cheveretoFingerprint(p)
 }
 
 // Extract resolves an album, a user's listing, or a single item.
 func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return cheveretoExtract(ctx, c.client, u, cheveretoLabel, opts)
+	return cheveretoExtract(ctx, c.client, u, opts)
 }
 
 // cheveretoExtract resolves one page, whatever kind it turns out to be.
@@ -124,8 +123,7 @@ func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 // because the routes are renameable — an operator can serve items from /i/,
 // /image/ or /photo/, and the short-link domains use no route segment at all.
 // Reading the page settles it in the fetch that had to happen anyway.
-func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
-	label string, opts Options) (*Result, error) {
+func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
 
 	// A bare domain is the site's front page, which carries a cover image in
 	// its metadata and would otherwise resolve to the operator's own artwork.
@@ -133,12 +131,12 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
 	// booru.go makes about a board's root.
 	if len(util.PathSegments(u)) == 0 {
 		return nil, fmt.Errorf("%s: %s names no item, album or user — "+
-			"paste a link to one rather than to the site", label, u.Redacted())
+			"paste a link to one rather than to the site", cheveretoLabel, u.Redacted())
 	}
 
 	_, root, err := cheveretoFetch(ctx, client, u, opts)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", label, err)
+		return nil, fmt.Errorf("%s: %w", cheveretoLabel, err)
 	}
 
 	listing := cheveretoWalk(ctx, client, u, root, opts)
@@ -149,11 +147,11 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
 		files := cheveretoExpand(ctx, client, listing.albums, opts)
 		if len(files) == 0 {
 			return nil, fmt.Errorf("%s: none of the %d albums on %s could be read",
-				label, len(listing.albums), u.Redacted())
+				cheveretoLabel, len(listing.albums), u.Redacted())
 		}
 		return &Result{Title: listing.title, Files: files}, nil
 	}
-	return cheveretoSingle(root, u, label, listing.title)
+	return cheveretoSingle(root, u, listing.title)
 }
 
 // ---------------------------------------------------------------- listings
@@ -452,21 +450,21 @@ func cheveretoPageAt(base *url.URL, page int) string {
 // first establishing that the page is showing an item would queue those as
 // downloads. The element is safe to require because the platform's own
 // scripts fetch it by that id, so a theme cannot rename it and still work.
-func cheveretoSingle(root *html.Node, u *url.URL, label, title string) (*Result, error) {
+func cheveretoSingle(root *html.Node, u *url.URL, title string) (*Result, error) {
 	viewer := findFirst(root, func(n *html.Node) bool {
 		return attr(n, "id") == cheveretoViewerID
 	})
 	if viewer == nil {
 		return nil, fmt.Errorf("%s: %s shows no item and lists no files "+
 			"(it may have been removed, or be a page this does not handle)",
-			label, u.Redacted())
+			cheveretoLabel, u.Redacted())
 	}
 
 	link := cheveretoMedia(root, viewer, u)
 	if link == "" {
 		return nil, fmt.Errorf("%s: nothing to download on %s "+
 			"(the item may have been removed, or the page layout changed)",
-			label, u.Redacted())
+			cheveretoLabel, u.Redacted())
 	}
 	name := util.FirstNonEmpty(util.NameFromURL(link), title)
 	return &Result{Title: util.FirstNonEmpty(title, name), Files: []File{{
@@ -661,18 +659,18 @@ func cheveretoAuthToken(root *html.Node) string {
 // and a paid licence may remove either — and the page must also carry what
 // is parsed here: the item viewer, the listing metadata, or the password
 // gate.
-func cheveretoFingerprint(root *html.Node, doc string) bool {
-	if strings.Contains(doc, cheveretoNamespace) {
+func cheveretoFingerprint(p *Page) bool {
+	if p.Has(cheveretoNamespace) {
 		return true
 	}
-	named := strings.Contains(strings.ToLower(metaContent(root, "generator")), "chevereto") ||
-		findFirst(root, func(n *html.Node) bool {
+	named := strings.Contains(p.Generator(), "chevereto") ||
+		p.hasElement(func(n *html.Node) bool {
 			return isElem(n, atom.A) && attr(n, "rel") == "generator" &&
 				strings.Contains(strings.ToLower(attr(n, "href")), "chevereto")
-		}) != nil
-	return named && (cheveretoGated(root) || findFirst(root, func(n *html.Node) bool {
+		})
+	return named && (cheveretoGated(p.HTML()) || p.hasElement(func(n *html.Node) bool {
 		return n.Type == html.ElementNode && (attr(n, "id") == cheveretoViewerID || attr(n, cheveretoObjectAttr) != "")
-	}) != nil)
+	}))
 }
 
 // cheveretoRoutes are the path segments the platform's own routes are named

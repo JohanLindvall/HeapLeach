@@ -68,10 +68,7 @@ func (b *Bandzoogle) Recognise(_ context.Context, p *Page) bool {
 	if !p.Has(bandzoogleTrackAttr) {
 		return false
 	}
-	root := p.HTML()
-	return root != nil && findFirst(root, func(n *html.Node) bool {
-		return isBandzoogleTrack(n)
-	}) != nil
+	return p.hasElement(isBandzoogleTrack)
 }
 
 // Extract reads every track on the page.

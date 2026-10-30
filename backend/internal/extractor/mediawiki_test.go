@@ -499,11 +499,7 @@ func TestMediaWikiTakesTheTitleFromThePage(t *testing.T) {
 func TestMediaWikiRecogniseChallengedThroughTheAPI(t *testing.T) {
 	srv, calls := mediaWikiServer(t)
 	m := NewMediaWiki(httpx.New("test", "en", 0, time.Second))
-	challenged := func(path string) *Page {
-		p := fixturePage(t, srv.URL+path, http.StatusForbidden, "text/html", "")
-		p.Challenged = true
-		return p
-	}
+	challenged := func(path string) *Page { return challengedPage(t, srv.URL+path) }
 	p := challenged("/wiki/Category:Synthetic_bridges")
 	for range 2 {
 		if !m.Recognise(context.Background(), p) {

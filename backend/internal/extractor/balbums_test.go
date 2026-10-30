@@ -173,7 +173,7 @@ func TestBalbumsPageNamesOnePageOfTheResults(t *testing.T) {
 // left alone.
 func TestBalbumsWalksEveryPageAndFoldersEachAlbum(t *testing.T) {
 	const albumHost = "albums.example.test"
-	stub := &linksStub{host: albumHost, files: 2, title: "Album"}
+	stub := &linksStub{hostClaim: albumHost, files: 2, title: "Album"}
 	index, root, asked := balbumsIndex(t, stub, map[int]string{
 		1: balbumsPageHTML(albumHost, 1, 2, "AAAA", "BBBB"),
 		2: balbumsPageHTML(albumHost, 2, 2, "CCCC"),
@@ -225,7 +225,7 @@ func TestBalbumsWalksEveryPageAndFoldersEachAlbum(t *testing.T) {
 // job is named rather than quietly returning a prefix.
 func TestBalbumsCapsTheAlbumsItFollows(t *testing.T) {
 	const albumHost = "albums.example.test"
-	stub := &linksStub{host: albumHost, files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
 
 	pages := make(map[int]string)
 	for page := 1; page <= 8; page++ {
@@ -260,7 +260,7 @@ func TestBalbumsCapsTheAlbumsItFollows(t *testing.T) {
 }
 
 func TestBalbumsReportsASearchWithNothingInIt(t *testing.T) {
-	stub := &linksStub{host: "albums.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "albums.example.test", files: 1, title: "Album"}
 	index, root, _ := balbumsIndex(t, stub, map[int]string{
 		1: `<html><body><div>results for <span>nothing</span></div>
 			<div>Page 1 of 0</div></body></html>`,
@@ -292,7 +292,7 @@ func TestBalbumsRecognise(t *testing.T) {
 }
 
 func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {
-	stub := &linksStub{host: "albums.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "albums.example.test", files: 1, title: "Album"}
 	index, root, asked := balbumsIndex(t, stub, map[int]string{1: "<html></html>"})
 
 	_, err := balbumsExtract(t, index, root+"/topalbums")
@@ -307,28 +307,17 @@ func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {
 	}
 }
 
-// sameTitleStub answers every link with the same title, the way two albums
-// on an index can both be called "Clapper 10".
-type sameTitleStub struct {
-	hostClaim
-	title string
-}
-
-func (s *sameTitleStub) Name() string { return "same" }
-func (s *sameTitleStub) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
-	return &Result{Title: s.title, Files: []File{{Name: "clip.mov", URL: u.String(), Size: -1}}}, nil
-}
-
 // Titles are not unique, and two albums sharing one were poured into one
 // folder, where two different files of the same name ended up as "(2)" and
 // "(3)" with nothing to say which album either came from. A repeated title
 // carries the album's id; a title that stands alone keeps its plain name,
-// which is what everything already downloaded under it is filed as.
+// which is what everything already downloaded under it is filed as. The
+// stub answers every link of a host with the same title.
 func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
 	reg := &Registry{fallback: NewDirect(nil)}
 	reg.extractors = []Extractor{
-		&sameTitleStub{hostClaim: "a.example.test", title: "Clapper 10"},
-		&sameTitleStub{hostClaim: "b.example.test", title: "Alone"},
+		stubExtractor{hostClaim: "a.example.test", title: "Clapper 10"},
+		stubExtractor{hostClaim: "b.example.test", title: "Alone"},
 	}
 	files := expandSources(context.Background(), reg, []string{
 		"https://a.example.test/a/AAAA",
@@ -351,7 +340,7 @@ func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
 // sooner, and one asked for more reads further.
 func TestBalbumsFollowsAsManyAlbumsAsConfigured(t *testing.T) {
 	const albumHost = "albums.example.test"
-	stub := &linksStub{host: albumHost, files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
 
 	pages := make(map[int]string)
 	for page := 1; page <= 8; page++ {

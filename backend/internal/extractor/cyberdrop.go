@@ -103,10 +103,9 @@ func (c *Cyberdrop) Shape(u *url.URL) bool { return cyberdropAlbumShape(u) || cy
 func (c *Cyberdrop) Recognise(_ context.Context, p *Page) bool {
 	switch {
 	case cyberdropAlbumShape(p.Final):
-		root := p.HTML()
-		return root != nil && findFirst(root, func(n *html.Node) bool {
+		return p.hasElement(func(n *html.Node) bool {
 			return isElem(n, atom.A) && attr(n, "id") == cyberdropFileID
-		}) != nil && findFirst(root, func(n *html.Node) bool { return hasClass(n, cyberdropSizeClass) }) != nil
+		}) && p.hasElement(func(n *html.Node) bool { return hasClass(n, cyberdropSizeClass) })
 	case cyberdropFileShape(p.Final):
 		return p.Has(cyberdropInfoPath)
 	}
@@ -135,13 +134,9 @@ func (c *Cyberdrop) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 // There is no pagination to follow: the page carries every entry, however
 // many there are.
 func (c *Cyberdrop) album(ctx context.Context, u *url.URL) (*Result, error) {
-	doc, _, err := fetchDocument(ctx, c.client, u, httpx.Referer(cyberdropRoot+"/"))
+	root, _, err := fetchRoot(ctx, c.client, u, httpx.Referer(cyberdropRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("cyberdrop: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("cyberdrop: parse %s: %w", u.Redacted(), err)
 	}
 	return c.albumFrom(root, u)
 }

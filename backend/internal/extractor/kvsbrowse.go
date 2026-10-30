@@ -43,20 +43,16 @@ import (
 
 // kvsBrowse resolves a page on a registered install that is neither a member
 // profile nor a search: a video, or a listing of them.
-func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, label string, limit int) (*Result, error) {
+func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, limit int) (*Result, error) {
 	if len(util.PathSegments(u)) == 0 {
 		return nil, fmt.Errorf("%s: %s is the front page; paste a video, a category, "+
-			"a model, a tag or a search instead", label, u.Redacted())
+			"a model, a tag or a search instead", kvsLabel, u.Redacted())
 	}
 	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
-		return nil, fmt.Errorf("%s: fetch %s: %w", label, u.Redacted(), err)
+		return nil, fmt.Errorf("%s: fetch %s: %w", kvsLabel, u.Redacted(), err)
 	}
-	return kvsBrowseDocument(ctx, client, u, label, limit, doc)
-}
-
-func kvsBrowseDocument(ctx context.Context, client *httpx.Client, u *url.URL, label string, limit int, doc string) (*Result, error) {
-	res, err := kvsResult(doc, u, label)
+	res, err := kvsResult(doc, u)
 	if err == nil {
 		return res, nil
 	}
@@ -75,10 +71,10 @@ func kvsBrowseDocument(ctx context.Context, client *httpx.Client, u *url.URL, la
 	if listing, ok := kvsPagedListing(u); ok {
 		l := kvsListingForPage(listing)
 		l.limit = limit
-		pages, title, err := kvsListingPages(ctx, client, l, label)
+		pages, title, err := kvsListingPages(ctx, client, l)
 		switch {
 		case err == nil && len(pages) > 0:
-			return kvsResolvePages(ctx, client, l, pages, title, label)
+			return kvsResolvePages(ctx, client, l, pages, title)
 		case err == nil, httpx.HasStatus(err, http.StatusNotFound, http.StatusGone):
 			// Nothing at the listing's first page, or no such page: the
 			// number was the section's own name.
@@ -89,7 +85,7 @@ func kvsBrowseDocument(ctx context.Context, client *httpx.Client, u *url.URL, la
 	l := kvsListingForPage(u.String())
 	l.first = doc
 	l.limit = limit
-	return kvsListingResult(ctx, client, l, label)
+	return kvsListingResult(ctx, client, l)
 }
 
 // kvsPagedListing reports whether a URL is a later page of a listing, and

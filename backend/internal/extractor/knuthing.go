@@ -99,13 +99,9 @@ func (k *Knuthing) readVideo(ctx context.Context, raw string) (*knuthingVideo, e
 	headers := httpx.Referer(util.Origin(page) + "/")
 	for attempt := range 2 {
 		ResolveNote(ctx, "Reading video page")
-		doc, final, err := fetchDocument(ctx, k.client, page, headers)
+		root, final, err := fetchRoot(ctx, k.client, page, headers)
 		if err != nil {
 			return nil, fmt.Errorf("knuthing: fetch video page: %w", err)
-		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, err
 		}
 		frame := findFirst(root, func(n *html.Node) bool {
 			return isElem(n, atom.Iframe) && hasClass(n, "bunnyframe")

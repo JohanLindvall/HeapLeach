@@ -16,16 +16,11 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// testFoolFuuka is an install on a reserved domain. What these tests pin is
-// how a FoolFuuka response is read, which is the same on every install and
-// cares nothing for whose archive it came from.
-var testFoolFuuka = foolFuukaSite{
-	name: "example",
-	root: "https://archive.example.test",
-}
-
+// testFoolFuukaExtractor reads an install on a reserved domain. What these
+// tests pin is how a FoolFuuka response is read, which is the same on every
+// install and cares nothing for whose archive it came from.
 func testFoolFuukaExtractor() *foolFuukaArchive {
-	return &foolFuukaArchive{site: testFoolFuuka}
+	return &foolFuukaArchive{name: "example", root: "https://archive.example.test"}
 }
 
 // foolFuukaThreadJSON is a thread in the shape the API serves one, and every
@@ -509,9 +504,7 @@ func TestFoolFuukaRecognise(t *testing.T) {
 	// The software's page on a path that names no board.
 	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/_/about/", page), false)
 	// A challenge with no client to ask the API through says nothing.
-	challenged := fixturePage(t, "https://archive.example.test/b/thread/42/", http.StatusForbidden, "text/html", "")
-	challenged.Challenged = true
-	expectRecognised(t, f, challenged, false)
+	expectRecognised(t, f, challengedPage(t, "https://archive.example.test/b/thread/42/"), false)
 
 	expectShape(t, f, "https://archive.example.test/b/thread/42/", true)
 	expectShape(t, f, "https://archive.example.test/b/post/42/", true)
@@ -531,8 +524,7 @@ func TestFoolFuukaRecogniseChallengedThroughTheAPI(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	f := NewFoolFuuka(httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 10*time.Second))
-	p := fixturePage(t, srv.URL+"/b/thread/9998/", http.StatusForbidden, "text/html", "")
-	p.Challenged = true
+	p := challengedPage(t, srv.URL+"/b/thread/9998/")
 	for range 2 {
 		if !f.Recognise(context.Background(), p) {
 			t.Fatal("a challenged thread whose API answers was not recognised")
@@ -553,7 +545,8 @@ func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *foolFuukaArchive 
 	t.Cleanup(srv.Close)
 	return &foolFuukaArchive{
 		client: httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 10*time.Second),
-		site:   foolFuukaSite{name: "example", root: srv.URL},
+		name:   "example",
+		root:   srv.URL,
 	}
 }
 

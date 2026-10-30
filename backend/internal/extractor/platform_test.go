@@ -354,3 +354,32 @@ func TestPlatformProbeIsBoundedAndDoesNotRetry(t *testing.T) {
 		t.Fatalf("canceled detection = %v, %v", res, err)
 	}
 }
+
+// An extractor reads the answer a recogniser already had from an endpoint,
+// and asks nothing itself through askedJSON when no recogniser did.
+func TestAskedJSONReusesOnlyWhatWasAsked(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"id":7}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	p := htmlPage(t, srv.URL+"/item/7", "<html></html>")
+
+	var out struct{ ID int }
+	if askedJSON(context.Background(), p, client, srv.URL+"/api/7", &out) || hits.Load() != 0 {
+		t.Fatalf("an endpoint nobody asked was answered (%d requests)", hits.Load())
+	}
+	if !pageJSON(context.Background(), p, client, srv.URL+"/api/7", nil, &out) {
+		t.Fatal("the recogniser's question went unanswered")
+	}
+	out.ID = 0
+	if !askedJSON(context.Background(), p, client, srv.URL+"/api/7", &out) || out.ID != 7 {
+		t.Errorf("the recogniser's answer was not reused: %+v", out)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the endpoint was asked %d times, want once", n)
+	}
+}

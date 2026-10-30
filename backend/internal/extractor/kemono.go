@@ -68,19 +68,19 @@ func (k *Kemono) Recognise(ctx context.Context, p *Page) bool {
 	if !kemonoShape(p.Final) {
 		return false
 	}
-	if root := p.HTML(); root != nil && p.Script(kemonoShell) && p.Named(kemonoNames...) &&
-		findFirst(root, func(n *html.Node) bool { return isElem(n, atom.Div) && attr(n, "id") == "root" }) != nil {
+	if p.Script(kemonoShell) && p.Named(kemonoNames...) &&
+		p.hasElement(func(n *html.Node) bool { return isElem(n, atom.Div) && attr(n, "id") == "root" }) {
 		return true
 	}
-	return p.Silent() && kemonoProfile(ctx, p, k.client, p.Final)
+	return p.Silent() && kemonoProfile(ctx, p, k.client)
 }
 
 // kemonoProfile asks for the creator's profile, whose service and id must
 // agree with the URL. This also identifies an empty creator without
 // mistaking an arbitrary JSON array for this platform.
-func kemonoProfile(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) bool {
-	segs := util.PathSegments(u)
-	root := util.Origin(u)
+func kemonoProfile(ctx context.Context, p *Page, client *httpx.Client) bool {
+	segs := p.Segments()
+	root := util.Origin(p.Final)
 	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/profile", root, url.PathEscape(segs[0]), url.PathEscape(segs[2]))
 	var profile struct {
 		ID      string `json:"id"`
