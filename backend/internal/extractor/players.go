@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -156,8 +155,8 @@ func (p *Player) canonicalPage(ctx context.Context, page *Page) *Page {
 		if resp.StatusCode != http.StatusOK || !mediaPageIsHTMLType(mediaPageMediaType(resp.Header.Get(httpx.HeaderContentType))) {
 			return nil
 		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
-		if err != nil || len(body) > config.MaxResponseBytes {
+		body, err := httpx.ReadBody(resp.Body)
+		if err != nil {
 			return nil
 		}
 		candidate := &Page{URL: req.URL, Final: resp.Request.URL, Status: resp.StatusCode, Header: resp.Header, Body: string(body)}

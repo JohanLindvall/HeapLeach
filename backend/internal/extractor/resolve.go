@@ -13,30 +13,45 @@ import (
 // asked several at a time; one refused or failing must not sink the rest,
 // but when none resolves the reason why is the whole answer, so it is kept.
 
-// outcome is what resolving one item came to.
+// outcome is what resolving one item came to: the item, its place in the
+// listing, and what it resolved to or why it did not.
 type outcome[T, R any] struct {
-	item T
-	got  R
-	err  error
+	index int
+	item  T
+	got   R
+	err   error
 }
 
-// resolveOutcomes resolves each item, several at a time or, inTurn, one
-// after another, keeping the listing's order. An item not reached because
-// the context ended has no outcome.
+// resolveOutcomes is the one ordered, bounded map every listing resolves
+// its items through: several at a time (config.PageFetchConcurrency) or,
+// inTurn, one after another, the outcomes in the listing's order with each
+// item's error kept beside the values. Both modes stop the same way once
+// the context ends: no item starts after that, work already started
+// settles, and an item not reached has no outcome. What the caller makes of
+// a cancelled map is settled by its finaliser, where the caller's
+// cancellation outranks whatever resolved first (readListing,
+// noneResolved, expandSeries).
 func resolveOutcomes[T, R any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (R, error)) []outcome[T, R] {
 	if inTurn {
 		var outcomes []outcome[T, R]
-		for _, item := range items {
+		for i, item := range items {
+			if ctx.Err() != nil {
+				break
+			}
 			got, err := resolve(ctx, item)
-			outcomes = append(outcomes, outcome[T, R]{item: item, got: got, err: err})
+			outcomes = append(outcomes, outcome[T, R]{index: i, item: item, got: got, err: err})
 		}
 		return outcomes
 	}
 	// FanOut drops an item whose fetch errored, so the error travels as a
 	// value instead.
-	return FanOut(ctx, items, func(ctx context.Context, item T) ([]outcome[T, R], error) {
-		got, err := resolve(ctx, item)
-		return []outcome[T, R]{{item: item, got: got, err: err}}, nil
+	indices := make([]int, len(items))
+	for i := range indices {
+		indices[i] = i
+	}
+	return FanOut(ctx, indices, func(ctx context.Context, i int) ([]outcome[T, R], error) {
+		got, err := resolve(ctx, items[i])
+		return []outcome[T, R]{{index: i, item: items[i], got: got, err: err}}, nil
 	})
 }
 
@@ -95,28 +110,27 @@ func noneRead(site string, n int, noun, where string, refusals []string, failed 
 // readListing resolves a listing's items into their files, in the
 // listing's order, with the note counting the items refused beside others
 // that resolved. When none resolves, the error is the first reason why
-// (noneRead) — or, once the caller has cancelled, that.
+// (noneRead). Once the caller has cancelled, the error is that, whatever
+// had resolved (noneResolved).
 func readListing[T any](ctx context.Context, site, noun, where string, items []T,
 	resolve func(context.Context, T) ([]File, error)) ([]File, string, error) {
 	files, refusals, failed := resolveFiles(ctx, items, resolve)
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, "", err
-		}
-		return nil, "", noneRead(site, len(items), noun, where, refusals, failed)
+	if err := noneResolved(ctx, files, site, len(items), noun, where, refusals, failed); err != nil {
+		return nil, "", err
 	}
 	return files, refusedNote(refusals), nil
 }
 
-// noneResolved is the error for a listing of n items on where none of
-// which yielded files — noneRead's, or the cancellation that cut it short —
-// and nil when files holds any.
+// noneResolved is how a listing of n items on where finishes: the caller's
+// cancellation, which outranks everything that resolved before it — a
+// listing cut short and returned as a success would be saved as the whole
+// listing; else noneRead's error when no item yielded files; else nil.
 func noneResolved(ctx context.Context, files []File, site string, n int, noun, where string, refusals []string, failed error) error {
-	if len(files) > 0 {
-		return nil
-	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if len(files) > 0 {
+		return nil
 	}
 	return noneRead(site, n, noun, where, refusals, failed)
 }

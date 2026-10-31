@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -16,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -172,7 +170,7 @@ func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (s
 		return "", nil, false
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
+	body, err := httpx.ReadBody(resp.Body)
 	if err != nil {
 		return "", nil, false
 	}
@@ -458,11 +456,9 @@ func mediaPageTwitterStream(root *html.Node, base *url.URL) (mediaFinding, bool)
 // contentUrl would resolve half the web to a JPEG. Only VideoObject,
 // AudioObject and the bare MediaObject are accepted.
 func mediaPageLinkedData(root *html.Node, base *url.URL) (mediaFinding, bool) {
-	for _, script := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && strings.Contains(strings.ToLower(attr(n, "type")), "ld+json")
-	}) {
+	for _, payload := range linkedData(root) {
 		var doc any
-		if err := json.Unmarshal([]byte(textOf(script)), &doc); err != nil {
+		if err := json.Unmarshal([]byte(payload), &doc); err != nil {
 			continue
 		}
 		if found, ok := linkedDataMedia(doc, base); ok {

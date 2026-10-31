@@ -15,7 +15,9 @@ takes it, so order matters where two could.
 
 No extractor claims a domain. `Registry.Extract` probes the submitted URL
 (`page.go`: one bounded GET, redirects followed, the body read only when it
-is text) and offers the `Page` to each `Recognise` in turn; nothing claims it
+is text; a body cut short or past `config.MaxResponseBytes` sets `Page.Err`,
+so recognisers may sniff the prefix but the page cache and `Document` never
+offer it) and offers the `Page` to each `Recognise` in turn; nothing claims it
 and `Direct` takes it. A site that moves domain, or an install nobody listed,
 reaches the right code because the code recognises what it serves. Host
 names may still appear as operational constants (API bases, CDN hosts,
@@ -328,6 +330,15 @@ intact. `sources.go` holds what they share:
   the requests interleave. One that will not load is skipped rather than
   failing a job of hundreds; when none loads, `noneRead` says why, and when
   some do, the note says how many the host refused and why (`refusedNote`).
+- `resolveOutcomes` is the one ordered, bounded map: serial (`inTurn`) and
+  concurrent modes both start nothing once the context ends, let started
+  work settle, and keep each outcome's index and error. `readSeasons`,
+  `resolveEach` and source expansion go through it. Every finisher —
+  `readListing`, `noneResolved`, `expandSeries`, the walkers' cap exits and
+  the album callers that finish by hand — checks the caller's cancellation
+  **first**: a listing cut short and returned as a success would be saved
+  as if it were the whole listing. `FanOut` remains for callers that only
+  fill values and need no outcomes (`Autoindex.readAll`).
 
 ### Caps
 
@@ -399,9 +410,17 @@ line in the saved queue.
   of its own: `newShare` makes the extractor's the union of its forms'. A form with no
   recogniser is a link that only redirects: followed, never recognised.
   `TestShareFormsNeverReadTheHost` holds the rows to the same no-host rule as
-  `Shape`/`Recognise`. Hosts with state of their own (tokens, quotas,
-  cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps their
-  per-route waits.
+  `Shape`/`Recognise`, and `TestShareRowsAreCompleteAndRegisteredOnce`
+  checks that every registered row has its callbacks, a recognising form and
+  one stable place in the registry. Hosts with state of their own (tokens,
+  quotas, cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps
+  their per-route waits. Do not convert a stateless extractor whose
+  `Recognise` accepts pages its `Shape` does not advertise (Erome's profile
+  pages, PornPics' listings without a discoverable form): `Share` builds
+  `Shape` from its forms and recognises only a matching form, so such a
+  conversion either loses those pages or widens link harvesting to
+  navigation. Rajce is the reference conversion: one form, page-only
+  recognition, its parser and notes kept as they were.
 - The `Player` engine (`players.go`, its rows in `playersites.go`): a video site is a `playerSite` row
   (its forms, recognition, canonical page and a reader returning the
   candidate renditions, with a per-read referer when the player needs its
@@ -417,6 +436,13 @@ line in the saved queue.
   signed per visit, resolved now and signed again when its transfer starts.
 - `unpackJS` and `jwSource` (`jsdecode.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
+  `jwSource` takes the **first** non-DASH link of a JavaScript setup and
+  reads nothing else about it, while `jwPlayerBest` (`mediapage.go`) ranks a
+  JSON feed's typed renditions, video before audio, with exact sizes. They
+  stay separate readers: a shared candidate step would either change the
+  first-source behaviour the player rows rely on or need the JS reader to
+  parse fields it does not have. Revisit only with fixtures that pin the
+  intended ordering, the sprite exclusion and each caller's preference.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
   for DRM and geo refusals in the broadcaster's own words, `expandSeries`
   for a series resolved while it is listed (capped by a request budget, noted
@@ -482,10 +508,39 @@ line in the saved queue.
   the sources that did not resolve (`expansion.refusals`, `failed`), so a
   page none of whose sources resolved says why through `noneRead`; a link no
   extractor recognised is counted apart (`unrecognised`), never a failure.
-- `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
-  playlist or target as a File, every field carried over.
+- `hlsMedia.file`/`hlsMedia.target` (`hls.go`), `Target.file` and
+  `File.target`: a resolved playlist or target as a File and back, every
+  media field carried over — segments, key, audio and subtitles. Build a
+  Target from a File only through `File.target`: the downloader replaces an
+  item's key and tracks whenever a target has segments, so a hand-built
+  conversion that drops a field clears it. Control fields (`Resolve`,
+  `Check`, `Cipher`, `Pace`, `Reject`, `Discard`, the directory) are not
+  media and stay with their owners.
 - `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,
   with the caller choosing the value for a name not on it.
+- `renewable` (`renewable.go`): a process-wide credential an extractor holds
+  for every job — Gofile's guest account, RedGifs' bearer token, VRT MAX's
+  player token. `get` reuses the value until it expires; `renew(stale)`
+  replaces it once however many callers were refused with the same value,
+  and returns an existing replacement to a refusal that arrives late. Only a
+  validated value is cached, a failed renewal is retried by the next caller,
+  and waiting is cancelable while the fetch runs detached from any one
+  caller's cancellation. Requesting and decoding, what counts as refused,
+  device ids and retry policy stay in the extractor; TTLs and margins live
+  in `config/limits.go`. RTBF's session (with its device id) and ORF's
+  site-read API credentials keep their own code, as do page memoisation,
+  platform `hostMemo`, per-post loaders and address-bound tickets such as
+  Keep2Share's and `Target.Discard`: their identities and lifetimes differ.
+- `rawText`, `scriptTexts`, `linkedData` and `jsonAttr` (`html.go`): script
+  payloads and JSON attributes as written. Decode JSON-LD, `__NEXT_DATA__`
+  and `data-page` through these, never through `textOf`, which collapses
+  whitespace for display text and would change names (and so paths) inside
+  the JSON. Schemas, required fields and which object counts stay in each
+  reader. A reader that recognition and extraction both need takes the
+  parsed root and is shared through `memo` on the same `Page` (the gallery
+  path in `celeb.go`); keep a string entry point for synthetic fixtures, and
+  treat memoised values as immutable. A canonical URL that differs from the
+  probed one reads its own page.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.

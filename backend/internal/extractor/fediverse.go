@@ -23,10 +23,10 @@ import (
 // It can do that because these servers publish what they are. nodeinfo is a
 // specification rather than a convention: /.well-known/nodeinfo answers with a
 // list of links, and the document one of those points at carries
-// software.name. That is what separates this from booru.go, which has to
-// carry a list of hosts that starts rotting the day it is written, and from
-// the KVS sniff, which guesses from the shape of a page. Here the instance
-// states its own software and is believed.
+// software.name. Other platform families recognise an install by what its
+// pages or API happen to serve — booru.go by an API family answering, the
+// KVS reader by its player's markup. Here the instance states its own
+// software and is believed.
 //
 // A list does remain, but it is of API families rather than of hosts, and it
 // names only the servers that speak something other than the Mastodon client

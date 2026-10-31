@@ -110,7 +110,8 @@ whose albums holds anything says why (`noneRead`).
 
 ## rajce
 
-Album pages embed a JSON `settings` object whose `legacy_media` list carries
+Rajce is a `shareSite` row (`rajceSite`): one album form, recognised by the
+settings script and its `legacy_media` list, read by `rajceExtract`. Album pages embed a JSON `settings` object whose `legacy_media` list carries
 the album in order. Decode that object from its script, without collapsing
 whitespace inside filenames or consuming the JavaScript after it. Read only
 that list: `miniplayer_data` and promoted content elsewhere in the settings

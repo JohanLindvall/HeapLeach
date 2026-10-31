@@ -46,7 +46,12 @@ Two traps:
 the caller's headers over them, `Do`'s retries, and a non-2xx answer returned
 as a `StatusError`. A body over `config.MaxResponseBytes` is an error, never
 cut short, because a truncated script or playlist parses as something it is
-not. It hands back the response with its body read and closed, for its
+not. Every buffered read uses `httpx.ReadBody`, which reads one byte past the
+limit so a body exactly at it is complete, and returns `ErrTooLarge` or the
+read's own error together with the prefix it got. Paths with their own request
+policy — the registry's page probe, platform JSON probes, the player's
+canonical probe, the challenge sniff — call it too: a prefix may be sniffed,
+but a body with any read error never becomes a reusable document. It hands back the response with its body read and closed, for its
 headers and for `resp.Request.URL`, the address after redirects that relative
 references resolve against. `GetPage` is `Fetch` with `Navigate` under the
 caller's headers; a playlist or script is fetched with `Fetch` itself, since

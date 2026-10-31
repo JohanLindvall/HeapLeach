@@ -321,7 +321,7 @@ func (l *cumPostLoader) resolve(ctx context.Context, hash string) (*Target, erro
 	if file.Resolve != nil {
 		return file.Resolve(ctx)
 	}
-	return &Target{URL: file.URL, Name: file.Name, Size: file.Size, Headers: file.Headers}, nil
+	return file.target(), nil
 }
 
 var cumEdgesRE = regexp.MustCompile(`\bEDGE_BASE_URLS\s*:\s*("(?:[^"\\]|\\.)*")`)
@@ -332,7 +332,7 @@ func cumEdges(doc string) ([]string, error) {
 		return nil, err
 	}
 	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		match := cumEdgesRE.FindStringSubmatch(textOf(script))
+		match := cumEdgesRE.FindStringSubmatch(rawText(script))
 		if match == nil {
 			continue
 		}

@@ -158,11 +158,8 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 		}
 		return release.files(b), nil
 	})
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead("bandcamp", len(links), "releases", u.Redacted(), refusals, failed)
+	if err := noneResolved(ctx, files, "bandcamp", len(links), "releases", u.Redacted(), refusals, failed); err != nil {
+		return nil, err
 	}
 	band := cmp.Or(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
 	return &Result{Title: band, Files: files, Note: joinNotes(cappedNote(len(links), listed, "releases"), refusedNote(refusals))}, nil

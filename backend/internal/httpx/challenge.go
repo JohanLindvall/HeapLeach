@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
-
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // ChallengeError distinguishes a Cloudflare challenge from a missing or
@@ -55,13 +53,13 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 	if check, _ := resp.Request.Context().Value(pageChallengeKey{}).(func(string) bool); !challenged && check != nil {
 		kind, _, _ := mime.ParseMediaType(resp.Header.Get(HeaderContentType))
 		if kind == "text/html" || kind == "application/xhtml+xml" {
-			body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
+			body, err := ReadBody(resp.Body)
 			resp.Body.Close()
+			if IsTooLarge(err) {
+				return nil, tooLarge(resp.Request.URL.Redacted())
+			}
 			if err != nil {
 				return nil, fmt.Errorf("%s: read page: %w", resp.Request.URL.Redacted(), err)
-			}
-			if len(body) > config.MaxResponseBytes {
-				return nil, fmt.Errorf("%s: response exceeds %d bytes", resp.Request.URL.Redacted(), config.MaxResponseBytes)
 			}
 			challenged = check(string(body))
 			resp.Body = io.NopCloser(bytes.NewReader(body))

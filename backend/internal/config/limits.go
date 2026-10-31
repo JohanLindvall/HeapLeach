@@ -734,6 +734,14 @@ const (
 	GofileSecretTTL    = time.Hour
 	GofileSecretMinTTL = 5 * time.Minute
 	GofileSecretMaxTTL = 12 * time.Hour
+
+	// GofileTokenTTL re-mints the guest account well inside the 6-hour
+	// window the web app allows a page to keep signing.
+	GofileTokenTTL = 3 * time.Hour
+
+	// RedGifsTokenTTL is how long a temporary bearer token is reused before
+	// another is asked for.
+	RedGifsTokenTTL = time.Hour
 )
 
 // Terminal display tuning, for runs that download straight to disk.

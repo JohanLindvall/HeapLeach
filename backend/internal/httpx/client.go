@@ -466,8 +466,8 @@ func responseBytes(resp *http.Response) ([]byte, error) {
 	defer resp.Body.Close()
 	page := resp.Request.URL.Redacted()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
-	if err != nil {
+	body, err := ReadBody(resp.Body)
+	if err != nil && !IsTooLarge(err) {
 		return nil, fmt.Errorf("%s: read body: %w", page, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -475,8 +475,8 @@ func responseBytes(resp *http.Response) ([]byte, error) {
 		// with a JSON document their extractor decodes.
 		return nil, statusError(resp, resp.Request, body)
 	}
-	if len(body) > config.MaxResponseBytes {
-		return nil, fmt.Errorf("%s: response exceeds %d bytes", page, config.MaxResponseBytes)
+	if err != nil {
+		return nil, tooLarge(page)
 	}
 	return body, nil
 }

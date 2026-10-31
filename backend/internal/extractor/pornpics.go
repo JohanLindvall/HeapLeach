@@ -316,7 +316,7 @@ var pornpicsGlobalVar = regexp.MustCompile(`\bvar\s+([A-Z][A-Z0-9_]*)\s*=\s*(?:'
 func pornpicsGlobals(root *html.Node) map[string]string {
 	out := make(map[string]string)
 	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		for _, m := range pornpicsGlobalVar.FindAllStringSubmatch(textOf(script), -1) {
+		for _, m := range pornpicsGlobalVar.FindAllStringSubmatch(rawText(script), -1) {
 			if _, seen := out[m[1]]; !seen {
 				out[m[1]] = cmp.Or(m[2], m[3])
 			}

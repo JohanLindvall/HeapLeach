@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -238,19 +239,51 @@ func hasAnyClass(n *html.Node, classes ...string) bool {
 	return slices.ContainsFunc(classes, func(class string) bool { return hasClass(n, class) })
 }
 
-// scriptTexts is the text of each script element under root, its spacing
-// kept as written: the JSON a page assigns there may hold names whose
-// spacing is their own.
+// rawText is the text an element holds, exactly as written: the payload of
+// a script, whose JSON strings may hold names whose spacing is their own.
+// textOf is for rendered display text and collapses whitespace, which
+// inside a payload would change the names and paths read out of it.
+func rawText(n *html.Node) string {
+	var text strings.Builder
+	for node := n.FirstChild; node != nil; node = node.NextSibling {
+		if node.Type == html.TextNode {
+			text.WriteString(node.Data)
+		}
+	}
+	return text.String()
+}
+
+// scriptTexts is the raw text (rawText) of each script element under root.
 func scriptTexts(root *html.Node) []string {
 	var texts []string
 	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		var text strings.Builder
-		for node := script.FirstChild; node != nil; node = node.NextSibling {
-			if node.Type == html.TextNode {
-				text.WriteString(node.Data)
-			}
-		}
-		texts = append(texts, text.String())
+		texts = append(texts, rawText(script))
 	}
 	return texts
+}
+
+// linkedData is the raw payload of each JSON-LD script under root, in the
+// document's order. Schemas, required fields and which object counts stay
+// with each reader: a page also carries breadcrumbs, recommendations and
+// image objects in the same form.
+func linkedData(root *html.Node) []string {
+	var docs []string
+	for _, script := range findAll(root, func(n *html.Node) bool {
+		return isElem(n, atom.Script) && strings.Contains(strings.ToLower(attr(n, "type")), "ld+json")
+	}) {
+		docs = append(docs, rawText(script))
+	}
+	return docs
+}
+
+// jsonAttr decodes the JSON held in the first element under root carrying
+// the attribute name — an Inertia app's data-page, say — into out. found is
+// false when no element carries it; err is the decoding's. The parser has
+// already decoded the attribute's quoting and entities.
+func jsonAttr(root *html.Node, name string, out any) (found bool, err error) {
+	node := findFirst(root, func(n *html.Node) bool { return hasAttr(n, name) })
+	if node == nil {
+		return false, nil
+	}
+	return true, json.Unmarshal([]byte(attr(node, name)), out)
 }

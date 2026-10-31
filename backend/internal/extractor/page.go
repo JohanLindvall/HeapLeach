@@ -6,7 +6,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
-	"io"
+	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
@@ -210,10 +210,15 @@ func probePage(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
 	if !probeReadsType(p.MediaType()) {
 		return p
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
-	if err != nil && len(body) == 0 {
-		p.Err = err
+	// A body cut short — interrupted, or past the bound — is kept for the
+	// recognisers to sniff, but the page is a failure: neither the cache
+	// nor Document may offer a prefix as the document, which a fetch of the
+	// same URL would refuse.
+	body, err := httpx.ReadBody(resp.Body)
+	if httpx.IsTooLarge(err) {
+		err = fmt.Errorf("%s: %w", p.Final.Redacted(), err)
 	}
+	p.Err = err
 	p.Body = string(body)
 	return p
 }

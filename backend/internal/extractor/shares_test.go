@@ -8,8 +8,11 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // TestShareFormsNeverReadTheHost is TestRecognitionNeverReadsTheHost for the
@@ -111,6 +114,57 @@ func TestLinkPathID(t *testing.T) {
 	} {
 		if got := linkPathID(link, "f", "e"); got != want {
 			t.Errorf("linkPathID(%q) = %q, want %q", link, got, want)
+		}
+	}
+}
+
+// Every registered Share row gives the engine what it calls: a name and an
+// inventory line, an extract, and forms that each have a shape, at least
+// one of which recognises a page. A form without recognise only redirects
+// to another, so a row of nothing but those could never be chosen. Rows are
+// registered once each, in the same order every time the registry is built.
+func TestShareRowsAreCompleteAndRegisteredOnce(t *testing.T) {
+	names := func() []string {
+		var out []string
+		for _, e := range NewRegistry(&config.Config{}, nil).extractors {
+			if s, ok := e.(*Share); ok {
+				out = append(out, s.Name())
+			}
+		}
+		return out
+	}
+	first := names()
+	if len(first) == 0 {
+		t.Fatal("no Share rows registered")
+	}
+	if again := names(); !slices.Equal(first, again) {
+		t.Errorf("registration order changed between builds: %v then %v", first, again)
+	}
+	seen := map[string]bool{}
+	for _, e := range NewRegistry(&config.Config{}, nil).extractors {
+		s, ok := e.(*Share)
+		if !ok {
+			continue
+		}
+		site := s.site
+		if seen[site.name] {
+			t.Errorf("row %q is registered twice", site.name)
+		}
+		seen[site.name] = true
+		if site.name == "" || site.recognises == "" || site.extract == nil || len(site.forms) == 0 || s.shape == nil {
+			t.Errorf("row %q leaves out something the engine calls", site.name)
+		}
+		recognising := 0
+		for i, f := range site.forms {
+			if f.shape == nil {
+				t.Errorf("row %q: form %d has no shape", site.name, i)
+			}
+			if f.recognise != nil {
+				recognising++
+			}
+		}
+		if recognising == 0 {
+			t.Errorf("row %q has only redirecting forms", site.name)
 		}
 	}
 }

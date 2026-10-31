@@ -41,7 +41,7 @@ var settings = {
 }; var domain = "example.test";
 </script><img src="https://media.example.test/logo.jpg"></body></html>`
 
-func rajceTestServer(t *testing.T, handler http.HandlerFunc) (*Rajce, *url.URL) {
+func rajceTestServer(t *testing.T, handler http.HandlerFunc) (*Share, *url.URL) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)

@@ -88,14 +88,8 @@ func refreshFile(read func(context.Context) (*Result, error), original File, sin
 		if found.Resolve != nil {
 			return found.Resolve(ctx)
 		}
-		link, size := found.URL, found.Size
-		if link == "" && len(found.Segments) > 0 {
-			link = found.Segments[0]
-		}
-		if found.SizeApprox {
-			size = -1
-		}
-		return &Target{URL: link, Name: util.Unescape(found.Name), Headers: found.Headers,
-			Size: size, Segments: found.Segments, SegmentKey: found.SegmentKey}, nil
+		target := found.target()
+		target.Name = util.Unescape(found.Name)
+		return target, nil
 	}
 }

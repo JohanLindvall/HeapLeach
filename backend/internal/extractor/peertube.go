@@ -510,10 +510,8 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 		})
 	// Skipping is right for one bad entry and wrong for a cancelled run:
 	// every remaining video would be "skipped" and the job would look like
-	// a complete, much shorter channel. A cancellation is reported as one.
-	if err == nil {
-		err = ctx.Err()
-	}
+	// a complete, much shorter channel. readListing reports a cancellation
+	// as one.
 	if err != nil {
 		return nil, err
 	}
