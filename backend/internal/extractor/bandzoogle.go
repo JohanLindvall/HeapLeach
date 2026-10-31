@@ -48,6 +48,11 @@ const bandzoogleIDAttr = "data-id"
 // bandzoogleDestAttr carries the path the audio is served from.
 const bandzoogleDestAttr = "data-dest"
 
+// bandzoogleDefaultExt is the extension a track whose link names none is
+// saved under: these serve mp3, and a file with no extension at all is
+// worse than the likely one.
+const bandzoogleDefaultExt = ".mp3"
+
 // NewBandzoogle builds the extractor covering every Bandzoogle site.
 func NewBandzoogle(client *httpx.Client) *Bandzoogle { return &Bandzoogle{client: client} }
 
@@ -204,7 +209,7 @@ func bandzoogleTracks(root *html.Node, base *url.URL) (files []File, artist stri
 		// a track the page did not name falls back to that path's own.
 		name := strings.TrimSpace(attr(a, "data-title"))
 		if name != "" {
-			name = bandzoogleNumber(a) + name + bandzoogleExt(link)
+			name = bandzoogleNumber(a) + name + linkExtAsIs(link, bandzoogleDefaultExt)
 		}
 		files = append(files, File{
 			Name: cmp.Or(name, util.NameFromURL(link)),
@@ -322,16 +327,4 @@ func bandzoogleNumber(a *html.Node) string {
 // knows it has climbed past the track it started from.
 func isBandzoogleTrack(n *html.Node) bool {
 	return isElem(n, atom.A) && attr(n, bandzoogleTrackAttr) != ""
-}
-
-// bandzoogleExt is the audio extension the link carries, defaulting to .mp3
-// — which is what these serve, and better than a file with no extension at
-// all if the path ever stops saying so.
-func bandzoogleExt(link string) string {
-	if name := util.NameFromURL(link); name != "" {
-		if i := strings.LastIndexByte(name, '.'); i > 0 {
-			return name[i:]
-		}
-	}
-	return ".mp3"
 }

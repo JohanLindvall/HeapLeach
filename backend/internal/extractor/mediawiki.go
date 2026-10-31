@@ -70,10 +70,11 @@ type MediaWiki struct {
 	// nothing but a real host has a courtesy limit to keep to.
 	interval time.Duration
 
-	mu sync.Mutex
 	// api caches one wiki's resolved API base, so a job of hundreds of
 	// files probes for it once rather than once per request.
-	api map[string]mediaWikiSite
+	api hostMemo[mediaWikiSite]
+
+	mu sync.Mutex
 	// next is the earliest a call to each API may go out. See pace.
 	next map[string]time.Time
 }
@@ -229,17 +230,13 @@ func mediaWikiCandidates(u *url.URL, advertised string) []string {
 }
 
 // mediaWikiAsk asks one candidate endpoint to identify itself, once per
-// probed page. The answer has to name MediaWiki, not merely arrive.
+// probed page.
 func mediaWikiAsk(ctx context.Context, p *Page, client *httpx.Client, api string) (mediaWikiSite, bool) {
-	query := mediaWikiQuery()
-	query.Set("meta", "siteinfo")
-	query.Set("siprop", "general")
 	var resp mediaWikiResponse
-	if !pageJSON(ctx, p, client, api+"?"+query.Encode(), nil, &resp) || resp.Error != nil ||
-		!strings.HasPrefix(resp.Query.General.Generator, "MediaWiki") {
+	if !pageJSON(ctx, p, client, api+"?"+mediaWikiQuery(mediaWikiSiteinfo...).Encode(), nil, &resp) {
 		return mediaWikiSite{}, false
 	}
-	return mediaWikiSite{api: api, name: resp.Query.General.SiteName}, true
+	return mediaWikiSiteOf(&resp, api)
 }
 
 // mediaWikiAdvertised is the api.php a page advertises in its EditURI link,
@@ -352,7 +349,9 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 				note = joinNotes(note, sourceLimitNote)
 				break
 			}
-			batch, listNote, err := m.list(ctx, site, mediaWikiCategoryQuery(category), limit-len(files), listed)
+			query := mediaWikiFileQuery("generator", "categorymembers", "gcmtitle", category,
+				"gcmtype", "file", "gcmlimit", mediaWikiPageLimit)
+			batch, listNote, err := m.list(ctx, site, query, limit-len(files), listed)
 			if err != nil {
 				// The category the user named is the job; a subcategory
 				// that will not answer is one branch of many, left out
@@ -404,26 +403,16 @@ const mediaWikiSkipped = "partial — unreadable subcategories"
 // subcategories lists one category's child categories, as many as the walk
 // may still visit.
 func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title string, opts Options) ([]string, error) {
-	query := mediaWikiQuery()
-	query.Set("list", "categorymembers")
-	query.Set("cmtitle", title)
-	query.Set("cmtype", "subcat")
-	query.Set("cmlimit", strconv.Itoa(mediaWikiPageSize))
-
-	subs, _, err := walkPages(ctx, pageWalk[string]{
+	query := mediaWikiQuery("list", "categorymembers", "cmtitle", title, "cmtype", "subcat",
+		"cmlimit", mediaWikiPageLimit)
+	subs, _, err := mediaWikiWalk(ctx, m, site, query, pageWalk[string]{
 		key: func(sub string) string { return sub }, limit: opts.maxSources(), quiet: true,
-		fetch: func(ctx context.Context, _ int) (pageOf[string], error) {
-			resp, err := m.call(ctx, site.api, query)
-			if err != nil {
-				return pageOf[string]{}, err
-			}
-			out := make([]string, 0, len(resp.Query.CategoryMembers))
-			for _, member := range resp.Query.CategoryMembers {
-				out = append(out, member.Title)
-			}
-			mediaWikiAdvance(query, resp.Continue)
-			return pageOf[string]{items: out, next: true, end: len(resp.Continue) == 0}, nil
-		},
+	}, func(resp *mediaWikiResponse) []string {
+		out := make([]string, 0, len(resp.Query.CategoryMembers))
+		for _, member := range resp.Query.CategoryMembers {
+			out = append(out, member.Title)
+		}
+		return out
 	})
 	return subs, err
 }
@@ -434,11 +423,7 @@ func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title
 // reports what the page embeds and cannot tell decoration from content. It
 // is what was asked for rather than a guess about which pictures were meant.
 func (m *MediaWiki) article(ctx context.Context, site mediaWikiSite, title string, limit int) (*Result, error) {
-	query := mediaWikiFileQuery()
-	query.Set("generator", "images")
-	query.Set("titles", title)
-	query.Set("gimlimit", strconv.Itoa(mediaWikiPageSize))
-
+	query := mediaWikiFileQuery("generator", "images", "titles", title, "gimlimit", mediaWikiPageLimit)
 	files, note, err := m.list(ctx, site, query, limit, nil)
 	if err != nil {
 		return nil, err
@@ -451,10 +436,7 @@ func (m *MediaWiki) article(ctx context.Context, site mediaWikiSite, title strin
 
 // filePage resolves one File: page to the file it describes.
 func (m *MediaWiki) filePage(ctx context.Context, site mediaWikiSite, title string) (*Result, error) {
-	query := mediaWikiFileQuery()
-	query.Set("titles", title)
-
-	files, _, err := m.list(ctx, site, query, 1, nil)
+	files, _, err := m.list(ctx, site, mediaWikiFileQuery("titles", title), 1, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -484,9 +466,7 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 			"paste a category, or Special:NewFiles for the most recent uploads", title)
 	}
 
-	query := mediaWikiFileQuery()
-	query.Set("generator", "allimages")
-	query.Set("gailimit", strconv.Itoa(mediaWikiPageSize))
+	query := mediaWikiFileQuery("generator", "allimages", "gailimit", mediaWikiPageLimit)
 	if newest {
 		query.Set("gaisort", "timestamp")
 		query.Set("gaidir", "older") // newest first
@@ -523,22 +503,13 @@ func (m *MediaWiki) uploads(ctx context.Context, site mediaWikiSite, u *url.URL,
 // titles already taken as files, so a caller walking several listings can
 // share one; nil starts afresh.
 func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Values, budget int, seen map[string]bool) ([]File, string, error) {
-	query := maps.Clone(params)
 	if seen == nil {
 		seen = make(map[string]bool)
 	}
-	pages, note, err := walkPages(ctx, pageWalk[mediaWikiPage]{
+	pages, note, err := mediaWikiWalk(ctx, m, site, params, pageWalk[mediaWikiPage]{
 		key:   func(p mediaWikiPage) string { return p.Title },
 		limit: budget, limitNote: fileLimitNote,
-		fetch: func(ctx context.Context, _ int) (pageOf[mediaWikiPage], error) {
-			resp, err := m.call(ctx, site.api, query)
-			if err != nil {
-				return pageOf[mediaWikiPage]{}, err
-			}
-			mediaWikiAdvance(query, resp.Continue)
-			return pageOf[mediaWikiPage]{items: resp.Query.Pages, next: true, end: len(resp.Continue) == 0}, nil
-		},
-	})
+	}, func(resp *mediaWikiResponse) []mediaWikiPage { return resp.Query.Pages })
 	if err != nil {
 		return nil, "", err
 	}
@@ -552,6 +523,22 @@ func (m *MediaWiki) list(ctx context.Context, site mediaWikiSite, params url.Val
 		files = append(files, file)
 	}
 	return files, note, nil
+}
+
+// mediaWikiWalk follows one query's continuations from its first batch,
+// reading each batch's entries with items. The query is the caller's to
+// reuse: the walk advances a copy.
+func mediaWikiWalk[T any](ctx context.Context, m *MediaWiki, site mediaWikiSite, params url.Values, w pageWalk[T], items func(*mediaWikiResponse) []T) ([]T, string, error) {
+	query := maps.Clone(params)
+	w.fetch = func(ctx context.Context, _ int) (pageOf[T], error) {
+		resp, err := m.call(ctx, site.api, query)
+		if err != nil {
+			return pageOf[T]{}, err
+		}
+		mediaWikiAdvance(query, resp.Continue)
+		return pageOf[T]{items: items(resp), next: true, end: len(resp.Continue) == 0}, nil
+	}
+	return walkPages(ctx, w)
 }
 
 // call performs one API request, waiting for this wiki's turn first.
@@ -608,10 +595,7 @@ func (m *MediaWiki) pace(ctx context.Context, api string) error {
 // authority on the question rather than by shipping a translation table that
 // would cover the languages someone thought of.
 func (m *MediaWiki) namespaceOf(ctx context.Context, site mediaWikiSite, title string) (mediaWikiKind, string, error) {
-	query := mediaWikiQuery()
-	query.Set("titles", title)
-
-	resp, err := m.call(ctx, site.api, query)
+	resp, err := m.call(ctx, site.api, mediaWikiQuery("titles", title))
 	if err != nil {
 		return mediaWikiArticle, title, err
 	}
@@ -650,27 +634,7 @@ func (m *MediaWiki) namespaceOf(ctx context.Context, site mediaWikiSite, title s
 
 // site resolves, and remembers, where a host keeps api.php.
 func (m *MediaWiki) site(ctx context.Context, u *url.URL) (mediaWikiSite, error) {
-	host := strings.ToLower(u.Host)
-
-	m.mu.Lock()
-	cached, ok := m.api[host]
-	m.mu.Unlock()
-	if ok {
-		return cached, nil
-	}
-
-	site, err := m.resolveSite(ctx, u)
-	if err != nil {
-		return site, err
-	}
-
-	m.mu.Lock()
-	if m.api == nil {
-		m.api = make(map[string]mediaWikiSite)
-	}
-	m.api[host] = site
-	m.mu.Unlock()
-	return site, nil
+	return m.api.lookup(u.Host, func() (mediaWikiSite, error) { return m.resolveSite(ctx, u) })
 }
 
 // resolveSite finds api.php, without asking when the answer is already known.
@@ -712,21 +676,13 @@ func (m *MediaWiki) resolveSite(ctx context.Context, u *url.URL) (mediaWikiSite,
 		u.Host, strings.Join(probed, " and "))
 }
 
-// probe asks a candidate endpoint to identify itself.
-//
-// The answer has to name MediaWiki, not merely arrive: Fandom serves a
-// blank 200 at /w/api.php, so a status code would take an empty body for a
-// wiki and every query after it would fail for no stated reason.
+// probe asks a candidate endpoint to identify itself, as a paced call.
 func (m *MediaWiki) probe(ctx context.Context, api string) (mediaWikiSite, bool) {
-	query := mediaWikiQuery()
-	query.Set("meta", "siteinfo")
-	query.Set("siprop", "general")
-
-	resp, err := m.call(ctx, api, query)
-	if err != nil || !strings.HasPrefix(resp.Query.General.Generator, "MediaWiki") {
+	resp, err := m.call(ctx, api, mediaWikiQuery(mediaWikiSiteinfo...))
+	if err != nil {
 		return mediaWikiSite{}, false
 	}
-	return mediaWikiSite{api: api, name: resp.Query.General.SiteName}, true
+	return mediaWikiSiteOf(resp, api)
 }
 
 // wikimedia reports whether a host is one of the Wikimedia projects.
@@ -747,12 +703,18 @@ func (m *MediaWiki) wikimedia(host string) bool {
 // maxlag, which Wikimedia recommends to bots, is deliberately not sent: it
 // turns a lagging database replica into a failed job, and a bulk read has
 // nothing better to do than wait its turn anyway.
-func mediaWikiQuery() url.Values {
-	return url.Values{
+//
+// pairs are the call's own parameters, name then value.
+func mediaWikiQuery(pairs ...string) url.Values {
+	query := url.Values{
 		"action":        {"query"},
 		"format":        {"json"},
 		"formatversion": {"2"},
 	}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		query.Set(pairs[i], pairs[i+1])
+	}
+	return query
 }
 
 // mediaWikiFileQuery adds what turns pages into downloadable files.
@@ -761,21 +723,25 @@ func mediaWikiQuery() url.Values {
 // mime type, and both are tempting, but nothing in the download contract
 // carries a checksum and the title already ends in the extension the file
 // was uploaded under.
-func mediaWikiFileQuery() url.Values {
-	query := mediaWikiQuery()
-	query.Set("prop", "imageinfo")
-	query.Set("iiprop", "url|size")
-	return query
+func mediaWikiFileQuery(pairs ...string) url.Values {
+	return mediaWikiQuery(append([]string{"prop", "imageinfo", "iiprop", "url|size"}, pairs...)...)
 }
 
-// mediaWikiCategoryQuery lists the files in one category.
-func mediaWikiCategoryQuery(title string) url.Values {
-	query := mediaWikiFileQuery()
-	query.Set("generator", "categorymembers")
-	query.Set("gcmtitle", title)
-	query.Set("gcmtype", "file")
-	query.Set("gcmlimit", strconv.Itoa(mediaWikiPageSize))
-	return query
+// mediaWikiPageLimit is mediaWikiPageSize as the API is asked for it.
+var mediaWikiPageLimit = strconv.Itoa(mediaWikiPageSize)
+
+// mediaWikiSiteinfo asks an endpoint to identify itself.
+var mediaWikiSiteinfo = []string{"meta", "siteinfo", "siprop", "general"}
+
+// mediaWikiSiteOf is the site an answer to mediaWikiSiteinfo identifies.
+// The answer has to name MediaWiki, not merely arrive: Fandom serves a
+// blank 200 at /w/api.php, so a status code would take an empty body for a
+// wiki and every query after it would fail for no stated reason.
+func mediaWikiSiteOf(resp *mediaWikiResponse, api string) (mediaWikiSite, bool) {
+	if resp.Error != nil || !strings.HasPrefix(resp.Query.General.Generator, "MediaWiki") {
+		return mediaWikiSite{}, false
+	}
+	return mediaWikiSite{api: api, name: resp.Query.General.SiteName}, true
 }
 
 // mediaWikiAdvance folds a continuation into the next request.

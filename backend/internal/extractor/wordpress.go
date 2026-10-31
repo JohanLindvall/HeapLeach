@@ -201,20 +201,21 @@ func wordPressArea(root *html.Node) *html.Node {
 	return root
 }
 
+// The classes classic and block themes give a post's title and a
+// category's heading.
+var (
+	wordPressPostTitles     = []string{"entry-title", "wp-block-post-title", "post-title"}
+	wordPressCategoryTitles = []string{"page-title", "archive-title", "wp-block-query-title"}
+)
+
+// wordPressTitle is the text of a category's heading, or of a post's title,
+// or failing either of the first h1.
 func wordPressTitle(root *html.Node, category bool) string {
-	classes := []string{"entry-title", "wp-block-post-title", "post-title"}
+	classes := wordPressPostTitles
 	if category {
-		classes = []string{"page-title", "archive-title", "wp-block-query-title"}
+		classes = wordPressCategoryTitles
 	}
-	title := findFirst(root, func(n *html.Node) bool {
-		for _, class := range classes {
-			if hasClass(n, class) {
-				return true
-			}
-		}
-		return false
-	})
-	if title != nil {
+	if title := findFirst(root, func(n *html.Node) bool { return hasAnyClass(n, classes...) }); title != nil {
 		return textOf(title)
 	}
 	return firstText(root, atom.H1)
@@ -230,11 +231,9 @@ func wordPressPostLinks(root *html.Node) []string {
 	}
 	var links []string
 	for _, post := range findAll(root, func(n *html.Node) bool {
-		return hasClass(n, "hentry") || hasClass(n, "post") || hasClass(n, "type-post") || hasClass(n, "wp-block-post") || isElem(n, atom.Article)
+		return hasAnyClass(n, "hentry", "post", "type-post", "wp-block-post") || isElem(n, atom.Article)
 	}) {
-		title := findFirst(post, func(n *html.Node) bool {
-			return hasClass(n, "entry-title") || hasClass(n, "wp-block-post-title") || hasClass(n, "post-title")
-		})
+		title := findFirst(post, func(n *html.Node) bool { return hasAnyClass(n, wordPressPostTitles...) })
 		var link *html.Node
 		if title != nil {
 			link = findFirst(title, func(n *html.Node) bool { return isElem(n, atom.A) })
@@ -258,7 +257,7 @@ func wordPressPostLinks(root *html.Node) []string {
 func wordPressNext(root *html.Node) (string, bool) {
 	link := findFirst(root, func(n *html.Node) bool {
 		return (isElem(n, atom.A) || isElem(n, atom.Link)) &&
-			(hasClass(n, "wp-block-query-pagination-next") || hasClass(n, "nextpostslink") ||
+			(hasAnyClass(n, "wp-block-query-pagination-next", "nextpostslink") ||
 				(hasClass(n, "next") && hasClass(n, "page-numbers")) ||
 				strings.Contains(" "+attr(n, "rel")+" ", " next "))
 	})
@@ -355,7 +354,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	}
 	area := wordPressArea(root)
 	content := findFirst(area, func(n *html.Node) bool {
-		return hasClass(n, "entry-content") || hasClass(n, "wp-block-post-content") || attr(n, "itemprop") == "articleBody"
+		return hasAnyClass(n, "entry-content", "wp-block-post-content") || attr(n, "itemprop") == "articleBody"
 	})
 	if content == nil {
 		content = findFirst(area, func(n *html.Node) bool { return hasClass(n, "post-content") })
@@ -366,7 +365,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	title := cmp.Or(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
 	// Related-post plugins can append their own thumbnails inside entry-content.
 	for _, related := range findAll(content, func(n *html.Node) bool {
-		return hasClass(n, "crp_related") || hasClass(n, "related-posts") || hasClass(n, "wp-block-query")
+		return hasAnyClass(n, "crp_related", "related-posts", "wp-block-query")
 	}) {
 		if related != content && related.Parent != nil {
 			related.Parent.RemoveChild(related)

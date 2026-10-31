@@ -165,8 +165,8 @@ func TestBandzoogleExt(t *testing.T) {
 		"": ".mp3",
 	}
 	for in, want := range cases {
-		if got := bandzoogleExt(in); got != want {
-			t.Errorf("bandzoogleExt(%q) = %q, want %q", in, got, want)
+		if got := linkExtAsIs(in, bandzoogleDefaultExt); got != want {
+			t.Errorf("linkExtAsIs(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -221,18 +221,20 @@ type bandcampTrack struct {
 	File   map[string]string `json:"file"`
 }
 
-// bandcampData returns the page's data-tralbum document, or "".
-func bandcampData(root *html.Node) string {
-	n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, "data-tralbum") })
+// bandcampData returns the JSON document the page carries in its first
+// element with the attribute name — data-tralbum, data-embed,
+// data-client-items — or "".
+func bandcampData(root *html.Node, name string) string {
+	n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, name) })
 	if n == nil {
 		return ""
 	}
-	return attr(n, "data-tralbum")
+	return attr(n, name)
 }
 
 // bandcampRelease reads a release out of its page.
 func bandcampRelease(root *html.Node, link string) (*bandcampPage, error) {
-	data := bandcampData(root)
+	data := bandcampData(root, "data-tralbum")
 	if data == "" {
 		return nil, fmt.Errorf("bandcamp: %s carries no release data (the page may be a purchase-only or removed item)", link)
 	}
@@ -251,13 +253,11 @@ func bandcampRelease(root *html.Node, link string) (*bandcampPage, error) {
 
 	// A track page names its album only in the embed data beside it.
 	if p.kind == "track" {
-		if n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, "data-embed") }); n != nil {
-			var e struct {
-				AlbumTitle string `json:"album_title"`
-			}
-			if json.Unmarshal([]byte(attr(n, "data-embed")), &e) == nil {
-				p.album = e.AlbumTitle
-			}
+		var e struct {
+			AlbumTitle string `json:"album_title"`
+		}
+		if json.Unmarshal([]byte(bandcampData(root, "data-embed")), &e) == nil {
+			p.album = e.AlbumTitle
 		}
 	}
 	return p, nil
@@ -362,14 +362,12 @@ func bandcampReleaseLinks(root *html.Node, u *url.URL) []string {
 	for _, a := range findAll(grid, func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "a" }) {
 		add(attr(a, "href"))
 	}
-	if n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, "data-client-items") }); n != nil {
-		var items []struct {
-			PageURL string `json:"page_url"`
-		}
-		if json.Unmarshal([]byte(attr(n, "data-client-items")), &items) == nil {
-			for _, it := range items {
-				add(it.PageURL)
-			}
+	var items []struct {
+		PageURL string `json:"page_url"`
+	}
+	if json.Unmarshal([]byte(bandcampData(root, "data-client-items")), &items) == nil {
+		for _, it := range items {
+			add(it.PageURL)
 		}
 	}
 	return links
