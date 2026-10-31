@@ -364,6 +364,15 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
+- The `Share` engine (`shares.go`): a file host whose share or album page
+  is read by its own code is a `shareSite` row — its name, inventory line,
+  forms (a shape plus what a page of that shape must carry; the first form
+  matching the final URL decides) and its `extract`. A form with no
+  recogniser is a link that only redirects: followed, never recognised.
+  `TestShareFormsNeverReadTheHost` holds the rows to the same no-host rule as
+  `Shape`/`Recognise`. Hosts with state of their own (tokens, quotas,
+  cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps their
+  per-route waits.
 - The `Player` engine (`players.go`, its rows in `playersites.go`): a video site is a `playerSite` row
   (its forms, recognition, canonical page and a reader returning the
   candidate renditions, with a per-read referer when the player needs its

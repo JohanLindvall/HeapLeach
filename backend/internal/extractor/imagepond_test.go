@@ -311,9 +311,9 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
   <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/voCUUYAj'"
      @click="manageMode &amp;&amp; toggleImageSelection(2043960)" class="block">
     <div class="aspect-square">
-      <img src="https://media.imagepond.net/media/videos/20260820_221249_TfNxuyl0_thumb.jpg" alt="">
+      <img src="https://media.imagepond.net/media/videos/20990101_120000_AbCdEf12_thumb.jpg" alt="">
     </div>
-    <p class="mt-1.5 text-xs text-gray-400 truncate">20260820_221249.mp4</p>
+    <p class="mt-1.5 text-xs text-gray-400 truncate">20990101_120000.mp4</p>
   </a>
 </div>
 <div class="group block relative">
@@ -321,12 +321,12 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
     <div class="aspect-square">
       <img src="https://www.imagepond.net/i/TSAehpVs/thumb/300" alt="">
     </div>
-    <p class="mt-1.5 text-xs text-gray-400 truncate">Screenshot_20260827_093756_Chrome.jpg</p>
+    <p class="mt-1.5 text-xs text-gray-400 truncate">Screenshot_20990102_080000_Browser.jpg</p>
   </a>
 </div>
 <div class="group block relative">
   <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/TSAehpVs'" class="block">
-    <p class="truncate">Screenshot_20260827_093756_Chrome.jpg</p>
+    <p class="truncate">Screenshot_20990102_080000_Browser.jpg</p>
   </a>
 </div>
 <a href="https://www.imagepond.net/a/OtherAlbum">another album</a>
@@ -346,10 +346,10 @@ func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
 			"album link, the /direct link and the site furniture are none", len(files))
 	}
 	// Names come from the card, so the queue shows them before anything resolves.
-	if files[0].Name != "20260820_221249.mp4" {
+	if files[0].Name != "20990101_120000.mp4" {
 		t.Errorf("first name = %q", files[0].Name)
 	}
-	if files[1].Name != "Screenshot_20260827_093756_Chrome.jpg" {
+	if files[1].Name != "Screenshot_20990102_080000_Browser.jpg" {
 		t.Errorf("second name = %q", files[1].Name)
 	}
 	// No URL up front: the media address is a fetch further on.
