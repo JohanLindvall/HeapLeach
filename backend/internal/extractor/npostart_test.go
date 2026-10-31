@@ -341,7 +341,7 @@ func TestNPOEdgeBlockIsNotARefusal(t *testing.T) {
 	for _, other := range []error{
 		errors.New("dial tcp: connection refused"),
 		&httpx.StatusError{Code: 451, Status: "451 Unavailable For Legal Reasons", Body: npoGeoBlocked},
-		&broadcastRefusal{"npo", "XX_000000012", "geblokkeerd"},
+		&itemRefusal{"npo", "XX_000000012", "geblokkeerd"},
 	} {
 		if npoThrottling(other) {
 			t.Errorf("%v reads as throttling", other)

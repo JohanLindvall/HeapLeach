@@ -229,7 +229,7 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 		stem = r.name(ctx, app, id)
 	}
 	if answer.URL == "" {
-		return nil, &broadcastRefusal{"radio-canada", stem, cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
+		return nil, &itemRefusal{"radio-canada", stem, cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
 	}
 	headers := radioCanadaHeaders()
 	master := radioCanadaUnfiltered(answer.URL)
@@ -392,9 +392,9 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 			},
 			key:   func(l listed) string { return l.id },
 			limit: -1,
-			failed: func(err error) string {
+			failed: func(err error) (string, bool) {
 				walkErr = cmp.Or(walkErr, err)
-				return ""
+				return "", true
 			},
 		})
 		walkErr, walkNote = cmp.Or(walkErr, err), cmp.Or(walkNote, note)

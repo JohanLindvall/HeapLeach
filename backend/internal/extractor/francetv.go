@@ -238,13 +238,13 @@ func (f *FranceTV) answer(ctx context.Context, id, title string) (*francetvAnswe
 	case !ok || refusal.Code == 0:
 		return nil, fmt.Errorf("francetv: %s: %w", title, err)
 	case refusal.Code == 2019:
-		return nil, &broadcastRefusal{"francetv", title, refusedDRM}
+		return nil, &itemRefusal{"francetv", title, refusedDRM}
 	case refusal.Code == 2003, refusal.Code == 2012:
-		return nil, &broadcastRefusal{"francetv", title, francetvGone}
+		return nil, &itemRefusal{"francetv", title, francetvGone}
 	case refusal.Code == 2009:
 		return nil, fmt.Errorf("francetv: %s: %w", title, errFranceTVFranceOnly)
 	}
-	return nil, &broadcastRefusal{"francetv", title, "france.tv refuses it: " + francetvPlain(refusal.Message)}
+	return nil, &itemRefusal{"francetv", title, "france.tv refuses it: " + francetvPlain(refusal.Message)}
 }
 
 // video asks for a video and resolves its stream, named stem where a
@@ -258,11 +258,11 @@ func (f *FranceTV) video(ctx context.Context, id, stem, label string) (*Target, 
 	title := cmp.Or(stem, answer.name(), id)
 	switch {
 	case answer.Video.IsLive:
-		return nil, "", &broadcastRefusal{"francetv", title, refusedLiveBroadcast}
+		return nil, "", &itemRefusal{"francetv", title, refusedLiveBroadcast}
 	case answer.protected():
-		return nil, "", &broadcastRefusal{"francetv", title, refusedDRM}
+		return nil, "", &itemRefusal{"francetv", title, refusedDRM}
 	case answer.Video.Format != "hls" || answer.Video.URL == "":
-		return nil, "", &broadcastRefusal{"francetv", title, "france.tv offers no stream of it to download"}
+		return nil, "", &itemRefusal{"francetv", title, "france.tv offers no stream of it to download"}
 	}
 	master, err := f.sign(ctx, answer)
 	if err != nil {
@@ -403,7 +403,7 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 			// A page past the end lists nothing new, which ends the walk
 			// quietly; a page that fails is a cut, and noted.
 			quiet:  true,
-			failed: func(error) string { return couldNotFetchNote },
+			failed: func(error) (string, bool) { return couldNotFetchNote, true },
 		})
 		if err != nil {
 			return nil, err

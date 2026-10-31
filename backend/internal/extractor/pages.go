@@ -62,16 +62,77 @@ type pageWalk[T any] struct {
 	// fails. It is no partial listing, so the walk adds no note of its
 	// own; the pages' notes and limitNote still stand.
 	quiet bool
-	// failed is the note for a later page that could not be fetched, in
-	// place of the walk's own, or of none when quiet; "" is no note, and
-	// pageFailed the walk's own after all.
-	failed func(error) string
+	// failed decides the note for a later page that could not be
+	// fetched: the note it returns, "" being none, in place of the walk's
+	// own, or of none when quiet. A hook that singles out one failure
+	// returns ok false for the rest, which leaves their note to the walk,
+	// as if there were no hook.
+	failed func(error) (note string, ok bool)
 }
 
-// pageFailed, returned by a pageWalk's failed hook, leaves the note to the
-// walk, as if there were no hook: a hook that singles out one failure need
-// not spell out the note for the rest.
-const pageFailed = "\x00page failed"
+// walkStop is why a walk of a paged listing ended. It is the walk's state;
+// the note that says it is rendered from it (pageWalk.render), so a caller
+// that needs the reason — a series that says in its own words that the cap
+// cut it — reads the reason rather than the wording.
+type walkStop int
+
+const (
+	// walkEnded is the listing's own end: an end flag, the stated total or
+	// page count, or no next page.
+	walkEnded walkStop = iota
+	// walkLimit is the walk's limit, in entries or in their weight.
+	walkLimit
+	// walkPageLimit is the page cap, with the listing going on.
+	walkPageLimit
+	// walkRepeated is a page that added nothing new.
+	walkRepeated
+	// walkStopped is a page that is not the listing's (pageOf.stop).
+	walkStopped
+	// walkFetchFailed is a later page that could not be fetched.
+	walkFetchFailed
+)
+
+// walked is what a walk came to: its entries, why it ended, and the notes
+// the pages and hooks gave for it, which render turns into the walk's note.
+type walked[T any] struct {
+	items []T
+	stop  walkStop
+	// note is the ending page's own note (pageOf.note), and stopped its
+	// stop reason, when it was a stop page.
+	note, stopped string
+	// failure is the failed hook's note for a page that could not be
+	// fetched, and decided whether the hook gave one.
+	failure string
+	decided bool
+}
+
+// render is the note a walk that ended so says, exactly as walkPages has
+// always worded it: the page's or the hook's note where they give one, the
+// limit's note, and the walk's own, which a quiet listing does not take.
+func (w pageWalk[T]) render(out walked[T]) string {
+	own := func(note string) string {
+		if w.quiet {
+			return ""
+		}
+		return note
+	}
+	switch out.stop {
+	case walkLimit:
+		return w.limitNote
+	case walkPageLimit:
+		return own("partial — page limit")
+	case walkRepeated:
+		return own("partial — repeated or empty page")
+	case walkStopped:
+		return cmp.Or(out.note, own(out.stopped))
+	case walkFetchFailed:
+		if out.decided {
+			return out.failure
+		}
+		return own(couldNotFetchNote)
+	}
+	return out.note
+}
 
 // walkPages follows a paged listing from its first page and returns its
 // entries in order without repeats, and the note for a walk that stopped
@@ -83,17 +144,19 @@ const pageFailed = "\x00page failed"
 // cancellation, not a partial listing: the page that ended it may have been
 // answered before its request saw the cancellation.
 func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note string, err error) {
+	out, err := walkPagesFor(ctx, w)
+	if err != nil {
+		return nil, "", err
+	}
+	return out.items, w.render(out), nil
+}
+
+// walkPagesFor is walkPages with why the walk ended (walked) in place of its
+// note.
+func walkPagesFor[T any](ctx context.Context, w pageWalk[T]) (out walked[T], err error) {
 	pages := w.pages
 	if pages <= 0 {
 		pages = config.MaxAlbumPages
-	}
-	// own is the walk's own note for ending early, which a quiet listing
-	// does not take.
-	own := func(note string) string {
-		if w.quiet {
-			return ""
-		}
-		return note
 	}
 	seen := make(map[string]bool)
 	// served counts the entries the pages carried, and count what the
@@ -101,75 +164,73 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 	served, count := 0, 0
 	for n := range pages {
 		if err := ctx.Err(); err != nil {
-			return nil, "", err
+			return walked[T]{}, err
 		}
 		p, err := w.fetch(ctx, n)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, "", ctx.Err()
+				return walked[T]{}, ctx.Err()
 			}
 			if n == 0 {
-				return nil, "", err
+				return walked[T]{}, err
 			}
-			note = pageFailed
+			out.stop = walkFetchFailed
 			if w.failed != nil {
-				note = w.failed(err)
-			}
-			if note == pageFailed {
-				note = own(couldNotFetchNote)
+				out.failure, out.decided = w.failed(err)
 			}
 			break
 		}
 		if p.stop != "" {
-			note = cmp.Or(p.note, own(p.stop))
+			out.stop, out.note, out.stopped = walkStopped, p.note, p.stop
 			break
 		}
-		before := len(items)
+		before := len(out.items)
 		for _, item := range p.items {
 			k := w.key(item)
 			if seen[k] {
 				continue
 			}
 			seen[k] = true
-			if w.weigh == nil && len(items) == w.limit {
+			if w.weigh == nil && len(out.items) == w.limit {
 				// The cap ends the walk early, but not past a
 				// cancellation, which outranks a partial listing.
 				if err := ctx.Err(); err != nil {
-					return nil, "", err
+					return walked[T]{}, err
 				}
-				return items, w.limitNote, nil
+				out.stop = walkLimit
+				return out, nil
 			}
-			items = append(items, item)
+			out.items = append(out.items, item)
 		}
 		served += len(p.items)
 		if w.weigh == nil {
-			count = len(items)
-		} else if count += w.weigh(items[before:]); w.limit >= 0 && count > w.limit {
-			note = w.limitNote
+			count = len(out.items)
+		} else if count += w.weigh(out.items[before:]); w.limit >= 0 && count > w.limit {
+			out.stop = walkLimit
 			break
 		}
 		if p.end || (p.total > 0 && served >= p.total) || (p.pages > 0 && n+1 >= p.pages) {
-			note = p.note
+			out.stop, out.note = walkEnded, p.note
 			break
 		}
-		if len(items) == before {
-			note = own("partial — repeated or empty page")
+		if len(out.items) == before {
+			out.stop = walkRepeated
 			break
 		}
 		if !p.next {
-			note = p.note
+			out.stop, out.note = walkEnded, p.note
 			break
 		}
 		if count == w.limit {
-			note = w.limitNote
+			out.stop = walkLimit
 			break
 		}
 		if n == pages-1 {
-			note = own("partial — page limit")
+			out.stop = walkPageLimit
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, "", err
+		return walked[T]{}, err
 	}
-	return items, note, nil
+	return out, nil
 }

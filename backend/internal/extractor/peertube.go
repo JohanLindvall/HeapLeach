@@ -375,7 +375,7 @@ func peerTubeNoMedia(video *peerTubeVideo) error {
 	case video.State.Label != "" && !strings.EqualFold(video.State.Label, "Published"):
 		reason = fmt.Sprintf("%q is not ready yet (%s)", name, video.State.Label)
 	}
-	return &broadcastRefusal{site: peerTubeLabel, reason: reason}
+	return &itemRefusal{site: peerTubeLabel, reason: reason}
 }
 
 // peerTubeCandidate is one rendition, from either of the two lists a video

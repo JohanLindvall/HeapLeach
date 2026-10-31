@@ -73,6 +73,18 @@ path names a non-page file and matches no `Shape` skips the probe
 (`probeWorthy`): probing would download the start of the file the fallback
 is about to fetch.
 
+A `Page` is borrowed, never owned: the cache hands one to every concurrent
+caller and every recogniser reads it. Its URLs, header, body, parsed tree and
+memoised values must not be changed. `probedDocument`, `fetchDocument` and
+`fetchRoot` hand back a final URL the caller owns, and the cache probes with
+a URL of its own, so editing either is safe; a reader that edits a tree (the
+WordPress post reader removes related-post blocks) parses a private copy
+rather than taking the shared one from `fetchRoot`. `TestSharedPageIsLeftAsItWas`
+runs concurrent extractions over one page under `-race`. The probe is reused
+only for the submitted URL as it was fetched; a request with other headers,
+a session or another method is not the same representation and fetches its
+own.
+
 ### The supported-site inventory
 
 The inventory in README.md is **generated** from the registry by `make
@@ -310,6 +322,16 @@ intact. `sources.go` holds what they share:
   walk, the page cap (`config.MaxAlbumPages` unless `pages` says otherwise),
   the limit and its note, and cancellation, which is never a partial listing.
   `walkListing` (`listing.go`) is its adapter for HTML pagers.
+- Why a walk ended is state, not wording. `walkPagesFor` returns `walked`:
+  the entries and a `walkStop` (the listing's own end, the limit, the page
+  cap, a repeated or empty page, a stop page, a later page that failed)
+  beside the page's and the `failed` hook's notes; `pageWalk.render` alone
+  turns that into the note `walkPages` has always returned, string for
+  string. A caller that needs the reason reads `stop` rather than matching
+  a note: `walkEpisodes` reports `more` from `walkLimit`. `quiet` still
+  silences the walk's own notes for the page cap, a repeated page, a stop
+  page and a failed page alike; telling a site's expected end from an
+  unexpected cut per caller is a separate change with its own note review.
 - Each page says how the listing ends, from what the API states: `total` (the
   count it holds), `pages` (the page count it runs to), `end` (an end flag, a
   missing cursor, or an empty page asked for past the end), or no `next`. Never end on a page shorter than the
@@ -347,6 +369,17 @@ intact. `sources.go` holds what they share:
   **first**: a listing cut short and returned as a success would be saved
   as if it were the whole listing. `FanOut` remains for callers that only
   fill values and need no outcomes (`Autoindex.readAll`).
+- The `PageFetchConcurrency` bound is per map, not per extraction: a
+  listing whose items are listings (source expansion through the registry,
+  a WordPress category's posts) multiplies it, and every top-level job the
+  manager resolves at once multiplies it again.
+  `TestNestedListingsMultiplyTheirBound` measures that baseline (36 leaves
+  in flight for one nested job, 72 for two). An extraction-wide request
+  admission is a separate change: it belongs around the metadata I/O
+  itself, not a parent waiting on its children (which would deadlock), and
+  must leave transfers and deferred resolvers to their own policies.
+  `config.SourceBatchRounds` sizes source expansion's batches, not the
+  bound.
 
 ### Caps
 
@@ -451,8 +484,10 @@ line in the saved queue.
   first-source behaviour the player rows rely on or need the JS reader to
   parse fields it does not have. Revisit only with fixtures that pin the
   intended ordering, the sprite exclusion and each caller's preference.
-- `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
-  for DRM and geo refusals in the broadcaster's own words, `expandSeries`
+- `broadcast.go`: what the public broadcasters share — `itemRefusal`
+  (declared beside the listing finishers in `resolve.go`, since other
+  listings refuse items too) for DRM and geo refusals in the broadcaster's
+  own words, `expandSeries`
   for a series resolved while it is listed (capped by a request budget, noted
   where cut, filed by season, one error when nothing plays) and
   `listSeries`, which ends a listing with it, beneath it
@@ -471,13 +506,22 @@ line in the saved queue.
   videos, a profile's posts, albums or galleries), resolved concurrently
   with the files kept in order and the refusals and first failure beside
   them, and the one error, `<site>: none of the <n> <noun> on <where> could
-  be read: <reason>`, for when none could; when some could, the refusals
-  go in the note (`refusedNote`). A listing that needs each item
-  beside what it resolved to uses `resolveOutcomes` and `sortOutcomes`
-  directly; `resolveEach` and `expandSeries` share the same outcome
-  handling. An item whose host states why it holds nothing (a live stream,
-  a video still transcoding) returns a `broadcastRefusal`, so that reason
-  outranks a failure in the error. Where every item costs a request at
+  be read: <reason>`, for when none could. `resolveListing`, `readListing`
+  and `resolveEach` keep the whole account of the items, `outcomeSummary`
+  (`summarise`): resolved, empty, refused (each reason, in order), failed
+  (counted, the first kept as the diagnostic), unrecognised and not
+  started, counted per item rather than per file. When some resolved,
+  `outcomeSummary.note` says what was left out — the refusals per reason
+  (`refusedNote`), then "N left out: could not be read" (`unreadNote`) —
+  so one unreadable item beside others that resolved is never silent. An
+  item that resolved to nothing is not mentioned, and a link no extractor
+  recognised is navigation, never a failure. `expandSeries` always notes
+  unreadable episodes and leaves refusals to the broadcaster
+  (`noteRefused`). A listing that needs each item beside what it resolved
+  to uses `resolveOutcomes` with `summarise` or `sortOutcomes` directly. An
+  item whose host states why it holds nothing (a live stream, a video
+  still transcoding) returns an `itemRefusal` (`resolve.go`), so that
+  reason outranks a failure in the error. Where every item costs a request at
   listing time, the listing is held to `listingLimit` and notes the cut.
   A listing of items to resolve uses these rather than `FanOut` alone, which
   drops every error.
@@ -508,8 +552,8 @@ line in the saved queue.
   a first page the caller already read (`root`), a fetch of its own (`fetch`,
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
   (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
-  that singles out one failure returns `pageFailed` for the rest, leaving
-  their note to the walk. `expansionNote` (`sources.go`) builds the job note
+  returns its note and whether it decided one, and a hook that singles out
+  one failure returns false for the rest, leaving their note to the walk. `expansionNote` (`sources.go`) builds the job note
   of a listing expanded into its sources, and `partialNote` that of a page
   or search whose sources a cap cut.
 - `expandSources` keeps, beside the files, the refusals and first failure of
@@ -548,7 +592,16 @@ line in the saved queue.
   parsed root and is shared through `memo` on the same `Page` (the gallery
   path in `celeb.go`); keep a string entry point for synthetic fixtures, and
   treat memoised values as immutable. A canonical URL that differs from the
-  probed one reads its own page.
+  probed one reads its own page. A reader that only extraction needs still
+  takes the root, through `fetchRoot`, so the tree recognition parsed is not
+  parsed again: NPR (`nprRead`) and ABC listen (`abcListenRead`, its
+  `__NEXT_DATA__` read off the tree with `nextDataIn`) do, each with its
+  string adapter beside it, and `TestProbedReadersReuseTheParsedDocument`
+  holds both paths to the same result (`BenchmarkProbedReaders` measures
+  them). Before moving another reader over, check what it reads besides the
+  tree: Niconico keeps metadata a 4xx body carries, Bandcamp reads a
+  document fetched with another User-Agent, and WordPress edits its private
+  tree.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.

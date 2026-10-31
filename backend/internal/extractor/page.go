@@ -30,6 +30,13 @@ import (
 // URL's host. A page that could not be read at all is still a Page — Err says
 // why — so that an extractor whose URL form alone is conclusive can claim it,
 // and the error it then meets is its own rather than the probe's.
+//
+// A Page is shared: the page cache hands one to every concurrent caller of
+// its URL and route, and every recogniser and the chosen extractor read it.
+// Everything it holds — its URLs, header, body, parsed document and memoised
+// values — is borrowed and must not be changed. A reader that needs to edit
+// a URL, a header or a subtree copies it first; probedDocument and fetchRoot
+// already hand back a final URL the caller owns.
 type Page struct {
 	// URL is the URL as submitted; Final is where redirects ended.
 	URL, Final *url.URL
@@ -146,7 +153,9 @@ func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *
 	c.entries[key] = c.order.PushBack(e)
 	c.mu.Unlock()
 
-	p := probePage(ctx, client, u)
+	// The page keeps a URL of its own: the caller's may be changed once
+	// the page is shared with others.
+	p := probePage(ctx, client, cloneURL(u))
 	c.mu.Lock()
 	if p.Err == nil && !p.Challenged {
 		e.page, e.fetched = p, time.Now()
@@ -270,13 +279,24 @@ func (p *Page) Document() (string, bool) {
 
 // probedDocument returns the page the registry already fetched for u, when it
 // is a successful document. ok is false whenever the extractor must fetch it
-// itself: another URL, a failure, or a body the probe did not read.
+// itself: another URL, a failure, or a body the probe did not read. The final
+// URL is a copy the caller may change, as it may one GetPage returned.
 func probedDocument(ctx context.Context, u *url.URL) (doc string, final *url.URL, ok bool) {
 	p := probed(ctx, u)
 	if doc, ok = p.Document(); !ok {
 		return "", nil, false
 	}
-	return doc, p.Final, true
+	return doc, cloneURL(p.Final), true
+}
+
+// cloneURL is a copy of u its holder may change without changing u. The
+// user information is immutable, so it may be shared.
+func cloneURL(u *url.URL) *url.URL {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	return &c
 }
 
 // fetchDocument is GetPage for the submitted URL that reuses the registry's
@@ -301,18 +321,20 @@ func fetchPage(ctx context.Context, client *httpx.Client, link string, headers h
 }
 
 // fetchRoot is fetchDocument parsed: the probe's own tree when it is reused,
-// so a document read to recognise it is not parsed a second time.
+// so a document read to recognise it is not parsed a second time. That tree
+// is the page's and is shared: a reader that removes or rewrites nodes parses
+// its own copy instead. The final URL is the caller's own.
 func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*html.Node, *url.URL, error) {
 	if p := probed(ctx, u); p != nil {
 		if doc, ok := p.Document(); ok {
 			if root := p.HTML(); root != nil {
-				return root, p.Final, nil
+				return root, cloneURL(p.Final), nil
 			}
 			// A document the probe did not take for HTML, for want of a
 			// declared type, is still the one asked for: parse it here
 			// rather than fetch it again.
 			root, err := parseHTML(doc)
-			return root, p.Final, err
+			return root, cloneURL(p.Final), err
 		}
 	}
 	doc, final, err := client.GetPage(ctx, u.String(), headers, nil)

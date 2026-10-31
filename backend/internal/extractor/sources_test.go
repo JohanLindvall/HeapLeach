@@ -21,7 +21,7 @@ func TestExpandSourcesKeepsWhySourcesFailed(t *testing.T) {
 			case "unrecognised":
 				return nil, fmt.Errorf("follow: %w", errUnrecognised)
 			case "refused":
-				return nil, &broadcastRefusal{site: "host", reason: "shown only at home"}
+				return nil, &itemRefusal{site: "host", reason: "shown only at home"}
 			case "broken":
 				return nil, errors.New("host: broken")
 			}

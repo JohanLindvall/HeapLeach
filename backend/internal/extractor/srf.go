@@ -269,7 +269,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", fmt.Errorf("srf: %s names nothing the Integration Layer knows about", urn)
 	}
 	if chapter.BlockReason != "" {
-		return nil, "", &broadcastRefusal{"srf", urn, srfBlockMessage(chapter.BlockReason)}
+		return nil, "", &itemRefusal{"srf", urn, srfBlockMessage(chapter.BlockReason)}
 	}
 
 	title := joinTitle(doc.Show.Title, cmp.Or(chapter.Title, doc.Episode.Title), titlePrefixed)

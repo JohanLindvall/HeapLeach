@@ -266,7 +266,7 @@ func (b *BBCSounds) stream(ctx context.Context, vpid string) (string, error) {
 		return "", fmt.Errorf("bbcsounds: media selector for %s: %w", vpid, err)
 	}
 	if doc.Result != "" {
-		return "", &broadcastRefusal{"bbcsounds", vpid, bbcReason(doc.Result)}
+		return "", &itemRefusal{"bbcsounds", vpid, bbcReason(doc.Result)}
 	}
 	if href := doc.stream(); href != "" {
 		return href, nil
@@ -288,7 +288,7 @@ func bbcRefusal(pid string, err error) error {
 	if !ok || doc.Result == "" {
 		return nil
 	}
-	return &broadcastRefusal{"bbcsounds", pid, bbcReason(doc.Result)}
+	return &itemRefusal{"bbcsounds", pid, bbcReason(doc.Result)}
 }
 
 // bbcReason is the media selector's refusal to name a stream, in words.

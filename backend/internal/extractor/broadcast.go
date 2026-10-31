@@ -17,6 +17,8 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Helpers the public broadcasters share. Their APIs have nothing in common,
@@ -25,34 +27,12 @@ import (
 // after its series, a listing of episodes resolved one by one or when
 // their transfers start, and a note on what a listing left out.
 
-// broadcastRefusal is a broadcaster declining a programme: gone, live,
-// protected, or shown only somewhere else. It is a type so that a listing
-// can leave such programmes out, saying why once, rather than queue them all
-// to fail. site is the extractor's prefix and title the programme's name, or
-// its id; a refusal that names neither leaves title empty.
-type broadcastRefusal struct{ site, title, reason string }
-
-func (e *broadcastRefusal) Error() string {
-	if e.title == "" {
-		return e.site + ": " + e.reason
-	}
-	return e.site + ": " + e.title + ": " + e.reason
-}
-
 // The reasons several broadcasters give in the same words.
 const (
 	refusedDRM           = "it is DRM-protected"
 	refusedLiveBroadcast = "it is a live broadcast, which has no end to download to"
 	refusedLiveStream    = "it is a live stream, which has no end to download to"
 )
-
-// refusalReason is the reason a broadcaster gave, when err is its refusal.
-func refusalReason(err error) (string, bool) {
-	if refusal, ok := errors.AsType[*broadcastRefusal](err); ok {
-		return refusal.reason, true
-	}
-	return "", false
-}
 
 // refusalBody decodes the body of a failed request as JSON, for a
 // broadcaster that says why it refused there rather than in a document of
@@ -133,16 +113,17 @@ type listedItem[T any] struct {
 // listing's order. One item refused or failing must not sink the rest; but
 // when nothing resolves, why is the whole answer, so the broadcaster's
 // reasons are kept in order, and the first other failure beside them, for
-// the caller to report (firstReason).
-func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) (resolved []listedItem[T], refusals []string, failed error) {
+// the caller to report (firstReason), in the account of the items
+// (outcomeSummary) that also counts the failures for the note.
+func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) ([]listedItem[T], outcomeSummary) {
 	outcomes := resolveOutcomes(ctx, items, inTurn, resolve)
-	refusals, failed = sortOutcomes(outcomes)
+	var resolved []listedItem[T]
 	for _, out := range outcomes {
 		if out.err == nil && out.got != nil {
 			resolved = append(resolved, listedItem[T]{item: out.item, file: *out.got})
 		}
 	}
-	return resolved, refusals, failed
+	return resolved, summarise(len(items), outcomes, func(got *File) bool { return got != nil })
 }
 
 // series is a broadcaster's listing of episodes, as expandSeries takes it.
@@ -198,7 +179,8 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 		note = fmt.Sprintf("first %d %s", len(items), s.noun)
 	}
 
-	resolved, refusals, failed := resolveEach(ctx, items, s.inTurn, s.resolve)
+	resolved, outcomes := resolveEach(ctx, items, s.inTurn, s.resolve)
+	refusals, failed := outcomes.refusals, outcomes.failed
 	if s.refused != nil {
 		*s.refused = refusals
 	}
@@ -219,6 +201,9 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 	if s.noteRefused {
 		note = joinNotes(note, refusedNote(refusals))
 	}
+	// A refusal is the broadcaster's to word, or to keep quiet about; an
+	// episode that could not be read is always said to be missing.
+	note = joinNotes(note, unreadNote(outcomes.failures))
 	return resolved, note, nil
 }
 
@@ -317,22 +302,21 @@ func readSeasons[S, T any](ctx context.Context, seasons []S, inTurn bool, read f
 	return list, first
 }
 
-// walkCut is the limit note walkEpisodes hands walkPages, to learn that
-// the walk stopped at its limit with the listing going on.
-const walkCut = "\x00cut"
-
 // walkEpisodes is walkPages for a broadcaster's listing taken up to limit
 // entries (none when negative), saying whether the listing went on past
 // them (more) rather than noting it, so that expandSeries or the caller says
 // what the cap left out in its own words. note is the walk's own, for a
 // listing cut short some other way.
 func walkEpisodes[T any](ctx context.Context, limit int, w pageWalk[T]) (items []T, more bool, note string, err error) {
-	w.limit, w.limitNote = limit, walkCut
-	items, note, err = walkPages(ctx, w)
-	if note == walkCut {
-		return items, true, "", err
+	w.limit, w.limitNote = limit, ""
+	out, err := walkPagesFor(ctx, w)
+	if err != nil {
+		return nil, false, "", err
 	}
-	return items, false, note, err
+	if out.stop == walkLimit {
+		return out.items, true, "", nil
+	}
+	return out.items, false, w.render(out), nil
 }
 
 // nestByLabel reports whether a listing spans more than one distinct
@@ -445,6 +429,19 @@ func nextData(doc string) (string, bool) {
 		return m[1], true
 	}
 	return "", false
+}
+
+// nextDataIn is nextData for a parsed page: the island's text as written
+// (rawText), for a reader that already holds the tree and would otherwise
+// scan the body again.
+func nextDataIn(root *html.Node) (string, bool) {
+	island := findFirst(root, func(n *html.Node) bool {
+		return isElem(n, atom.Script) && attr(n, "id") == "__NEXT_DATA__"
+	})
+	if island == nil {
+		return "", false
+	}
+	return rawText(island), true
 }
 
 // allDigits reports a non-empty run of decimal digits: an id where a slug

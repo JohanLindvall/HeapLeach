@@ -121,9 +121,8 @@ func expandSourcesNamed(ctx context.Context, sources []string, opts Options,
 	extract func(context.Context, string) (*Result, error), folders func([]sourceResult) []string) expansion {
 	limit := opts.maxFiles()
 
-	// A few rounds of slots at a time: enough that a slow source holds up
-	// little, few enough that the cap overshoots by a handful of requests.
-	batch := 4 * config.PageFetchConcurrency
+	// A few rounds of slots at a time (config.SourceBatchRounds).
+	batch := config.SourceBatchRounds * config.PageFetchConcurrency
 	var (
 		resolved []sourceResult
 		e        expansion

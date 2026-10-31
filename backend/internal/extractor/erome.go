@@ -136,11 +136,11 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (al
 		// the title names the folder: a partial run filed under "(partial —
 		// rate limited)" and the complete run after it under the plain name
 		// was every file downloaded twice.
-		failed: func(err error) string {
+		failed: func(err error) (string, bool) {
 			if httpx.HasStatus(err, http.StatusTooManyRequests) {
-				return "partial — rate limited"
+				return "partial — rate limited", true
 			}
-			return ""
+			return "", true
 		},
 		fetch: fetchAsAsked(e.client, headers),
 		read: func(root *html.Node, base, _ *url.URL) listingPage {

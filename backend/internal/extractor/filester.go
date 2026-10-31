@@ -320,12 +320,12 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 			page = next
 			return p, nil
 		},
-		failed: func(err error) string {
+		failed: func(err error) (string, bool) {
 			if errors.Is(err, ErrPasswordRequired) {
 				locked = err
-				return ""
+				return "", true
 			}
-			return "partial — could not read a folder page"
+			return "partial — could not read a folder page", true
 		},
 	})
 	switch {

@@ -135,7 +135,7 @@ func (a *Arte) config(ctx context.Context, lang, id string) (*arteConfig, string
 	var cfg arteConfig
 	if err := a.client.GetJSON(ctx, a.api+"/config/"+lang+"/"+url.PathEscape(id), arteHeaders(), &cfg); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, "", &broadcastRefusal{"arte", id, "it is not online: it does not exist, or its time on ARTE is over"}
+			return nil, "", &itemRefusal{"arte", id, "it is not online: it does not exist, or its time on ARTE is over"}
 		}
 		return nil, "", fmt.Errorf("arte: %s: %w", id, err)
 	}
@@ -144,11 +144,11 @@ func (a *Arte) config(ctx context.Context, lang, id string) (*arteConfig, string
 	title = cmp.Or(title, id)
 	switch geo := attrs.Restriction.Geoblocking; {
 	case attrs.Error != nil:
-		return nil, "", &broadcastRefusal{"arte", title, cmp.Or(attrs.Error.Message, attrs.Error.Title, "refused")}
+		return nil, "", &itemRefusal{"arte", title, cmp.Or(attrs.Error.Message, attrs.Error.Title, "refused")}
 	case geo.RestrictedArea:
-		return nil, "", &broadcastRefusal{"arte", title, "it is not shown where this is asked from (ARTE limits it to " + geo.Code + ")"}
+		return nil, "", &itemRefusal{"arte", title, "it is not shown where this is asked from (ARTE limits it to " + geo.Code + ")"}
 	case attrs.Live:
-		return nil, "", &broadcastRefusal{"arte", title, refusedLiveBroadcast}
+		return nil, "", &itemRefusal{"arte", title, refusedLiveBroadcast}
 	}
 	return &cfg, title, nil
 }
@@ -274,7 +274,7 @@ func (a *Arte) playlist(ctx context.Context, lang, id string) (string, []arteEnt
 	var doc arteCollection
 	if err := a.client.GetJSON(ctx, a.api+"/playlist/"+lang+"/"+url.PathEscape(id), arteHeaders(), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return "", nil, &broadcastRefusal{"arte", "collection " + id, "it is not online: it does not exist, or its time on ARTE is over"}
+			return "", nil, &itemRefusal{"arte", "collection " + id, "it is not online: it does not exist, or its time on ARTE is over"}
 		}
 		return "", nil, fmt.Errorf("arte: collection %s: %w", id, err)
 	}

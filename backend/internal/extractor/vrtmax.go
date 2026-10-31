@@ -425,7 +425,7 @@ func (v *VRTMax) media(ctx context.Context, streamID string) (*vrtMedia, error) 
 	var doc vrtMedia
 	if err := v.client.GetJSON(ctx, endpoint, nil, &doc); err != nil {
 		if code := vrtRefusalCode(err); code != "" {
-			return nil, &broadcastRefusal{site: "vrtmax", reason: vrtReason(code)}
+			return nil, &itemRefusal{site: "vrtmax", reason: vrtReason(code)}
 		}
 		return nil, fmt.Errorf("vrtmax: media for %s: %w", streamID, err)
 	}

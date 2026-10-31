@@ -299,7 +299,7 @@ func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string,
 		key:   key,
 		quiet: true,
 		// A later page failing still leaves the earlier ones.
-		failed: func(error) string { return couldNotFetchNote },
+		failed: func(error) (string, bool) { return couldNotFetchNote, true },
 	})
 	if err != nil {
 		return nil, false, "", fmt.Errorf("rtve: listing %s: %w", endpoint, err)
@@ -342,7 +342,7 @@ func (r *RTVE) metadata(ctx context.Context, id string) (*rtveVideo, error) {
 // file turns a video document into the file to fetch.
 func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if !video.playable() {
-		return nil, &broadcastRefusal{"rtve", video.name(), rtveReason(video.Country)}
+		return nil, &itemRefusal{"rtve", video.name(), rtveReason(video.Country)}
 	}
 
 	links, err := r.media(ctx, video.ID)
