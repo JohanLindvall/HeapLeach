@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -230,4 +231,9 @@ func matchedIDs(text string, res ...*regexp.Regexp) []string {
 		}
 	}
 	return util.Dedupe(ids)
+}
+
+// hasAnyClass reports whether n carries any of classes.
+func hasAnyClass(n *html.Node, classes ...string) bool {
+	return slices.ContainsFunc(classes, func(class string) bool { return hasClass(n, class) })
 }
