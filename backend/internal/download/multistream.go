@@ -326,14 +326,18 @@ func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bo
 	// that cannot help, because the ceiling is shared across all of them —
 	// and with several files running, every one of them would fan out at
 	// once for the same wrong reason.
-	if t.manager.throttle.isPaused() || t.manager.throttle.limiting() || t.item.limiter.limiting() {
-		return false
-	}
-	if speed >= float64(t.slowBelow) {
+	if t.held() || speed >= float64(t.slowBelow) {
 		return false
 	}
 	// Let the previous addition settle before judging the rate again.
 	return lastAdd.IsZero() || time.Since(lastAdd) >= t.manager.timings.cooldown
+}
+
+// held reports a pause or a speed cap, the queue's or the job's, holding the
+// transfer back: slow without being slow, and no faster for another
+// connection, since every connection draws on the same ceiling.
+func (t *segmentedTransfer) held() bool {
+	return t.manager.throttle.isPaused() || t.manager.throttle.limiting() || t.item.limiter.limiting()
 }
 
 // pump fetches one segment, retrying it on its own so a single dropped
@@ -398,11 +402,8 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 			return nil
 		}
 		// A failed flush drops whatever the connection was holding, and pos
-		// had already moved past it. Retrying from pos would skip that run
-		// and leave a hole, so go back to what the file actually holds.
-		if flushed := seg.flushed.Load(); seg.pos.Load() > flushed {
-			t.item.downloaded.Add(flushed - seg.pos.Swap(flushed))
-		}
+		// had already moved past it.
+		t.item.downloaded.Add(-seg.rewind())
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

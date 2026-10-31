@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -59,8 +58,7 @@ func TestALinkRefusedForItsAddressIsMintedAgainAndResumed(t *testing.T) {
 		resumedAt.CompareAndSwap(-1, int64(from))
 		second.handler().ServeHTTP(w, r)
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	srv := testServer(t, mux)
 
 	m := progressManager(t, 1)
 	var discards atomic.Int32
@@ -88,8 +86,7 @@ func TestALinkRefusedForItsAddressIsMintedAgainAndResumed(t *testing.T) {
 // A link refused every time is not tried for ever: the retry budget still
 // bounds attempts that get nowhere, and the refusal is what fails the file.
 func TestLinksAlwaysRefusedForTheirAddressFailWithinTheBudget(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
-	t.Cleanup(srv.Close)
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
 	m := progressManager(t, 1)
 	var discards atomic.Int32
 	it := &Item{ID: newID(), Name: "clip.bin", Size: -1,
@@ -106,8 +103,7 @@ func TestLinksAlwaysRefusedForTheirAddressFailWithinTheBudget(t *testing.T) {
 // Only a resolver that says its links are bound to an address has a 409 read
 // that way. Any other 409 still fails the file at once.
 func TestAConflictOnAnUnboundLinkStillFails(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
-	t.Cleanup(srv.Close)
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
 	m := progressManager(t, 1)
 	var resolves atomic.Int32
 	it := &Item{ID: newID(), Name: "clip.bin", Size: -1, resolve: func(context.Context) (*extractor.Target, error) {

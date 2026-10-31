@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -254,8 +253,7 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 					http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader(payload))
 				}
 			}
-			direct := httptest.NewServer(handler("direct"))
-			defer direct.Close()
+			direct := testServer(t, handler("direct"))
 			origin = direct.URL
 			route := proxyServer(t, "127.0.0.2", handler("proxy"))
 			pool := attachPool(t, m, []string{proxy.Direct, route.URL})
@@ -275,8 +273,7 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 			failed.Store(true)
 			m.mu.Lock()
 			job := &Job{ID: newID(), Source: u.String()}
-			m.jobs[job.ID] = job
-			m.order = append(m.order, job.ID)
+			m.queueJobLocked(job)
 			m.applyResultLocked(job, "doodstream", res, nil)
 			m.mu.Unlock()
 			m.Start()
@@ -302,11 +299,10 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 
 func TestSourceProgressIncludesRetryAttemptAndClearsAfterCancellation(t *testing.T) {
 	m := busyManager(t)
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	origin := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(httpx.HeaderCFMitigated, "challenge")
 		w.WriteHeader(http.StatusForbidden)
 	}))
-	defer origin.Close()
 	started := make(chan struct{})
 	route := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, r *http.Request) {
 		close(started)
@@ -366,7 +362,7 @@ func TestDoodFallbackDisabledKeepsOrdinaryTransferRetries(t *testing.T) {
 	m := busyManager(t)
 	m.timings.progressRetry = time.Millisecond
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(httpx.HeaderContentType, "video/mp4")
 		w.Header().Set("Content-Length", "4")
 		if calls.Add(1) == 1 {
@@ -375,7 +371,6 @@ func TestDoodFallbackDisabledKeepsOrdinaryTransferRetries(t *testing.T) {
 		}
 		fmt.Fprint(w, "file")
 	}))
-	defer srv.Close()
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL, Size: 4, proxyFallback: true}
 	if err := m.transferRouted(context.Background(), it); err != nil || calls.Load() < 2 {
 		t.Fatalf("disabled fallback changed direct retries: calls=%d err=%v", calls.Load(), err)

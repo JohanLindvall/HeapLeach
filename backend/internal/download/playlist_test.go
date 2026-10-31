@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,8 +35,7 @@ func TestPlaylistJoinsPartsInOrder(t *testing.T) {
 		}
 		_, _ = w.Write(payload[i])
 	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 
 	m := busyManager(t)
 	m.streams = 4
@@ -91,8 +89,7 @@ func TestPlaylistReportsTheFailingPart(t *testing.T) {
 		}
 		_, _ = w.Write([]byte("data"))
 	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "broken.ts", URL: srv.URL, Size: -1,
@@ -162,10 +159,9 @@ func TestLoadPlaylistStateRejectsGarbage(t *testing.T) {
 // arrives — that counter is what the stall watchdog watches.
 func TestFetchSegmentCountsBytesAsTheyArrive(t *testing.T) {
 	payload := bytes.Repeat([]byte{7}, 300<<10)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(payload)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	var fetched atomic.Int64
@@ -183,11 +179,10 @@ func TestFetchSegmentCountsBytesAsTheyArrive(t *testing.T) {
 
 func TestFetchSegmentRetriesAndGivesUp(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		http.Error(w, "nope", http.StatusNotFound)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	var fetched atomic.Int64
@@ -208,14 +203,12 @@ func TestPlaylistFetchesByteRanges(t *testing.T) {
 	for i := range file {
 		file[i] = byte(i % 251)
 	}
-	honours := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	honours := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "clip.mp4", time.Time{}, bytes.NewReader(file))
 	}))
-	defer honours.Close()
-	ignores := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ignores := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(file)
 	}))
-	defer ignores.Close()
 
 	ranges := [][2]int{{0, 699}, {700, 1699}, {1700, 4999}}
 	segments := func(base string) []string {

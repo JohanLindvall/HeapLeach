@@ -5,7 +5,6 @@ package download
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,8 +91,7 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 					http.NotFound(w, r)
 				}
 			}
-			srv := httptest.NewServer(handler("direct"))
-			defer srv.Close()
+			srv := testServer(t, handler("direct"))
 			origin = srv.URL
 			endpoints := []string{proxy.Direct}
 			for i, address := range []string{"127.0.0.2", "127.0.0.3", "127.0.0.4"} {
@@ -119,9 +117,7 @@ func TestChallengeProxyRecoveryForUnregisteredPagesAndFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			waitFor(t, 5*time.Second, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+			waitLocked(t, m, 5*time.Second, func() bool {
 				job := m.jobs[id]
 				if tc.wantWaiting {
 					return proxyChallenges.Load() == tc.refusals && len(job.Items) == 1 &&

@@ -5,11 +5,9 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -104,13 +102,9 @@ func parseRange(header string, total int64) (start, end int64, err error) {
 // places. A wrong offset would corrupt the file silently, so the check is
 // byte-for-byte against what was served.
 func TestSegmentedTransferIsByteExact(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 	origin := &rangeServer{payload: payload, perChunk: 3 * time.Millisecond}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	part, got := runSegmented(t, srv.URL, len(payload), 8)
 
@@ -130,13 +124,9 @@ func TestSegmentedTransferIsByteExact(t *testing.T) {
 // A server that ignores Range must fall back to one connection and still
 // produce the right file.
 func TestSegmentedTransferHandlesNoRangeSupport(t *testing.T) {
-	payload := make([]byte, 9<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 9<<20)
 	origin := &rangeServer{payload: payload, perChunk: time.Millisecond, ignoreRange: true}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	_, got := runSegmented(t, srv.URL, len(payload), 1)
 
@@ -151,13 +141,9 @@ func TestSegmentedTransferHandlesNoRangeSupport(t *testing.T) {
 // An interrupted transfer must resume from its sidecar rather than starting
 // over, and still finish byte-exact.
 func TestSegmentedTransferResumesFromState(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 	origin := &rangeServer{payload: payload, perChunk: 3 * time.Millisecond}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	dir := t.TempDir()
 	part := filepath.Join(dir, "resume.part")
@@ -316,13 +302,9 @@ func runSegmented(t *testing.T, url string, size, streams int) (string, []byte) 
 // judged incapable of ranges, and no transfer was ever split. This covers
 // that seam.
 func TestSlowDownloadSplitsThroughTheManager(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 	origin := &rangeServer{payload: payload, perChunk: 4 * time.Millisecond}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	manager := testManager(t, func(c *config.Config) {
 		c.Streams, c.MaxRetries = 8, 1
@@ -365,10 +347,7 @@ func TestSlowDownloadSplitsThroughTheManager(t *testing.T) {
 // ones are turned away the transfer must settle for what it has and still
 // finish correctly, rather than failing a download that was working.
 func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 
 	origin := &rangeServer{payload: payload, perChunk: 4 * time.Millisecond}
 	const allowed = 2 // this host tolerates two connections and no more
@@ -383,8 +362,7 @@ func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
 		}
 		origin.handler().ServeHTTP(w, r)
 	})
-	srv := httptest.NewServer(gated)
-	defer srv.Close()
+	srv := testServer(t, gated)
 
 	manager, item := testTransferDeps(t, srv.URL)
 	manager.hosts = newHostLimiter(8)
@@ -431,15 +409,12 @@ func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
 // resolver-less item stops; TestBusyCap* pin the boundary itself from both
 // sides.
 func TestBusyHostRetriesBeyondTheRetryBudget(t *testing.T) {
-	payload := make([]byte, 1<<20) // small enough that nothing is split
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 1<<20) // small enough that nothing is split
 
 	const busyResponses = 5 // far more than the retry budget below
 	var attempts atomic.Int32
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) <= busyResponses {
 			// What gofile's 302-to-its-own-page looks like once followed.
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -449,7 +424,6 @@ func TestBusyHostRetriesBeyondTheRetryBudget(t *testing.T) {
 		}
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	manager := testManager(t, func(c *config.Config) {
 		c.MaxRetries = 1 // deliberately tiny: busy must not consume it

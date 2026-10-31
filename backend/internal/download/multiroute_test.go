@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -95,14 +94,13 @@ func newRouteRig(t *testing.T, routes int) *routeRig {
 	for i, id := range ids {
 		r.exits[id] = fmt.Sprintf("198.51.100.%d", 1+i) // each its own, unless a test says otherwise
 	}
-	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	echo := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if r.echoDown.Load() {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = fmt.Fprint(w, "192.0.2.1") // the normal connection's own address
 	}))
-	t.Cleanup(echo.Close)
 	r.echoHost = echo.Listener.Addr().String()
 	r.m.cfg.ProxyExitProbes = []string{echo.URL + "/"}
 	streams := 4
@@ -194,10 +192,7 @@ func (r *routeRig) serve(w http.ResponseWriter, req *http.Request, route string)
 func (r *routeRig) add(name string, hold func(ctx context.Context, route string) error) *Item {
 	r.m.mu.Lock()
 	defer r.m.mu.Unlock()
-	job := &Job{ID: newID(), Source: "http://service.example.test/" + name}
-	r.m.jobs[job.ID] = job
-	r.m.order = append(r.m.order, job.ID)
-	it := r.m.newItem(job, extractor.File{Name: name, Size: int64(len(r.payload)),
+	it := r.m.queueJobLocked(&Job{ID: newID(), Source: "http://service.example.test/" + name}, extractor.File{Name: name, Size: int64(len(r.payload)),
 		Resolve: func(ctx context.Context) (*extractor.Target, error) {
 			route := httpx.RouteID(ctx)
 			r.mu.Lock()
@@ -212,9 +207,7 @@ func (r *routeRig) add(name string, hold func(ctx context.Context, route string)
 				Size: int64(len(r.payload))}, nil
 		},
 		Refused: quotaRefused,
-		Pace:    &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}}, "", 0)
-	job.Items = append(job.Items, it)
-	r.m.queue = append(r.m.queue, it)
+		Pace:    &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}})[0]
 	r.m.signal()
 	return it
 }

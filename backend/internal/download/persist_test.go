@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -258,12 +257,11 @@ func TestRetryingOneItemOfARestoredJobReReadsTheSource(t *testing.T) {
 
 func retryRestoredItem(t *testing.T, status Status) {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer server.Close()
 
 	m := testManager(t, nil)
 	m.Start()
@@ -278,8 +276,7 @@ func retryRestoredItem(t *testing.T, status Status) {
 		Items:     []*Item{{ID: "stale", Name: "payload.bin", Status: status, Size: 4}},
 		restored:  true,
 	}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
+	m.queueJobLocked(job)
 	m.mu.Unlock()
 
 	if err := m.RetryItem("restored", "stale"); err != nil {
@@ -309,12 +306,11 @@ func retryRestoredItem(t *testing.T, status Status) {
 // file in it would come back twice. This is the whole reason resuming and
 // retrying clear them rather than leaving them in place.
 func TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer server.Close()
 
 	m := testManager(t, nil)
 	m.Start()
@@ -330,8 +326,7 @@ func TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem(t *testing.T
 		Items:     []*Item{{ID: "stale", Name: "payload.bin", Status: StatusQueued, Size: 4}},
 		restored:  true,
 	}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
+	m.queueJobLocked(job)
 	m.mu.Unlock()
 
 	// Nothing runs while it is held, which is the point of restoring held.
@@ -375,7 +370,7 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 	// A body that never ends, so the transfer is unambiguously mid-flight
 	// when the manager is closed under it.
 	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "10000000")
 		w.WriteHeader(http.StatusOK)
@@ -392,7 +387,6 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}))
-	defer server.Close()
 	defer close(release)
 
 	file := filepath.Join(t.TempDir(), "queue.json")
@@ -444,12 +438,11 @@ func TestShutdownRecordsAnInterruptedTransferAsUnfinished(t *testing.T) {
 // why. Restored items are not put in the dispatch queue at all, so they are
 // already held on their own account, and the pause bought nothing for it.
 func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer server.Close()
 
 	// A state file holding one unfinished job.
 	file := filepath.Join(t.TempDir(), "queue.json")
@@ -511,12 +504,11 @@ func TestRestoreLeavesNewWorkFreeToRun(t *testing.T) {
 // cancelled one re-queued it on its own and failed with "no download URL",
 // which is what the held case had already been fixed for.
 func TestRetryingACancelledItemOfAnUnheldRestoredJobReReadsTheSource(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer server.Close()
 
 	file := filepath.Join(t.TempDir(), "queue.json")
 	seed := &Manager{stateFile: file, jobs: map[string]*Job{}, log: testLogger()}

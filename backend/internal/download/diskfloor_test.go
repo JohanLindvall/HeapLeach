@@ -4,7 +4,6 @@ package download
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -46,12 +45,11 @@ func TestLowOnSpace(t *testing.T) {
 // picks up by itself once room is made, so clearing space is the whole of the
 // remedy and nothing has to be re-added.
 func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer server.Close()
 
 	m := testManager(t, nil)
 	m.Start()

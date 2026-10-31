@@ -5,7 +5,6 @@ package download
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -82,7 +81,7 @@ func TestCancelRetryNeverDoubleRuns(t *testing.T) {
 	const body = 512 << 10
 
 	var concurrent, peak atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := concurrent.Add(1)
 		for {
 			old := peak.Load()
@@ -126,7 +125,6 @@ func TestCancelRetryNeverDoubleRuns(t *testing.T) {
 			}
 		}
 	}))
-	defer server.Close()
 
 	// Measure the invariant itself: how many workers hold the item at once.
 	// Counting HTTP handlers cannot answer that, because a cancelled

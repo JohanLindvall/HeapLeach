@@ -5,7 +5,6 @@ package download
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
@@ -49,8 +48,7 @@ func seededManager(t *testing.T) (m *Manager, done, failed, queued string) {
 		job := &Job{ID: newID(), Source: "https://example.test/" + newID(), Title: "t", CreatedAt: time.Now()}
 		job.Items = []*Item{{ID: newID(), JobID: job.ID, Name: "f", Status: status}}
 		m.mu.Lock()
-		m.jobs[job.ID] = job
-		m.order = append(m.order, job.ID)
+		m.queueJobLocked(job)
 		m.mu.Unlock()
 		return job.ID
 	}
@@ -88,8 +86,7 @@ func TestClearFinishedForgetsOnlyCompleteJobs(t *testing.T) {
 		for i, status := range tc.statuses {
 			job.Items = append(job.Items, &Item{ID: fmt.Sprint(i), JobID: job.ID, Status: status})
 		}
-		m.jobs[job.ID] = job
-		m.order = append(m.order, job.ID)
+		m.queueJobLocked(job)
 		if tc.remove {
 			wantRemoved++
 		} else {
@@ -229,13 +226,12 @@ func TestBusyCountsAResolvingJob(t *testing.T) {
 
 	// A page that never answers keeps the job resolving.
 	hold := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-hold:
 		case <-r.Context().Done():
 		}
 	}))
-	defer srv.Close()
 	defer close(hold)
 
 	id, err := m.Add(srv.URL+"/slow", "")

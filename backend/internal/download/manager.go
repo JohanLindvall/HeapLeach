@@ -314,8 +314,7 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 	m.jobs[job.ID] = job
 	m.order = append(m.order, job.ID)
 	m.rereadLocked(job)
-	m.mu.Unlock()
-	m.markDirty()
+	m.commitLocked()
 	return job.ID, nil
 }
 
@@ -798,7 +797,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	err := m.transferRouted(ctx, it)
 	// Read here, outside mu, for the one outcome that uses it.
 	var started bool
-	if _, wait := errors.AsType[*extractor.WaitError](err); wait && ctx.Err() == nil {
+	if isErr[*extractor.WaitError](err) && ctx.Err() == nil {
 		started = m.startedOnDisk(it)
 	}
 
@@ -993,9 +992,7 @@ func (m *Manager) RetryJob(id string) error {
 	// with no items at all, where the extractor itself is what failed.
 	if job.restored || job.unfetchable || len(job.Items) == 0 {
 		m.rereadLocked(job)
-		m.mu.Unlock()
-
-		m.markDirty()
+		m.commitLocked()
 		return nil
 	}
 
@@ -1040,9 +1037,7 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	// skipped, so this costs the listing and nothing more.
 	if unfetchable {
 		m.rereadLocked(job)
-		m.mu.Unlock()
-
-		m.markDirty()
+		m.commitLocked()
 		return nil
 	}
 

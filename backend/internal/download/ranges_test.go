@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,10 +16,9 @@ import (
 func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
 	for _, status := range []int{http.StatusAccepted, http.StatusNoContent, http.StatusResetContent} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(status)
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if _, err := m.transferOnce(t.Context(), it, part, "file.bin", transferFiles{}); err == nil {
@@ -38,7 +36,7 @@ func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
 
 func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 	payload := []byte("new123")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Range") == "bytes=3-8" {
 			w.Header().Set("Content-Range", "bytes 3-5/6")
 			w.WriteHeader(http.StatusPartialContent)
@@ -49,7 +47,6 @@ func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write(payload)
 	}))
-	defer srv.Close()
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), URL: srv.URL, Name: "file.bin", Size: -1}
 	part := filepath.Join(m.DownloadDir(), "file.bin."+partSuffix(it.URL)+".part")
@@ -86,11 +83,10 @@ func TestResumeRejectsUnprovenCompletion(t *testing.T) {
 		{name: "complete sequential part", contentRange: "bytes */6", complete: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Range", tc.contentRange)
 				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if err := os.WriteFile(part, []byte("abcdef"), 0o644); err != nil {
@@ -117,7 +113,7 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 	for _, mode := range []string{"missing part", "truncated part", "corrupt checkpoint"} {
 		t.Run(mode, func(t *testing.T) {
 			payload := []byte("abcdef")
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if got := r.Header.Get("Range"); got != "bytes=0-" {
 					t.Errorf("resumed unproven bytes with %q", got)
 				}
@@ -125,7 +121,6 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 				w.WriteHeader(http.StatusPartialContent)
 				_, _ = w.Write(payload)
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if mode != "missing part" {
@@ -165,12 +160,11 @@ func TestPartialResponsesAreValidatedBeforeWriting(t *testing.T) {
 		{"invalid unit", "items 3-5/6", "def"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Range", tc.contentRange)
 				w.WriteHeader(http.StatusPartialContent)
 				_, _ = w.Write([]byte(tc.body))
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if err := os.WriteFile(part, []byte("abc"), 0o644); err != nil {

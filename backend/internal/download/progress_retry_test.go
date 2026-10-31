@@ -5,10 +5,8 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,23 +79,13 @@ func progressManager(t *testing.T, retries int) *Manager {
 	return m
 }
 
-func randomPayload(t *testing.T, n int) []byte {
-	t.Helper()
-	payload := make([]byte, n)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
-	return payload
-}
-
 // A connection that drops after moving bytes is resumed, not counted: with
 // no retries at all in the budget, a file that arrives in four pieces still
 // arrives, because each attempt got somewhere.
 func TestDroppedConnectionAfterProgressResumesRatherThanFailing(t *testing.T) {
 	payload := randomPayload(t, 100_000)
 	origin := &droppingServer{payload: payload, chunks: []int{30_000}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 0)
 	// Long enough to be seen, short enough not to matter.
@@ -157,8 +145,7 @@ func TestDroppedConnectionAfterProgressResumesRatherThanFailing(t *testing.T) {
 // is a failure.
 func TestAttemptsThatMoveNothingStillSpendTheBudget(t *testing.T) {
 	origin := &droppingServer{payload: randomPayload(t, 100_000), chunks: []int{0}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -180,8 +167,7 @@ func TestAttemptsThatMoveNothingStillSpendTheBudget(t *testing.T) {
 // get kept on disk for a retry to resume from.
 func TestProgressRestartsTheRetryCount(t *testing.T) {
 	origin := &droppingServer{payload: randomPayload(t, 100_000), chunks: []int{30_000, 0}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -210,8 +196,7 @@ func TestProgressRestartsTheRetryCount(t *testing.T) {
 // other attempt that got nowhere.
 func TestRestartingFromZeroIsNotProgress(t *testing.T) {
 	origin := &droppingServer{payload: randomPayload(t, 100_000), chunks: []int{30_000}, ignoreRange: true}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}

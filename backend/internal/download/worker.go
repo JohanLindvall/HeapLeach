@@ -202,10 +202,10 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if meant := m.refusedByHost(ctx, it, err); meant != nil {
 			return meant
 		}
-		if _, routed := errors.AsType[*httpx.RouteError](err); routed {
+		if isErr[*httpx.RouteError](err) {
 			return &routeTransferError{err: err, moved: m.onDisk(it, part, files) > before}
 		}
-		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+		if isErr[*httpx.ChallengeError](err) {
 			return err
 		}
 		// A link bound to the address that obtained it, refused because
@@ -222,17 +222,12 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			err = &addressRefusedError{err: err}
 		}
-		if it.proxyFallback && httpx.RouteID(ctx) == "" && retryRouteFailure(err) {
-			// Let direct-first hosts recover on another address before
-			// ordinary retries or host backoff repeat the same failed route.
-			m.mu.Lock()
-			canRecover := m.proxyEnabled && m.proxies != nil
-			m.mu.Unlock()
-			if canRecover {
-				return err
-			}
+		// Let direct-first hosts recover on another address before ordinary
+		// retries or host backoff repeat the same failed route.
+		if httpx.RouteID(ctx) == "" && retryRouteFailure(err) && m.proxyRecovers(it) {
+			return err
 		}
-		if _, busy := errors.AsType[*busyHostError](err); busy && httpx.RouteID(ctx) != "" {
+		if isErr[*busyHostError](err) && httpx.RouteID(ctx) != "" {
 			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: m.onDisk(it, part, files) > before}
 		}
 		if errors.Is(err, errFileChanged) {
@@ -1000,10 +995,7 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 		if httpx.RouteID(ctx) != "" || !retryableResolve(err) {
 			return err
 		}
-		m.mu.Lock()
-		fallback := it.proxyFallback && m.proxyEnabled && m.proxies != nil
-		m.mu.Unlock()
-		if fallback || m.cfg == nil || attempt >= m.cfg.MaxRetries {
+		if m.cfg == nil || attempt >= m.cfg.MaxRetries || m.proxyRecovers(it) {
 			return err
 		}
 		wait := transferRetryDelay(attempt)
@@ -1048,27 +1040,25 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 // host's refusal are final, while queue waits and route recovery belong to
 // their callers. retryableTransfer is deliberately broader for body I/O.
 func retryableResolve(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) || isErr[*extractor.WaitError](err) ||
+		isErr[*extractor.RefusedError](err) || isErr[*httpx.RouteError](err) || isErr[*httpx.ChallengeError](err) {
 		return false
 	}
-	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*extractor.RefusedError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*httpx.RouteError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*httpx.ChallengeError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*httpx.StatusError](err); ok {
+	if isErr[*httpx.StatusError](err) {
 		return httpx.HasStatus(err, http.StatusRequestTimeout, http.StatusTooManyRequests,
 			http.StatusInternalServerError, http.StatusBadGateway,
 			http.StatusServiceUnavailable, http.StatusGatewayTimeout)
 	}
 	return transientRouteFailure(err) || errors.Is(err, io.EOF)
+}
+
+// proxyRecovers reports that a failure of the item on the normal connection
+// is for the proxy pool to recover from: the item opted in
+// (File.ProxyFallback), and a pool is open and enabled.
+func (m *Manager) proxyRecovers(it *Item) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return it.proxyFallback && m.proxyEnabled && m.proxies != nil
 }
 
 // note records a short, transient explanation of what an item is waiting
@@ -1345,13 +1335,20 @@ func (m *Manager) discarder(it *Item) func() {
 	return it.discard
 }
 
+// isErr reports whether err's chain holds an error of type T, for the many
+// classifiers here that ask only what kind of failure it was.
+func isErr[T error](err error) bool {
+	_, ok := errors.AsType[T](err)
+	return ok
+}
+
 // retryableTransfer reports whether a failed pass is worth repeating. A
 // definitive client error (404, 403, ...) is not.
 func retryableTransfer(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	if _, ok := errors.AsType[*addressRefusedError](err); ok {
+	if isErr[*addressRefusedError](err) {
 		return true
 	}
 	// The host said the resource is gone, or answers a range with the whole
@@ -1359,7 +1356,7 @@ func retryableTransfer(err error) bool {
 	if errors.Is(err, errDeadResource) || errors.Is(err, errRangeIgnored) {
 		return false
 	}
-	if _, ok := errors.AsType[*busyHostError](err); ok {
+	if isErr[*busyHostError](err) {
 		return true
 	}
 	if se, ok := errors.AsType[*httpx.StatusError](err); ok {

@@ -5,10 +5,8 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,14 +23,11 @@ import (
 // transfer merely looks slow — which is what opens more connections. Pace is
 // how an extractor says "not this one".
 func TestPaceCapsConnectionsToOneHost(t *testing.T) {
-	payload := make([]byte, 24<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 24<<20)
 
 	var live, peak atomic.Int32
 	origin := &rangeServer{payload: payload, perChunk: 3 * time.Millisecond}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := live.Add(1)
 		for {
 			old := peak.Load()
@@ -43,7 +38,6 @@ func TestPaceCapsConnectionsToOneHost(t *testing.T) {
 		defer live.Add(-1)
 		origin.handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	manager, item := testTransferDeps(t, srv.URL)
 	// testTransferDeps leaves SlowSpeed enormous, so the supervisor always
@@ -74,7 +68,7 @@ func TestPaceCapsSimultaneousTransfersToOneHost(t *testing.T) {
 	payload := bytes.Repeat([]byte{9}, 256<<10)
 
 	var live, peak atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := live.Add(1)
 		for {
 			old := peak.Load()
@@ -87,7 +81,6 @@ func TestPaceCapsSimultaneousTransfersToOneHost(t *testing.T) {
 		time.Sleep(120 * time.Millisecond)
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	manager := busyManager(t)
 	manager.limit = 4
@@ -95,18 +88,16 @@ func TestPaceCapsSimultaneousTransfersToOneHost(t *testing.T) {
 
 	job := &Job{ID: newID(), Source: srv.URL + "/album"}
 	manager.mu.Lock()
-	manager.jobs[job.ID] = job
-	manager.order = append(manager.order, job.ID)
-	for i := range 4 {
-		it := manager.newItem(job, extractor.File{
+	files := make([]extractor.File, 4)
+	for i := range files {
+		files[i] = extractor.File{
 			Name: fmt.Sprintf("file-%d.bin", i),
 			URL:  fmt.Sprintf("%s/f/%d", srv.URL, i),
 			Size: int64(len(payload)),
 			Pace: &extractor.Pace{Streams: 1, Files: 1},
-		}, "", i)
-		job.Items = append(job.Items, it)
-		manager.queue = append(manager.queue, it)
+		}
 	}
+	manager.queueJobLocked(job, files...)
 	manager.mu.Unlock()
 	manager.signal()
 
@@ -204,7 +195,7 @@ func TestRejectByHostIsNotRetried(t *testing.T) {
 	// that is correct in every respect except being the wrong file. Nothing
 	// in the response is malformed, so no general rule can catch it.
 	removed := bytes.Repeat([]byte{0x89}, 503)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/removed.png" {
 			w.Header().Set("Content-Type", "image/png")
 			(&rangeServer{payload: removed}).handler().ServeHTTP(w, r)
@@ -213,7 +204,6 @@ func TestRejectByHostIsNotRetried(t *testing.T) {
 		hits.Add(1)
 		http.Redirect(w, r, "/removed.png", http.StatusFound)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	it := &Item{
@@ -243,8 +233,7 @@ func TestRejectByHostIsNotRetried(t *testing.T) {
 
 func TestRejectByHostPassesGoodResponses(t *testing.T) {
 	payload := bytes.Repeat([]byte{3}, 4096)
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	m := busyManager(t)
 	var asked atomic.Int32

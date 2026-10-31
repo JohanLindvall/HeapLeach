@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -83,19 +82,17 @@ func TestStalledTransferYieldsTheWorkerSlot(t *testing.T) {
 	// Sends a little and then nothing, holding the connection open — the
 	// shape of a host that throttled this address, which a read deadline
 	// never catches.
-	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	hang := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(1<<20))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(make([]byte, 8<<10))
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	}))
-	t.Cleanup(hang.Close)
 
-	quick := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	quick := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("small and immediate payload"))
 	}))
-	t.Cleanup(quick.Close)
 
 	m := testManager(t, func(c *config.Config) {
 		c.MaxRetries, c.SlowSpeed = 1, 1

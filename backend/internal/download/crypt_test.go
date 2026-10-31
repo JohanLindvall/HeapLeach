@@ -7,9 +7,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	mrand "math/rand/v2"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,14 +35,7 @@ func encryptCTR(t *testing.T, plain, key, nonce []byte) []byte {
 
 func testCipher(t *testing.T) (*extractor.StreamCipher, []byte, []byte) {
 	t.Helper()
-	key := make([]byte, 16)
-	nonce := make([]byte, 8)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatal(err)
-	}
+	key, nonce := randomPayload(t, 16), randomPayload(t, 8)
 	return &extractor.StreamCipher{Key: key, Nonce: nonce}, key, nonce
 }
 
@@ -54,10 +45,7 @@ func testCipher(t *testing.T) (*extractor.StreamCipher, []byte, []byte) {
 // has to come out identical to a single sequential pass.
 func TestDecryptingWriterIsOrderIndependent(t *testing.T) {
 	sc, key, nonce := testCipher(t)
-	plain := make([]byte, 512<<10)
-	if _, err := rand.Read(plain); err != nil {
-		t.Fatal(err)
-	}
+	plain := randomPayload(t, 512<<10)
 	encrypted := encryptCTR(t, plain, key, nonce)
 
 	// Chop the payload into pieces of deliberately awkward sizes, so writes
@@ -181,13 +169,9 @@ func TestEncryptedTransferOverManyConnections(t *testing.T) {
 	sc, key, nonce := testCipher(t)
 	// Comfortably over MinSplitFileSize, and paced slowly enough that the
 	// supervisor has time to decide another connection would help.
-	plain := make([]byte, 12<<20)
-	if _, err := rand.Read(plain); err != nil {
-		t.Fatal(err)
-	}
+	plain := randomPayload(t, 12<<20)
 	server := &rangeServer{payload: encryptCTR(t, plain, key, nonce), perChunk: 2 * time.Millisecond}
-	srv := httptest.NewServer(server.handler())
-	defer srv.Close()
+	srv := testServer(t, server.handler())
 
 	manager, item := testTransferDeps(t, srv.URL)
 	item.cipher = sc
@@ -216,14 +200,10 @@ func TestEncryptedTransferOverManyConnections(t *testing.T) {
 // up with the offset by itself.
 func TestEncryptedTransferResumes(t *testing.T) {
 	sc, key, nonce := testCipher(t)
-	plain := make([]byte, 1<<20)
-	if _, err := rand.Read(plain); err != nil {
-		t.Fatal(err)
-	}
+	plain := randomPayload(t, 1<<20)
 	encrypted := encryptCTR(t, plain, key, nonce)
 	server := &rangeServer{payload: encrypted}
-	srv := httptest.NewServer(server.handler())
-	defer srv.Close()
+	srv := testServer(t, server.handler())
 
 	manager, item := testTransferDeps(t, srv.URL)
 	item.cipher = sc

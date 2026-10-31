@@ -57,14 +57,12 @@ func addProxyFiles(m *Manager, count int, resolve func(context.Context) (*extrac
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := &Job{ID: newID(), Source: "http://service.example.test/collection"}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
-	for i := range count {
-		it := m.newItem(job, extractor.File{Name: fmt.Sprintf("file-%d.bin", i), Size: -1,
-			Resolve: resolve, Pace: &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}}, "", i)
-		job.Items = append(job.Items, it)
-		m.queue = append(m.queue, it)
+	files := make([]extractor.File, count)
+	for i := range files {
+		files[i] = extractor.File{Name: fmt.Sprintf("file-%d.bin", i), Size: -1,
+			Resolve: resolve, Pace: &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}}
 	}
+	m.queueJobLocked(job, files...)
 	return job
 }
 
@@ -189,9 +187,7 @@ func TestProxyDownloadsOverlapAndKeepResolverAndFileOnTheirRoute(t *testing.T) {
 				}
 			}
 			once.Do(func() { close(finish) })
-			waitFor(t, 5*time.Second, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+			waitLocked(t, m, 5*time.Second, func() bool {
 				for _, it := range job.Items {
 					if it.Status != StatusDone {
 						return false
@@ -234,7 +230,7 @@ func TestProxyCooldownRotatesAndDoesNotConsumeAnotherWorker(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return job.Items[0].Status == StatusDone })
+	waitLocked(t, m, 5*time.Second, func() bool { return job.Items[0].Status == StatusDone })
 	if attempted.Load() != 2 {
 		t.Fatalf("attempts=%d", attempted.Load())
 	}
@@ -276,7 +272,7 @@ func TestARefusedAddressRetriesTheFileOnAnotherRoute(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return job.Items[0].Status == StatusDone })
+	waitLocked(t, m, 5*time.Second, func() bool { return job.Items[0].Status == StatusDone })
 	if attempts.Load() != 2 {
 		t.Fatalf("attempts=%d, want the refusal and one more route", attempts.Load())
 	}
@@ -321,7 +317,7 @@ func TestProxyTransportFailureRetriesOnAnotherRoute(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return job.Items[0].Status == StatusDone })
+	waitLocked(t, m, 5*time.Second, func() bool { return job.Items[0].Status == StatusDone })
 }
 
 func TestUnavailableProxyRoutesDoNotBlockOtherHosts(t *testing.T) {
@@ -367,7 +363,7 @@ func TestCancelReleasesRouteWithoutCoolingIt(t *testing.T) {
 	if err := m.CancelJob(job.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return !job.Items[0].inFlight })
+	waitLocked(t, m, 5*time.Second, func() bool { return !job.Items[0].inFlight })
 	lease := pool.Acquire(config.GroupKeep2Share, "", 1)
 	if lease == nil {
 		t.Fatal("cancelled download leaked or penalised its route")
@@ -388,7 +384,7 @@ func TestRouteFailuresAreBoundedAndManualRetryResetsBudget(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return job.Items[0].Status == StatusFailed })
+	waitLocked(t, m, 5*time.Second, func() bool { return job.Items[0].Status == StatusFailed })
 	if calls.Load() != 2 {
 		t.Fatalf("proxy requests=%d; want initial attempt plus one retry", calls.Load())
 	}
@@ -438,26 +434,19 @@ func TestProxyChangeResumesBytesAndDoesNotSpendRetriesOnProgress(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return job.Items[0].Status.Terminal() })
+	waitLocked(t, m, 5*time.Second, func() bool { return job.Items[0].Status.Terminal() })
 	got, err := os.ReadFile(filepath.Join(m.DownloadDir(), "file-0.bin"))
 	if err != nil || !bytes.Equal(got, payload) || resumed.Load() <= 0 {
 		t.Fatalf("resumed=%d bytes=%d err=%v state=%+v", resumed.Load(), len(got), err, m.Snapshot().Jobs)
 	}
 }
 
-// errTestTimeout stands in for a dial's i/o timeout.
-type errTestTimeout struct{}
-
-func (errTestTimeout) Error() string   { return "i/o timeout" }
-func (errTestTimeout) Timeout() bool   { return true }
-func (errTestTimeout) Temporary() bool { return true }
-
 // The shape net/http gives a proxy that never answered: a request through
 // it, a proxyconnect around a dial, and the dial's own failure.
 func deadProxyError() error {
 	return fmt.Errorf("keep2share: requestCaptcha: %w", &httpx.RouteError{Err: &url.Error{
 		Op: "Post", URL: "https://service.example.test/api/v2/requestCaptcha",
-		Err: &net.OpError{Op: "proxyconnect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errTestTimeout{}}},
+		Err: &net.OpError{Op: "proxyconnect", Net: "tcp", Err: &net.OpError{Op: "dial", Net: "tcp", Err: dialTimeout}},
 	}})
 }
 
@@ -519,7 +508,7 @@ func TestProxiesAtFaultDoNotSpendTheRetryBudget(t *testing.T) {
 		},
 		"TLS never completing through the proxy": func() error {
 			return fmt.Errorf("doodstream: fetch: %w", &httpx.RouteError{Err: &url.Error{
-				Op: "Get", URL: "https://player.example.test/e/clip", Err: errTLSHandshakeTimeout{}}})
+				Op: "Get", URL: "https://player.example.test/e/clip", Err: tlsHandshakeTimeout}})
 		},
 		"challenged": func() error {
 			return &httpx.RouteError{Err: &httpx.ChallengeError{Err: &httpx.StatusError{
@@ -565,9 +554,7 @@ func TestProxiesAtFaultDoNotSpendTheRetryBudget(t *testing.T) {
 			}
 			m.Start()
 			m.signal()
-			waitFor(t, 10*time.Second, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+			waitLocked(t, m, 10*time.Second, func() bool {
 				return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
 			})
 			m.mu.Lock()
@@ -611,9 +598,7 @@ func TestTransientRouteFailuresRetryAndPermanentOnesDoNot(t *testing.T) {
 			})
 			m.Start()
 			m.signal()
-			waitFor(t, 10*time.Second, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+			waitLocked(t, m, 10*time.Second, func() bool {
 				return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
 			})
 			m.mu.Lock()
@@ -625,10 +610,3 @@ func TestTransientRouteFailuresRetryAndPermanentOnesDoNot(t *testing.T) {
 		})
 	}
 }
-
-// errTLSHandshakeTimeout is net/http's own, which is unexported.
-type errTLSHandshakeTimeout struct{}
-
-func (errTLSHandshakeTimeout) Error() string   { return "net/http: TLS handshake timeout" }
-func (errTLSHandshakeTimeout) Timeout() bool   { return true }
-func (errTLSHandshakeTimeout) Temporary() bool { return true }

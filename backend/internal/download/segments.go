@@ -73,6 +73,17 @@ func (s *segment) markFlushed(upTo int64) {
 	}
 }
 
+// rewind moves pos back to what the file holds, once a failed flush has
+// dropped what the connection was holding, and returns how many bytes that
+// was. Retrying from pos would skip that run and leave a hole.
+func (s *segment) rewind() int64 {
+	flushed := s.flushed.Load()
+	if s.pos.Load() <= flushed {
+		return 0
+	}
+	return s.pos.Swap(flushed) - flushed
+}
+
 // remaining is how many bytes this segment still owes.
 func (s *segment) remaining() int64 {
 	if r := s.end.Load() - s.pos.Load(); r > 0 {

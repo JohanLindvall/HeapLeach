@@ -69,12 +69,7 @@ func TestEmloadResolvesAndTransfersThroughItsProxyPool(t *testing.T) {
 				t.Fatalf("discovery fetched a page before a route was assigned: %v", err)
 			}
 			m.mu.Lock()
-			job := &Job{ID: newID(), Source: source}
-			m.jobs[job.ID] = job
-			m.order = append(m.order, job.ID)
-			it := m.newItem(job, res.Files[0], "", 0)
-			job.Items = append(job.Items, it)
-			m.queue = append(m.queue, it)
+			it := m.queueJobLocked(&Job{ID: newID(), Source: source}, res.Files[0])[0]
 			m.mu.Unlock()
 			m.Start()
 			m.signal()
@@ -84,7 +79,7 @@ func TestEmloadResolvesAndTransfersThroughItsProxyPool(t *testing.T) {
 			} else if scenario == "premium only" {
 				wantStatus, wantTransfers = StatusFailed, 0
 			}
-			waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return it.Status == wantStatus })
+			waitLocked(t, m, 5*time.Second, func() bool { return it.Status == wantStatus })
 			if pages.Load() != wantPages || transfers.Load() != wantTransfers {
 				t.Fatalf("pages=%d transfers=%d; want %d and %d", pages.Load(), transfers.Load(), wantPages, wantTransfers)
 			}

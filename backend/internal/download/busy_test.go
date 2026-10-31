@@ -5,9 +5,7 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,11 +44,10 @@ func alwaysHTML() http.Handler {
 // "host busy" after the cap and say that instead.
 func TestBusyCapStopsResolverlessItems(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		alwaysHTML().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -71,21 +68,17 @@ func TestBusyCapStopsResolverlessItems(t *testing.T) {
 // An item that can re-resolve — a mirror set, a re-signed link — is the case
 // the patience exists for, and must ride out more busy answers than the cap.
 func TestBusyCapDoesNotBindItemsThatCanReResolve(t *testing.T) {
-	payload := make([]byte, 64<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 64<<10)
 
 	busyAnswers := int32(config.BusyRetryLimit) + 3
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits.Add(1) <= busyAnswers {
 			alwaysHTML().ServeHTTP(w, r)
 			return
 		}
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	var resolves atomic.Int32
