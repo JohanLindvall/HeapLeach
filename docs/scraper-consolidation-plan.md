@@ -1,6 +1,6 @@
 # Scraper and supporting-code consolidation plan
 
-Status: proposed implementation plan; no scraper migration is implemented by this document.
+Status: in progress; see the [ledger](scraper-consolidation-ledger.md) for what is implemented.
 
 Baseline: branch `consolidation-adoption`, commit
 `efa21c7197cd20daf26ac3355297c52e7ed8b41b`, inspected on 2026-10-31.
@@ -1272,7 +1272,8 @@ its failing regression test, requirement and adjacent-case checks together.
 
 ### Caller ledger template
 
-Keep the implementation ledger in this plan or in a linked repository document;
+The implementation ledger is [scraper-consolidation-ledger.md](scraper-consolidation-ledger.md).
+Keep it in this plan or in a linked repository document;
 store private replay details only in `hl-priv`. It is a migration record, not a
 new source of production registration data.
 

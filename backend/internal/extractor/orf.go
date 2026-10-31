@@ -318,7 +318,7 @@ func (o *ORF) get(ctx context.Context, path string, out any) error {
 		if err != nil {
 			return err
 		}
-		headers := httpx.Header{"Authorization": api.authorization, httpx.HeaderReferer: orfSite}
+		headers := httpx.Header{httpx.HeaderAuthorization: api.authorization, httpx.HeaderReferer: orfSite}
 		err = o.client.GetJSON(ctx, api.base+path, headers, out)
 		if attempt == 0 && httpx.HasStatus(err, http.StatusUnauthorized, http.StatusForbidden) {
 			continue

@@ -427,8 +427,14 @@ func feedDecoder(body []byte) *xml.Decoder {
 // right for ISO-8859-1 and near enough for its neighbours: everything acted
 // on here — URLs, lengths, media types — is ASCII in all of them, and the
 // only casualty is the odd piece of punctuation in a filename.
+//
+// input is the rest of a feed already read whole within the response limit
+// (Feeds.fetch, the probe), so the shared bounded read never meets more
+// than the limit here; it is the bound in case a caller ever hands it
+// more. The bound is on bytes in: the decoded text is at most twice that,
+// since each byte above 0x7f becomes a two-byte rune.
 func feedCharset(_ string, input io.Reader) (io.Reader, error) {
-	raw, err := io.ReadAll(io.LimitReader(input, config.MaxResponseBytes))
+	raw, err := httpx.ReadBody(input)
 	if err != nil {
 		return nil, err
 	}
