@@ -311,8 +311,10 @@ func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	}
 	l.limit = opts.maxFiles()
 	if l.url == u.String() {
-		if doc, _, ok := probedDocument(ctx, u); ok {
-			l.first = doc
+		if p := probed(ctx, u); p != nil {
+			if doc, ok := p.Document(); ok {
+				l.first = &document{body: doc, final: cloneURL(p.Final), probe: p}
+			}
 		}
 	}
 	return kvsListingResult(ctx, k.client, l)

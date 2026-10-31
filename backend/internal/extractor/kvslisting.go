@@ -56,9 +56,10 @@ type kvsListing struct {
 	title func(root *html.Node) string
 	// empty explains a listing with no videos on it.
 	empty string
-	// first is the first page's document when the caller has already
-	// fetched it, so that it is not fetched twice.
-	first string
+	// first is the first page when the caller has already read it, so
+	// that it is neither fetched nor parsed twice: its text for the stated
+	// total, its tree for the walk.
+	first *document
 	// limit is the listing cap in force; zero means the default.
 	limit int
 }
@@ -122,18 +123,20 @@ func (e kvsEmpty) Error() string { return kvsLabel + ": " + string(e) }
 // ends it as well, ahead of the cap.
 func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, string, error) {
 	headers := httpx.Referer(l.url)
-	doc := l.first
-	if doc == "" {
-		var err error
-		if doc, err = client.GetString(ctx, l.url, headers); err != nil {
+	first := l.first
+	if first == nil {
+		doc, err := client.GetString(ctx, l.url, headers)
+		if err != nil {
 			return nil, "", "", fmt.Errorf("%s: fetch %s: %w", kvsLabel, l.url, err)
 		}
+		first = &document{body: doc}
 	}
-	root, err := parseHTML(doc)
+	doc := first.body
+	root, err := first.parse()
 	if err != nil {
 		return nil, "", "", nil
 	}
-	first, err := url.Parse(l.url)
+	start, err := url.Parse(l.url)
 	if err != nil {
 		return nil, "", "", nil
 	}
@@ -147,7 +150,7 @@ func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]
 		page  = 0
 		block string
 	)
-	links, title, note, err := walkListing(ctx, client, first, listingWalk{
+	links, title, note, err := walkListing(ctx, client, start, listingWalk{
 		name: kvsLabel, title: l.title(root), root: root,
 		// The stated total, a page adding nothing, or one without the
 		// listing is where it ends; a page that fails is a cut.

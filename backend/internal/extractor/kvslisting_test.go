@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -271,5 +272,39 @@ func TestKVSListingPagesEnds(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The listing's first page, when the caller already holds it, is walked
+// from the tree recognition parsed rather than parsed again, leaves that
+// shared tree as it was, and comes to what a fresh parse of the same text
+// does: the same videos, title and note, with nothing fetched.
+func TestKVSListingWalksTheFirstPageInHand(t *testing.T) {
+	const link = "https://tube.example.test/categories/a-category/"
+	doc := "<html><head><title>A Category - Example Tube</title></head><body>" + kvsScriptedLastPage + "</body></html>"
+	p := probedPage(link, doc)
+	root := p.HTML()
+	nodes := countNodes(root)
+
+	walk := func(first *document) ([]string, string, string) {
+		l := kvsListingForPage(link)
+		l.first = first
+		links, title, note, err := kvsListingWalk(t.Context(), nil, l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return links, title, note
+	}
+	inHand := &document{body: doc, probe: p}
+	links, title, note := walk(inHand)
+	wantLinks, wantTitle, wantNote := walk(&document{body: doc})
+	if !slices.Equal(links, wantLinks) || title != wantTitle || note != wantNote || len(links) != 1 {
+		t.Errorf("from the probe's tree %v %q %q, from the text %v %q %q", links, title, note, wantLinks, wantTitle, wantNote)
+	}
+	if inHand.tree() != root {
+		t.Error("the walk parsed the page again instead of taking the probe's tree")
+	}
+	if p.HTML() != root || countNodes(root) != nodes {
+		t.Error("the shared tree changed")
 	}
 }

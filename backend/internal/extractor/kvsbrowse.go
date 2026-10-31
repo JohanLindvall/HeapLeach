@@ -50,10 +50,11 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, limit int)
 		return nil, fmt.Errorf("%s: %s is the front page; paste a video, a category, "+
 			"a model, a tag or a search instead", kvsLabel, u.Redacted())
 	}
-	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
+	d, err := readDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("%s: fetch %s: %w", kvsLabel, u.Redacted(), err)
 	}
+	doc := d.body
 	res, err := kvsResult(doc, u)
 	if err == nil {
 		return res, nil
@@ -65,7 +66,7 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, limit int)
 	if kvsVideoPath(u) || flashvarsStart.MatchString(doc) {
 		return nil, err
 	}
-	root, perr := parseHTML(doc)
+	root, perr := d.parse()
 	if perr != nil || !kvsHasListing(root) {
 		return nil, err
 	}
@@ -84,8 +85,11 @@ func kvsBrowse(ctx context.Context, client *httpx.Client, u *url.URL, limit int)
 			return nil, err
 		}
 	}
+	// The page in hand is the listing's first page, so the walk starts from
+	// it, its text and its tree both, rather than asking or parsing again.
+	// A canonical first page found above was a request of its own.
 	l := kvsListingForPage(u.String())
-	l.first = doc
+	l.first = d
 	l.limit = limit
 	return kvsListingResult(ctx, client, l)
 }

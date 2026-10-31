@@ -393,7 +393,13 @@ keeps the escaping it arrived with, because the site writes a plus as `%2B`
 and re-encoding a decoded segment would hand its routing a literal plus.
 
 `kvsListingWalk` hands its pages to the shared `walkListing`, with the first
-document from the probe or the browse fetch. Its reader stops at the stated
+page from the probe or the browse fetch carried as a `document` (`first`):
+its text for the stated total and its tree, the probe's when recognition
+parsed it, for the walk, so the first page is neither fetched nor parsed a
+second time (`TestKVSListingWalksTheFirstPageInHand`). A canonical first
+page found by dropping a pasted page number is a request of its own. A
+member or search listing takes the probe by URL and route alone
+(`probed`), as it always has. Its reader stops at the stated
 total, and a later page that repeats, adds nothing or carries no listing is
 the end of the listing rather than a partial one; a later page that fails is
 a cut, and noted. Every video
