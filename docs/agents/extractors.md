@@ -127,7 +127,9 @@ with, the probe's for the first and `freshRead`'s after, so a page answered
 attempt reads with the context it is given, never one it captured.
 `refreshing` and the player engine's deferred resolvers read fresh at
 transfer time, since the probed page is where an expired signed link came
-from. Transport failures and 429 waits stay with `httpx.Client.Do`; the
+from; both prepare that context with `transferRead` (`contract.go`), which
+also leaves the discovery job's request admission behind.
+`TestTransferReadDropsOnlyThePageAndAdmission` pins what it keeps. Transport failures and 429 waits stay with `httpx.Client.Do`; the
 extraction retry covers only a response that arrived and was wrong.
 `TestRetryOfAProbedPageReadsItAfresh` runs the empty-then-playable player
 through the registry and expects two requests.

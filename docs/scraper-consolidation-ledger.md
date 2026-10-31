@@ -99,3 +99,22 @@ pin (offsets, limits, page numbers). No flag or environment setting was added.
 | Autoindex size column (`0` and listed numbers kept as given) | retain: `parsedSize` maps zero to unknown |
 | Bunkr listing size (`parseHumanSize`, approximate) | already shared |
 | `util.Unescape`, `util.TitleName`, `sourceFolder` | already shared; no inline copies (`feedSlashes` maps to `-`, a different rule kept for feed names) |
+
+## W5 — collection accounting
+
+| Caller | Disposition |
+| --- | --- |
+| Source expansion finishers (balbums, links, VoyeurKing, Erome, PornPics, Chevereto, WordPress) | already shared: each checks cancellation first, through `expansion.unresolved` (`noneResolved`) or an explicit `ctx.Err()` |
+| `expandSourcesNamed` partial count (`r.res.Note != ""`) | retain: counts a child that said anything, not why; a structured partial flag would add a field to the exported `Result` |
+| Cum creator note (`note == ""` before `cappedNote`) | retain: composition of its own notes, in its existing order (an invalid-posts note suppresses the capped one) |
+| RTP capped season title (`more || walkNote != ""`) | retain: the plan's named legacy exception; the folder name it produces is part of resume behaviour. A request-sequence characterization needs endpoint injection RTP does not have, so it is not pinned here |
+| Bandzoogle continuation | already shared (`walkPages`); now pinned by `TestBandzoogleFollowsEveryListThatHasMore` |
+
+## W7 — resolver construction
+
+| Item | Disposition |
+| --- | --- |
+| `File.target`, `Target.file`, `hlsMedia.target` | already shared: no hand-built partial copy of an existing `File`/`Target` remains; other `Target` literals are built from host API data |
+| Transfer-time context (`refreshing`, `Player` deferred resolve) | adopt: one `transferRead`; identical composition. `TestTransferReadDropsOnlyThePageAndAdmission` |
+| Bunkr albums, lazy broadcaster episodes, Niconico lists, Keep2Share tickets, `cumPostLoader`, `Mirrored` | retain: their lifecycles differ (plan W7 table); no unconditional fresh read or invalidation added |
+| `refreshFile` identity and downloader partial-update contract | unchanged; existing `refresh_media_test.go`, `download/refresh_tracks_test.go` |

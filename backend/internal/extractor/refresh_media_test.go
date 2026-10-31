@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"reflect"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // playlistReader answers each read with the playlist of its next
@@ -87,5 +89,35 @@ func TestFileTargetSizes(t *testing.T) {
 	approx.SizeApprox = true
 	if got := approx.target(); got.Size != -1 {
 		t.Errorf("approximate size kept: %d", got.Size)
+	}
+}
+
+// A resolver run at transfer time reads with the context it is handed,
+// less the discovery job's probed page and request admission, and with
+// everything else — route, cancellation — kept: both the signed-file
+// adapter and the player engine's deferred resolver prepare it the same
+// way (transferRead).
+func TestTransferReadDropsOnlyThePageAndAdmission(t *testing.T) {
+	page := htmlPage(t, "https://media.example.test/watch/1", "<html></html>")
+	admission := httpx.NewAdmission(2)
+	ctx, cancel := context.WithCancel(httpx.WithRoute(withPage(httpx.WithAdmission(t.Context(), admission), page), "a-route", nil, nil))
+	defer cancel()
+	var seen context.Context
+	file := refreshing(&Target{URL: "https://media.example.test/a.mp4", Name: "a.mp4"}, func(ctx context.Context) (*Target, error) {
+		seen = ctx
+		return &Target{URL: "https://media.example.test/b.mp4", Name: "a.mp4"}, nil
+	})
+	if _, err := file.Resolve(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if attachedPage(seen) != nil || httpx.AdmissionOf(seen) != nil {
+		t.Errorf("transfer read kept the page (%v) or the admission (%v)", attachedPage(seen) != nil, httpx.AdmissionOf(seen) != nil)
+	}
+	if httpx.RouteID(seen) != httpx.RouteID(ctx) || httpx.RouteID(seen) == "" {
+		t.Errorf("route %q, want the caller's %q", httpx.RouteID(seen), httpx.RouteID(ctx))
+	}
+	cancel()
+	if seen.Err() == nil {
+		t.Error("the caller's cancellation did not reach the transfer read")
 	}
 }

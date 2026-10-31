@@ -275,9 +275,21 @@ func (f *File) target() *Target {
 func refreshing(target *Target, resolve func(context.Context) (*Target, error)) File {
 	file := target.file("")
 	file.Resolve = func(ctx context.Context) (*Target, error) {
-		return resolve(httpx.WithoutAdmission(freshRead(ctx)))
+		return resolve(transferRead(ctx))
 	}
 	return file
+}
+
+// transferRead is ctx for a resolver reading at transfer time rather than
+// during discovery: the probed page withheld (freshRead), so a signed link
+// or ticket is asked for again, and the extraction's discovery admission
+// left behind (httpx.WithoutAdmission), so a transfer is held to its own
+// limits rather than to a job whose listing has finished. Everything else —
+// cancellation, route, cookie jar, logger, progress, challenge capture —
+// is the caller's, so a resolver always reads with the context it is
+// handed, never one it captured at listing time.
+func transferRead(ctx context.Context) context.Context {
+	return httpx.WithoutAdmission(freshRead(ctx))
 }
 
 // signedResult is the one-file result of a host that signs its link on
