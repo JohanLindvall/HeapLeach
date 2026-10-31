@@ -279,8 +279,8 @@ func booruMarked(p *Page) bool {
 
 // booruDetect works out which board family a page belongs to, or nil.
 //
-// The page has to carry a board's markup first, unless it cannot say; the
-// family is then settled by its API answering for this very target with a
+// The URL selects plausible families, even when a custom frontend carries
+// no recognised markup. The API must answer for this very target with a
 // post id and original-media metadata. Danbooru and e621 share an endpoint;
 // the nested file in the answer distinguishes them. A Gelbooru-shaped page
 // whose API does not answer is a Gelbooru 0.1 board, which publishes none
@@ -290,7 +290,7 @@ func booruMarked(p *Page) bool {
 func booruDetect(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) *booruSite {
 	candidates := booruCandidates(u)
 	marked := booruMarked(p)
-	if len(candidates) == 0 || (!marked && !p.Silent()) {
+	if len(candidates) == 0 {
 		return nil
 	}
 	segs := util.PathSegments(u)

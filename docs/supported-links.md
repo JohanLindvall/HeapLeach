@@ -11,6 +11,7 @@ No link is chosen by its domain. HeapLeach fetches the page once and picks the e
 | **gofile** | `/d/<code>` | Mints a guest token, then signs each API call with `sha256(ua :: lang :: token :: 4h-slot :: secret)` in an `X-Website-Token` header. The secret is rotated server-side, so it is read out of gofile's own obfuscated script rather than pinned: its string table is RC4 under a shuffled base64 alphabet, and the one rotation that decodes the whole file is what proves the answer. A signature gofile rejects is not repeated — it blocks addresses that sign badly. Downloads carry the token as a cookie. Walks nested folders. |
 | **bunkr** | `/f/<slug>`, `/a/<slug>`, on any domain serving its pages | Page → numeric file id → metadata endpoint → separate signing service for the `token`/`ex` pair the CDN demands. |
 | **pixeldrain** | `/l/<id>`, `/u/<id>`, `/f/<id>` | Public JSON API. |
+| **kemono** (family) | `/<service>/user/<id>` and `/<service>/user/<id>/post/<post>` | Downloads original attachments from compatible creator archives, including custom frontends identified through their matching creator-profile API. Creator listings preserve a folder per post, deduplicate attachments and follow pagination subject to file limits. Posts explicitly marked as previews only are left out and reported; if no originals have been archived, extraction explains their absence. |
 | **cum.st** | `/creators/<service>/<id>` and `/creators/<service>/<id>/post/<post>` | Downloads original post attachments, with a separate folder per post and fallback across the site's advertised media servers. Creator pagination starts at the beginning and preserves post search, sort and media filters. Exact sizes are loaded when each post's first download starts. Source/file limits and incomplete listings are reported; thumbnails, smaller video renditions and other creator tabs are excluded. |
 | **keep2share** | `/file/<id>`, with or without a filename, on Keep2Share's domains and on FileBoom's | Free downloads through the public API of whichever of the two hosts the page names: both run the same software and the same free-download protocol. Reads the image CAPTCHA locally, waits for the host's timer, and reuses the resulting link when resuming. OCR model and runtime included in releases and the container image. Premium-only and private files are reported as restricted. The two hosts are one service for proxy routing: one free download per address across both. |
 | **filejump** | `filejump.com/s/<id>`, including `?access=download` | Reads the public share's filename and download button, then uses the native ranged downloader. Keeps the stable download endpoint so each transfer obtains a fresh storage signature. Rounded display sizes are estimates; expired or restricted shares fail before queueing. |
@@ -79,8 +80,10 @@ through its player or asynchronous block controls. Existing PeerTube,
 Chevereto and Bandzoogle detection continues to work the same way.
 
 A familiar URL path selects a possible API; it does not establish support.
-API requests made to identify a page whose HTML says nothing (one behind a
-browser check, say) are bounded, do not retry, and are made once per page.
+API requests made to identify a page with unfamiliar markup (a custom
+frontend or one behind a browser check) are bounded, do not retry, and are
+made once per page. A populated page can still be identified by its API;
+the response must match the platform and requested target.
 Recognised platforms use their normal extractors, including pagination,
 deferred resolvers and transfer pacing. Unidentified pages continue through
 the generic fallback.
@@ -96,6 +99,9 @@ whose page that extractor recognises. A recognised
 WordPress category also follows its own post permalinks and pagination;
 ordinary navigation links are not followed. Exact duplicates are
 removed; Keep2Share links are also merged by file ID, across both hosts and their aliases.
+Links back to the scanned page, including fragment anchors and its original
+address before a redirect, are ignored and do not use the source limit.
+Relative links use the final page address; other links keep their fragments.
 Recognised platforms keep their own extraction behavior. Use `links:<url>`
 to explicitly scan a page that would otherwise go to a dedicated extractor.
 

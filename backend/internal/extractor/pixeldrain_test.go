@@ -44,7 +44,7 @@ func TestPixeldrainRecognise(t *testing.T) {
 }
 
 // A page that cannot say is settled by the API describing the very file the
-// link names, asked once; an ordinary page of the form costs nothing.
+// link names, asked once; a compatible custom frontend works the same way.
 func TestPixeldrainRecogniseAskingTheAPI(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,8 +67,8 @@ func TestPixeldrainRecogniseAskingTheAPI(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("the API was asked %d times, want once", calls)
 	}
-	if p.Recognise(context.Background(), htmlPage(t, srv.URL+"/u/SampleID", `<html><title>A user</title></html>`)) || calls != 1 {
-		t.Errorf("an ordinary page of the form was claimed or cost a request (%d)", calls)
+	if !p.Recognise(context.Background(), htmlPage(t, srv.URL+"/u/SampleID", `<html><title>A user</title></html>`)) || calls != 2 {
+		t.Errorf("a custom frontend was not identified through its API (%d requests)", calls)
 	}
 }
 

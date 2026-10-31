@@ -113,7 +113,7 @@ func NewFoolFuuka(client *httpx.Client) *FoolFuuka {
 	return &FoolFuuka{client: client, about: about{name: "foolfuuka", shape: foolFuukaShape,
 		recognises: "FoolFuuka archive threads, posts, searches and board pages (`/<board>/thread/<n>/`, " +
 			"`/<board>/post/<n>/`, `/<board>/search/…`, `/<board>/`) whose page names the software as " +
-			"its generator and loads its `/foolfuuka/` assets, or, behind a challenge, whose origin's " +
+			"its generator and loads its `/foolfuuka/` assets, or whose origin's " +
 			"`/_/api/chan/` answers the route with archived posts"}}
 }
 
@@ -126,9 +126,8 @@ func foolFuukaShape(u *url.URL) bool {
 }
 
 // Recognise takes an archive route served by the software: its generator
-// and its own assets. The largest archives answer their HTML with a
-// challenge while leaving the API open, so a page that cannot say is asked
-// of the API the route corresponds to, for a thread, post or search form.
+// and its own assets. An unfamiliar frontend or challenge is settled by
+// the API the route corresponds to, for a thread, post or search form.
 func (f *FoolFuuka) Recognise(ctx context.Context, p *Page) bool {
 	if _, err := foolFuukaParse(p.Final); err != nil {
 		return false
@@ -136,7 +135,7 @@ func (f *FoolFuuka) Recognise(ctx context.Context, p *Page) bool {
 	if strings.HasPrefix(p.Generator(), "foolfuuka") && p.Script(foolFuukaAssets) {
 		return true
 	}
-	return f.Shape(p.Final) && p.Silent() && foolFuukaAnswers(ctx, p, f.client)
+	return f.Shape(p.Final) && foolFuukaAnswers(ctx, p, f.client)
 }
 
 // foolFuukaAnswers asks only the API corresponding to the route. A post

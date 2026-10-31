@@ -210,7 +210,7 @@ Sites change, so fixture tests alone cannot guarantee current live support.
 | `feed` | RSS and Atom feeds, at any URL: a response served as a feed type, or whose document element is `<rss>` or `<feed>` |
 | `filejump` | public shares (`/s/<id>`) whose page offers the share's own `/s/<id>/download` button |
 | `filester` | file shares (`/d/<slug>`) loading `file_dl.js` beside a `#downloadButton`, and folders (`/f/<id>`) listing file cards or asking for their password |
-| `foolfuuka` | FoolFuuka archive threads, posts, searches and board pages (`/<board>/thread/<n>/`, `/<board>/post/<n>/`, `/<board>/search/…`, `/<board>/`) whose page names the software as its generator and loads its `/foolfuuka/` assets, or, behind a challenge, whose origin's `/_/api/chan/` answers the route with archived posts |
+| `foolfuuka` | FoolFuuka archive threads, posts, searches and board pages (`/<board>/thread/<n>/`, `/<board>/post/<n>/`, `/<board>/search/…`, `/<board>/`) whose page names the software as its generator and loads its `/foolfuuka/` assets, or whose origin's `/_/api/chan/` answers the route with archived posts |
 | `francetv` | video pages (`/…/<id>-<slug>.html`) and programme listings of France TV whose flight data names `video_factory_id`s |
 | `gofile` | share links (`/d/<code>`) whose page is the Gofile app shell, loading its signing script |
 | `hls` | bare HLS manifests: a response served as a playlist type or opening `#EXTM3U`, at any URL, or a `.m3u8` link; `.mpd` links are taken in order to refuse them with the reason |
@@ -223,7 +223,7 @@ Sites change, so fixture tests alone cannot guarantee current live support.
 | `links` | a `links:<url>` prefix — every supported link on the page |
 | `lulustream` | videos (`/<id>`, `/e/<id>`, `/d/<id>`) whose page names LuluStream and carries its player's HLS source |
 | `mediafire` | file pages (`/file/<key>/…`) carrying the `#downloadButton` link, and folder shares (`/folder/<key>`) whose page is the MediaFire folder viewer |
-| `mediawiki` | MediaWiki categories, articles, file pages and upload lists: pages naming a title (`/wiki/<title>`, `index.php?title=`) whose generator is MediaWiki and which carry its ResourceLoader configuration, or, behind a challenge, whose origin's `api.php` identifies as MediaWiki |
+| `mediawiki` | MediaWiki categories, articles, file pages and upload lists: pages naming a title (`/wiki/<title>`, `index.php?title=`) whose generator is MediaWiki and which carry its ResourceLoader configuration, or whose origin's `api.php` identifies a namespace route as MediaWiki |
 | `mega` | file and folder links (`/file/<handle>#<key>`, `/folder/<handle>#<key>`, `/embed/…`, `#!…!…`) whose page is the MEGA web client's boot shell (`secureboot.js`, `#fmholder`) |
 | `mixcloud` | shows (`/<user>/<show>/`) whose page, named Mixcloud, carries the app's `cloudcastQuery` for the show |
 | `mixdrop` | players (`/e/<code>`) configuring the MixDrop player object (`MDCore`), and landing pages (`/f/<code>`) named MixDrop that frame or configure one |

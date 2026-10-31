@@ -170,7 +170,7 @@ func NewMediaWiki(client *httpx.Client) *MediaWiki {
 		shape: mediaWikiShape,
 		recognises: "MediaWiki categories, articles, file pages and upload lists: pages naming a title " +
 			"(`/wiki/<title>`, `index.php?title=`) whose generator is MediaWiki and which carry its " +
-			"ResourceLoader configuration, or, behind a challenge, whose origin's `api.php` identifies " +
+			"ResourceLoader configuration, or whose origin's `api.php` identifies a namespace route " +
 			"as MediaWiki"}}
 }
 
@@ -185,8 +185,8 @@ func mediaWikiShape(u *url.URL) bool {
 
 // Recognise takes a page naming a title that the software made: its
 // generator, and the ResourceLoader configuration or the body class its
-// skins print. A page that cannot say — a challenge in front of a wiki — is
-// asked of the API instead, but only for a form that names a namespace,
+// skins print. An unfamiliar frontend or challenge is asked of the API
+// instead, but only for a form that names a namespace,
 // since an article path alone is too common to probe for.
 func (m *MediaWiki) Recognise(ctx context.Context, p *Page) bool {
 	if title, _ := mediaWikiTitle(p.Final); title == "" {
@@ -198,7 +198,7 @@ func (m *MediaWiki) Recognise(ctx context.Context, p *Page) bool {
 		})) {
 		return true
 	}
-	if !mediaWikiShape(p.Final) || !p.Silent() {
+	if !mediaWikiShape(p.Final) {
 		return false
 	}
 	for _, api := range mediaWikiCandidates(p.Final, "") {

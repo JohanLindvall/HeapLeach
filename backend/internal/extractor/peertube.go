@@ -109,8 +109,8 @@ func peerTubeShape(u *url.URL) bool { return peerTubeParseRoute(u).Kind != peerT
 
 // Recognise takes an instance route served by the PeerTube web client: its
 // application element and the server configuration it is handed inline.
-// A page that cannot say — a challenge or a bot check in front of it — is
-// settled by asking the origin's /api/v1/config for its server version,
+// A custom frontend or challenge is settled by asking the origin's
+// /api/v1/config for its server version,
 // which every instance answers and nothing else does.
 func (p *PeerTube) Recognise(ctx context.Context, page *Page) bool {
 	if !peerTubeShape(page.Final) {
@@ -120,7 +120,7 @@ func (p *PeerTube) Recognise(ctx context.Context, page *Page) bool {
 		page.hasElement(func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "my-app" }) {
 		return true
 	}
-	return page.Silent() && peerTubeIsInstance(ctx, page, p.client)
+	return peerTubeIsInstance(ctx, page, p.client)
 }
 
 // Extract resolves a video, channel, account or playlist page.

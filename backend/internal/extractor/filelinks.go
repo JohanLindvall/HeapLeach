@@ -40,8 +40,8 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	}
 	album, albumErr := darkGramResult(d.client, page, root, opts)
 	if d.registry != nil {
-		if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
-			if res, err := expandPageLinks(ctx, d.registry, u, root, sources, opts); res != nil || err != nil {
+		if sources := fileLinkSources(d.registry, linksCandidates(root, page, u)); len(sources) > 0 {
+			if res, err := expandPageLinks(ctx, d.registry, page, root, sources, opts); res != nil || err != nil {
 				return res, err
 			}
 		}

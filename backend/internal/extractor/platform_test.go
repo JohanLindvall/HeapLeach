@@ -18,9 +18,9 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// Each instance is a fresh origin whose page answers with a refusal, as a
-// challenged one does: recognition must then reach the extractor through the
-// platform's API, retaining original files, headers and transfer pacing.
+// Each instance is a fresh origin whose page either refuses the request or
+// renders an unfamiliar frontend. Its API must identify the platform in
+// both cases, retaining original files, headers and transfer pacing.
 // platformRegistry is the whole registry over a client that does not retry,
 // for a test extracting from its own server.
 func platformRegistry() *Registry {
@@ -57,50 +57,52 @@ func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
 		{"foolfuuka post", "/b/post/42/", foolFuukaPostAPI,
 			`{"num":"42","media":{"media":"sample.jpg","media_filename":"sample.jpg","media_link":"https://media.example.test/sample.jpg","media_size":"12","media_status":"normal"}}`, "https://media.example.test/sample.jpg", 1},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.RequestURI() == tc.page {
-					w.Header().Set(httpx.HeaderContentType, "text/html")
-					w.WriteHeader(http.StatusForbidden)
-					fmt.Fprint(w, `<title>Access denied</title><a href="/wiki/File:Ignored.bin">Advertisement</a>`)
-					return
+		for _, status := range []int{http.StatusForbidden, http.StatusOK} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, status), func(t *testing.T) {
+				t.Parallel()
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.RequestURI() == tc.page {
+						w.Header().Set(httpx.HeaderContentType, "text/html")
+						w.WriteHeader(status)
+						fmt.Fprint(w, `<title>A custom frontend</title><p>Browse the archive.</p>`)
+						return
+					}
+					if r.URL.Path != tc.api {
+						http.NotFound(w, r)
+						return
+					}
+					if tc.name == "szurubooru" && !strings.Contains(r.Header.Get(httpx.HeaderAccept), "application/json") {
+						t.Error("szurubooru API requires JSON Accept")
+					}
+					w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+					fmt.Fprint(w, tc.body)
+				}))
+				defer srv.Close()
+				res, _, err := platformRegistry().Extract(context.Background(), srv.URL+tc.page, Options{})
+				if err != nil || res == nil {
+					t.Fatalf("extract: %v, %v", res, err)
 				}
-				if r.URL.Path != tc.api {
-					http.NotFound(w, r)
-					return
+				if len(res.Files) != tc.count {
+					t.Fatalf("files = %d, want %d", len(res.Files), tc.count)
 				}
-				if tc.name == "szurubooru" && !strings.Contains(r.Header.Get(httpx.HeaderAccept), "application/json") {
-					t.Error("szurubooru API requires JSON Accept")
+				want := tc.file
+				if strings.HasPrefix(want, "/") {
+					want = srv.URL + want
 				}
-				w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
-				fmt.Fprint(w, tc.body)
-			}))
-			defer srv.Close()
-			res, _, err := platformRegistry().Extract(context.Background(), srv.URL+tc.page, Options{})
-			if err != nil || res == nil {
-				t.Fatalf("extract: %v, %v", res, err)
-			}
-			if len(res.Files) != tc.count {
-				t.Fatalf("files = %d, want %d", len(res.Files), tc.count)
-			}
-			want := tc.file
-			if strings.HasPrefix(want, "/") {
-				want = srv.URL + want
-			}
-			if res.Files[0].URL != want {
-				t.Errorf("file = %q, want %q", res.Files[0].URL, want)
-			}
-			if strings.HasPrefix(tc.name, "pixeldrain") && (res.Files[0].Pace == nil || res.Files[0].Pace.Streams != 1) {
-				t.Error("lost Pixeldrain connection limit")
-			}
-			if res.Files[0].Headers[httpx.HeaderReferer] != srv.URL+"/" {
-				t.Errorf("lost instance referer: %v", res.Files[0].Headers)
-			}
-			if tc.name == "foolfuuka thread" && res.Files[len(res.Files)-1].Resolve == nil {
-				t.Error("lost deferred remote attachment resolver")
-			}
-		})
+				if res.Files[0].URL != want {
+					t.Errorf("file = %q, want %q", res.Files[0].URL, want)
+				}
+				if strings.HasPrefix(tc.name, "pixeldrain") && (res.Files[0].Pace == nil || res.Files[0].Pace.Streams != 1) {
+					t.Error("lost Pixeldrain connection limit")
+				}
+				if res.Files[0].Headers[httpx.HeaderReferer] != srv.URL+"/" {
+					t.Errorf("lost instance referer: %v", res.Files[0].Headers)
+				}
+				if tc.name == "foolfuuka thread" && res.Files[len(res.Files)-1].Resolve == nil {
+					t.Error("lost deferred remote attachment resolver")
+				}
+			})
+		}
 	}
 }
 
@@ -196,42 +198,51 @@ func TestPlatformDetectionDoesNotBroadenKnownLinks(t *testing.T) {
 
 func TestPlatformKemonoCreatorAndPost(t *testing.T) {
 	for _, route := range []string{"/sample/user/creator", "/sample/user/creator/post/42"} {
-		t.Run(route, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if !strings.HasPrefix(r.URL.Path, "/api/") {
-					http.NotFound(w, r)
-					return
+		for _, status := range []int{http.StatusNotFound, http.StatusOK} {
+			t.Run(fmt.Sprintf("%s/%d", route, status), func(t *testing.T) {
+				var profileCalls atomic.Int32
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasPrefix(r.URL.Path, "/api/") {
+						w.Header().Set(httpx.HeaderContentType, "text/html")
+						w.WriteHeader(status)
+						fmt.Fprintf(w, `<title>A Creator | Custom Archive</title><script src="/static/js/lazy-styles.js"></script><a href="%s">Posts</a>`, route)
+						return
+					}
+					if r.Header.Get(httpx.HeaderAccept) != kemonoScrapeAccept {
+						t.Errorf("wrong API Accept: %q", r.Header.Get(httpx.HeaderAccept))
+					}
+					w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+					post := `{"id":"42","user":"creator","service":"sample","title":"Sample Post","file":{"name":"sample.bin","path":"/aa/sample.bin"},"attachments":[]}`
+					switch r.URL.Path {
+					case "/api/v1/sample/user/creator/profile":
+						profileCalls.Add(1)
+						fmt.Fprint(w, `{"id":"creator","service":"sample","name":"A Creator"}`)
+					case "/api/v1/sample/user/creator/posts":
+						fmt.Fprintf(w, "[%s]", post)
+					case "/api/v1/sample/user/creator/post/42":
+						fmt.Fprintf(w, `{"post":%s}`, post)
+					default:
+						t.Errorf("unexpected request %s", r.URL)
+						http.NotFound(w, r)
+					}
+				}))
+				defer srv.Close()
+				reg := platformRegistry()
+				res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{})
+				if err != nil || res == nil || len(res.Files) != 1 || ex.Name() != "kemono" {
+					t.Fatalf("extract = %v via %v, %v", res, ex, err)
 				}
-				if r.Header.Get(httpx.HeaderAccept) != kemonoScrapeAccept {
-					t.Errorf("wrong API Accept: %q", r.Header.Get(httpx.HeaderAccept))
+				if res.Files[0].URL != srv.URL+"/data/aa/sample.bin" {
+					t.Fatalf("attachment = %v", res.Files[0])
 				}
-				w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
-				post := `{"id":"42","user":"creator","service":"sample","title":"Sample Post","file":{"name":"sample.bin","path":"/aa/sample.bin"},"attachments":[]}`
-				switch r.URL.Path {
-				case "/api/v1/sample/user/creator/profile":
-					fmt.Fprint(w, `{"id":"creator","service":"sample","name":"A Creator"}`)
-				case "/api/v1/sample/user/creator/posts":
-					fmt.Fprintf(w, "[%s]", post)
-				case "/api/v1/sample/user/creator/post/42":
-					fmt.Fprintf(w, `{"post":%s}`, post)
-				default:
-					t.Errorf("unexpected request %s", r.URL)
-					http.NotFound(w, r)
+				if route == "/sample/user/creator" && res.Files[0].Dir != "Sample Post" {
+					t.Errorf("lost creator post folder: %q", res.Files[0].Dir)
 				}
-			}))
-			defer srv.Close()
-			reg := platformRegistry()
-			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{})
-			if err != nil || res == nil || len(res.Files) != 1 || ex.Name() != "kemono" {
-				t.Fatalf("extract = %v via %v, %v", res, ex, err)
-			}
-			if res.Files[0].URL != srv.URL+"/data/aa/sample.bin" {
-				t.Fatalf("attachment = %v", res.Files[0])
-			}
-			if route == "/sample/user/creator" && res.Files[0].Dir != "Sample Post" {
-				t.Errorf("lost creator post folder: %q", res.Files[0].Dir)
-			}
-		})
+				if n := profileCalls.Load(); n != 1 {
+					t.Errorf("creator profile requested %d times, want once", n)
+				}
+			})
+		}
 	}
 }
 

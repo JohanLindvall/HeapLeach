@@ -169,6 +169,62 @@ func TestPlainPageWithoutFileLinksKeepsMediaAndDirectFallbacks(t *testing.T) {
 	}
 }
 
+// A path may look supported even when the page is an unrelated frontend.
+// Its own navigation must not defeat the generic media fallback or use up
+// the source cap, including after a redirect and with fragment anchors.
+func TestPlainPageIgnoresSelfLinks(t *testing.T) {
+	for _, route := range []string{"/sample/user/creator", "/posts/42", "/b/thread/42/", "/wiki/Category:Examples"} {
+		for _, linked := range []bool{false, true} {
+			for _, redirect := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/linked=%t/redirect=%t", route, linked, redirect), func(t *testing.T) {
+					mux := http.NewServeMux()
+					asked := keep2ShareStatusAPI(t, mux)
+					mux.HandleFunc("/api/v1/", http.NotFound)
+					mux.HandleFunc("/api/v3/", http.NotFound)
+					download := ""
+					if linked {
+						download = keep2ShareShells(t).Replace(`<a href="https://keep2share.example.test/file/first">Download</a>`)
+					}
+					mux.HandleFunc("/entry", func(w http.ResponseWriter, r *http.Request) {
+						http.Redirect(w, r, route, http.StatusFound)
+					})
+					mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set(httpx.HeaderContentType, "text/html")
+						fmt.Fprintf(w, `<title>Example page</title><a href="%s">Self</a><a href="%s#files">Files</a>
+<script type="application/ld+json">{"url":"http://%s%s"}</script><video src="https://media.example.test/clip.mp4"></video>`, route, route, r.Host, route)
+						if redirect {
+							fmt.Fprint(w, `<a href="/entry">Original address</a>`)
+						}
+						fmt.Fprint(w, download)
+					})
+					srv := httptest.NewServer(mux)
+					defer srv.Close()
+					reg := platformRegistry()
+					keep2ShareAPIs(reg, srv.URL)
+					start := route
+					if redirect {
+						start = "/entry"
+					}
+					res, _, err := reg.Extract(t.Context(), srv.URL+start, Options{limits: Limits{Sources: 1}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(res.Files) != 1 || res.Note != "" {
+						t.Fatalf("self-links changed the result: %+v", res)
+					}
+					if linked {
+						if res.Files[0].Resolve == nil || len(asked()) != 1 {
+							t.Fatalf("self-link used the source cap: %+v", res)
+						}
+					} else if res.Files[0].URL != "https://media.example.test/clip.mp4" {
+						t.Fatalf("lost embedded media: %+v", res.Files[0])
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestPlainPageSniffDoesNotHarvestBinaryResponses(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(httpx.HeaderContentType, "application/octet-stream")

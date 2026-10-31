@@ -328,7 +328,7 @@ func TestPeerTubeRecognise(t *testing.T) {
 	expectShape(t, p, "https://tube.example.test/", false)
 }
 
-// A challenged instance, or one behind a bot check, is recognised by its API
+// An instance behind a bot check or custom frontend is recognised by its API
 // reporting a server version, asked once per page.
 func TestPeerTubeRecogniseAskingTheAPI(t *testing.T) {
 	var calls int
@@ -353,9 +353,8 @@ func TestPeerTubeRecogniseAskingTheAPI(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("the API was asked %d times, want once", calls)
 	}
-	// An ordinary page of the form is not asked about at all.
-	if p.Recognise(context.Background(), htmlPage(t, srv.URL+"/c/a_channel", `<html><title>A channel</title></html>`)) || calls != 1 {
-		t.Errorf("an ordinary page of the form was claimed or cost a request (%d)", calls)
+	if !p.Recognise(context.Background(), htmlPage(t, srv.URL+"/c/a_channel", `<html><title>A channel</title></html>`)) || calls != 2 {
+		t.Errorf("a custom frontend was not identified through its API (%d requests)", calls)
 	}
 }
 

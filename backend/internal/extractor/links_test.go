@@ -118,6 +118,23 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 	}
 }
 
+func TestLinksCandidatesIgnoreSelfAndKeepOtherFragments(t *testing.T) {
+	base := mustParse(t, "https://board.example.test/topics/current")
+	original := mustParse(t, "https://board.example.test/entry")
+	root, err := parseHTML(`<a href="/topics/current">Self</a><a href="#files">Anchor</a>
+<a href="/entry#files">Original address</a><iframe src="/topics/current"></iframe>
+<script type="application/ld+json">{"url":"https://board.example.test/topics/current"}</script>
+<a href="next#section">Next page</a><a href="https://files.example.test/file/sample#key">File</a>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := linksCandidates(root, base, original)
+	want := "https://board.example.test/topics/next#section,https://files.example.test/file/sample#key"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("candidates = %v, want %s", got, want)
+	}
+}
+
 // TestLinksSweepIgnoresAPagesOwnFurniture runs the sweep and the filter
 // together over the fixture, with the registry the user actually has.
 //

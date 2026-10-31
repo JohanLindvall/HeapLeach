@@ -30,10 +30,12 @@ the extractor's own logic depends on (the player configuration, embedded
 JSON, script or DOM structure it parses). The site's name (`Page.Named`) is
 never enough alone; a pure app shell pairs it with a structural marker such
 as the bundle it loads (`Page.Script`). Each test carries a negative fixture
-with the right form and name but without the marker. When the page cannot
-say (a challenge stood in for it, or the HTML is an empty shell) a bounded
-origin request (`platformJSON`) may decide, but only after the form matched,
-since every unrecognised page is offered to every recogniser.
+with the right form and name but without the marker or a matching API.
+When the page lacks recognised markup, a bounded origin request
+(`platformJSON`) may decide, but only after the form matched, since every
+unrecognised page is offered to every recogniser. A populated custom
+frontend is as eligible as a challenge or empty shell: compatible APIs do
+not require the original frontend's branding or markup.
 
 `Shape` is the half that needs no fetch: the link's path, query and
 fragment. `Registry.Known` uses it for link discovery (the harvester, the
@@ -186,21 +188,36 @@ once its page proves to be nobody's, and a page whose links were all of that
 kind falls through to its own media. Keep2Share links are deduplicated by
 file ID alone, across both of its hosts, which share one store; other links
 keep their full URLs, including Mega keys.
+Both scanners resolve relative links against the final page URL and exclude
+links to that page or its submitted alias, including fragment anchors,
+before counting source limits. Self-links are navigation even when their
+paths match an extractor's form; they must not trigger recursion failures
+or displace downloadable sources. Other links retain their fragments.
 Supported links that all fail are reported as an error rather than saved as
 an HTML shell, and partial results report counts.
 
 ### Platforms behind a closed page
 
-Most platforms are recognised in the probed page itself. When the page cannot
-say — challenged, not OK, empty, or a proof-of-work interstitial served with
-200 (`Page.Silent`) — a recogniser whose URL form matched may ask the page's
-own origin a bounded, single-attempt question instead (`pageJSON`, memoised
+Most platforms are recognised in the probed page itself. When its markup is
+unfamiliar — including custom frontends and pages behind a challenge — a
+recogniser whose URL form matched may ask the page's own origin a bounded,
+single-attempt question instead (`pageJSON`, memoised
 per page, so every recogniser asking the same endpoint shares one answer):
 pixeldrain file metadata, booru post records, FoolFuuka archive records,
 Kemono creator profiles, MediaWiki siteinfo, PeerTube's config. An extractor
 then reads the memoised answers back through `probed` and `askedJSON`
 instead of asking again. Positive identification commits to an extractor, whose errors must be
 returned rather than falling back to saving the page shell.
+The API response must identify the software and, where it returns a record,
+the requested target. Generic JSON or a matching site name is insufficient;
+the HTML's status and branding do not veto a valid API response.
+
+Compatible creator archives may return attachment metadata with
+`has_full: false` before storing the originals. Such posts contribute no
+files or file-limit weight; mixed listings report them as left out, and a
+post or creator with only previews reports that originals are not archived.
+An absent availability flag keeps the ordinary API's attachment behavior.
+Previews must not become original downloads or fabricated `/data` links.
 
 Keep forms that are this broad out of `Shape` where they would make ordinary
 navigation a probe per link; `TestRegistryKnowsLinksByTheirForm` pins which

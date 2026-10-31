@@ -144,6 +144,55 @@ func TestKemonoCreatorPagesToTheStatedEnd(t *testing.T) {
 	}
 }
 
+// Preview metadata must neither consume the file cap nor hide a later
+// original with the same path. APIs without the availability flag keep
+// their existing behavior.
+func TestKemonoOriginalAvailability(t *testing.T) {
+	for _, flag := range []string{``, `,"has_full":true`, `,"has_full":false`} {
+		t.Run(flag, func(t *testing.T) {
+			var offsets []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/profile"):
+					fmt.Fprint(w, `{"name":"A Creator","post_count":2}`)
+				case strings.HasSuffix(r.URL.Path, "/posts"):
+					o := r.URL.Query().Get("o")
+					offsets = append(offsets, o)
+					if o == "0" {
+						fmt.Fprint(w, `[{"id":"1","has_full":false,"file":{"path":"/a/sample.jpg"}}]`)
+					} else {
+						fmt.Fprintf(w, `[{"id":"2","title":"Original","file":{"path":"/a/sample.jpg"}%s}]`, flag)
+					}
+				case strings.HasSuffix(r.URL.Path, "/post/1"):
+					fmt.Fprint(w, `{"id":"1","has_full":false,"file":{"path":"/a/sample.jpg"}}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			k := NewKemono(testClient())
+			page := mustParse(t, srv.URL+"/sample/user/creator")
+			res, err := k.Extract(t.Context(), page, Options{limits: Limits{Files: 1}})
+			if strings.Join(offsets, ",") != "0,1" {
+				t.Fatalf("preview metadata consumed the file cap: %v", offsets)
+			}
+			if strings.Contains(flag, "false") {
+				if err == nil || res != nil || !strings.Contains(err.Error(), kemonoPreviewsOnly) {
+					t.Fatalf("unavailable originals: result=%+v error=%v", res, err)
+				}
+			} else if err != nil || len(res.Files) != 1 || res.Files[0].Dir != "Original" ||
+				res.Files[0].URL != srv.URL+"/data/a/sample.jpg" || !strings.Contains(res.Note, "1 left out: "+kemonoPreviewsOnly) {
+				t.Fatalf("mixed availability: result=%+v error=%v", res, err)
+			}
+			res, err = k.Extract(t.Context(), mustParse(t, page.String()+"/post/1"), Options{})
+			if err == nil || res != nil || !strings.Contains(err.Error(), kemonoPreviewsOnly) {
+				t.Fatalf("preview-only post: result=%+v error=%v", res, err)
+			}
+		})
+	}
+}
+
 func TestFolderNameTrimsRamblingTitles(t *testing.T) {
 	if got := folderName("  a tidy title  "); got != "a tidy title" {
 		t.Errorf("got %q", got)

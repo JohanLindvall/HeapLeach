@@ -399,15 +399,17 @@ func TestBooruRecognise(t *testing.T) {
 	if n := apiCalls.Load(); n != 1 {
 		t.Errorf("the API was asked %d times for one page, want once", n)
 	}
-	// The right form and the board's name, without its markup: the API is
-	// not even asked.
+	// A custom frontend is identified by a matching API response too.
 	apiCalls.Store(0)
 	named := htmlPage(t, srv.URL+"/posts/42", `<html><head><title>Board</title><meta property="og:site_name" content="Board"></head></html>`)
-	if b.Recognise(context.Background(), named) {
-		t.Error("an unmarked page of the right form was recognised")
+	if !b.Recognise(context.Background(), named) {
+		t.Error("an unmarked page with a matching API was not recognised")
 	}
-	if n := apiCalls.Load(); n != 0 {
-		t.Errorf("an unmarked page cost %d API requests", n)
+	if n := apiCalls.Load(); n != 1 {
+		t.Errorf("an unmarked page cost %d API requests, want once", n)
+	}
+	if b.Recognise(context.Background(), htmlPage(t, srv.URL+"/posts/43", `<title>Another post</title>`)) {
+		t.Error("an API response for a different post identified the page")
 	}
 	// The markup on a path that is no board's form.
 	if b.Recognise(context.Background(), htmlPage(t, srv.URL+"/about", booruRailsPost)) {

@@ -347,19 +347,6 @@ func (p *Page) IsHTML() bool {
 	return p.Body != "" && (mediaPageIsHTMLType(kind) || kind == "" && strings.Contains(p.Body[:min(len(p.Body), 1024)], "<"))
 }
 
-// Silent reports a page with nothing of the site's own to read: a WAF
-// challenge stood in for it, it failed or answered with an error, it is
-// empty, or it is a proof-of-work interstitial served with a 200. Only then
-// may a recogniser whose URL form matched ask the origin's own API instead
-// of reading the page.
-func (p *Page) Silent() bool {
-	return p.Challenged || !p.OK() || p.Body == "" || p.Script(antiBotScriptPath)
-}
-
-// antiBotScriptPath is where the common proof-of-work bot check serves its
-// script from, on whichever site deploys it.
-const antiBotScriptPath = "/.within.website/"
-
 // index parses the document once and reads its head in the same pass.
 func (p *Page) index() *pageIndex {
 	p.parseOnce.Do(func() {

@@ -32,6 +32,8 @@ type Kemono struct {
 // kemonoScrapeAccept is the header the sites themselves ask scrapers to use.
 const kemonoScrapeAccept = "text/css"
 
+const kemonoPreviewsOnly = "original attachments have not been archived (previews only)"
+
 // NewKemono builds the kemono/coomer extractor.
 func NewKemono(client *httpx.Client) *Kemono {
 	return &Kemono{client: client, about: about{name: "kemono", shape: kemonoShape,
@@ -51,9 +53,8 @@ var kemonoNames = []string{"Kemono", "Coomer"}
 
 // Recognise takes a creator or post link served by the sites' app shell:
 // the shell's own loader script, its empty application root and its name.
-// The shell carries nothing else — the app fetches the creator afterwards —
-// so a page that cannot say is settled the way the app would settle it, by
-// the API's profile of exactly this creator.
+// Compatible installs may render their own frontend instead, so an
+// unfamiliar page is settled by the API's profile of exactly this creator.
 func (k *Kemono) Recognise(ctx context.Context, p *Page) bool {
 	if !kemonoShape(p.Final) {
 		return false
@@ -62,7 +63,7 @@ func (k *Kemono) Recognise(ctx context.Context, p *Page) bool {
 		p.hasElement(func(n *html.Node) bool { return isElem(n, atom.Div) && attr(n, "id") == "root" }) {
 		return true
 	}
-	return p.Silent() && kemonoProfile(ctx, p, k.client)
+	return kemonoProfile(ctx, p, k.client)
 }
 
 // kemonoProfile asks for the creator's profile, whose service and id must
@@ -97,13 +98,16 @@ func (k *Kemono) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 	service, creator := segs[0], segs[2]
 	api := creatorAPI(root, service, creator)
 
-	name, total := k.creator(ctx, api, root, service, creator)
+	name, total := k.creator(ctx, probed(ctx, u), api, root, service, creator)
 
 	// /<service>/user/<id>/post/<postId>
 	if len(segs) >= 5 && segs[3] == "post" {
 		post, err := k.post(ctx, api, root, segs[4])
 		if err != nil {
 			return nil, err
+		}
+		if post.previewOnly() {
+			return nil, fmt.Errorf("kemono: %s", kemonoPreviewsOnly)
 		}
 		files := k.filesOf(root, []kemonoPost{post}, false)
 		if len(files) == 0 {
@@ -151,9 +155,19 @@ func (k *Kemono) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		return nil, err
 	}
 	files := k.filesOf(root, all, true)
+	previews := 0
+	for _, post := range all {
+		if post.previewOnly() {
+			previews++
+		}
+	}
 	if len(files) == 0 {
+		if previews > 0 {
+			return nil, fmt.Errorf("kemono: %s", kemonoPreviewsOnly)
+		}
 		return nil, fmt.Errorf("kemono: %s has no downloadable attachments", u.Redacted())
 	}
+	note = joinNotes(note, partial(leftOutNote(previews, ": "+kemonoPreviewsOnly)))
 	return &Result{Title: name, Files: files, Note: note}, nil
 }
 
@@ -210,12 +224,13 @@ func (k *Kemono) post(ctx context.Context, api, root, id string) (kemonoPost, er
 
 // creator looks up a display name, falling back to the id, and how many
 // posts the creator has, 0 when the profile does not say.
-func (k *Kemono) creator(ctx context.Context, api, root, service, creator string) (name string, posts int) {
+func (k *Kemono) creator(ctx context.Context, page *Page, api, root, service, creator string) (name string, posts int) {
 	var profile struct {
 		Name  string `json:"name"`
 		Posts int    `json:"post_count"`
 	}
-	if err := k.client.GetJSON(ctx, api+"/profile", kemonoHeaders(root), &profile); err == nil && profile.Name != "" {
+	if (askedJSON(ctx, page, k.client, api+"/profile", &profile) ||
+		k.client.GetJSON(ctx, api+"/profile", kemonoHeaders(root), &profile) == nil) && profile.Name != "" {
 		return profile.Name, profile.Posts
 	}
 	return service + "-" + creator, 0
@@ -229,10 +244,18 @@ type kemonoPost struct {
 	Title       string             `json:"title"`
 	File        kemonoAttachment   `json:"file"`
 	Attachments []kemonoAttachment `json:"attachments"`
+	// Compatible archives may list metadata before storing the originals.
+	// An absent flag is the ordinary API, where attachments are available.
+	HasFull *bool `json:"has_full"`
 }
+
+func (p kemonoPost) previewOnly() bool { return p.HasFull != nil && !*p.HasFull }
 
 // items is the post's file and its attachments, in the order shown.
 func (p kemonoPost) items() []kemonoAttachment {
+	if p.previewOnly() {
+		return nil
+	}
 	return append([]kemonoAttachment{p.File}, p.Attachments...)
 }
 

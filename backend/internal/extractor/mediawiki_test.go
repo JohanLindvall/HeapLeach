@@ -501,23 +501,29 @@ func TestMediaWikiTakesTheTitleFromThePage(t *testing.T) {
 	}
 }
 
-// A challenged wiki is asked its API, but only for a form naming a
+// A wiki without recognised markup is asked its API, but only for a form naming a
 // namespace, and only once however often the page is consulted.
-func TestMediaWikiRecogniseChallengedThroughTheAPI(t *testing.T) {
-	srv, calls := mediaWikiServer(t)
-	m := NewMediaWiki(testClient())
-	challenged := func(path string) *Page { return challengedPage(t, srv.URL+path) }
-	p := challenged("/wiki/Category:Synthetic_bridges")
-	for range 2 {
-		if !m.Recognise(context.Background(), p) {
-			t.Fatal("a challenged category whose API answers was not recognised")
-		}
-	}
-	if n := calls.Load(); n != 1 {
-		t.Errorf("the API was asked %d times, want once", n)
-	}
-	if m.Recognise(context.Background(), challenged("/wiki/An_article")) {
-		t.Error("a challenged article path was probed and claimed")
+func TestMediaWikiRecogniseThroughTheAPI(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusOK} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			srv, calls := mediaWikiServer(t)
+			m := NewMediaWiki(testClient())
+			page := func(path string) *Page {
+				return fixturePage(t, srv.URL+path, status, "text/html", `<title>A custom wiki</title><p>Browse files.</p>`)
+			}
+			p := page("/wiki/Category:Synthetic_bridges")
+			for range 2 {
+				if !m.Recognise(context.Background(), p) {
+					t.Fatal("a category whose API answers was not recognised")
+				}
+			}
+			if n := calls.Load(); n != 1 {
+				t.Errorf("the API was asked %d times, want once", n)
+			}
+			if m.Recognise(context.Background(), page("/wiki/An_article")) {
+				t.Error("an unmarked article path was probed and claimed")
+			}
+		})
 	}
 }
 

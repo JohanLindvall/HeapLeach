@@ -90,9 +90,8 @@ const (
 )
 
 // Recognise takes a link of those forms served by the software's viewer. A
-// page that cannot say is settled by the metadata the API publishes for the
-// very id the link names; the short paths alone are common on unrelated
-// sites, so a page that does say, and says something else, is not asked.
+// custom frontend or challenge is settled by the metadata the API publishes
+// for the very id the link names; the short paths alone establish nothing.
 func (p *Pixeldrain) Recognise(ctx context.Context, page *Page) bool {
 	if !pixeldrainShape(page.Final) {
 		return false
@@ -100,7 +99,7 @@ func (p *Pixeldrain) Recognise(ctx context.Context, page *Page) bool {
 	if page.Script(pixeldrainViewerPath) && page.Has(pixeldrainAPIGlobal) {
 		return true
 	}
-	return page.Silent() && pixeldrainAnswers(ctx, page, p.client)
+	return pixeldrainAnswers(ctx, page, p.client)
 }
 
 // pixeldrainAnswers recognises a compatible install by its file, list or

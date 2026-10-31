@@ -108,7 +108,7 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("links: %s stacks the prefix; one is all it takes", u.Redacted())
 	}
 
-	doc, err := l.client.GetString(ctx, page.String(), httpx.Referer(util.Origin(page)+"/"))
+	doc, final, err := l.client.GetPage(ctx, page.String(), httpx.Referer(util.Origin(page)+"/"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("links: fetch %s: %w", page.Redacted(), err)
 	}
@@ -117,14 +117,14 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("links: parse %s: %w", page.Redacted(), err)
 	}
 
-	candidates := linksCandidates(root, page)
+	candidates := linksCandidates(root, final, page)
 	sources := supportedSources(l.registry, candidates, l)
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("links: none of the %d links on %s point at a host this build "+
 			"knows (the page may be showing a login rather than its content)",
 			len(candidates), page.Redacted())
 	}
-	return expandPageLinks(ctx, l.registry, page, root, sources, opts)
+	return expandPageLinks(ctx, l.registry, final, root, sources, opts)
 }
 
 func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, root *html.Node, sources []string, opts Options) (*Result, error) {
@@ -259,13 +259,20 @@ const linksTrailing = `.,;:!?"'`
 //
 // Fragments are kept. It is tempting to read "#..." as a page anchor and strip
 // it for a tidier dedupe, but mega puts the decryption key there: a mega link
-// without its fragment is a file nobody can open.
-func linksCandidates(root *html.Node, base *url.URL) []string {
+// without its fragment is a file nobody can open. Links to the page itself,
+// including its fragment anchors and pre-redirect aliases, are navigation.
+func linksCandidates(root *html.Node, base *url.URL, aliases ...*url.URL) []string {
 	var out []string
 	seen := make(map[string]bool)
+	self := make(map[string]bool)
+	for _, page := range append([]*url.URL{base}, aliases...) {
+		key, _, _ := strings.Cut(page.String(), "#")
+		self[key] = true
+	}
 	add := func(ref string) {
 		link := resolveRef(base, ref)
-		if link == "" || seen[link] {
+		key, _, _ := strings.Cut(link, "#")
+		if link == "" || self[key] || seen[link] {
 			return
 		}
 		// resolveRef resolves anything, including the mailto: and javascript:
