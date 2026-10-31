@@ -204,9 +204,9 @@ for the existing string/tree parity and benchmark pattern.
 
 **Shape of the change:**
 
-- [ ] Keep a provider parser as an ordinary function taking a tree and/or raw
+- [x] Keep a provider parser as an ordinary function taking a tree and/or raw
   body plus the final URL. It returns typed metadata or `playerVideo`.
-- [ ] Introduce a page-reading adapter only after two simple rows fit it.
+- [x] Introduce a page-reading adapter only after two simple rows fit it.
   It owns acquisition, the B freshness decision, optional tree access and
   shared error wrapping. Start with the straightforward body-based rows;
   retain the existing custom `read` function for API and handshake readers.
@@ -388,7 +388,7 @@ The existing row tests already check registration and required fields. Extend
 those tests for any new acquisition path instead of maintaining another
 handwritten registry inventory.
 
-- [ ] For a player with a page adapter, require exactly one acquisition path:
+- [x] For a player with a page adapter, require exactly one acquisition path:
   adapted page parser or custom `read`. Keep the existing listing `walk` versus
   `links` exclusivity check. Test coherent signing options, including that
   `withheld` cannot silently apply to an unsigned eager file.

@@ -383,6 +383,48 @@ func fetchDocument(ctx context.Context, client *httpx.Client, u *url.URL, header
 	return client.GetPage(ctx, u.String(), headers, nil)
 }
 
+// document is a page read whole, as a reader may want it: its body, where
+// it was served from, and its tree, parsed on first use — the probe's own
+// when the page is the probe's, which is shared and only read. The tree is
+// nil for a body that will not parse; a reader that needs it says so.
+type document struct {
+	body  string
+	final *url.URL
+	probe *Page
+
+	once sync.Once
+	root *html.Node
+}
+
+// tree is the document parsed, once.
+func (d *document) tree() *html.Node {
+	d.once.Do(func() {
+		if d.probe != nil {
+			d.root = d.probe.HTML()
+		}
+		if d.root == nil {
+			d.root, _ = parseHTML(d.body)
+		}
+	})
+	return d.root
+}
+
+// readDocument is fetchDocument with the page's tree to hand: a reader that
+// scans the body never parses it, and one that reads the tree parses it once
+// or takes the probe's.
+func readDocument(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*document, error) {
+	if p := probedFor(ctx, client, u, headers); p != nil {
+		if body, ok := p.Document(); ok {
+			return &document{body: body, final: cloneURL(p.Final), probe: p}, nil
+		}
+	}
+	body, final, err := client.GetPage(ctx, u.String(), headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &document{body: body, final: final}, nil
+}
+
 // fetchPage is fetchDocument for a link held as a string.
 func fetchPage(ctx context.Context, client *httpx.Client, link string, headers httpx.Header) (string, error) {
 	u, err := url.Parse(link)

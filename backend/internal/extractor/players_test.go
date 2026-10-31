@@ -32,7 +32,9 @@ func TestPlayerSitesAreCompleteAndRegistered(t *testing.T) {
 	var want []string
 	for _, site := range playerSites {
 		if site.name == "" || site.recognises == "" || site.shape == nil || site.recognise == nil ||
-			site.read == nil || site.listing != nil && site.listing.shape == nil ||
+			(site.read == nil) == (site.parse == nil) || site.parse == nil && site.asks != nil ||
+			site.withheld && !site.signed || site.peek != nil && site.signed ||
+			site.listing != nil && site.listing.shape == nil ||
 			site.listing != nil && (site.listing.walk == nil) == (site.listing.links == nil) {
 			t.Errorf("row %q leaves out something the engine calls", site.name)
 		}

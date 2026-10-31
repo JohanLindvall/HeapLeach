@@ -14,8 +14,16 @@ own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
 one rather than as a block). A row states its forms and recogniser, the
 canonical page a pasted link is read as (`page`), the media referer, and
-`read`, which fetches the page and returns its title and rendition
-candidates. The engine takes the best (`bestCandidate`: quality, then a
+how the page is read: `parse`, for a row whose page is all it reads, or
+`read`, for one that asks an API, runs a handshake or makes requests of its
+own. A `parse` row names the Referer the page is fetched with (`asks`) and
+receives a `playerPage`: the body, the final URL, the page as asked for, and
+the tree on demand (`tree`, `title`, `heading`), the probe's own when it
+holds the page. A scan of the body never parses it. `TestPlayerSitesAreCompleteAndRegistered`
+holds every row to exactly one of the two, `withheld` only on a `signed`
+row and no `peek` row signed; `TestPlayerPageRowsReadTheProbedPage`
+reads the converted rows through the registry for one request each.
+Either way the row returns the title and rendition candidates. The engine takes the best (`bestCandidate`: quality, then a
 plain file over a playlist, then the larger stated size), follows a playlist
 to its segments (named by the segments' container) or hands over a plain
 file, carrying a size the candidate states exactly, and, for a row marked

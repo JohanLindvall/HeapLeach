@@ -524,8 +524,9 @@ list below.
   recognition, its parser and notes kept as they were.
 - The `Player` engine (`players.go`, its rows in `playersites.go`): a video site is a `playerSite` row
   (its forms, recognition, canonical page and a reader returning the
-  candidate renditions, with a per-read referer when the player needs its
-  own), registered with `NewPlayer` at the position where its form order
+  candidate renditions — `parse` over the engine's one page acquisition,
+  `readPlayerPage` on `readDocument`, or a `read` of its own for an API or
+  handshake — with a per-read referer when the player needs its own), registered with `NewPlayer` at the position where its form order
   matters. The engine picks the rendition, follows a playlist and re-reads a
   signed page at transfer time. A row may `peek` (read only the title now
   and everything at transfer time), take a `listing` of its videos (through

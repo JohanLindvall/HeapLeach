@@ -63,6 +63,15 @@ type playerSite struct {
 	referer func(page string) string
 	// read fetches the page and reports what its player is given.
 	read func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error)
+	// parse, in read's place, is a row whose page is all it reads: the
+	// engine fetches the page (readDocument, so the probe's own page and
+	// tree when it holds them), with asks's Referer, and parse reads what
+	// the player is given off it. A row has read or parse, never both; an
+	// API, a handshake or another request keeps a read of its own.
+	parse func(page *playerPage) (*playerVideo, error)
+	// asks is the Referer the page itself is fetched with, given it; nil
+	// sends none. It is the page's, apart from referer, the media's.
+	asks func(page string) string
 	// signed reads the page again when the transfer starts. withheld
 	// leaves the link off the queued file as well, which carries only its
 	// name and size until then.
@@ -252,7 +261,7 @@ func (p *Player) list(ctx context.Context, u *url.URL, opts Options) (*Result, e
 // resolve reads the page once and turns its best rendition into a Target.
 func (p *Player) resolve(ctx context.Context, page string) (*Target, string, error) {
 	name := p.name
-	video, err := p.site.read(ctx, p.client, page)
+	video, err := p.read(ctx, page)
 	if err != nil {
 		return nil, "", p.readError(page, err)
 	}
@@ -282,6 +291,62 @@ func (p *Player) resolve(ctx context.Context, page string) (*Target, string, err
 		return nil, "", fmt.Errorf("%s: %s: the video's playlist is still being written: %s", name, page, why)
 	}
 	return media.target(best.URL, title+media.extension(), headers), title, nil
+}
+
+// read is the row's one acquisition: its own read, or the page fetched and
+// handed to its parse.
+func (p *Player) read(ctx context.Context, page string) (*playerVideo, error) {
+	if p.site.parse == nil {
+		return p.site.read(ctx, p.client, page)
+	}
+	return readPlayerPage(ctx, p.client, page, p.site.asks, p.site.parse)
+}
+
+// readPlayerPage fetches a player's page with asks's Referer and hands it
+// to parse.
+func readPlayerPage(ctx context.Context, client *httpx.Client, page string, asks func(string) string,
+	parse func(*playerPage) (*playerVideo, error)) (*playerVideo, error) {
+	u, err := url.Parse(page)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", page, err)
+	}
+	var headers httpx.Header
+	if asks != nil {
+		headers = httpx.Referer(asks(page))
+	}
+	doc, err := readDocument(ctx, client, u, headers)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", page, err)
+	}
+	return parse(&playerPage{document: doc, page: page, base: u})
+}
+
+// playerPage is a player's page as a row's parse reads it: the document,
+// the page as asked for, and that page parsed, for resolving its links.
+type playerPage struct {
+	*document
+	page string
+	base *url.URL
+}
+
+// title is the document's title less the site's suffix (pageTitle), read
+// off the tree.
+func (d *playerPage) title() string { return trimSiteSuffix(d.rawTitle()) }
+
+// rawTitle is the document's first title as written.
+func (d *playerPage) rawTitle() string {
+	if root := d.tree(); root != nil {
+		return firstText(root, atomTitle)
+	}
+	return ""
+}
+
+// heading is the document's first <h1>, trimmed (firstHeading).
+func (d *playerPage) heading() string {
+	if root := d.tree(); root != nil {
+		return strings.TrimSpace(firstText(root, atom.H1))
+	}
+	return ""
 }
 
 // readError is a failed read in the row's name. A 404 on the page is the

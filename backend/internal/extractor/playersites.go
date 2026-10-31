@@ -131,7 +131,8 @@ var xhamsterPlayer = playerSite{
 	recognises: "video pages (`/videos/<slug>-<id>`) named xHamster that carry the site's page state " +
 		"(`window.initials`) and player settings",
 	referer: siteRoot(xhamsterRoot),
-	read:    mediaLinksRead(xhamsterRoot, "xhcdn.com"),
+	asks:    siteRoot(xhamsterRoot),
+	parse:   mediaLinksParse("xhcdn.com"),
 	signed:  true,
 }
 
@@ -146,16 +147,16 @@ var tnaflixPlayer = playerSite{
 	recognises: "video pages (`/<category>/<slug>/video<id>`) named TNAFlix whose player lists its " +
 		"renditions as `<source>` elements",
 	referer: siteRoot(tnaflixRoot),
-	read:    mediaLinksRead(tnaflixRoot, "tnaflix.com"),
+	asks:    siteRoot(tnaflixRoot),
+	parse:   mediaLinksParse("tnaflix.com"),
 	signed:  true,
 }
 
-// mediaLinksRead reads the media links a page carries on the site's own
+// mediaLinksParse reads the media links a page carries on the site's own
 // media hosts, those whose address contains hint.
-func mediaLinksRead(root, hint string) func(context.Context, *httpx.Client, string) (*playerVideo, error) {
-	return func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		doc, err := playerFetch(ctx, client, page, root+"/")
-		return &playerVideo{title: pageTitle(doc), candidates: mediaLinksIn(doc, hint)}, err
+func mediaLinksParse(hint string) func(*playerPage) (*playerVideo, error) {
+	return func(d *playerPage) (*playerVideo, error) {
+		return &playerVideo{title: d.title(), candidates: mediaLinksIn(d.body, hint)}, nil
 	}
 }
 
@@ -278,10 +279,11 @@ var pornonePlayer = playerSite{
 	recognises: "video pages (`/<category>/<slug>/<id>/`) named PornOne whose player lists renditions " +
 		"as `<source>` elements named by their frame size",
 	referer: siteRoot(pornoneRoot),
-	read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		root, err := fetchPageRoot(ctx, client, page, httpx.Referer(pornoneRoot+"/"))
-		if err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", page, err)
+	asks:    siteRoot(pornoneRoot),
+	parse: func(d *playerPage) (*playerVideo, error) {
+		root := d.tree()
+		if root == nil {
+			return nil, fmt.Errorf("parse %s: not a document", d.page)
 		}
 		return &playerVideo{
 			title:      cmp.Or(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle))),
