@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +37,7 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 		mu        sync.Mutex
 		requested = map[string]int{}
 	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		track, index, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 		i, err := strconv.Atoi(index)
 		if err != nil {
@@ -50,7 +49,6 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 		mu.Unlock()
 		_, _ = w.Write(body(track, i))
 	}))
-	defer srv.Close()
 	list := func(track string) []string {
 		var segments []string
 		for i := range parts {
@@ -132,8 +130,7 @@ func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 	requireFFprobe(t)
 
 	origin := t.TempDir()
-	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
-	defer srv.Close()
+	srv := testServer(t, http.FileServer(http.Dir(origin)))
 	hls := func(name string, input ...string) []string {
 		return cmafRendition(t, ffmpeg, origin, srv.URL, name, input...)
 	}
@@ -314,11 +311,10 @@ func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 // fetches a byte, rather than once the whole video has arrived.
 func TestPlaylistWithAudioKeptApartNeedsFFmpegFirst(t *testing.T) {
 	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer srv.Close()
 
 	hideFFmpeg(t)
 

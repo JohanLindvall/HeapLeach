@@ -17,14 +17,13 @@ import (
 // endpoint does: nothing before the bytes themselves says how long it is.
 func unsizedServer(t *testing.T, body func() []byte, fetched *atomic.Int32) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
 		fetched.Add(1)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush() // headers out before the body: no length
 		_, _ = w.Write(body())
 	}))
-	t.Cleanup(srv.Close)
 	return srv
 }
 
@@ -85,8 +84,7 @@ func TestARestartDoesNotFetchAgainWhatTheJobSaved(t *testing.T) {
 					{ID: "saved", Name: "photo.jpg", Status: StatusDone, Path: "photo.jpg", Size: recorded},
 				},
 			}
-			m.jobs[job.ID] = job
-			m.order = append(m.order, job.ID)
+			m.queueJobLocked(job)
 			m.mu.Unlock()
 
 			_ = m.ApplySettings(Settings{Paused: new(false)})
@@ -168,8 +166,7 @@ func TestARestartRecognisesAFileItsResolverRenamed(t *testing.T) {
 			Path: "A Photo Named By Its Resolver.jpg", Size: int64(len(photo)),
 		}},
 	}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
+	m.queueJobLocked(job)
 	m.mu.Unlock()
 
 	_ = m.ApplySettings(Settings{Paused: new(false)})

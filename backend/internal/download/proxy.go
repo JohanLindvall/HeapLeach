@@ -161,8 +161,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		if ctx.Err() == nil && m.moveOntoRoutes(it, err) {
 			return &extractor.WaitError{Until: time.Now(), Reason: "Going on through a proxy"}
 		}
-		_, challenged := errors.AsType[*httpx.ChallengeError](err)
-		if ctx.Err() != nil || (!challenged && (!it.proxyFallback || !retryRouteFailure(err))) {
+		if ctx.Err() != nil || (!isErr[*httpx.ChallengeError](err) && (!it.proxyFallback || !retryRouteFailure(err))) {
 			return err
 		}
 		m.mu.Lock()
@@ -238,7 +237,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 	if ctx.Err() == nil {
 		cause := err
 		m.noteRouteOutcome(it, err)
-		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+		if isErr[*httpx.ChallengeError](err) {
 			m.mu.Lock()
 			it.pace = challengePace(it.pace)
 			if it.refresh != nil {
@@ -249,9 +248,9 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 		if stall, ok := errors.AsType[*stalledError](err); ok {
 			lease.Failed(err, time.Since(start), true)
 			err = &routeTransferError{err: &httpx.RouteError{Err: err}, moved: stall.moved}
-		} else if _, busy := errors.AsType[*busyHostError](err); busy {
+		} else if isErr[*busyHostError](err) {
 			lease.Failed(err, time.Since(start), false)
-		} else if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
+		} else if isErr[*extractor.RefusedError](err) {
 			// The host turned this address away, not the file: hold the
 			// route back from it, its exit with it, and let the file try
 			// another. The API's own answer came back as an ordinary
@@ -273,7 +272,7 @@ func (m *Manager) transferRouted(ctx context.Context, it *Item) error {
 			// Only this address is waiting. The next dispatch may use a
 			// different one immediately, or wait in the queue for the pool.
 			err = &extractor.WaitError{Until: time.Now(), Reason: noteWaitingForRoute}
-		} else if _, routed := errors.AsType[*httpx.RouteError](err); routed {
+		} else if isErr[*httpx.RouteError](err) {
 			m.mu.Lock()
 			it.preferredRoute = ""
 			progress, _ := errors.AsType[*routeTransferError](err)
@@ -337,19 +336,8 @@ func retryRouteFailure(err error) bool {
 	if err == nil {
 		return false
 	}
-	if _, ok := errors.AsType[*httpx.RouteError](err); ok {
-		return true
-	}
-	if _, ok := errors.AsType[*httpx.ChallengeError](err); ok {
-		return true
-	}
-	if _, ok := errors.AsType[*stalledError](err); ok {
-		return true
-	}
-	if _, ok := errors.AsType[*busyHostError](err); ok {
-		return true
-	}
-	if transientRouteFailure(err) || routeAtFault(err) {
+	if isErr[*httpx.RouteError](err) || isErr[*httpx.ChallengeError](err) || isErr[*stalledError](err) ||
+		isErr[*busyHostError](err) || transientRouteFailure(err) || routeAtFault(err) {
 		return true
 	}
 	if status, ok := errors.AsType[*httpx.StatusError](err); ok {
@@ -410,10 +398,8 @@ func (e *routeTransferError) Unwrap() error { return e.err }
 // reader's included), a timeout, or a connection refused, reset or cut
 // short. The caller has already excluded the item's own cancellation.
 func transientRouteFailure(err error) bool {
-	if _, ok := errors.AsType[*extractor.TransientError](err); ok {
-		return true
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if isErr[*extractor.TransientError](err) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
@@ -438,10 +424,8 @@ func transientRouteFailure(err error) bool {
 // asked again for a while. Timeouts after proxy setup, HTTP refusals and
 // stalls still count.
 func routeAtFault(err error) bool {
-	if deadProxy(err) || proxyUnusable(err) || errors.Is(err, errExitInUse) {
-		return true
-	}
-	if errors.Is(err, proxy.ErrExitProbeFailed) {
+	if deadProxy(err) || proxyUnusable(err) || errors.Is(err, errExitInUse) ||
+		errors.Is(err, proxy.ErrExitProbeFailed) {
 		return true
 	}
 	// A proxy that answered and could not carry this request on: it
@@ -453,23 +437,18 @@ func routeAtFault(err error) bool {
 	// on a host other routes were serving. Its route is scored for the
 	// service, and the file moves on at no cost. A host that is down for
 	// every route leaves its files waiting for one, rather than failing.
-	if _, refused := errors.AsType[*httpx.ProxyRefusedError](err); refused {
-		return true
-	}
-	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+	if isErr[*httpx.ProxyRefusedError](err) || isErr[*httpx.ChallengeError](err) {
 		return true
 	}
 	// A proxy that answered the tunnel in another protocol altogether, as a
 	// SOCKS proxy listed as an HTTP one does, comes back from net/http as a
 	// malformed response: it carries nothing, whatever is asked of it.
-	if _, routed := errors.AsType[*httpx.RouteError](err); routed &&
+	if isErr[*httpx.RouteError](err) &&
 		(strings.Contains(err.Error(), "TLS handshake timeout") || strings.Contains(err.Error(), "malformed HTTP response")) {
 		return true
 	}
-	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
-		return true
-	}
-	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
+	return isErr[*extractor.RefusedError](err) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) ||
+		errors.Is(err, syscall.ECONNRESET)
 }
 
 // routeOutcome is one service's routed attempts that ended one way.
@@ -485,31 +464,26 @@ var routeOutcomeKinds = []string{"dead", "shared", "challenged", "refused", "wai
 // turned away; waited, a host's timer for the address; then transient
 // failures, stalls, other failures, and attempts that finished their file.
 func routeOutcomeKind(err error) string {
-	if err == nil || errors.Is(err, errAlreadyComplete) {
+	switch {
+	case err == nil || errors.Is(err, errAlreadyComplete):
 		return "finished"
-	}
-	if errors.Is(err, errExitInUse) {
+	case errors.Is(err, errExitInUse):
 		return "shared"
-	}
-	if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+	case isErr[*httpx.ChallengeError](err):
 		return "challenged"
-	}
-	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
+	case isErr[*extractor.WaitError](err):
 		return "waited"
-	}
-	if _, ok := errors.AsType[*extractor.RefusedError](err); ok {
+	case isErr[*extractor.RefusedError](err):
 		return "refused"
-	}
-	if _, ok := errors.AsType[*stalledError](err); ok {
+	case isErr[*stalledError](err):
 		return "stalled"
-	}
-	if routeBroken(err) {
+	case routeBroken(err):
 		return "dead"
-	}
-	if transientRouteFailure(err) {
+	case transientRouteFailure(err):
 		return "transient"
+	default:
+		return "failed"
 	}
-	return "failed"
 }
 
 // logRouteAttempt says how a routed attempt ended and what the file does
@@ -634,11 +608,7 @@ func (m *Manager) claimExit(ctx context.Context, it *Item, route *proxy.Lease) e
 		IsResponseError: func(err error) bool {
 			// Adapter HTTP refusals try the next probe, including statuses
 			// wrapped in RouteError. Other route failures stop immediately.
-			if _, answered := errors.AsType[*httpx.StatusError](err); answered {
-				return true
-			}
-			_, routed := errors.AsType[*httpx.RouteError](err)
-			return !routed && !routeAtFault(err)
+			return isErr[*httpx.StatusError](err) || !isErr[*httpx.RouteError](err) && !routeAtFault(err)
 		},
 		Reachable: m.echoReachable,
 	}
@@ -705,10 +675,7 @@ func (c echoClient) Do(req *http.Request) (*http.Response, error) {
 // carry the request at all, which the host either never saw or saw cut off.
 // Most untested ports on a public gateway are such proxies.
 func routeBroken(err error) bool {
-	if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
-		return false
-	}
-	return routeAtFault(err)
+	return !isErr[*extractor.RefusedError](err) && routeAtFault(err)
 }
 
 // proxyUnusable reports a proxy that answered and showed it cannot carry these
@@ -731,19 +698,9 @@ func proxyUnusable(err error) bool {
 	if refused, ok := errors.AsType[*httpx.ProxyRefusedError](err); ok {
 		return refused.Code < http.StatusInternalServerError
 	}
-	if _, ok := errors.AsType[tls.RecordHeaderError](err); ok || errors.Is(err, http.ErrSchemeMismatch) {
-		return true
-	}
-	if _, ok := errors.AsType[x509.CertificateInvalidError](err); ok {
-		return true
-	}
-	if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
-		return true
-	}
-	if _, ok := errors.AsType[x509.HostnameError](err); ok {
-		return true
-	}
-	return socksAuthRefused(err)
+	return isErr[tls.RecordHeaderError](err) || errors.Is(err, http.ErrSchemeMismatch) ||
+		isErr[x509.CertificateInvalidError](err) || isErr[x509.UnknownAuthorityError](err) ||
+		isErr[x509.HostnameError](err) || socksAuthRefused(err)
 }
 
 // socksAuthRefused reports a SOCKS proxy that would not let these requests
@@ -773,7 +730,7 @@ func socksAuthRefused(err error) bool {
 // is not one; that answer is about the host as much as the proxy, and an
 // outage there would otherwise walk one file through the entire pool.
 func deadProxy(err error) bool {
-	if _, ok := errors.AsType[*httpx.ProxyConnectError](err); ok {
+	if isErr[*httpx.ProxyConnectError](err) {
 		return true
 	}
 	for err != nil {

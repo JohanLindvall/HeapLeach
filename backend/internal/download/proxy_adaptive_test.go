@@ -118,9 +118,7 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			if reserved != (mode != "no ranges") {
 				t.Fatalf("upgrade reserved=%v in mode %s", reserved, mode)
 			}
-			waitFor(t, 5*time.Second, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+			waitLocked(t, m, 5*time.Second, func() bool {
 				return it.Status.Terminal() && !it.inFlight
 			})
 			if mode == "resume" || mode == "disabled" || mode == "removed" {

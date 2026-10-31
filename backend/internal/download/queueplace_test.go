@@ -102,21 +102,18 @@ func TestAStartedFileTakesTheNextRouteAfterOneFailsIt(t *testing.T) {
 	var attempts []string
 	m.mu.Lock()
 	job := &Job{ID: newID(), Source: "http://service.example.test/collection"}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
-	for i, name := range []string{"started.bin", "second.bin", "third.bin"} {
-		it := m.newItem(job, extractor.File{Name: name, Size: -1,
+	var files []extractor.File
+	for _, name := range []string{"started.bin", "second.bin", "third.bin"} {
+		files = append(files, extractor.File{Name: name, Size: -1,
 			Resolve: func(context.Context) (*extractor.Target, error) {
 				mu.Lock()
 				attempts = append(attempts, name)
 				mu.Unlock()
 				return &extractor.Target{URL: "http://storage.example.test/" + name, Size: -1}, nil
 			},
-			Pace: &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}}, "", i)
-		job.Items = append(job.Items, it)
-		m.queue = append(m.queue, it)
+			Pace: &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}})
 	}
-	started := job.Items[0]
+	started := m.queueJobLocked(job, files...)[0]
 	started.preferredRoute = pool.Page(config.GroupKeep2Share, proxy.Query{Search: dropping.URL}).Rows[0].ID
 	m.mu.Unlock()
 	half := len(payload) / 2

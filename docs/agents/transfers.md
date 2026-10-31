@@ -19,10 +19,10 @@ transfer backoff and an item note. Parser errors, missing files, certificate
 failures and permanent refusals stop immediately. Check the caller's context
 separately: an HTTP client deadline is retryable while that context is alive;
 a canceled or expired caller stops the attempt and its backoff. Leased routes,
-challenges, host waits and enabled proxy fallback keep their existing recovery
-paths rather than spending another retry budget on the same route. Tests in
-`resolve_retry_test.go` cover both initial resolution and refresh after a
-partial transfer.
+challenges, host waits and enabled proxy fallback (`proxyRecovers`) keep their
+existing recovery paths rather than spending another retry budget on the same
+route. Tests in `resolve_retry_test.go` cover both initial resolution and
+refresh after a partial transfer.
 
 **The retry budget counts attempts in a row that moved nothing.** An attempt
 that received bytes and then lost its connection — a CDN node dropping every
@@ -163,6 +163,8 @@ has been *received* and decides what to read next; `segment.flushed` is what
 the file actually holds, and it is the only thing `state()` writes to the
 sidecar. A sidecar that counted buffered bytes would resume past a gap and
 finish a file with a hole in it — the sidecar may only ever under-report.
+A connection whose flush failed goes back to `flushed` before it retries
+(`segment.rewind`), on the single-route and the multi-route path alike.
 Reads stay bounded by `CopyBufferSize` whatever the buffer holds, because the
 promise that keeps a split point ahead of the writer is stated in those terms;
 see `MinSegmentSize`. Tests live in `writebuf_test.go`, and the invariant

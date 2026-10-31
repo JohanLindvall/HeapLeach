@@ -5,7 +5,6 @@ package download
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,11 +14,10 @@ import (
 func TestTransfersCannotWriteThroughEscapingSymlinks(t *testing.T) {
 	for _, location := range []string{"directory", "part", "checkpoint"} {
 		t.Run(location, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/octet-stream")
 				_, _ = w.Write([]byte("downloaded data"))
 			}))
-			defer server.Close()
 			m := testManager(t, nil)
 			m.Start()
 			dir := m.DownloadDir()
@@ -92,11 +90,10 @@ func TestConcurrentCompletionsReserveDistinctNames(t *testing.T) {
 }
 
 func TestCheckpointFailureStopsBeforeWritingFileData(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write([]byte("downloaded data"))
 	}))
-	defer server.Close()
 	m := testManager(t, nil)
 	m.Start()
 	dir := m.DownloadDir()

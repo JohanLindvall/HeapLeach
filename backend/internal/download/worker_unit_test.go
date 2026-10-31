@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -143,7 +142,7 @@ func TestRejectWebPageAllowsPagesWhenAsked(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": {"text/html; charset=utf-8"}},
-		Request:    &http.Request{URL: mustParse(t, "https://x.test/page.html")},
+		Request:    &http.Request{URL: mustURL(t, "https://x.test/page.html")},
 	}
 	if err := rejectWebPage(resp, "page.html"); err != nil {
 		t.Errorf("an HTML file asked for by name is fine: %v", err)
@@ -156,15 +155,6 @@ func TestRejectWebPageAllowsPagesWhenAsked(t *testing.T) {
 	if err := rejectWebPage(ranged, "video.mp4"); err != nil {
 		t.Errorf("a ranged answer is the real thing: %v", err)
 	}
-}
-
-func mustParse(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
 }
 
 // Retrying must ask the tools package to look again.

@@ -42,12 +42,11 @@ func (m *Manager) recoverExtraction(ctx context.Context, read func(context.Conte
 		return nil, cause
 	}
 	m.mu.Lock()
-	pool, enabled := m.proxies, m.proxyEnabled
-	m.mu.Unlock()
-	if !enabled || pool == nil {
+	pool := m.proxies
+	if !m.proxyEnabled || pool == nil {
+		m.mu.Unlock()
 		return nil, cause
 	}
-	m.mu.Lock()
 	m.proxyResolving++
 	m.updateProxyDemandLocked()
 	m.mu.Unlock()
@@ -72,7 +71,7 @@ func (m *Manager) recoverExtraction(ctx context.Context, read func(context.Conte
 		}
 		start := time.Now()
 		res, err := read(lease.Context(attemptCtx))
-		if _, refused := errors.AsType[*extractor.RefusedError](err); refused && ctx.Err() == nil {
+		if isErr[*extractor.RefusedError](err) && ctx.Err() == nil {
 			lease.Failed(err, time.Since(start), false)
 		}
 		lease.Release()

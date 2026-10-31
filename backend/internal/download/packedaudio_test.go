@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -94,8 +93,7 @@ func TestWithoutPackedAudioTag(t *testing.T) {
 func TestPackedAudioKeepsOnlyItsFirstTag(t *testing.T) {
 	ffmpeg, ffprobe := requireFFmpeg(t), requireFFprobe(t)
 	origin := t.TempDir()
-	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
-	defer srv.Close()
+	srv := testServer(t, http.FileServer(http.Dir(origin)))
 	video := cmafRendition(t, ffmpeg, origin, srv.URL, "video",
 		append([]string{"-f", "lavfi", "-i", testPicture, "-an"}, testH264...)...)
 

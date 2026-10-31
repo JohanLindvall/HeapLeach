@@ -5,7 +5,6 @@ package download
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,7 +17,7 @@ func TestResolutionConcurrencyAndCancelWhileWaiting(t *testing.T) {
 	var requests atomic.Int32
 	var canceledRequested atomic.Bool
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if strings.Contains(r.URL.Path, "canceled") {
 			canceledRequested.Store(true)
@@ -30,7 +29,6 @@ func TestResolutionConcurrencyAndCancelWhileWaiting(t *testing.T) {
 		case <-r.Context().Done():
 		}
 	}))
-	t.Cleanup(srv.Close)
 	m := testManager(t, nil)
 	m.Start()
 	for i := range config.ResolveConcurrency {
@@ -46,9 +44,7 @@ func TestResolutionConcurrencyAndCancelWhileWaiting(t *testing.T) {
 	if err := m.CancelJob(id); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		return !m.jobs[id].resolving
 	})
 	if got := requests.Load(); got != int32(config.ResolveConcurrency) {

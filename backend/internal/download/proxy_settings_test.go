@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -36,8 +35,7 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 			fmt.Fprint(w, "file")
 		}
 	}
-	origin := httptest.NewServer(handler("direct", finishDirect))
-	defer origin.Close()
+	origin := testServer(t, handler("direct", finishDirect))
 	defer directOnce.Do(func() { close(finishDirect) })
 	defer aOnce.Do(func() { close(finishA) })
 	defer bOnce.Do(func() { close(finishB) })
@@ -93,9 +91,7 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 	}
 	bOnce.Do(func() { close(finishB) })
 	take("direct")
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		for _, it := range job.Items {
 			if it.Status != StatusDone {
 				return false
@@ -115,8 +111,7 @@ func TestEnablingAfterStartWakesForDiscoveredRoutes(t *testing.T) {
 		fmt.Fprint(w, "file")
 	})
 	finish := make(chan struct{})
-	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-finish; fmt.Fprint(w, destination.URL) }))
-	defer feed.Close()
+	feed := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-finish; fmt.Fprint(w, destination.URL) }))
 	var once sync.Once
 	defer once.Do(func() { close(finish) })
 	job := addProxyFiles(m, 1, func(context.Context) (*extractor.Target, error) {
@@ -131,9 +126,7 @@ func TestEnablingAfterStartWakesForDiscoveredRoutes(t *testing.T) {
 	}
 	_ = m.ApplySettings(Settings{Paused: new(false)})
 	once.Do(func() { close(finish) })
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		return job.Items[0].Status == StatusDone
 	})
 }

@@ -5,12 +5,10 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,14 +52,11 @@ func addTestJob(m *Manager, name, base string, files, size int) *Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	job := &Job{ID: newID(), Source: "http://site.example.test/" + name, Host: "site.example.test", limiter: newThrottle(0)}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
-	for i := range files {
-		it := m.newItem(job, extractor.File{Name: fmt.Sprintf("%s-%d.bin", name, i),
-			URL: fmt.Sprintf("%s/%s/%d", base, name, i), Size: int64(size)}, "", i)
-		job.Items = append(job.Items, it)
-		m.queue = append(m.queue, it)
+	listed := make([]extractor.File, files)
+	for i := range listed {
+		listed[i] = extractor.File{Name: fmt.Sprintf("%s-%d.bin", name, i), URL: fmt.Sprintf("%s/%s/%d", base, name, i), Size: int64(size)}
 	}
+	m.queueJobLocked(job, listed...)
 	m.signal()
 	return job
 }
@@ -82,12 +77,11 @@ func jobDone(m *Manager, job *Job) bool {
 func TestAJobsFilesAreLimitedBeneathTheQueue(t *testing.T) {
 	payload := bytes.Repeat([]byte{7}, 256<<10)
 	peaks := &peakCounter{live: map[string]int{}, peak: map[string]int{}}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer peaks.enter(strings.Split(r.URL.Path, "/")[1])()
 		time.Sleep(150 * time.Millisecond) // long enough to overlap
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 	m := busyManager(t)
 	concurrency := 4
 	if err := m.ApplySettings(Settings{Concurrency: &concurrency}); err != nil {
@@ -118,13 +112,12 @@ func TestAJobSetToNoneHoldsItsNewDownloads(t *testing.T) {
 	var releaseOnce sync.Once
 	let := func() { releaseOnce.Do(func() { close(release) }) }
 	var started atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/held/") && started.Add(1) == 1 {
 			<-release // the first file runs until the test lets it finish
 		}
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 	defer let() // before the server closes, which waits for the held request
 	m := busyManager(t)
 	concurrency := 2
@@ -192,20 +185,16 @@ func TestAJobsStreamsReplaceItsHostsBeneathTheQueue(t *testing.T) {
 		{"never past the queue's", 1, 6, 2, 3, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			payload := make([]byte, 24<<20)
-			if _, err := rand.Read(payload); err != nil {
-				t.Fatal(err)
-			}
+			payload := randomPayload(t, 24<<20)
 			var live, peak atomic.Int32
 			origin := &rangeServer{payload: payload, perChunk: 3 * time.Millisecond}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				n := live.Add(1)
 				for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
 				}
 				defer live.Add(-1)
 				origin.handler().ServeHTTP(w, r)
 			}))
-			defer srv.Close()
 			m, item := testTransferDeps(t, srv.URL)
 			m.timings.probe, m.timings.cooldown = 30*time.Millisecond, 30*time.Millisecond
 			m.streams = tc.queueSettings
@@ -245,8 +234,7 @@ func TestAJobsSpeedLimitHoldsItsOwnTransfers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			payload := bytes.Repeat([]byte{5}, size)
-			srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-			defer srv.Close()
+			srv := testServer(t, (&rangeServer{payload: payload}).handler())
 			m := busyManager(t)
 			concurrency := 2
 			if err := m.ApplySettings(Settings{Concurrency: &concurrency, SpeedLimit: &tc.queue}); err != nil {

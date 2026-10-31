@@ -30,13 +30,17 @@ from `Snapshot()` or `CurrentSettings()`.
 
 The package's tests build managers with `testManager` (`helpers_test.go`),
 whose function argument tunes the configuration before anything is built from
-it, and read the queue through `jobView`, `findItem`, `countStatus` and
-`waitForStatus`; it waits with `waitFor`, not a loop of its own. Tests that
-need the media tools skip without them through `requireFFmpeg` and
-`requireFFprobe`, run a tool with `run`, and read a result's streams with
-`ffprobeStreams`, the tests' own reading of ffprobe kept apart from
-`probeMedia` so a test cannot share the mistake it should catch. A test's own differences — retries, timings, whether it calls
-`Start()` — stay at the test. Accessors the code itself never needs, such as
+it, list files on a job with `queueJobLocked`, serve them from `testServer`
+(closed when the test ends) with `randomPayload` for contents, and read the
+queue through `jobView`, `findItem`, `countStatus` and `waitForStatus`; it
+waits with `waitFor`, or `waitLocked` for a condition read under `mu`, not a
+loop of its own. A net/http timeout is `timeoutError` (`tlsHandshakeTimeout`,
+`dialTimeout`). Tests that need the media tools skip without them through
+`requireFFmpeg` and `requireFFprobe`, run a tool with `run`, and read a
+result's streams with `ffprobeStreams`, the tests' own reading of ffprobe kept
+apart from `probeMedia` so a test cannot share the mistake it should catch. A
+test's own differences — retries, timings, whether it calls `Start()` — stay
+at the test. Accessors the code itself never needs, such as
 `hostGate.quiet` or `throttle.take`, live in `testonly_test.go`.
 
 **Clear finished only forgets successful jobs** (`Job.complete`): the source
@@ -84,9 +88,9 @@ consequences worth keeping in mind:
 - A paused transfer is idle *on purpose*, so `watchForStall` is given the
   pause predicate and does not count that time against it. Otherwise pausing
   would abort exactly the transfers the user asked to keep.
-- The stream supervisor asks `throttle.limiting()` before opening another
-  connection. A capped transfer and a slow one look identical from the outside
-  — bytes are not moving — and splitting a capped one eight ways cannot help,
+- The stream supervisors ask `throttle.limiting()` before opening another
+  connection (`segmentedTransfer.held`, which both share). A capped transfer
+  and a slow one look identical from the outside — bytes are not moving — and splitting a capped one eight ways cannot help,
   because the bucket is shared. `limiting()` measures the bucket's own
   throughput over a rolling window rather than whether anyone *blocked*: the
   bucket hands out whatever it has, so a transfer pinned exactly at the

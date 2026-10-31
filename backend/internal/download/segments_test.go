@@ -3,10 +3,11 @@
 package download
 
 import (
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // The requested placement: the first extra connection starts halfway

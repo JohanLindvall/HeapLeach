@@ -3,8 +3,12 @@
 package download
 
 import (
+	"crypto/rand"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -40,6 +44,65 @@ func testManager(t *testing.T, tune func(*config.Config)) *Manager {
 	return m
 }
 
+// queueJobLocked registers job and queues the files given as its items, in
+// order, as a resolved listing would be. Caller holds mu.
+func (m *Manager) queueJobLocked(job *Job, files ...extractor.File) []*Item {
+	m.jobs[job.ID] = job
+	m.order = append(m.order, job.ID)
+	items := make([]*Item, 0, len(files))
+	for i, f := range files {
+		it := m.newItem(job, f, "", i)
+		job.Items = append(job.Items, it)
+		m.queue = append(m.queue, it)
+		items = append(items, it)
+	}
+	return items
+}
+
+// randomPayload is n random bytes, a file's contents no transfer could get
+// right by accident.
+func randomPayload(t *testing.T, n int) []byte {
+	t.Helper()
+	payload := make([]byte, n)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+// testServer starts a server for the test, closed when it ends.
+func testServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// mustURL parses a URL a test wrote itself.
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// timeoutError is a net.Error that timed out without wrapping
+// context.DeadlineExceeded, as net/http's own unexported ones do.
+type timeoutError string
+
+func (e timeoutError) Error() string { return string(e) }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+const (
+	// tlsHandshakeTimeout is net/http's TLS handshake timeout.
+	tlsHandshakeTimeout timeoutError = "net/http: TLS handshake timeout"
+	// dialTimeout is a dial's i/o timeout.
+	dialTimeout timeoutError = "i/o timeout"
+)
+
 // waitFor polls until cond holds, failing the test if it has not within
 // timeout.
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
@@ -47,6 +110,16 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	if !waitForCond(timeout, cond) {
 		t.Fatalf("condition not met within %s", timeout)
 	}
+}
+
+// waitLocked is waitFor with cond read under the manager's lock.
+func waitLocked(t *testing.T, m *Manager, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	waitFor(t, timeout, func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return cond()
+	})
 }
 
 // waitForCond polls until cond holds, reporting whether it did.

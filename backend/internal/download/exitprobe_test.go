@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,7 +65,7 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 		t.Run(map[bool]string{false: "outage", true: "broken route"}[reachable], func(t *testing.T) {
 			m := busyManager(t)
 			var directCalls atomic.Int32
-			echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			echo := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				directCalls.Add(1)
 				if reachable {
 					io.WriteString(w, "192.0.2.1")
@@ -74,7 +73,6 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 					w.WriteHeader(http.StatusServiceUnavailable)
 				}
 			}))
-			defer echo.Close()
 			server := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusForbidden)
 			})
@@ -116,11 +114,10 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 func TestExitProbeCanceledOutageCheckIsNotCached(t *testing.T) {
 	m := busyManager(t)
 	started := make(chan struct{})
-	echo := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	echo := testServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(started)
 		<-r.Context().Done()
 	}))
-	defer echo.Close()
 	server := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})

@@ -4,7 +4,6 @@ package download
 
 import (
 	"context"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,8 +148,7 @@ func TestApproximateSizeDoesNotSkip(t *testing.T) {
 // when the length is known, and after the response headers, when it is not.
 func TestSkippingAFinishedFileLeavesItsMtimeAlone(t *testing.T) {
 	payload := []byte(strings.Repeat("finished file ", 512))
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	for name, size := range map[string]int64{"known length": int64(len(payload)), "length from headers": -1} {
 		t.Run(name, func(t *testing.T) {
@@ -193,8 +191,7 @@ func TestSkippingAFinishedFileLeavesItsMtimeAlone(t *testing.T) {
 func TestAFileSavedUnderANumberedNameIsRecognised(t *testing.T) {
 	small := []byte(strings.Repeat("s", 1000))
 	large := []byte(strings.Repeat("L", 3000))
-	srv := httptest.NewServer((&rangeServer{payload: large}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: large}).handler())
 
 	m := busyManager(t)
 	dir := m.cfg.DownloadDir

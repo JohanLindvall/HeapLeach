@@ -116,7 +116,7 @@ func (m *Manager) routeSourceLocked(it *Item) func(context.Context) (*streamSour
 			if ctx.Err() == nil {
 				if wait, ok := errors.AsType[*extractor.WaitError](err); ok {
 					lease.Cooldown(wait.Until)
-				} else if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
+				} else if isErr[*extractor.RefusedError](err) {
 					lease.Failed(err, time.Since(start), false)
 					lease.Cooldown(time.Now().Add(config.ProxyAddressRefusedWait))
 				}
@@ -342,7 +342,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			}
 			speed, stable := meter.observe(current, elapsed)
 			if !stable || wanted || pending != nil || 1+len(extras) >= t.maxStreams ||
-				speed >= float64(t.slowBelow) || paused || t.manager.throttle.limiting() || t.item.limiter.limiting() {
+				speed >= float64(t.slowBelow) || t.held() {
 				continue
 			}
 			if !lastAdd.IsZero() && time.Since(lastAdd) < t.manager.timings.cooldown || now.Before(nextAcquire) {
@@ -385,12 +385,10 @@ func (t *segmentedTransfer) pumpSource(seg *segment, src *streamSource) {
 		}
 		if err != nil {
 			// What the failed flush was holding is not on disk.
-			if flushed := seg.flushed.Load(); seg.pos.Load() > flushed {
-				lost := seg.pos.Swap(flushed) - flushed
-				t.item.downloaded.Add(-lost)
-				t.item.extraBytes.Add(-lost)
-				src.bytes.Add(-lost)
-			}
+			lost := seg.rewind()
+			t.item.downloaded.Add(-lost)
+			t.item.extraBytes.Add(-lost)
+			src.bytes.Add(-lost)
 			// The link is bound to an address this route did not present: a
 			// route whose egress moves, which is the route's fault.
 			if refusedForAddress(err) {

@@ -4,7 +4,6 @@ package download
 
 import (
 	"bytes"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,8 +78,7 @@ func TestSetDownloadDirExpandsHome(t *testing.T) {
 // The point of the feature: what is queued follows the new destination.
 func TestQueuedTransfersFollowTheNewDirectory(t *testing.T) {
 	payload := bytes.Repeat([]byte{4}, 2048)
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	m := busyManager(t)
 	moved := filepath.Join(t.TempDir(), "elsewhere")
