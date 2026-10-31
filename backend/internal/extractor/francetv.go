@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"golang.org/x/net/html"
 )
 
 // FranceTV reads france.tv through the API its player calls
@@ -97,13 +98,15 @@ var (
 // Extract reads a video page into its file, a programme's page into one
 // file a programme, and hands anything else on france.tv to yt-dlp.
 func (f *FranceTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	page, _, err := fetchDocument(ctx, f.client, u, nil)
+	d, err := readDocument(ctx, f.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("francetv: %s: %w", u.Redacted(), err)
 	}
 	// The flight data is JSON written into script as strings.
-	flight := strings.ReplaceAll(page, `\"`, `"`)
-	pageTitle := francetvPageTitle(page)
+	flight := strings.ReplaceAll(d.body, `\"`, `"`)
+	// The title is read off the tree recognition built when it named the
+	// site, and off a parse of its own otherwise.
+	pageTitle := francetvTitleOf(d.tree())
 	if id := francetvVideoID(flight, u); id != "" {
 		// The page's title names the video where the API refuses to.
 		label := cmp.Or(pageTitle, id)
@@ -122,14 +125,15 @@ func (f *FranceTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Resu
 	return f.handoff.Extract(ctx, u, opts)
 }
 
-// francetvPageTitle is what a page is called: its og:title, less the "en
+// francetvTitleOf is what a page is called: its og:title, less the "en
 // replay" the site adds, or its title, less the site's name and, for a
 // programme's every video, the "Toutes les vidéos" that would file them
 // apart from the programme's own page. A video page's title is the site's
-// name alone, and a listing's og:title the site's description.
-func francetvPageTitle(page string) string {
-	root, err := parseHTML(page)
-	if err != nil {
+// name alone, and a listing's og:title the site's description. A page that
+// would not parse (nil) has none; the tree may be the probe's and is only
+// read.
+func francetvTitleOf(root *html.Node) string {
+	if root == nil {
 		return ""
 	}
 	if og := strings.TrimSpace(strings.TrimSuffix(metaContent(root, "og:title"), " en replay")); og != "" && !strings.HasPrefix(og, "France TV") {

@@ -86,10 +86,11 @@ func noodleRead(ctx context.Context, client *httpx.Client, page string) (*player
 	if err != nil {
 		return nil, err
 	}
-	doc, final, err := fetchDocument(ctx, client, pageURL, nil)
+	d, err := readDocument(ctx, client, pageURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch video: %w", err)
 	}
+	doc, final := d.body, d.final
 	marker := noodlePlaylist.FindStringIndex(doc)
 	if marker == nil {
 		return nil, fmt.Errorf("no player on this page (the video may be restricted or removed)")
@@ -125,7 +126,9 @@ func noodleRead(ctx context.Context, client *httpx.Client, page string) (*player
 	if _, ok := bestCandidate(candidates); !ok {
 		return nil, fmt.Errorf("player has no usable MP4 or HLS sources")
 	}
-	root, err := parseHTML(doc)
+	// The tree recognition built when it read the page's name, if this is
+	// the probed page; at transfer time the page is fresh and parsed here.
+	root, err := d.parse()
 	if err != nil {
 		return nil, err
 	}
