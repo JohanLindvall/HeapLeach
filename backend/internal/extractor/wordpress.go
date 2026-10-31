@@ -78,14 +78,10 @@ func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Regis
 		}
 		return res, err
 	})
-	if err := ctx.Err(); err != nil {
+	if err := e.unresolved(ctx, "wordpress", "posts", page.Redacted()); err != nil {
 		return nil, err
 	}
-	if len(e.files) == 0 {
-		return nil, noneRead("wordpress", len(sources), "posts", page.Redacted(), e.refusals, e.failed)
-	}
-	note = expansionNote(note, e, len(sources), "posts")
-	note = joinNotes(note, countNote(e.partial, "posts have incomplete downloads"))
+	note = e.note(note, sourceWords{noun: "posts", counted: true, own: true, children: "posts have incomplete downloads"})
 	return &Result{Title: title, Note: note, Files: e.files}, nil
 }
 
@@ -397,8 +393,8 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if len(sources) < found {
 		notes = append(notes, sourceLimitNote)
 	}
-	notes = append(notes, resolvedNote(e.used, len(sources)-e.unrecognised, "links"))
-	notes = append(notes, countNote(e.partial, "linked sources are incomplete"))
+	notes = append(notes, e.resolvedNote("links"))
+	notes = append(notes, e.childNote(sourceWords{children: "linked sources are incomplete"}))
 	// A supported download link takes precedence over an embedded preview,
 	// just as it does on an ordinary page. Without one, use the same album
 	// and player parsers, scoped to this post rather than its sidebar/head.

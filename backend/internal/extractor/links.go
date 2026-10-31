@@ -147,13 +147,9 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 	}
 
 	title := cmp.Or(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
-	note := partialNote("links", e, found, len(sources) < found)
-	if note == "" {
-		note = resolvedNote(e.used, found, "links")
-	}
 	return &Result{
 		Title: title,
-		Note:  note,
+		Note:  e.note("", sourceWords{noun: "links", found: found, counted: true}),
 		Files: e.files,
 	}, nil
 }

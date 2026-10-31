@@ -727,3 +727,39 @@ func TestFoolFuukaIndexSaysWhyAPageYieldedNothing(t *testing.T) {
 		t.Errorf("error %q drops what the archive actually said", err)
 	}
 }
+
+// TestFoolFuukaIndexNotesThreadsThatWouldNotOpen: one thread refused beside
+// another that opened leaves the page's files standing, and says that a
+// thread was left out, so the page is never taken for the whole board page.
+// A text-only thread is the board as it is and is not mentioned.
+func TestFoolFuukaIndexNotesThreadsThatWouldNotOpen(t *testing.T) {
+	f := foolFuukaFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, foolFuukaIndexAPI) {
+			_, _ = io.WriteString(w, `{
+				"300":{"op":{"num":"300","title":"Text"}},
+				"200":{"op":{"num":"200","title":"Refused"}},
+				"100":{"op":{"num":"100","title":"Open"}}}`)
+			return
+		}
+		switch num := r.URL.Query().Get("num"); num {
+		case "200":
+			w.WriteHeader(http.StatusForbidden)
+		case "300":
+			_, _ = io.WriteString(w, `{"300":{"op":{"num":"300","title":"Text"}}}`)
+		default:
+			_, _ = io.WriteString(w, fmt.Sprintf(`{"%s":{"op":{"num":"%s","title":"T","media":{
+				"media":"%s-op.jpg","media_filename":"a.jpg",
+				"media_link":"https://media.example.test/b/image/1/1/%s-op.jpg",
+				"media_size":"10","media_status":"normal"}}}}`, num, num, num, num))
+		}
+	})
+
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/page/2/", Options{})
+	if len(res.Files) != 1 || res.Files[0].Name != "100-op.jpg" {
+		t.Fatalf("files = %+v", res.Files)
+	}
+	if res.Note != "1 left out: could not be read" {
+		t.Errorf("note = %q, want the refused thread counted", res.Note)
+	}
+}

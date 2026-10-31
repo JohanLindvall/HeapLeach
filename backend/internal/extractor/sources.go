@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
@@ -276,16 +277,77 @@ func partialNote(noun string, e expansion, found int, capped bool) string {
 	return joinNotes(cappedNote(e.used, found, noun), cappedNote(e.cut, e.of, "files"))
 }
 
-// expansionNote is a walked listing's note once its entries are expanded:
-// the walk's own, the file cap when it cut the expansion short, and how
-// many of the listed entries resolved when some did not, in the caller's
-// noun.
-func expansionNote(walk string, e expansion, listed int, noun string) string {
-	limit := ""
-	if e.full {
-		limit = fileLimitNote
+// sourceWords is how a collection words its expansion's note: what its
+// sources are called, and which of the shared accounts it gives.
+type sourceWords struct {
+	// noun is the sources, in the collection's words: "albums", "links".
+	noun string
+	// found is how many sources the page or search offered, for a
+	// collection that counts its caps against them (partialNote) rather
+	// than naming the file limit; zero for one that names it.
+	found int
+	// counted says what was left out as how many sources resolved — "3 of
+	// 5 links resolved" — rather than per reason, where no cap already
+	// counted the sources against what was found.
+	counted bool
+	// own says the sources are pages of the collection's own, so that one
+	// no extractor recognised is a dead page, counted as not resolved,
+	// rather than navigation that only looked like a source.
+	own bool
+	// children is the words for the sources whose own results reported
+	// something left out: "posts have incomplete downloads". Empty, they
+	// read "N of M <noun> incomplete".
+	children string
+}
+
+// note is a collection's note once its sources are expanded, the one place
+// its parts are put together, in order: the listing's own (walk); what the
+// caps left out; the sources left out, per reason (outcomeSummary.note) or
+// as a count of those resolved (sourceWords.counted); and how many of the
+// sources taken reported something left out of their own results. A link
+// no extractor recognised is navigation and is not counted, unless the
+// sources are the collection's own pages (sourceWords.own).
+func (e expansion) note(walk string, w sourceWords) string {
+	caps := e.limitNote()
+	if w.found > 0 {
+		caps = partialNote(w.noun, e, w.found, e.listed < w.found)
 	}
-	return joinNotes(walk, limit, resolvedNote(e.used, listed, noun))
+	omitted := e.outcomeSummary.note()
+	if w.counted && (w.found == 0 || caps == "") {
+		listed := e.listed
+		if !w.own {
+			listed -= e.unrecognised
+		}
+		omitted = resolvedNote(e.used, listed, w.noun)
+	}
+	return joinNotes(walk, caps, omitted, e.childNote(w))
+}
+
+// resolvedNote says how many of the sources resolved, in the caller's
+// noun, or nothing when every source did. Links no extractor recognised
+// were never sources.
+func (e expansion) resolvedNote(noun string) string {
+	return resolvedNote(e.used, e.listed-e.unrecognised, noun)
+}
+
+// childNote counts the sources taken whose own results reported something
+// left out, in the collection's words (sourceWords.children), or nothing
+// when none did.
+func (e expansion) childNote(w sourceWords) string {
+	if w.children != "" {
+		return countNote(e.partial, w.children)
+	}
+	if e.partial == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d of %d %s incomplete", e.partial, e.used, w.noun)
+}
+
+// unresolved is how an expansion of the sources on where finishes when it
+// is no success: the caller's cancellation, or noneRead's error when no
+// source yielded files (noneResolved); nil otherwise.
+func (e expansion) unresolved(ctx context.Context, site, noun, where string) error {
+	return noneResolved(ctx, e.files, site, e.listed, noun, where, e.refusals, e.failed)
 }
 
 // opening is an expansion's extract for a host reading the pages its own

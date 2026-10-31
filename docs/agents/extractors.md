@@ -306,10 +306,22 @@ intact. `sources.go` holds what they share:
   titles were filed under a form of its own before this existed keeps that
   form through `expandSourcesNamed`'s `folders` hook, since renaming them
   would download them all again.
-- **The note.** "N of M" admits a truncated answer (`partialNote`, on
-  `cappedNote`); a listing expanded into its sources says what its walk,
-  the file cap and the sources that did not resolve left out
-  (`expansionNote`).
+- **The note.** A collection expanded from sources finishes through
+  `expansion.unresolved` (cancellation, then `noneRead` when nothing
+  resolved) and `expansion.note`, the one place its note is put together,
+  in order: the walk's own note; the caps, as the file limit or, with
+  `sourceWords.found`, as "N of M" against what the page offered
+  (`partialNote`, on `cappedNote`, which stays about caps alone); the
+  sources left out, per reason through `outcomeSummary.note` or, with
+  `counted`, as "N of M <noun> resolved" where no cap already counted them;
+  and the sources whose own result carried a note, "N of M <noun>
+  incomplete" unless `children` gives the family's words. A source
+  resolved but cut by the file cap is not a failure. A link no extractor
+  recognised is navigation and is never counted as left out, except where
+  the sources are the collection's own pages (`own`), whose unrecognised
+  page is a dead one. A child's note is counted, not parsed: it says the
+  child reported something left out, not what. Use these rather than
+  joining a collection's note by hand.
 
 ### Walking pages
 
@@ -553,9 +565,8 @@ line in the saved queue.
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
   (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
   returns its note and whether it decided one, and a hook that singles out
-  one failure returns false for the rest, leaving their note to the walk. `expansionNote` (`sources.go`) builds the job note
-  of a listing expanded into its sources, and `partialNote` that of a page
-  or search whose sources a cap cut.
+  one failure returns false for the rest, leaving their note to the walk. `expansion.note` (`sources.go`) builds the job note
+  of a listing expanded into its sources, `partialNote` its caps.
 - `expandSources` keeps, beside the files, the `outcomeSummary` of every
   source it attempted (embedded in `expansion`), so a page none of whose
   sources resolved says why through `noneRead`; a link no extractor

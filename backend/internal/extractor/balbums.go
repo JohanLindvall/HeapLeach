@@ -94,12 +94,12 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	}
 
 	e := expandSources(ctx, b.registry, albums, opts)
-	if err := noneResolved(ctx, e.files, "balbums", len(albums), "albums", fmt.Sprintf("the search for %q", query), e.refusals, e.failed); err != nil {
+	if err := e.unresolved(ctx, "balbums", "albums", fmt.Sprintf("the search for %q", query)); err != nil {
 		return nil, err
 	}
 	return &Result{
 		Title: query,
-		Note:  partialNote("albums", e, found, len(albums) < found),
+		Note:  e.note("", sourceWords{noun: "albums", found: max(found, len(albums))}),
 		Files: e.files,
 	}, nil
 }

@@ -214,10 +214,10 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 	// finished download and is not; a gallery that will not open leaves the
 	// rest, and why comes back for when none did.
 	e := expandSourcesWith(ctx, links, opts, opening(p.gallery))
-	if err := noneResolved(ctx, e.files, "pornpics", len(links), "galleries", u.Redacted(), e.refusals, e.failed); err != nil {
+	if err := e.unresolved(ctx, "pornpics", "galleries", u.Redacted()); err != nil {
 		return nil, err
 	}
-	return &Result{Title: pornpicsTitle(root, u), Files: e.files, Note: joinNotes(note, e.limitNote())}, nil
+	return &Result{Title: pornpicsTitle(root, u), Files: e.files, Note: e.note(note, sourceWords{noun: "galleries"})}, nil
 }
 
 // block fetches one page of a listing and reads the galleries out of it.

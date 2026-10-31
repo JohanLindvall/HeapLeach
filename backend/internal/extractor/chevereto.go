@@ -143,10 +143,10 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 			albums, note = albums[:limit], joinNotes(note, limitNote)
 		}
 		e := cheveretoExpand(ctx, client, albums, opts)
-		if err := noneResolved(ctx, e.files, cheveretoLabel, len(albums), "albums", u.Redacted(), e.refusals, e.failed); err != nil {
+		if err := e.unresolved(ctx, cheveretoLabel, "albums", u.Redacted()); err != nil {
 			return nil, err
 		}
-		return &Result{Title: listing.title, Files: e.files, Note: joinNotes(note, e.limitNote(), refusedNote(e.refusals))}, nil
+		return &Result{Title: listing.title, Files: e.files, Note: e.note(note, sourceWords{noun: "albums"})}, nil
 	}
 	return cheveretoSingle(root, u, listing.title)
 }

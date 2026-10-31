@@ -430,9 +430,12 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 		return nil, fmt.Errorf("%s: /%s/ page %d: none of its %d threads holds an attachment",
 			a.name, t.board, t.page, len(threads))
 	}
+	// Threads that would not open beside others that did are said, so a
+	// board page missing some of its threads is never taken for the whole.
 	return &Result{
 		Title: fmt.Sprintf("%s-%s-page-%d", a.name, t.board, t.page),
 		Files: files,
+		Note:  outcomes.note(),
 	}, nil
 }
 

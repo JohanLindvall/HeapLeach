@@ -80,10 +80,10 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := noneResolved(ctx, e.files, "voyeurking", len(sources), "videos", first.Redacted(), e.refusals, e.failed); err != nil {
+	if err := e.unresolved(ctx, "voyeurking", "videos", first.Redacted()); err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Note: expansionNote(note, e, len(sources), "videos"), Files: e.files}, nil
+	return &Result{Title: title, Note: e.note(note, sourceWords{noun: "videos", counted: true, own: true}), Files: e.files}, nil
 }
 
 func voyeurKingListing(u *url.URL) bool {

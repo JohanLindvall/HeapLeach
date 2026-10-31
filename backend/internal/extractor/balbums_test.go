@@ -353,3 +353,20 @@ func TestBalbumsEndsWhereTheResultsDo(t *testing.T) {
 		})
 	}
 }
+
+// An album that will not open beside others that did leaves their files
+// standing and is said in the note, beside nothing a cap left out.
+func TestBalbumsNotesAnAlbumThatWouldNotOpen(t *testing.T) {
+	const albumHost = "albums.example.test"
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album", fail: "/a/BBBB"}
+	index, root, _ := balbumsIndex(t, stub, map[int]string{
+		1: balbumsPageHTML(albumHost, 1, 1, "AAAA", "BBBB", "CCCC"),
+	})
+	res, err := balbumsExtract(t, index, root+"/?search=Driftwood")
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(res.Files) != 2 || res.Note != "1 left out: could not be read" {
+		t.Errorf("got %d files, note %q; want 2 and the dead album counted", len(res.Files), res.Note)
+	}
+}

@@ -97,10 +97,10 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 	// skips an unavailable album rather than sinking the rest, its reason
 	// kept for when no album held anything.
 	expanded := expandSourcesNamed(ctx, albums, opts, opening(e.album), eromeFolders)
-	if err := noneResolved(ctx, expanded.files, "erome", len(albums), "albums", "profile "+u.Redacted(), expanded.refusals, expanded.failed); err != nil {
+	if err := expanded.unresolved(ctx, "erome", "albums", "profile "+u.Redacted()); err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: expanded.files, Note: joinNotes(note, expanded.limitNote())}, nil
+	return &Result{Title: title, Files: expanded.files, Note: expanded.note(note, sourceWords{noun: "albums"})}, nil
 }
 
 // profileAlbums walks a profile's pages for the albums they list, up to the

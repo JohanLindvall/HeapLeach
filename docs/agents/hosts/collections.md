@@ -21,7 +21,9 @@ the shared `walkListing` as a quiet, numbered listing: its reader names the
 next page by number and stops at the stated last page, however short, or the
 cap, and a page that is missing or adds nothing is where the results end, not
 a partial job. When none of the albums found resolves, the error is
-`noneRead`'s, naming the first album's refusal or failure.
+`noneRead`'s, naming the first album's refusal or failure; when some do, the
+note counts the caps against what the search found and the albums left out,
+per reason (`expansion.note`).
 
 ## coomerfans
 

@@ -320,20 +320,41 @@ func TestWebLink(t *testing.T) {
 }
 
 func TestExpansionNote(t *testing.T) {
+	listed := func(n int) outcomeSummary { return outcomeSummary{listed: n, attempted: n} }
+	counted := sourceWords{noun: "videos", counted: true, own: true}
+	byReason := sourceWords{noun: "albums"}
 	for _, tc := range []struct {
-		walk   string
-		e      expansion
-		listed int
-		want   string
+		walk  string
+		e     expansion
+		words sourceWords
+		want  string
 	}{
-		{"", expansion{used: 3}, 3, ""},
-		{"partial — source limit", expansion{used: 3}, 3, "partial — source limit"},
-		{"", expansion{used: 2, full: true}, 3, "partial — file limit; 2 of 3 videos resolved"},
-		{"partial — repeated page", expansion{used: 1}, 3, "partial — repeated page; 1 of 3 videos resolved"},
-		{"partial — repeated page", expansion{used: 1, full: true}, 3, "partial — repeated page; file limit; 1 of 3 videos resolved"},
+		{"", expansion{outcomeSummary: listed(3), used: 3}, counted, ""},
+		{"partial — source limit", expansion{outcomeSummary: listed(3), used: 3}, counted, "partial — source limit"},
+		{"", expansion{outcomeSummary: listed(3), used: 2, full: true}, counted, "partial — file limit; 2 of 3 videos resolved"},
+		{"partial — repeated page", expansion{outcomeSummary: listed(3), used: 1}, counted, "partial — repeated page; 1 of 3 videos resolved"},
+		{"partial — repeated page", expansion{outcomeSummary: listed(3), used: 1, full: true}, counted, "partial — repeated page; file limit; 1 of 3 videos resolved"},
+		// A link no extractor recognised was never a source, unless the
+		// sources are the collection's own pages.
+		{"", expansion{outcomeSummary: outcomeSummary{listed: 3, attempted: 3, unrecognised: 1}, used: 2}, sourceWords{noun: "links", counted: true}, ""},
+		{"", expansion{outcomeSummary: outcomeSummary{listed: 3, attempted: 3, unrecognised: 1}, used: 2}, counted, "2 of 3 videos resolved"},
+		// Per reason: what the host refused and what could not be read.
+		{"", expansion{outcomeSummary: outcomeSummary{listed: 4, attempted: 4, failures: 1, refusals: []string{"private"}}, used: 2}, byReason,
+			"1 left out: private; 1 left out: could not be read"},
+		{"partial — invalid next page", expansion{outcomeSummary: outcomeSummary{listed: 3, attempted: 3, failures: 1}, used: 2, full: true}, byReason,
+			"partial — invalid next page; file limit; 1 left out: could not be read"},
+		// Sources that said their own results were incomplete.
+		{"", expansion{outcomeSummary: listed(3), used: 3, partial: 1}, byReason, "1 of 3 albums incomplete"},
+		{"", expansion{outcomeSummary: listed(3), used: 3, partial: 2}, sourceWords{noun: "posts", counted: true, children: "posts have incomplete downloads"},
+			"2 posts have incomplete downloads"},
+		// Caps counted against what was found leave the omissions per reason.
+		{"", expansion{outcomeSummary: outcomeSummary{listed: 2, attempted: 2, failures: 1}, used: 1}, sourceWords{noun: "links", found: 5, counted: true},
+			"1 of 5 links; 1 left out: could not be read"},
+		{"", expansion{outcomeSummary: outcomeSummary{listed: 2, attempted: 2, failures: 1}, used: 1}, sourceWords{noun: "links", found: 2, counted: true},
+			"1 of 2 links resolved"},
 	} {
-		if got := expansionNote(tc.walk, tc.e, tc.listed, "videos"); got != tc.want {
-			t.Errorf("expansionNote(%q, %+v, %d) = %q, want %q", tc.walk, tc.e, tc.listed, got, tc.want)
+		if got := tc.e.note(tc.walk, tc.words); got != tc.want {
+			t.Errorf("note(%q, %+v, %+v) = %q, want %q", tc.walk, tc.e, tc.words, got, tc.want)
 		}
 	}
 }
