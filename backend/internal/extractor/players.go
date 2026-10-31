@@ -369,15 +369,6 @@ type playerGone struct {
 func (e *playerGone) Error() string { return e.msg }
 func (e *playerGone) Unwrap() error { return e.err }
 
-// playerFetch reads a page, sending referer as its Referer.
-func playerFetch(ctx context.Context, client *httpx.Client, page, referer string) (string, error) {
-	doc, err := fetchPage(ctx, client, page, httpx.Referer(referer))
-	if err != nil {
-		return "", fmt.Errorf("fetch %s: %w", page, err)
-	}
-	return doc, nil
-}
-
 // idPage is a row's page for a link from which id reads the video: the
 // site's origin, then prefix and the id.
 func idPage(id func(*url.URL) string, prefix, expect string) func(*url.URL) (string, error) {
@@ -435,16 +426,6 @@ func pageOrigin(page string) string {
 func videoSource(n *html.Node) bool {
 	return isElem(n, atom.Source) && attr(n, "src") != "" &&
 		(strings.HasPrefix(attr(n, "type"), "video/") || strings.Contains(attr(n, "src"), ".mp4"))
-}
-
-// firstHeading reads the page's own <h1>, which names a video where the
-// document title adds the site's furniture around it.
-func firstHeading(doc string) string {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(firstText(root, atom.H1))
 }
 
 // pageTitle reads a document title, trimmed of the site's own suffix.

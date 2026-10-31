@@ -133,11 +133,13 @@ func okruCandidates(meta *okruMetadata) []mediaCandidate {
 
 // okruFetch reads the embed page once.
 func okruFetch(ctx context.Context, client *httpx.Client, page string) (*okruMetadata, error) {
-	doc, err := fetchPage(ctx, client, page, httpx.Referer(okruRoot+"/"))
+	// The probe's own tree on the first attempt; withExtractRetries hands a
+	// retry a context without it, so an empty but OK player is asked again.
+	root, err := fetchPageRoot(ctx, client, page, httpx.Referer(okruRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", page, err)
 	}
-	meta, err := okruMetadataFrom(doc)
+	meta, err := okruMetadataRead(root)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", page, err)
 	}
@@ -154,6 +156,12 @@ func okruMetadataFrom(doc string) (*okruMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
+	return okruMetadataRead(root)
+}
+
+// okruMetadataRead is okruMetadataFrom for a parsed page, which may be the
+// shared probe's: it is only read.
+func okruMetadataRead(root *html.Node) (*okruMetadata, error) {
 
 	// Several elements can carry player options; the one that matters is
 	// whichever holds a metadata document.

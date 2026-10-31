@@ -57,15 +57,13 @@ var pornhubPlayer = playerSite{
 	recognises: "video pages (`/view_video.php?viewkey=<key>`) named Pornhub whose player configuration " +
 		"(`flashvars_<n>` with its `mediaDefinitions`) is in the page",
 	referer: siteRoot(pornhubRoot),
-	read:    pornhubRead,
+	asks:    siteRoot(pornhubRoot),
+	parse:   pornhubParse,
 }
 
-// pornhubRead reads the player configuration embedded in a video page.
-func pornhubRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-	doc, err := playerFetch(ctx, client, page, pornhubRoot+"/")
-	if err != nil {
-		return nil, err
-	}
+// pornhubParse reads the player configuration embedded in a video page.
+func pornhubParse(d *playerPage) (*playerVideo, error) {
+	doc := d.body
 	loc := pornhubFlashvars.FindStringIndex(doc)
 	if loc == nil {
 		return nil, fmt.Errorf("no player configuration found (the video may be private or removed)")
@@ -84,7 +82,11 @@ func pornhubRead(ctx context.Context, client *httpx.Client, page string) (*playe
 	if err := json.NewDecoder(strings.NewReader(doc[loc[1]-1:])).Decode(&flashvars); err != nil {
 		return nil, fmt.Errorf("read player configuration: %w", err)
 	}
-	video := &playerVideo{title: cmp.Or(flashvars.VideoTitle, pageTitle(doc))}
+	title := flashvars.VideoTitle
+	if title == "" {
+		title = d.title()
+	}
+	video := &playerVideo{title: title}
 	for _, def := range flashvars.MediaDefinitions {
 		if def.Remote || def.VideoURL == "" {
 			continue // a pointer to another list, not a stream
@@ -376,18 +378,14 @@ var vidmolyPlayer = playerSite{
 		return vidmolyEmbed(code).String(), nil
 	},
 	referer: samePage,
-	read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		doc, err := playerFetch(ctx, client, page, vidmolyRoot+"/")
+	asks:    siteRoot(vidmolyRoot),
+	parse: func(d *playerPage) (*playerVideo, error) {
+		link, err := jwSource(d.body, d.base)
 		if err != nil {
-			return nil, err
-		}
-		base, _ := url.Parse(page)
-		link, err := jwSource(doc, base)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", page, err)
+			return nil, fmt.Errorf("%s: %w", d.page, err)
 		}
 		return &playerVideo{
-			title:      cmp.Or(pageTitle(doc), vidmolyCode(base)),
+			title:      cmp.Or(d.title(), vidmolyCode(d.base)),
 			candidates: playerLink(link),
 			ext:        linkExtAsIs(link, ".mp4"), // the rare page offering a progressive file
 		}, nil
@@ -436,17 +434,14 @@ var streamtapePlayer = playerSite{
 	recognise:  func(p *Page) bool { return streamtapeShape(p.Final) && streamtapeLink.MatchString(p.Body) },
 	recognises: "videos (`/v/<id>`, `/e/<id>`) whose page assembles the Streamtape `robotlink` media link",
 	referer:    samePage,
-	read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		// These hosts reject a referer from a sibling domain.
-		doc, err := playerFetch(ctx, client, page, strings.TrimSuffix(pageOrigin(page), "/"))
+	// These hosts reject a referer from a sibling domain.
+	asks: func(page string) string { return strings.TrimSuffix(pageOrigin(page), "/") },
+	parse: func(d *playerPage) (*playerVideo, error) {
+		link, err := streamtapeAssemble(d.body, d.page)
 		if err != nil {
 			return nil, err
 		}
-		link, err := streamtapeAssemble(doc, page)
-		if err != nil {
-			return nil, err
-		}
-		return &playerVideo{title: pageTitle(doc), candidates: playerLink(link)}, nil
+		return &playerVideo{title: d.title(), candidates: playerLink(link)}, nil
 	},
 	signed: true,
 }
@@ -516,11 +511,9 @@ var mixdropPlayer = playerSite{
 	// The embed page carries the player; /f/ is a landing page around it.
 	page:    func(u *url.URL) (string, error) { return strings.Replace(u.String(), "/f/", "/e/", 1), nil },
 	referer: samePage,
-	read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		doc, err := playerFetch(ctx, client, page, pageOrigin(page))
-		if err != nil {
-			return nil, err
-		}
+	asks:    pageOrigin,
+	parse: func(d *playerPage) (*playerVideo, error) {
+		doc, page := d.body, d.page
 		source := doc
 		if unpacked, ok := unpackJS(doc); ok {
 			source = unpacked + doc
@@ -533,7 +526,7 @@ var mixdropPlayer = playerSite{
 		if strings.HasPrefix(link, "//") {
 			link = "https:" + link
 		}
-		return &playerVideo{title: cmp.Or(pageTitle(doc), util.NameFromURL(page)),
+		return &playerVideo{title: cmp.Or(d.title(), util.NameFromURL(page)),
 			candidates: playerLink(link)}, nil
 	},
 	signed: true,
@@ -559,7 +552,7 @@ var luluPlayer = playerSite{
 		if !luluPage(p.Final) || !p.HasAny("LuluStream", "LuluVdo", "Luluvdo") {
 			return false
 		}
-		link, err := luluSource(p.Body, p.Final)
+		link, err := luluProbedSource(p)
 		return err == nil && isPlaylistLink(link)
 	},
 	recognises: "videos (`/<id>`, `/e/<id>`, `/d/<id>`) whose page names LuluStream and carries its " +
@@ -568,21 +561,50 @@ var luluPlayer = playerSite{
 	// domain, where the embed and download pages redirect on some of them.
 	page:    idPage(luluID, "/", "/<id>"),
 	referer: pageOrigin,
-	read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		doc, err := playerFetch(ctx, client, page, pageOrigin(page))
-		if err != nil {
-			return nil, err
+	asks:    pageOrigin,
+	parse: func(d *playerPage) (*playerVideo, error) {
+		var (
+			link string
+			err  error
+		)
+		// The source recognition unpacked, when this is the page it read
+		// and the page was read against the same address; any other page,
+		// a fresh or a canonical one, is decoded for itself.
+		if d.probe != nil && d.probe.Final.String() == d.base.String() {
+			link, err = luluProbedSource(d.probe)
+		} else {
+			link, err = luluSource(d.body, d.base)
 		}
-		base, _ := url.Parse(page)
-		link, err := luluSource(doc, base)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", page, err)
+			return nil, fmt.Errorf("%s: %w", d.page, err)
 		}
 		// The heading names the video; the document title adds the site's.
-		return &playerVideo{title: cmp.Or(firstHeading(doc), pageTitle(doc), util.NameFromURL(page)),
-			candidates: playerLink(link)}, nil
+		// Both are read off the one tree, the title only when the heading
+		// says nothing.
+		title := d.heading()
+		if title == "" {
+			title = cmp.Or(d.title(), util.NameFromURL(d.page))
+		}
+		return &playerVideo{title: title, candidates: playerLink(link)}, nil
 	},
 	signed: true,
+}
+
+// luluDecoded is a probed page's source as luluSource read it, error and all.
+type luluDecoded struct {
+	link string
+	err  error
+}
+
+// luluProbedSource is luluSource for a probed page, decoded once however
+// many ask — recognition, and extraction of that same page — and shared as
+// an immutable value (memo). A page fetched afresh is decoded for itself.
+func luluProbedSource(p *Page) (string, error) {
+	got := memo(p, "lulustream source", func() luluDecoded {
+		link, err := luluSource(p.Body, p.Final)
+		return luluDecoded{link, err}
+	})
+	return got.link, got.err
 }
 
 // luluSource reads the player's source, from its setup as the page carries
@@ -622,16 +644,13 @@ var vidsPlayer = playerSite{
 	recognises: "videos (`/v/<id>`, `/e/<id>`) whose page carries the player's `playerConfig` with its `videoUrl`",
 	page:       idPage(vidsID, "/v/", "/v/<id>"),
 	referer:    samePage,
-	read:       vidsRead,
+	asks:       samePage,
+	parse:      vidsParse,
 }
 
-func vidsRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-	base, _ := url.Parse(page)
+func vidsParse(d *playerPage) (*playerVideo, error) {
+	base, doc, page := d.base, d.body, d.page
 	id := vidsID(base)
-	doc, err := playerFetch(ctx, client, page, page)
-	if err != nil {
-		return nil, err
-	}
 	at := strings.Index(doc, vidsConfigMarker)
 	if at < 0 {
 		return nil, fmt.Errorf("%s: no player on the page (the video may have been removed)", page)
@@ -687,12 +706,12 @@ var sendvidPlayer = playerSite{
 		"`video_source`",
 	page:    idPage(sendvidID, "/", "/<id> or /embed/<id>"),
 	referer: samePage,
-	read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		base, _ := url.Parse(page)
+	parse: func(d *playerPage) (*playerVideo, error) {
+		base, page := d.base, d.page
 		id := sendvidID(base)
-		root, err := fetchPageRoot(ctx, client, page, nil)
-		if err != nil {
-			return nil, fmt.Errorf("fetch %s: %w", page, err)
+		root := d.tree()
+		if root == nil {
+			return nil, fmt.Errorf("parse %s: not a document", page)
 		}
 		link := resolveRef(base, sendvidSource(root))
 		if link == "" {

@@ -210,18 +210,18 @@ for the existing string/tree parity and benchmark pattern.
   It owns acquisition, the B freshness decision, optional tree access and
   shared error wrapping. Start with the straightforward body-based rows;
   retain the existing custom `read` function for API and handshake readers.
-- [ ] Use `Page.HTML()` or `fetchRoot` when a tree already exists. Keep raw
+- [x] Use `Page.HTML()` or `fetchRoot` when a tree already exists. Keep raw
   body access for regex and JavaScript readers; do not force a DOM parse on
   a reader that only scans script text.
-- [ ] Keep title fallback order in each parser. `cmp.Or` evaluates all its
+- [x] Keep title fallback order in each parser. `cmp.Or` evaluates all its
   arguments, so composing string helpers can parse both the heading and
   title even when the heading already supplied the answer.
-- [ ] Memoize only pure parsing of the exact page. Store immutable values;
+- [x] Memoize only pure parsing of the exact page. Store immutable values;
   copy slices or maps before any ranking or mutation. A fresh page gets its
   own parse result. Provider-specific memo keys must not collide.
-- [ ] Retain string entry points only where tests or independent readers need
+- [x] Retain string entry points only where tests or independent readers need
   them; those entry points parse and delegate rather than duplicate logic.
-- [ ] Remove the old acquisition/title/decoding glue at each migrated caller.
+- [x] Remove the old acquisition/title/decoding glue at each migrated caller.
 
 The adapter must accommodate direct `Extractor.Extract` tests with no attached
 probe, as well as registry-driven extraction. Do not strengthen recognition to
@@ -232,6 +232,12 @@ restricted page still belongs to its provider and must return its refusal.
 handshakes, Bandcamp's request identity, Niconico metadata carried by error
 responses, or WordPress's mutable private tree. They can reuse individual
 parsing primitives without sharing the whole acquisition sequence.
+
+**Outcome.** Nine player rows use `parse` over `readPlayerPage`; CoomerFans,
+PornPics, Chevereto and ok.ru read the root through `fetchRoot`, and
+LuluStream memoises its unpacked source. `rajceAlbumData` was evaluated and
+left on its own parse: its recogniser never builds a tree, so taking the
+probe's would cost more than parsing (measured with `BenchmarkProbedReaders`).
 
 **Completion criterion:** at least two player rows and one collection reader
 use the new path, each has a smaller adapter, and fixture results match for

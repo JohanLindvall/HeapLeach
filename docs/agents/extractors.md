@@ -660,8 +660,17 @@ list below.
   parsed again: NPR (`nprRead`), ABC listen (`abcListenRead`, its
   `__NEXT_DATA__` read off the tree with `nextDataIn`), CoomerFans posts
   (`coomerFansRead`), PornPics galleries (`pornpicsGalleryRead`) and
-  Chevereto pages (`cheveretoFetch`) do, each string adapter only parsing
-  and delegating, so there is one parser per page. `TestProbedReadersReuseTheParsedDocument`
+  Chevereto pages (`cheveretoFetch`) and ok.ru's player (`okruMetadataRead`)
+  do, each string adapter only parsing and delegating, so there is one
+  parser per page. `fetchRoot` and `readDocument` take the probe's tree only
+  when recognition already built it (`Page.parsedRoot`); otherwise they parse
+  the body for the reader alone, which costs less than the index
+  `Page.HTML` builds beside the tree, so a reuse is never dearer than a
+  reparse. Rajce's recogniser only scans the body, so no tree exists when its
+  extractor reads, and it parses its own copy of the probed body. Player rows
+  share a decoded payload between recognition and extraction through `memo`
+  where both need it (LuluStream's unpacked source, `luluProbedSource`), and
+  only for the probed page itself: a fresh or canonical page decodes its own. `TestProbedReadersReuseTheParsedDocument`
   holds both paths to the same result with no client to fetch through
   (`BenchmarkProbedReaders` measures them). A read that must be fresh stays
   fresh: CoomerFans' video resolver re-reads the post at transfer time for

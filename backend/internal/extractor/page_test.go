@@ -67,6 +67,12 @@ func TestReusedProbeHandsBackAURLOfItsOwn(t *testing.T) {
 		t.Fatalf("probedDocument shares the page's URL (ok %v)", ok)
 	}
 	final.Fragment = "edited"
+	// Before recognition parsed it, the page is parsed for the reader alone
+	// rather than indexed; after, the probe's tree is the one read.
+	if root, _, err := fetchRoot(ctx, nil, u, nil); err != nil || root == nil || p.indexed.Load() {
+		t.Fatalf("fetchRoot of an unparsed probe: root %v, indexed %v, err %v", root != nil, p.indexed.Load(), err)
+	}
+	p.HTML()
 	root, final, err := fetchRoot(ctx, nil, u, nil)
 	if err != nil || root != p.HTML() || final == p.Final {
 		t.Fatalf("fetchRoot: root reused %v, URL shared %v, err %v", root == p.HTML(), final == p.Final, err)

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -65,6 +66,9 @@ type Page struct {
 	// page is offered to every recogniser in turn.
 	parseOnce sync.Once
 	parsed    pageIndex
+	// indexed is set once parsed is filled, for a reader that takes the
+	// tree only when recognition already built it (parsedRoot).
+	indexed atomic.Bool
 
 	memoMu sync.Mutex
 	memo   map[string]*memoEntry
@@ -400,7 +404,7 @@ type document struct {
 func (d *document) tree() *html.Node {
 	d.once.Do(func() {
 		if d.probe != nil {
-			d.root = d.probe.HTML()
+			d.root, _ = d.probe.parsedRoot()
 		}
 		if d.root == nil {
 			d.root, _ = parseHTML(d.body)
@@ -442,12 +446,13 @@ func fetchPage(ctx context.Context, client *httpx.Client, link string, headers h
 func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*html.Node, *url.URL, error) {
 	if p := probedFor(ctx, client, u, headers); p != nil {
 		if doc, ok := p.Document(); ok {
-			if root := p.HTML(); root != nil {
+			if root, _ := p.parsedRoot(); root != nil {
 				return root, cloneURL(p.Final), nil
 			}
-			// A document the probe did not take for HTML, for want of a
-			// declared type, is still the one asked for: parse it here
-			// rather than fetch it again.
+			// A document recognition did not parse — its recognisers only
+			// scanned the body, or the probe did not take it for HTML for
+			// want of a declared type — is still the one asked for: parse
+			// it here rather than fetch it again.
 			root, err := parseHTML(doc)
 			return root, cloneURL(p.Final), err
 		}
@@ -533,7 +538,20 @@ func (p *Page) index() *pageIndex {
 			}
 		}
 	})
+	p.indexed.Store(true)
 	return &p.parsed
+}
+
+// parsedRoot is the page's tree when recognition has already parsed it,
+// and false when nothing has yet. A reader that only wants a tree, not the
+// index Page.HTML builds beside it, parses the body itself in that case:
+// that costs less than the index, and a page whose recognisers only scan
+// its body is never indexed for nothing.
+func (p *Page) parsedRoot() (*html.Node, bool) {
+	if !p.indexed.Load() {
+		return nil, false
+	}
+	return p.parsed.root, true
 }
 
 // HTML is the parsed document, or nil when the body is not one.

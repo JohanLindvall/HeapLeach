@@ -146,12 +146,13 @@ func TestPornOneRenditionsOnAPageWithNoPlayer(t *testing.T) {
 	}
 }
 
-func TestFirstHeading(t *testing.T) {
-	if got := firstHeading(pornonePlayerPage); got != "a synthetic clip" {
-		t.Errorf("firstHeading = %q", got)
+func TestPlayerPageHeading(t *testing.T) {
+	heading := func(doc string) string { return (&playerPage{document: &document{body: doc}}).heading() }
+	if got := heading(pornonePlayerPage); got != "a synthetic clip" {
+		t.Errorf("heading = %q", got)
 	}
-	if got := firstHeading(`<html><body><p>no heading</p></body></html>`); got != "" {
-		t.Errorf("firstHeading = %q, want empty", got)
+	if got := heading(`<html><body><p>no heading</p></body></html>`); got != "" {
+		t.Errorf("heading = %q, want empty", got)
 	}
 }
 
@@ -776,13 +777,44 @@ func TestPlayerEngineOptions(t *testing.T) {
 func TestPlayerGoneKeepsTheStatus(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	site := &playerSite{name: "synthetic", read: func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
-		_, err := playerFetch(ctx, client, page, page)
-		return nil, err
+	site := &playerSite{name: "synthetic", asks: samePage, parse: func(*playerPage) (*playerVideo, error) {
+		t.Error("a page that answered 404 was parsed")
+		return nil, nil
 	}}
 	_, err := NewPlayer(testClient(), site).
 		Extract(context.Background(), mustParse(t, srv.URL+"/v/1"), Options{})
 	if err == nil || !strings.Contains(err.Error(), "is not there") || !httpx.HasStatus(err, http.StatusNotFound) {
 		t.Fatalf("err = %v, want a gone video still carrying its 404", err)
+	}
+}
+
+// Through the registry the probed page's source is decoded once, by
+// recognition, and extraction reads that decoding with no second page
+// request; the transfer-time read decodes the page it fetched afresh.
+func TestLuluStreamDecodesTheProbedSourceOnce(t *testing.T) {
+	site, pages := luluSite(t)
+	// The page as the site names itself, which the recogniser asks for.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		doc, err := testClient().GetString(r.Context(), site.URL+r.URL.Path, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		_, _ = io.WriteString(w, strings.Replace(doc, "Lulustream", "LuluStream", 1))
+	}))
+	t.Cleanup(srv.Close)
+	client := testClient()
+	player := NewPlayer(client, &luluPlayer)
+	reg := &Registry{client: client, extractors: []Extractor{player}, fallback: NewDirect(client)}
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/abcd1234wxyz", Options{})
+	if err != nil || ex != player || res.Title != "First Clip" {
+		t.Fatalf("result=%+v extractor=%v err=%v", res, ex, err)
+	}
+	if n := pages.Load(); n != 1 {
+		t.Errorf("%d page reads at extraction, want the probe alone", n)
+	}
+	if _, err := res.Files[0].Resolve(context.Background()); err != nil || pages.Load() != 2 {
+		t.Errorf("resolve after %d page reads: %v", pages.Load(), err)
 	}
 }
