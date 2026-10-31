@@ -165,9 +165,7 @@ func (s *ruvSession) single(ctx context.Context, prog *ruvProgram, episodeID str
 	// A lone file lands in the download directory with no folder to say what
 	// it belongs to, so its name carries the programme as well: RÚV episode
 	// titles are routinely no more than "Þáttur 1 af 6".
-	title := joinTitle(prog.name(), strings.TrimSpace(prog.Episodes[i].Title), titleEqual)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(joinTitle(prog.name(), strings.TrimSpace(prog.Episodes[i].Title), titleEqual), file), nil
 }
 
 // whole expands a programme into one file per episode.
@@ -231,12 +229,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 		// and no byte count anywhere — so the transfer reads Content-Length
 		// itself, which is exact where a rounded figure would poison the
 		// skip check.
-		return &File{
-			Name:    ext,
-			URL:     ep.File,
-			Size:    -1,
-			Headers: headers,
-		}, nil
+		return progressiveFile(ep.File, ext, headers), nil
 	}
 
 	media, err := resolveMediaPlaylist(ctx, s.client, ep.File, headers)
@@ -252,12 +245,9 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 
 // programme fetches a listing, which is the only request this host needs.
 func (r *RUV) programme(ctx context.Context, id int) (*ruvProgram, error) {
-	body := map[string]any{
-		"query":     ruvProgramQuery,
-		"variables": map[string]int{"programID": id},
-	}
 	var out ruvResponse
-	if err := r.client.PostJSON(ctx, ruvGraphQL, httpx.Referer(ruvRoot+"/"), body, &out); err != nil {
+	if err := postGraphQL(ctx, r.client, ruvGraphQL, httpx.Referer(ruvRoot+"/"), ruvProgramQuery,
+		map[string]int{"programID": id}, &out); err != nil {
 		return nil, fmt.Errorf("ruv: programme %d: %w", id, err)
 	}
 	return out.program(id)

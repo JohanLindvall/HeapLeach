@@ -158,7 +158,7 @@ func rtveTarget(u *url.URL) rtveRef {
 	segs := util.PathSegments(u)
 
 	// /v/<id> is the share link the site's own buttons produce.
-	if len(segs) == 2 && segs[0] == "v" && rtveIsID(segs[1]) {
+	if len(segs) == 2 && segs[0] == "v" && allDigits(segs[1]) {
 		return rtveRef{video: segs[1]}
 	}
 
@@ -170,22 +170,11 @@ func rtveTarget(u *url.URL) rtveRef {
 	}
 	rest := segs[2:]
 	for _, r := range slices.Backward(rest) {
-		if rtveIsID(r) {
+		if allDigits(r) {
 			return rtveRef{video: r}
 		}
 	}
 	return rtveRef{series: rest[0]}
-}
-
-// rtveIsID reports whether a path segment is an asset id, which is decimal
-// digits and nothing else.
-func rtveIsID(seg string) bool {
-	for i := 0; i < len(seg); i++ {
-		if seg[i] < '0' || seg[i] > '9' {
-			return false
-		}
-	}
-	return seg != ""
 }
 
 // video resolves one asset id into a job of its own.
@@ -383,9 +372,9 @@ func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if playlist == "" {
 		return nil, fmt.Errorf("rtve: %s offers neither a file nor a playlist", video.ID)
 	}
-	media, err := resolveMediaPlaylist(ctx, r.client, playlist, headers)
+	media, err := broadcastMedia(ctx, r.client, "rtve", video.ID, playlist, headers)
 	if err != nil {
-		return nil, fmt.Errorf("rtve: %s: %w", video.ID, err)
+		return nil, err
 	}
 	// Named off the segments, not the variant URL, whose directory naming
 	// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.

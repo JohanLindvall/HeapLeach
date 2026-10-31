@@ -5,8 +5,6 @@ package extractor
 import (
 	"cmp"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -141,9 +139,7 @@ func (b *BBCSounds) episode(ctx context.Context, pid string) (*Result, error) {
 	// A lone file lands straight in the download directory with no folder to
 	// say what it belongs to, so every level of the name is used: a Radio 4
 	// episode title on its own is routinely just a date.
-	title := cmp.Or(bbcName(item.Titles.full()), pid)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(bbcName(item.Titles.full()), pid), file), nil
 }
 
 // container expands a brand or a series into one file per episode.
@@ -238,8 +234,8 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 		return &File{
 			Name:       linkExt(variant.FileURL, ".mp3"),
 			URL:        variant.FileURL,
-			Size:       variant.size(),
-			SizeApprox: variant.size() > 0,
+			Size:       knownSize(variant.FileSize),
+			SizeApprox: variant.FileSize > 0,
 			Headers:    headers,
 		}, nil
 	}
@@ -253,9 +249,9 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	media, err := resolveMediaPlaylist(ctx, b.client, stream, headers)
+	media, err := broadcastMedia(ctx, b.client, "bbcsounds", item.pid(), stream, headers)
 	if err != nil {
-		return nil, fmt.Errorf("bbcsounds: %s: %w", item.pid(), err)
+		return nil, err
 	}
 	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
@@ -292,14 +288,10 @@ func (b *BBCSounds) stream(ctx context.Context, vpid string) (string, error) {
 // fact worth having. Neither status is retried by the client, which is what
 // makes the body available here at all.
 func bbcRefusal(pid string, err error) error {
-	status, ok := errors.AsType[*httpx.StatusError](err)
-	if !ok || status.Body == "" {
-		return nil
-	}
-	var doc struct {
+	doc, ok := refusalBody[struct {
 		Result string `json:"result"`
-	}
-	if json.Unmarshal([]byte(status.Body), &doc) != nil || doc.Result == "" {
+	}](err)
+	if !ok || doc.Result == "" {
 		return nil
 	}
 	return &broadcastRefusal{"bbcsounds", pid, bbcReason(doc.Result)}
@@ -369,14 +361,6 @@ type bbcVariant struct {
 	Bitrate  int    `json:"bitrate"`
 	FileURL  string `json:"file_url"`
 	FileSize int64  `json:"file_size"`
-}
-
-// size is the declared length, or -1 where none was declared.
-func (v bbcVariant) size() int64 {
-	if v.FileSize <= 0 {
-		return -1
-	}
-	return v.FileSize
 }
 
 // bbcQualityOrder ranks the tiers the BBC keys its variants by. It is only

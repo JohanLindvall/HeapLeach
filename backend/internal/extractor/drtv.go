@@ -5,7 +5,6 @@ package extractor
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -258,12 +257,10 @@ func (d *DRTV) videos(ctx context.Context, id, title string) ([]drStream, error)
 	if err == nil {
 		return streams, nil
 	}
-	if se, ok := errors.AsType[*httpx.StatusError](err); ok {
-		var answer struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal([]byte(se.Body), &answer)
+	if answer, ok := refusalBody[struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}](err); ok {
 		switch {
 		case answer.Code == 8009:
 			return nil, &broadcastRefusal{"drtv", title, "DR TV offers no stream of it without signing in"}
@@ -298,7 +295,7 @@ func (d *DRTV) programme(ctx context.Context, item *drItem, stem string) (*Targe
 	}
 	if chosen == nil {
 		if protected {
-			return nil, &broadcastRefusal{"drtv", stem, "it is DRM-protected"}
+			return nil, &broadcastRefusal{"drtv", stem, refusedDRM}
 		}
 		return nil, &broadcastRefusal{"drtv", stem, "DR TV offers no stream of it to download"}
 	}
@@ -409,36 +406,11 @@ func (d *DRTV) season(ctx context.Context, season *drItem, opts Options) (*Resul
 // walk of the listing said of where it stopped, and walkErr why a season
 // of it could not be read at all.
 func (d *DRTV) listing(ctx context.Context, title, show string, entries []drListed, walkNote string, walkErr error, opts Options) (*Result, error) {
-	blocked, probes := false, 0
-	for i := range entries {
-		if probes == config.GeoProbesDR {
-			break
-		}
-		if !entries[i].item.geoRestricted() {
-			continue
-		}
-		probes++
-		if refused, known := d.refusedHere(ctx, &entries[i].item); known {
-			blocked = refused
-			break
-		}
-	}
-
-	var (
-		files          []File
-		denmark, shown int
-	)
-	limit := opts.maxFiles()
-	for i := range entries {
-		e := &entries[i]
-		if blocked && e.item.geoRestricted() {
-			denmark++
-			continue
-		}
-		shown++
-		if len(files) < limit {
-			files = append(files, d.lazy(e, show))
-		}
+	shown, denmark := regionGate(ctx, entries, func(e drListed) bool { return e.item.geoRestricted() },
+		config.GeoProbesDR, func(ctx context.Context, e drListed) (bool, bool) { return d.refusedHere(ctx, &e.item) })
+	var files []File
+	for i := range shown[:min(len(shown), opts.maxFiles())] {
+		files = append(files, d.lazy(&shown[i], show))
 	}
 	if len(files) == 0 {
 		switch {
@@ -449,7 +421,7 @@ func (d *DRTV) listing(ctx context.Context, title, show string, entries []drList
 		}
 		return nil, fmt.Errorf("drtv: %s lists nothing DR TV offers now", title)
 	}
-	note := joinNotes(cappedNote(len(files), shown, "episodes"), walkNote,
+	note := joinNotes(cappedNote(len(files), len(shown), "episodes"), walkNote,
 		leftOutNote(denmark, " that DR shows in Denmark only"))
 	return &Result{Title: title, Files: files, Note: note}, nil
 }

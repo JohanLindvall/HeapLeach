@@ -247,7 +247,7 @@ Three things here are not what they look like:
   refuse.
 - What Yle shows in Finland alone (`region` "Finland") is handed a stream like
   any other, whatever `countryCode` says, and the CDN refuses it from
-  elsewhere with a 403, the MP3s as well as the masters (`refusedHere` asks an
+  elsewhere with a 403, the MP3s as well as the masters (`refusesByte` asks an
   MP3 for one byte). The player sends `countryCode` FI until it has located
   the viewer; since it changes nothing, it is not sent.
 - A series id asked of the preview answers with one of its episodes, so the
@@ -266,7 +266,8 @@ preview as the listing is read (`expandSeries`): one Areena does not offer is
 left out, counted by its reason, as are the Finland-only ones once one of them
 has been refused here. That probe is made after the previews, of the first
 Finland-only episode in the listing's order, so it is asked once and of the
-same episode however the previews were scheduled. An episode keeps the name it is listed under, the card's
+same episode however the previews were scheduled (`regionGate`, which drtv
+shares). An episode keeps the name it is listed under, the card's
 title with its number, so that a listing read again finds what was saved:
 `finishedLocked` keys on the name an item finished with, the `.ts`, not the
 MP4 it was remuxed into.
@@ -298,7 +299,10 @@ the programme and names no language, so the track is left unnamed.
 
 What DR shows in Denmark alone (`IsGeoRestricted`) its CDN refuses from
 elsewhere with a 403, sent as an HTML page under a playlist's content type;
-the API does not refuse it. DRM is marked per version (`drm`: `PlayReady`). A
+the API does not refuse it. A listing asks for the masters of its
+Denmark-only entries in order, at most `config.GeoProbesDR` of them, until
+one answers, and leaves them all out when that one is refused
+(`regionGate`). DRM is marked per version (`drm`: `PlayReady`). A
 show lists its seasons and a season its episodes (`/children`, 200 a page,
 `paging.total` counting pages). Each entry carries its `contextualTitle`, the
 episode as its season names it, number and all, and its geo flag, so a listing

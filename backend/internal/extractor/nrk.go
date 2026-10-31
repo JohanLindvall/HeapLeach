@@ -188,9 +188,7 @@ func (n *NRK) programme(ctx context.Context, id string) (*Result, error) {
 	// A lone file is written straight into the download directory, with no
 	// folder to say what it belongs to, so the name carries the series as
 	// well: NRK episode titles are routinely no more than "1. episode".
-	title := cmp.Or(n.title(ctx, id), id)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(n.title(ctx, id), id), file), nil
 }
 
 // series expands a series, or one season of it, into one file per episode.
@@ -303,19 +301,12 @@ func (n *NRK) numbered(ctx context.Context, ref nrkRef) (string, error) {
 
 // episodesFromPage recovers programme ids straight from the rendered page.
 func (n *NRK) episodesFromPage(ctx context.Context, u *url.URL) (string, []nrkEpisodeRef, error) {
-	doc, _, err := fetchDocument(ctx, n.client, u, httpx.Referer(nrkRoot+"/"))
-	if err != nil {
-		return "", nil, fmt.Errorf("nrk: fetch %s: %w", u.Redacted(), err)
-	}
-
+	doc, listed, err := pageIDs(ctx, n.client, u, httpx.Referer(nrkRoot+"/"), "nrk", nrkEpisodeLink)
 	var episodes []nrkEpisodeRef
-	for _, id := range matchedIDs(doc, nrkEpisodeLink) {
-		episodes = append(episodes, nrkEpisodeRef{id: id})
+	for _, ep := range listed {
+		episodes = append(episodes, nrkEpisodeRef{id: ep.id})
 	}
-	if len(episodes) == 0 {
-		return "", nil, fmt.Errorf("nrk: no episodes listed on %s", u.Redacted())
-	}
-	return nrkPageTitle(doc), episodes, nil
+	return nrkPageTitle(doc), episodes, err
 }
 
 // nrkPageTitle reads the series name out of a page title. The suffix is a
@@ -347,9 +338,9 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 	}
 
 	headers := httpx.Referer(nrkRoot + "/")
-	media, err := resolveMediaPlaylist(ctx, n.client, stream, headers)
+	media, err := broadcastMedia(ctx, n.client, "nrk", id, stream, headers)
 	if err != nil {
-		return nil, fmt.Errorf("nrk: %s: %w", id, err)
+		return nil, err
 	}
 	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }

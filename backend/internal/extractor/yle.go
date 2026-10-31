@@ -187,7 +187,7 @@ func (od *yleOndemand) extension() string {
 // not downloaded. They are the states Yle's player itself knows.
 var yleStates = map[string]string{
 	"gone":                "it is no longer on Areena",
-	"ongoing_event":       "it is a live broadcast, which has no end to download to",
+	"ongoing_event":       refusedLiveBroadcast,
 	"ongoing_channel":     "it is a live channel, which has no end to download to",
 	"pending_event":       "it is a broadcast still to come",
 	"pending_ondemand":    "it is not published yet",
@@ -254,22 +254,15 @@ func (y *Yle) programme(ctx context.Context, lang, id string) (*Target, string, 
 		}
 		return media.target(od.ManifestURL, title+media.extension(), headers), title, nil
 	case od.MediaURL != "":
-		if od.finlandOnly() && y.refusedHere(ctx, od.MediaURL, headers) {
+		// A master is asked for anyway when it is resolved; an MP3 is not,
+		// and would otherwise be refused only once its transfer starts, as a
+		// bare 403.
+		if od.finlandOnly() && refusesByte(ctx, y.client, od.MediaURL, headers) {
 			return nil, "", fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 		}
 		return &Target{URL: od.MediaURL, Name: title + od.extension(), Size: -1, Headers: headers}, title, nil
 	}
 	return nil, "", &broadcastRefusal{"yle", title, "it offers no stream to download"}
-}
-
-// refusedHere asks for a file's first byte, to learn whether its host serves
-// it to this address at all. A master is asked for anyway when it is
-// resolved; an MP3 is not, and would otherwise be refused only once its
-// transfer starts, as a bare 403.
-func (y *Yle) refusedHere(ctx context.Context, link string, headers httpx.Header) bool {
-	status, err := y.client.StatusOnce(ctx, http.MethodGet, link,
-		headers.Merge(httpx.Header{httpx.HeaderRange: "bytes=0-0"}))
-	return err == nil && status == http.StatusForbidden
 }
 
 // headers are what the site's own player sends.
@@ -411,7 +404,6 @@ func yleOwnSeason(lists []yleList, options []yleOption, id string) []yleList {
 }
 
 var (
-	yleNextData    = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</script>`)
 	yleFrontendID  = regexp.MustCompile(`appIdFrontend\W{1,4}([A-Za-z0-9_-]+)`)
 	yleFrontendKey = regexp.MustCompile(`appKeyFrontend\W{1,4}([A-Za-z0-9_-]+)`)
 )
@@ -425,12 +417,12 @@ func (y *Yle) page(ctx context.Context, lang, id string) (*ylePage, error) {
 		}
 		return nil, fmt.Errorf("yle: %s: %w", id, err)
 	}
-	m := yleNextData.FindStringSubmatch(html)
-	if m == nil {
+	island, ok := nextData(html)
+	if !ok {
 		return nil, fmt.Errorf("yle: %s: the page carries no description of what it shows", id)
 	}
 	page := &ylePage{}
-	if err := json.Unmarshal([]byte(m[1]), &page.doc); err != nil {
+	if err := json.Unmarshal([]byte(island), &page.doc); err != nil {
 		return nil, fmt.Errorf("yle: %s: read the page: %w", id, err)
 	}
 	if m := yleFrontendID.FindStringSubmatch(html); m != nil {
@@ -528,25 +520,13 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Resu
 	// Whether what Yle shows in Finland alone is refused here is asked
 	// once, of the first such episode in the listing's order, and holds for
 	// the rest.
-	var (
-		files   []File
-		finland int
-		blocked *bool
-	)
-	for _, r := range resolved {
-		if r.item.preview != nil && r.item.preview.finlandOnly() {
-			if blocked == nil {
-				_, _, err := y.programme(ctx, lang, r.item.episode.id)
-				refusedHere := errors.Is(err, errYleFinlandOnly)
-				blocked = &refusedHere
-			}
-			if *blocked {
-				finland++
-				continue
-			}
-		}
-		files = append(files, r.file)
-	}
+	shown, finland := regionGate(ctx, resolved, func(r listedItem[*yleChecked]) bool {
+		return r.item.preview != nil && r.item.preview.finlandOnly()
+	}, 1, func(ctx context.Context, r listedItem[*yleChecked]) (bool, bool) {
+		_, _, err := y.programme(ctx, lang, r.item.episode.id)
+		return errors.Is(err, errYleFinlandOnly), true
+	})
+	files := listedFiles(shown)
 	if len(files) == 0 {
 		return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 	}

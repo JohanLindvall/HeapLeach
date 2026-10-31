@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,8 +14,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // ABCListen resolves abc.net.au/listen, the Australian broadcaster's radio
@@ -305,10 +302,8 @@ func abcListenParse(doc string) (*abcListenPage, error) {
 	if err != nil {
 		return nil, err
 	}
-	island := findFirst(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && attr(n, "id") == abcListenIsland
-	})
-	if island == nil {
+	island, ok := nextData(doc)
+	if !ok {
 		return nil, fmt.Errorf("no %s island on the page", abcListenIsland)
 	}
 
@@ -319,7 +314,7 @@ func abcListenParse(doc string) (*abcListenPage, error) {
 			PageProps abcListenPageProps `json:"pageProps"`
 		} `json:"props"`
 	}
-	if err := json.Unmarshal([]byte(abcListenScriptText(island)), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(island), &envelope); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", abcListenIsland, err)
 	}
 
@@ -328,23 +323,8 @@ func abcListenParse(doc string) (*abcListenPage, error) {
 	// behead every programme whose own name contains a dash.
 	return &abcListenPage{
 		props: envelope.Props.PageProps,
-		title: strings.TrimSpace(strings.TrimSuffix(
-			strings.TrimSpace(firstText(root, atom.Title)), abcListenTitleSuffix)),
+		title: strings.TrimSpace(strings.TrimSuffix(firstText(root, atomTitle), abcListenTitleSuffix)),
 	}, nil
-}
-
-// abcListenScriptText reads a script element's contents verbatim. textOf
-// would do almost as well and is what the other page parsers here use, but it
-// collapses runs of whitespace, and this element is JSON: the spacing inside
-// a title is data rather than presentation.
-func abcListenScriptText(n *html.Node) string {
-	var b strings.Builder
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.TextNode {
-			b.WriteString(c.Data)
-		}
-	}
-	return b.String()
 }
 
 // file turns a document's best rendition into a download. The returned File
@@ -361,14 +341,11 @@ func (a *ABCListen) file(doc abcListenDoc) (File, bool) {
 	// type.
 	headers := httpx.Referer(abcListenRoot + "/")
 	file := File{
-		Name:    linkExt(best.URL, ""),
-		URL:     best.URL,
-		Size:    -1,
-		Headers: headers,
-	}
-	if best.FileSize > 0 {
-		file.Size = best.FileSize
-		file.SizeApprox = !best.measured()
+		Name:       linkExt(best.URL, ""),
+		URL:        best.URL,
+		Size:       knownSize(best.FileSize),
+		SizeApprox: best.FileSize > 0 && !best.measured(),
+		Headers:    headers,
 	}
 	if abcListenGeoBucket(best.URL) {
 		file.Resolve = a.geoCheck(best.URL, headers)
@@ -415,14 +392,11 @@ func abcListenGeoBucket(raw string) bool {
 // refusing a download that had started working.
 func (a *ABCListen) geoCheck(link string, headers httpx.Header) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
-		target := &Target{URL: link, Headers: headers}
-		status, err := a.client.StatusOnce(ctx, http.MethodGet, link,
-			headers.Merge(httpx.Header{httpx.HeaderRange: "bytes=0-0"}))
-		if err == nil && status == http.StatusForbidden {
+		if refusesByte(ctx, a.client, link, headers) {
 			return nil, fmt.Errorf("abclisten: the ABC licenses this recording for "+
 				"Australia only, and its content network refuses %s from anywhere else", link)
 		}
-		return target, nil
+		return &Target{URL: link, Headers: headers}, nil
 	}
 }
 

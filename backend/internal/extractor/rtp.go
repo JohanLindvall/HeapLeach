@@ -231,9 +231,9 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 			"the page carries no stream for this programme")}
 	}
 
-	media, err := resolveMediaPlaylist(ctx, r.client, manifest, headers)
+	media, err := broadcastMedia(ctx, r.client, "rtpplay", page, manifest, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("rtpplay: %s: %w", page, err)
+		return nil, "", err
 	}
 	name := cmp.Or(title, program)
 	// Named off the segments, not the variant URL: RTP's manifests are
@@ -268,16 +268,11 @@ func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	episodes, more, walkNote, err := walkEpisodes(ctx, config.MaxResolvedEpisodes, pageWalk[rtpEpisodeRef]{
 		fetch: func(ctx context.Context, n int) (pageOf[rtpEpisodeRef], error) {
 			// The walk drops what an earlier page listed.
-			seen := make(map[string]bool)
-			if n == 0 {
-				listed := rtpEpisodeLinks(root, ref, seen)
-				return pageOf[rtpEpisodeRef]{items: listed, next: true, end: len(listed) == 0}, nil
+			listed, err := rtpEpisodeLinks(root, ref), error(nil)
+			if n > 0 {
+				listed, err = r.listing(ctx, ref, n+1)
 			}
-			listed, err := r.listing(ctx, ref, n+1, seen)
-			if err != nil {
-				return pageOf[rtpEpisodeRef]{}, err
-			}
-			return pageOf[rtpEpisodeRef]{items: listed, next: true, end: len(listed) == 0}, nil
+			return pageOf[rtpEpisodeRef]{items: listed, next: true, end: len(listed) == 0}, err
 		},
 		key: func(ep rtpEpisodeRef) string { return ep.id },
 	})
@@ -333,7 +328,7 @@ type rtpEpisodeRef struct {
 }
 
 // listing asks for one page of a programme's episodes.
-func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int, seen map[string]bool) ([]rtpEpisodeRef, error) {
+func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int) ([]rtpEpisodeRef, error) {
 	query := url.Values{
 		// The endpoint wants the bare number, not the "p" the URL spells it
 		// with.
@@ -349,24 +344,25 @@ func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int, seen map[st
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: episode listing page %d of %s: %w", page, ref.program, err)
 	}
-	return rtpEpisodeLinks(root, ref, seen), nil
+	return rtpEpisodeLinks(root, ref), nil
 }
 
 // rtpEpisodeLinks collects the episode links a listing document carries, in
-// the order the site put them, skipping any already taken.
+// the order the site put them, each once.
 //
 // It is given the whole document rather than a container, because the listing
 // endpoint answers with a bare fragment of articles while the programme page
 // wraps the same markup in a site. Restricting the links to this programme is
 // what keeps the two honest — a page also carries navigation into other
 // programmes, and an episode id is only unique beneath its own.
-func rtpEpisodeLinks(root *html.Node, ref rtpRef, seen map[string]bool) []rtpEpisodeRef {
+func rtpEpisodeLinks(root *html.Node, ref rtpRef) []rtpEpisodeRef {
 	base, err := ParseURL(ref.page)
 	if err != nil {
 		return nil
 	}
 
 	var out []rtpEpisodeRef
+	seen := make(map[string]bool)
 	for _, anchor := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
 		link := resolveRef(base, attr(anchor, "href"))
 		if link == "" {
