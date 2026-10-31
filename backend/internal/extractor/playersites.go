@@ -347,8 +347,9 @@ var (
 )
 
 var vidmolyPlayer = playerSite{
-	name:  "vidmoly",
-	shape: func(u *url.URL) bool { return vidmolyWatchShape(u) || vidmolyEmbedShape(u) },
+	name:           "vidmoly",
+	probeCanonical: true,
+	shape:          func(u *url.URL) bool { return vidmolyWatchShape(u) || vidmolyEmbedShape(u) },
 	recognise: func(p *Page) bool {
 		code := vidmolyCode(p.Final)
 		switch {
@@ -363,7 +364,7 @@ var vidmolyPlayer = playerSite{
 		return false
 	},
 	recognises: "watch pages (`/w/<code>`, `/v/<code>`) of the VidMoly app naming the file's player, and " +
-		"players (`/embed-<code>.html`) whose JWPlayer source list names VidMoly",
+		"players (`/embed-<code>.html`) whose JWPlayer source list names VidMoly; aliases are validated against the canonical player",
 	page: func(u *url.URL) (string, error) {
 		code := vidmolyCode(u)
 		if code == "" {

@@ -34,6 +34,8 @@ func TestNiconicoLink(t *testing.T) {
 		"https://www.nicovideo.jp/user/5005":               {niconicoUploads, "5005"},
 		"https://www.nicovideo.jp/user/5005/video":         {niconicoUploads, "5005"},
 		// Pages still handed to yt-dlp.
+		"https://live.example.test/lv12345":            {0, ""},
+		"https://live.example.test/watch/lv12345":      {0, ""},
 		"https://www.nicovideo.jp/tag/an-invented-tag": {0, ""},
 		"https://www.nicovideo.jp/ranking":             {0, ""},
 		"https://www.nicovideo.jp/watch/not-an-id":     {0, ""},
@@ -42,6 +44,28 @@ func TestNiconicoLink(t *testing.T) {
 		if kind, id := niconicoLink(u); kind != want.kind || id != want.id {
 			t.Errorf("%s: %d %q, want %d %q", raw, kind, id, want.kind, want.id)
 		}
+	}
+}
+
+func TestNiconicoRecognisesLiveProgramState(t *testing.T) {
+	short := &url.URL{Scheme: "https", Host: "nico.ms", Path: "/lv12345"}
+	if kind, _ := niconicoLink(short); kind != 0 {
+		t.Fatal("live short link must use the metadata handoff")
+	}
+	const state = `<script src="/relive/program-watch/scripts/runtime.js"></script><script id="embedded-data" data-props='{"program":{"nicoliveProgramId":"lv12345"}}'></script>`
+	n := NewNiconico(nil)
+	for _, tc := range []struct {
+		path, body string
+		want       bool
+	}{
+		{"/watch/lv12345", state, true},
+		{"/watch/lv99999", state, false},
+		{"/watch/sm12345", state, false},
+		{"/help", state, false},
+		{"/watch/lv12345", strings.ReplaceAll(state, "/relive/program-watch/scripts/", "/other/"), false},
+		{"/watch/lv12345", `<title>ニコニコ生放送</title>`, false},
+	} {
+		expectRecognised(t, n, htmlPage(t, "https://live.example.test"+tc.path, tc.body), tc.want)
 	}
 }
 

@@ -133,7 +133,21 @@ filenames taken from real pages (verification corpora included). Clone it
 beside this checkout and run its `link.sh`, which symlinks the live tests into
 place; `.gitignore` carries `*live_test.go`, so the links are never committed
 here. Create a new live test in `hl-priv` and link it, rather than writing it
-into this checkout, and commit it there. Before committing here, check that
+into this checkout, and commit it there.
+
+**Standing rule: retain fetched corpus pages and metadata responses in
+`hl-priv`, and run the real extraction code against those saved responses.**
+Reuse the recorded pages, API responses and metadata-helper outputs for
+routine parser checks; offline replay must fail on a missing recording
+rather than silently contact the network. Fetch missing responses or refresh
+recordings explicitly when investigating site changes. Preserve redirects
+and request identity so a replay exercises recognition and extraction as a
+live request would. Store no media bodies, and do not invoke file resolvers
+or transfers during parsing checks. The private corpus owns these copies;
+public regression fixtures remain synthetic. See the replay commands in
+`hl-priv/README.md` and [extractors.md](docs/agents/extractors.md).
+
+Before committing here, check that
 nothing slipped in:
 
 ```bash

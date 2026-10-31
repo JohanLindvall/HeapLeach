@@ -495,6 +495,26 @@ line in the saved queue.
 
 ## Live tests
 
+### Recorded parsing corpus
+
+Keep copies of corpus pages, API responses and metadata-helper outputs in
+the private `hl-priv` repository. Routine parsing checks replay those
+responses through the actual registry and extractors, with the network
+disabled and a missing recording reported as a failure. Reuse recordings
+before making live requests; explicitly fill gaps or refresh them when a
+site changes. The private audit runner preserves request identity and
+redirects and can record responses as it checks them. Its README documents
+the commands and refresh modes.
+
+Parsing checks read only pages and metadata: no download manager, file
+resolver, media body, segment or key fetch. Keep the saved real pages out of
+this public repository; public unit tests use invented fixtures. A parsing
+success verifies discovered metadata, not whether a deferred transfer would
+succeed. Record unsupported, removed and inaccessible pages as negative
+cases rather than silently discarding them from the corpus.
+
+### Live transfer tests
+
 Extractor tests that hit the real sites sit behind a build tag, because these
 hosts change their plumbing without warning. They live in the private
 [`hl-priv`](https://github.com/JohanLindvall/hl-priv) repository, at the paths

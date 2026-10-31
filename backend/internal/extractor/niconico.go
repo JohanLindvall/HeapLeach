@@ -18,6 +18,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // Niconico reads niconico's own player API.
@@ -73,7 +74,7 @@ func NewNiconico(client *httpx.Client) *Niconico {
 		about: about{name: "niconico", shape: eitherShape(niconicoWatchShape, niconicoListShape),
 			recognises: "watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, " +
 				"and mylists, series and users' uploads rendered by the niconico web client's bundle; " +
-				"its other pages are handed to yt-dlp"},
+				"live watch pages describing their program in the live client's embedded data are handed to yt-dlp"},
 		client: client, watch: niconicoWatchRoot, api: niconicoAPIRoot,
 		handoff: newHandoff(client, niconicoRest),
 	}
@@ -107,10 +108,34 @@ const niconicoBundle = "/web/scripts/bundle/"
 // page of the site that carries either is the handoff's, as all of it was
 // before videos and listings were read natively.
 func (n *Niconico) Recognise(_ context.Context, p *Page) bool {
+	if niconicoLivePage(p) {
+		return true
+	}
 	if !p.Named(niconicoNames...) {
 		return false
 	}
 	return p.Has(niconicoResponseMeta) || p.Script(niconicoBundle)
+}
+
+// Live programs use another player and API. Their state identifies the
+// requested program; neither branding nor a watch-shaped path alone does.
+func niconicoLivePage(p *Page) bool {
+	segs := p.Segments()
+	if len(segs) != 2 || segs[0] != "watch" || !strings.HasPrefix(segs[1], "lv") || !allDigits(strings.TrimPrefix(segs[1], "lv")) ||
+		!p.Script("/relive/program-watch/scripts/") {
+		return false
+	}
+	return p.hasElement(func(node *html.Node) bool {
+		if node.Type != html.ElementNode || node.Data != "script" || attr(node, "id") != "embedded-data" {
+			return false
+		}
+		var state struct {
+			Program struct {
+				ID string `json:"nicoliveProgramId"`
+			} `json:"program"`
+		}
+		return json.Unmarshal([]byte(attr(node, "data-props")), &state) == nil && state.Program.ID == segs[1]
+	})
 }
 
 // The kinds of page read natively.
@@ -129,6 +154,10 @@ var niconicoVideoID = regexp.MustCompile(`^(?:[a-z]{2})?[0-9]+$`)
 // user's uploads, or none of those (0).
 func niconicoLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
+	if len(segs) > 0 && strings.HasPrefix(segs[len(segs)-1], "lv") &&
+		(len(segs) == 1 || len(segs) == 2 && segs[0] == "watch") {
+		return 0, ""
+	}
 	if util.HostMatches(u.Host, "nico.ms") {
 		if len(segs) == 1 && niconicoVideoID.MatchString(segs[0]) {
 			return niconicoVideo, segs[0]

@@ -46,6 +46,12 @@ What else a row can ask for:
   (ok.ru) or simply leave its end unmarked, and is taken as it is.
 - **`proxyFallback`.** Opts the row's sources and files into proxy recovery
   (doodstream).
+- **`probeCanonical`.** When an alias has lost its player markup, validate
+  the canonical page with one bounded request after the submitted shape
+  matches. Recognition still requires the player's normal markers, and
+  extraction reuses that validated page. VidMoly needs this because old
+  aliases redirect to advertising rather than the player; the final URL
+  cannot identify the submitted video.
 - **`withheld`.** A signed row's queued file carries no link at all, only
   its name and exact size, so the item waits against the site it came from
   rather than the media host (streamable).

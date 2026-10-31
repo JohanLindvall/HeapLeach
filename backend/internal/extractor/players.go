@@ -6,11 +6,13 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -52,6 +54,10 @@ type playerSite struct {
 	// page that serves its player. Nil reads the link as it is. An error
 	// says the link names no video.
 	page func(u *url.URL) (string, error)
+	// probeCanonical validates the canonical player's markup when an alias
+	// answers with an unrelated page. It is opt-in and only follows a URL
+	// whose submitted shape matches, with one bounded identification request.
+	probeCanonical bool
 	// referer is the Referer every media request carries, given the page,
 	// unless a read names its own (playerVideo.referer). Nil, with none
 	// named, sends no Referer.
@@ -115,13 +121,63 @@ func NewPlayer(client *httpx.Client, site *playerSite) *Player {
 }
 
 // Recognise reports whether the probed page is the site's player.
-func (p *Player) Recognise(_ context.Context, page *Page) bool { return p.site.recognise(page) }
+func (p *Player) Recognise(ctx context.Context, page *Page) bool {
+	return p.site.recognise(page) || p.canonicalPage(ctx, page) != nil
+}
+
+// canonicalPage keeps the validated player on the original probe so Extract
+// can read it without another request. The submitted form matters: a redirect
+// to advertising can have discarded both the player's path and its markers.
+func (p *Player) canonicalPage(ctx context.Context, page *Page) *Page {
+	if !p.site.probeCanonical || p.site.page == nil || p.client == nil || page == nil || !p.Shape(page.URL) {
+		return nil
+	}
+	endpoint, err := p.site.page(page.URL)
+	if err != nil || endpoint == page.Final.String() {
+		return nil
+	}
+	return memo(page, "player "+endpoint, func() *Page {
+		ctx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
+		defer cancel()
+		req, err := p.client.NewRequest(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil
+		}
+		httpx.Navigate.Apply(req)
+		resp, err := p.client.DoOnce(req)
+		if err != nil {
+			return nil
+		}
+		defer resp.Body.Close()
+		canonical, canonicalErr := p.site.page(resp.Request.URL)
+		if canonicalErr != nil || canonical != endpoint {
+			return nil
+		}
+		if resp.StatusCode != http.StatusOK || !mediaPageIsHTMLType(mediaPageMediaType(resp.Header.Get(httpx.HeaderContentType))) {
+			return nil
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
+		if err != nil || len(body) > config.MaxResponseBytes {
+			return nil
+		}
+		candidate := &Page{URL: req.URL, Final: resp.Request.URL, Status: resp.StatusCode, Header: resp.Header, Body: string(body)}
+		if !p.site.recognise(candidate) {
+			return nil
+		}
+		return candidate
+	})
+}
 
 // ProxyFallback reports whether the row opted into proxy recovery.
 func (p *Player) ProxyFallback() bool { return p.site.proxyFallback }
 
 // Extract resolves a video page to its best rendition, or queues a listing.
 func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	if source := probed(ctx, u); source != nil {
+		if canonical := p.canonicalPage(ctx, source); canonical != nil {
+			ctx = withPage(ctx, canonical)
+		}
+	}
 	if p.site.listing != nil && p.site.listing.shape(u) {
 		return p.list(ctx, u, opts)
 	}

@@ -459,3 +459,8 @@ Mylists (`/v2/mylists`), series (`/v2/series`) and a user's uploads
 request a page and no watch page until a transfer starts. Entries gone from
 the site, or paid, are left out and counted in the note apart from what the
 cap cut. Any other page (tags, rankings, channels) goes to yt-dlp.
+
+Live watch pages use the live client's `embedded-data` program description
+and `/relive/program-watch/scripts/` bundle for recognition. Its program id
+must match the URL. An `lv` id is handed to yt-dlp rather than sent to the
+ordinary watch API, which only reads uploaded videos.

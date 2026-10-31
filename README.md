@@ -227,7 +227,7 @@ Sites change, so fixture tests alone cannot guarantee current live support.
 | `mega` | file and folder links (`/file/<handle>#<key>`, `/folder/<handle>#<key>`, `/embed/…`, `#!…!…`) whose page is the MEGA web client's boot shell (`secureboot.js`, `#fmholder`) |
 | `mixcloud` | shows (`/<user>/<show>/`) whose page, named Mixcloud, carries the app's `cloudcastQuery` for the show |
 | `mixdrop` | players (`/e/<code>`) configuring the MixDrop player object (`MDCore`), and landing pages (`/f/<code>`) named MixDrop that frame or configure one |
-| `niconico` | watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, and mylists, series and users' uploads rendered by the niconico web client's bundle; its other pages are handed to yt-dlp |
+| `niconico` | watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, and mylists, series and users' uploads rendered by the niconico web client's bundle; live watch pages describing their program in the live client's embedded data are handed to yt-dlp |
 | `noodlemagazine` | watch pages (`/watch/<id>`) named Noodlemagazine carrying the player's `window.playlist`, and search listings (`/video/<query>`) of its video cards |
 | `npo` | episodes and series (`/start/afspelen/<slug>`, `/start/serie/<slug>`) of NPO Start, served by its app |
 | `npr` | NPR pages carrying audio players (`data-audio`): stories, programmes, podcasts and sections |
@@ -260,7 +260,7 @@ Sites change, so fixture tests alone cannot guarantee current live support.
 | `svtplay` | videos (`/video/<id>`) and programme pages of SVT Play whose page data names the player API's `videoSvtId`s |
 | `tnaflix` | video pages (`/<category>/<slug>/video<id>`) named TNAFlix whose player lists its renditions as `<source>` elements |
 | `turbo` | video pages (`/embed/<id>`, `/d/<id>`, `/v/<id>`) whose player or download page calls the `/api/sign?v=` signing endpoint, or that frame that player |
-| `vidmoly` | watch pages (`/w/<code>`, `/v/<code>`) of the VidMoly app naming the file's player, and players (`/embed-<code>.html`) whose JWPlayer source list names VidMoly |
+| `vidmoly` | watch pages (`/w/<code>`, `/v/<code>`) of the VidMoly app naming the file's player, and players (`/embed-<code>.html`) whose JWPlayer source list names VidMoly; aliases are validated against the canonical player |
 | `vids.st` | videos (`/v/<id>`, `/e/<id>`) whose page carries the player's `playerConfig` with its `videoUrl` |
 | `vimeo` | player pages (`/video/<id>`) carrying `window.playerConfig`, and watch pages (`/<id>`, `/<id>/<hash>`, channel, group and album videos) of a site named Vimeo that offer that player for embedding |
 | `voyeurking` | video pages (`/video/<slug>`) and category and collection listings (`/categories/<name>`, `/collection/<slug>`) whose React Router data names the `routes/video.$slug`, `routes/categories` or `routes/collection` route |
