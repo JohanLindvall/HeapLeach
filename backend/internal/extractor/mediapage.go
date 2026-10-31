@@ -456,11 +456,9 @@ func mediaPageTwitterStream(root *html.Node, base *url.URL) (mediaFinding, bool)
 // contentUrl would resolve half the web to a JPEG. Only VideoObject,
 // AudioObject and the bare MediaObject are accepted.
 func mediaPageLinkedData(root *html.Node, base *url.URL) (mediaFinding, bool) {
-	for _, script := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && strings.Contains(strings.ToLower(attr(n, "type")), "ld+json")
-	}) {
+	for _, payload := range linkedData(root) {
 		var doc any
-		if err := json.Unmarshal([]byte(textOf(script)), &doc); err != nil {
+		if err := json.Unmarshal([]byte(payload), &doc); err != nil {
 			continue
 		}
 		if found, ok := linkedDataMedia(doc, base); ok {

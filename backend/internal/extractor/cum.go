@@ -332,7 +332,7 @@ func cumEdges(doc string) ([]string, error) {
 		return nil, err
 	}
 	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		match := cumEdgesRE.FindStringSubmatch(textOf(script))
+		match := cumEdgesRE.FindStringSubmatch(rawText(script))
 		if match == nil {
 			continue
 		}

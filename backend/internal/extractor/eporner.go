@@ -194,14 +194,12 @@ func epornerTitle(doc string) string {
 // page carries a breadcrumb list in the same form, so the type is checked
 // rather than taking the first name found.
 func epornerLinkedName(root *html.Node) string {
-	for _, script := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && strings.Contains(strings.ToLower(attr(n, "type")), "ld+json")
-	}) {
+	for _, payload := range linkedData(root) {
 		var obj struct {
 			Type string `json:"@type"`
 			Name string `json:"name"`
 		}
-		if json.Unmarshal([]byte(textOf(script)), &obj) != nil {
+		if json.Unmarshal([]byte(payload), &obj) != nil {
 			continue
 		}
 		if strings.EqualFold(obj.Type, "VideoObject") {

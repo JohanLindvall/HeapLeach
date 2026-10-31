@@ -503,6 +503,16 @@ line in the saved queue.
   media and stay with their owners.
 - `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,
   with the caller choosing the value for a name not on it.
+- `rawText`, `scriptTexts`, `linkedData` and `jsonAttr` (`html.go`): script
+  payloads and JSON attributes as written. Decode JSON-LD, `__NEXT_DATA__`
+  and `data-page` through these, never through `textOf`, which collapses
+  whitespace for display text and would change names (and so paths) inside
+  the JSON. Schemas, required fields and which object counts stay in each
+  reader. A reader that recognition and extraction both need takes the
+  parsed root and is shared through `memo` on the same `Page` (the gallery
+  path in `celeb.go`); keep a string entry point for synthetic fixtures, and
+  treat memoised values as immutable. A canonical URL that differs from the
+  probed one reads its own page.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.

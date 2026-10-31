@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -305,4 +307,50 @@ func TestCelebRecognise(t *testing.T) {
 	expectShape(t, c, "https://gallery.example.test/creator/a-creator-1", true)
 	expectShape(t, c, "https://gallery.example.test/creator/a-creator-1/videos", false)
 	expectShape(t, c, "https://gallery.example.test/feed/hot", false)
+}
+
+// An unchanged gallery is read once: the extractor reuses the probe the
+// registry recognised it by, props and all. A creator page canonicalises to
+// its gallery, which is another page and is read on its own.
+func TestCelebReusesTheProbedGallery(t *testing.T) {
+	var hits sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := hits.LoadOrStore(r.URL.Path, new(atomic.Int32))
+		n.(*atomic.Int32).Add(1)
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		switch r.URL.Path {
+		case "/creator/a-creator-42/images":
+			fmt.Fprint(w, celebFixture("Creator/Media", `{"creator":{"name":"A Creator","slug":"a-creator-42","imageCount":1},
+				"mediaType":"media","pages":1,"currentPage":1,
+				"media":[{"id":102,"src":"https://cdn.example.test/api/v1/image/second.png"}]}`))
+		case "/creator/a-creator-42":
+			fmt.Fprint(w, `<html><head><title>A Creator - Celeb.st</title></head><body>`+celebFixture("404", `{}`)+`</body></html>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	count := func(path string) int32 {
+		n, ok := hits.Load(path)
+		if !ok {
+			return 0
+		}
+		return n.(*atomic.Int32).Load()
+	}
+	client := testClient()
+	reg := &Registry{client: client, extractors: []Extractor{NewCeleb(client)}, fallback: NewDirect(client)}
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/creator/a-creator-42/images", Options{})
+	if err != nil || ex.Name() != "celeb" || len(res.Files) != 1 {
+		t.Fatalf("gallery: %v via %v, %v", res, ex, err)
+	}
+	if got := count("/creator/a-creator-42/images"); got != 1 {
+		t.Errorf("unchanged gallery fetched %d times, want 1", got)
+	}
+	res, _, err = reg.Extract(context.Background(), srv.URL+"/creator/a-creator-42", Options{})
+	if err != nil || len(res.Files) != 1 {
+		t.Fatalf("creator: %v, %v", res, err)
+	}
+	if count("/creator/a-creator-42") != 1 || count("/creator/a-creator-42/images") != 2 {
+		t.Errorf("creator page read %d times, its gallery %d in all", count("/creator/a-creator-42"), count("/creator/a-creator-42/images"))
+	}
 }

@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -53,7 +52,7 @@ func (c *Celeb) Recognise(_ context.Context, p *Page) bool {
 	if !c.Shape(p.Final) || !p.Has("data-page=") {
 		return false
 	}
-	data, err := celebPageData(p.Body)
+	data, err := celebProbedData(p)
 	if err != nil {
 		return false
 	}
@@ -111,11 +110,7 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	query.Del("page")
 	pageURL.RawQuery = query.Encode()
 	page := pageURL.String()
-	doc, _, err := fetchDocument(ctx, c.client, &pageURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("celeb: fetch gallery: %w", err)
-	}
-	data, err := celebPageData(doc)
+	data, err := c.gallery(ctx, &pageURL)
 	if err != nil {
 		return nil, err
 	}
@@ -177,17 +172,61 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	return res, nil
 }
 
+// gallery is the gallery page's props. When the page is the one the
+// registry probed — the submitted gallery, unchanged — the props the
+// recogniser already decoded from its tree are reused; a creator page or a
+// later page pasted is canonicalised to another URL, and reads its own.
+func (c *Celeb) gallery(ctx context.Context, pageURL *url.URL) (*celebPage, error) {
+	if p := probed(ctx, pageURL); p != nil {
+		if _, ok := p.Document(); ok {
+			return celebProbedData(p)
+		}
+	}
+	root, _, err := fetchRoot(ctx, c.client, pageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("celeb: fetch gallery: %w", err)
+	}
+	return celebPageDataOf(root)
+}
+
+// celebProbedData is a probed page's props, decoded once per page from its
+// own tree and shared by recognition and extraction. The value is shared:
+// callers read it and never modify it.
+func celebProbedData(p *Page) (*celebPage, error) {
+	type decoded struct {
+		data *celebPage
+		err  error
+	}
+	got := memo(p, "celeb.data", func() decoded {
+		root := p.HTML()
+		if root == nil {
+			var err error
+			if root, err = parseHTML(p.Body); err != nil {
+				return decoded{err: err}
+			}
+		}
+		data, err := celebPageDataOf(root)
+		return decoded{data, err}
+	})
+	return got.data, got.err
+}
+
+// celebPageData decodes the props of a gallery page's markup.
 func celebPageData(doc string) (*celebPage, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, err
 	}
-	node := findFirst(root, func(n *html.Node) bool { return hasAttr(n, "data-page") })
-	if node == nil {
-		return nil, fmt.Errorf("celeb: no gallery data on the page")
-	}
+	return celebPageDataOf(root)
+}
+
+// celebPageDataOf decodes the props an already parsed page carries.
+func celebPageDataOf(root *html.Node) (*celebPage, error) {
 	var data celebPage
-	if err := json.Unmarshal([]byte(attr(node, "data-page")), &data); err != nil {
+	switch found, err := jsonAttr(root, "data-page", &data); {
+	case !found:
+		return nil, fmt.Errorf("celeb: no gallery data on the page")
+	case err != nil:
 		return nil, fmt.Errorf("celeb: decode gallery data: %w", err)
 	}
 	return &data, nil
