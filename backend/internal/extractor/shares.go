@@ -22,6 +22,7 @@ import (
 // reading of a recognised link — is a row of a table (shareSite), and this
 // is the one extractor that serves every row.
 type Share struct {
+	about
 	client *httpx.Client
 	site   *shareSite
 	// api is the row's API base, a field so a test can serve it.
@@ -30,9 +31,9 @@ type Share struct {
 
 // shareSite is one host's row.
 type shareSite struct {
-	name string
-	// recognises describes the forms for the inventory.
-	recognises string
+	// about names the host and describes its forms for the inventory; its
+	// shape is left unset, since the extractor's is any of the forms'.
+	about
 	// forms are the host's link forms, in the order a page is offered to
 	// them: the first whose shape the page's final URL has decides.
 	forms []shareForm
@@ -60,22 +61,13 @@ func newShare(client *httpx.Client, site *shareSite) *Share {
 	if site.timeout > 0 {
 		client = client.WithTimeout(site.timeout)
 	}
-	return &Share{client: client, site: site, api: site.api}
-}
-
-func (s *Share) Name() string { return s.site.name }
-
-// Recognises is the inventory's description.
-func (s *Share) Recognises() string { return s.site.recognises }
-
-// Shape reports any of the row's forms.
-func (s *Share) Shape(u *url.URL) bool {
-	for _, f := range s.site.forms {
-		if f.shape(u) {
-			return true
-		}
+	var shapes []func(*url.URL) bool
+	for _, f := range site.forms {
+		shapes = append(shapes, f.shape)
 	}
-	return false
+	about := site.about
+	about.shape = eitherShape(shapes...)
+	return &Share{about: about, client: client, site: site, api: site.api}
 }
 
 // Recognise offers the page to the form its final URL has.
@@ -98,7 +90,7 @@ func (s *Share) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 func (s *Share) root(ctx context.Context, u *url.URL, referer string) (*html.Node, error) {
 	root, _, err := fetchRoot(ctx, s.client, u, httpx.Referer(referer))
 	if err != nil {
-		return nil, fmt.Errorf("%s: fetch %s: %w", s.site.name, u.Redacted(), err)
+		return nil, fmt.Errorf("%s: fetch %s: %w", s.name, u.Redacted(), err)
 	}
 	return root, nil
 }

@@ -39,6 +39,7 @@ import (
 // the same listing and is served, so a discography is read from there and
 // every release on it resolved in turn.
 type Bandcamp struct {
+	about
 	client *httpx.Client
 }
 
@@ -53,23 +54,16 @@ const bandcampStream = "mp3-128"
 const bandcampDomain = "bandcamp.com"
 
 // NewBandcamp builds the bandcamp extractor.
-func NewBandcamp(client *httpx.Client) *Bandcamp { return &Bandcamp{client: client} }
-
-func (b *Bandcamp) Name() string { return "bandcamp" }
+func NewBandcamp(client *httpx.Client) *Bandcamp {
+	return &Bandcamp{client: client, about: about{name: "bandcamp", shape: bandcampShape,
+		recognises: "releases (`/album/<slug>`, `/track/<slug>`), a band's `/music` and its front page, " +
+			"where the page is built from Bandcamp's client bundle and carries `data-tralbum` release data or the music grid"}}
+}
 
 // bandcampShape is a release, /album/<slug> or /track/<slug>, or a band's
 // /music listing. A band's own front page is its site root, which is no
 // shape at all, so it is recognised by its page alone.
 var bandcampShape = pathShape(`^/(?:album|track)/[^/.]+/?$`, `^/music/?$`)
-
-// Recognises is the inventory's description.
-func (b *Bandcamp) Recognises() string {
-	return "releases (`/album/<slug>`, `/track/<slug>`), a band's `/music` and its front page, " +
-		"where the page is built from Bandcamp's client bundle and carries `data-tralbum` release data or the music grid"
-}
-
-// Shape reports a release or a band's listing.
-func (b *Bandcamp) Shape(u *url.URL) bool { return bandcampShape(u) }
 
 // Recognise takes a page of the right form, or a band's front page, built
 // from the platform's client bundle and carrying what Extract reads: the

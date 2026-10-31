@@ -71,24 +71,20 @@ import (
 // up by the title rule below. Anything beyond that belongs in an extractor
 // of its own.
 type Autoindex struct {
+	about
 	client *httpx.Client
 }
 
 // NewAutoindex builds the open-directory extractor.
-func NewAutoindex(client *httpx.Client) *Autoindex { return &Autoindex{client: client} }
-
-func (a *Autoindex) Name() string { return "autoindex" }
-
-// Recognises is the inventory's description.
-func (a *Autoindex) Recognises() string {
-	return "generated directory listings at any path: a page titled as an index of its own " +
-		"directory (`Index of /…`, `Directory listing for /…`) that links at least one entry " +
-		"inside it"
-}
-
-// Shape is false: a directory's URL looks like any other page's, and only
+//
+// It has no shape: a directory's URL looks like any other page's, and only
 // the listing itself says what it is.
-func (a *Autoindex) Shape(*url.URL) bool { return false }
+func NewAutoindex(client *httpx.Client) *Autoindex {
+	return &Autoindex{client: client, about: about{name: "autoindex",
+		recognises: "generated directory listings at any path: a page titled as an index of its own " +
+			"directory (`Index of /…`, `Directory listing for /…`) that links at least one entry " +
+			"inside it"}}
+}
 
 // Recognise takes a page whose title or heading names it a listing of the
 // directory it was served from, and that links an entry inside that

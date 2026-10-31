@@ -64,6 +64,7 @@ import (
 // spaced out per wiki. Only the API is paced: the files themselves come off
 // a CDN built to serve them in parallel.
 type MediaWiki struct {
+	about
 	client *httpx.Client
 	// interval is how far apart this wiki's API calls are spaced. Zero is
 	// valid and means no spacing at all, which is what the tests build:
@@ -165,23 +166,19 @@ var mediaWikiNewestPages = map[string]bool{"newfiles": true, "newimages": true}
 
 // NewMediaWiki builds the MediaWiki extractor.
 func NewMediaWiki(client *httpx.Client) *MediaWiki {
-	return &MediaWiki{client: client, interval: config.MediaWikiInterval}
+	return &MediaWiki{client: client, interval: config.MediaWikiInterval, about: about{name: "mediawiki",
+		shape: mediaWikiShape,
+		recognises: "MediaWiki categories, articles, file pages and upload lists: pages naming a title " +
+			"(`/wiki/<title>`, `index.php?title=`) whose generator is MediaWiki and which carry its " +
+			"ResourceLoader configuration, or, behind a challenge, whose origin's `api.php` identifies " +
+			"as MediaWiki"}}
 }
 
-func (m *MediaWiki) Name() string { return "mediawiki" }
-
-// Recognises is the inventory's description.
-func (m *MediaWiki) Recognises() string {
-	return "MediaWiki categories, articles, file pages and upload lists: pages naming a title " +
-		"(`/wiki/<title>`, `index.php?title=`) whose generator is MediaWiki and which carry its " +
-		"ResourceLoader configuration, or, behind a challenge, whose origin's `api.php` identifies " +
-		"as MediaWiki"
-}
-
-// Shape reports a title in the File, Category or Special namespace: nothing
-// else on the web lays a URL out that way. An article's /wiki/<title> is
-// every site's that uses the prefix, so it is recognised only once fetched.
-func (m *MediaWiki) Shape(u *url.URL) bool {
+// mediaWikiShape is a title in the File, Category or Special namespace:
+// nothing else on the web lays a URL out that way. An article's
+// /wiki/<title> is every site's that uses the prefix, so it is recognised
+// only once fetched.
+func mediaWikiShape(u *url.URL) bool {
 	title, explicit := mediaWikiTitle(u)
 	return explicit && title != "" && mediaWikiKindOf(title) != mediaWikiArticle
 }
@@ -201,7 +198,7 @@ func (m *MediaWiki) Recognise(ctx context.Context, p *Page) bool {
 		})) {
 		return true
 	}
-	if !m.Shape(p.Final) || !p.Silent() {
+	if !mediaWikiShape(p.Final) || !p.Silent() {
 		return false
 	}
 	for _, api := range mediaWikiCandidates(p.Final, "") {

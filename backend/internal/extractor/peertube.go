@@ -66,6 +66,7 @@ import (
 // directory as much as a store. The link is followed exactly as given and
 // never rebuilt against the instance.
 type PeerTube struct {
+	about
 	client *httpx.Client
 }
 
@@ -96,19 +97,15 @@ const (
 )
 
 // NewPeerTube builds the extractor covering every PeerTube instance.
-func NewPeerTube(client *httpx.Client) *PeerTube { return &PeerTube{client: client} }
-
-func (p *PeerTube) Name() string { return peerTubeLabel }
-
-// Recognises is the inventory's description.
-func (p *PeerTube) Recognises() string {
-	return "PeerTube videos, playlists, channels and accounts (`/w/<id>`, `/videos/watch/<id>`, " +
-		"`/w/p/<id>`, `/c/<handle>`, `/a/<handle>`) whose page is the PeerTube web client with its " +
-		"inline server configuration, or whose origin's `/api/v1/config` reports a server version"
+func NewPeerTube(client *httpx.Client) *PeerTube {
+	return &PeerTube{client: client, about: about{name: peerTubeLabel, shape: peerTubeShape,
+		recognises: "PeerTube videos, playlists, channels and accounts (`/w/<id>`, `/videos/watch/<id>`, " +
+			"`/w/p/<id>`, `/c/<handle>`, `/a/<handle>`) whose page is the PeerTube web client with its " +
+			"inline server configuration, or whose origin's `/api/v1/config` reports a server version"}}
 }
 
-// Shape reports an instance route.
-func (p *PeerTube) Shape(u *url.URL) bool { return peerTubeParseRoute(u).Kind != peerTubeNothing }
+// peerTubeShape is an instance route.
+func peerTubeShape(u *url.URL) bool { return peerTubeParseRoute(u).Kind != peerTubeNothing }
 
 // Recognise takes an instance route served by the PeerTube web client: its
 // application element and the server configuration it is handed inline.
@@ -116,7 +113,7 @@ func (p *PeerTube) Shape(u *url.URL) bool { return peerTubeParseRoute(u).Kind !=
 // settled by asking the origin's /api/v1/config for its server version,
 // which every instance answers and nothing else does.
 func (p *PeerTube) Recognise(ctx context.Context, page *Page) bool {
-	if !p.Shape(page.Final) {
+	if !peerTubeShape(page.Final) {
 		return false
 	}
 	if page.Has(peerTubeConfigGlobal) &&

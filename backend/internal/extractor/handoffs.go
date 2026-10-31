@@ -72,21 +72,19 @@ import (
 // becomes an item of its own. That is still yt-dlp's work, not ours: it
 // reads the listing exactly as it would on download.
 type Handoff struct {
+	about
 	client *httpx.Client
 	site   handoffSite
 }
 
 // handoffSite is one host passed over whole.
 type handoffSite struct {
-	name string
-	// shape is the URL forms the site's media and collections have, for the
-	// link scanner; recognise says whether a probed page is the site's,
-	// by what the page carries that yt-dlp goes on to read; recognises
-	// describes both for the inventory. Every site sets both functions, one
-	// with no form worth scanning for included.
-	shape      func(u *url.URL) bool
-	recognise  func(ctx context.Context, h *Handoff, p *Page) bool
-	recognises string
+	// about's shape is the URL forms the site's media and collections
+	// have, for the link scanner.
+	about
+	// recognise says whether a probed page is the site's, by what the page
+	// carries that yt-dlp goes on to read.
+	recognise func(ctx context.Context, h *Handoff, p *Page) bool
 	// why completes the sentence explaining what yt-dlp is needed for. It
 	// only ever reaches the user when yt-dlp is missing, which is the one
 	// moment the reason is something they can act on.
@@ -296,12 +294,6 @@ func (h *Handoff) rumbleKnows(ctx context.Context, p *Page) bool {
 		strings.HasPrefix(strings.ToLower(out.ProviderName), "rumble") && out.HTML != ""
 }
 
-// Recognises is the inventory's description.
-func (h *Handoff) Recognises() string { return h.site.recognises }
-
-// Shape reports the site's URL forms worth a probe.
-func (h *Handoff) Shape(u *url.URL) bool { return h.site.shape(u) }
-
 // Recognise reports whether the probed page is the site's.
 func (h *Handoff) Recognise(ctx context.Context, p *Page) bool {
 	return h.site.recognise(ctx, h, p)
@@ -312,12 +304,15 @@ func (h *Handoff) Recognise(ctx context.Context, p *Page) bool {
 func NewHandoffs(client *httpx.Client) []Extractor {
 	out := make([]Extractor, 0, len(handoffSites))
 	for _, site := range handoffSites {
-		out = append(out, &Handoff{client: client, site: site})
+		out = append(out, newHandoff(client, site))
 	}
 	return out
 }
 
-func (h *Handoff) Name() string { return h.site.name }
+// newHandoff builds the extractor for one host.
+func newHandoff(client *httpx.Client, site handoffSite) *Handoff {
+	return &Handoff{about: site.about, client: client, site: site}
+}
 
 // Extract names the media, or lists the collection where the site expands
 // one, and hands each page to the external downloader.

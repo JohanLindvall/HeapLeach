@@ -243,10 +243,7 @@ const oembedPayload = `{
 
 func testHandoff(t *testing.T, oembed string) *Handoff {
 	t.Helper()
-	return &Handoff{
-		client: testClient(),
-		site:   handoffSite{name: "rumble", why: "testing", oembed: oembed},
-	}
+	return newHandoff(testClient(), handoffSite{name: "rumble", why: "testing", oembed: oembed})
 }
 
 func TestOEmbedTitle(t *testing.T) {

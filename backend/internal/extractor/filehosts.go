@@ -385,7 +385,10 @@ func mediafireFolderName(ctx context.Context, s *Share, key string) (string, err
 //
 // Folders are deliberately left out: listing one needs an API key, which
 // this program has no way to ask for and no business holding.
-type GoogleDrive struct{ client *httpx.Client }
+type GoogleDrive struct {
+	about
+	client *httpx.Client
+}
 
 const (
 	driveRoot = "https://drive.google.com"
@@ -398,9 +401,11 @@ const (
 )
 
 // NewGoogleDrive builds the drive extractor.
-func NewGoogleDrive(client *httpx.Client) *GoogleDrive { return &GoogleDrive{client: client} }
-
-func (g *GoogleDrive) Name() string { return "drive" }
+func NewGoogleDrive(client *httpx.Client) *GoogleDrive {
+	return &GoogleDrive{client: client, about: about{name: "drive", shape: driveShape,
+		recognises: "file links (`/file/d/<id>`, `/open?id=`, `/uc?id=`) whose page is the Google Drive file viewer " +
+			"(its `apps-fileview` bundle), or the download confirmation form"}}
+}
 
 // driveFileShape is a file's viewer, /file/d/<id>[/view]; driveQueryShape
 // the endpoints that take the id as a query, /open, /uc and /download.
@@ -412,14 +417,8 @@ var (
 // driveViewerBundle is the file viewer's script bundle.
 const driveViewerBundle = "/_/apps-fileview/"
 
-// Recognises is the inventory's description.
-func (g *GoogleDrive) Recognises() string {
-	return "file links (`/file/d/<id>`, `/open?id=`, `/uc?id=`) whose page is the Google Drive file viewer " +
-		"(its `apps-fileview` bundle), or the download confirmation form"
-}
-
-// Shape reports a file link.
-func (g *GoogleDrive) Shape(u *url.URL) bool {
+// driveShape is a file link: its viewer, or an endpoint given its id.
+func driveShape(u *url.URL) bool {
 	return driveFileShape(u) || driveQueryShape(u) && u.Query().Get("id") != ""
 }
 
@@ -428,7 +427,7 @@ func (g *GoogleDrive) Shape(u *url.URL) bool {
 // rather than read off the page — or by the confirmation form that endpoint
 // puts in front of a large file, which is what Extract walks past.
 func (g *GoogleDrive) Recognise(_ context.Context, p *Page) bool {
-	if !g.Shape(p.URL) && !g.Shape(p.Final) {
+	if !driveShape(p.URL) && !driveShape(p.Final) {
 		return false
 	}
 	if p.Script(driveViewerBundle) && p.Named("Google Drive") {

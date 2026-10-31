@@ -44,6 +44,7 @@ import (
 // request time serves something longer than it advertised; the only
 // consequence is that the file is fetched.
 type Feeds struct {
+	about
 	client *httpx.Client
 }
 
@@ -53,9 +54,11 @@ type Feeds struct {
 const feedAccept = "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8"
 
 // NewFeeds builds the syndication-feed extractor.
-func NewFeeds(client *httpx.Client) *Feeds { return &Feeds{client: client} }
-
-func (f *Feeds) Name() string { return "feed" }
+func NewFeeds(client *httpx.Client) *Feeds {
+	return &Feeds{client: client, about: about{name: "feed", shape: feedShape,
+		recognises: "RSS and Atom feeds, at any URL: a response served as a feed type, or whose document " +
+			"element is `<rss>` or `<feed>`"}}
+}
 
 // Feed-shaped URLs: what the link scanner may probe. None of these is a
 // promise — the document itself settles it — so they are deliberately the
@@ -68,14 +71,8 @@ var (
 	feedFileExtensions = []string{".rss", ".atom", ".xml"}
 )
 
-// Recognises is the inventory's description.
-func (f *Feeds) Recognises() string {
-	return "RSS and Atom feeds, at any URL: a response served as a feed type, or whose document " +
-		"element is `<rss>` or `<feed>`"
-}
-
-// Shape reports a URL that looks like a feed.
-func (f *Feeds) Shape(u *url.URL) bool {
+// feedShape is a URL that looks like a feed.
+func feedShape(u *url.URL) bool {
 	segs := util.PathSegments(u)
 	for _, seg := range segs {
 		if slices.Contains(feedPathNames, strings.ToLower(seg)) {

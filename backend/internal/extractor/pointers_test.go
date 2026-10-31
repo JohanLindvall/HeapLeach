@@ -179,7 +179,8 @@ func TestPointerResolvesThroughTheRegistry(t *testing.T) {
 	client := testClient()
 	reg := &Registry{fallback: NewDirect(nil)}
 	reg.extractors = []Extractor{stubExtractor{hostClaim: "tube.example.test", title: "a synthetic clip"}}
-	p := &Pointer{client: client, registry: reg, site: pointerNamed(t, "alohatube").site}
+	p := NewPointer(client, "alohatube")
+	p.registry = reg
 
 	u, err := url.Parse(srv.URL + "/ktm/view.cgi?gid=1234567")
 	if err != nil {
@@ -201,7 +202,7 @@ func TestPointerReportsAPageThatPointsNowhere(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := &Pointer{client: testClient(), site: pointerNamed(t, "yandex").site}
+	p := NewPointer(testClient(), "yandex")
 	u, err := url.Parse(srv.URL + "/video/preview/1234567890")
 	if err != nil {
 		t.Fatal(err)

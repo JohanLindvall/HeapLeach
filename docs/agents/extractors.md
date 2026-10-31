@@ -366,13 +366,20 @@ line in the saved queue.
 
 - `about` (`extractor.go`): an extractor's name, inventory text and shape
   as one embedded row, so its constructor reads as data rather than three
-  hand-written methods. A shape handed to it is a plain function named
-  `…Shape`; `TestRecognitionNeverReadsTheHost` checks those too.
+  hand-written methods. Every extractor embeds it, and so does every engine
+  row (`playerSite`, `shareSite`, `pointerSite`, `handoffSite`), whose
+  literals keep writing `name:`, `shape:` and `recognises:` as promoted
+  fields; each engine's constructor copies the row's `about` into the
+  extractor, so build engines and extractors with their constructors, never
+  as bare literals, or they have no name and no shape. A shape handed to it
+  is a plain function named `…Shape`, nil for an extractor with no form
+  worth a probe; `TestRecognitionNeverReadsTheHost` checks those too.
   `eitherShape` combines shapes.
 - The `Share` engine (`shares.go`): a file host whose share or album page
   is read by its own code is a `shareSite` row — its name, inventory line,
   forms (a shape plus what a page of that shape must carry; the first form
-  matching the final URL decides) and its `extract`. A form with no
+  matching the final URL decides) and its `extract`. The row sets no shape
+  of its own: `newShare` makes the extractor's the union of its forms'. A form with no
   recogniser is a link that only redirects: followed, never recognised.
   `TestShareFormsNeverReadTheHost` holds the rows to the same no-host rule as
   `Shape`/`Recognise`. Hosts with state of their own (tokens, quotas,

@@ -142,7 +142,7 @@ func testPixeldrain(t *testing.T) *Pixeldrain {
 	t.Helper()
 	// No retries: a subtree that will not answer should be given up on at
 	// once, and the test should not wait out a backoff to see it.
-	return &Pixeldrain{client: testClient()}
+	return NewPixeldrain(testClient())
 }
 
 // This host counts connections rather than files: an anonymous caller is

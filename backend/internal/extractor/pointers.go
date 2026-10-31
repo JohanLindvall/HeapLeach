@@ -31,6 +31,7 @@ import (
 // player only yt-dlp knows — is passed over rather than saved as a page,
 // and only when none is recognised is the first handed to yt-dlp.
 type Pointer struct {
+	about
 	client   *httpx.Client
 	registry *Registry
 	site     pointerSite
@@ -38,12 +39,10 @@ type Pointer struct {
 
 // pointerSite is one site whose pages point elsewhere.
 type pointerSite struct {
-	name string
-	// shape is the page's URL form, recognise whether a probed page is the
-	// site's and points somewhere, recognises both for the inventory.
-	shape      func(u *url.URL) bool
-	recognise  func(p *Page) bool
-	recognises string
+	about
+	// recognise reports whether a probed page is the site's and points
+	// somewhere.
+	recognise func(p *Page) bool
 	// links reads the off-site links the page points at, likeliest first.
 	links func(root *html.Node, page *url.URL) []string
 	// missing completes "<page> ..." when the page points nowhere.
@@ -120,7 +119,7 @@ const (
 func NewPointer(client *httpx.Client, name string) *Pointer {
 	for _, site := range pointerSites {
 		if site.name == name {
-			return &Pointer{client: client, site: site}
+			return &Pointer{about: site.about, client: client, site: site}
 		}
 	}
 	return nil
@@ -136,14 +135,6 @@ func wirePointers(reg *Registry) {
 	}
 }
 
-func (p *Pointer) Name() string { return p.site.name }
-
-// Recognises is the inventory's description.
-func (p *Pointer) Recognises() string { return p.site.recognises }
-
-// Shape reports the site's page form.
-func (p *Pointer) Shape(u *url.URL) bool { return p.site.shape(u) }
-
 // Recognise reports whether the probed page is the site's.
 func (p *Pointer) Recognise(_ context.Context, page *Page) bool { return p.site.recognise(page) }
 
@@ -151,11 +142,11 @@ func (p *Pointer) Recognise(_ context.Context, page *Page) bool { return p.site.
 func (p *Pointer) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	root, page, err := fetchRoot(ctx, p.client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
-		return nil, fmt.Errorf("%s: fetch %s: %w", p.site.name, u.Redacted(), err)
+		return nil, fmt.Errorf("%s: fetch %s: %w", p.name, u.Redacted(), err)
 	}
 	links := p.site.links(root, page)
 	if len(links) == 0 {
-		return nil, fmt.Errorf("%s: %s %s", p.site.name, u.Redacted(), p.site.missing)
+		return nil, fmt.Errorf("%s: %s %s", p.name, u.Redacted(), p.site.missing)
 	}
 
 	// A link some extractor here recognises first, wherever it sits in the
@@ -175,12 +166,12 @@ func (p *Pointer) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	if !ok {
 		return nil, fmt.Errorf("%s: %s points at %s, which no extractor here claims — "+
 			"yt-dlp is what fetches from those, and %s",
-			p.site.name, u.Redacted(), pointerHost(links[0]), tools.NotInstalled(ytdlpBinary))
+			p.name, u.Redacted(), pointerHost(links[0]), tools.NotInstalled(ytdlpBinary))
 	}
 	title, err := ytdlpTitle(ctx, ytdlp, links[0])
 	if err != nil {
 		return nil, fmt.Errorf("%s: the page points at %s, which could not be read: %w",
-			p.site.name, links[0], err)
+			p.name, links[0], err)
 	}
 	return &Result{Title: title, Files: []File{{
 		Name:     title + ".mp4",

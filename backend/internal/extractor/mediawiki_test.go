@@ -207,7 +207,9 @@ func testMediaWiki(t *testing.T) *MediaWiki {
 	t.Helper()
 	// No interval: the courtesy spacing is for real hosts, and a second
 	// between requests would be the whole runtime of this file.
-	return &MediaWiki{client: testClient()}
+	m := NewMediaWiki(testClient())
+	m.interval = 0
+	return m
 }
 
 func mediaWikiExtract(t *testing.T, m *MediaWiki, raw string) (*Result, error) {
@@ -670,7 +672,8 @@ func TestMediaWikiSpecialPage(t *testing.T) {
 // TestMediaWikiPaceSpacesCallsOut covers the courtesy limit. Wikimedia has no
 // key to throttle instead, so this is the only thing keeping the promise.
 func TestMediaWikiPaceSpacesCallsOut(t *testing.T) {
-	m := &MediaWiki{interval: 40 * time.Millisecond}
+	m := NewMediaWiki(nil)
+	m.interval = 40 * time.Millisecond
 	ctx := context.Background()
 
 	start := time.Now()

@@ -702,6 +702,7 @@ func parseKeyIV(raw string) ([]byte, error) {
 // Each refusal names the external downloader, which can do what this
 // deliberately does not.
 type HLSDirect struct {
+	about
 	client *httpx.Client
 }
 
@@ -714,24 +715,20 @@ const (
 )
 
 // NewHLSDirect builds the bare-manifest extractor.
-func NewHLSDirect(client *httpx.Client) *HLSDirect { return &HLSDirect{client: client} }
-
-func (h *HLSDirect) Name() string { return "hls" }
-
-// Recognises is the inventory's description.
-func (h *HLSDirect) Recognises() string {
-	return "bare HLS manifests: a response served as a playlist type or opening `#EXTM3U`, at any " +
-		"URL, or a `.m3u8` link; `.mpd` links are taken in order to refuse them with the reason"
+func NewHLSDirect(client *httpx.Client) *HLSDirect {
+	return &HLSDirect{client: client, about: about{name: "hls", shape: hlsManifestShape,
+		recognises: "bare HLS manifests: a response served as a playlist type or opening `#EXTM3U`, at any " +
+			"URL, or a `.m3u8` link; `.mpd` links are taken in order to refuse them with the reason"}}
 }
 
-// Shape claims a manifest by the extension on its path, which is read
-// before the query: these URLs nearly always carry a token or a signature
-// after the '?', and none of that is part of the name.
+// hlsManifestShape claims a manifest by the extension on its path, which is
+// read before the query: these URLs nearly always carry a token or a
+// signature after the '?', and none of that is part of the name.
 //
 // DASH is matched only in order to be refused. A refusal that explains itself
 // is worth more than the silent handover to the fallback that produced the
 // defect this file exists to fix.
-func (h *HLSDirect) Shape(u *url.URL) bool {
+func hlsManifestShape(u *url.URL) bool {
 	switch strings.ToLower(path.Ext(u.Path)) {
 	case ".m3u8", ".mpd":
 		return true
@@ -750,7 +747,7 @@ func (h *HLSDirect) Recognise(_ context.Context, p *Page) bool {
 	if p.OK() && hlsManifestBody(p.Body[:min(len(p.Body), config.ManifestSniffBytes)]) {
 		return true
 	}
-	return h.Shape(p.URL) || h.Shape(p.Final)
+	return hlsManifestShape(p.URL) || hlsManifestShape(p.Final)
 }
 
 // Extract resolves the manifest into the one file its segments join into.

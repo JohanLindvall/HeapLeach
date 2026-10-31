@@ -37,6 +37,7 @@ import (
 // expires the next link is refused here rather than sent — one wrong secret
 // costs one request, not one per link in the queue.
 type Gofile struct {
+	about
 	client   *httpx.Client
 	fallback string
 	lang     string
@@ -88,6 +89,8 @@ const (
 // NewGofile builds the gofile extractor.
 func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 	return &Gofile{
+		about: about{name: "gofile", shape: gofileShape,
+			recognises: "share links (`/d/<code>`) whose page is the Gofile app shell, loading its signing script"},
 		client:    client,
 		fallback:  cfg.GofileSecret,
 		lang:      cfg.Language,
@@ -96,18 +99,8 @@ func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 	}
 }
 
-func (g *Gofile) Name() string { return "gofile" }
-
 // gofileShape is a share link: /d/<code>.
 var gofileShape = pathShape(`^/d/[A-Za-z0-9]+/?$`)
-
-// Recognises is the inventory's description.
-func (g *Gofile) Recognises() string {
-	return "share links (`/d/<code>`) whose page is the Gofile app shell, loading its signing script"
-}
-
-// Shape reports a share link.
-func (g *Gofile) Shape(u *url.URL) bool { return gofileShape(u) }
 
 // Recognise takes a share link served by the site's app shell. The folder
 // is fetched by the app afterwards, so the shell is all a share link ever

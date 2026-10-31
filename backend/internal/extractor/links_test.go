@@ -126,7 +126,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 // exactly as a posted link does. Every one of them then costs a request and
 // fails, and on a page belonging to a supported host there are hundreds.
 func TestLinksSweepIgnoresAPagesOwnFurniture(t *testing.T) {
-	harvester := &Links{registry: NewRegistry(&config.Config{}, nil)}
+	harvester := NewLinks(nil, NewRegistry(&config.Config{}, nil))
 
 	got := supportedSources(harvester.registry, linksSweep(t, linksThreadPage), harvester)
 	want := []string{
@@ -165,7 +165,7 @@ func TestLinksCandidatesReadsThroughARedirector(t *testing.T) {
 // used Find would queue the board's navigation as files.
 func TestLinksSupportedKeepsOnlyRealExtractors(t *testing.T) {
 	reg := NewRegistry(&config.Config{}, nil)
-	harvester := &Links{registry: reg}
+	harvester := NewLinks(nil, reg)
 
 	got := supportedSources(harvester.registry, []string{
 		"https://share.example.test/d/AAAA",
@@ -274,7 +274,7 @@ func TestLinksRoutesAheadOfTheHosts(t *testing.T) {
 
 // TestLinksMatchIsPrefixOnly is the gate: no page is harvested by accident.
 func TestLinksMatchIsPrefixOnly(t *testing.T) {
-	harvester := &Links{}
+	harvester := NewLinks(nil, nil)
 	for raw, want := range map[string]bool{
 		"links:https://board.example.test/t": true,
 		"https://board.example.test/t":       false,

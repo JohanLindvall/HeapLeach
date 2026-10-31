@@ -54,6 +54,7 @@ import (
 // labels, and the archive coins new ones whenever it adds a derivation.
 // HEAPLEACH_ARCHIVE_FORMATS is the escape for when it coins one that matters.
 type ArchiveOrg struct {
+	about
 	client *httpx.Client
 	// formats, when set, replaces the per-mediatype policy entirely.
 	formats []string
@@ -100,23 +101,17 @@ var archiveReaderPositions = map[string]bool{
 
 // NewArchiveOrg builds the archive.org extractor.
 func NewArchiveOrg(cfg *config.Config, client *httpx.Client) *ArchiveOrg {
-	a := &ArchiveOrg{client: client}
+	a := &ArchiveOrg{client: client, about: about{name: "archive.org", shape: archiveShape,
+		recognises: "items (`/details/<identifier>`, `/download/<identifier>[/<file>]` and the other item routes) " +
+			"whose page is the archive's item page or file listing, or whose metadata API answers for the identifier"}}
 	if cfg != nil {
 		a.formats = cfg.ArchiveFormats
 	}
 	return a
 }
 
-func (a *ArchiveOrg) Name() string { return "archive.org" }
-
-// Recognises is the inventory's description.
-func (a *ArchiveOrg) Recognises() string {
-	return "items (`/details/<identifier>`, `/download/<identifier>[/<file>]` and the other item routes) " +
-		"whose page is the archive's item page or file listing, or whose metadata API answers for the identifier"
-}
-
-// Shape reports an item route.
-func (a *ArchiveOrg) Shape(u *url.URL) bool {
+// archiveShape is an item route.
+func archiveShape(u *url.URL) bool {
 	_, _, ok := archiveParse(u)
 	return ok
 }
