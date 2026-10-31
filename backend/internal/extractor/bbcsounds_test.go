@@ -188,8 +188,8 @@ func TestBBCBestDownloadPrefersTheLargestPublished(t *testing.T) {
 	if variant.Bitrate != 320 {
 		t.Errorf("chose the %d kbps copy, want the largest", variant.Bitrate)
 	}
-	if variant.size() != 65000000 {
-		t.Errorf("size = %d", variant.size())
+	if knownSize(variant.FileSize) != 65000000 {
+		t.Errorf("size = %d", knownSize(variant.FileSize))
 	}
 }
 
@@ -247,15 +247,15 @@ func TestBBCBestDownloadIgnoresTiersWithNoURL(t *testing.T) {
 func TestBBCDeclaredSizeIsNeverExact(t *testing.T) {
 	item := decode[bbcItem](t, bbcDownloadableEpisode)
 	variant, _ := item.Download.best()
-	if variant.size()%1_000_000 != 0 {
-		t.Errorf("size %d is not the rounded figure the API publishes", variant.size())
+	if knownSize(variant.FileSize)%1_000_000 != 0 {
+		t.Errorf("size %d is not the rounded figure the API publishes", knownSize(variant.FileSize))
 	}
 
 	// A tier with no length at all reports -1, which is the contract's way of
 	// saying "unknown" and is not the same as zero.
 	var empty bbcVariant
-	if empty.size() != -1 {
-		t.Errorf("an undeclared size reported %d, want -1", empty.size())
+	if knownSize(empty.FileSize) != -1 {
+		t.Errorf("an undeclared size reported %d, want -1", knownSize(empty.FileSize))
 	}
 }
 

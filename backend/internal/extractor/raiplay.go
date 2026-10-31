@@ -126,8 +126,7 @@ func (r *RaiPlay) video(ctx context.Context, page string) (*Result, error) {
 	// A lone file is written straight into the download directory, with no
 	// folder to say what it belongs to, so the name carries the programme as
 	// well where the video's own name does not already.
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(title, file), nil
 }
 
 // programme expands a programme into one file per entry, filed by listing
@@ -150,28 +149,13 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	// bulletins and its clips beside them, which the cap cuts short. One
 	// listing needs no folder: a folder every file goes in says nothing, and
 	// two programmes fetched separately would then share it.
-	return listSeries(ctx, cmp.Or(doc.Name, strings.Trim(u.Path, "/")), series[raiEntry]{
+	return listSeries(ctx, cmp.Or(doc.Name, strings.Trim(u.Path, "/")), series[broadcastEpisode]{
 		site: "raiplay", noun: "entries", link: u.Redacted(),
-		items: entries,
-		label: func(entry raiEntry) string { return entry.label },
-		resolve: func(ctx context.Context, entry raiEntry) (*File, error) {
-			file, title, err := r.episode(ctx, entry.page)
-			if err != nil {
-				return nil, err
-			}
-			file.Name = cmp.Or(entry.name, title) + file.Name
-			return file, nil
-		},
+		items:      entries,
+		label:      broadcastEpisode.seasonOf,
+		resolve:    listedAs(r.episode, nil),
 		unplayable: "Rai offers no stream for any of them",
 	})
-}
-
-// raiEntry is one video a programme lists, with the folder its listing would
-// file it under.
-type raiEntry struct {
-	page  string
-	name  string
-	label string
 }
 
 // raiSetRef is one of a programme's listings.
@@ -183,10 +167,10 @@ type raiSetRef struct {
 // entries reads a programme's listings and collects what they hold. The
 // listings are few and are read one after another; it is the entries inside
 // them that run to the hundreds.
-func (r *RaiPlay) entries(ctx context.Context, doc raiProgramme) []raiEntry {
+func (r *RaiPlay) entries(ctx context.Context, doc raiProgramme) []broadcastEpisode {
 	headers := raiHeaders()
 	seen := make(map[string]bool)
-	var entries []raiEntry
+	var entries []broadcastEpisode
 	for _, ref := range raiListings(doc) {
 		var listing raiSet
 		if err := r.client.GetJSON(ctx, raiDocument(ref.page), headers, &listing); err != nil {
@@ -221,14 +205,14 @@ func raiListings(doc raiProgramme) []raiSetRef {
 // raiItems collects one listing's entries, skipping any the caller has already
 // taken from another listing: a clip is routinely filed under its season and
 // again under the programme's clip reel.
-func raiItems(listing raiSet, label string, seen map[string]bool) []raiEntry {
-	var out []raiEntry
+func raiItems(listing raiSet, label string, seen map[string]bool) []broadcastEpisode {
+	var out []broadcastEpisode
 	for _, item := range listing.Items {
 		if item.PathID == "" || seen[item.PathID] {
 			continue
 		}
 		seen[item.PathID] = true
-		out = append(out, raiEntry{page: item.PathID, name: item.Name, label: label})
+		out = append(out, broadcastEpisode{id: item.PathID, name: item.Name, season: label})
 	}
 	return out
 }
@@ -265,9 +249,9 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	// the audio description among them, and those come with the video
 	// (media.Audio) for the downloader to join to it. Any rendition that
 	// carries its own audio is still preferred (bestVariant).
-	media, err := resolveMediaPlaylist(ctx, r.client, manifest, headers)
+	media, err := broadcastMedia(ctx, r.client, "raiplay", title, manifest, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("raiplay: %s: %w", title, err)
+		return nil, "", err
 	}
 
 	// The signed link the relinker mints lives for 150 seconds, but the CDN

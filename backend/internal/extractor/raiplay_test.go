@@ -489,8 +489,8 @@ func TestRaiItemsSkipWhatIsAlreadyTaken(t *testing.T) {
 	if entries[0].name != "Un Programma S1E1 - Episodio 1" {
 		t.Errorf("first entry = %+v", entries[0])
 	}
-	if entries[0].label != "Stagione 2026 - Puntate" {
-		t.Errorf("first entry filed under %q", entries[0].label)
+	if entries[0].season != "Stagione 2026 - Puntate" {
+		t.Errorf("first entry filed under %q", entries[0].season)
 	}
 	if again := raiItems(listing, "Stagione 2026 - Clip", seen); len(again) != 0 {
 		t.Errorf("the same listing yielded %d entries a second time", len(again))
@@ -506,18 +506,18 @@ func TestRaiNestOnlyWhenThereIsSomethingToTellApart(t *testing.T) {
 	if len(single) != 1 || single[0].label != "Un Film" {
 		t.Fatalf("film listings = %+v", single)
 	}
-	raiNest := func(entries []raiEntry) bool {
-		return nestByLabel(entries, func(entry raiEntry) string { return entry.label })
+	raiNest := func(entries []broadcastEpisode) bool {
+		return nestByLabel(entries, broadcastEpisode.seasonOf)
 	}
-	if raiNest([]raiEntry{{label: "Un Film"}, {label: "Un Film"}}) {
+	if raiNest([]broadcastEpisode{{season: "Un Film"}, {season: "Un Film"}}) {
 		t.Error("one listing was nested; the folder would only repeat the job's own name")
 	}
 
-	if !raiNest([]raiEntry{{label: "Stagione 2026 - Puntate"}, {label: "Stagione 2025 - Puntate"}}) {
+	if !raiNest([]broadcastEpisode{{season: "Stagione 2026 - Puntate"}, {season: "Stagione 2025 - Puntate"}}) {
 		t.Error("two listings were not nested; their episodes would collide")
 	}
 	// A listing that named nothing is not a listing to tell apart.
-	if raiNest([]raiEntry{{label: ""}, {label: "Speciali"}}) {
+	if raiNest([]broadcastEpisode{{season: ""}, {season: "Speciali"}}) {
 		t.Error("an unnamed listing counted towards nesting")
 	}
 }

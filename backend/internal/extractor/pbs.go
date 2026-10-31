@@ -186,7 +186,7 @@ func pbsTargetOf(u *url.URL) *pbsTarget {
 	if len(segs) > 0 && (slices.Contains(pbsPlayerPaths, segs[0]) ||
 		len(segs) > 1 && segs[0] == "widget" && slices.Contains(pbsPlayerPaths, segs[1])) {
 		for _, seg := range slices.Backward(segs) {
-			if pbsIsID(seg) {
+			if allDigits(seg) {
 				return &pbsTarget{id: seg}
 			}
 		}
@@ -202,14 +202,6 @@ func pbsTargetOf(u *url.URL) *pbsTarget {
 		}
 	}
 	return nil
-}
-
-// pbsIsID reports whether a path segment is a player id.
-func pbsIsID(seg string) bool {
-	if seg == "" {
-		return false
-	}
-	return strings.IndexFunc(seg, func(r rune) bool { return r < '0' || r > '9' }) < 0
 }
 
 // pbsEpisode is one resolved video, with what the caller needs to name and

@@ -142,18 +142,9 @@ func (s *SVTPlay) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 		if err != nil {
 			return nil, err
 		}
-		title := cmp.Or(episode, program, segs[1])
-		file.Name = title + file.Name // Name holds only the extension here
-		return &Result{Title: title, Files: []File{*file}}, nil
+		return soleFile(cmp.Or(episode, program, segs[1]), file), nil
 	}
 	return s.series(ctx, u)
-}
-
-// svtEpisodeRef is one episode of a series, with the season it belongs to.
-type svtEpisodeRef struct {
-	videoID string
-	name    string
-	season  string
 }
 
 // series expands a programme into one file per episode, filed by season
@@ -176,32 +167,28 @@ func (s *SVTPlay) series(ctx context.Context, u *url.URL) (*Result, error) {
 // expand resolves a programme's episodes into one file each, filed by season
 // when the programme has more than one. Without a title, the job is named
 // for the programme as the player API gives it, or failing that its slug.
-func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, episodes []svtEpisodeRef) (*Result, error) {
-	// svtListed is an episode with the programme its video names.
-	type svtListed struct {
-		svtEpisodeRef
-		program string
-	}
-	items := make([]*svtListed, len(episodes))
-	for i, ep := range episodes {
-		items[i] = &svtListed{svtEpisodeRef: ep}
+func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, episodes []broadcastEpisode) (*Result, error) {
+	// Each episode learns its programme as its video names it.
+	items := make([]*broadcastEpisode, len(episodes))
+	for i := range episodes {
+		items[i] = &episodes[i]
 	}
 
 	// Every episode is its own API call, and a series runs to hundreds;
 	// fetched one after another the job would sit resolving for minutes
 	// before a byte moved. An expired or geo-blocked episode is dropped
 	// rather than sinking the rest.
-	resolved, note, err := expandSeries(ctx, series[*svtListed]{
+	resolved, note, err := expandSeries(ctx, series[*broadcastEpisode]{
 		site: "svtplay", noun: "episodes", link: u.Redacted(),
 		items: items,
-		label: func(ep *svtListed) string { return ep.season },
-		resolve: func(ctx context.Context, ep *svtListed) (*File, error) {
-			file, program, episodeTitle, err := s.episode(ctx, ep.videoID)
+		label: (*broadcastEpisode).seasonOf,
+		resolve: func(ctx context.Context, ep *broadcastEpisode) (*File, error) {
+			file, program, episodeTitle, err := s.episode(ctx, ep.id)
 			if err != nil {
 				return nil, err
 			}
-			ep.program = program
-			file.Name = cmp.Or(ep.name, episodeTitle, program, ep.videoID) + file.Name
+			ep.programme = program
+			file.Name = cmp.Or(ep.name, episodeTitle, program, ep.id) + file.Name
 			return file, nil
 		},
 		unplayable: "they may be outside their availability window, or geo-blocked",
@@ -212,19 +199,15 @@ func (s *SVTPlay) expand(ctx context.Context, u *url.URL, slug, title string, ep
 
 	result := &Result{Title: cmp.Or(title, slug), Files: listedFiles(resolved), Note: note}
 	for _, r := range resolved {
-		if result.Title == slug && r.item.program != "" {
-			result.Title = r.item.program
+		if result.Title == slug && r.item.programme != "" {
+			result.Title = r.item.programme
 		}
 	}
 	return result, nil
 }
 
 // seasons reads a programme's episodes, grouped by season, from the API.
-func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []svtEpisodeRef, error) {
-	body := map[string]any{
-		"query":     svtSeasonsQuery,
-		"variables": map[string]string{"slug": slug},
-	}
+func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []broadcastEpisode, error) {
 	var out struct {
 		Data struct {
 			ListablesBySlug []struct {
@@ -243,7 +226,8 @@ func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []svtEpisod
 			} `json:"listablesBySlug"`
 		} `json:"data"`
 	}
-	if err := s.client.PostJSON(ctx, s.graphql, httpx.Referer(svtRoot+"/"), body, &out); err != nil {
+	if err := postGraphQL(ctx, s.client, s.graphql, httpx.Referer(svtRoot+"/"), svtSeasonsQuery,
+		map[string]string{"slug": slug}, &out); err != nil {
 		return "", nil, fmt.Errorf("svtplay: seasons for %s: %w", slug, err)
 	}
 	if len(out.Data.ListablesBySlug) == 0 {
@@ -251,7 +235,7 @@ func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []svtEpisod
 	}
 
 	listable := out.Data.ListablesBySlug[0]
-	var episodes []svtEpisodeRef
+	var episodes []broadcastEpisode
 	seen := make(map[string]bool)
 	for _, group := range listable.AssociatedContent {
 		if !strings.EqualFold(group.Type, "Season") {
@@ -263,30 +247,16 @@ func (s *SVTPlay) seasons(ctx context.Context, slug string) (string, []svtEpisod
 				continue
 			}
 			seen[item.VideoSvtID] = true
-			episodes = append(episodes, svtEpisodeRef{
-				videoID: item.VideoSvtID,
-				name:    item.Name,
-				season:  group.Name,
-			})
+			episodes = append(episodes, broadcastEpisode{id: item.VideoSvtID, name: item.Name, season: group.Name})
 		}
 	}
 	return listable.Name, episodes, nil
 }
 
 // episodesFromPage recovers ids straight from the rendered page.
-func (s *SVTPlay) episodesFromPage(ctx context.Context, u *url.URL) (string, []svtEpisodeRef, error) {
-	doc, _, err := fetchDocument(ctx, s.client, u, httpx.Referer(svtRoot+"/"))
-	if err != nil {
-		return "", nil, fmt.Errorf("svtplay: fetch %s: %w", u.Redacted(), err)
-	}
-	var episodes []svtEpisodeRef
-	for _, id := range matchedIDs(doc, svtVideoLink) {
-		episodes = append(episodes, svtEpisodeRef{videoID: id})
-	}
-	if len(episodes) == 0 {
-		return "", nil, fmt.Errorf("svtplay: no episodes listed on %s", u.Redacted())
-	}
-	return "", episodes, nil
+func (s *SVTPlay) episodesFromPage(ctx context.Context, u *url.URL) (string, []broadcastEpisode, error) {
+	_, episodes, err := pageIDs(ctx, s.client, u, httpx.Referer(svtRoot+"/"), "svtplay", svtVideoLink)
+	return "", episodes, err
 }
 
 // episode resolves one video id to a playable segment list. The returned
@@ -314,9 +284,9 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 	}
 
 	headers := httpx.Referer(svtRoot + "/")
-	media, err := resolveMediaPlaylist(ctx, s.client, manifest, headers)
+	media, err := broadcastMedia(ctx, s.client, "svtplay", id, manifest, headers)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("svtplay: %s: %w", id, err)
+		return nil, "", "", err
 	}
 
 	return new(media.file(media.extension(), headers)), meta.ProgramTitle, meta.EpisodeTitle, nil
@@ -383,7 +353,6 @@ type svtAvailability struct {
 // and no reason, which said "offers no usable stream" of a programme that
 // could be watched until two years before.
 func (s *SVTPlay) unavailable(ctx context.Context, id string, now time.Time) error {
-	body := map[string]any{"query": svtAvailabilityQuery, "variables": map[string]string{"path": "/video/" + id}}
 	var out struct {
 		Data struct {
 			DetailsPageByPath *struct {
@@ -391,7 +360,8 @@ func (s *SVTPlay) unavailable(ctx context.Context, id string, now time.Time) err
 			} `json:"detailsPageByPath"`
 		} `json:"data"`
 	}
-	err := s.client.PostJSON(ctx, s.graphql, httpx.Referer(svtRoot+"/"), body, &out)
+	err := postGraphQL(ctx, s.client, s.graphql, httpx.Referer(svtRoot+"/"), svtAvailabilityQuery,
+		map[string]string{"path": "/video/" + id}, &out)
 	if err != nil || out.Data.DetailsPageByPath == nil || out.Data.DetailsPageByPath.Item == nil {
 		return fmt.Errorf("svtplay: SVT offers no stream for %s (it may no longer be available, or not be yet)", id)
 	}
