@@ -1,7 +1,8 @@
 # Scraper consolidation and code reuse plan
 
 Investigation date: 2026-10-31. Baseline: `f36100d363eec07b20ce87f0fe53387fc329a464`.
-Status: proposed implementation plan; this review changes documentation only.
+Status: implemented; see [Implementation status](#implementation-status). The
+investigation below describes the baseline as it was found.
 
 ## Recommendation
 
@@ -15,6 +16,20 @@ Keep the existing separation between page recognition, host-specific parsing,
 and downloading. Broadcasters, authenticated file services and platform
 dialects need their own policies even when they use the same helpers. Further
 conversions to table rows should earn their place through a small pilot.
+
+## Implementation status
+
+| Increment | Outcome |
+| --- | --- |
+| A | `File.target` is the one File-to-Target conversion, used by generic refresh, eager attachment resolution and `hlsMedia.target`. Refresh keeps the key, audio and subtitles, and clears tracks a fresh playlist lacks. |
+| B | `httpx.ReadBody` is the bounded reader for buffered responses, the registry probe, platform JSON probes, the canonical player probe, the challenge sniff and the generic media-page fetch. An incomplete probe sets `Page.Err`, is evicted and is never offered as a document. |
+| C | `resolveOutcomes` is the ordered map for listings, seasons and source expansion, and both modes stop at cancellation. `readListing`, `noneResolved`, `expandSeries`, the walker cap exits and the album callers that finish by hand let caller cancellation outrank partial results. The notes on failed items beside successes are unchanged. |
+| D | `rawText`, `linkedData` and `jsonAttr` decode script payloads and JSON attributes as written. The JSON-LD readers and two inline-script scanners use them, and the unchanged-gallery path shares one decode between recognition and extraction. A JSON-LD name with internal runs of whitespace now keeps them, which is the documented fix. |
+| E | `renewable` holds Gofile's, RedGifs' and VRT MAX's tokens, with their lifetimes in `config/limits.go`. RTBF and ORF keep their own code, because their device id and site-read credentials do not fit without switches. |
+| F | Rajce is a `shareSite` row, and a contract test covers every registered row. The JW Player readers stay separate: a shared candidate step would change first-source behaviour (see `extractors.md`). Registry and fediverse comments now describe page recognition. |
+
+Private offline replay of the full corpus matched its baseline after the
+shared changes. The guides in `docs/agents/` describe the resulting contracts.
 
 ## Investigation and current structure
 
