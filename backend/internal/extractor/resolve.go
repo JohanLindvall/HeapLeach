@@ -91,3 +91,19 @@ func noneRead(site string, n int, noun, where string, refusals []string, failed 
 	return fmt.Errorf("%s: none of the %d %s on %s could be read: %s",
 		site, n, noun, where, firstReason(site, refusals, failed, "they hold nothing to download"))
 }
+
+// readListing resolves a listing's items into their files, in the
+// listing's order, with the note counting the items refused beside others
+// that resolved. When none resolves, the error is the first reason why
+// (noneRead) — or, once the caller has cancelled, that.
+func readListing[T any](ctx context.Context, site, noun, where string, items []T,
+	resolve func(context.Context, T) ([]File, error)) ([]File, string, error) {
+	files, refusals, failed := resolveFiles(ctx, items, resolve)
+	if len(files) == 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		return nil, "", noneRead(site, len(items), noun, where, refusals, failed)
+	}
+	return files, refusedNote(refusals), nil
+}
