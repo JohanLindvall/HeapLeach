@@ -134,24 +134,11 @@ func (s outcomeSummary) note() string {
 	return joinNotes(refusedNote(s.refusals), unreadNote(s.failures))
 }
 
-// sortOutcomes is the reasons the items refused were refused for, in the
-// listing's order, and the first other failure.
-func sortOutcomes[T, R any](outcomes []outcome[T, R]) (refusals []string, failed error) {
-	s := summarise(len(outcomes), outcomes, func(R) bool { return true })
-	return s.refusals, s.failed
-}
-
-// resolveFiles resolves each item into the files it holds, several at a
-// time, keeping the files in the listing's order. Beside them come the
-// reasons of the items refused, in order, and the first other failure, for
-// the caller to report when nothing resolved (noneRead).
-func resolveFiles[T any](ctx context.Context, items []T, resolve func(context.Context, T) ([]File, error)) (files []File, refusals []string, failed error) {
-	files, s := resolveListing(ctx, items, resolve)
-	return files, s.refusals, s.failed
-}
-
-// resolveListing is resolveFiles with the whole account of the items beside
-// the files, for a caller that notes what was left out (outcomeSummary.note).
+// resolveListing resolves each item into the files it holds, several at a
+// time, keeping the files in the listing's order, with the whole account of
+// the items beside them (outcomeSummary): the caller reports why when
+// nothing resolved (noneRead) and notes what was left out when some did
+// (outcomeSummary.note).
 func resolveListing[T any](ctx context.Context, items []T, resolve func(context.Context, T) ([]File, error)) ([]File, outcomeSummary) {
 	outcomes := resolveOutcomes(ctx, items, false, resolve)
 	var files []File

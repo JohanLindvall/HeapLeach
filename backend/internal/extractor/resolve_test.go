@@ -18,7 +18,7 @@ import (
 // TestResolveFilesKeepsOrderAndReasons pins the multi-file resolve: each
 // item's files in the listing's order, whichever finished first, the
 // refusals in order beside them, and the first other failure.
-func TestResolveFilesKeepsOrderAndReasons(t *testing.T) {
+func TestResolveListingKeepsOrderAndReasons(t *testing.T) {
 	resolve := func(_ context.Context, item string) ([]File, error) {
 		switch item {
 		case "refused-1", "refused-2":
@@ -31,7 +31,8 @@ func TestResolveFilesKeepsOrderAndReasons(t *testing.T) {
 		return []File{{Name: item + "-a"}, {Name: item + "-b"}}, nil
 	}
 	items := []string{"one", "failed-1", "refused-1", "empty", "two", "refused-2", "failed-2"}
-	files, refusals, failed := resolveFiles(context.Background(), items, resolve)
+	files, s := resolveListing(context.Background(), items, resolve)
+	refusals, failed := s.refusals, s.failed
 	if got := fmt.Sprint(fileNames(files)); got != "[one-a one-b two-a two-b]" {
 		t.Errorf("files = %s", got)
 	}
@@ -40,6 +41,9 @@ func TestResolveFilesKeepsOrderAndReasons(t *testing.T) {
 	}
 	if failed == nil || failed.Error() != "site: failed-1" {
 		t.Errorf("failed = %v", failed)
+	}
+	if s.listed != 7 || s.succeeded != 2 || s.empty != 1 || s.failures != 2 {
+		t.Errorf("summary = %+v", s)
 	}
 }
 

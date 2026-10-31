@@ -38,3 +38,28 @@ func TestExpandSourcesKeepsWhySourcesFailed(t *testing.T) {
 		t.Errorf("error = %q, want %q", err, want)
 	}
 }
+
+// TestExpansionCountsSourcesApartFromTheCap keeps the account of every
+// source attempted: a source resolved but left out by the file cap is
+// resolved, not failed, and the admitted count is the sources whose files
+// were taken, whatever batch work went on past the cap.
+func TestExpansionCountsSourcesApartFromTheCap(t *testing.T) {
+	sources := []string{"one", "empty", "broken", "two", "three"}
+	e := expandSourcesWith(context.Background(), sources, Options{limits: Limits{Files: 3}},
+		func(_ context.Context, link string) (*Result, error) {
+			switch link {
+			case "empty":
+				return &Result{Title: "Empty"}, nil
+			case "broken":
+				return nil, errors.New("host: broken")
+			}
+			return &Result{Title: link, Files: []File{{Name: link + "-a"}, {Name: link + "-b"}}}, nil
+		})
+	if e.used != 2 || !e.full || len(e.files) != 2 {
+		t.Errorf("used %d, full %v, %d files; want 2, true, 2", e.used, e.full, len(e.files))
+	}
+	s := e.outcomeSummary
+	if s.listed != 5 || s.attempted != 5 || s.succeeded != 3 || s.empty != 1 || s.failures != 1 || len(s.refusals) != 0 {
+		t.Errorf("summary = %+v", s)
+	}
+}

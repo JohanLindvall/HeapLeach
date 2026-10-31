@@ -414,7 +414,7 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 		return nil, fmt.Errorf("%s: /%s/ has no threads on page %d", a.name, t.board, t.page)
 	}
 
-	files, refusals, failed := a.expand(ctx, t.board, threads)
+	files, outcomes := a.expand(ctx, t.board, threads)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -423,9 +423,9 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 		// is a fact about the board, while a board none of whose threads
 		// would open is a fact about the archive, and only one of them is
 		// worth trying again later.
-		if len(refusals) > 0 || failed != nil {
+		if len(outcomes.refusals) > 0 || outcomes.failed != nil {
 			return nil, noneRead(a.name, len(threads), "threads",
-				fmt.Sprintf("/%s/ page %d", t.board, t.page), refusals, failed)
+				fmt.Sprintf("/%s/ page %d", t.board, t.page), outcomes.refusals, outcomes.failed)
 		}
 		return nil, fmt.Errorf("%s: /%s/ page %d: none of its %d threads holds an attachment",
 			a.name, t.board, t.page, len(threads))
@@ -437,11 +437,11 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 }
 
 // expand reads every thread on an index page, several at a time, in the
-// board's own order (resolveFiles). One thread that will not open leaves the
-// rest; why comes back beside the files for the case where no thread opened
-// at all — see index.
-func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, []string, error) {
-	return resolveFiles(ctx, threads, func(ctx context.Context, num string) ([]File, error) {
+// board's own order (resolveListing). One thread that will not open leaves
+// the rest; the account of every thread comes back beside the files, for
+// index to say why when no thread opened at all.
+func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, outcomeSummary) {
+	return resolveListing(ctx, threads, func(ctx context.Context, num string) ([]File, error) {
 		entries, err := a.call(ctx, foolFuukaTarget{kind: foolFuukaThreadTarget, board: board, num: num})
 		if err != nil || len(entries) == 0 {
 			return nil, err

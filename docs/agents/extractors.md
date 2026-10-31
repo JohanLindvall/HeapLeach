@@ -354,7 +354,7 @@ intact. `sources.go` holds what they share:
   when it passes the cap or the listing goes on, and the registry cuts the
   files to the cap.
 - Entries that need their own page are then read concurrently through
-  `resolveFiles`/`resolveOutcomes` (`resolve.go`, on `FanOut` in
+  `resolveListing`/`resolveOutcomes` (`resolve.go`, on `FanOut` in
   `fanout.go`), bounded by `config.PageFetchConcurrency`, with results
   collected by index so the job lists files in the site's own order however
   the requests interleave. One that will not load is skipped rather than
@@ -501,13 +501,13 @@ line in the saved queue.
   for naming an episode by its programme, and `writtenTitle` for a
   page's `<title>` with its spacing kept. A new broadcaster uses these
   rather than types of its own.
-- `resolveFiles` and `noneRead` (`resolve.go`): a listing whose items each
-  open into files (a band's releases, a board's threads, a channel's
+- `resolveListing` and `noneRead` (`resolve.go`): a listing whose items
+  each open into files (a band's releases, a board's threads, a channel's
   videos, a profile's posts, albums or galleries), resolved concurrently
-  with the files kept in order and the refusals and first failure beside
-  them, and the one error, `<site>: none of the <n> <noun> on <where> could
-  be read: <reason>`, for when none could. `resolveListing`, `readListing`
-  and `resolveEach` keep the whole account of the items, `outcomeSummary`
+  with the files kept in order and the account of the items beside them,
+  and the one error, `<site>: none of the <n> <noun> on <where> could be
+  read: <reason>`, for when none could. `resolveListing`, `readListing`,
+  `resolveEach` and source expansion keep the whole account of the items, `outcomeSummary`
   (`summarise`): resolved, empty, refused (each reason, in order), failed
   (counted, the first kept as the diagnostic), unrecognised and not
   started, counted per item rather than per file. When some resolved,
@@ -518,7 +518,7 @@ line in the saved queue.
   recognised is navigation, never a failure. `expandSeries` always notes
   unreadable episodes and leaves refusals to the broadcaster
   (`noteRefused`). A listing that needs each item beside what it resolved
-  to uses `resolveOutcomes` with `summarise` or `sortOutcomes` directly. An
+  to uses `resolveOutcomes` with `summarise` directly. An
   item whose host states why it holds nothing (a live stream, a video
   still transcoding) returns an `itemRefusal` (`resolve.go`), so that
   reason outranks a failure in the error. Where every item costs a request at
@@ -556,10 +556,13 @@ line in the saved queue.
   one failure returns false for the rest, leaving their note to the walk. `expansionNote` (`sources.go`) builds the job note
   of a listing expanded into its sources, and `partialNote` that of a page
   or search whose sources a cap cut.
-- `expandSources` keeps, beside the files, the refusals and first failure of
-  the sources that did not resolve (`expansion.refusals`, `failed`), so a
-  page none of whose sources resolved says why through `noneRead`; a link no
-  extractor recognised is counted apart (`unrecognised`), never a failure.
+- `expandSources` keeps, beside the files, the `outcomeSummary` of every
+  source it attempted (embedded in `expansion`), so a page none of whose
+  sources resolved says why through `noneRead`; a link no extractor
+  recognised is counted apart (`unrecognised`), never a failure. A source
+  that resolved but was left out by the file cap is resolved, not failed:
+  `used` counts the sources admitted, apart from the batch work done past
+  the cap.
 - `hlsMedia.file`/`hlsMedia.target` (`hls.go`), `Target.file` and
   `File.target`: a resolved playlist or target as a File and back, every
   media field carried over — segments, key, audio and subtitles. Build a

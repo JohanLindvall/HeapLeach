@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"path"
 	"strings"
@@ -55,8 +54,16 @@ func supportedSources(registry *Registry, candidates []string, self Extractor) [
 
 // expansion is what expandSources made of a list of sources.
 type expansion struct {
+	// outcomeSummary is the account of every source the expansion
+	// attempted, batch by batch: those that resolved, held nothing, were
+	// refused, failed or turned out to be no extractor's page (unrecognised,
+	// links with a supported form that were never sources, so neither
+	// resolved nor failed). A source resolved but left out by the file cap
+	// counts as resolved: it is not a failure.
+	outcomeSummary
 	files []File
-	// used is how many sources the files came from.
+	// used is how many sources the files came from: those the cap
+	// admitted, counted apart from the batch work done past it.
 	used int
 	// partial counts sources that themselves reported an incomplete result.
 	partial int
@@ -67,15 +74,6 @@ type expansion struct {
 	// fit, when a single source alone held more than the cap. Zero
 	// otherwise: every other source is taken whole or not at all.
 	cut, of int
-	// unrecognised counts links that had a supported form but whose page
-	// no extractor recognised. They were never sources, so they count
-	// neither as resolved nor as failed.
-	unrecognised int
-	// refusals and failed are why sources did not resolve: the reasons of
-	// those refused, in order, and the first other failure, for a caller
-	// whose sources all failed to say why (noneRead).
-	refusals []string
-	failed   error
 }
 
 // expandSources resolves the sources in order, several at a time, until
@@ -127,20 +125,15 @@ func expandSourcesNamed(ctx context.Context, sources []string, opts Options,
 		resolved []sourceResult
 		e        expansion
 		total    int
-		// failures are the sources that did not resolve, less those no
-		// extractor recognised, which were never sources.
-		failures []outcome[string, *Result]
+		outcomes []outcome[string, *Result]
 	)
 walk:
 	for start := 0; start < len(sources); start += batch {
 		var batchResolved []sourceResult
 		for _, out := range resolveOutcomes(ctx, sources[start:min(start+batch, len(sources))], false, extract) {
-			switch {
-			case errors.Is(out.err, errUnrecognised):
-				e.unrecognised++
-			case out.err != nil:
-				failures = append(failures, out)
-			case out.got != nil:
+			out.index += start
+			outcomes = append(outcomes, out)
+			if out.err == nil && out.got != nil {
 				batchResolved = append(batchResolved, sourceResult{link: out.item, res: out.got})
 			}
 		}
@@ -171,7 +164,7 @@ walk:
 		e.files = append(e.files, sourceFiles(r.res, names[i])...)
 	}
 	e.used = len(resolved)
-	e.refusals, e.failed = sortOutcomes(failures)
+	e.outcomeSummary = summarise(len(sources), outcomes, func(res *Result) bool { return res != nil && len(res.Files) > 0 })
 	return e
 }
 
