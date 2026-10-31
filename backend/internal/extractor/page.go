@@ -373,60 +373,89 @@ func (p *Page) answers(client *httpx.Client, headers httpx.Header) bool {
 	return true
 }
 
+// acquire is the one place a reader's page is obtained: the registry's
+// probe when it is the response this request would get (probedFor) and a
+// successful document of its own (Page.Document), otherwise a GetPage of
+// u. A probe that failed, answered another status, or was read only in
+// part is never offered; the reader fetches for itself. The document's
+// final URL is the caller's own either way, and the probe's tree, when
+// recognition built one, is borrowed rather than parsed again.
+//
+// fetchDocument, readDocument and fetchRoot are this with the result in the
+// form each reader wants it. probe is the page reused, nil after a fetch.
+func acquire(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (body string, final *url.URL, probe *Page, err error) {
+	if p := probedFor(ctx, client, u, headers); p != nil {
+		if body, ok := p.Document(); ok {
+			return body, cloneURL(p.Final), p, nil
+		}
+	}
+	body, final, err = client.GetPage(ctx, u.String(), headers, nil)
+	return body, final, nil, err
+}
+
 // fetchDocument is GetPage for the submitted URL that reuses the registry's
 // probe when it already holds the document, so a page an extractor reads
 // whole is fetched once rather than once to recognise and again to read.
 // Any other URL, a probe that did not get the page, or a request the probe
 // does not answer (Page.answers) is fetched as usual.
 func fetchDocument(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (string, *url.URL, error) {
-	if p := probedFor(ctx, client, u, headers); p != nil {
-		if doc, ok := p.Document(); ok {
-			return doc, cloneURL(p.Final), nil
-		}
+	body, final, _, err := acquire(ctx, client, u, headers)
+	if err != nil {
+		return "", nil, err
 	}
-	return client.GetPage(ctx, u.String(), headers, nil)
+	return body, final, nil
 }
 
 // document is a page read whole, as a reader may want it: its body, where
 // it was served from, and its tree, parsed on first use — the probe's own
-// when the page is the probe's, which is shared and only read. The tree is
-// nil for a body that will not parse; a reader that needs it says so.
+// when recognition parsed the page, which is shared and only read.
 type document struct {
 	body  string
 	final *url.URL
 	probe *Page
 
-	once sync.Once
-	root *html.Node
+	once    sync.Once
+	root    *html.Node
+	rootErr error
 }
 
-// tree is the document parsed, once.
+// parse is the document's tree, built once: the probe's when recognition
+// already parsed it, otherwise the body parsed here, with the error of a
+// body that will not parse. Taking the probe's tree never indexes a page
+// that recognition did not, so a reader that wants only a tree costs no
+// more than its own parse.
+func (d *document) parse() (*html.Node, error) {
+	d.once.Do(func() { d.root, d.rootErr = parseDocument(d.body, d.probe) })
+	return d.root, d.rootErr
+}
+
+// parseDocument is body's tree: probe's when recognition already parsed it,
+// otherwise body parsed now, with the error of one that will not parse.
+func parseDocument(body string, probe *Page) (*html.Node, error) {
+	if probe != nil {
+		if root, _ := probe.parsedRoot(); root != nil {
+			return root, nil
+		}
+	}
+	return parseHTML(body)
+}
+
+// tree is the parsed document, or nil for a body that will not parse; a
+// reader that needs it says so.
 func (d *document) tree() *html.Node {
-	d.once.Do(func() {
-		if d.probe != nil {
-			d.root, _ = d.probe.parsedRoot()
-		}
-		if d.root == nil {
-			d.root, _ = parseHTML(d.body)
-		}
-	})
-	return d.root
+	root, _ := d.parse()
+	return root
 }
 
 // readDocument is fetchDocument with the page's tree to hand: a reader that
 // scans the body never parses it, and one that reads the tree parses it once
 // or takes the probe's.
 func readDocument(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*document, error) {
-	if p := probedFor(ctx, client, u, headers); p != nil {
-		if body, ok := p.Document(); ok {
-			return &document{body: body, final: cloneURL(p.Final), probe: p}, nil
-		}
-	}
-	body, final, err := client.GetPage(ctx, u.String(), headers, nil)
+	body, final, probe, err := acquire(ctx, client, u, headers)
 	if err != nil {
 		return nil, err
 	}
-	return &document{body: body, final: final}, nil
+	return &document{body: body, final: final, probe: probe}, nil
 }
 
 // fetchPage is fetchDocument for a link held as a string.
@@ -442,26 +471,16 @@ func fetchPage(ctx context.Context, client *httpx.Client, link string, headers h
 // fetchRoot is fetchDocument parsed: the probe's own tree when it is reused,
 // so a document read to recognise it is not parsed a second time. That tree
 // is the page's and is shared: a reader that removes or rewrites nodes parses
-// its own copy instead. The final URL is the caller's own.
+// its own copy instead. A document recognition did not parse — its
+// recognisers only scanned the body, or the probe did not take it for HTML
+// for want of a declared type — is still the one asked for, and is parsed
+// here rather than fetched again. The final URL is the caller's own.
 func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*html.Node, *url.URL, error) {
-	if p := probedFor(ctx, client, u, headers); p != nil {
-		if doc, ok := p.Document(); ok {
-			if root, _ := p.parsedRoot(); root != nil {
-				return root, cloneURL(p.Final), nil
-			}
-			// A document recognition did not parse — its recognisers only
-			// scanned the body, or the probe did not take it for HTML for
-			// want of a declared type — is still the one asked for: parse
-			// it here rather than fetch it again.
-			root, err := parseHTML(doc)
-			return root, cloneURL(p.Final), err
-		}
-	}
-	doc, final, err := client.GetPage(ctx, u.String(), headers, nil)
+	body, final, probe, err := acquire(ctx, client, u, headers)
 	if err != nil {
 		return nil, nil, err
 	}
-	root, err := parseHTML(doc)
+	root, err := parseDocument(body, probe)
 	return root, final, err
 }
 

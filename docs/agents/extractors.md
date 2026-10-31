@@ -69,8 +69,16 @@ not turn a successful listing into a partial failure.
 Probes go through `pageCache`: per route (a page fetched through one egress
 address says nothing of another's), shared by concurrent callers, kept for
 `config.PageCacheTTL`, and never keeping a failure or a challenge. An
-extractor that reads the submitted page whole uses `fetchDocument`, which
-hands it the probed document instead of fetching again; any extra request a
+extractor that reads the submitted page whole uses `fetchDocument`,
+`readDocument` or `fetchRoot`, which hand it the probed document instead of
+fetching again. All three are adapters over `acquire` (`page.go`), the one
+implementation of that decision: the probe when `probedFor` says it answers
+this request and `Page.Document` says it is a complete 200 document,
+otherwise `GetPage`; a final URL the caller owns either way; and the probe's
+tree only when recognition already parsed it (`parseDocument`), so a body
+read without a tree never builds the page's index, and a parse error is
+returned rather than lost behind a nil tree. `TestAcquisitionReusesOnlyACompleteProbe`
+runs every adapter over each probe state. Any extra request a
 recogniser makes goes through `memo(p, key, …)` (`pageJSON` for an API
 question), keyed by what it asks, so several recognisers asking one
 origin's API share one answer. An extractor that reads an endpoint a recogniser may already have asked tries

@@ -58,8 +58,84 @@ func TestProbeAnswersOnlyItsOwnRequest(t *testing.T) {
 			if _, _, err := fetchRoot(tc.ctx, tc.client, u, tc.headers); err != nil {
 				t.Fatal(err)
 			}
-			if got := hits.Load() - before; got != 2*tc.fetches {
-				t.Errorf("%d requests, want %d", got, 2*tc.fetches)
+			d, err := readDocument(tc.ctx, tc.client, u, tc.headers)
+			if err != nil || d.tree() == nil {
+				t.Fatalf("readDocument: %v", err)
+			}
+			if got := hits.Load() - before; got != 3*tc.fetches {
+				t.Errorf("%d requests, want %d", got, 3*tc.fetches)
+			}
+		})
+	}
+}
+
+// Only a probe that holds a complete, successful document of its own stands
+// in for a reader's request, and it does for either end of its redirect
+// chain. Each acquisition adapter decides the same way: a failed, partial,
+// empty or non-200 probe, or one of another URL, is fetched again.
+func TestAcquisitionReusesOnlyACompleteProbe(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		_, _ = io.WriteString(w, "<html><head><title>fetched</title></head></html>")
+	}))
+	t.Cleanup(srv.Close)
+	client := testClient()
+	submitted, _ := url.Parse(srv.URL + "/short")
+	final, _ := url.Parse(srv.URL + "/canonical")
+	other, _ := url.Parse(srv.URL + "/other")
+	const probed = "<html><head><title>probed</title></head></html>"
+	page := func(edit func(*Page)) *Page {
+		p := &Page{URL: submitted, Final: final, Status: http.StatusOK, Body: probed}
+		if edit != nil {
+			edit(p)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name   string
+		page   *Page
+		ask    *url.URL
+		reused bool
+	}{
+		{"the submitted URL", page(nil), submitted, true},
+		{"the redirect's end", page(nil), final, true},
+		{"another URL", page(nil), other, false},
+		{"another status", page(func(p *Page) { p.Status = http.StatusNotFound }), submitted, false},
+		{"a body cut short", page(func(p *Page) { p.Err = io.ErrUnexpectedEOF }), submitted, false},
+		{"no body", page(func(p *Page) { p.Body = "" }), submitted, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := withPage(context.Background(), tc.page)
+			before := hits.Load()
+			doc, docFinal, err := fetchDocument(ctx, client, tc.ask, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, rootFinal, err := fetchRoot(ctx, client, tc.ask, nil)
+			if err != nil || root == nil {
+				t.Fatalf("fetchRoot: %v", err)
+			}
+			d, err := readDocument(ctx, client, tc.ask, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fetches := hits.Load() - before
+			if tc.reused {
+				if fetches != 0 || doc != probed || d.body != probed {
+					t.Errorf("%d requests and body %q, want the probe's without a request", fetches, doc)
+				}
+				for _, got := range []*url.URL{docFinal, rootFinal, d.final} {
+					if got.String() != final.String() || got == tc.page.Final {
+						t.Errorf("final URL %v: want a copy of the probe's", got)
+					}
+				}
+				if tc.page.indexed.Load() {
+					t.Error("a reader that wanted no index built one on the shared page")
+				}
+			} else if fetches != 3 || doc == probed || d.body == probed {
+				t.Errorf("%d requests and body %q, want each adapter to fetch for itself", fetches, doc)
 			}
 		})
 	}
