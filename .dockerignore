@@ -1,6 +1,8 @@
 # Keep the build context small and force a clean frontend build in-image.
 .git
 .gitignore
+# Private live-test symlinks point outside the Docker build context.
+**/*live_test.go
 bin/
 downloads/
 node_modules/

@@ -26,6 +26,10 @@ target C compiler for cross-builds. QEMU handles the runtime package install;
 local arm64 image builds also need binfmt. Main images compile from source;
 manual release images use the verified published archives instead.
 
+The Docker build context excludes `*live_test.go`, including the private
+checkout's symlinks. Their targets are outside that context; copying the
+links would leave dangling Go source files and prevent local builds.
+
 ## Manual versions and releases
 
 Neither pushing a commit nor pushing a tag allocates a version or publishes
