@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -321,5 +322,30 @@ func TestCumRecognise(t *testing.T) {
 		"https://fans.example.test/patreon/user/42":            false,
 	} {
 		expectShape(t, c, raw, want)
+	}
+}
+
+// The media servers are decoded once per probed page, by whichever of
+// recognition and extraction asks first, and come to what decoding the
+// page's text gives; a page that advertises none decodes to the same error
+// every time it is asked.
+func TestCumDecodesAProbedPagesServersOnce(t *testing.T) {
+	page := `<html><body><script>var env={EDGE_BASE_URLS:"https://edge.example.test/, https://edge2.example.test"};</script></body></html>`
+	p := htmlPage(t, "https://fans.example.test/creators/patreon/42", page)
+	first, err := cumProbedEdges(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := cumProbedEdges(p)
+	want, _ := cumEdges(page)
+	if !slices.Equal(first, want) || len(first) != 2 || &first[0] != &again[0] {
+		t.Errorf("edges %v then %v, want %v decoded once", first, again, want)
+	}
+	none := htmlPage(t, "https://fans.example.test/creators/patreon/42", `<html><body></body></html>`)
+	_, err1 := cumProbedEdges(none)
+	_, err2 := cumProbedEdges(none)
+	_, want2 := cumEdges(`<html><body></body></html>`)
+	if err1 == nil || err1 != err2 || err1.Error() != want2.Error() {
+		t.Errorf("errors %v and %v, want %v once", err1, err2, want2)
 	}
 }

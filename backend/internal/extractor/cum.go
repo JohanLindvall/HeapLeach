@@ -45,7 +45,7 @@ func (c *Cum) Recognise(_ context.Context, p *Page) bool {
 	if !cumShape(p.Final) || !p.Has("EDGE_BASE_URLS") {
 		return false
 	}
-	edges, err := cumEdges(p.Body)
+	edges, err := cumProbedEdges(p)
 	return err == nil && len(edges) > 0
 }
 
@@ -79,14 +79,22 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	}
 	query.Del("pppage")
 	page.RawQuery = query.Encode()
-	doc, final, err := fetchDocument(ctx, c.client, &page, nil)
+	d, err := readDocument(ctx, c.client, &page, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cum: fetch page: %w", err)
 	}
+	final := d.final
 	if strings.TrimRight(final.Path, "/") != strings.TrimRight(page.Path, "/") {
 		return nil, fmt.Errorf("cum: creator or post redirected to another page")
 	}
-	edges, err := cumEdges(doc)
+	// The media servers recognition already decoded, when this is the
+	// probed page; a page fetched here decodes its own.
+	var edges []string
+	if d.probe != nil {
+		edges, err = cumProbedEdges(d.probe)
+	} else {
+		edges, err = cumEdges(d.body)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +330,21 @@ func (l *cumPostLoader) resolve(ctx context.Context, hash string) (*Target, erro
 		return file.Resolve(ctx)
 	}
 	return file.target(), nil
+}
+
+// cumProbedEdges is a probed page's media servers, decoded once per page
+// and shared by recognition and extraction. The slice is shared: callers
+// read it and never modify it.
+func cumProbedEdges(p *Page) ([]string, error) {
+	type decoded struct {
+		edges []string
+		err   error
+	}
+	got := memo(p, "cum.edges", func() decoded {
+		edges, err := cumEdges(p.Body)
+		return decoded{edges, err}
+	})
+	return got.edges, got.err
 }
 
 var cumEdgesRE = regexp.MustCompile(`\bEDGE_BASE_URLS\s*:\s*("(?:[^"\\]|\\.)*")`)

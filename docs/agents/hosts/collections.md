@@ -62,7 +62,9 @@ content hashes and variants rather than downloadable `path` fields. Keep its
 dedicated extractor instead of registering it as a Kemono alias.
 
 The page advertises interchangeable media servers in `EDGE_BASE_URLS`. Read
-that list rather than pinning its numbered hosts. Originals are served at
+that list rather than pinning its numbered hosts. Recognition and
+extraction of the probed page share one decode of it (`cumProbedEdges`, a
+`memo` on the page); a page fetched afresh decodes its own. Originals are served at
 `/media/<sha256>/<original variant name>`; `Mirrored` rotates the advertised
 servers on retries. Thumbnails and video renditions are separate variants,
 and only `original.*` is accepted. Use that variant's byte count, not the
