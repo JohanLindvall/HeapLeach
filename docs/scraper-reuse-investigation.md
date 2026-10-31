@@ -5,7 +5,8 @@
 
 Investigation date: 2026-10-31. Source baseline:
 `d27bb4c0f53c9bebc491ee1daa74454202aba0dd`.
-Status: proposed work; this document changes no scraper behavior.
+Status: A, B, D and E implemented, with C's measurement; C's admission,
+F's wider harness and G remain. See [Implementation status](#implementation-status).
 
 The next consolidation should strengthen the shared extraction contracts and
 finish adopting existing helpers. Much of the obvious consolidation is already
@@ -16,6 +17,25 @@ rendition selection and download timing.
 Start with shared-page ownership and incomplete-result reporting, then reuse
 parsed documents. Address nested request concurrency as a separate behavior
 change. Keep the existing Player, Share, broadcaster and platform boundaries.
+
+## Implementation status
+
+| ID | State | What landed |
+| --- | --- | --- |
+| A | Done | The page cache probes with a URL of its own; `probedDocument` and `fetchRoot` hand back copies of the final URL. The ownership rule is on `Page` and in the extractor guide; `TestSharedPageIsLeftAsItWas` runs concurrent extractions over one page under `-race`. |
+| B | Done | `outcomeSummary` (`resolve.go`) keeps resolved, empty, refused, failed, unrecognised and not-started items apart. `readListing`, the Bandcamp discography and `expandSeries` note unreadable items ("N left out: could not be read"). The refusal type is now `itemRefusal`, beside the finishers, with unchanged wording. Clearing still judges transfers only; the download guide says so. |
+| C | Measured | `TestNestedListingsMultiplyTheirBound` pins the baseline: 36 leaves in flight for one nested job, 72 for two. The batch factor is `config.SourceBatchRounds`. Extraction-wide admission is left for its own change. |
+| D | Done for the pilots | NPR and ABC listen read the probe's tree (`nprRead`, `abcListenRead`, `nextDataIn`). `BenchmarkProbedReaders` recorded about a third fewer bytes and allocations per recognised read (NPR 54.8 kB/489 → 37.6 kB/323; ABC listen 22.8 kB/175 → 15.1 kB/116). Other readers are not yet migrated. |
+| E | Done | `walkPagesFor` returns a `walkStop` reason; `pageWalk.render` gives the same note strings. `walkCut` and `pageFailed` are gone; `failed` hooks return whether they decided a note. The `quiet` audit and the tree adapter remain. |
+| F | Partial | Each step added focused contract tests; no separate scenario harness was built. |
+| G | Not started | Deferred until the remaining contracts settle. |
+
+A pre-existing intermittent failure in the concurrent cancellation test was
+fixed along the way: its callbacks now wait for the cancellation, so the
+count of calls started after it no longer depends on scheduling.
+
+The baseline below describes the code at the investigation's source
+revision; names it cites, such as `broadcastRefusal`, have since changed.
 
 ## Investigation and evidence
 
