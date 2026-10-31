@@ -3,379 +3,591 @@
 [Documentation](README.md) · [Architecture](architecture.md) ·
 [Extractor guide](agents/extractors.md)
 
-Status: proposed; this document does not implement the refactors.
-Reviewed on 2026-10-31 against
-`52d5652ade12336e0efba53bbc76929985ff40f7`.
+Status: proposed. Reviewed on 2026-10-31. This is an implementation plan;
+its checkboxes describe future work.
 
 ## Recommendation
 
-Consolidate the remaining copies of **shared responsibilities**: collecting
-item outcomes, finishing collections, reading an already parsed document, and
-carrying pagination completion between helpers. Keep host protocols in small,
-explicit readers that compose those helpers.
+Consolidate **decisions that should have one owner**: whether a page can be
+reused, when a retry must fetch again, how a listing reports its end, and how
+much discovery I/O one extraction can start. Extend the existing engines with
+small, typed readers. Keep each provider's protocol, selection rules and
+naming beside its parser.
 
-Start with outcome accounting and document reuse. Both have concrete consumers
-and reproduced gaps in the current code. Complete the pagination-to-folder
-adapter next. Treat discovery request admission as a separate scheduling change
-after measuring actual HTTP concurrency. File reorganization comes last.
+The next work should be, in order:
 
-The earlier consolidation is already present: Player and Share engines, common
-pagination, ordered expansion, outcome summaries, immutable borrowed pages,
-typed page-walk termination, renewable credentials, and the NPR/ABC listen
-document-reuse pilots. These are the starting point, not work to rebuild.
+1. Carry forward the completed adoption work described below, and fix the
+   reproduced interaction between cached pages and semantic retries.
+2. Share page acquisition and parsing in the remaining simple player readers.
+3. Replace broad listing `quiet` rules with explicit completion policies.
+4. Bound nested discovery requests at the HTTP boundary.
+5. Consolidate the small remaining media-finalization families where the
+   policies actually agree, then remove obsolete adapters.
 
-## Existing code to build on
+A successful consolidation makes a future fix land in one place while keeping
+provider behavior visible. The number of extractor structs, files or lines
+removed is a secondary measure. An abstraction requiring many exceptions to
+preserve existing behavior should be narrowed or abandoned.
 
-Paths below are relative to `backend/internal/extractor/` unless stated.
+## Baseline and work already completed
 
-| Responsibility | Existing owner | What remains provider-specific |
+The detailed audit used `consolidation-adoption` at
+`b09b765c787796824e2d0981b98793d2335e1957`. That tree contains `main` at
+`dd825f7d5a42a7a4426c1c09ac1455ae1e072495`, plus completed adoption work.
+The documentation is being saved on `main`; the adoption branch's code is a
+separate integration step. Source links below point to files, and symbol names
+identify the intended code even where the two revisions differ.
+
+The reviewed tree has 112 production extractor Go files, 42,221 physical lines,
+and 121 tracked Go test files. These counts exclude private live-test symlinks.
+There are 17 rows in `playerSites` and 13 `shareSite` declarations. These are
+scope measurements, not estimates of removable code.
+
+### Carry forward existing work before building on it
+
+| Existing adoption work | Commits | Effect on this plan |
 | --- | --- | --- |
-| Recognition, ordered dispatch and borrowed page data | [extractor.go](../backend/internal/extractor/extractor.go), [page.go](../backend/internal/extractor/page.go), [platform.go](../backend/internal/extractor/platform.go) | URL forms, fingerprints, target validation and bounded API questions |
-| Ordinary player orchestration | [players.go](../backend/internal/extractor/players.go), [playersites.go](../backend/internal/extractor/playersites.go) | Page reader, canonical URL, referer, rendition candidates and signing behavior |
-| Stateless share-page orchestration | [shares.go](../backend/internal/extractor/shares.go) | Ordered forms, recognition and extraction callback |
-| External handoffs and pointer pages | [handoffs.go](../backend/internal/extractor/handoffs.go), [pointers.go](../backend/internal/extractor/pointers.go) | Metadata/probe requirements and destination discovery |
-| Page and folder traversal | [pages.go](../backend/internal/extractor/pages.go), [listing.go](../backend/internal/extractor/listing.go), [tree.go](../backend/internal/extractor/tree.go) | Reading one page/folder, cursor updates, identity keys and stated end conditions |
-| Ordered work and item accounting | [resolve.go](../backend/internal/extractor/resolve.go), [fanout.go](../backend/internal/extractor/fanout.go) | Reading one item and interpreting a provider's refusal |
-| Collections and broadcaster series | [sources.go](../backend/internal/extractor/sources.go), [broadcast.go](../backend/internal/extractor/broadcast.go) | Provider schemas, season identity, stable naming and deliberate omission policy |
-| Media payloads and refresh | [hls.go](../backend/internal/extractor/hls.go), `File.target`, `Target.file`, `refreshing`, `signedResult` | Selection policy, when to sign, and route-bound control hooks |
-| HTML payloads, diagnostics and credentials | [html.go](../backend/internal/extractor/html.go), [notes.go](../backend/internal/extractor/notes.go), [renewable.go](../backend/internal/extractor/renewable.go) | Typed JSON schemas, display vocabulary, credential identity and refusal classification |
+| Retain complete item outcomes through source expansion and archive indexes | `87bbfb6`, `ad9788d` | Use `outcomeSummary`, `expansion.note` and `expansion.unresolved`; preserve the newer failure and child-incompleteness notes. |
+| Read the probe's parsed tree in more collection readers | `86b3fce` | CoomerFans, PornPics and Chevereto join the NPR/ABC listen pilots; start subsequent adoption elsewhere. |
+| Carry typed pagination completion into folder trees | `8cc3fae` | Build on `walkEnd` and `treeWalk.ended`; retain the existing note rendering. |
+| Record the extractor choice rules and adoption status | `c151b3f` | Retain the choice table and exception notes in the extractor guide. |
 
-Keep these helpers in the existing package. Moving each host into a subpackage
-would require exporting or relocating the helpers it already shares. Put truly
-dependency-free utilities in `internal/util`, transport behavior in
-`internal/httpx`, and tunable limits in `internal/config/limits.go`.
+Review these commits against the current `main` and integrate their code,
+tests and area-guide changes as one coherent prerequisite. Resolve the plan
+file separately: the old plan was subsequently deleted on that branch, and
+this document replaces it. Do not let that deletion remove the new plan.
+This document itself performs no code integration.
 
-## Confirmed opportunities
+### Existing owners to extend
 
-The checkout contains 112 tracked production extractor Go files, totaling
-42,113 physical lines, and 121 tracked Go test files. Those counts describe the
-scope; reducing line count is not the objective.
+Paths in this table are relative to `backend/internal/extractor/`.
 
-Source inspection was supplemented with temporary Go test overlays using
-synthetic fixtures. The probes ran with `-race`, made no live-site requests,
-and left no instrumentation or tests in the checkout.
-
-| Observation | Evidence | Implication |
+| Responsibility | Existing implementation | Provider responsibility |
 | --- | --- | --- |
-| An archive index with one readable thread and one HTTP 403 returns one file and an empty `Result.Note` | `foolFuukaArchive.index` / `expand` in [foolfuuka.go](../backend/internal/extractor/foolfuuka.go); reproduced through its local HTTP fixture | This path still uses the reduced `resolveFiles` result instead of retaining the full outcome summary |
-| Expanding one good source and one failed source retains the first error, but the cap-only note is empty; `expansionNote` says only `1 of 2 sources resolved` | `expandSourcesNamed`, `partialNote`, `expansionNote` in [sources.go](../backend/internal/extractor/sources.go); reproduced | Source expansion has a second, less complete accounting/finalization path |
-| A successful child with a file-limit note increments `expansion.partial`, while both shared note helpers can return an empty string | Same source-expansion probe; [wordpress.go](../backend/internal/extractor/wordpress.go) separately adds child-note counts | Child reports need a shared finishing policy; callers currently have to remember it independently |
-| CoomerFans posts, PornPics galleries and an ordinary Chevereto album each parse the same document twice: once during recognition, once during extraction | Counter added to `parseHTML` only through an overlay; actual recognizers and extractors called with a supplied `Page` and nil HTTP clients | Three concrete adopters can use the existing `fetchRoot` contract |
-| NPR and ABC listen each parse once across recognition and extraction on the same probe | Same counter probe, plus [docreuse_test.go](../backend/internal/extractor/docreuse_test.go) | The existing root-reader pattern is a working reference |
-| Nested maps reach 36 active leaf callbacks for one job and 72 for two | `TestNestedListingsMultiplyTheirBound` in [resolve_test.go](../backend/internal/extractor/resolve_test.go), rerun successfully | A per-map bound is not an extraction-wide request bound; actual HTTP admission requires separate measurement |
+| Recognition and precedence | [extractor.go](../backend/internal/extractor/extractor.go), `NewRegistry`, `about` | Specific URL forms, structural fingerprints, bounded API identification and registration position |
+| Borrowed documents and API answers | [page.go](../backend/internal/extractor/page.go), [platform.go](../backend/internal/extractor/platform.go) | Request identity, whether a fresh response is required, schema and target validation |
+| Ordinary video pages | [players.go](../backend/internal/extractor/players.go), [playersites.go](../backend/internal/extractor/playersites.go) | Canonicalization, player reader, referer, candidate metadata and signing policy |
+| Stateless shares | [shares.go](../backend/internal/extractor/shares.go) | Ordered forms and extraction callback |
+| External and indirect sources | [handoffs.go](../backend/internal/extractor/handoffs.go), [pointers.go](../backend/internal/extractor/pointers.go) | Helper requirements and destination discovery |
+| Pagination and folder trees | [pages.go](../backend/internal/extractor/pages.go), [listing.go](../backend/internal/extractor/listing.go), [tree.go](../backend/internal/extractor/tree.go) | One page or folder, cursor updates, item identity and evidence of completion |
+| Ordered resolution and accounting | [resolve.go](../backend/internal/extractor/resolve.go), [fanout.go](../backend/internal/extractor/fanout.go) | One item and its typed refusal |
+| Collection and series results | [sources.go](../backend/internal/extractor/sources.go), [broadcast.go](../backend/internal/extractor/broadcast.go), [notes.go](../backend/internal/extractor/notes.go) | Stable folders, seasons, vocabulary and deliberate omission policy |
+| Media and refresh | [hls.go](../backend/internal/extractor/hls.go), `File.target`, `Target.file`, `refreshing`, `signedResult` | Rendition choice, signing cadence and route-bound control hooks |
+| Payload reading and credentials | [html.go](../backend/internal/extractor/html.go), [jsdecode.go](../backend/internal/extractor/jsdecode.go), [renewable.go](../backend/internal/extractor/renewable.go) | Typed payload schemas, credential identity, expiry and refusal interpretation |
 
-These observations distinguish missing information from changed wording. The
-link harvester already reports a resolved-source count; WordPress already
-reports child notes. The proposed work should preserve those useful behaviors
-while removing the need for each caller to assemble its own incomplete account.
+Keep the helpers in the existing extractor package during this work. Moving
+providers to subpackages now would require exporting or moving the private
+helpers they already share. Dependency-free utilities belong in
+`internal/util`, transport mechanics in `internal/httpx`, and tunable values
+in `internal/config/limits.go`.
 
-## Work order
+## Intended division of responsibility
 
-| Order | Work | First consumers | Risk and completion gate |
+```mermaid
+flowchart TD
+    R[Registry: identify and dispatch] --> D[Document access: identity and freshness]
+    D --> P[Provider reader: typed metadata and refusals]
+    P --> E[Existing family engine: player, share, platform or broadcaster]
+    E --> W[Shared traversal and ordered resolution]
+    W --> O[Outcome accounting and result notes]
+    E --> F[File and deferred Target contracts]
+    O --> F
+    D --> H[HTTP client: requests, retries and discovery admission]
+```
+
+This is an ownership map, not a requirement that every extractor pass through
+all boxes. A standalone video has no collection walk. An API-first platform
+may not read HTML. A signed-link handshake remains a provider reader used by
+the existing player engine.
+
+Keep recognition, discovery and transfer-time resolution distinct. Sharing a
+parser between them must not make recognition mint a token, make discovery
+open every listed video, or let a queued file retain an expired target.
+
+## Priorities
+
+Effort is relative: S is a bounded helper and a few callers; M crosses a family;
+L crosses extraction and transport contracts. It includes tests and guide
+updates, and is not a calendar estimate.
+
+| ID | Priority | Change | Evidence / expected benefit | Effort and dependency |
+| --- | --- | --- | --- | --- |
+| A | P0 | Integrate completed adoption | Avoid recreating work or losing its diagnostics | M; baseline prerequisite |
+| B | P0 | Explicit freshness for page reuse and retries | Reproduced retry failure; one owner for an otherwise scattered policy | M; initial fix can proceed independently of A |
+| C | P1 | Reusable document readers and parsed payloads | Repeated fetch/parse/title glue; duplicate player decoding | M; B, and A for the expanded reuse tests |
+| D | P1 | Explicit listing completion policy | `quiet` currently hides several unrelated stop reasons | M; A |
+| E | P1 | Shared discovery request admission | Nested map fixture reaches 36 and 72 concurrent leaves | L; measure actual HTTP I/O before choosing limits |
+| F | P2 | Narrow broadcaster media finalization | Repeated playlist-to-file tails with several distinct extension rules | S–M; existing media contracts |
+| G | P2 | Harden engine rows and finish adoption | Shared mechanics need shared validation and a clear deletion list | S–M; accompany B–F |
+| H | Defer | More struct-to-row conversions and package splits | Small wrapper savings; potentially large semantic changes | Reconsider only with measured, concrete duplication |
+
+### B. Give page freshness one owner
+
+**Observed source.** `fetchDocument` and `fetchRoot` reuse a successful probe
+for the requested URL. `fetchPage` delegates to `fetchDocument`.
+`withExtractRetries` calls a closure repeatedly, and `okruRead` captures the
+same context for every `okruFetch`. If that context holds a successful page
+with an empty rendition list, each retry receives the same page again.
+Relevant code: [page.go](../backend/internal/extractor/page.go),
+[retry.go](../backend/internal/extractor/retry.go),
+[okru.go](../backend/internal/extractor/okru.go).
+
+**Reproduced behavior.** A temporary synthetic test served an empty player
+whose status was `OK` on the first request and a playable configuration on
+every subsequent request. It used the real registry with a copied player row;
+only canonicalization was changed to retain the local test server's URL.
+Registry extraction made **one HTTP request and failed after its retries**.
+Calling `okruRead` without a probed page made **two requests and succeeded**,
+returning four candidates. No live service or media transfer was involved.
+The temporary test was removed after the audit. The relevant production files
+are identical in the two reviewed revisions.
+
+The same helper has three production callers: `okruRead`, `doodRead` and the
+Civitai listing reader. Inspect each call when changing the retry contract;
+the reproduction establishes the first case, not that all three are broken.
+
+**Implementation steps:**
+
+- [ ] Add a shared, explicit way to request a fresh document, bypassing the
+  extraction's attached probe without discarding cancellation, route,
+  cookie-jar, logging or challenge-capture context.
+- [ ] Let retry callbacks receive an attempt context or explicit read mode.
+  The first attempt may reuse the probe; a retry of a semantically invalid
+  response must perform a fresh request. Callbacks must use the supplied
+  context instead of retaining the original one.
+- [ ] Keep `httpx.Client.Do` responsible for transport retries and 429 waits.
+  `withExtractRetries` remains responsible for a successful response whose
+  contents require another attempt. Do not multiply either budget.
+- [ ] Define freshness for `peek`, signed refresh and canonical probes in the
+  same vocabulary, while retaining their existing schedules.
+- [ ] Add the synthetic scenario above as a permanent regression test that
+  expects successful registry extraction and two requests after the fix.
+
+**Representation identity needs an explicit contract too.** The current
+`fetchDocument` reuse branch does not compare its `headers` argument with the
+probe's request. `pageJSON` memoizes by endpoint alone. Those APIs are safe only
+where the caller knows the response is the same representation; generalizing
+their use without that assumption is unsafe.
+
+Add a documented reuse decision covering method, requested URL, request body,
+representation-changing headers, session identity and route. Prefer explicit
+provider opt-in or a small request descriptor over hashing arbitrary context
+values. A changed User-Agent, authenticated session, POST body or route must
+not borrow another representation. A provider may declare that its referer
+does not change its page; make that decision visible at the call site.
+Do not key shared caches on logged or persisted raw credentials.
+
+Acceptance cases: same page reused once; fresh retry sees changed metadata;
+changed route/session/User-Agent receives its own response; canonical aliases
+reuse only their validated canonical page; a cancelled retry starts no request;
+transfer-time refresh replaces every media field. Preserve the existing
+bounded probe, error and challenge rules.
+
+### C. Share document readers before adding another scraper engine
+
+The engine already owns candidate selection, HLS resolution, deferred files
+and error context. The remaining repetition is mostly inside its readers.
+
+| Candidate | Current repetition | Proposed change | Compatibility condition |
 | --- | --- | --- | --- |
-| 1 | Reuse complete outcome accounting and collection finalization | FoolFuuka index; source expansion used by Balbums and PornPics | Medium: intentional note changes; unchanged files, names, order and cap behavior |
-| 2 | Reuse parsed documents | CoomerFans posts and PornPics galleries, then Chevereto | Low to medium: one parse per supplied HTML page, same results and request timing |
-| 3 | Carry typed walk completion into folder traversal | Mediafire and Gofile folders, then Filester | Medium: exact current notes and termination behavior preserved |
-| Throughout | Extend shared contract tests as consumers migrate | Existing recognition, document, source and media tests | Each migrated boundary exercised by at least two real consumers |
-| 4, separate follow-up | Decide and implement discovery request admission | Nested registry/source expansion | High: measured HTTP bound, cancellation, fairness and no deadlock |
-| 5, optional | Remove obsolete adapters and improve file organization | Central contracts and migrated helpers | Low: no behavior change, no new package/API boundary |
+| Simple inline rows in `playersites.go` | Fetch page, read title, parse a source, assemble `playerVideo` | A small page-reader adapter around provider parsing | Request headers and fallback title order remain explicit |
+| `luluPlayer` / `luluSource` | Recognition decodes the source; extraction decodes it again; heading and title helpers parse separately | Memoize the pure source decode for the same `Page`; read headings/title from one tree | Canonical URL changes and fresh signing produce a new read |
+| `rajceAlbumData` | Parses a string even when a borrowed tree is available | Add a root-based reader; retain a thin string adapter for fixtures | Raw script whitespace, media order and final referer are unchanged |
+| `okruMetadataFrom` | String entry point always reparses the document | Root-based payload reader behind the explicit freshness contract | An empty but `OK` player must still fetch again |
+| `pageTitle` / `firstHeading` callers | Each convenience helper can parse the same body | Root-based title access at callers already needing a DOM | Keep each provider's suffix and whitespace rules |
 
-### 1. Finish adopting outcome summaries
+Use [celeb.go](../backend/internal/extractor/celeb.go)'s `celebProbedData` as the
+existing model for sharing a decoded payload between recognition and
+extraction. It uses `memo`, retains the parse error, and treats the result as
+immutable. Use [docreuse_test.go](../backend/internal/extractor/docreuse_test.go)
+for the existing string/tree parity and benchmark pattern.
 
-**Current duplication.** `resolveListing` already returns `outcomeSummary`, and
-`readListing` uses it to report unreadable items. FoolFuuka's index still goes
-through `resolveFiles`, then finishes the result itself. Source expansion
-collects another list of failures and reduces it through `sortOutcomes`.
-Its callers combine caps, resolved counts and child notes in different ways.
+**Shape of the change:**
 
-Examples worth migrating after the pilots:
+- [ ] Keep a provider parser as an ordinary function taking a tree and/or raw
+  body plus the final URL. It returns typed metadata or `playerVideo`.
+- [ ] Introduce a page-reading adapter only after two simple rows fit it.
+  It owns acquisition, the B freshness decision, optional tree access and
+  shared error wrapping. Start with the straightforward body-based rows;
+  retain the existing custom `read` function for API and handshake readers.
+- [ ] Use `Page.HTML()` or `fetchRoot` when a tree already exists. Keep raw
+  body access for regex and JavaScript readers; do not force a DOM parse on
+  a reader that only scans script text.
+- [ ] Keep title fallback order in each parser. `cmp.Or` evaluates all its
+  arguments, so composing string helpers can parse both the heading and
+  title even when the heading already supplied the answer.
+- [ ] Memoize only pure parsing of the exact page. Store immutable values;
+  copy slices or maps before any ranking or mutation. A fresh page gets its
+  own parse result. Provider-specific memo keys must not collide.
+- [ ] Retain string entry points only where tests or independent readers need
+  them; those entry points parse and delegate rather than duplicate logic.
+- [ ] Remove the old acquisition/title/decoding glue at each migrated caller.
 
-- [erome.go](../backend/internal/extractor/erome.go) and
-  [pornpics.go](../backend/internal/extractor/pornpics.go) finish successful
-  expansions with the walk and file-limit notes.
-- [balbums.go](../backend/internal/extractor/balbums.go) uses `partialNote`,
-  which intentionally reports only caps.
-- [links.go](../backend/internal/extractor/links.go) adds a resolved count;
-  WordPress additionally counts child reports.
+The adapter must accommodate direct `Extractor.Extract` tests with no attached
+probe, as well as registry-driven extraction. Do not strengthen recognition to
+require a playable video merely to share a parser: a recognizably removed or
+restricted page still belongs to its provider and must return its refusal.
 
-**Implementation.**
+**Do not force into the pilot:** API-only readers, DoodStream and Noodlemagazine
+handshakes, Bandcamp's request identity, Niconico metadata carried by error
+responses, or WordPress's mutable private tree. They can reuse individual
+parsing primitives without sharing the whole acquisition sequence.
 
-1. Preserve `outcomeSummary` through the archive's expansion. Keep its special
-   distinction between an entirely text-only board and threads that could not
-   be read. Share the success-note construction without replacing that useful
-   error with a generic one.
-2. Use `summarise` for source-resolution outcomes instead of independently
-   classifying failures. Keep source admission separate: successfully fetched
-   sources excluded by a whole-album cap are not failed sources. Keep counts
-   for discovered, attempted, admitted, empty, refused, failed and unrecognised
-   sources distinct where they affect the result.
-3. Consolidate expansion finishing around the existing note helpers. Keep
-   `partialNote` narrowly about caps; give collection callers one composition
-   point for cap information, outcomes and child reports. Supply vocabulary
-   explicitly, with small family adapters where existing wording differs.
-4. Migrate Balbums and PornPics, then the harvester, WordPress and Erome.
-   Preserve WordPress's existing child-report wording without reporting it
-   twice. Preserve Erome's `eromeFolders` hook and every existing directory.
-5. Remove reduced-result adapters only after their production callers have
-   migrated and their remaining test uses have been reviewed.
+**Completion criterion:** at least two player rows and one collection reader
+use the new path, each has a smaller adapter, and fixture results match for
+titles, filenames, directories, headers, sizes and hooks. Count parsing and
+requests separately. Fewer parses is not evidence of fewer HTTP requests.
 
-First make outcome retention a behavior-preserving change. Add the intended
-note improvements in a separate commit with explicit expectations and guide
-updates. No API, queue persistence or UI completeness field is needed here.
-Do not infer a new machine-readable completeness state by inspecting note
-text; the current child counter records nonempty notes, which needs a defined
-policy before being treated as a stronger completeness guarantee.
+### D. Make listing completion a reusable policy
 
-**Acceptance.** Cover all-success, mixed failure, all-failed, only-empty,
-explicit refusal, unrecognised navigation, partial children, cancellation,
-duplicate titles, an oversized first album, and later albums excluded by caps.
-Successful mixed results report what was omitted; cancellation remains an error.
-Filenames, directories, source order, exact sizes and transfer hooks are
-unchanged. Count admitted sources independently of speculative batch work.
+`walkPagesFor` already records `walkEnded`, `walkLimit`, `walkPageLimit`,
+`walkRepeated`, `walkStopped` and `walkFetchFailed`. The adoption work makes
+that state available to trees through `walkEnd`. Keep it.
 
-### 2. Reuse the document and keep one parser per representation
+The remaining problem is `quiet`: it suppresses the walk's default note for
+page-cap exhaustion, repeated/empty pages, stop pages and later fetch failures.
+Those events are not equivalent. Some providers legitimately end by serving
+an empty/repeated page; that does not establish that a timeout or a 200-page
+cap means a complete listing. Several callers compensate with `failed` hooks,
+which duplicates policy and makes omissions easy.
 
-**Current duplication.** Recognition calls the page's HTML reader, but
-`CoomerFans.postFiles` then calls `coomerFansPost(string, base)`,
-`PornPics.gallery` calls `pornpicsGallery(string, base)`, and
-`cheveretoFetch` calls `parseHTML` after `fetchDocument`.
+Concrete callers to review include Erome, CoomerFans, PornPics, Balbums,
+Fapello, Imgur, KVS listings and MediaWiki subcategories. FranceTV and RTVE
+already combine `quiet` with an explicit fetch-failure note; preserve those
+behaviors. See [listing.go](../backend/internal/extractor/listing.go) and
+[pages.go](../backend/internal/extractor/pages.go).
 
-**Implementation.**
+**Implementation steps:**
 
-1. Give the CoomerFans and PornPics parsers root-based entry points, as
-   `nprRead` and `abcListenRead` already do. Obtain the root through `fetchRoot`.
-   Keep existing string entry points as tiny fixture adapters that parse once
-   and delegate; there must be only one implementation of each parser.
-2. Extend `docreuse_test.go` to these consumers. Check borrowed-root ownership,
-   output parity and the absence of another document request. Keep the
-   CoomerFans video resolver's fresh page read at transfer time: an earlier
-   signed link must not become a permanent cached answer.
-3. Convert Chevereto's ordinary GET path after checking which callers still
-   need its raw body as well as its root. Its password-unlock POST returns a
-   different representation and must parse that new response. Do not reuse
-   the gate's DOM as the unlocked document.
-4. Only if two actual consumers need body, root and final URL together, add
-   one small page-reading helper in `page.go`. Otherwise use `fetchRoot` and
-   preserve the exceptional raw-body path locally. Do not add another cache.
-5. Consider further readers individually. `Direct.pageSniff` in
-   [filelinks.go](../backend/internal/extractor/filelinks.go) is a candidate,
-   but must retain its HTML content-type gate and fallback ordering.
-   [celeb.go](../backend/internal/extractor/celeb.go) demonstrates per-Page
-   memoization when both recognition and extraction need the decoded payload;
-   memoize only when there are multiple consumers.
+- [ ] Keep the current renderer as a compatibility adapter first. Add typed
+  distinctions for the evidence a reader supplies, such as expected missing
+  next page versus redirect outside the listing; `pageOf.stop` currently
+  carries display text, which should not become a control-flow input.
+- [ ] Replace a broad `quiet` choice with explicit accepted end conditions.
+  A caller may accept empty/repeated results or particular later-page HTTP
+  statuses as its normal end. Unexpected failures and exhausted page budgets
+  retain an incomplete-result reason by default.
+- [ ] Use shared named policies only when at least two callers have the same
+  conditions. Keep the reader responsible for recognizing its own end page,
+  following filters and advancing its cursor.
+- [ ] Retain the original error in typed completion state where a caller
+  needs to distinguish status, challenge and transport failure. Rendering a
+  note must not be how a caller recovers that information.
+- [ ] Migrate one caller per behavior review. Preserve first-page errors and
+  cancellation precedence. Note changes are deliberate user-visible changes,
+  not an incidental consequence of replacing a helper.
+- [ ] Remove `quiet` and redundant failure hooks only after all callers have
+  an explicit policy and tests for their chosen interpretation.
 
-Keep JSON schemas typed and provider-owned. Shared `rawText`, `scriptTexts`,
-`linkedData` and `jsonAttr` locate payloads without changing their whitespace;
-they do not decide which payload describes the requested media.
+Acceptance table:
 
-**Acceptance.** The three reproduced ordinary-page cases go from two parses
-to one across recognition and extraction. Measure allocations and time with
-`-benchmem`; do not assume a percentage speedup. Preserve result metadata byte
-for byte, redirects, canonical URL behavior, negative recognition and request
-counts. Shared URLs, DOM nodes and memoized values remain unchanged under
-concurrent extraction with `-race`.
+| End condition | Expected shared behavior |
+| --- | --- |
+| API total/page count/end flag reached | Complete, without a fabricated partial note |
+| Short page with an advertised continuation | Continue |
+| Empty/repeated page used as the provider's sentinel | Complete only under that declared policy |
+| Later page 404/410 | Provider-declared end or incomplete result; never inferred universally |
+| Later timeout, challenge, 429 or 5xx | Preserve failure evidence and report the cut unless a documented policy specifically explains it |
+| Source, file or page cap | Typed cap with the appropriate note |
+| Cancellation, including immediately after a successful page | Cancellation error, regardless of accumulated items |
 
-Keep these exceptions explicit: Niconico reads useful metadata from HTTP error
-bodies; Bandcamp asks for a different User-Agent representation; WordPress
-edits a private tree; deferred resolvers need fresh metadata. None should be
-forced into the initial migration.
+Preserve source-at-a-time file caps, weighted counts for posts holding several
+files, depth-first tree order and existing folder names. This work changes
+completion policy, not traversal identity or pagination arithmetic.
 
-### 3. Finish the typed pagination-to-folder boundary
+### E. Centralize admission for discovery I/O
 
-**Current duplication.** `walkPagesFor` already returns `walked` with a
-`walkStop`, and `walkEpisodes` consumes it. Folder readers still call the
-string-returning `walkPages` adapter and pass its note to `treeWalk.partial`,
-which strips `partialPrefix` before adding it again. This is remaining
-coupling to display formatting, not a missing pagination engine.
+`FanOut` bounds one map by `config.PageFetchConcurrency`, currently six.
+`resolveOutcomes` composes it, and source expansion can call the registry,
+which starts another map. The synthetic
+`TestNestedListingsMultiplyTheirBound` measured **36 concurrent leaves for one
+nested root and 72 for two** during this audit. Those are callback counts;
+actual HTTP concurrency still needs measurement.
 
-**Implementation.**
+A semaphore around `resolveOutcomes` or `Registry.Extract` is the wrong
+boundary: parents could hold every permit while waiting for children that
+need the same permits. Share admission at the actual request boundary.
 
-1. Separate the non-generic completion information from the page items only
-   as far as needed to pass it to a tree. Retain `walkPages` as a compatibility
-   adapter for callers that only need items and a displayed note.
-2. Migrate Mediafire's folder chunks in
-   [filehosts.go](../backend/internal/extractor/filehosts.go) and Gofile's
-   subfolder listing in [gofile.go](../backend/internal/extractor/gofile.go).
-   Have the tree consume completion information directly and render through
-   the shared note code.
-3. Migrate [filester.go](../backend/internal/extractor/filester.go), preserving
-   its page budget across the entire tree, per-folder cookie jars, password
-   failures and room-based stopping. Preserve Gofile's separately read root
-   and Mediafire's files-before-subfolders order.
-4. Review `quiet` policies separately after parity. A repeated end page can
-   be expected; exhausting a page budget or a later rate limit may mean
-   truncation. Record each caller's intended behavior before changing it.
+**Implementation steps:**
 
-**Acceptance.** Preserve exact note strings in the refactor, including quiet
-walks, prefix deduplication and provider notes. Test first-page error versus
-later partial success, short pages, explicit end/total/page-count signals,
-repeats, weighted limits, exact caps, folder cycles and cancellation. No host
-gets a new page loop, and note text is not parsed to decide control flow.
+- [ ] Instrument a synthetic nested registry extraction at the transport:
+  request starts, active responses, peak active reads and attempts. Separate
+  page probes, API metadata, discovery manifests and helper processes.
+- [ ] Create an extraction-scoped admission object once at the outer registry
+  call and pass it through nested calls. Preserve it when context values are
+  copied for route recovery; define its lifecycle for coalesced work.
+- [ ] Implement the low-level admission mechanism in `httpx`, with extraction
+  opting in through context. Cover requests made by `GetPage`, `GetJSON`,
+  `PostJSON`, `Do` and `DoOnce`, including manually built metadata requests.
+  Review [client.go](../backend/internal/httpx/client.go)'s `send`/`do`
+  boundary and the route path before selecting the exact hook.
+- [ ] Hold a permit until the response body is consumed or closed, or until
+  the request fails. Release exactly once, including error-status draining,
+  redirects, body-read failures and cancellation. A permit released when
+  headers arrive would leave simultaneous body reads unbounded.
+- [ ] Release before retry backoff or `Retry-After` waits. Each new attempt
+  acquires again; waiting for a slot must be cancellable.
+- [ ] Acquire only for the actual fetch in coalesced page/memo/credential work.
+  Other waiters and parents waiting for children must not hold permits.
+- [ ] Start with a measured per-extraction limit. Treat a process-wide ceiling
+  or per-origin fairness as a separate decision: a per-root bound still
+  multiplies across top-level jobs. Add tunables in `config/limits.go`.
+- [ ] Keep media transfers and deferred file resolvers under their existing
+  transfer/route policies. An extraction's admission object must not be
+  captured accidentally by a resolver that runs much later. Metadata-helper
+  processes need an explicit separate bound if measurements justify it.
 
-### 4. Share discovery admission only after measuring the I/O
+Test a nested fan-out deeper than its permit count, two roots, slow bodies,
+cancelled waiters, same-page coalescing, routed requests, retries, redirects
+and early closes. Demonstrate completion without deadlock and a measured HTTP
+peak at or below the chosen budget. Compare request count, latency and order
+against the baseline; admission should change concurrency, not the result.
 
-This is a separate follow-up. Reusing a worker-map helper has already reduced
-code duplication, but nesting it multiplies its bound. The reproduced 36/72
-baseline measures callbacks, not simultaneous HTTP requests or production load.
+This is a scheduling change and carries more risk than parser reuse. Land it
+separately so it can be reverted without undoing C or changing transfer
+behavior.
 
-1. Build a synthetic nested-registry workload with a local HTTP server that
-   records active requests, totals and cancellation. Include two root jobs,
-   redirects, retries and two callers sharing a cached probe.
-2. Define the unit and scope: the recommended first scope is active discovery
-   requests within one top-level extraction, shared by its nested extractions.
-   Two independent jobs may each use their own bound. A process-wide bound or
-   per-origin fairness is a separate policy decision, not an accidental effect.
-3. Put admission at the metadata I/O boundary, with its primitive below
-   `extractor` in the dependency graph if `httpx` needs it. Acquire only while
-   doing an actual request/body read. Do not hold a permit around a parent
-   waiting for child extraction, a cache wait, or retry backoff; those designs
-   can deadlock or consume all capacity without doing I/O.
-4. Specify permit ownership for redirects, retry attempts, body close/error,
-   shared in-flight fetches, helper subprocesses and cancellation. Ensure a
-   transport wrapper cannot acquire twice for one active operation. Carry the
-   same scope into nested registry calls and detached shared fetches.
-5. Keep deferred resolution and media transfers under their existing policies.
-   Do not reinterpret source/file caps as cumulative request budgets. Keep
-   `SourceBatchRounds` as batch sizing, independent of request admission.
+### F. Consolidate only matching media-finalization tails
 
-**Acceptance.** Observed discovery requests respect the chosen per-extraction
-bound, complete without deadlock or starvation, and release admission on every
-failure/cancellation path. Files, order, notes and request totals stay the same
-apart from explicitly justified speculation changes. Measure latency as well
-as peaks. Land this independently so it can be reverted without undoing the
-parser and outcome consolidation.
+Several broadcaster readers repeat: call `broadcastMedia`, return its error,
+choose a filename extension, and call `hlsMedia.file`. The extension policies
+already differ, so a universal `playVideo` helper would conceal decisions.
 
-### 5. Make the shared boundaries easier to maintain
+| Family | Concrete examples | Required distinction |
+| --- | --- | --- |
+| Segment-derived extension | SVTPlay and ARD; RTP and RTVE also supply a name prefix | Manifest paths can contain `.mp4` while the actual segments are transport streams |
+| Existing variant fallback | NPOStart, NRK, BBC Sounds | Preserve `extensionOr(playlistExtension(media.Variant))` |
+| Additional media checks or transformations | SRF, RaiPlay, VRT MAX, ZDF | Audio labeling, special extension fallback, audio-presence checks or other processing stay explicit |
 
-After adoption, remove redundant wrappers and stale comments. If it improves
-navigation, split `extractor.go` into files for transfer contracts,
-registry/dispatch, options/identity and queue-steering errors, within the same
-package. This is optional organization work, not a prerequisite or a substitute
-for removing duplicated policy.
+Relevant sources: [broadcast.go](../backend/internal/extractor/broadcast.go),
+[svtplay.go](../backend/internal/extractor/svtplay.go),
+[ard.go](../backend/internal/extractor/ard.go),
+[npostart.go](../backend/internal/extractor/npostart.go),
+[nrk.go](../backend/internal/extractor/nrk.go),
+[bbcsounds.go](../backend/internal/extractor/bbcsounds.go).
 
-Keep local duplication local when its semantics are local. For example,
-Niconico's `seriesPage` and `uploadsPage` resemble each other but decode
-different envelopes and derive titles differently. They may share a small
-provider-local conversion if that helps; they do not justify a universal JSON
-endpoint DSL.
+- [ ] Prototype a narrow finalizer for the two unmodified segment-based
+  callers. It composes `broadcastMedia` and existing media conversion methods;
+  it never copies `Target` or `File` media fields by hand.
+- [ ] If the variant-fallback family benefits too, expose that choice as a
+  small named policy or a separate helper. Keep the extension choice visible
+  where it affects files already on disk.
+- [ ] Keep custom post-processing in the provider. If supporting it requires
+  a collection of before/after hooks, leave that caller on `broadcastMedia`.
+- [ ] Keep refusal classification, progressive-file preference, language
+  selection and API response schemas out of the finalizer.
 
-Update the extractor guide with a short choice table: Player row, Share row,
-handoff/pointer, platform family, or dedicated stateful extractor. Make the
-existing helper catalogue the place to look before adding another walker,
-resolver, formatter or cache.
+Acceptance: filenames stay byte-for-byte stable; keys, audio, subtitles,
+segments and headers survive initial extraction and refresh; exact and
+approximate sizes remain distinct. Preserve all current ranking tie-breaks.
+Abandon the prototype if it adds more indirection than shared policy.
+
+### G. Harden engines and remove obsolete paths
+
+The existing row tests already check registration and required fields. Extend
+those tests for any new acquisition path instead of maintaining another
+handwritten registry inventory.
+
+- [ ] For a player with a page adapter, require exactly one acquisition path:
+  adapted page parser or custom `read`. Keep the existing listing `walk` versus
+  `links` exclusivity check. Test coherent signing options, including that
+  `withheld` cannot silently apply to an unsigned eager file.
+- [ ] Pin registry precedence with pages recognized by overlapping families;
+  deterministic construction alone does not prove the intended precedence.
+- [ ] Keep `Shape` narrow enough for link discovery while allowing `Recognise`
+  to identify a broader directly submitted page. Share's current forms couple
+  those two sets; preserve dedicated Erome and PornPics extractors unless a
+  separate, worthwhile change explicitly decouples them.
+- [ ] Keep outcome summaries intact until final rendering. Remove tuple
+  adapters that discard counts once their callers have migrated; the adoption
+  branch already removes `resolveFiles` and `sortOutcomes`.
+- [ ] Reuse `expansion.note`, `outcomeSummary.note`, `noneResolved` and
+  `listSeries` at collection finishers instead of rebuilding their phrases.
+  Preserve deliberate provider omission policies.
+- [ ] Update the choice table and matching host notes in each implementation
+  commit. Regenerate the inventory when registration or descriptions change.
+
+Use a deletion checklist in each commit: which duplicate body, parser,
+formatter or policy disappeared, which callers now use the shared owner, and
+which exceptions remain. Adding a helper while leaving both old paths in use
+is unfinished consolidation.
 
 ## Boundaries to preserve
 
-| Tempting consolidation | Required boundary |
+| Tempting merge | Decision and reason |
 | --- | --- |
-| Put every stateless reader into Share | `Share` recognizes only matching forms. Erome profiles and PornPics categories intentionally include recognizable pages whose shapes should not be harvested as navigation. Preserve the distinction. |
-| Use one rendition comparator everywhere | Player ranking, Vimeo's HLS preference, PeerTube selection and `jwSource`'s first usable non-DASH source are different policies. Reuse primitives without changing their ordering. |
-| Use one token cache for all state | `renewable` fits existing process-wide renewable credentials. Device/session pairs, per-post metadata, page memoization and address-bound tickets have different identities and invalidation rules. |
-| Merge every folder/tree walk | `walkTree` reads nested folder APIs. Mega reconstructs a decrypted listing; Autoindex traverses directory pages by levels. Share compatible naming/limits without changing traversal. |
-| Cache every response under its URL | Route, method, headers and session can change the representation. Borrowed page reuse does not authorize sharing a password-unlock response or a new signed result. |
-| Simplify recognition to a hostname table | Dispatch remains ordered and content-based. Unknown installations, aliases, strict followed-link failures and the Direct fallback must keep working. |
-| Convert files and targets with fresh struct literals | Use `File.target`, `Target.file` and HLS conversion helpers so segments, keys, audio and subtitles travel together. Pacing, cipher, checks, refusals, discard and refresh hooks retain their owners. |
-| Normalize titles while moving helpers | Titles determine persisted paths. Preserve whitespace inside payloads, `sourceFolder`, duplicate-title disambiguation and the distinction between `Result.Title` and `Result.Note`. |
+| Every provider into one configurable scraper | Keep the current families. A universal callback graph would move the duplication into configuration and obscure protocol order. |
+| Every broadcaster's candidate type into `mediaCandidate` | Defer. Players prefer progressive media at equal quality; broadcasters have format, language, audio-description and codec rules of their own. |
+| `jwSource` and `jwPlayerBest` | Keep separate. One reads the first usable non-DASH JavaScript source; the other ranks typed JSON-feed renditions. Sprite filtering and selection precedence differ. |
+| Every metadata cache into `renewable` | Keep identities distinct. Process-wide credentials, per-page memoization, per-origin discovery, per-post stable metadata and per-route tickets have different lifetimes. |
+| Stateful hosts into Share rows | Share existing utilities; keep quota, CAPTCHA, device/session and cryptographic protocols explicit. A row is suitable only if it removes orchestration without hiding state. |
+| Similar creator-archive APIs into aliases | Keep schema adapters distinct, particularly original-availability and attachment-variant rules. Shared route names do not establish interchangeable responses. |
+| All JSON-in-script readers into a JavaScript evaluator | Use existing raw-text/JSON helpers. A wrapper around `json.Decoder` alone has little value unless it removes repeated locator or validation policy. |
+| Every collector into one loop | Keep flat lists, weighted post lists, source-atomic expansion, broadcaster request budgets and folder trees as separate compositions. Their caps measure different things. |
+| All title handling into one normalizer | Preserve existing paths. `writtenTitle`, suffix rules, `sourceFolder` and legacy repeated-title formats deliberately differ. |
+| Parser deduplication by automatic line similarity alone | Use clone search to find candidates, then compare semantics. Matching imports, error branches and JSON envelopes are weak evidence. |
 
-The relevant invariants are in the [extractor guide](agents/extractors.md),
-[HTTP guide](agents/http.md), and host notes for
-[collections](agents/hosts/collections.md), [file hosts](agents/hosts/file-hosts.md),
-[players](agents/hosts/video-hosts.md) and
-[broadcasters](agents/hosts/broadcasters.md).
+## Compatibility requirements
 
-## Tests and migration gates
+Every migration must preserve the following unless its commit explicitly
+changes and tests the behavior:
 
-Extend the existing tests as each responsibility moves. Prefer a small shared
-fixture/request recorder or assertion helper once two tests need it; a new
-scenario language or replay framework is unnecessary.
+- Recognition by page content, never domain-based dispatch; narrow discovery
+  shapes; strict followed-link handling; existing registry order.
+- Request identity, final redirected URL, referer/origin, cookies and route.
+  A recognized provider failure retains its meaning instead of falling back
+  to saving the HTML shell.
+- `Result.Title`, `File.Name` and `File.Dir`, including spacing, case and
+  repeated-title disambiguation. Notes remain separate from folder identity.
+- Source, file, page, folder-depth and broadcaster request budgets; original
+  item order; stable deduplication; source-at-a-time admission of albums.
+- Cancellation precedence, typed address/wait/transient failures and each
+  provider's permanent refusal. Error wording alone must not control retries.
+- `Resolve`, `Refresh`, `Check`, `Reject`, `Refused`, `Cipher`, `Pace`,
+  `ProxyFallback` and `Target.Discard`, alongside all media fields. A shared
+  payload conversion does not take ownership of these control fields.
+- Deferred signing, route-bound token invalidation, and clean refresh of
+  segments, encryption keys, separate audio and subtitles.
+- Borrowed-page immutability. A parser that edits a tree receives a private
+  copy. Incomplete or challenged bodies never become reusable documents.
 
-| Boundary | Existing starting point | Required additional checks |
+## Migration sequence and review units
+
+Keep each unit independently reviewable and revertible. Use the repository's
+normal direct-to-`main` workflow; there is no need for a large refactor branch.
+
+| Unit | Concrete deliverable | Gate before continuing |
 | --- | --- | --- |
-| Recognition and dispatch | `recognise_test.go`, `registry_test.go`, `shares_test.go`, `players_test.go` | Unrelated host, misleading branding, overlapping forms, redirects and strict navigation rejection |
-| Page and payload ownership | `page_test.go`, `docreuse_test.go` | Three new root-reader consumers, full metadata parity, no extra request, shared data unchanged |
-| Collection outcomes | `resolve_test.go`, `sources_test.go`, affected host tests | Mixed failures and partial children reach the final result; admitted, empty and unrecognised sources stay distinct |
-| Traversal | `pages_test.go`, `tree_test.go`, folder-host tests | Typed completion composes without changing order, caps, error precedence or notes |
-| Transfer handoff | `refresh_media_test.go`, player and affected resolver tests | Deferred timing, referer, route identity, every media field refreshed, obsolete tracks cleared, control hooks retained |
-| Admission, if implemented | Nested-listing baseline plus local HTTP scenarios | Nested and concurrent jobs, shared fetches, retries, cancelled waiters and bounded active I/O |
+| 1 | Integrate A's existing implementation and tests, retaining this plan | Existing outcome, document-reuse and tree tests pass; note changes reviewed |
+| 2 | B's fresh-read contract and semantic retry fix | Synthetic empty-then-playable registry test succeeds with two requests |
+| 3 | Request-representation contract and focused identity tests | Session, route and representation variants cannot borrow incompatible responses |
+| 4 | C's first two simple player adapters | One shared acquisition path, identical result snapshots and request counts |
+| 5 | Remaining worthwhile C adopters, starting with the root-based album reader | String/tree parity, immutable shared data, fresh retry/signing preserved |
+| 6 | D's typed end policies and one HTML/API pilot each | Completion matrix passes; changed notes explicitly reviewed |
+| 7 | Remaining D callers and removal of broad compatibility switches | Every migrated caller declares its end policy |
+| 8 | E's HTTP measurement fixture, then admission in a separate commit | Measured bound, cancellation, response ownership and deadlock tests pass |
+| 9 | F's narrow media finalizer, if the prototype pays for itself | Media fields, filenames and provider checks unchanged |
+| 10 | G's final cleanup and current area guides | Obsolete paths removed, registry checks and inventory agree |
 
-Use synthetic names and reserved domains in public fixtures. Synthetic tests
-may explicitly invoke resolvers against local servers. The private parsing
-corpus must continue to exercise the real registry and extractors with no file
-resolvers, transfers, media bodies or implicit network fallback.
+Unit 2 can land before unit 1 because its affected production code is identical
+in the reviewed revisions. Unit 9 is optional and should not delay the higher
+value work. Avoid combining a parser migration, changed rendition ranking and
+new retry behavior in one commit.
 
-For each implementation commit:
+## Validation strategy
 
-1. Read the applicable area/host guides and add the focused characterization
-   cases before changing behavior. Migrate one small family at a time.
-2. Run affected tests with `-race`; benchmark root-reader migrations with
-   `-benchmem`. Check metadata, names, directories, note policy, request timing
-   and counts, not merely the number of returned files.
-3. Replay affected private recordings, then broaden replay when a shared
-   helper changes. From the sibling private checkout:
+### Characterize before moving behavior
 
-   ```sh
-   ./support/audit-corpus.sh ../HeapLeach
-   ```
+For each pilot, retain a synthetic fixture that exercises the real registry,
+not just the provider constructor. The registry adds the probe, recognition,
+strictness and cache context that exposed the retry problem.
 
-   Its default is offline replay; missing recordings fail. Its current
-   baseline checks outcomes, extractor selection, counts and deferred/external
-   entries, so synthetic tests must cover the fuller filename, track and
-   header contracts. Preserve real pages, links, filenames and reports only
-   in `hl-priv`. Refresh recordings explicitly when investigating site changes.
-4. Run the extractor guide's private live tests for extractor code changes,
-   plus affected resolver/transfer checks. Parsing replay alone does not
-   establish that a deferred link can be downloaded.
-5. Run the relevant repository checks, with `make check` as the broad gate.
-   Useful backend checks, from `backend/`, are:
+Compare the selected extractor, title, note, file order, names, directories,
+sizes and `SizeApprox`, headers, candidate choice and hook presence. Check
+hook behavior separately with local servers: execute a resolver twice under
+controlled responses and routes, and verify that it refreshes the right
+fields. Comparing closures or merely checking that they are non-nil is not
+behavioral equivalence.
 
-   ```sh
-   go test ./internal/extractor ./internal/httpx ./internal/download -race
-   go vet ./...
-   go vet -tags live ./...
-   ```
+Count requests by method, logical endpoint, representation and attempt. A
+reduced parser allocation count must not hide extra page probes, token calls,
+playlist fetches or requests after a cap/cancellation.
 
-6. Update area guides in the same commit as the code; update user reference
-   material when visible behavior changes. Regenerate the supported inventory
-   with `make hosts` if registration/descriptions change. Commit small changes
-   on `main` using generic behavior descriptions, following repository policy.
+### Shared test matrix
 
-Keep refactors, deliberate note changes, scheduling changes and provider
-protocol fixes in separate commits. Revert a problematic consumer migration
-independently; retain an old adapter only during migration and remove it when
-its replacement is established.
+| Contract | Existing tests to build on | Additional coverage for this plan |
+| --- | --- | --- |
+| Document ownership | `page_test.go`, `docreuse_test.go`, `rawtext_test.go` | Same-page reuse versus fresh attempt; representation variants; shared decoded slices/maps |
+| Recognition and routing | `recognise_test.go`, `registry_test.go`, `strictprobe_test.go`, `playerprobe_test.go` | Overlapping-family precedence and adapted readers through the real registry |
+| Engine rows | `players_test.go`, `shares_test.go` | Exclusive acquisition modes and signing-option consistency |
+| Traversal and accounting | `pages_test.go`, `listing_test.go`, `resolve_test.go`, `sources_test.go`, `tree_test.go` | Explicit end-policy matrix and preserved child/cap accounting |
+| Media and deferred resolution | `refresh_media_test.go`, provider fixtures, `hls_test.go` | Fresh attempts retain keys/tracks/control hooks and extension choices |
+| Concurrency and HTTP | `fanout_test.go`, `resolve_test.go`, `internal/httpx` tests | Actual HTTP admission, body-close ownership, cancellation and nested progress |
+| Credentials and sessions | `renewable_test.go`, provider-specific tests | Admission/coalescing interaction and route/session isolation |
+
+Run focused tests while developing. For each completed code unit, run the
+extractor and affected-package race suites and vet. Before completing the
+consolidation, run the repository checks:
+
+```bash
+# From backend/
+go test -race ./internal/extractor ./internal/httpx
+go vet ./... && go vet -tags live ./...
+
+# From the repository root
+make hosts-check
+make check
+```
+
+For parser-performance work, extend `BenchmarkProbedReaders` with the migrated
+readers and compare before/after allocations and time under the same fixture
+and machine conditions. Do not set an arbitrary percentage reduction target.
+
+### Recorded and live validation
+
+Use the private corpus instructions in `hl-priv/README.md`. The existing
+runner defaults to replay and fails on missing recordings:
+
+```bash
+# From the private hl-priv checkout
+./support/audit-corpus.sh ../HeapLeach
+```
+
+Compare extractor choice, metadata, ordering, refusal classification and
+request identities. Keep negative cases. Request-count changes need review;
+a missing recording after a refactor may identify an unintended new request.
+Do not enable capture or refresh simply to make a parser regression disappear.
+Refresh missing responses explicitly when a justified request change or site
+change requires it, then replay again offline.
+
+The corpus harness preserves responses, redirects and metadata-helper output
+without invoking file resolvers or downloading media. Its anonymous lookup
+omits cookies and authorization, so it cannot prove session isolation; use
+synthetic servers for that contract. Parsing success also cannot establish
+that a deferred signed transfer works. Run the applicable private live tests
+separately after extractor changes, as the area guide requires.
+
+All live URLs, real filenames, recordings and live-test source stay in
+`hl-priv`. Public fixtures use invented names and reserved domains. Before each
+public commit, run the repository's content-reference check and inspect the
+actual diff; a small regular expression does not catch every real filename.
+
+## Evidence collected for this plan
+
+- Graph discovery and call tracing covered the shared engines, readers and
+  traversal helpers, followed by source inspection for material claims.
+  Exact-path coverage was checked for 136 extractor paths plus the supporting
+  files relied on. Twelve production broadcaster files had single-line parse
+  gaps around `new(media.file(...))`; those ranges were read directly.
+  Private live-test symlinks were outside the graph scope. Graph call counts
+  were treated as navigation aids, not exhaustive proof.
+- `go test -race ./internal/extractor ./internal/httpx` passed on the audited
+  adoption tree using Go's test cache.
+- `TestNestedListingsMultiplyTheirBound` was rerun uncached and reported the
+  36/72 callback peaks described above.
+- The temporary registry-versus-reader retry reproduction was run uncached
+  against a local synthetic server and passed its assertions about the
+  current failure. It used no live requests and left no test file behind.
+- The private replay runner's documented boundaries were reviewed. The full
+  corpus and live transfer suites were not run for this documentation task.
+
+These checks support the plan's concrete findings. They do not establish that
+all providers are currently reachable, that every similar code block is
+interchangeable, or that the proposed abstractions already improve performance.
 
 ## Definition of done
 
-- Each new production helper has at least two compatible real consumers and
-  removes an independently implemented responsibility. Existing helpers can
-  be adopted one reader at a time.
-- The archive and collection pilots retain shared outcome accounting through
-  result construction, with omissions and child reports handled deliberately.
-- The three measured document readers use one parse of the supplied page,
-  with unchanged metadata and no extra requests.
-- The migrated folder readers consume typed walk completion; display wording
-  is no longer an input to their orchestration.
-- Host-specific recognition, naming, ordering, signing, media selection and
-  route behavior remain covered. Any visible change is separately documented.
-- Obsolete implementation paths are removed, guides describe the result, and
-  relevant tests/replay pass. Admission is either independently validated or
-  explicitly deferred; it does not block the core reuse work.
-
-Stop expanding an abstraction when it needs a growing collection of host
-switches, hides protocol decisions, or adds more adaptation code than shared
-responsibility. Fewer independently maintained policies is the success measure;
-a target percentage of deleted lines is not.
-
-## Investigation limits
-
-This is a task-directed review, not an exhaustive protocol audit. Structural
-discovery used the codebase graph, call traces and source checks. Exact-path
-coverage was checked for the evidence files; reported broadcaster parse gaps
-were inspected directly. Graph counts for same-named Go methods were not used
-as per-method impact measurements.
-
-The focused ownership, document-reuse, outcome, pagination and nested-map tests
-passed with the race detector, as did the temporary accounting and parse-count
-probes described above. No live transfer, corpus refresh, complete private
-replay or full `make check` was run for this documentation-only change. The
-future migration gates above remain work for the implementation commits.
+- [ ] The known stale-probe retry case succeeds through the registry.
+- [ ] Reuse, freshness and representation identity have one documented owner.
+- [ ] Each new shared parser path has multiple real callers and removes their
+  duplicate implementation; fresh transfer-time reads remain fresh.
+- [ ] Migrated listings distinguish expected ends from incomplete work using
+  typed state, with reviewed user-visible notes.
+- [ ] Nested discovery has a measured HTTP bound and no parent/child deadlock.
+- [ ] Selected media-finalization adopters preserve every file and track field.
+- [ ] Existing paths, recognition, ordering, caps and route behavior remain
+  stable except for explicitly tested changes.
+- [ ] Obsolete adapters are deleted; remaining exceptions are explained next
+  to their code; the extractor choice table and host guides match reality.
+- [ ] Synthetic checks, applicable private replay/live checks, vet, inventory
+  validation and required repository checks pass for the implementation.
