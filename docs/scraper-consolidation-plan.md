@@ -269,20 +269,20 @@ behaviors. See [listing.go](../backend/internal/extractor/listing.go) and
   distinctions for the evidence a reader supplies, such as expected missing
   next page versus redirect outside the listing; `pageOf.stop` currently
   carries display text, which should not become a control-flow input.
-- [ ] Replace a broad `quiet` choice with explicit accepted end conditions.
+- [x] Replace a broad `quiet` choice with explicit accepted end conditions.
   A caller may accept empty/repeated results or particular later-page HTTP
   statuses as its normal end. Unexpected failures and exhausted page budgets
   retain an incomplete-result reason by default.
-- [ ] Use shared named policies only when at least two callers have the same
+- [x] Use shared named policies only when at least two callers have the same
   conditions. Keep the reader responsible for recognizing its own end page,
   following filters and advancing its cursor.
 - [x] Retain the original error in typed completion state where a caller
   needs to distinguish status, challenge and transport failure. Rendering a
   note must not be how a caller recovers that information.
-- [ ] Migrate one caller per behavior review. Preserve first-page errors and
+- [x] Migrate one caller per behavior review. Preserve first-page errors and
   cancellation precedence. Note changes are deliberate user-visible changes,
   not an incidental consequence of replacing a helper.
-- [ ] Remove `quiet` and redundant failure hooks only after all callers have
+- [x] Remove `quiet` and redundant failure hooks only after all callers have
   an explicit policy and tests for their chosen interpretation.
 
 Acceptance table:
@@ -587,7 +587,7 @@ interchangeable, or that the proposed abstractions already improve performance.
 - [ ] Reuse, freshness and representation identity have one documented owner.
 - [ ] Each new shared parser path has multiple real callers and removes their
   duplicate implementation; fresh transfer-time reads remain fresh.
-- [ ] Migrated listings distinguish expected ends from incomplete work using
+- [x] Migrated listings distinguish expected ends from incomplete work using
   typed state, with reviewed user-visible notes.
 - [ ] Nested discovery has a measured HTTP bound and no parent/child deadlock.
 - [ ] Selected media-finalization adopters preserve every file and track field.

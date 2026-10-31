@@ -148,7 +148,10 @@ func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]
 		block string
 	)
 	links, title, note, err := walkListing(ctx, client, first, listingWalk{
-		name: kvsLabel, title: l.title(root), quiet: true, root: root,
+		name: kvsLabel, title: l.title(root), root: root,
+		// The stated total, a page adding nothing, or one without the
+		// listing is where it ends; a page that fails is a cut.
+		ends:  walkAccepts{repeated: true, missing: true},
 		limit: l.fileCap(), limitNote: fileLimitNote,
 		fetch: fetchAsAsked(client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {

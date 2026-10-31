@@ -364,7 +364,7 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 				break
 			}
 			if level < depth {
-				subs, err := m.subcategories(ctx, site, category, opts)
+				subs, subNote, err := m.subcategories(ctx, site, category, opts)
 				if err != nil {
 					if ctx.Err() != nil {
 						return nil, ctx.Err()
@@ -372,6 +372,7 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 					note = joinNotes(note, mediaWikiSkipped)
 					continue
 				}
+				note = joinNotes(note, subNote)
 				for _, sub := range subs {
 					if !seen[sub] {
 						seen[sub] = true
@@ -398,12 +399,12 @@ func (m *MediaWiki) category(ctx context.Context, site mediaWikiSite, u *url.URL
 const mediaWikiSkipped = "partial — unreadable subcategories"
 
 // subcategories lists one category's child categories, as many as the walk
-// may still visit.
-func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title string, opts Options) ([]string, error) {
+// may still visit, with the note for a listing of them cut short.
+func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title string, opts Options) ([]string, string, error) {
 	query := mediaWikiQuery("list", "categorymembers", "cmtitle", title, "cmtype", "subcat",
 		"cmlimit", mediaWikiPageLimit)
-	subs, _, err := mediaWikiWalk(ctx, m, site, query, pageWalk[string]{
-		key: func(sub string) string { return sub }, limit: opts.maxSources(), quiet: true,
+	return mediaWikiWalk(ctx, m, site, query, pageWalk[string]{
+		key: func(sub string) string { return sub }, limit: opts.maxSources(),
 	}, func(resp *mediaWikiResponse) []string {
 		out := make([]string, 0, len(resp.Query.CategoryMembers))
 		for _, member := range resp.Query.CategoryMembers {
@@ -411,7 +412,6 @@ func (m *MediaWiki) subcategories(ctx context.Context, site mediaWikiSite, title
 		}
 		return out
 	})
-	return subs, err
 }
 
 // article resolves every image an article uses.

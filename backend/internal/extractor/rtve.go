@@ -296,10 +296,10 @@ func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string,
 			}
 			return pageOf[T]{items: doc.Page.Items, next: true, end: len(doc.Page.Items) == 0, pages: max(doc.Page.TotalPages, 1)}, nil
 		},
-		key:   key,
-		quiet: true,
-		// A later page failing still leaves the earlier ones.
-		failed: func(error) (string, bool) { return couldNotFetchNote, true },
+		key: key,
+		// A page past the end answers with the first again; a later page
+		// failing still leaves the earlier ones, and is noted.
+		ends: walkAccepts{repeated: true},
 	})
 	if err != nil {
 		return nil, false, "", fmt.Errorf("rtve: listing %s: %w", endpoint, err)

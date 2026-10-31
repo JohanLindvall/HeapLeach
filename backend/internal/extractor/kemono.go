@@ -136,12 +136,7 @@ func (k *Kemono) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 			}
 			return n
 		},
-		failed: func(err error) (string, bool) {
-			if httpx.HasStatus(err, http.StatusBadRequest) {
-				return "", true
-			}
-			return "", false
-		},
+		ends: walkAccepts{statuses: []int{http.StatusBadRequest}},
 		fetch: func(ctx context.Context, _ int) (pageOf[kemonoPost], error) {
 			var posts []kemonoPost
 			if err := k.client.GetJSON(ctx, fmt.Sprintf("%s/posts?o=%d", api, offset), kemonoHeaders(root), &posts); err != nil {

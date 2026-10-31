@@ -64,9 +64,9 @@ func TestWalkListing(t *testing.T) {
 		items  int
 		note   string
 		failed string
-		// quiet walks the listing as one that ends where it stops, with a
-		// failed hook naming a rate limit.
-		quiet bool
+		// sentinel walks the listing as one whose end is found by asking
+		// past it: a 404, a repeated page or one without the listing.
+		sentinel bool
 		// cancel is the page whose request cancels the walk as it is
 		// answered.
 		cancel int
@@ -122,46 +122,46 @@ func TestWalkListing(t *testing.T) {
 		{name: "exact cap at the end", limit: 2, items: 2, body: func(int) string {
 			return listPage("", "a", "b")
 		}},
-		{name: "quiet end at a missing page", quiet: true, items: 1, body: func(n int) string {
+		{name: "end at a missing page", sentinel: true, items: 1, body: func(n int) string {
 			if n == 1 {
 				return listPage("?page=2", "a")
 			}
 			return ""
 		}},
-		{name: "quiet rate limit", quiet: true, items: 1, note: "partial — rate limited", body: func(n int) string {
+		{name: "rate limit is a cut", sentinel: true, items: 1, note: "partial — rate limited", body: func(n int) string {
 			if n == 1 {
 				return listPage("?page=2", "a")
 			}
 			return "429"
 		}},
-		{name: "quiet repeated page", quiet: true, items: 2, body: func(n int) string {
+		{name: "repeated page is the end", sentinel: true, items: 2, body: func(n int) string {
 			if n == 1 {
 				return listPage("?page=2", "a")
 			}
 			return listPage("/list", "b")
 		}},
-		{name: "quiet page adding nothing", quiet: true, items: 3, body: func(n int) string {
+		{name: "page adding nothing is the end", sentinel: true, items: 3, body: func(n int) string {
 			if n == 1 {
 				return listPage("?page=2", "a", "b")
 			}
 			return listPage("?page=3", "b", "c")
 		}},
-		{name: "quiet page limit", quiet: true, items: config.MaxAlbumPages, body: func(n int) string {
+		{name: "page limit is a cut", sentinel: true, items: config.MaxAlbumPages, note: "partial — page limit", body: func(n int) string {
 			return listPage("?page="+strconv.Itoa(n+1), strconv.Itoa(n))
 		}},
-		{name: "quiet missing", quiet: true, items: 1, body: func(n int) string {
+		{name: "missing listing is the end", sentinel: true, items: 1, body: func(n int) string {
 			if n == 1 {
 				return listPage("?page=2", "a")
 			}
 			return "<p>gone</p>"
 		}},
-		{name: "quiet redirected", quiet: true, items: 1, body: func(n int) string {
+		{name: "redirect is a cut", sentinel: true, items: 1, note: "partial — next page redirected to another listing", body: func(n int) string {
 			if n == 1 {
 				return listPage("?page=2", "a")
 			}
 			return "redirect"
 		}},
-		{name: "quiet cap keeps its note", quiet: true, limit: 2, items: 2, note: "partial — source limit", body: func(int) string {
+		{name: "cap keeps its note", sentinel: true, limit: 2, items: 2, note: "partial — source limit", body: func(int) string {
 			return listPage("?page=2", "a", "b", "c")
 		}},
 		{name: "cancelled", cancel: 2, failed: context.Canceled.Error(), body: func(n int) string {
@@ -210,14 +210,8 @@ func TestWalkListing(t *testing.T) {
 			walk := listingWalk{
 				name: "test", title: "fallback", none: "nothing here", limit: limit, limitNote: "partial — source limit", read: testListingPage,
 			}
-			if tc.quiet {
-				walk.quiet = true
-				walk.failed = func(err error) (string, bool) {
-					if httpx.HasStatus(err, http.StatusTooManyRequests) {
-						return "partial — rate limited", true
-					}
-					return "", true
-				}
+			if tc.sentinel {
+				walk.ends = walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound}}
 			}
 			links, title, note, err := walkListing(ctx, testClient(), mustParse(t, srv.URL+"/list"), walk)
 			if tc.failed != "" {
@@ -243,7 +237,7 @@ func TestWalkPages(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		pages []pageOf[string]
-		quiet bool
+		ends  walkAccepts
 		items string
 		note  string
 		asked int
@@ -259,13 +253,16 @@ func TestWalkPages(t *testing.T) {
 		}, items: "a,b", asked: 2},
 		{name: "last page note", pages: []pageOf[string]{
 			{items: []string{"a"}, note: "partial — invalid next page"},
-		}, quiet: true, items: "a", note: "partial — invalid next page", asked: 1},
+		}, ends: walkAccepts{repeated: true}, items: "a", note: "partial — invalid next page", asked: 1},
 		{name: "stop page", pages: []pageOf[string]{
 			{items: []string{"a"}, next: true}, {items: []string{"b"}, stop: "partial — redirected"},
 		}, items: "a", note: "partial — redirected", asked: 2},
-		{name: "quiet stop page keeps its own note", pages: []pageOf[string]{
-			{items: []string{"a"}, next: true}, {stop: "partial — redirected", note: "partial — gone"},
-		}, quiet: true, items: "a", note: "partial — gone", asked: 2},
+		{name: "accepted stop page keeps its own note", pages: []pageOf[string]{
+			{items: []string{"a"}, next: true}, {stop: "partial — redirected", stopped: stopRedirected, note: "partial — gone"},
+		}, ends: walkAccepts{redirected: true}, items: "a", note: "partial — gone", asked: 2},
+		{name: "accepted stop page without a note", pages: []pageOf[string]{
+			{items: []string{"a"}, next: true}, {stop: "partial — redirected", stopped: stopRedirected},
+		}, ends: walkAccepts{redirected: true}, items: "a", asked: 2},
 		{name: "failed hook", pages: []pageOf[string]{
 			{items: []string{"a"}, next: true}, {},
 		}, items: "a", note: "partial — gone", asked: 2},
@@ -273,7 +270,7 @@ func TestWalkPages(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			asked := 0
 			items, note, err := walkPages(context.Background(), pageWalk[string]{
-				key: func(s string) string { return s }, limit: -1, quiet: tc.quiet,
+				key: func(s string) string { return s }, limit: -1, ends: tc.ends,
 				failed: func(err error) (string, bool) { return "partial — " + err.Error(), true },
 				fetch: func(_ context.Context, n int) (pageOf[string], error) {
 					asked++
@@ -400,7 +397,7 @@ func TestWalkListingCallerOwnedFirstPage(t *testing.T) {
 
 	empty := mustParseDoc(t, `<h1>Nothing</h1><div id="list"></div>`)
 	links, title, note, err = walkListing(context.Background(), client, mustParse(t, srv.URL+"/list"), listingWalk{
-		name: "test", limit: -1, quiet: true, read: testListingPage, root: empty,
+		name: "test", limit: -1, read: testListingPage, root: empty, ends: walkAccepts{repeated: true},
 	})
 	if err != nil || len(links) != 0 || title != "Nothing" || note != "" {
 		t.Fatalf("empty listing: links=%d title=%q note=%q err=%v", len(links), title, note, err)

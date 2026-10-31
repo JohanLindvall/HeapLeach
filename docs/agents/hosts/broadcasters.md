@@ -27,7 +27,8 @@ and radio-canada, whose episodes are resolved when their transfers start,
 walk the whole listing to the page cap and cut it to the file cap after.
 A listing whose end is found by asking past it (rtve, which answers a page
 past the end with the first again, and francetv's `toutes-les-videos`)
-walks `quiet`, with the failure note kept for a page that really failed.
+accepts a page adding nothing as its end (`walkAccepts{repeated}`), with
+the failure note kept for a page that really failed and the page cap noted.
 Where a later page fails, the note says so ("partial — could not fetch next
 page", or "the listing broke off partway" for rtbf, radio-canada and yle,
 whose notes already said it that way, and for a drtv season that could not

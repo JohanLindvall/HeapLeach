@@ -72,12 +72,18 @@ func TestWalkPagesEndsAtTheStatedPageCount(t *testing.T) {
 
 // TestWalkPagesFailedHookDefers leaves the note for a failed later page to
 // the walk when the hook declines to decide it: its own note, or none when
-// the walk is quiet; a decided "" stays no note at all.
+// the walk accepts the failure; a decided "" stays no note at all.
 func TestWalkPagesFailedHookDefers(t *testing.T) {
+	accepting := func(accept bool) walkAccepts {
+		if accept {
+			return walkAccepts{statuses: []int{http.StatusNotFound}}
+		}
+		return walkAccepts{}
+	}
 	for _, tc := range []struct {
 		hook    string
 		decided bool
-		quiet   bool
+		accept  bool
 		want    string
 	}{
 		{"", false, false, "partial — could not fetch next page"},
@@ -86,17 +92,17 @@ func TestWalkPagesFailedHookDefers(t *testing.T) {
 		{"partial — rate limited", true, true, "partial — rate limited"},
 	} {
 		_, note, err := walkPages(context.Background(), pageWalk[string]{
-			key: func(s string) string { return s }, limit: -1, quiet: tc.quiet,
+			key: func(s string) string { return s }, limit: -1, ends: accepting(tc.accept),
 			failed: func(error) (string, bool) { return tc.hook, tc.decided },
 			fetch: func(_ context.Context, n int) (pageOf[string], error) {
 				if n > 0 {
-					return pageOf[string]{}, errors.New("gone")
+					return pageOf[string]{}, &httpx.StatusError{Code: http.StatusNotFound}
 				}
 				return pageOf[string]{items: []string{"a"}, next: true}, nil
 			},
 		})
 		if err != nil || note != tc.want {
-			t.Errorf("hook %q, quiet %v: note = %q, err = %v; want %q", tc.hook, tc.quiet, note, err, tc.want)
+			t.Errorf("hook %q, accepted %v: note = %q, err = %v; want %q", tc.hook, tc.accept, note, err, tc.want)
 		}
 	}
 }

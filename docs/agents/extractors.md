@@ -360,7 +360,7 @@ intact. `sources.go` holds what they share:
   (`walkEpisodes`), walks through `walkPages` (`pages.go`). The caller's `fetch` reads page *n*
   and keeps the cursor, offset or page number in its own closure; the engine
   owns the rest, once: a first page that fails is the caller's error as it
-  stands and a later one a partial listing (or quiet, or the `failed` hook's
+  stands and a later one a partial listing (or an accepted end, or the `failed` hook's
   note), entries deduplicated by `key`, a page that adds nothing ends the
   walk, the page cap (`config.MaxAlbumPages` unless `pages` says otherwise),
   the limit and its note, and cancellation, which is never a partial listing.
@@ -369,7 +369,7 @@ intact. `sources.go` holds what they share:
   the entries and a `walkEnd`, which carries the `walkStop` (the listing's
   own end, the limit, the page cap, a repeated or empty page, a stop page, a
   later page that failed) beside the page's and the `failed` hook's notes
-  and the walk's `quiet` and `limitNote`. `walkEnd.render` alone turns that
+  and the walk's `ends` and `limitNote`. `walkEnd.render` alone turns that
   into the note `walkPages` has always returned, string for string, and
   `walkEnd.reason` into the same thing as a bare reason for a caller that
   marks its result partial itself. A caller that needs the reason reads
@@ -396,10 +396,10 @@ intact. `sources.go` holds what they share:
   outwait ("rate limited", read off the kept error), and the page cap. A
   stop page carries its kind (`pageOf.stopped`: `stopRepeatedPage`,
   `stopMissing`, `stopRedirected`) beside its wording, and the policy reads
-  the kind, never the text. `TestWalkEndPolicies` is the matrix. `quiet` is
-  the older blanket form, accepting every end alike, and remains only until
-  its callers declare their ends; `failed` maps a failure to a note of the
-  caller's own where the shared wording does not fit. `note` is a reason the
+  the kind, never the text. `TestWalkEndPolicies` is the matrix. There is
+  no blanket switch accepting every end alike: each listing names its own.
+  `failed` maps a failure to a note of the caller's own where the shared
+  wording does not fit. `note` is a reason the
   walk ends early, such as a next page that cannot be followed.
 - Stop **at** the cap rather than collecting everything and truncating: a
   broad search can state tens of thousands of pages. Where every entry costs a
@@ -621,7 +621,7 @@ list below.
   it rather than beside a copy of it. Options cover the rest:
   a first page the caller already read (`root`), a fetch of its own (`fetch`,
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
-  (`anyRedirect`), and the engine's `ends`, `quiet` and `failed`; a `failed` hook
+  (`anyRedirect`), and the engine's `ends` and `failed`; a `failed` hook
   returns its note and whether it decided one, and a hook that singles out
   one failure returns false for the rest, leaving their note to the walk. `expansion.note` (`sources.go`) builds the job note
   of a listing expanded into its sources, `partialNote` its caps.

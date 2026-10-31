@@ -30,7 +30,8 @@ type pageOf[T any] struct {
 	// states that instead: the walk ends with page pages-1.
 	pages int
 	// note is why the walk ends here though the listing goes on, such as
-	// a next page that cannot be followed. It stands in a quiet walk too.
+	// a next page that cannot be followed. It stands whatever the walk
+	// accepts.
 	note string
 	// stop marks a page that is not the listing's — missing, read twice,
 	// redirected elsewhere: the walk ends without its items, with stop as
@@ -46,7 +47,7 @@ type pageStop int
 
 const (
 	// stopOther is a page not the listing's for a reason of the reader's
-	// own, which no policy accepts but quiet.
+	// own, which no policy accepts.
 	stopOther pageStop = iota
 	// stopRepeatedPage is a page already read, served again.
 	stopRepeatedPage
@@ -120,16 +121,12 @@ type pageWalk[T any] struct {
 	weigh func([]T) int
 	// pages caps the pages read, config.MaxAlbumPages when zero.
 	pages int
-	// ends are the ends this listing takes as its own (walkAccepts).
+	// ends are the ends this listing takes as its own (walkAccepts); the
+	// pages' notes and limitNote stand whatever it accepts.
 	ends walkAccepts
-	// quiet is the older, broader form of ends, kept while callers move
-	// to it: every end the walk would note — a page that adds nothing, a
-	// stop page, the page cap, a later page that fails — is taken as the
-	// listing's own. The pages' notes and limitNote still stand.
-	quiet bool
 	// failed decides the note for a later page that could not be
 	// fetched: the note it returns, "" being none, in place of the walk's
-	// own, or of none when quiet. A hook that singles out one failure
+	// own, or of none when the walk accepts it. A hook that singles out one failure
 	// returns ok false for the rest, which leaves their note to the walk,
 	// as if there were no hook.
 	failed func(error) (note string, ok bool)
@@ -158,7 +155,7 @@ const (
 )
 
 // walkEnd is why a walk ended, apart from its entries: the stop, the notes
-// the pages and hooks gave for it, and the walk's own wording policy (quiet,
+// the pages and hooks gave for it, and the walk's own wording policy (ends,
 // limitNote). It is what a caller that does not need the entries' type —
 // the tree a folder's walk belongs to — takes, and renders itself, so no
 // caller reads a walk's reason back out of its note.
@@ -175,8 +172,7 @@ type walkEnd struct {
 	// fetched, and decided whether the hook gave one.
 	failure string
 	decided bool
-	// quiet, ends and limitNote are the walk's (pageWalk).
-	quiet     bool
+	// ends and limitNote are the walk's (pageWalk).
 	ends      walkAccepts
 	limitNote string
 }
@@ -189,10 +185,10 @@ type walked[T any] struct {
 
 // given is the note a caller gave for the walk's end — a page's, a stop
 // page's, the failed hook's or the limit's — when that is what says it.
-// own is the walk's own reason, bare, when it says it instead; a quiet
+// own is the walk's own reason, bare, when it says it instead; an accepted
 // walk has none.
 func (e walkEnd) given() (note string, own string) {
-	accepted := e.quiet || e.ends.accepts(e)
+	accepted := e.ends.accepts(e)
 	mine := func(reason string) string {
 		if accepted {
 			return ""
@@ -220,7 +216,7 @@ func (e walkEnd) given() (note string, own string) {
 		}
 		// A rate limit the client waited out as far as it would is said
 		// as such: the host asked to come back, not that the listing ended.
-		if httpx.HasStatus(e.err, http.StatusTooManyRequests) && !e.quiet {
+		if httpx.HasStatus(e.err, http.StatusTooManyRequests) {
 			return "", mine(rateLimited)
 		}
 		return "", mine(strings.TrimPrefix(couldNotFetchNote, partialPrefix))
@@ -230,7 +226,8 @@ func (e walkEnd) given() (note string, own string) {
 
 // render is the note a walk that ended so says, exactly as walkPages has
 // always worded it: the page's or the hook's note where they give one, the
-// limit's note, and the walk's own, which a quiet listing does not take.
+// limit's note, and the walk's own, which an end the listing accepts does
+// not take.
 func (e walkEnd) render() string {
 	note, own := e.given()
 	return cmp.Or(note, partial(own))
@@ -264,7 +261,7 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 // walkPagesFor is walkPages with why the walk ended (walked) in place of its
 // note.
 func walkPagesFor[T any](ctx context.Context, w pageWalk[T]) (out walked[T], err error) {
-	out.quiet, out.ends, out.limitNote = w.quiet, w.ends, w.limitNote
+	out.ends, out.limitNote = w.ends, w.limitNote
 	pages := w.pages
 	if pages <= 0 {
 		pages = config.MaxAlbumPages

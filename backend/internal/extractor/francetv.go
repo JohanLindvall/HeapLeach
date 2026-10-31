@@ -402,8 +402,7 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 			limit: -1,
 			// A page past the end lists nothing new, which ends the walk
 			// quietly; a page that fails is a cut, and noted.
-			quiet:  true,
-			failed: func(error) (string, bool) { return couldNotFetchNote, true },
+			ends: walkAccepts{repeated: true},
 		})
 		if err != nil {
 			return nil, err

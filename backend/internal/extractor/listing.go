@@ -72,11 +72,9 @@ type listingWalk struct {
 	// missing is the error for a first page without its listing, in place
 	// of "no video listing on this page".
 	missing string
-	// ends, quiet and failed are walkPages' own: the ends the listing
-	// takes as its own, the older blanket form of that, and the note for a
-	// later page that fails.
+	// ends and failed are walkPages' own: the ends the listing takes as
+	// its own, and the note for a later page that fails.
 	ends   walkAccepts
-	quiet  bool
 	failed func(error) (string, bool)
 }
 
@@ -103,7 +101,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 	pages := make(map[string]bool)
 	links, note, err = walkPages(ctx, pageWalk[listingLink]{
 		key:   func(link listingLink) string { return cmp.Or(link.key, link.url) },
-		limit: w.limit, limitNote: w.limitNote, ends: w.ends, quiet: w.quiet, failed: w.failed,
+		limit: w.limit, limitNote: w.limitNote, ends: w.ends, failed: w.failed,
 		fetch: func(ctx context.Context, n int) (pageOf[listingLink], error) {
 			const repeated = "partial — repeated page"
 			if pages[key(page)] {

@@ -260,8 +260,9 @@ is minted through `Resolve` at download time; a profile of a hundred videos
 would otherwise start failing partway down its own queue. The media requests
 carry no Referer. Profile tabs page by path rather than by a pager link, and
 end on a 404, so the row's listing (`listing.links`, which is handed the
-options) runs a quiet, numbered `walkListing` that names each next page
-itself, held to `listingLimit` like the engine's own walks; each video is
+options) runs a numbered `walkListing` that names each next page itself
+and takes the 404 past the last, a page adding nothing or one without the
+listing as the end; any other failure is noted as a cut, held to `listingLimit` like the engine's own walks; each video is
 queued unread and reopened on its own on recovery.
 
 Two traps, both of which look like working code. The listing lives under
@@ -273,8 +274,8 @@ collects entries the tab does not own. The tab states its own total, which is
 what the profile's `cappedNote` (in `epornerProfile`) compares against, so a short walk says so instead
 of passing for a whole one; a walk the cap cut short carries the cap's note
 in its place. The pages are numbered, and asking past the last
-answers 404, so the profile is a quiet `walkListing` that names each next
-page by number: the stated total, not how the walk stopped, decides whether
+answers 404, so the profile is a `walkListing` that accepts that 404 as its
+end and names each next page by number: the stated total, not how the walk stopped, decides whether
 the listing came back whole.
 
 Titles need `epornerTitle` rather than the shared `trimSiteSuffix`, which cuts
@@ -390,10 +391,11 @@ page at all, since following it resolves straight back to page one. The query
 keeps the escaping it arrived with, because the site writes a plus as `%2B`
 and re-encoding a decoded segment would hand its routing a literal plus.
 
-`kvsListingWalk` hands its pages to the shared `walkListing` as a quiet
-listing, with the first document from the probe or the browse fetch. Its
-reader stops at the stated total, and a later page that fails, repeats or
-adds nothing is the end of the listing rather than a partial one. Every video
+`kvsListingWalk` hands its pages to the shared `walkListing`, with the first
+document from the probe or the browse fetch. Its reader stops at the stated
+total, and a later page that repeats, adds nothing or carries no listing is
+the end of the listing rather than a partial one; a later page that fails is
+a cut, and noted. Every video
 is a page to read, so the walk is held to the file cap and notes when that
 cut it. The videos are read through `readListing` (`kvsListingResult`);
 when none can be, `noneRead` gives the first reason, and videos refused or

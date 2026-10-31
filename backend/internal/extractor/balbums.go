@@ -85,7 +85,7 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 			"list the whole catalogue; paste a /?search=<query> URL", u.Redacted())
 	}
 
-	albums, found, err := b.walk(ctx, first, query, opts.maxSources())
+	albums, found, walkNote, err := b.walk(ctx, first, query, opts.maxSources())
 	if err != nil {
 		return nil, err
 	}
@@ -99,27 +99,28 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	}
 	return &Result{
 		Title: query,
-		Note:  e.note("", sourceWords{noun: "albums", found: max(found, len(albums))}),
+		Note:  e.note(walkNote, sourceWords{noun: "albums", found: max(found, len(albums))}),
 		Files: e.files,
 	}, nil
 }
 
 // walk reads the result pages and collects the albums they link to, with the
-// number the search claims to have.
+// number the search claims to have, and the note for a walk cut short of
+// the results' end.
 //
 // It stops at the cap rather than collecting everything and truncating
 // afterwards, because a two-word search over six hundred thousand albums
 // states twenty thousand pages and walking them to throw all but five away
 // would be a lot of requests to reach the same answer.
-func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit int) (albums []string, found int, err error) {
+func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit int) (albums []string, found int, note string, err error) {
 	headers := httpx.Referer(balbumsRoot + "/")
 	doc, err := b.client.GetString(ctx, balbumsPage(first, 1), headers)
 	if err != nil {
-		return nil, 0, fmt.Errorf("balbums: search for %q: %w", query, err)
+		return nil, 0, "", fmt.Errorf("balbums: search for %q: %w", query, err)
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
-		return nil, 0, nil
+		return nil, 0, "", nil
 	}
 	total := 0
 	if m := balbumsPages.FindStringSubmatch(doc); m != nil {
@@ -134,8 +135,11 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 	seen := make(map[string]bool)
 	page, capped := 0, false
 	start, _ := url.Parse(balbumsPage(first, 1))
-	links, _, _, err := walkListing(ctx, b.client, start, listingWalk{
-		name: "balbums", limit: -1, quiet: true, root: root,
+	// The stated last page, a page adding nothing or one without results
+	// is where they end; a page that fails is a cut, and noted.
+	links, _, note, err := walkListing(ctx, b.client, start, listingWalk{
+		name: "balbums", limit: -1, root: root,
+		ends:  walkAccepts{repeated: true, missing: true},
 		fetch: fetchAsAsked(b.client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {
 			page++
@@ -158,13 +162,13 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 		},
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	albums = listingURLs(links)
 	if capped {
-		return albums[:limit], found, nil
+		return albums[:limit], found, note, nil
 	}
-	return albums, len(albums), nil
+	return albums, len(albums), note, nil
 }
 
 // balbumsSearch reads the query out of a URL and returns the first page of

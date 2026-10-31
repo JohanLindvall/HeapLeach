@@ -92,11 +92,10 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	ownMedia := fapelloMedia(model)
 
 	// Paging past the last page wraps back to the first rather than
-	// returning nothing, so the end is a page that adds nothing new, and
-	// the walk is a quiet one.
+	// returning nothing, so the end is a page that adds nothing new.
 	files, note, err := walkPages(ctx, pageWalk[File]{
 		key:   func(f File) string { return f.URL },
-		limit: opts.maxFiles(), limitNote: fileLimitNote, quiet: true,
+		limit: opts.maxFiles(), limitNote: fileLimitNote, ends: walkAccepts{repeated: true},
 		fetch: func(ctx context.Context, n int) (pageOf[File], error) {
 			target := base + "/" + url.PathEscape(model) + "/"
 			if n > 0 {

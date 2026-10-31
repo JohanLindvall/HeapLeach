@@ -17,10 +17,10 @@ hundred is not refused, it is served as twenty under a page count for twenty,
 so the walk trusts the stated page count and a page that adds nothing, never
 the parameter. Without the shared self-exclusion, the site's own navigation
 would turn one search into a walk of the whole catalogue. The pages go through
-the shared `walkListing` as a quiet, numbered listing: its reader names the
-next page by number and stops at the stated last page, however short, or the
-cap, and a page that is missing or adds nothing is where the results end, not
-a partial job. When none of the albums found resolves, the error is
+the shared `walkListing` as a numbered listing: its reader names the next
+page by number and stops at the stated last page, however short, or the cap,
+and a page that is missing or adds nothing is where the results end, not a
+partial job. A later page that fails is a cut, and its note leads the job's. When none of the albums found resolves, the error is
 `noneRead`'s, naming the first album's refusal or failure; when some do, the
 note counts the caps against what the search found and the albums left out,
 per reason (`expansion.note`).
@@ -31,9 +31,10 @@ A creator's page on coomerfans lists posts but keeps the media on each post's
 own page, and the listing cannot be worked from instead: a post holding a
 video shows no thumbnail there at all. So every post is opened, through
 `readListing`, and a profile none of whose posts could be read says why
-(`noneRead`); one with some unreadable posts counts them in the note. The creator's pages are walked by `walkListing` as a quiet
-listing following its next links: the listing states no length, so a later
-page that fails or adds nothing ends it without a note. Every post costs a
+(`noneRead`); one with some unreadable posts counts them in the note. The creator's pages are walked by `walkListing` following
+its next links. The listing states no length, so a page that adds nothing,
+one without the listing or a 404 past the end is where it ends, with no
+note; a later page that fails any other way is a cut, and noted. Every post costs a
 request, so the walk is held to `listingLimit` and says so when it cuts.
 Posts the site refused are counted in the note (`refusedNote`).
 

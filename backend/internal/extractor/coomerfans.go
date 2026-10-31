@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -284,9 +285,10 @@ func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Re
 //
 // Paging stops at a page that adds nothing new as well as at the absence of
 // a next link, because a listing that runs past its end tends to answer with
-// the last page again rather than with nothing. A later page that will not
-// load or parse ends the walk with the earlier ones, quietly: the listing
-// says nothing of how long it is, so there is nothing to call partial.
+// the last page again rather than with nothing, which is its end, as is a
+// page past the end that answers 404 or carries no listing. A later page
+// that fails any other way ends the walk with the earlier ones, and says
+// the listing was cut: a timeout is not the creator's last post.
 func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([]string, string, string, error) {
 	headers := httpx.Referer(coomerFansRoot + "/")
 	fallback := strings.Trim(u.Path, "/")
@@ -296,7 +298,8 @@ func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options) ([
 	}
 	limit, limitNote := listingLimit(opts)
 	found, title, note, err := walkListing(ctx, c.client, u, listingWalk{
-		name: "coomerfans", title: fallback, quiet: true, root: root,
+		name: "coomerfans", title: fallback, root: root,
+		ends:  walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound}},
 		limit: limit, limitNote: limitNote,
 		fetch: fetchAsAsked(c.client, headers),
 		read: func(root *html.Node, _, _ *url.URL) listingPage {

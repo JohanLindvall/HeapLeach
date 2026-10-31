@@ -201,10 +201,10 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 
 	// A listing run past its end tends to answer with what it already gave
 	// rather than with nothing, so a block that adds nothing is the end
-	// whatever it said, and the walk is a quiet one.
+	// whatever it said. A block that fails is a cut, and noted.
 	links, note, _ := walkPages(ctx, pageWalk[string]{
 		key:   func(link string) string { return link },
-		limit: opts.maxSources(), limitNote: sourceLimitNote, quiet: true,
+		limit: opts.maxSources(), limitNote: sourceLimitNote, ends: walkAccepts{repeated: true},
 		fetch: func(ctx context.Context, n int) (pageOf[string], error) {
 			if n == 0 {
 				return pageOf[string]{items: first, next: true}, nil

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -376,7 +377,11 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 	page := 1
 	limit, limitNote := listingLimit(opts)
 	links, _, note, err := walkListing(ctx, client, first, listingWalk{
-		name: "eporner", quiet: true, anyRedirect: true, root: root,
+		name: "eporner", anyRedirect: true, root: root,
+		// Asking past the last page answers 404; a page adding nothing is
+		// the end too. Any other failure is a cut, and noted beside the
+		// stated total's count.
+		ends:  walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound}},
 		limit: limit, limitNote: limitNote,
 		fetch: fetchAsAsked(client, headers),
 		read: func(root *html.Node, at, _ *url.URL) listingPage {
