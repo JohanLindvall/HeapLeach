@@ -65,6 +65,7 @@ import (
 //     would throw away just as thoroughly. It is walked with a token decoder
 //     instead. See foolFuukaDecode.
 type FoolFuuka struct {
+	about
 	client *httpx.Client
 }
 
@@ -108,21 +109,18 @@ const foolFuukaNormal = "normal"
 const foolFuukaMaxBoardLen = 5
 
 // NewFoolFuuka builds the extractor covering every FoolFuuka archive.
-func NewFoolFuuka(client *httpx.Client) *FoolFuuka { return &FoolFuuka{client: client} }
-
-func (f *FoolFuuka) Name() string { return "foolfuuka" }
-
-// Recognises is the inventory's description.
-func (f *FoolFuuka) Recognises() string {
-	return "FoolFuuka archive threads, posts, searches and board pages (`/<board>/thread/<n>/`, " +
-		"`/<board>/post/<n>/`, `/<board>/search/…`, `/<board>/`) whose page names the software as " +
-		"its generator and loads its `/foolfuuka/` assets, or, behind a challenge, whose origin's " +
-		"`/_/api/chan/` answers the route with archived posts"
+func NewFoolFuuka(client *httpx.Client) *FoolFuuka {
+	return &FoolFuuka{client: client, about: about{name: "foolfuuka", shape: foolFuukaShape,
+		recognises: "FoolFuuka archive threads, posts, searches and board pages (`/<board>/thread/<n>/`, " +
+			"`/<board>/post/<n>/`, `/<board>/search/…`, `/<board>/`) whose page names the software as " +
+			"its generator and loads its `/foolfuuka/` assets, or, behind a challenge, whose origin's " +
+			"`/_/api/chan/` answers the route with archived posts"}}
 }
 
-// Shape reports a thread, post or search. A bare /<board>/ is too common a
-// path to single out, so a board page is recognised only once fetched.
-func (f *FoolFuuka) Shape(u *url.URL) bool {
+// foolFuukaShape is a thread, post or search. A bare /<board>/ is too
+// common a path to single out, so a board page is recognised only once
+// fetched.
+func foolFuukaShape(u *url.URL) bool {
 	t, err := foolFuukaParse(u)
 	return err == nil && t.kind != foolFuukaIndexTarget
 }
@@ -149,19 +147,7 @@ func foolFuukaAnswers(ctx context.Context, p *Page, client *httpx.Client) bool {
 	if err != nil {
 		return false
 	}
-	endpoint := foolFuukaIndexAPI
-	query := url.Values{"board": {t.board}, "page": {strconv.Itoa(t.page)}}
-	switch t.kind {
-	case foolFuukaThreadTarget, foolFuukaPostTarget:
-		endpoint = foolFuukaThreadAPI
-		if t.kind == foolFuukaPostTarget {
-			endpoint = foolFuukaPostAPI
-		}
-		query = url.Values{"board": {t.board}, "num": {t.num}}
-	case foolFuukaSearchTarget:
-		endpoint = foolFuukaSearchAPI
-		maps.Copy(query, t.search)
-	}
+	endpoint, query := t.api()
 	root := util.Origin(p.Final)
 	var raw json.RawMessage
 	if !pageJSON(ctx, p, client, root+endpoint+"?"+query.Encode(), httpx.Referer(root+"/"), &raw) {
@@ -244,6 +230,23 @@ type foolFuukaTarget struct {
 	search url.Values
 	// label describes the search in the job title.
 	label string
+}
+
+// api is the endpoint a target is asked of and its query, at the target's
+// own page for a listing.
+func (t foolFuukaTarget) api() (string, url.Values) {
+	switch t.kind {
+	case foolFuukaThreadTarget:
+		return foolFuukaThreadAPI, url.Values{"board": {t.board}, "num": {t.num}}
+	case foolFuukaPostTarget:
+		return foolFuukaPostAPI, url.Values{"board": {t.board}, "num": {t.num}}
+	}
+	query := url.Values{"board": {t.board}, "page": {strconv.Itoa(t.page)}}
+	if t.kind == foolFuukaSearchTarget {
+		maps.Copy(query, t.search)
+		return foolFuukaSearchAPI, query
+	}
+	return foolFuukaIndexAPI, query
 }
 
 // foolFuukaParse reads an input URL by its shape alone.
@@ -340,9 +343,7 @@ func foolFuukaPageNumber(seg string) int {
 
 // thread lists every attachment in one thread, in the order it was posted.
 func (a *foolFuukaArchive) thread(ctx context.Context, t foolFuukaTarget) (*Result, error) {
-	entries, err := a.call(ctx, foolFuukaThreadAPI, url.Values{
-		"board": {t.board}, "num": {t.num},
-	})
+	entries, err := a.call(ctx, t)
 	if err != nil {
 		return nil, fmt.Errorf("%s: /%s/ thread %s: %w", a.name, t.board, t.num, err)
 	}
@@ -370,15 +371,12 @@ func (a *foolFuukaArchive) thread(ctx context.Context, t foolFuukaTarget) (*Resu
 // The post endpoint answers with the post itself rather than with the
 // keyed object every other endpoint uses, so it is decoded on its own.
 func (a *foolFuukaArchive) post(ctx context.Context, t foolFuukaTarget) (*Result, error) {
-	link := a.root + foolFuukaPostAPI + "?" + url.Values{
-		"board": {t.board}, "num": {t.num},
-	}.Encode()
-
+	endpoint, query := t.api()
 	var payload struct {
 		Error string `json:"error"`
 		foolFuukaPost
 	}
-	if err := a.client.GetJSON(ctx, link, a.headers(), &payload); err != nil {
+	if err := a.client.GetJSON(ctx, a.root+endpoint+"?"+query.Encode(), a.headers(), &payload); err != nil {
 		return nil, fmt.Errorf("%s: /%s/ post %s: %w", a.name, t.board, t.num, err)
 	}
 	if payload.Error != "" {
@@ -402,9 +400,7 @@ func (a *foolFuukaArchive) post(ctx context.Context, t foolFuukaTarget) (*Result
 // a creator's posts and for the same reason: doing it one after another
 // leaves a board resolving for a minute before a byte moves.
 func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Result, error) {
-	entries, err := a.call(ctx, foolFuukaIndexAPI, url.Values{
-		"board": {t.board}, "page": {strconv.Itoa(t.page)},
-	})
+	entries, err := a.call(ctx, t)
 	if err != nil {
 		return nil, fmt.Errorf("%s: /%s/ page %d: %w", a.name, t.board, t.page, err)
 	}
@@ -447,9 +443,7 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 // at all — see index.
 func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []string) ([]File, []string, error) {
 	return resolveFiles(ctx, threads, func(ctx context.Context, num string) ([]File, error) {
-		entries, err := a.call(ctx, foolFuukaThreadAPI, url.Values{
-			"board": {board}, "num": {num},
-		})
+		entries, err := a.call(ctx, foolFuukaTarget{kind: foolFuukaThreadTarget, board: board, num: num})
 		if err != nil || len(entries) == 0 {
 			return nil, err
 		}
@@ -473,9 +467,6 @@ func (a *foolFuukaArchive) expand(ctx context.Context, board string, threads []s
 // an archive taking new posts while the walk is in progress shifts
 // everything down a page, which without this would queue the same file twice.
 func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget, opts Options) (*Result, error) {
-	query := url.Values{"board": {t.board}}
-	maps.Copy(query, t.search)
-
 	posts, note, err := walkPages(ctx, pageWalk[foolFuukaPost]{
 		key: func(post foolFuukaPost) string {
 			if post.Media != nil {
@@ -487,8 +478,9 @@ func (a *foolFuukaArchive) search(ctx context.Context, t foolFuukaTarget, opts O
 		// Most matching posts may be text, so the cap counts attachments.
 		weigh: func(posts []foolFuukaPost) int { return len(a.files(posts, "")) },
 		fetch: func(ctx context.Context, n int) (pageOf[foolFuukaPost], error) {
-			query.Set("page", strconv.Itoa(t.page+n))
-			entries, err := a.call(ctx, foolFuukaSearchAPI, query)
+			page := t
+			page.page += n
+			entries, err := a.call(ctx, page)
 			if err != nil && n > 0 && err.Error() == foolFuukaReason(foolFuukaNoResults) {
 				return pageOf[foolFuukaPost]{end: true}, nil
 			}
@@ -552,8 +544,9 @@ func (a *foolFuukaArchive) files(posts []foolFuukaPost, dir string) []File {
 		case media.RemoteLink != "":
 			// No local copy: what is left is a link the archive recorded
 			// rather than one it serves, and it may not be the file. See
-			// resolveRemote.
-			file.Resolve = a.remoteResolver(media.RemoteLink, name, media.size())
+			// resolveRemote, deferred to the moment the transfer starts.
+			link, size := media.RemoteLink, media.size()
+			file.Resolve = func(ctx context.Context) (*Target, error) { return a.resolveRemote(ctx, link, name, size) }
 		default:
 			continue
 		}
@@ -564,13 +557,6 @@ func (a *foolFuukaArchive) files(posts []foolFuukaPost, dir string) []File {
 
 // headers are what every request for this install carries.
 func (a *foolFuukaArchive) headers() httpx.Header { return httpx.Referer(a.root + "/") }
-
-// remoteResolver defers a fallback link to the moment its transfer starts.
-func (a *foolFuukaArchive) remoteResolver(link, name string, size int64) func(context.Context) (*Target, error) {
-	return func(ctx context.Context) (*Target, error) {
-		return a.resolveRemote(ctx, link, name, size)
-	}
-}
 
 // resolveRemote follows the link an archive recorded for a file it never kept.
 //
@@ -614,7 +600,7 @@ func (a *foolFuukaArchive) resolveRemote(ctx context.Context, link, name string,
 	case status >= 400:
 		return nil, fmt.Errorf("%s: %s was never mirrored here and the link the archive "+
 			"recorded for it answers %d", a.name, name, status)
-	case !foolFuukaIsHTML(contentType):
+	case !strings.Contains(strings.ToLower(contentType), "text/html"):
 		return target, nil
 	}
 
@@ -629,11 +615,6 @@ func (a *foolFuukaArchive) resolveRemote(ctx context.Context, link, name string,
 	}
 	target.URL = next
 	return target, nil
-}
-
-// foolFuukaIsHTML reports whether a content type is a web page.
-func foolFuukaIsHTML(contentType string) bool {
-	return strings.Contains(strings.ToLower(contentType), "text/html")
 }
 
 // foolFuukaRefreshValue picks the location out of a refresh directive, which
@@ -670,12 +651,11 @@ func foolFuukaRefreshTarget(doc, base string) string {
 
 // ----------------------------------------------------------------- the API
 
-// call fetches one endpoint and decodes it.
-func (a *foolFuukaArchive) call(ctx context.Context, endpoint string, query url.Values) ([]foolFuukaEntry, error) {
-	link := a.root + endpoint + "?" + query.Encode()
-
+// call asks the API for a target and decodes the answer.
+func (a *foolFuukaArchive) call(ctx context.Context, t foolFuukaTarget) ([]foolFuukaEntry, error) {
+	endpoint, query := t.api()
 	var raw json.RawMessage
-	if err := a.client.GetJSON(ctx, link, a.headers(), &raw); err != nil {
+	if err := a.client.GetJSON(ctx, a.root+endpoint+"?"+query.Encode(), a.headers(), &raw); err != nil {
 		return nil, err
 	}
 	return foolFuukaDecode(raw)

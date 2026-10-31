@@ -17,7 +17,7 @@ import (
 
 func testBooru(t *testing.T) *Booru {
 	t.Helper()
-	return &Booru{client: testClient()}
+	return NewBooru(testClient())
 }
 
 // ------------------------------------------------------------- szurubooru

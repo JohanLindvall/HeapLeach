@@ -186,7 +186,7 @@ func TestCivitaiRecognise(t *testing.T) {
 // ever sent.
 func TestCivitaiQueryLiftsMatureFiltering(t *testing.T) {
 	raw := civitaiQuery("https://civitai.example/api/v1/images",
-		&civitaiTarget{selector: civitaiByUser, value: "Some Creator"})
+		&civitaiTarget{selector: civitaiByUser, value: "Some Creator"}, civitaiPageSize)
 
 	u := mustParse(t, raw)
 	query := u.Query()
@@ -260,7 +260,7 @@ type civitaiResponse struct {
 // extractor's own handling of an overloaded search rather than the shared
 // client's.
 func civitaiTestClient() *Civitai {
-	return &Civitai{client: testClient()}
+	return NewCivitai(testClient())
 }
 
 // civitaiCursorPage is a page that points at the next one, carrying the cursor and

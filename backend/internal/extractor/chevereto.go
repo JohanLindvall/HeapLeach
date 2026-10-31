@@ -48,6 +48,7 @@ import (
 // metadata this reads. That covers the self-hosted tail without naming a
 // host, and the best-known installs the same way.
 type Chevereto struct {
+	about
 	client *httpx.Client
 }
 
@@ -90,20 +91,12 @@ const (
 var cheveretoThumbInfixes = []string{"md", "th", "fr"}
 
 // NewChevereto builds the extractor covering every Chevereto install.
-func NewChevereto(client *httpx.Client) *Chevereto { return &Chevereto{client: client} }
-
-func (c *Chevereto) Name() string { return cheveretoLabel }
-
-// Recognises is the inventory's description.
-func (c *Chevereto) Recognises() string {
-	return "Chevereto items, albums and user listings: pages below the site root carrying the " +
-		"platform's `CHV.obj` script namespace, or its generator or credit beside the item viewer, " +
-		"the `data-object` listing metadata or the password gate"
+func NewChevereto(client *httpx.Client) *Chevereto {
+	return &Chevereto{client: client, about: about{name: cheveretoLabel, shape: cheveretoPagePath,
+		recognises: "Chevereto items, albums and user listings: pages below the site root carrying the " +
+			"platform's `CHV.obj` script namespace, or its generator or credit beside the item viewer, " +
+			"the `data-object` listing metadata or the password gate"}}
 }
-
-// Shape reports the routes worth a probe: an item, an album, or a user's
-// albums. The short single-segment links are every site's form.
-func (c *Chevereto) Shape(u *url.URL) bool { return cheveretoPagePath(u) }
 
 // Recognise takes a page below the root that carries the platform's own
 // structure. The routes are renameable, so the path beyond that is not
@@ -150,16 +143,10 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 			albums, note = albums[:limit], joinNotes(note, limitNote)
 		}
 		e := cheveretoExpand(ctx, client, albums, opts)
-		if len(e.files) == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			return nil, noneRead(cheveretoLabel, len(albums), "albums", u.Redacted(), e.refusals, e.failed)
+		if err := noneResolved(ctx, e.files, cheveretoLabel, len(albums), "albums", u.Redacted(), e.refusals, e.failed); err != nil {
+			return nil, err
 		}
-		if e.full {
-			note = joinNotes(note, fileLimitNote)
-		}
-		return &Result{Title: listing.title, Files: e.files, Note: joinNotes(note, refusedNote(e.refusals))}, nil
+		return &Result{Title: listing.title, Files: e.files, Note: joinNotes(note, e.limitNote(), refusedNote(e.refusals))}, nil
 	}
 	return cheveretoSingle(root, u, listing.title)
 }
@@ -697,7 +684,9 @@ var cheveretoMediaExts = map[string]bool{
 	".m4v": true, ".html": true, ".htm": true, ".php": true,
 }
 
-// cheveretoPagePath reports whether a path looks like a Chevereto page.
+// cheveretoPagePath reports whether a path looks like a Chevereto page, the
+// routes worth a probe: an item, an album, or a user's albums. The short
+// single-segment links are every site's form.
 func cheveretoPagePath(u *url.URL) bool {
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {

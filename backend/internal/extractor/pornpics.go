@@ -46,6 +46,7 @@ import (
 // category pages, which would be fatal to a regex and is beside the point to
 // a real parser.
 type PornPics struct {
+	about
 	client *httpx.Client
 }
 
@@ -88,9 +89,11 @@ const (
 )
 
 // NewPornPics builds the pornpics extractor.
-func NewPornPics(client *httpx.Client) *PornPics { return &PornPics{client: client} }
-
-func (p *PornPics) Name() string { return "pornpics" }
+func NewPornPics(client *httpx.Client) *PornPics {
+	return &PornPics{client: client, about: about{name: "pornpics", shape: pornpicsShape,
+		recognises: "galleries (`/galleries/<slug>`) and category, tag, pornstar and channel listings whose page " +
+			"sets the site's `PP_LANG` global and marks its links `rel-link`"}}
+}
 
 // pornpicsShape is a gallery, or a tag, pornstar or channel listing, under
 // an optional language prefix. A category is a bare /<name>/, which is no
@@ -99,15 +102,6 @@ var pornpicsShape = pathShape(
 	`^/(?:[a-z]{2}/)?galleries/[^/.]+/?$`,
 	`^/(?:[a-z]{2}/)?(?:tags|pornstars|channels)/[^/]+/?$`,
 )
-
-// Recognises is the inventory's description.
-func (p *PornPics) Recognises() string {
-	return "galleries (`/galleries/<slug>`) and category, tag, pornstar and channel listings whose page " +
-		"sets the site's `PP_LANG` global and marks its links `rel-link`"
-}
-
-// Shape reports a gallery or a named listing.
-func (p *PornPics) Shape(u *url.URL) bool { return pornpicsShape(u) }
 
 // Recognise takes a page below the root that carries what the extractor
 // reads: the PP_LANG global the pager is chosen by and the rel-link anchors
@@ -164,17 +158,12 @@ func pornpicsGallery(doc string, u *url.URL) (*Result, error) {
 			continue
 		}
 		seen[link] = true
-		files = append(files, File{
-			// The CDN names every image after the gallery it belongs to, so
-			// these are already distinct across the whole site.
-			Name: util.NameFromURL(link),
-			URL:  link,
-			// The page prints a count and each image's pixel dimensions but
-			// never a length — and the count it prints is not reliably the
-			// number of images it carries either, so there is nothing here
-			// worth reporting as a size.
-			Size: -1,
-		})
+		// The CDN names every image after the gallery it belongs to, so
+		// these are already distinct across the whole site. The page prints
+		// a count and each image's pixel dimensions but never a length — and
+		// the count it prints is not reliably the number of images it
+		// carries either, so there is nothing here worth reporting as a size.
+		files = append(files, linkFile(link, nil))
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no images in %s (the gallery may have been removed)", u.Redacted())
@@ -224,23 +213,11 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 	// folder holding an arbitrary prefix of its pictures looks like a
 	// finished download and is not; a gallery that will not open leaves the
 	// rest, and why comes back for when none did.
-	e := expandSourcesWith(ctx, links, opts, func(ctx context.Context, link string) (*Result, error) {
-		u, err := ParseURL(link)
-		if err != nil {
-			return nil, err
-		}
-		return p.gallery(ctx, u)
-	})
-	if len(e.files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead("pornpics", len(links), "galleries", u.Redacted(), e.refusals, e.failed)
+	e := expandSourcesWith(ctx, links, opts, opening(p.gallery))
+	if err := noneResolved(ctx, e.files, "pornpics", len(links), "galleries", u.Redacted(), e.refusals, e.failed); err != nil {
+		return nil, err
 	}
-	if e.full {
-		note = joinNotes(note, fileLimitNote)
-	}
-	return &Result{Title: pornpicsTitle(root, u), Files: e.files, Note: note}, nil
+	return &Result{Title: pornpicsTitle(root, u), Files: e.files, Note: joinNotes(note, e.limitNote())}, nil
 }
 
 // block fetches one page of a listing and reads the galleries out of it.

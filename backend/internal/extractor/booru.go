@@ -34,30 +34,56 @@ import (
 // splitting on the one step that differs would duplicate the seven that do
 // not.
 
-// booruAPI is one API family.
+// booruAPI is one API family, its dialect in booruDialects.
 type booruAPI int
 
 const (
-	// apiDanbooru: GET /posts.json -> [ {file_url, id, ...} ], page=N
 	apiDanbooru booruAPI = iota
-	// apiE621: GET /posts.json -> {posts: [ {file: {url}}, ... ]}, page=N
 	apiE621
-	// apiMoebooru: GET /post.json -> [ {file_url, id, ...} ], page=N
 	apiMoebooru
-	// apiGelbooru: GET /index.php?page=dapi&s=post&q=index&json=1, pid=N
 	apiGelbooru
-	// apiPhilomena: GET /api/v1/json/search/images -> {images: [...]}, page=N
 	apiPhilomena
-	// apiTwibooru: a later philomena at /api/v3/search/posts -> {posts: [...]}
 	apiTwibooru
-	// apiSzurubooru: GET /api/posts/?query=<tags> -> {results: [...]},
-	// offset=N counting posts. The Accept header is not optional here: a
-	// request that does not name JSON is answered 406, not with HTML.
 	apiSzurubooru
-	// apiGelbooru01: the booru.org boards, which have no JSON API at all —
-	// page=dapi redirects away — so the listing HTML is what is read.
 	apiGelbooru01
 )
+
+// booruDialect is how a family is asked for one page of posts: its
+// endpoint and the constant part of its query, the parameters naming the
+// search, the page and the page's size (none when limit is ""), and how the
+// page parameter counts — from first, by step a page.
+type booruDialect struct {
+	path, fixed       string
+	tags, page, limit string
+	first, step       int
+	// json marks a family whose API answers a request that does not name
+	// JSON in its Accept header with 406 rather than with HTML.
+	json bool
+}
+
+// booruDialects are the families' listings, and what each answers with.
+var booruDialects = [...]booruDialect{
+	// [ {file_url, id, ...} ]
+	apiDanbooru: {path: "/posts.json", tags: "tags", page: "page", limit: "limit", first: 1, step: 1},
+	// {posts: [ {file: {url}}, ... ]}, at Danbooru's endpoint
+	apiE621: {path: "/posts.json", tags: "tags", page: "page", limit: "limit", first: 1, step: 1},
+	// [ {file_url, id, ...} ]
+	apiMoebooru: {path: "/post.json", tags: "tags", page: "page", limit: "limit", first: 1, step: 1},
+	// {post: [...]}, its pid counting pages from nought
+	apiGelbooru: {path: "/index.php", fixed: "page=dapi&s=post&q=index&json=1",
+		tags: "tags", page: "pid", limit: "limit", step: 1},
+	// {images: [...], total}
+	apiPhilomena: {path: "/api/v1/json/search/images", tags: "q", page: "page", limit: "per_page", first: 1, step: 1},
+	// a later philomena: {posts: [...], total}
+	apiTwibooru: {path: "/api/v3/search/posts", tags: "q", page: "page", limit: "per_page", first: 1, step: 1},
+	// {results: [...], total}, its offset counting posts
+	apiSzurubooru: {path: "/api/posts/", tags: "query", page: "offset", limit: "limit", step: booruPageSize, json: true},
+	// the booru.org boards, which have no JSON API at all — page=dapi
+	// redirects away — so the listing HTML is what is read. Its pid counts
+	// posts rather than pages: the board's own paginator steps it by the
+	// size of a page, which the board offers no way to change.
+	apiGelbooru01: {path: "/index.php", fixed: "page=post&s=list", tags: "tags", page: "pid", step: gelbooru01PageSize},
+}
 
 // booruSite is the board one URL is on, as recognition established it.
 type booruSite struct {
@@ -110,25 +136,21 @@ const philomenaEverything = "Everything"
 // sites answer the page with a challenge while serving their JSON openly,
 // so a page that cannot say is asked of the API alone.
 type Booru struct {
+	about
 	client *httpx.Client
 }
 
-// NewBooru builds the image-board extractor.
-func NewBooru(client *httpx.Client) *Booru { return &Booru{client: client} }
-
-func (b *Booru) Name() string { return "booru" }
-
-// Recognises is the inventory's description.
-func (b *Booru) Recognises() string {
-	return "image-board tag searches and posts on Danbooru, e621, Moebooru, Gelbooru, Philomena, " +
-		"Twibooru and szurubooru boards (`/posts?tags=`, `/posts/<id>`, `/post/show/<id>`, " +
-		"`/index.php?page=post`, `/images/<id>`, `/post/<id>`) whose page carries the software's " +
-		"markup and whose API answers for the same post or listing; Gelbooru 0.1 boards by their " +
-		"listing markup alone"
+// NewBooru builds the image-board extractor. Its shape is the forms the
+// families lay their posts out at.
+func NewBooru(client *httpx.Client) *Booru {
+	return &Booru{client: client, about: about{name: "booru",
+		shape: func(u *url.URL) bool { return len(booruCandidates(u)) > 0 },
+		recognises: "image-board tag searches and posts on Danbooru, e621, Moebooru, Gelbooru, Philomena, " +
+			"Twibooru and szurubooru boards (`/posts?tags=`, `/posts/<id>`, `/post/show/<id>`, " +
+			"`/index.php?page=post`, `/images/<id>`, `/post/<id>`) whose page carries the software's " +
+			"markup and whose API answers for the same post or listing; Gelbooru 0.1 boards by their " +
+			"listing markup alone"}}
 }
-
-// Shape reports the forms the families lay their posts out at.
-func (b *Booru) Shape(u *url.URL) bool { return len(booruCandidates(u)) > 0 }
 
 // Recognise takes a post or listing form whose page is a board's, by its
 // markup, and whose API then answers; or, where the page cannot say, whose
@@ -440,62 +462,27 @@ func (b *Booru) posts(ctx context.Context, site *booruSite, tags, single string,
 // files: asking an image server for JSON is a different question.
 func (s *booruSite) apiHeaders() httpx.Header {
 	headers := httpx.Referer(s.root + "/")
-	if s.api == apiSzurubooru {
+	if booruDialects[s.api].json {
 		headers[httpx.HeaderAccept] = httpx.ContentTypeJSON
 	}
 	return headers
 }
 
-// endpoint builds the API request for one page.
+// endpoint builds the API request for one page, counted from 0, in the
+// family's dialect.
 func (s *booruSite) endpoint(tags string, page int) string {
-	query := url.Values{}
-	switch s.api {
-	case apiGelbooru:
-		query.Set("page", "dapi")
-		query.Set("s", "post")
-		query.Set("q", "index")
-		query.Set("json", "1")
-		query.Set("tags", tags)
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		query.Set("pid", strconv.Itoa(page)) // zero-based
-		return s.root + "/index.php?" + query.Encode()
-	case apiGelbooru01:
-		query.Set("page", "post")
-		query.Set("s", "list")
-		query.Set("tags", tags)
-		// pid counts posts rather than pages here: the board's own paginator
-		// steps it by the size of a page.
-		query.Set("pid", strconv.Itoa(page*gelbooru01PageSize))
-		return s.root + "/index.php?" + query.Encode()
-	case apiSzurubooru:
-		query.Set("query", tags)
-		query.Set("offset", strconv.Itoa(page*booruPageSize))
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		return s.root + "/api/posts/?" + query.Encode()
-	case apiPhilomena:
-		query.Set("q", tags)
-		query.Set("per_page", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		if s.filterID != "" {
-			query.Set("filter_id", s.filterID)
-		}
-		return s.root + "/api/v1/json/search/images?" + query.Encode()
-	case apiTwibooru:
-		query.Set("q", tags)
-		query.Set("per_page", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		return s.root + "/api/v3/search/posts?" + query.Encode()
-	case apiMoebooru:
-		query.Set("tags", tags)
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		return s.root + "/post.json?" + query.Encode()
-	default: // danbooru, e621
-		query.Set("tags", tags)
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		return s.root + "/posts.json?" + query.Encode()
+	d := booruDialects[s.api]
+	query, _ := url.ParseQuery(d.fixed)
+	query.Set(d.tags, tags)
+	query.Set(d.page, strconv.Itoa(d.first+page*d.step))
+	if d.limit != "" {
+		query.Set(d.limit, strconv.Itoa(booruPageSize))
 	}
+	// Only a philomena site's is ever looked up.
+	if s.filterID != "" {
+		query.Set("filter_id", s.filterID)
+	}
+	return s.root + d.path + "?" + query.Encode()
 }
 
 // page fetches and normalises one response, whatever shape it arrives in,

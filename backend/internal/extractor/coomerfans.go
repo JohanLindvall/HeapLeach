@@ -31,6 +31,7 @@ import (
 // item starts rather than when the page is read. Image links are plain and
 // need no such treatment.
 type CoomerFans struct {
+	about
 	client *httpx.Client
 }
 
@@ -44,10 +45,11 @@ const (
 
 // NewCoomerFans builds the coomerfans extractor.
 func NewCoomerFans(client *httpx.Client) *CoomerFans {
-	return &CoomerFans{client: client}
+	return &CoomerFans{client: client, about: about{name: "coomerfans",
+		shape: eitherShape(coomerFansProfileShape, coomerFansPostShape),
+		recognises: "creator pages (`/u/<service>/<id>/<name>`) listing that creator's `/p/` posts, and posts " +
+			"(`/p/<post>/<id>/<service>`) carrying the `post-body` the media is read from"}}
 }
-
-func (c *CoomerFans) Name() string { return "coomerfans" }
 
 var (
 	// coomerFansPostLink is a link to a post, capturing the creator's id.
@@ -57,17 +59,6 @@ var (
 	// coomerFansPostShape is a post, /p/<post>/<id>/<service>.
 	coomerFansPostShape = pathShape(`^/p/\d+/\d+/[A-Za-z]+/?$`)
 )
-
-// Recognises is the inventory's description.
-func (c *CoomerFans) Recognises() string {
-	return "creator pages (`/u/<service>/<id>/<name>`) listing that creator's `/p/` posts, and posts " +
-		"(`/p/<post>/<id>/<service>`) carrying the `post-body` the media is read from"
-}
-
-// Shape reports a creator's page or a post.
-func (c *CoomerFans) Shape(u *url.URL) bool {
-	return coomerFansProfileShape(u) || coomerFansPostShape(u)
-}
 
 // Recognise takes a post whose page has the post-body coomerFansPost reads,
 // or a creator's page linking posts of that same creator, which is what
@@ -249,14 +240,20 @@ func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Re
 	if len(links) == 0 {
 		return nil, fmt.Errorf("coomerfans: no posts on %s", u.Redacted())
 	}
-	files, refusals, failed := c.expand(ctx, links)
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
+	// Every post is read, several at a time, in the listing's order; a post
+	// that will not load leaves the rest.
+	files, refused, err := readListing(ctx, "coomerfans", "posts", u.Redacted(), links, func(ctx context.Context, link string) ([]File, error) {
+		u, err := ParseURL(link)
+		if err != nil {
 			return nil, err
 		}
-		return nil, noneRead("coomerfans", len(links), "posts", u.Redacted(), refusals, failed)
+		files, _, err := c.postFiles(ctx, u)
+		return files, err
+	})
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refused)}, nil
 }
 
 // postLinks walks the creator's pages for the posts they list, up to the
@@ -319,18 +316,4 @@ func coomerFansIsPost(link string) bool {
 	}
 	segs := util.PathSegments(u)
 	return len(segs) >= 2 && segs[0] == "p"
-}
-
-// expand reads every post page, several at a time, in the listing's order
-// (resolveFiles); a post that will not load leaves the rest, and why comes
-// back beside the files for when none could be read.
-func (c *CoomerFans) expand(ctx context.Context, links []string) ([]File, []string, error) {
-	return resolveFiles(ctx, links, func(ctx context.Context, link string) ([]File, error) {
-		u, err := ParseURL(link)
-		if err != nil {
-			return nil, err
-		}
-		files, _, err := c.postFiles(ctx, u)
-		return files, err
-	})
 }

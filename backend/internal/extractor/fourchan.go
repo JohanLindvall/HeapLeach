@@ -18,6 +18,7 @@ import (
 // FourChan resolves 4chan threads through the site's read-only JSON API,
 // which needs no key and is served from a separate host to the boards.
 type FourChan struct {
+	about
 	client *httpx.Client
 	// api and files are the two hosts this reads, kept as fields only so a
 	// test can point them at a fixture server.
@@ -33,23 +34,14 @@ const (
 
 // NewFourChan builds the 4chan extractor.
 func NewFourChan(client *httpx.Client) *FourChan {
-	return &FourChan{client: client, api: fourChanAPI, files: fourChanFiles}
+	return &FourChan{client: client, api: fourChanAPI, files: fourChanFiles, about: about{name: "4chan", shape: fourChanShape,
+		recognises: "4chan threads (`/<board>/thread/<number>`) whose page renders the thread's own " +
+			"`t<number>` container on the board and names the site"}}
 }
-
-func (f *FourChan) Name() string { return "4chan" }
 
 // fourChanShape is a thread: /<board>/thread/<number>, optionally with the
 // slug the site appends.
 var fourChanShape = pathShape(`^/[a-z0-9]{1,8}/thread/[0-9]+(/[^/]*)?/?$`)
-
-// Recognises is the inventory's description.
-func (f *FourChan) Recognises() string {
-	return "4chan threads (`/<board>/thread/<number>`) whose page renders the thread's own " +
-		"`t<number>` container on the board and names the site"
-}
-
-// Shape reports a thread link.
-func (f *FourChan) Shape(u *url.URL) bool { return fourChanShape(u) }
 
 // Recognise takes a thread page whose board renders this very thread — the
 // container the site's scripts number after it — and that calls itself

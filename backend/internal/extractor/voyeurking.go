@@ -22,31 +22,24 @@ import (
 // Keep the host's File intact so its resolver, free-download pacing and
 // proxy route are chosen by the downloader when the transfer starts.
 type VoyeurKing struct {
+	about
 	client   *httpx.Client
 	registry *Registry
 }
 
 func NewVoyeurKing(client *httpx.Client, registry *Registry) *VoyeurKing {
-	return &VoyeurKing{client: client, registry: registry}
+	return &VoyeurKing{client: client, registry: registry, about: about{name: "voyeurking",
+		shape: eitherShape(voyeurKingVideoShape, voyeurKingListing),
+		recognises: "video pages (`/video/<slug>`) and category and collection listings (`/categories/<name>`, " +
+			"`/collection/<slug>`) whose React Router data names the `routes/video.$slug`, `routes/categories` or " +
+			"`routes/collection` route"}}
 }
-
-func (v *VoyeurKing) Name() string { return "voyeurking" }
 
 // voyeurKingVideoShape is a video's page, /video/<slug>.
 var voyeurKingVideoShape = pathShape(`^/video/[^/.]+/?$`)
 
 // voyeurKingRouterContext is the React Router data every page streams.
 const voyeurKingRouterContext = "window.__reactRouterContext.streamController.enqueue("
-
-// Recognises is the inventory's description.
-func (v *VoyeurKing) Recognises() string {
-	return "video pages (`/video/<slug>`) and category and collection listings (`/categories/<name>`, " +
-		"`/collection/<slug>`) whose React Router data names the `routes/video.$slug`, `routes/categories` or " +
-		"`routes/collection` route"
-}
-
-// Shape reports a video or a listing.
-func (v *VoyeurKing) Shape(u *url.URL) bool { return voyeurKingVideoShape(u) || voyeurKingListing(u) }
 
 // Recognise takes a page streaming the React Router data video decodes,
 // for the route that matches its form: the video route for a video, the
@@ -87,8 +80,8 @@ func (v *VoyeurKing) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(e.files) == 0 {
-		return nil, noneRead("voyeurking", len(sources), "videos", first.Redacted(), e.refusals, e.failed)
+	if err := noneResolved(ctx, e.files, "voyeurking", len(sources), "videos", first.Redacted(), e.refusals, e.failed); err != nil {
+		return nil, err
 	}
 	return &Result{Title: title, Note: expansionNote(note, e, len(sources), "videos"), Files: e.files}, nil
 }
@@ -200,15 +193,9 @@ func voyeurKingPageData(doc string) (voyeurKingData, error) {
 		return nil, err
 	}
 	var stream strings.Builder
-	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		var body string
-		for node := script.FirstChild; node != nil; node = node.NextSibling {
-			if node.Type == html.TextNode {
-				body += node.Data
-			}
-		}
+	for _, body := range scriptTexts(root) {
 		for {
-			_, rest, found := strings.Cut(body, "window.__reactRouterContext.streamController.enqueue(")
+			_, rest, found := strings.Cut(body, voyeurKingRouterContext)
 			if !found {
 				break
 			}

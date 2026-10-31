@@ -53,8 +53,8 @@ note for what stopped it, leaving the creator's folder name stable.
 ## cum.st
 
 Creator pages use `/creators/<service>/<id>` and individual posts append
-`/post/<post>`. The public API resembles Kemono's route names, but its schema
-is different: post listings wrap records with a `total`, and attachments have
+`/post/<post>`. The public API uses Kemono's route names (`creatorAPI`
+builds both), but its schema is different: post listings wrap records with a `total`, and attachments have
 content hashes and variants rather than downloadable `path` fields. Keep its
 dedicated extractor instead of registering it as a Kemono alias.
 

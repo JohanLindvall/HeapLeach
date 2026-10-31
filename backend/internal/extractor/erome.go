@@ -23,6 +23,7 @@ import (
 // CDN checks Referer, and that each item is rendered twice (once for the
 // inline player, once for the lightbox), so the list needs de-duplicating.
 type Erome struct {
+	about
 	client *httpx.Client
 }
 
@@ -31,24 +32,15 @@ const eromeReferer = "https://www.erome.com"
 
 // NewErome builds the erome extractor.
 func NewErome(client *httpx.Client) *Erome {
-	return &Erome{client: client}
+	return &Erome{client: client, about: about{name: "erome", shape: eromeAlbumShape,
+		recognises: "albums (`/a/<id>`) and profiles (`/<user>`) whose page carries the site's album markup " +
+			"(the album title heading and media group, or a profile's album links)"}}
 }
-
-func (e *Erome) Name() string { return "erome" }
 
 // eromeAlbumShape is an album link, /a/<id>. A profile is a bare /<user>,
 // which is every site's navigation too, so it is no shape: a profile is
 // recognised by its page alone.
 var eromeAlbumShape = pathShape(`^/a/[A-Za-z0-9]+/?$`)
-
-// Recognises is the inventory's description.
-func (e *Erome) Recognises() string {
-	return "albums (`/a/<id>`) and profiles (`/<user>`) whose page carries the site's album markup " +
-		"(the album title heading and media group, or a profile's album links)"
-}
-
-// Shape reports an album link.
-func (e *Erome) Shape(u *url.URL) bool { return eromeAlbumShape(u) }
 
 // Recognise takes an album page carrying the markup album reads — the
 // album-title heading over the media group — or a profile page listing
@@ -104,23 +96,11 @@ func (e *Erome) profile(ctx context.Context, u *url.URL, opts Options) (*Result,
 	// own order however the requests interleave, stops at the file cap, and
 	// skips an unavailable album rather than sinking the rest, its reason
 	// kept for when no album held anything.
-	expanded := expandSourcesNamed(ctx, albums, opts, func(ctx context.Context, link string) (*Result, error) {
-		albumURL, err := ParseURL(link)
-		if err != nil {
-			return nil, err
-		}
-		return e.album(ctx, albumURL)
-	}, eromeFolders)
-	if len(expanded.files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead("erome", len(albums), "albums", "profile "+u.Redacted(), expanded.refusals, expanded.failed)
+	expanded := expandSourcesNamed(ctx, albums, opts, opening(e.album), eromeFolders)
+	if err := noneResolved(ctx, expanded.files, "erome", len(albums), "albums", "profile "+u.Redacted(), expanded.refusals, expanded.failed); err != nil {
+		return nil, err
 	}
-	if expanded.full {
-		note = joinNotes(note, fileLimitNote)
-	}
-	return &Result{Title: title, Files: expanded.files, Note: note}, nil
+	return &Result{Title: title, Files: expanded.files, Note: joinNotes(note, expanded.limitNote())}, nil
 }
 
 // profileAlbums walks a profile's pages for the albums they list, up to the
@@ -307,7 +287,7 @@ func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
 			// eager src is a thumbnail, so prefer data-src when present.
 			if v := attr(n, "data-src"); v != "" {
 				urls = append(urls, resolveRef(u, v))
-			} else if hasClass(n, "img-front") || hasClass(n, "img-back") {
+			} else if hasAnyClass(n, "img-front", "img-back") {
 				urls = append(urls, resolveRef(u, attr(n, "src")))
 			}
 		}
@@ -318,12 +298,7 @@ func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
 		if !isEromeMedia(raw) {
 			continue
 		}
-		files = append(files, File{
-			Name:    util.NameFromURL(raw),
-			URL:     raw,
-			Size:    -1,
-			Headers: httpx.Referer(eromeReferer),
-		})
+		files = append(files, linkFile(raw, httpx.Referer(eromeReferer)))
 	}
 	if len(files) == 0 {
 		return nil, fmt.Errorf("erome: no media found in %s (album may be private or removed)", u.Redacted())
