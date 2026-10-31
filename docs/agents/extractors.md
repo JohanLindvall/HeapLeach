@@ -450,6 +450,18 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
+Before writing a new extractor, pick its shape from this table; before
+adding another walker, resolver, formatter or cache, look for it in the
+list below.
+
+| The site | Write | Where |
+| --- | --- | --- |
+| A video page whose player names its renditions | a `playerSite` row | `playersites.go` |
+| A stateless share or album page read by its own parser | a `shareSite` row, unless its `Recognise` must accept pages its forms do not describe | `shares.go` |
+| A link that only hands off to another host's page, or a page that only points at one | a `handoffSite` or `pointerSite` row | `handoffs.go`, `pointers.go` |
+| Software many operators run | one platform-family extractor keyed on its fingerprint | [Platform families](#platform-families) |
+| A host with tokens, quotas, cooldowns, sessions or signing of its own | a dedicated extractor, composing the helpers below | its own file |
+
 - `about` (`extractor.go`): an extractor's name, inventory text and shape
   as one embedded row, so its constructor reads as data rather than three
   hand-written methods. Every extractor embeds it, and so does every engine

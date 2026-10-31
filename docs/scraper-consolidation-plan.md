@@ -3,9 +3,12 @@
 [Documentation](README.md) · [Architecture](architecture.md) ·
 [Extractor guide](agents/extractors.md)
 
-Status: proposed; this document does not implement the refactors.
+Status: steps 1–3 implemented, with the extractor guide's choice table from
+step 5; step 4 (discovery request admission) remains a separate follow-up,
+and the rest of step 5 (file reorganisation) is optional and not started.
 Reviewed on 2026-10-31 against
-`52d5652ade12336e0efba53bbc76929985ff40f7`.
+`52d5652ade12336e0efba53bbc76929985ff40f7`; the observations below describe
+the code before the implementation.
 
 ## Recommendation
 
