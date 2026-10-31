@@ -51,13 +51,12 @@ type keep2ShareService struct {
 	// free that the site offers to premium users alone. Empty asks nothing.
 	files string
 
-	// cooldown is when the host's wait between free downloads runs out. It
-	// holds back every file from this address, not only the one that was
-	// told, so the rest learn it here rather than each solving a CAPTCHA to
-	// be told again. Each host keeps its own: one's wait says nothing of
-	// the other's.
-	mu        sync.Mutex
-	cooldowns map[string]time.Time
+	// cooldowns are when the host's wait between free downloads runs out, by
+	// route. One holds back every file from that address, not only the one
+	// that was told, so the rest learn it here rather than each solving a
+	// CAPTCHA to be told again. Each host keeps its own: one's wait says
+	// nothing of the other's.
+	cooldowns routeWaits
 }
 
 func (s *keep2ShareService) cooldownNote() string {
@@ -69,36 +68,15 @@ func (s *keep2ShareService) errorf(format string, args ...any) error {
 	return fmt.Errorf(strings.ToLower(s.label)+": "+format, args...)
 }
 
-func keep2ShareRoute(ctx context.Context) string {
-	if id := httpx.RouteID(ctx); id != "" {
-		return id
-	}
-	return httpx.DirectRoute
-}
-
 // wait records the host's wait between free downloads and returns the error
 // that puts a file back in the queue until it is over.
 func (s *keep2ShareService) wait(ctx context.Context, delay time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.cooldowns == nil {
-		s.cooldowns = make(map[string]time.Time)
-	}
-	route := keep2ShareRoute(ctx)
-	if until := time.Now().Add(delay); until.After(s.cooldowns[route]) {
-		s.cooldowns[route] = until
-	}
-	return &WaitError{Until: s.cooldowns[route], Reason: s.cooldownNote()}
+	return s.cooldowns.hold(ctx, delay, s.cooldownNote())
 }
 
 // waiting returns that error while the wait is still on, and nil after.
 func (s *keep2ShareService) waiting(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if until := s.cooldowns[keep2ShareRoute(ctx)]; time.Now().Before(until) {
-		return &WaitError{Until: until, Reason: s.cooldownNote()}
-	}
-	return nil
+	return s.cooldowns.waiting(ctx, s.cooldownNote())
 }
 
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
@@ -258,12 +236,6 @@ func (r *keep2ShareResponse) Error() string {
 	return r.host + ": " + message
 }
 
-// refusesAddress reports a refusal of the address asking rather than of the
-// file. Asked for the same file through twenty-two public proxies in one
-// sample, six were answered errorCode 42 with no reason at all while sixteen
-// got tickets, so that answer says nothing about the file. Neither do a wait
-// longer than the limit (detail 5, once retryDelay has declined it) or
-// another free download running from the same address (detail 6).
 // limitsAddress reports a free-download limit on the address that asked
 // rather than on the file: its traffic (detail 2, "Traffic limit exceed")
 // or its count of downloads (detail 1). Asked for one such file through
@@ -282,6 +254,12 @@ func (r *keep2ShareResponse) limitsAddress() bool {
 	return false
 }
 
+// refusesAddress reports a refusal of the address asking rather than of the
+// file. Asked for the same file through twenty-two public proxies in one
+// sample, six were answered errorCode 42 with no reason at all while sixteen
+// got tickets, so that answer says nothing about the file. Neither do a wait
+// longer than the limit (detail 5, once retryDelay has declined it) or
+// another free download running from the same address (detail 6).
 func (r *keep2ShareResponse) refusesAddress() bool {
 	// A reCAPTCHA in place of the image is asked of addresses the host
 	// mistrusts, and another may be given the image.
@@ -449,7 +427,7 @@ func (d *keep2ShareDownload) prune(route string, st *keep2ShareFree) {
 func (d *keep2ShareDownload) resolve(ctx context.Context) (*Target, error) {
 	// CAPTCHA tickets and storage links belong to the public IP that
 	// obtained them, so each route has its own free flow.
-	route := keep2ShareRoute(ctx)
+	route := waitRoute(ctx)
 	st := d.free(route)
 	st.mu.Lock()
 	defer st.mu.Unlock()

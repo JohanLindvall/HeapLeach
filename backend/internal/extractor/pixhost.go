@@ -15,7 +15,7 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// Pixhost resolves galleries and single images.
+// pixhost resolves galleries and single images.
 //
 // A gallery page carries a thumbnail per image, and a thumbnail's link says
 // where the full image is: the two differ only by host prefix and one path
@@ -26,9 +26,6 @@ import (
 //
 // Single viewer pages take the other route and read the image straight off
 // the page, because there is no saving to be had from one request either way.
-type Pixhost struct {
-	client *httpx.Client
-}
 
 const pixhostRoot = "https://pixhost.to"
 
@@ -36,11 +33,7 @@ const pixhostRoot = "https://pixhost.to"
 const pixhostImageID = "image"
 
 // NewPixhost builds the pixhost extractor.
-func NewPixhost(client *httpx.Client) *Pixhost {
-	return &Pixhost{client: client}
-}
-
-func (p *Pixhost) Name() string { return "pixhost" }
+func NewPixhost(client *httpx.Client) *Share { return newShare(client, &pixhostSite) }
 
 // pixhostGalleryShape is a gallery, /gallery/<code>; pixhostImageShape a
 // viewer page, /show/<group>/<file>.
@@ -49,49 +42,48 @@ var (
 	pixhostImageShape   = pathShape(`^/show/[0-9]+/[^/]+$`)
 )
 
-// Recognises is the inventory's description.
-func (p *Pixhost) Recognises() string {
-	return "galleries (`/gallery/<code>`) of `/thumbs/<group>/<file>` thumbnails, and viewer pages " +
-		"(`/show/<group>/<file>`) showing an `img#image` from `/images/`"
-}
-
-// Shape reports a gallery or a viewer page.
-func (p *Pixhost) Shape(u *url.URL) bool { return pixhostGalleryShape(u) || pixhostImageShape(u) }
-
-// Recognise reads the images Extract derives the files from: a gallery's
+// pixhostSite reads the images extract derives the files from: a gallery's
 // thumbnails, which name the stored image by their path, and a viewer's
 // full-size image element.
-func (p *Pixhost) Recognise(_ context.Context, page *Page) bool {
-	img := func(test func(n *html.Node, path string) bool) bool {
-		return page.hasElement(func(n *html.Node) bool {
-			if !isElem(n, atom.Img) {
-				return false
-			}
-			src, err := url.Parse(attr(n, "src"))
-			return err == nil && test(n, src.Path)
-		})
-	}
-	switch {
-	case pixhostGalleryShape(page.Final):
-		return img(func(_ *html.Node, path string) bool { return strings.HasPrefix(path, "/thumbs/") })
-	case pixhostImageShape(page.Final):
-		return img(func(n *html.Node, path string) bool {
-			return attr(n, "id") == pixhostImageID && strings.HasPrefix(path, "/images/")
-		})
-	}
-	return false
+var pixhostSite = shareSite{
+	name: "pixhost",
+	recognises: "galleries (`/gallery/<code>`) of `/thumbs/<group>/<file>` thumbnails, and viewer pages " +
+		"(`/show/<group>/<file>`) showing an `img#image` from `/images/`",
+	forms: []shareForm{
+		{pixhostGalleryShape, func(p *Page) bool {
+			return pixhostShows(p, func(_ *html.Node, path string) bool { return strings.HasPrefix(path, "/thumbs/") })
+		}},
+		{pixhostImageShape, func(p *Page) bool {
+			return pixhostShows(p, func(n *html.Node, path string) bool {
+				return attr(n, "id") == pixhostImageID && strings.HasPrefix(path, "/images/")
+			})
+		}},
+	},
+	extract: pixhostExtract,
 }
 
-// Extract resolves a gallery or a single image.
-func (p *Pixhost) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+// pixhostShows reports an image on the page that passes test, given its
+// element and the path of its source.
+func pixhostShows(p *Page, test func(n *html.Node, path string) bool) bool {
+	return p.hasElement(func(n *html.Node) bool {
+		if !isElem(n, atom.Img) {
+			return false
+		}
+		src, err := url.Parse(attr(n, "src"))
+		return err == nil && test(n, src.Path)
+	})
+}
+
+// pixhostExtract resolves a gallery or a single image.
+func pixhostExtract(ctx context.Context, s *Share, u *url.URL, _ Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) == 0 {
 		return nil, fmt.Errorf("pixhost: %s names no gallery or image", u.Redacted())
 	}
 
-	root, _, err := fetchRoot(ctx, p.client, u, httpx.Referer(pixhostRoot+"/"))
+	root, err := s.root(ctx, u, pixhostRoot+"/")
 	if err != nil {
-		return nil, fmt.Errorf("pixhost: fetch %s: %w", u.Redacted(), err)
+		return nil, err
 	}
 
 	switch segs[0] {

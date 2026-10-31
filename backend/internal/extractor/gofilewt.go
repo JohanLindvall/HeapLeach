@@ -182,9 +182,7 @@ func gofileSecretFrom(script string) (string, error) {
 	// The file writes most of its characters as \xNN escapes. Undoing that
 	// first means every pattern below can look for what the string says
 	// rather than for how it was spelled.
-	script = gofileHexEscape.ReplaceAllStringFunc(script, func(esc string) string {
-		return string(rune(hexByte(esc[2], esc[3])))
-	})
+	script = gofileUnescape(script)
 
 	alphabet, err := gofileAlphabet(script)
 	if err != nil {
@@ -404,16 +402,11 @@ func printableASCII(text string) bool {
 	return true
 }
 
-func hexByte(hi, lo byte) byte { return hexDigit(hi)<<4 | hexDigit(lo) }
-
-func hexDigit(c byte) byte {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0'
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10
-	}
-	return 0
+// gofileUnescape undoes the script's \xNN escapes.
+func gofileUnescape(script string) string {
+	return gofileHexEscape.ReplaceAllStringFunc(script, func(esc string) string {
+		// The pattern admits two hexadecimal digits only, so this cannot fail.
+		b, _ := strconv.ParseUint(esc[2:], 16, 8)
+		return string(rune(b))
+	})
 }

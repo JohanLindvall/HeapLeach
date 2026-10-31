@@ -194,7 +194,7 @@ func TestGoogleDriveRecognise(t *testing.T) {
 
 // mediafireFolderServer serves folder listings by "<key> <kind> <chunk>",
 // each the JSON of one chunk; anything else fails.
-func mediafireFolderServer(t *testing.T, chunks map[string]string) (*Mediafire, *atomic.Int32) {
+func mediafireFolderServer(t *testing.T, chunks map[string]string) (*Share, *atomic.Int32) {
 	t.Helper()
 	var asked atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +212,7 @@ func mediafireFolderServer(t *testing.T, chunks map[string]string) (*Mediafire, 
 		fmt.Fprintf(w, `{"response":{"result":"Success","folder_content":%s}}`, body)
 	}))
 	t.Cleanup(srv.Close)
-	return &Mediafire{client: testClient(), api: srv.URL}, &asked
+	return &Share{client: testClient(), site: &mediafireSite, api: srv.URL}, &asked
 }
 
 // TestMediafireFolderPages covers a folder share's chunks: a repeated chunk
@@ -226,7 +226,7 @@ func TestMediafireFolderPages(t *testing.T) {
 		"sub files 1":     `{"files":[{"quickkey":"qb","filename":"b.bin"}],"more_chunks":"no"}`,
 		"nothing files 1": `{"files":[],"more_chunks":"no"}`,
 	})
-	res, err := m.extractFolder(context.Background(), "root", Options{})
+	res, err := mediafireShare(context.Background(), m, "root", Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,20 +242,20 @@ func TestMediafireFolderPages(t *testing.T) {
 		"leaf files 1":   `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"no"}`,
 		"leaf folders 1": `{"folders":[],"more_chunks":"no"}`,
 	})
-	if res, err := leaf.extractFolder(context.Background(), "leaf", Options{}); err != nil || len(res.Files) != 1 || res.Note != "" {
+	if res, err := mediafireShare(context.Background(), leaf, "leaf", Options{}); err != nil || len(res.Files) != 1 || res.Note != "" {
 		t.Errorf("a folder of one file: %+v, %v", res, err)
 	}
 
 	// A folder whose subfolders will not list and that holds no files of
 	// its own is a folder that could not be read.
-	if _, err := m.extractFolder(context.Background(), "nothing", Options{}); err == nil {
+	if _, err := mediafireShare(context.Background(), m, "nothing", Options{}); err == nil {
 		t.Error("an unreadable folder resolved")
 	}
 
 	full, asked := mediafireFolderServer(t, map[string]string{
 		"root files 1": `{"files":[{"quickkey":"qa","filename":"a.bin"},{"quickkey":"qb","filename":"b.bin"}],"more_chunks":"yes"}`,
 	})
-	res, err = full.extractFolder(context.Background(), "root", Options{limits: Limits{Files: 1}})
+	res, err = mediafireShare(context.Background(), full, "root", Options{limits: Limits{Files: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}

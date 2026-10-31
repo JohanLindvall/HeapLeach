@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -65,8 +64,7 @@ type Mega struct {
 	seq atomic.Int64
 
 	// spent is when each route's transfer quota is back, by route.
-	mu    sync.Mutex
-	spent map[string]time.Time
+	spent routeWaits
 }
 
 const (
@@ -527,7 +525,7 @@ type megaDownloadLink struct {
 // answered with the time left instead, which is that address's wait, and is
 // not asked again before it is over.
 func (m *Mega) link(ctx context.Context, folder string, cmd megaCommand) (*megaDownloadLink, error) {
-	if err := m.waiting(ctx); err != nil {
+	if err := m.spent.waiting(ctx, megaQuotaNote); err != nil {
 		return nil, err
 	}
 	var dl megaDownloadLink
@@ -589,27 +587,7 @@ func (m *Mega) spend(ctx context.Context, left time.Duration) error {
 	if left <= 0 {
 		left = config.MegaQuotaWait
 	}
-	route := cmp.Or(httpx.RouteID(ctx), httpx.DirectRoute)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.spent == nil {
-		m.spent = make(map[string]time.Time)
-	}
-	if until := time.Now().Add(left); until.After(m.spent[route]) {
-		m.spent[route] = until
-	}
-	return &WaitError{Until: m.spent[route], Reason: megaQuotaNote}
-}
-
-// waiting returns the route's wait while its quota is used up, and nil after.
-func (m *Mega) waiting(ctx context.Context) error {
-	route := cmp.Or(httpx.RouteID(ctx), httpx.DirectRoute)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if until := m.spent[route]; time.Now().Before(until) {
-		return &WaitError{Until: until, Reason: megaQuotaNote}
-	}
-	return nil
+	return m.spent.hold(ctx, left, megaQuotaNote)
 }
 
 // api sends one command and decodes the single result mega answers with.

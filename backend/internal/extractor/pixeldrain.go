@@ -126,10 +126,7 @@ func pixeldrainAnswers(ctx context.Context, page *Page, client *httpx.Client) bo
 		return pageJSON(ctx, page, client, origin+pixeldrainAPI+"/file/"+url.PathEscape(segs[1])+"/info", nil, &f) &&
 			f.ID == segs[1] && validFile(f)
 	case len(segs) == 2 && segs[0] == "l":
-		var list struct {
-			Success bool             `json:"success"`
-			Files   []pixeldrainFile `json:"files"`
-		}
+		var list pixeldrainList
 		if pageJSON(ctx, page, client, origin+pixeldrainAPI+"/list/"+url.PathEscape(segs[1]), nil, &list) && list.Success {
 			for _, f := range list.Files {
 				if validFile(f) {
@@ -172,13 +169,7 @@ func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 
 // list resolves an album of files.
 func (p *Pixeldrain) list(ctx context.Context, origin, id string) (*Result, error) {
-	var out struct {
-		Success bool             `json:"success"`
-		Title   string           `json:"title"`
-		Files   []pixeldrainFile `json:"files"`
-		Value   string           `json:"value"`
-		Message string           `json:"message"`
-	}
+	var out pixeldrainList
 	endpoint := origin + pixeldrainAPI + "/list/" + url.PathEscape(id)
 	if err := p.client.GetJSON(ctx, endpoint, nil, &out); err != nil {
 		return nil, fmt.Errorf("pixeldrain: list %s: %w", id, err)
@@ -216,6 +207,15 @@ func (p *Pixeldrain) toFile(origin string, f pixeldrainFile) File {
 		Headers: httpx.Referer(origin + "/"),
 		Pace:    &pixeldrainPace,
 	}
+}
+
+// pixeldrainList is a list's metadata: its files, or why there are none.
+type pixeldrainList struct {
+	Success bool             `json:"success"`
+	Title   string           `json:"title"`
+	Files   []pixeldrainFile `json:"files"`
+	Value   string           `json:"value"`
+	Message string           `json:"message"`
 }
 
 // pixeldrainFile is the subset of the file metadata we need.
