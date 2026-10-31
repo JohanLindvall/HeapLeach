@@ -5,9 +5,11 @@ package extractor
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -17,9 +19,9 @@ import (
 
 // Helpers the public broadcasters share. Their APIs have nothing in common,
 // so each keeps its own extractor; what they do share is the shape of what
-// comes back — a programme refused for a reason, a series whose episodes are
-// resolved when their transfers start, and a note on what a listing left
-// out.
+// comes back — a programme refused for a reason, a lone programme named
+// after its series, a listing of episodes resolved one by one or when
+// their transfers start, and a note on what a listing left out.
 
 // broadcastRefusal is a broadcaster declining a programme: gone, live,
 // protected, or shown only somewhere else. It is a type so that a listing
@@ -35,12 +37,85 @@ func (e *broadcastRefusal) Error() string {
 	return e.site + ": " + e.title + ": " + e.reason
 }
 
+// The reasons several broadcasters give in the same words.
+const (
+	refusedDRM           = "it is DRM-protected"
+	refusedLiveBroadcast = "it is a live broadcast, which has no end to download to"
+	refusedLiveStream    = "it is a live stream, which has no end to download to"
+)
+
 // refusalReason is the reason a broadcaster gave, when err is its refusal.
 func refusalReason(err error) (string, bool) {
 	if refusal, ok := errors.AsType[*broadcastRefusal](err); ok {
 		return refusal.reason, true
 	}
 	return "", false
+}
+
+// refusalBody decodes the body of a failed request as JSON, for a
+// broadcaster that says why it refused there rather than in a document of
+// its own; codes, when given, are the statuses that carry such a body.
+func refusalBody[T any](err error, codes ...int) (body T, ok bool) {
+	status, isStatus := errors.AsType[*httpx.StatusError](err)
+	if !isStatus || len(codes) > 0 && !slices.Contains(codes, status.Code) {
+		return body, false
+	}
+	return body, json.Unmarshal([]byte(status.Body), &body) == nil
+}
+
+// broadcastMedia resolves a broadcaster's playlist, a failure reading
+// "<site>: <name>: <cause>".
+func broadcastMedia(ctx context.Context, client *httpx.Client, site, name, link string, headers httpx.Header) (*hlsMedia, error) {
+	media, err := resolveMediaPlaylist(ctx, client, link, headers)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s: %w", site, name, err)
+	}
+	return media, nil
+}
+
+// progressiveFile is a programme's plain file, named only by its extension
+// ext. Its length is left for the response to state: the broadcasters that
+// publish one print no byte count of it, or one of another rendition.
+func progressiveFile(link, ext string, headers httpx.Header) *File {
+	return &File{Name: ext, URL: link, Size: -1, Headers: headers}
+}
+
+// broadcastEpisode is one entry of a broadcaster's listing: the id its
+// player is asked for, the name the listing gave it, the season it is
+// filed under, and its programme where the listing names that per entry.
+type broadcastEpisode struct{ id, name, season, programme string }
+
+// seasonOf is the season an episode is filed under, as series.label takes
+// it.
+func (e broadcastEpisode) seasonOf() string { return e.season }
+
+// listedAs resolves listed episodes through play, which answers with a file
+// named only by its extension and the name the player gives the episode.
+// The file is named by the listing's name, else the player's, else fallback
+// of the id (the id itself when fallback is nil): a listing read again
+// finds what was saved under the same name. A play answering with neither
+// a file nor an error passes the episode over.
+func listedAs(play func(context.Context, string) (*File, string, error), fallback func(string) string) func(context.Context, broadcastEpisode) (*File, error) {
+	return func(ctx context.Context, ep broadcastEpisode) (*File, error) {
+		file, name, err := play(ctx, ep.id)
+		if err != nil || file == nil {
+			return nil, err
+		}
+		id := ep.id
+		if fallback != nil {
+			id = fallback(id)
+		}
+		file.Name = cmp.Or(ep.name, name, id) + file.Name
+		return file, nil
+	}
+}
+
+// soleFile is a lone programme's job: file, named only by its extension,
+// named title. A lone file lands with no folder above it to say what it
+// belongs to, so title carries the programme as well (joinTitle).
+func soleFile(title string, file *File) *Result {
+	file.Name = title + file.Name
+	return &Result{Title: title, Files: []File{*file}}
 }
 
 // listedItem is a listed item with the file it resolved to.

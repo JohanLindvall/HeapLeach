@@ -572,7 +572,7 @@ func TestZDFShowListsEveryVideoOnce(t *testing.T) {
 	res := zdfParse(t, zdfShow)
 
 	refs := res.videos()
-	want := []zdfRef{
+	want := []broadcastEpisode{
 		{id: "third-100", name: "Third", season: "2"},
 		{id: "trailer-100", name: "Trailer: A Show", season: ""},
 		{id: "fourth-100", name: "Fourth", season: "2"},

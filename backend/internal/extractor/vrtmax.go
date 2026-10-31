@@ -226,9 +226,7 @@ func (v *VRTMax) single(ctx context.Context, page *vrtPage, id string) (*Result,
 	if err != nil {
 		return nil, err
 	}
-	title := vrtTitle(programme, cmp.Or(episode, vrtSlug(id)))
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(vrtTitle(programme, cmp.Or(episode, vrtSlug(id))), file), nil
 }
 
 // series expands a programme into one file per episode, filed by season when
@@ -248,28 +246,14 @@ func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id strin
 	// thirty-odd seasons. A whole season refused is a whole season refused
 	// for one reason, and VRT's code for it is the only thing the caller can
 	// act on.
-	return listSeries(ctx, cmp.Or(page.Title, vrtSlug(id)), series[vrtEpisodeRef]{
+	return listSeries(ctx, cmp.Or(page.Title, vrtSlug(id)), series[broadcastEpisode]{
 		site: "vrtmax", noun: "episodes", link: u.Redacted(),
 		items: episodes,
-		label: func(ep vrtEpisodeRef) string { return ep.season },
-		resolve: func(ctx context.Context, ep vrtEpisodeRef) (*File, error) {
-			file, _, episode, err := v.episode(ctx, ep.id)
-			if err != nil {
-				return nil, err
-			}
-			file.Name = cmp.Or(ep.name, episode, vrtSlug(ep.id)) + file.Name
-			return file, nil
-		},
+		label: broadcastEpisode.seasonOf,
+		// An episode's id is its page's own path, which the tile carried.
+		resolve:    listedAs(v.episode, vrtSlug),
 		unplayable: "the listing named them but the player offered no stream",
 	}, lists.note)
-}
-
-// vrtEpisodeRef is one episode of a programme, with the season it belongs to.
-// The id is the episode page's own path, which is what the tile carried.
-type vrtEpisodeRef struct {
-	id     string
-	name   string
-	season string
 }
 
 // vrtList is one list of episodes found on a programme page, with the label
@@ -360,8 +344,8 @@ func (v *VRTMax) fill(ctx context.Context, list vrtList) (seasonList[vrtList], e
 // vrtRefs flattens the filled lists into episode references, keeping the
 // order they were listed in and dropping both the tiles that name something
 // other than an episode and anything an earlier list already claimed.
-func vrtRefs(lists []vrtList) []vrtEpisodeRef {
-	var out []vrtEpisodeRef
+func vrtRefs(lists []vrtList) []broadcastEpisode {
+	var out []broadcastEpisode
 	seen := make(map[string]bool)
 	for _, list := range lists {
 		for _, tile := range list.tiles {
@@ -370,22 +354,24 @@ func vrtRefs(lists []vrtList) []vrtEpisodeRef {
 				continue
 			}
 			seen[link] = true
-			out = append(out, vrtEpisodeRef{id: link, name: tile.Title, season: list.label})
+			out = append(out, broadcastEpisode{id: link, name: tile.Title, season: list.label})
 		}
 	}
 	return out
 }
 
-// episode resolves one episode page id to a playable segment list.
-func (v *VRTMax) episode(ctx context.Context, id string) (*File, string, string, error) {
+// episode resolves one episode page id to a playable segment list, with
+// the episode's name.
+func (v *VRTMax) episode(ctx context.Context, id string) (*File, string, error) {
 	resp, err := v.gql(ctx, vrtEpisodeQuery, id)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
 	if resp.Data.Page == nil || resp.Data.Page.TypeName != vrtEpisodePage {
-		return nil, "", "", fmt.Errorf("vrtmax: %s is not an episode page", id)
+		return nil, "", fmt.Errorf("vrtmax: %s is not an episode page", id)
 	}
-	return v.play(ctx, resp.Data.Page)
+	file, _, episode, err := v.play(ctx, resp.Data.Page)
+	return file, episode, err
 }
 
 // play turns an episode page into a playable segment list. The returned File
@@ -410,9 +396,9 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 	}
 
 	headers := httpx.Referer(vrtRoot + "/")
-	stream, err := resolveMediaPlaylist(ctx, v.client, manifest, headers)
+	stream, err := broadcastMedia(ctx, v.client, "vrtmax", streamID, manifest, headers)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("vrtmax: %s: %w", streamID, err)
+		return nil, "", "", err
 	}
 	// A variant keeping its audio apart comes with it (stream.Audio), which
 	// the downloader joins to the video. Only one naming no audio anywhere
@@ -579,17 +565,12 @@ func vrtReason(code string) string {
 // answers one with HTTP 400 and a body of a single field, so the code arrives
 // inside the status error rather than in a document of its own.
 func vrtRefusalCode(err error) string {
-	status, ok := errors.AsType[*httpx.StatusError](err)
-	if !ok || status.Code != http.StatusBadRequest {
-		return ""
-	}
-	var body struct {
+	if body, ok := refusalBody[struct {
 		Code string `json:"code"`
+	}](err, http.StatusBadRequest); ok {
+		return body.Code
 	}
-	if json.Unmarshal([]byte(status.Body), &body) != nil {
-		return ""
-	}
-	return body.Code
+	return ""
 }
 
 // vrtResponse is the envelope both queries come back in.

@@ -200,9 +200,9 @@ func (o *ORF) stream(ctx context.Context, ep *orfEpisodeDoc) (*Target, error) {
 		return nil, fmt.Errorf("orf: %s offers no stream to download", name)
 	}
 	headers := httpx.SiteOrigin(strings.TrimSuffix(orfSite, "/"))
-	media, err := resolveMediaPlaylist(ctx, o.client, master, headers)
+	media, err := broadcastMedia(ctx, o.client, "orf", name, master, headers)
 	if err != nil {
-		return nil, fmt.Errorf("orf: %s: %w", name, err)
+		return nil, err
 	}
 	if orfGeoProtected(media) {
 		return nil, fmt.Errorf("orf: %s: %w", name, errORFAustriaOnly)

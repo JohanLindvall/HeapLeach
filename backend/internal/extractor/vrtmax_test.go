@@ -287,7 +287,7 @@ func TestVRTMaxRefsDropDuplicatesAndNonEpisodes(t *testing.T) {
 	lists[1].tiles = lazy.Data.List.Items
 
 	refs := vrtRefs(lists)
-	want := []vrtEpisodeRef{
+	want := []broadcastEpisode{
 		{id: "/vrtmax/a-z/a-programme/2026/ep-260821/", name: "The newest one", season: "Seizoen 2026"},
 		{id: "/vrtmax/a-z/a-programme/2026/ep-260820/", name: "The one before", season: "Seizoen 2026"},
 		{id: "/vrtmax/a-z/a-programme/2025/ep-251231/", name: "Last year's finale", season: "Seizoen 2025"},

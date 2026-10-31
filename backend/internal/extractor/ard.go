@@ -199,12 +199,8 @@ func (a *ARD) video(ctx context.Context, id string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A lone file is written straight into the download directory with no
-	// folder to say what it belongs to, so the name carries the programme as
-	// well — unless, as is usual here, the episode title already repeats it.
-	title := joinTitle(show, cmp.Or(episode, id), titleContains)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	// The episode title usually repeats the programme already.
+	return soleFile(joinTitle(show, cmp.Or(episode, id), titleContains), file), nil
 }
 
 // series expands a programme into one file per episode, filed by season when
@@ -221,11 +217,12 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
 	// minutes before a byte moved.
-	return listSeries(ctx, cmp.Or(title, ref.show), series[ardEpisodeRef]{
+	return listSeries(ctx, cmp.Or(title, ref.show), series[broadcastEpisode]{
 		site: "ard", noun: "entries", link: u.Redacted(),
 		items: episodes, more: more,
-		label: func(ep ardEpisodeRef) string { return ep.season },
-		resolve: func(ctx context.Context, ep ardEpisodeRef) (*File, error) {
+		label: broadcastEpisode.seasonOf,
+		// The item's own title wins over the listing's short one here.
+		resolve: func(ctx context.Context, ep broadcastEpisode) (*File, error) {
 			file, _, episodeTitle, err := a.episode(ctx, ep.id)
 			if err != nil {
 				return nil, err
@@ -237,17 +234,10 @@ func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, erro
 	}, walkNote)
 }
 
-// ardEpisodeRef is one entry of a programme's listing.
-type ardEpisodeRef struct {
-	id     string
-	name   string
-	season string
-}
-
 // episodes names a programme and lists what to download from it, up to
 // limit entries a listing, saying whether one went on past that, and the
 // note for a listing whose walk was cut short some other way.
-func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string, refs []ardEpisodeRef, more bool, note string, err error) {
+func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string, refs []broadcastEpisode, more bool, note string, err error) {
 	// A season named in the link is taken on its own, and its name goes in
 	// the job title rather than into a folder below it: two seasons fetched
 	// from two links would otherwise land in one folder, where episode names
@@ -274,16 +264,16 @@ func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string
 	// is the only one that names the seasons ("Staffel 2") and the only one
 	// that leaves out the audio-described copies.
 	// One unreadable season does not lose the others.
-	list, _ := readSeasons(ctx, seasons, true, func(ctx context.Context, season string) (seasonList[ardEpisodeRef], error) {
+	list, _ := readSeasons(ctx, seasons, true, func(ctx context.Context, season string) (seasonList[broadcastEpisode], error) {
 		l, err := a.pages(ctx, ref.show, season, limit)
 		if err != nil {
-			return seasonList[ardEpisodeRef]{}, err
+			return seasonList[broadcastEpisode]{}, err
 		}
 		// A season with no name of its own still needs a folder, or its
 		// episodes would be written beside the folders of every other season
 		// rather than into one of their own.
 		listed := ardRefs(l.teasers, cmp.Or(l.widget.Title, "Staffel "+season))
-		return seasonList[ardEpisodeRef]{items: listed, more: l.more, note: l.note}, nil
+		return seasonList[broadcastEpisode]{items: listed, more: l.more, note: l.note}, nil
 	})
 	if len(list.items) == 0 {
 		return flat.widget.Title, ardRefs(flat.teasers, ""), flat.more, flat.note, nil
@@ -378,21 +368,16 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 	// second run once its length matches what is on disk. ARD publishes no
 	// byte count of its own, so that length comes from the response headers.
 	if best, ok := media.best(ardMimeMP4); ok {
-		return &File{
-			Name:    ".mp4",
-			URL:     best.URL,
-			Size:    -1,
-			Headers: headers,
-		}, show, episode, nil
+		return progressiveFile(best.URL, ".mp4", headers), show, episode, nil
 	}
 
 	best, ok := media.best(ardMimeHLS)
 	if !ok {
 		return nil, "", "", fmt.Errorf("ard: %s offers no stream", id)
 	}
-	stream, err := resolveMediaPlaylist(ctx, a.client, best.URL, headers)
+	stream, err := broadcastMedia(ctx, a.client, "ard", id, best.URL, headers)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("ard: %s: %w", id, err)
+		return nil, "", "", err
 	}
 	// Named off the segments, not the variant URL: ARD's packager builds
 	// manifest paths out of the source file's name, ".mp4.csmil/" over
@@ -466,13 +451,11 @@ type ardMedia struct {
 	} `json:"meta"`
 	// IsGeoBlocked is ARD's own statement that this is for Germany only.
 	IsGeoBlocked bool `json:"isGeoBlocked"`
-	// Live is present, and non-null, only for a live relay.
-	Live    *ardLive    `json:"live"`
+	// Live is present, and non-null, only for a live relay; only its
+	// presence is read.
+	Live    *struct{}   `json:"live"`
 	Streams []ardStream `json:"streams"`
 }
-
-// ardLive marks a live relay; only its presence is read.
-type ardLive struct{}
 
 // ardStream is one presentation of a video.
 type ardStream struct {
@@ -597,10 +580,10 @@ func ardSeasons(teasers []ardTeaser) []string {
 }
 
 // ardRefs turns a listing into the episodes to fetch from it.
-func ardRefs(teasers []ardTeaser, season string) []ardEpisodeRef {
+func ardRefs(teasers []ardTeaser, season string) []broadcastEpisode {
 	teasers = ardWithoutVariants(ardEpisodesOnly(teasers))
 
-	var refs []ardEpisodeRef
+	var refs []broadcastEpisode
 	seen := make(map[string]bool, len(teasers))
 	for _, t := range teasers {
 		id := t.id()
@@ -608,7 +591,7 @@ func ardRefs(teasers []ardTeaser, season string) []ardEpisodeRef {
 			continue
 		}
 		seen[id] = true
-		refs = append(refs, ardEpisodeRef{id: id, name: t.ShortTitle, season: season})
+		refs = append(refs, broadcastEpisode{id: id, name: t.ShortTitle, season: season})
 	}
 	return refs
 }

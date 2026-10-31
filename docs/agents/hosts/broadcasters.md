@@ -101,7 +101,15 @@ episode opening with the programme's name; ard, drtv, francetv,
 radio-canada, orf, rtbf and yle use `titleContains`, ard's episode titles
 spelling the series out anywhere in them. Changing a broadcaster's test
 renames its files, so a listing read again would no longer find what it
-saved. A page title read by radio-canada and for rtbf's embedded players
+saved. A resolve that answers with a file named only by its extension
+ends a lone programme through `soleFile(title, file)`, which names the
+file and the job alike (ard, srf, vrtmax, zdf, npostart). A listing of
+such episodes is `broadcastEpisode`s (id, the listing's name, season, and
+the programme where the listing names it per entry), filed by
+`broadcastEpisode.seasonOf`; `listedAs(play, fallback)` names each by the
+listing's name, else the player's, else the fallback of its id (srf,
+vrtmax, zdf, npostart). ard keeps its own resolve, its item's title
+winning over the listing's short one. A page title read by radio-canada and for rtbf's embedded players
 is `writtenTitle`, the `<title>` as written, rather than `firstTitleOf`,
 which folds the no-break spaces of French typography into plain ones.
 
@@ -116,7 +124,14 @@ resolved at transfer time is `lazyEpisode`, one resolved now and read again
 at transfer time `refreshing` (`extractor.go`, shared with the signed file
 hosts), and a listing's note is assembled from
 `cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
-files and targets through `hlsMedia.file` and `hlsMedia.target` only.
+files and targets through `hlsMedia.file` and `hlsMedia.target` only; a
+broadcaster's playlist is resolved through `broadcastMedia`, whose failure
+reads `<site>: <name>: <cause>`, and a plain progressive file is
+`progressiveFile`, its length left to the response. A refusal written in
+the body of a failed request (vrtmax's code, npostart's sentence,
+francetv's code, rtbf's play answer) is read with `refusalBody`, limited
+to the statuses that carry one. Reasons several broadcasters word alike
+are `refusedDRM`, `refusedLiveBroadcast` and `refusedLiveStream`.
 
 ## vimeo
 

@@ -188,15 +188,7 @@ func (z *ZDF) single(ctx context.Context, doc *zdfDocument, fallback string, rea
 		// sentence about it, so there is no colon between the two.
 		return nil, fmt.Errorf("zdf: %s %w", title, err)
 	}
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
-}
-
-// zdfRef is one video a listing named, with what the listing knew about it.
-type zdfRef struct {
-	id     string
-	name   string
-	season string
+	return soleFile(title, file), nil
 }
 
 // fromPage resolves a page by the videos it links to, for the pages futura
@@ -225,27 +217,30 @@ func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach 
 		return z.single(ctx, &doc.Document, cmp.Or(title, ids[0]), reach)
 	}
 
-	refs := make([]zdfRef, 0, len(ids))
+	refs := make([]broadcastEpisode, 0, len(ids))
 	for _, videoID := range ids {
-		refs = append(refs, zdfRef{id: videoID})
+		refs = append(refs, broadcastEpisode{id: videoID})
 	}
 	return z.expand(ctx, u, cmp.Or(title, pageTitle(page)), refs, reach)
 }
 
 // expand resolves a listing's videos into one file each.
-func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRef, reach *zdfReach) (*Result, error) {
-	return listSeries(ctx, title, series[zdfRef]{
+func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []broadcastEpisode, reach *zdfReach) (*Result, error) {
+	return listSeries(ctx, title, series[broadcastEpisode]{
 		site: "zdf", noun: "videos", link: u.Redacted(),
 		items: refs,
-		label: func(ref zdfRef) string {
+		label: func(ref broadcastEpisode) string {
 			if ref.season == "" {
 				return ""
 			}
 			return zdfSeasonFolder(ref.season)
 		},
-		resolve: func(ctx context.Context, ref zdfRef) (*File, error) {
-			return z.video(ctx, ref, reach)
-		},
+		// The listing's own name for a video wins: it is what the page
+		// showed, and for a series it is the episode title where the
+		// document's is occasionally the whole strand's.
+		resolve: listedAs(func(ctx context.Context, id string) (*File, string, error) {
+			return z.video(ctx, id, reach)
+		}, nil),
 		// "each" carries the reason, which is written as a sentence about
 		// one video: when a whole run is refused it is refused the same way
 		// all the way down, and ZDF's words for it beat anything concluded
@@ -254,24 +249,20 @@ func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRe
 	})
 }
 
-// video resolves one listed video. A document that will not load is
-// passed over without a reason, since it says nothing about the others;
-// ZDF's refusal of the video is the reason, as a sentence about each one.
-func (z *ZDF) video(ctx context.Context, ref zdfRef, reach *zdfReach) (*File, error) {
-	doc, err := z.document(ctx, ref.id)
+// video resolves one listed video, with its document's title. A document
+// that will not load is passed over without a reason, since it says
+// nothing about the others; ZDF's refusal of the video is the reason, as a
+// sentence about each one.
+func (z *ZDF) video(ctx context.Context, id string, reach *zdfReach) (*File, string, error) {
+	doc, err := z.document(ctx, id)
 	if err != nil {
-		return nil, nil
+		return nil, "", nil
 	}
 	file, err := z.file(ctx, &doc.Document, reach)
 	if err != nil {
-		return nil, fmt.Errorf("each %w", err)
+		return nil, "", fmt.Errorf("each %w", err)
 	}
-
-	// The listing's own name for a video wins: it is what the page showed,
-	// and for a series it is the episode title where the document's is
-	// occasionally the whole strand's.
-	file.Name = cmp.Or(ref.name, doc.Document.Titel, ref.id) + file.Name
-	return file, nil
+	return file, doc.Document.Titel, nil
 }
 
 // file turns a document's rendition list into something to fetch.
@@ -299,7 +290,7 @@ func (z *ZDF) file(ctx context.Context, doc *zdfDocument, reach *zdfReach) (*Fil
 		// for a different file is not an approximation of this one, so it may
 		// carry neither Size nor SizeApprox; the transfer learns the real
 		// length from the response headers, and the skip check with it.
-		return &File{Name: ".mp4", URL: best.URL, Size: -1, Headers: headers}, nil
+		return progressiveFile(best.URL, ".mp4", headers), nil
 	}
 
 	media, err := resolveMediaPlaylist(ctx, z.client, best.URL, headers)
@@ -543,8 +534,8 @@ type zdfResponse struct {
 // the editors are pushing this week — so the same episode routinely appears
 // on two of them, and a page's featured entry is always a repeat of one
 // further down.
-func (r *zdfResponse) videos() []zdfRef {
-	var refs []zdfRef
+func (r *zdfResponse) videos() []broadcastEpisode {
+	var refs []broadcastEpisode
 	seen := make(map[string]bool)
 	for _, cluster := range r.Cluster {
 		for _, teaser := range cluster.Teaser {
@@ -552,7 +543,7 @@ func (r *zdfResponse) videos() []zdfRef {
 				continue
 			}
 			seen[teaser.ID] = true
-			refs = append(refs, zdfRef{
+			refs = append(refs, broadcastEpisode{
 				id:     teaser.ID,
 				name:   teaser.Titel,
 				season: strings.TrimSpace(teaser.SeasonNumber),

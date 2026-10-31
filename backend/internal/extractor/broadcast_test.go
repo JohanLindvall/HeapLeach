@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestBroadcastRefusalReadsAsBefore(t *testing.T) {
@@ -262,5 +265,61 @@ func TestWalkEpisodesSaysWhetherTheListingWentOn(t *testing.T) {
 	}
 	if items, more, note := walk(10, 3, true); len(items) != 2 || more || note != "partial — could not fetch next page" {
 		t.Errorf("broke off: %v, more %v, note %q", items, more, note)
+	}
+}
+
+func TestListedAsNamesByListingThenPlayerThenID(t *testing.T) {
+	play := func(_ context.Context, id string) (*File, string, error) {
+		switch id {
+		case "gone":
+			return nil, "", nil
+		case "refused":
+			return nil, "", errors.New("refused")
+		case "nameless":
+			return &File{Name: ".mp4"}, "", nil
+		}
+		return &File{Name: ".mp4"}, "Player Name", nil
+	}
+	resolve := listedAs(play, func(id string) string { return "#" + id })
+	for _, tc := range []struct {
+		ep   broadcastEpisode
+		want string
+	}{
+		{broadcastEpisode{id: "a", name: "Listed Name"}, "Listed Name.mp4"},
+		{broadcastEpisode{id: "a"}, "Player Name.mp4"},
+		{broadcastEpisode{id: "nameless"}, "#nameless.mp4"},
+	} {
+		file, err := resolve(context.Background(), tc.ep)
+		if err != nil || file == nil || file.Name != tc.want {
+			t.Errorf("%+v: got %+v, %v; want %q", tc.ep, file, err, tc.want)
+		}
+	}
+	if file, err := resolve(context.Background(), broadcastEpisode{id: "gone"}); file != nil || err != nil {
+		t.Errorf("passed-over episode = %+v, %v", file, err)
+	}
+	if _, err := resolve(context.Background(), broadcastEpisode{id: "refused"}); err == nil {
+		t.Error("a refusal was lost")
+	}
+}
+
+func TestRefusalBodyReadsOnlyTheStatusesAsked(t *testing.T) {
+	type body struct {
+		Code string `json:"code"`
+	}
+	err := fmt.Errorf("wrapped: %w", &httpx.StatusError{Code: http.StatusBadRequest, Body: `{"code":"NOPE"}`})
+	if got, ok := refusalBody[body](err); !ok || got.Code != "NOPE" {
+		t.Errorf("any status: %+v, %v", got, ok)
+	}
+	if got, ok := refusalBody[body](err, http.StatusBadRequest); !ok || got.Code != "NOPE" {
+		t.Errorf("asked status: %+v, %v", got, ok)
+	}
+	if _, ok := refusalBody[body](err, http.StatusForbidden); ok {
+		t.Error("read the body of a status not asked for")
+	}
+	if _, ok := refusalBody[body](&httpx.StatusError{Code: http.StatusForbidden, Body: "<html>"}); ok {
+		t.Error("read a body that is no JSON")
+	}
+	if _, ok := refusalBody[body](errors.New("plain")); ok {
+		t.Error("read a plain error")
 	}
 }

@@ -520,7 +520,7 @@ func TestARDRefsDropTheAudioDescribedCopies(t *testing.T) {
 	if len(refs) != 2 {
 		t.Fatalf("got %d entries, want the two episodes: %+v", len(refs), refs)
 	}
-	want := []ardEpisodeRef{
+	want := []broadcastEpisode{
 		{id: ardEpisodeOneID, name: "Folge 1 · Staffel 1 | A Drama (S01/E01)", season: "Staffel 1"},
 		{id: ardEpisodeTwoID, name: "Folge 2 · Staffel 1 | A Drama (S01/E02)", season: "Staffel 1"},
 	}

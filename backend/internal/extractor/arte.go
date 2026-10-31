@@ -153,7 +153,7 @@ func (a *Arte) config(ctx context.Context, lang, id string) (*arteConfig, string
 	case geo.RestrictedArea:
 		return nil, "", &broadcastRefusal{"arte", title, "it is not shown where this is asked from (ARTE limits it to " + geo.Code + ")"}
 	case attrs.Live:
-		return nil, "", &broadcastRefusal{"arte", title, "it is a live broadcast, which has no end to download to"}
+		return nil, "", &broadcastRefusal{"arte", title, refusedLiveBroadcast}
 	}
 	return &cfg, title, nil
 }
@@ -176,9 +176,9 @@ func (a *Arte) programme(ctx context.Context, lang, id string) (*Target, string,
 		return nil, "", fmt.Errorf("arte: %s offers no stream to download", title)
 	}
 	headers := arteHeaders()
-	media, err := resolveMediaPlaylist(ctx, a.client, master, headers)
+	media, err := broadcastMedia(ctx, a.client, "arte", title, master, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("arte: %s: %w", title, err)
+		return nil, "", err
 	}
 	return media.target(master, title+media.extension(), headers), title, nil
 }

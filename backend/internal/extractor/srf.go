@@ -199,11 +199,7 @@ func (s *SRF) programme(ctx context.Context, urn string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A lone file lands straight in the download directory with no folder to
-	// say what it belongs to, so the name carries the show as well.
-	title = cmp.Or(title, urn)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(title, urn), file), nil
 }
 
 // series expands a show into one file per episode, filed by season when the
@@ -217,27 +213,13 @@ func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, 
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
 	// before a byte moved.
-	return listSeries(ctx, cmp.Or(title, showURN), series[srfEpisodeRef]{
+	return listSeries(ctx, cmp.Or(title, showURN), series[broadcastEpisode]{
 		site: "srf", noun: "episodes", link: u.Redacted(),
 		items: episodes, more: more,
-		label: func(ep srfEpisodeRef) string { return ep.season },
-		resolve: func(ctx context.Context, ep srfEpisodeRef) (*File, error) {
-			file, name, err := s.chapter(ctx, ep.urn)
-			if err != nil {
-				return nil, err
-			}
-			file.Name = cmp.Or(ep.name, name, ep.urn) + file.Name
-			return file, nil
-		},
+		label:      broadcastEpisode.seasonOf,
+		resolve:    listedAs(s.chapter, nil),
 		unplayable: "the catalogue lists them but the Integration Layer offers no stream for any of them",
 	}, walkNote)
-}
-
-// srfEpisodeRef is one episode of a show, with the season it belongs to.
-type srfEpisodeRef struct {
-	urn    string
-	name   string
-	season string
 }
 
 // episodes reads a show's episodes, following the listing's own paging up
@@ -245,26 +227,26 @@ type srfEpisodeRef struct {
 // strand has thousands of instalments and reaches it every time. A page that
 // will not load part-way down a long show still leaves everything above it
 // worth downloading, and the note says the listing was cut there.
-func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (title string, episodes []srfEpisodeRef, more bool, note string, err error) {
+func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (title string, episodes []broadcastEpisode, more bool, note string, err error) {
 	next := s.il + srfEpisodesPath + url.PathEscape(showURN) + ".json?" +
 		"pageSize=" + strconv.Itoa(config.FolderPageSize) + "&" + srfVector
-	episodes, more, note, err = walkEpisodes(ctx, limit, pageWalk[srfEpisodeRef]{
-		fetch: func(ctx context.Context, _ int) (pageOf[srfEpisodeRef], error) {
+	episodes, more, note, err = walkEpisodes(ctx, limit, pageWalk[broadcastEpisode]{
+		fetch: func(ctx context.Context, _ int) (pageOf[broadcastEpisode], error) {
 			var doc srfEpisodeList
 			if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
-				return pageOf[srfEpisodeRef]{}, err
+				return pageOf[broadcastEpisode]{}, err
 			}
 			title = cmp.Or(title, doc.Show.Title)
-			var refs []srfEpisodeRef
+			var refs []broadcastEpisode
 			for _, ep := range doc.EpisodeList {
 				if urn := ep.urn(); urn != "" {
-					refs = append(refs, srfEpisodeRef{urn: urn, name: ep.Title, season: ep.season()})
+					refs = append(refs, broadcastEpisode{id: urn, name: ep.Title, season: ep.season()})
 				}
 			}
 			next = doc.Next
-			return pageOf[srfEpisodeRef]{items: refs, next: next != "", end: len(refs) == 0}, nil
+			return pageOf[broadcastEpisode]{items: refs, next: next != "", end: len(refs) == 0}, nil
 		},
-		key: func(ep srfEpisodeRef) string { return ep.urn },
+		key: func(ep broadcastEpisode) string { return ep.id },
 	})
 	if err != nil {
 		return "", nil, false, "", fmt.Errorf("srf: episodes of %s: %w", showURN, err)
@@ -301,12 +283,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 	// disk. The API publishes no byte count of its own, so Size stays unknown
 	// and the response's own Content-Length settles it.
 	if best, ok := chapter.pick(srfProtocolHTTP); ok {
-		return &File{
-			Name:    linkExt(best.URL, ".mp4"),
-			URL:     srfSecure(best.URL),
-			Size:    -1,
-			Headers: headers,
-		}, title, nil
+		return progressiveFile(srfSecure(best.URL), linkExt(best.URL, ".mp4"), headers), title, nil
 	}
 
 	best, ok := chapter.pick(srfProtocolHLS)
@@ -314,9 +291,9 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", fmt.Errorf("srf: %s %s", urn, chapter.refusal())
 	}
 
-	media, err := resolveMediaPlaylist(ctx, s.client, best.URL, headers)
+	media, err := broadcastMedia(ctx, s.client, "srf", urn, best.URL, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("srf: %s: %w", urn, err)
+		return nil, "", err
 	}
 	variant := media.Variant
 	// bestVariant only *prefers* a self-contained rendition; when a master

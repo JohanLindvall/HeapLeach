@@ -224,11 +224,7 @@ func (n *NPOStart) programme(ctx context.Context, slug string) (*Result, error) 
 	if err != nil {
 		return nil, err
 	}
-	// A lone file lands straight in the download directory with no folder to
-	// say what it belongs to, so the name carries the series as well.
-	title := cmp.Or(doc.name(), slug)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(doc.name(), slug), file), nil
 }
 
 // series expands a series, or one season of it, into one file per episode.
@@ -259,7 +255,7 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 		return nil, fmt.Errorf("npo: %s lists no episodes", target.series)
 	}
 
-	title := cmp.Or(episodes[0].series, target.series)
+	title := cmp.Or(episodes[0].programme, target.series)
 	if named {
 		// One season goes in the job title rather than in a folder below it,
 		// which would say nothing; and two seasons fetched separately would
@@ -284,22 +280,18 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 	// wrong, and the only honest way to find out which instalments are
 	// downloadable is to ask about each.
 	var throttled atomic.Int32
-	resolved, note, err := expandSeries(ctx, series[npoEpisodeRef]{
+	resolved, note, err := expandSeries(ctx, series[broadcastEpisode]{
 		site: "npo", noun: "episodes", link: target.series,
 		items: episodes, budget: config.MaxResolvedEpisodesNPO,
-		label: func(ep npoEpisodeRef) string { return ep.season },
+		label: broadcastEpisode.seasonOf,
 		split: len(seasons) > 1,
-		resolve: func(ctx context.Context, ref npoEpisodeRef) (*File, error) {
-			file, err := n.stream(ctx, ref.productID)
-			if err != nil {
-				if errors.Is(err, errNPOThrottled) {
-					throttled.Add(1)
-				}
-				return nil, err
+		resolve: listedAs(func(ctx context.Context, productID string) (*File, string, error) {
+			file, err := n.stream(ctx, productID)
+			if errors.Is(err, errNPOThrottled) {
+				throttled.Add(1)
 			}
-			file.Name = cmp.Or(ref.name, ref.productID) + file.Name
-			return file, nil
-		},
+			return file, "", err
+		}, nil),
 		unplayable: "the catalogue lists them but the player offers no stream",
 	})
 
@@ -318,14 +310,6 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 	return &Result{Title: title, Files: listedFiles(resolved), Note: joinNotes(seasonsNote, unread, note)}, nil
 }
 
-// npoEpisodeRef is one episode of a series, with the season it belongs to.
-type npoEpisodeRef struct {
-	productID string
-	name      string
-	series    string
-	season    string
-}
-
 // seasons lists a series' seasons, newest first.
 func (n *NPOStart) seasons(ctx context.Context, slug string) ([]npoSeason, error) {
 	var seasons []npoSeason
@@ -338,25 +322,25 @@ func (n *NPOStart) seasons(ctx context.Context, slug string) ([]npoSeason, error
 // listings reads every season's episode list, and the note when some could
 // not be read. These are independent requests and a news strand has twenty
 // of them, so they go out together.
-func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) ([]npoEpisodeRef, string) {
-	list, _ := readSeasons(ctx, seasons, false, func(ctx context.Context, season npoSeason) (seasonList[npoEpisodeRef], error) {
+func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) ([]broadcastEpisode, string) {
+	list, _ := readSeasons(ctx, seasons, false, func(ctx context.Context, season npoSeason) (seasonList[broadcastEpisode], error) {
 		var listing []npoProgram
 		if err := n.fetch(ctx, npoListEndpoint, "guid", season.GUID, &listing); err != nil {
-			return seasonList[npoEpisodeRef]{}, err
+			return seasonList[broadcastEpisode]{}, err
 		}
-		out := make([]npoEpisodeRef, 0, len(listing))
+		out := make([]broadcastEpisode, 0, len(listing))
 		for _, ep := range listing {
 			if ep.ProductID == "" {
 				continue
 			}
-			out = append(out, npoEpisodeRef{
-				productID: ep.ProductID,
+			out = append(out, broadcastEpisode{
+				id:        ep.ProductID,
 				name:      ep.name(),
-				series:    ep.Series.Title,
+				programme: ep.Series.Title,
 				season:    season.name(),
 			})
 		}
-		return seasonList[npoEpisodeRef]{items: out}, nil
+		return seasonList[broadcastEpisode]{items: out}, nil
 	})
 	return list.items, list.note
 }
@@ -407,9 +391,9 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 	// in it, which outlasts any queue this program will hold, so the
 	// segments are resolved now rather than through File.Resolve.
 	headers := httpx.Referer(npoRoot)
-	media, err := resolveMediaPlaylist(ctx, n.client, link.Stream.URL, headers)
+	media, err := broadcastMedia(ctx, n.client, "npo", productID, link.Stream.URL, headers)
 	if err != nil {
-		return nil, fmt.Errorf("npo: %s: %w", productID, err)
+		return nil, err
 	}
 	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
@@ -479,15 +463,10 @@ func npoEmpty(raw json.RawMessage) bool {
 // either would be inventing an answer only NPO has, so the sentence is
 // passed through as written and the dates are appended to it.
 func npoReason(err error) string {
-	status, ok := errors.AsType[*httpx.StatusError](err)
-	if !ok {
-		return ""
+	if refusal, ok := refusalBody[npoRefusal](err); ok {
+		return refusal.message()
 	}
-	var refusal npoRefusal
-	if json.Unmarshal([]byte(status.Body), &refusal) != nil {
-		return ""
-	}
-	return refusal.message()
+	return ""
 }
 
 // npoRefusal is the document a refusal arrives in. There are two envelopes
