@@ -33,6 +33,7 @@ import (
 // over the whole index, twenty thousand pages of it, and nobody pasting a
 // bare domain is asking for that.
 type Balbums struct {
+	about
 	client   *httpx.Client
 	registry *Registry
 }
@@ -58,25 +59,16 @@ var balbumsPages = regexp.MustCompile(`(?i)page\s+\d+\s+of\s+(\d+)`)
 // what it finds through the registry it is part of, so it is handed that
 // registry rather than building one.
 func NewBalbums(client *httpx.Client, registry *Registry) *Balbums {
-	return &Balbums{client: client, registry: registry}
+	return &Balbums{client: client, registry: registry, about: about{name: "balbums", shape: balbumsShape,
+		recognises: "searches of a Bunkr album index (`/?search=<query>`) whose page carries the index's search form " +
+			"and its \"Page n of m\" result count"}}
 }
-
-func (b *Balbums) Name() string { return "balbums" }
 
 // balbumsShape is a search of the index: its root with a search query.
 func balbumsShape(u *url.URL) bool {
 	_, _, ok := balbumsSearch(u)
 	return ok && (u.EscapedPath() == "" || u.EscapedPath() == "/")
 }
-
-// Recognises is the inventory's description.
-func (b *Balbums) Recognises() string {
-	return "searches of a Bunkr album index (`/?search=<query>`) whose page carries the index's search form " +
-		"and its \"Page n of m\" result count"
-}
-
-// Shape reports a search.
-func (b *Balbums) Shape(u *url.URL) bool { return balbumsShape(u) }
 
 // Recognise takes a search whose page has the index's own search form and
 // states its page count, which is what walk pages by.
@@ -102,8 +94,8 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	}
 
 	e := expandSources(ctx, b.registry, albums, opts)
-	if len(e.files) == 0 {
-		return nil, noneRead("balbums", len(albums), "albums", fmt.Sprintf("the search for %q", query), e.refusals, e.failed)
+	if err := noneResolved(ctx, e.files, "balbums", len(albums), "albums", fmt.Sprintf("the search for %q", query), e.refusals, e.failed); err != nil {
+		return nil, err
 	}
 	return &Result{
 		Title: query,

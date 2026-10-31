@@ -65,10 +65,7 @@ func balbumsIndex(t *testing.T, stub Extractor, pages map[int]string) (*Balbums,
 	t.Cleanup(srv.Close)
 
 	reg := &Registry{fallback: NewDirect(nil)}
-	index := &Balbums{
-		client:   testClient(),
-		registry: reg,
-	}
+	index := NewBalbums(testClient(), reg)
 	reg.extractors = []Extractor{index, stub}
 	return index, srv.URL, func() []string {
 		mu.Lock()

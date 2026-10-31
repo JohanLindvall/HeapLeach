@@ -54,6 +54,7 @@ import (
 // the right suffix on a filename nobody can match against the page they
 // copied it from.
 type Civitai struct {
+	about
 	client *httpx.Client
 }
 
@@ -85,20 +86,16 @@ const (
 var civitaiUserTabs = map[string]bool{"images": true, "posts": true, "videos": true}
 
 // NewCivitai builds the civitai extractor.
-func NewCivitai(client *httpx.Client) *Civitai { return &Civitai{client: client} }
-
-func (c *Civitai) Name() string { return "civitai" }
-
-// Recognises is the inventory's description.
-func (c *Civitai) Recognises() string {
-	return "images, posts, models and user galleries (`/images/<id>`, `/posts/<id>`, `/models/<id>`, `/user/<name>`) " +
-		"whose site's public API answers for that item on the page's own origin"
+func NewCivitai(client *httpx.Client) *Civitai {
+	return &Civitai{client: client, about: about{name: "civitai", shape: civitaiShape,
+		recognises: "images, posts, models and user galleries (`/images/<id>`, `/posts/<id>`, `/models/<id>`, `/user/<name>`) " +
+			"whose site's public API answers for that item on the page's own origin"}}
 }
 
-// Shape reports the forms civitaiTargetOf reads, but for a post: /posts/<n>
-// is every forum's and blog's navigation too, so a post is recognised when
-// submitted rather than singled out among a page's links.
-func (c *Civitai) Shape(u *url.URL) bool {
+// civitaiShape is the forms civitaiTargetOf reads, but for a post:
+// /posts/<n> is every forum's and blog's navigation too, so a post is
+// recognised when submitted rather than singled out among a page's links.
+func civitaiShape(u *url.URL) bool {
 	target := civitaiTargetOf(u)
 	return target != nil && target.selector != civitaiByPost
 }
@@ -116,7 +113,6 @@ func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 	if target == nil || c.client == nil || !(p.Challenged || p.Named("Civitai") || civitaiApp(p)) {
 		return false
 	}
-	api := util.Origin(p.Final) + "/api/v1"
 	if target.selector == "" {
 		endpoint := civitaiModelOn(p.Final, target.value)
 		var model struct {
@@ -125,11 +121,7 @@ func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
 		}
 		return pageJSON(ctx, p, c.client, endpoint, nil, &model) && model.ID > 0 && model.Versions != nil
 	}
-	query := url.Values{}
-	query.Set("limit", "1")
-	query.Set("nsfw", civitaiNSFW)
-	query.Set(target.selector, target.value)
-	endpoint := api + "/images?" + query.Encode()
+	endpoint := civitaiQuery(util.Origin(p.Final)+"/api/v1/images", target, 1)
 	var listing struct {
 		Items    *[]json.RawMessage `json:"items"`
 		Metadata *json.RawMessage   `json:"metadata"`
@@ -204,7 +196,7 @@ func (c *Civitai) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 		return c.model(ctx, u, target.value)
 	}
 
-	items, note, err := c.listing(ctx, target, opts)
+	items, note, err := c.walk(ctx, civitaiQuery(civitaiAPI+"/images", target, civitaiPageSize), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -220,17 +212,12 @@ func (c *Civitai) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	return &Result{Title: civitaiTitle(target, items), Files: files, Note: note}, nil
 }
 
-// listing collects everything one selector names.
-func (c *Civitai) listing(ctx context.Context, target *civitaiTarget, opts Options) ([]civitaiImage, string, error) {
-	return c.walk(ctx, civitaiQuery(civitaiAPI+"/images", target), opts)
-}
-
-// civitaiQuery builds the first page's request: the site's own maximum page,
-// the browsing level that makes the answer complete, and exactly one
-// selector.
-func civitaiQuery(endpoint string, target *civitaiTarget) string {
+// civitaiQuery builds the first page's request: limit items, the site's own
+// maximum page for a listing, the browsing level that makes the answer
+// complete, and exactly one selector.
+func civitaiQuery(endpoint string, target *civitaiTarget, limit int) string {
 	query := url.Values{}
-	query.Set("limit", strconv.Itoa(civitaiPageSize))
+	query.Set("limit", strconv.Itoa(limit))
 	query.Set("nsfw", civitaiNSFW)
 	query.Set(target.selector, target.value)
 	return endpoint + "?" + query.Encode()

@@ -26,26 +26,18 @@ import (
 // attachment; full posts supply the original variants and their exact sizes.
 // Media is content-addressed and served by the page's advertised edge pool.
 type Cum struct {
+	about
 	client *httpx.Client
 }
 
 func NewCum(client *httpx.Client) *Cum {
-	return &Cum{client: client}
+	return &Cum{client: client, about: about{name: "cum", shape: cumShape,
+		recognises: "creators and posts (`/creators/<service>/<id>[/post/<post>]`) whose page advertises its media " +
+			"servers as `EDGE_BASE_URLS` in the app's configuration"}}
 }
-
-func (c *Cum) Name() string { return "cum" }
 
 // cumShape is a creator, /creators/<service>/<id>, or one of their posts.
 var cumShape = pathShape(`^/creators/[^/]+/[^/]+(?:/post/[^/]+)?/?$`)
-
-// Recognises is the inventory's description.
-func (c *Cum) Recognises() string {
-	return "creators and posts (`/creators/<service>/<id>[/post/<post>]`) whose page advertises its media " +
-		"servers as `EDGE_BASE_URLS` in the app's configuration"
-}
-
-// Shape reports a creator or a post.
-func (c *Cum) Shape(u *url.URL) bool { return cumShape(u) }
 
 // Recognise takes a creator or post page that advertises the edge pool
 // Extract downloads from, which is read from the page before any API call.
@@ -98,7 +90,7 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	if err != nil {
 		return nil, err
 	}
-	base := util.Origin(final) + "/api/v1/" + url.PathEscape(segs[1]) + "/user/" + url.PathEscape(segs[2])
+	base := creatorAPI(util.Origin(final), segs[1], segs[2])
 	if len(segs) == 5 {
 		post, err := c.post(ctx, base, segs[1], segs[4], final.String())
 		if err != nil {

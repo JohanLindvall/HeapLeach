@@ -21,6 +21,7 @@ import (
 // being fetched. The thumbnails differ from the full-size file by a "_300px"
 // suffix, which is simply dropped.
 type Fapello struct {
+	about
 	client *httpx.Client
 }
 
@@ -29,24 +30,15 @@ var fapelloThumbSuffix = regexp.MustCompile(`_\d+px(\.[A-Za-z0-9]+)$`)
 
 // NewFapello builds the fapello extractor.
 func NewFapello(client *httpx.Client) *Fapello {
-	return &Fapello{client: client}
+	return &Fapello{client: client, about: about{name: "fapello", shape: fapelloShape,
+		recognises: "model pages and their posts (`/<model>/`, `/<model>/<n>/`) whose page links the model's own " +
+			"media under `/content/…/<model>/`"}}
 }
-
-func (f *Fapello) Name() string { return "fapello" }
 
 // fapelloShape is one of a model's posts, /<model>/<n>/. The model's own
 // page is a bare /<model>/, which is no shape, so it is recognised by its
 // page alone.
 var fapelloShape = pathShape(`^/[A-Za-z0-9_.-]+/\d+/$`)
-
-// Recognises is the inventory's description.
-func (f *Fapello) Recognises() string {
-	return "model pages and their posts (`/<model>/`, `/<model>/<n>/`) whose page links the model's own " +
-		"media under `/content/…/<model>/`"
-}
-
-// Shape reports a model's post.
-func (f *Fapello) Shape(u *url.URL) bool { return fapelloShape(u) }
 
 // Recognise takes a model page, or one of its posts, carrying what Extract
 // collects: media under the content tree in the model's own folder, on a
@@ -120,13 +112,7 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 			}
 			var files []File
 			for _, link := range ownMedia.FindAllString(doc, -1) {
-				full := fapelloFullSize(link)
-				files = append(files, File{
-					Name:    util.NameFromURL(full),
-					URL:     full,
-					Size:    -1,
-					Headers: headers,
-				})
+				files = append(files, linkFile(fapelloFullSize(link), headers))
 			}
 			return pageOf[File]{items: files, next: true}, nil
 		},

@@ -14,35 +14,25 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // Rajce reads an album's embedded settings, which contain its entire media
 // list. Images and videos have separate URLs; a video's image is its poster.
 type Rajce struct {
+	about
 	client *httpx.Client
 }
 
 func NewRajce(client *httpx.Client) *Rajce {
-	return &Rajce{client: client}
+	return &Rajce{client: client, about: about{name: "rajce", shape: rajceShape,
+		recognises: "albums (`/<user>/album/<slug>`) whose page assigns the album's settings, media list included, in a script"}}
 }
-
-func (r *Rajce) Name() string { return "rajce" }
 
 var rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
 
 // rajceShape is an album: /<user>/album/<slug>, optionally with one of its
 // items after it.
 var rajceShape = pathShape(`^/[^/]+/album/[^/]+(?:/\d+)?/?$`)
-
-// Recognises is the inventory's description.
-func (r *Rajce) Recognises() string {
-	return "albums (`/<user>/album/<slug>`) whose page assigns the album's settings, media list included, in a script"
-}
-
-// Shape reports an album link.
-func (r *Rajce) Shape(u *url.URL) bool { return rajceShape(u) }
 
 // Recognise takes an album page whose script assigns the settings object
 // rajceAlbumData decodes, with its legacy_media list.
@@ -115,13 +105,9 @@ func rajceAlbumData(doc string) (*rajceAlbum, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, node := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		if node.FirstChild == nil {
-			continue
-		}
-		// Script text must retain its whitespace: collapsing it would change
-		// filenames and titles inside the JSON strings as well.
-		script := node.FirstChild.Data
+	// Script text must retain its whitespace: collapsing it would change
+	// filenames and titles inside the JSON strings as well.
+	for _, script := range scriptTexts(root) {
 		marker := rajceSettings.FindStringIndex(script)
 		if marker == nil {
 			continue

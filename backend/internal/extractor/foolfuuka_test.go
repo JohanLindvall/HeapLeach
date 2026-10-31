@@ -488,7 +488,7 @@ func TestFoolFuukaIsBoard(t *testing.T) {
 // An archive page is recognised by the software's generator and assets,
 // whatever host serves it; a board-shaped path on an ordinary site is not.
 func TestFoolFuukaRecognise(t *testing.T) {
-	f := &FoolFuuka{}
+	f := NewFoolFuuka(nil)
 	page := `<html><head><meta name="generator" content="FoolFuuka 2.2.0"><title>/b/ - Thread</title>
 <script src="/foolfuuka/foolz/theme/assets/board.js"></script></head><body><article class="thread"></article></body></html>`
 	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/thread/42/", page), true)

@@ -45,6 +45,7 @@ import (
 // asks for thousands of pages in a row and a tag feed will happily supply
 // them.
 type Imgur struct {
+	about
 	client *httpx.Client
 }
 
@@ -80,28 +81,22 @@ const (
 var errNoImgurPost = errors.New("the page carries no post data")
 
 // NewImgur builds the imgur extractor.
-func NewImgur(client *httpx.Client) *Imgur { return &Imgur{client: client} }
-
-func (i *Imgur) Name() string { return "imgur" }
+func NewImgur(client *httpx.Client) *Imgur {
+	return &Imgur{client: client, about: about{name: "imgur", shape: imgurShape,
+		recognises: "posts and albums (`/a/<id>`, `/gallery/<slug>-<id>`, `/<id>`) whose page carries `window.postDataJSON` " +
+			"or its own media as og:image, and account, tag and subreddit listings (`/user/<name>`, `/t/<tag>`, `/r/<name>`) " +
+			"whose listing JSON answers"}}
+}
 
 // imgurShape is a post, an album, an account, a tag or a mirrored
-// subreddit, with or without a post after it. A bare /<id> is every site's
-// navigation too, so it is recognised by its page alone.
+// subreddit, with or without a post after it: the forms the extractor
+// reads, bare ids excepted. A bare /<id> is every site's navigation too, so
+// it is recognised by its page alone.
 var imgurShape = pathShape(
 	`^/(?:a|gallery)/[^/.]+/?$`,
 	`^/(?:t|r)/[^/]+(?:/[^/]+)?/?$`,
 	`^/user/[^/]+(?:/(?:submitted|favorites))?/?$`,
 )
-
-// Recognises is the inventory's description.
-func (i *Imgur) Recognises() string {
-	return "posts and albums (`/a/<id>`, `/gallery/<slug>-<id>`, `/<id>`) whose page carries `window.postDataJSON` " +
-		"or its own media as og:image, and account, tag and subreddit listings (`/user/<name>`, `/t/<tag>`, `/r/<name>`) " +
-		"whose listing JSON answers"
-}
-
-// Shape reports the forms the extractor reads, bare ids excepted.
-func (i *Imgur) Shape(u *url.URL) bool { return imgurShape(u) }
 
 // Recognise takes a post page carrying the post data postFiles decodes, a
 // single-media page whose og:image is the file the id names (what
@@ -143,7 +138,11 @@ func (i *Imgur) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	case target.Listing != "":
 		return i.listing(ctx, probed(ctx, u), target, opts)
 	case target.ID != "":
-		return i.post(ctx, target.ID)
+		files, title, err := i.postFiles(ctx, target.ID)
+		if err != nil {
+			return nil, err
+		}
+		return &Result{Title: title, Files: files}, nil
 	}
 	return nil, fmt.Errorf("imgur: %s names no post (/a/<id>, /gallery/<slug>-<id>), "+
 		"account (/user/<name>) or tag (/t/<tag>)", u.Redacted())
@@ -213,17 +212,8 @@ func imgurID(seg string) string {
 
 // --------------------------------------------------------------------- post
 
-// post resolves one post, album or bare media id.
-func (i *Imgur) post(ctx context.Context, id string) (*Result, error) {
-	files, title, err := i.postFiles(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: title, Files: files}, nil
-}
-
-// postFiles reads one post's media, falling back to the single-media page for
-// an id that is not a post.
+// postFiles reads one post's or album's media and its title, falling back
+// to the single-media page for an id that is not a post.
 func (i *Imgur) postFiles(ctx context.Context, id string) ([]File, string, error) {
 	page := imgurRoot + "/gallery/" + url.PathEscape(id)
 	doc, err := i.document(ctx, page)
@@ -316,13 +306,9 @@ func imgurFileOf(link string, size int64) File {
 		// length this transfer can never reach.
 		link, size = mp4, -1
 	}
-	size = knownSize(size)
-	return File{
-		Name:    util.NameFromURL(link),
-		URL:     link,
-		Size:    size,
-		Headers: httpx.Referer(imgurRoot + "/"),
-	}
+	file := linkFile(link, httpx.Referer(imgurRoot+"/"))
+	file.Size = knownSize(size)
+	return file
 }
 
 // imgurPreferMP4 swaps a GIF for the H.264 rendition the site generates
@@ -366,14 +352,22 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, op
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("imgur: %s%s lists no posts", imgurRoot, target.Listing)
 	}
-	files, refusals, failed := i.expand(ctx, entries)
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead("imgur", len(entries), "posts", imgurRoot+target.Listing, refusals, failed)
+	// A row that is itself the media costs nothing and is built here. A row
+	// naming a post needs that post's page, so those are read several at a
+	// time, in the listing's order; one post that will not load is skipped,
+	// since on a listing of hundreds the rest are still worth having.
+	files, refused, err := readListing(ctx, "imgur", "posts", imgurRoot+target.Listing, entries,
+		func(ctx context.Context, entry imgurEntry) ([]File, error) {
+			if file, ok := entry.media(); ok {
+				return []File{file}, nil
+			}
+			files, _, err := i.postFiles(ctx, entry.Hash)
+			return files, err
+		})
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: target.Title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
+	return &Result{Title: target.Title, Files: files, Note: joinNotes(note, refused)}, nil
 }
 
 // listingEntries walks a listing's pages on origin, up to the listing cap:
@@ -425,24 +419,6 @@ func (i *Imgur) listingEntries(ctx context.Context, probe *Page, origin, base st
 // imgurListingPage is the JSON for one page of a listing on an origin.
 func imgurListingPage(origin, base string, page int) string {
 	return fmt.Sprintf("%s%s/page/%d/hit.json?scrolled", origin, base, page)
-}
-
-// expand turns listing rows into files.
-//
-// A row that is itself the media costs nothing and is built here. A row naming
-// a post needs that post's page, so those are fetched several at a time, the
-// job listing its files in the listing's own order however the requests
-// interleave (resolveFiles). One post that will not load is skipped, because
-// on a listing of hundreds the rest are still worth having; why comes back
-// beside the files for when none could be read.
-func (i *Imgur) expand(ctx context.Context, entries []imgurEntry) ([]File, []string, error) {
-	return resolveFiles(ctx, entries, func(ctx context.Context, entry imgurEntry) ([]File, error) {
-		if file, ok := entry.media(); ok {
-			return []File{file}, nil
-		}
-		files, _, err := i.postFiles(ctx, entry.Hash)
-		return files, err
-	})
 }
 
 // media builds the file for a row that is the media rather than a post, and
