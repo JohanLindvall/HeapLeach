@@ -148,19 +148,19 @@ the reproduction establishes the first case, not that all three are broken.
 
 **Implementation steps:**
 
-- [ ] Add a shared, explicit way to request a fresh document, bypassing the
+- [x] Add a shared, explicit way to request a fresh document, bypassing the
   extraction's attached probe without discarding cancellation, route,
   cookie-jar, logging or challenge-capture context.
-- [ ] Let retry callbacks receive an attempt context or explicit read mode.
+- [x] Let retry callbacks receive an attempt context or explicit read mode.
   The first attempt may reuse the probe; a retry of a semantically invalid
   response must perform a fresh request. Callbacks must use the supplied
   context instead of retaining the original one.
-- [ ] Keep `httpx.Client.Do` responsible for transport retries and 429 waits.
+- [x] Keep `httpx.Client.Do` responsible for transport retries and 429 waits.
   `withExtractRetries` remains responsible for a successful response whose
   contents require another attempt. Do not multiply either budget.
-- [ ] Define freshness for `peek`, signed refresh and canonical probes in the
+- [x] Define freshness for `peek`, signed refresh and canonical probes in the
   same vocabulary, while retaining their existing schedules.
-- [ ] Add the synthetic scenario above as a permanent regression test that
+- [x] Add the synthetic scenario above as a permanent regression test that
   expects successful registry extraction and two requests after the fix.
 
 **Representation identity needs an explicit contract too.** The current
@@ -577,7 +577,7 @@ interchangeable, or that the proposed abstractions already improve performance.
 
 ## Definition of done
 
-- [ ] The known stale-probe retry case succeeds through the registry.
+- [x] The known stale-probe retry case succeeds through the registry.
 - [ ] Reuse, freshness and representation identity have one documented owner.
 - [ ] Each new shared parser path has multiple real callers and removes their
   duplicate implementation; fresh transfer-time reads remain fresh.

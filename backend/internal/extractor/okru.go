@@ -89,7 +89,7 @@ var okruPlayer = playerSite{
 func okruRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
 	id, _ := url.PathUnescape(path.Base(page))
 	meta, err := withExtractRetries(ctx,
-		func() (*okruMetadata, error) { return okruFetch(ctx, client, page) },
+		func(ctx context.Context) (*okruMetadata, error) { return okruFetch(ctx, client, page) },
 		func(meta *okruMetadata, err error) bool {
 			return err == nil && !okruPlayable(meta) && strings.EqualFold(meta.Movie.Status, "OK")
 		})

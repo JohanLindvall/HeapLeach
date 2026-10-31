@@ -282,10 +282,11 @@ func (f *File) target() *Target {
 
 // refreshing is a resolved target as its file, read again by resolve when
 // its transfer starts, for a link signed for less time than a queue can
-// take.
+// take. The read again is always fresh (freshRead): a page probed when the
+// job was listed is where the expired link came from.
 func refreshing(target *Target, resolve func(context.Context) (*Target, error)) File {
 	file := target.file("")
-	file.Resolve = resolve
+	file.Resolve = func(ctx context.Context) (*Target, error) { return resolve(freshRead(ctx)) }
 	return file
 }
 

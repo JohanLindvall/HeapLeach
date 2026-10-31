@@ -89,7 +89,7 @@ func NewDoodStream(client *httpx.Client) *Player { return NewPlayer(client, &doo
 // token endpoint asks for a reload.
 func doodRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
 	attempt := 0
-	video, err := withExtractRetries(ctx, func() (*playerVideo, error) {
+	video, err := withExtractRetries(ctx, func(ctx context.Context) (*playerVideo, error) {
 		attempt++
 		note := func(stage string) {
 			ResolveNote(ctx, fmt.Sprintf("Doodstream: %s (%d/%d)", stage, attempt, config.ExtractRetries))

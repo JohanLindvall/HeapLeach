@@ -288,7 +288,7 @@ func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, e
 	overloaded := func(_ *civitaiListing, err error) bool {
 		return httpx.HasStatus(err, http.StatusServiceUnavailable)
 	}
-	payload, err := withExtractRetries(ctx, func() (*civitaiListing, error) {
+	payload, err := withExtractRetries(ctx, func(ctx context.Context) (*civitaiListing, error) {
 		var payload civitaiListing
 		err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload)
 		return &payload, err

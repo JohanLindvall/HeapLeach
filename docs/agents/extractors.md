@@ -85,6 +85,21 @@ only for the submitted URL as it was fetched; a request with other headers,
 a session or another method is not the same representation and fetches its
 own.
 
+Whether a read may take the probe is decided in one place, `freshRead`
+(`page.go`): a context with the probed page withheld and everything else —
+cancellation, route, cookie jar, logger, challenge capture — kept. Every
+read that must ask the site again uses it rather than its own rule. A
+semantic retry (`withExtractRetries`) hands each attempt the context to read
+with, the probe's for the first and `freshRead`'s after, so a page answered
+`OK` with nothing playable is read again rather than handed back; an
+attempt reads with the context it is given, never one it captured.
+`refreshing` and the player engine's deferred resolvers read fresh at
+transfer time, since the probed page is where an expired signed link came
+from. Transport failures and 429 waits stay with `httpx.Client.Do`; the
+extraction retry covers only a response that arrived and was wrong.
+`TestRetryOfAProbedPageReadsItAfresh` runs the empty-then-playable player
+through the registry and expects two requests.
+
 ### The supported-site inventory
 
 The inventory in README.md is **generated** from the registry by `make

@@ -253,12 +253,35 @@ func withPage(ctx context.Context, p *Page) context.Context {
 	return context.WithValue(ctx, pageKey{}, p)
 }
 
+// freshRead is ctx for a read that must ask the site again rather than take
+// the page the registry probed: a retry of an answer that was received but
+// wrong, and every read at transfer time, whose signed link or metadata the
+// probe's would have made stale. Everything else ctx carries — cancellation,
+// route, cookie jar, logger, challenge capture — stays as it was; only the
+// probed page is withheld, so fetchDocument, fetchRoot and probedDocument
+// fetch as if there had been none.
+//
+// Freshness is decided here, once, rather than by each reader: a reader
+// takes the ctx it is handed and never one it captured earlier.
+func freshRead(ctx context.Context) context.Context {
+	if attachedPage(ctx) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, pageKey{}, (*Page)(nil))
+}
+
+// attachedPage is the page carried in ctx, whatever URL it answers.
+func attachedPage(ctx context.Context) *Page {
+	p, _ := ctx.Value(pageKey{}).(*Page)
+	return p
+}
+
 // probed is the page the registry probed for u, carried in ctx, or nil when
 // there is none for this URL. Either end of the redirect chain will do: an
 // extractor that rebuilds the canonical address the submitted link
 // redirected to is asking for the same page.
 func probed(ctx context.Context, u *url.URL) *Page {
-	p, _ := ctx.Value(pageKey{}).(*Page)
+	p := attachedPage(ctx)
 	if p == nil || u == nil {
 		return nil
 	}
