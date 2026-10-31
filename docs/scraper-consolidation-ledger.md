@@ -151,3 +151,29 @@ No universal cache interface or background refresh was introduced.
 | `extractor.go` | split into `contract.go`, `errors.go`, `registry.go` with no symbol changes; `extractor.go` keeps `Result`, the interfaces, `Options`/`Limits` and `about` |
 | `fanout.go`, `wirePointers`, `playerSites`, `francetvPageTitle` | removed: no remaining caller in this repository or the private overlay |
 | String adapters kept for synthetic parser tests (`imgurMediaFrom` and the NPR, ABC listen, CoomerFans, PornPics adapters) | retain: each only parses and delegates, so there is one parser per page |
+
+## Performance
+
+`go test ./internal/extractor -run '^$' -bench '^BenchmarkProbedReaders$' -benchmem -count=5`
+on the baseline (`efa21c7`) and the final code, same machine and Go 1.27.1,
+cold probes (each iteration builds and recognises a fresh page):
+
+| Reader | Baseline allocs/op | Final allocs/op |
+| --- | --- | --- |
+| NPR, ABC listen, CoomerFans, PornPics, Chevereto (reuse and reparse) | 323/488, 116/175, 261/450, 330/575, 178/298 | identical |
+| Bandzoogle | 1730 (its old path: parse the probed body again; the `reparse` case) | 1033 (`reuse`) |
+
+The document-acquisition change (W2) costs no allocation on the reuse path.
+
+## Final verification
+
+| Check | Result |
+| --- | --- |
+| `go test ./... -race`, `go vet ./...`, `go vet -tags live ./...` (private tests linked) | pass |
+| `make check` (format, vet, inventory, SPDX, Go, frontend 132 tests, OCR, release scripts) | pass |
+| `make hosts` | README unchanged; 97 entries |
+| Private replay, final code | 1332 URLs, 0 network requests, 0 misses, 0 resolvers or transfers; every outcome (extractor, status, file, deferred and external counts) identical to the baseline run; the same 27 known differences from the stored private baseline. Reports are kept in `hl-priv/reports/2026-10-31-consolidation-*` |
+
+Not covered: live sites (no live content was fetched for this work), leased
+proxy routes, and deep pagination beyond the corpus's five-file cap, which
+the synthetic tests above cover instead.
