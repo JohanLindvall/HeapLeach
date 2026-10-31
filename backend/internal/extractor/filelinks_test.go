@@ -51,7 +51,7 @@ func TestPlainPageHarvestsFileLinksBeforePreviewAndKeepsPacing(t *testing.T) {
 			<a href="https://keep2share.example.test/premium">upgrade</a>
 			<a href="https://fileboom.example.test/folder/example">folder</a>
 			<a href="https://keep2share.example.test/file/">missing ID</a>
-			<a href="https://elsewhere.example.test/download/third">unsupported</a>
+			<a href="/download/third">unsupported</a>
 			<a href="/thread/next">navigation</a></html>`)
 			res, ex, err := reg.Extract(context.Background(), base+page, Options{})
 			if err != nil {

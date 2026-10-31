@@ -48,6 +48,14 @@ as navigation (`errUnrecognised`) rather than handed to the fallback. Keep
 forms specific enough that a site's own navigation does not turn into a
 probe per link.
 
+A failed probe is not evidence that a followed link is navigation. When no
+extractor claims it, strict extraction preserves transport and body-read
+errors, and reports HTTP failures as `httpx.StatusError` with the response
+headers and a bounded body sample. Source retries and route recovery need
+those typed failures. Unclaimed `404` and `410` responses still mean missing
+navigation, so dead links whose paths happen to match a supported form do
+not turn a successful listing into a partial failure.
+
 ### Fetching a page once
 
 Probes go through `pageCache`: per route (a page fetched through one egress
