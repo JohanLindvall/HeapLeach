@@ -74,17 +74,24 @@ func (b *Bandzoogle) Recognise(_ context.Context, p *Page) bool {
 	return p.hasElement(isBandzoogleTrack)
 }
 
-// Extract reads every track on the page.
+// Extract reads every track on the page: the tree recognition parsed when
+// the probe holds the page, since recognising it meant finding a track
+// element, and the page fetched and parsed here otherwise.
 func (b *Bandzoogle) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	doc, _, err := fetchDocument(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
+	d, err := readDocument(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("bandzoogle: fetch %s: %w", u.Redacted(), err)
 	}
-	return bandzoogleParse(ctx, b.client, doc, u, opts)
+	root, err := d.parse()
+	if err != nil {
+		return nil, fmt.Errorf("bandzoogle: parse %s: %w", u.Redacted(), err)
+	}
+	return bandzoogleRead(ctx, b.client, root, u, opts)
 }
 
-// bandzoogleParse turns a page that has already been fetched into its tracks,
-// following the rest of any listing that says it has more.
+// bandzoogleRead turns a page that has already been parsed into its tracks,
+// following the rest of any listing that says it has more. The tree may be
+// the probe's, shared with every other reader of the page, and is only read.
 //
 // A track list shows twenty and says so: data-offset names where it stopped
 // and data-load-more whether anything follows. Asking for the same page with
@@ -92,12 +99,7 @@ func (b *Bandzoogle) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 // Without this an album of twenty-five arrived as twenty, which is not a
 // failure anything reports — the page looks complete and the last five are
 // simply absent.
-func bandzoogleParse(ctx context.Context, client *httpx.Client, doc string, u *url.URL, opts Options) (*Result, error) {
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("bandzoogle: parse %s: %w", u.Redacted(), err)
-	}
-
+func bandzoogleRead(ctx context.Context, client *httpx.Client, root *html.Node, u *url.URL, opts Options) (*Result, error) {
 	// Each continuation a list names is a page to read, the page itself
 	// the first; the walk ends once no list says it has more.
 	var artist string

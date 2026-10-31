@@ -4,8 +4,13 @@ package extractor
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -365,5 +370,69 @@ func TestBandzoogleAlbumName(t *testing.T) {
 		if got := bandzoogleAlbumName(in); got != want {
 			t.Errorf("bandzoogleAlbumName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// bandzoogleList is a track list of the given offset and continuation flag,
+// one anchor per id, each served from the id's own path.
+func bandzoogleList(offset, more string, ids ...string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="zoogle-music-player"><ol class="track-list" data-offset="%s" data-load-more="%s">`, offset, more)
+	for _, id := range ids {
+		fmt.Fprintf(&b, `<li><a data-id="%s" data-title="Song %s" data-dest="/player/1/tracks/%s.mp3" data-zoogle-track="true" href="#"></a></li>`, id, id, id)
+	}
+	b.WriteString(`</ol></div>`)
+	return b.String()
+}
+
+// Every list that says it has more is followed once, in the order the
+// pages name them, from the tree recognition parsed: two lists on the page
+// continue at two offsets, a continuation naming an offset already followed
+// is not asked again, and the page itself is fetched only by the probe.
+func TestBandzoogleFollowsEveryListThatHasMore(t *testing.T) {
+	var asked []string
+	var mu sync.Mutex
+	pages := map[string]string{
+		"":         bandzoogleList("2", "true", "1", "2") + bandzoogleList("3", "true", "10"),
+		"offset=2": bandzoogleList("4", "false", "3"),
+		"offset=3": bandzoogleList("2", "true", "11") + bandzoogleList("9", "false", "1"),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.RequestURI())
+		mu.Unlock()
+		body, ok := pages[r.URL.RawQuery]
+		if !ok || r.URL.Path != "/music" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, "<!DOCTYPE html><html><head><title>A Band Name</title></head><body>"+body+"</body></html>")
+	}))
+	t.Cleanup(srv.Close)
+	cfg := &config.Config{UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage}
+	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, 10*time.Second)
+
+	res, ex, err := NewRegistry(cfg, client).Extract(t.Context(), srv.URL+"/music", Options{})
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if ex.Name() != "bandzoogle" {
+		t.Fatalf("routed via %s", ex.Name())
+	}
+	var got []string
+	for _, f := range res.Files {
+		got = append(got, strings.TrimPrefix(f.URL, srv.URL))
+	}
+	want := []string{"/player/1/tracks/1.mp3", "/player/1/tracks/2.mp3", "/player/1/tracks/10.mp3",
+		"/player/1/tracks/3.mp3", "/player/1/tracks/11.mp3"}
+	if !slices.Equal(got, want) {
+		t.Errorf("tracks %v, want %v", got, want)
+	}
+	if wantAsked := []string{"/music", "/music?offset=2", "/music?offset=3"}; !slices.Equal(asked, wantAsked) {
+		t.Errorf("requests %v, want %v", asked, wantAsked)
+	}
+	if res.Title != "A Band Name" || res.Note != "" {
+		t.Errorf("title %q note %q", res.Title, res.Note)
 	}
 }

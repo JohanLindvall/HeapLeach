@@ -165,4 +165,7 @@ The audio path redirects to storage signed for a couple of hours, minted per
 request, so the player link is what goes on the `File`; the signed one would
 go stale in a long queue. A track list shows twenty and says whether it has
 more (`data-load-more`, `data-offset`); each continuation it names is a page
-of `walkPages`, read until no list says it has more.
+of `walkPages`, read until no list says it has more. The first page is the
+tree recognition parsed (the recogniser looked for a track element); each
+continuation is fetched and parsed on its own.
+`TestBandzoogleFollowsEveryListThatHasMore` pins the request sequence.

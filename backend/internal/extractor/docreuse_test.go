@@ -67,6 +67,17 @@ func probedReaders() []probedReader {
 				return cheveretoSingle(root, u, cheveretoTitle(root, u))
 			},
 		},
+		{
+			name: "bandzoogle", link: "https://aband.example.test/music", doc: bandzooglePage,
+			ex: NewBandzoogle(nil),
+			fromString: func(doc string, u *url.URL) (*Result, error) {
+				root, err := parseHTML(doc)
+				if err != nil {
+					return nil, err
+				}
+				return bandzoogleRead(context.Background(), nil, root, u, Options{})
+			},
+		},
 	}
 }
 
