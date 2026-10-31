@@ -14,6 +14,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // ABCListen resolves abc.net.au/listen, the Australian broadcaster's radio
@@ -270,11 +271,13 @@ func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCol
 
 // page fetches one page and reads its JSON island.
 func (a *ABCListen) page(ctx context.Context, link string) (*abcListenPage, error) {
-	doc, err := fetchPage(ctx, a.client, link, httpx.Referer(abcListenRoot+"/"))
+	// The probe's own tree is read when it holds the page, so the document
+	// recognised is not parsed again.
+	root, err := fetchPageRoot(ctx, a.client, link, httpx.Referer(abcListenRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("abclisten: fetch %s: %w", link, err)
 	}
-	page, err := abcListenParse(doc)
+	page, err := abcListenRead(root)
 	if err != nil {
 		return nil, fmt.Errorf("abclisten: %s: %w", link, err)
 	}
@@ -289,14 +292,22 @@ type abcListenPage struct {
 	title string
 }
 
-// abcListenParse reads a fetched page. Kept apart from the fetch so a fixture
-// can stand in for the page.
+// abcListenParse is abcListenRead for a page held as a string, as the
+// fixtures hold theirs.
 func abcListenParse(doc string) (*abcListenPage, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, err
 	}
-	island, ok := nextData(doc)
+	return abcListenRead(root)
+}
+
+// abcListenRead reads a fetched, parsed page. Kept apart from the fetch so a
+// fixture can stand in for the page. The tree may be the shared probe's, so
+// it is only read; the island is taken as written (nextDataIn), never through
+// display text, which would collapse the spacing inside its strings.
+func abcListenRead(root *html.Node) (*abcListenPage, error) {
+	island, ok := nextDataIn(root)
 	if !ok {
 		return nil, fmt.Errorf("no %s island on the page", abcListenIsland)
 	}

@@ -563,7 +563,16 @@ line in the saved queue.
   parsed root and is shared through `memo` on the same `Page` (the gallery
   path in `celeb.go`); keep a string entry point for synthetic fixtures, and
   treat memoised values as immutable. A canonical URL that differs from the
-  probed one reads its own page.
+  probed one reads its own page. A reader that only extraction needs still
+  takes the root, through `fetchRoot`, so the tree recognition parsed is not
+  parsed again: NPR (`nprRead`) and ABC listen (`abcListenRead`, its
+  `__NEXT_DATA__` read off the tree with `nextDataIn`) do, each with its
+  string adapter beside it, and `TestProbedReadersReuseTheParsedDocument`
+  holds both paths to the same result (`BenchmarkProbedReaders` measures
+  them). Before moving another reader over, check what it reads besides the
+  tree: Niconico keeps metadata a 4xx body carries, Bandcamp reads a
+  document fetched with another User-Agent, and WordPress edits its private
+  tree.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.

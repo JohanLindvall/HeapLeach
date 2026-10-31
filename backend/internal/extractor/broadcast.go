@@ -17,6 +17,8 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Helpers the public broadcasters share. Their APIs have nothing in common,
@@ -428,6 +430,19 @@ func nextData(doc string) (string, bool) {
 		return m[1], true
 	}
 	return "", false
+}
+
+// nextDataIn is nextData for a parsed page: the island's text as written
+// (rawText), for a reader that already holds the tree and would otherwise
+// scan the body again.
+func nextDataIn(root *html.Node) (string, bool) {
+	island := findFirst(root, func(n *html.Node) bool {
+		return isElem(n, atom.Script) && attr(n, "id") == "__NEXT_DATA__"
+	})
+	if island == nil {
+		return "", false
+	}
+	return rawText(island), true
 }
 
 // allDigits reports a non-empty run of decimal digits: an id where a slug
