@@ -118,3 +118,14 @@ pin (offsets, limits, page numbers). No flag or environment setting was added.
 | Transfer-time context (`refreshing`, `Player` deferred resolve) | adopt: one `transferRead`; identical composition. `TestTransferReadDropsOnlyThePageAndAdmission` |
 | Bunkr albums, lazy broadcaster episodes, Niconico lists, Keep2Share tickets, `cumPostLoader`, `Mirrored` | retain: their lifecycles differ (plan W7 table); no unconditional fresh read or invalidation added |
 | `refreshFile` identity and downloader partial-update contract | unchanged; existing `refresh_media_test.go`, `download/refresh_tracks_test.go` |
+
+## W8 — media selection
+
+| Item | Disposition |
+| --- | --- |
+| `peerTubeBest` | retain: video presence ranks first and "progressive" is provenance, not `IsHLS`; folding it into `bestCandidate` would need a switch or a false `IsHLS` |
+| `jwSource`, `jwPlayerBest` | retain: first usable source versus a ranked feed (plan W8.4) |
+| Broadcaster file tails | already shared (`broadcastFile`, `progressiveFile`), adopted where the tails agree before this work |
+| BitChute playlist test (case-insensitive `.m3u8` in the link) | adopt `isPlaylistLink`, its exact equivalent |
+| `renditions.go`, KVS, RTP `.m3u8` checks (case-sensitive), knuthing (path extension), Noodlemagazine and media-page checks (declared type as well) | retain: inputs or case rules differ from `isPlaylistLink` |
+| Generic fallback confidence order | unchanged |

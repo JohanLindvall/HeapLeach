@@ -383,7 +383,7 @@ func bitchuteIsPlaylist(media bitchuteMedia) bool {
 	if strings.Contains(kind, "hls") || strings.Contains(kind, "mpegurl") {
 		return true
 	}
-	return strings.Contains(strings.ToLower(media.URL), ".m3u8")
+	return isPlaylistLink(media.URL)
 }
 
 // ------------------------------------------------------------ API payloads
