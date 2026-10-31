@@ -132,6 +132,11 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 			}
 			seen[k] = true
 			if w.weigh == nil && len(items) == w.limit {
+				// The cap ends the walk early, but not past a
+				// cancellation, which outranks a partial listing.
+				if err := ctx.Err(); err != nil {
+					return nil, "", err
+				}
 				return items, w.limitNote, nil
 			}
 			items = append(items, item)

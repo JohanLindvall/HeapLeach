@@ -90,6 +90,11 @@ func walkTree[F any](ctx context.Context, opts Options, res *Result, key string,
 	if errors.As(err, &stop) {
 		return stop.error
 	}
+	// A walk that stopped at the cap returns no error of its own; a
+	// cancellation still outranks the files it collected.
+	if err == nil {
+		err = ctx.Err()
+	}
 	return err
 }
 

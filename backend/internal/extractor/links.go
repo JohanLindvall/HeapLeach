@@ -134,6 +134,9 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 	}
 
 	e := expandSources(ctx, registry, sources, opts)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	found -= e.unrecognised
 	if len(e.files) == 0 && e.unrecognised == len(sources) {
 		// Every link only looked like a download: the page has none.

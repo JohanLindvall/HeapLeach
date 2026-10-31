@@ -415,10 +415,10 @@ func (a *foolFuukaArchive) index(ctx context.Context, t foolFuukaTarget) (*Resul
 	}
 
 	files, refusals, failed := a.expand(ctx, t.board, threads)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		// Which of these it was matters: a board whose threads are all text
 		// is a fact about the board, while a board none of whose threads
 		// would open is a fact about the archive, and only one of them is

@@ -202,6 +202,11 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 	if s.refused != nil {
 		*s.refused = refusals
 	}
+	// The caller's cancellation outranks what resolved before it, as in
+	// noneResolved.
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	if len(resolved) == 0 {
 		return nil, "", fmt.Errorf("%s: none of the %d %s of %s are playable: %s",
 			s.site, len(items), s.noun, s.link, firstReason(s.site, refusals, failed, s.unplayable))
@@ -219,12 +224,10 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 
 // listSeries is expandSeries ending a listing: the job titled title, its
 // note the cap's followed by notes. A listing whose context ended while it
-// was resolved returns that rather than whatever had resolved by then.
+// was resolved returns that rather than whatever had resolved by then
+// (expandSeries).
 func listSeries[T any](ctx context.Context, title string, s series[T], notes ...string) (*Result, error) {
 	resolved, note, err := expandSeries(ctx, s)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, ctxErr
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -295,34 +298,8 @@ const unreadableSeasons = "partial — unreadable seasons"
 // failure, when it could not be read, for a broadcaster that takes that as
 // the programme itself failing; the rest take what the others gave.
 func readSeasons[S, T any](ctx context.Context, seasons []S, inTurn bool, read func(context.Context, S) (seasonList[T], error)) (list seasonList[T], first error) {
-	type outcome struct {
-		index int
-		list  seasonList[T]
-		err   error
-	}
-	readOne := func(ctx context.Context, i int) ([]outcome, error) {
-		got, err := read(ctx, seasons[i])
-		return []outcome{{i, got, err}}, nil
-	}
-	indices := make([]int, len(seasons))
-	for i := range indices {
-		indices[i] = i
-	}
-	var outcomes []outcome
-	if inTurn {
-		for _, i := range indices {
-			if ctx.Err() != nil {
-				break
-			}
-			got, _ := readOne(ctx, i)
-			outcomes = append(outcomes, got...)
-		}
-	} else {
-		outcomes = FanOut(ctx, indices, readOne)
-	}
-
 	unread := false
-	for _, out := range outcomes {
+	for _, out := range resolveOutcomes(ctx, seasons, inTurn, read) {
 		if out.err != nil {
 			unread = true
 			if out.index == 0 {
@@ -330,9 +307,9 @@ func readSeasons[S, T any](ctx context.Context, seasons []S, inTurn bool, read f
 			}
 			continue
 		}
-		list.items = append(list.items, out.list.items...)
-		list.more = list.more || out.list.more
-		list.note = cmp.Or(list.note, out.list.note)
+		list.items = append(list.items, out.got.items...)
+		list.more = list.more || out.got.more
+		list.note = cmp.Or(list.note, out.got.note)
 	}
 	if unread {
 		list.note = joinNotes(list.note, unreadableSeasons)

@@ -330,6 +330,15 @@ intact. `sources.go` holds what they share:
   the requests interleave. One that will not load is skipped rather than
   failing a job of hundreds; when none loads, `noneRead` says why, and when
   some do, the note says how many the host refused and why (`refusedNote`).
+- `resolveOutcomes` is the one ordered, bounded map: serial (`inTurn`) and
+  concurrent modes both start nothing once the context ends, let started
+  work settle, and keep each outcome's index and error. `readSeasons`,
+  `resolveEach` and source expansion go through it. Every finisher —
+  `readListing`, `noneResolved`, `expandSeries`, the walkers' cap exits and
+  the album callers that finish by hand — checks the caller's cancellation
+  **first**: a listing cut short and returned as a success would be saved
+  as if it were the whole listing. `FanOut` remains for callers that only
+  fill values and need no outcomes (`Autoindex.readAll`).
 
 ### Caps
 
