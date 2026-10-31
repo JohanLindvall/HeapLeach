@@ -62,7 +62,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if initial == nil {
 		return
 	}
-	if !writeEvent(out, gz, rc, initial) {
+	if !writeSSE(out, gz, rc, "data: ", initial) {
 		return
 	}
 
@@ -77,7 +77,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // manager shut down
 			}
-			if !writeEvent(out, gz, rc, msg) {
+			if !writeSSE(out, gz, rc, "data: ", msg) {
 				return
 			}
 		case <-ticker.C:
@@ -88,13 +88,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeEvent emits one SSE message, reporting whether the client is still
-// there. The payload is compact JSON, which never contains a newline, so it
-// fits a single data: line.
-func writeEvent(out io.Writer, gz *gzip.Writer, rc *http.ResponseController, payload []byte) bool {
-	return writeSSE(out, gz, rc, "data: ", payload)
-}
-
+// writeSSE emits one SSE line, a message ("data: ") or a comment (": "),
+// reporting whether the client is still there. A message's payload is
+// compact JSON, which never contains a newline, so it fits a single line.
 func writeSSE(out io.Writer, gz *gzip.Writer, rc *http.ResponseController, prefix string, payload []byte) bool {
 	_ = rc.SetWriteDeadline(time.Now().Add(config.SSEWriteTimeout))
 	if _, err := fmt.Fprintf(out, "%s%s\n\n", prefix, payload); err != nil {

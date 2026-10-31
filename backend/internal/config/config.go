@@ -7,6 +7,7 @@ package config
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -170,9 +171,6 @@ func FromEnv() (*Config, error) {
 		ProxyRetries:    DefaultProxyRetries,
 		ProxyExitProbes: []string{ProxyExitProbeURL, ProxyExitProbeFallbackURL},
 	}
-	if enabled, set := EnvBool("PROXIES"); set {
-		c.Proxies = enabled
-	}
 	warnRetiredSettings()
 	if _, set := envSet("PROXY_ENDPOINTS"); !set {
 		c.ProxyEndpoints = []string{"direct"}
@@ -197,39 +195,28 @@ func FromEnv() (*Config, error) {
 		return nil, fmt.Errorf("%sPROXY_TYPES: %w", envPrefix, err)
 	}
 	// Each read keeps the default when the setting is absent.
-	for _, s := range []struct {
-		name string
-		to   *int
-	}{
-		{"PROXY_RETRIES", &c.ProxyRetries}, {"CONCURRENCY", &c.Concurrency},
-		{"MAX_RETRIES", &c.MaxRetries}, {"STREAMS", &c.Streams},
-		{"MAX_CONCURRENCY", &c.MaxConcurrency}, {"CAPTCHA_CONCURRENCY", &c.CaptchaConcurrency},
-		{"MAX_SOURCES", &c.MaxSources}, {"MAX_FILES", &c.MaxFiles},
+	for _, read := range []func() error{
+		envInto("PROXY_RETRIES", &c.ProxyRetries, strconv.Atoi),
+		envInto("CONCURRENCY", &c.Concurrency, strconv.Atoi),
+		envInto("MAX_RETRIES", &c.MaxRetries, strconv.Atoi),
+		envInto("STREAMS", &c.Streams, strconv.Atoi),
+		envInto("MAX_CONCURRENCY", &c.MaxConcurrency, strconv.Atoi),
+		envInto("CAPTCHA_CONCURRENCY", &c.CaptchaConcurrency, strconv.Atoi),
+		envInto("MAX_SOURCES", &c.MaxSources, strconv.Atoi),
+		envInto("MAX_FILES", &c.MaxFiles, strconv.Atoi),
+		envInto("SLOW_SPEED", &c.SlowSpeed, ParseSize),
+		envInto("MAX_SPEED", &c.SpeedLimit, ParseSize),
+		envInto("MIN_FREE", &c.MinFreeDisk, ParseSize),
+		envInto("STALL_TIMEOUT", &c.StallTimeout, time.ParseDuration),
+		envInto("PROXIES", &c.Proxies, parseBool),
+		envInto("DEBUG", &c.Debug, parseBool),
+		envInto("OPEN", &c.OpenBrowser, parseBool),
+		envInto("RESUME", &c.ResumeRestored, parseBool),
 	} {
-		if *s.to, err = envInt(s.name, *s.to); err != nil {
+		if err := read(); err != nil {
 			return nil, err
 		}
 	}
-	for _, s := range []struct {
-		name string
-		to   *int64
-	}{
-		{"SLOW_SPEED", &c.SlowSpeed}, {"MAX_SPEED", &c.SpeedLimit}, {"MIN_FREE", &c.MinFreeDisk},
-	} {
-		if *s.to, err = envSize(s.name, *s.to); err != nil {
-			return nil, err
-		}
-	}
-
-	if c.StallTimeout, err = envDuration("STALL_TIMEOUT", c.StallTimeout); err != nil {
-		return nil, err
-	}
-
-	if enabled, set := EnvBool("DEBUG"); set {
-		c.Debug = enabled
-	}
-	c.OpenBrowser, _ = EnvBool("OPEN")
-	c.ResumeRestored, _ = EnvBool("RESUME")
 	c.ProfileAddr = env("PPROF", "")
 	return c, nil
 }
@@ -327,14 +314,18 @@ func FormatSize(n int64) string {
 // no desktop — needs a way to say so, and setting the variable to anything
 // would otherwise turn it further on.
 func EnvBool(name string) (value, set bool) {
-	switch strings.ToLower(LookupEnv(name)) {
-	case "":
-		return false, false
-	case "0", "false", "no", "off":
-		return false, true
-	default:
-		return true, true
+	raw := LookupEnv(name)
+	value, _ = parseBool(raw)
+	return value, raw != ""
+}
+
+// parseBool reads a switch's value: off when it says so, on otherwise.
+func parseBool(raw string) (bool, error) {
+	switch strings.ToLower(raw) {
+	case "", "0", "false", "no", "off":
+		return false, nil
 	}
+	return true, nil
 }
 
 // PrepareDir expands, resolves and creates a download directory, and proves
@@ -407,52 +398,35 @@ func (c *Config) Prepare() error {
 		c.StateFile = ""
 		c.LegacyStateFile = ""
 	}
-	if c.MaxConcurrency < 0 {
-		return fmt.Errorf("max-concurrency cannot be negative, got %d", c.MaxConcurrency)
+	for _, n := range []struct {
+		setting string
+		value   int64
+	}{
+		{"max-concurrency", int64(c.MaxConcurrency)}, {"retries", int64(c.MaxRetries)},
+		{"slow-speed", c.SlowSpeed}, {"max-speed", c.SpeedLimit}, {"min-free", c.MinFreeDisk},
+		{"max-sources", int64(c.MaxSources)}, {"max-files", int64(c.MaxFiles)},
+	} {
+		if n.value < 0 {
+			return fmt.Errorf("%s cannot be negative, got %d", n.setting, n.value)
+		}
 	}
-	if c.MaxConcurrency == 0 {
-		c.MaxConcurrency = DefaultMaxConcurrency
-	}
+	// Zero is the default rather than nothing at all, as it is wherever the
+	// caps are read; a config written as a literal leaves them unset.
+	c.MaxConcurrency = cmp.Or(c.MaxConcurrency, DefaultMaxConcurrency)
+	c.CaptchaConcurrency = cmp.Or(c.CaptchaConcurrency, DefaultCaptchaConcurrency)
+	c.MaxSources = cmp.Or(c.MaxSources, MaxExpandedSources)
+	c.MaxFiles = cmp.Or(c.MaxFiles, MaxListingFiles)
 	if c.Concurrency < 1 || c.Concurrency > c.MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 1 and %d, got %d", c.MaxConcurrency, c.Concurrency)
-	}
-	if c.CaptchaConcurrency == 0 {
-		c.CaptchaConcurrency = DefaultCaptchaConcurrency
 	}
 	if c.CaptchaConcurrency < 1 || c.CaptchaConcurrency > MaxCaptchaConcurrency {
 		return fmt.Errorf("captcha-concurrency must be between 1 and %d, got %d", MaxCaptchaConcurrency, c.CaptchaConcurrency)
 	}
-	if c.MaxRetries < 0 {
-		return fmt.Errorf("retries cannot be negative, got %d", c.MaxRetries)
-	}
 	if c.Streams < 1 || c.Streams > MaxStreams {
 		return fmt.Errorf("streams must be between 1 and %d, got %d", MaxStreams, c.Streams)
 	}
-	if c.SlowSpeed < 0 {
-		return fmt.Errorf("slow-speed cannot be negative, got %d", c.SlowSpeed)
-	}
-	if c.SpeedLimit < 0 {
-		return fmt.Errorf("max-speed cannot be negative, got %d", c.SpeedLimit)
-	}
 	if c.StallTimeout <= 0 {
 		return fmt.Errorf("stall-timeout must be positive, got %s", c.StallTimeout)
-	}
-	if c.MinFreeDisk < 0 {
-		return fmt.Errorf("min-free cannot be negative, got %d", c.MinFreeDisk)
-	}
-	// Zero is the default rather than nothing at all, as it is wherever the
-	// caps are read; a config written as a literal leaves them unset.
-	if c.MaxSources < 0 {
-		return fmt.Errorf("max-sources cannot be negative, got %d", c.MaxSources)
-	}
-	if c.MaxSources == 0 {
-		c.MaxSources = MaxExpandedSources
-	}
-	if c.MaxFiles < 0 {
-		return fmt.Errorf("max-files cannot be negative, got %d", c.MaxFiles)
-	}
-	if c.MaxFiles == 0 {
-		c.MaxFiles = MaxListingFiles
 	}
 	dir, err := PrepareDir(c.DownloadDir)
 	if err != nil {
@@ -678,43 +652,23 @@ func splitList(raw string) []string {
 	return out
 }
 
-func envInt(name string, def int) (int, error) {
-	v := LookupEnv(name)
-	if v == "" {
-		return def, nil
+// envInto returns a read of one setting into to, which keeps its value when
+// the setting is absent. A setting that parse refuses is an error naming it.
+// Sizes take a unit (ParseSize), so a rate or a floor need not be a run of
+// zeroes; a bare number is still bytes.
+func envInto[T any](name string, to *T, parse func(string) (T, error)) func() error {
+	return func() error {
+		v := LookupEnv(name)
+		if v == "" {
+			return nil
+		}
+		parsed, err := parse(v)
+		if err != nil {
+			return fmt.Errorf("%s%s: %w", envPrefix, name, err)
+		}
+		*to = parsed
+		return nil
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
-	}
-	return n, nil
-}
-
-func envDuration(name string, def time.Duration) (time.Duration, error) {
-	v := LookupEnv(name)
-	if v == "" {
-		return def, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
-	}
-	return d, nil
-}
-
-// envSize reads a byte count that may carry a unit — 5MB, 10GiB — since a
-// rate or a floor is far easier to state that way than as a run of zeroes.
-// A bare number is still bytes, so what worked before still works.
-func envSize(name string, def int64) (int64, error) {
-	v := LookupEnv(name)
-	if v == "" {
-		return def, nil
-	}
-	n, err := ParseSize(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
-	}
-	return n, nil
 }
 
 // The protocols a proxy group can be held to.

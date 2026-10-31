@@ -42,7 +42,7 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 		default:
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
-		tr.DialContext = (&net.Dialer{Timeout: config.ProxyDialTimeout, KeepAlive: 30 * time.Second}).DialContext
+		tr.DialContext = dialer(config.ProxyDialTimeout).DialContext
 		if err := proxytron.SetHTTPProxy(tr, raw, &tls.Config{InsecureSkipVerify: true}); err != nil {
 			return nil, err
 		}

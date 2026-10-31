@@ -15,7 +15,9 @@ Download directory precedence: positional argument → `-dir` → `HEAPLEACH_DIR
 
 A setting whose empty value means something of its own (`HEAPLEACH_STATE`
 empty turns persistence off) is read with `envSet`, which tells set from
-unset; the rest treat empty as absent. Proxy protocols are checked in one
+unset; the rest treat empty as absent. Numbers, sizes, durations and switches
+are one table in `FromEnv`, each row an `envInto(name, &field, parse)`; a
+new one is a row, and its error names the variable like the rest. Proxy protocols are checked in one
 place, `config.CheckProxyType` and `config.CheckProxyTypes`, for the
 environment, flags and `/api/settings` alike, so all three refuse the same
 values, and say why in the words `/api/settings` answers with.

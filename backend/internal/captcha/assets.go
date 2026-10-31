@@ -9,6 +9,7 @@ import (
 	"runtime"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 const modelSHA256 = "33b5cd351ee94e73a6bf8fa18c415ed8b819b3ffd342e267c30d8ad8334e34e8"
@@ -16,14 +17,11 @@ const modelSHA256 = "33b5cd351ee94e73a6bf8fa18c415ed8b819b3ffd342e267c30d8ad8334
 func assetPaths() (model, library string, err error) {
 	dir := config.LookupEnv("OCR_DIR")
 	if dir == "" {
-		exe, err := os.Executable()
+		exe, err := util.ExecutableDir()
 		if err != nil {
 			return "", "", err
 		}
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-		dir = filepath.Join(filepath.Dir(exe), "ocr")
+		dir = filepath.Join(exe, "ocr")
 	}
 	lib := "libonnxruntime.so"
 	switch runtime.GOOS {

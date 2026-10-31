@@ -10,9 +10,12 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // The helper binaries the downloader can put to work. Named here, in the
@@ -87,12 +90,8 @@ func locate(name string) string {
 		name += ".exe"
 	}
 	// Alongside the binary first.
-	if exe, err := os.Executable(); err == nil {
-		if resolvedExe, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolvedExe
-		}
-		candidate := filepath.Join(filepath.Dir(exe), name)
-		if executable(candidate) {
+	if dir, err := util.ExecutableDir(); err == nil {
+		if candidate := filepath.Join(dir, name); executable(candidate) {
 			return candidate
 		}
 	}
@@ -113,4 +112,4 @@ func executable(path string) bool {
 }
 
 // lookPath is exec.LookPath, kept behind a variable so tests can steer it.
-var lookPath = defaultLookPath
+var lookPath = exec.LookPath
