@@ -32,6 +32,6 @@ area guides with the invariants for each part of the code.
 
 The [service audit](audit-2026-10-03.md) records a dated review; use the current
 guides for present behavior. The
-[scraper consolidation and reuse plan](scraper-reuse-investigation.md) records
-the investigation, reproduced findings and proposed work from 2026-10-31.
+[scraper consolidation plan](scraper-consolidation-plan.md) records the remaining
+reuse opportunities, reproduced findings and proposed migration from 2026-10-31.
 Vulnerabilities follow the [security policy](../SECURITY.md).
