@@ -5,7 +5,6 @@ package extractor
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -538,11 +537,11 @@ var archiveGeneratedSuffixes = []string{
 	"_itemimage.jpg",
 }
 
-func archiveIsVideo(format archiveText) bool { return archiveVideoFormats[archiveLabel(format)] }
+func archiveIsVideo(format flexValue) bool { return archiveVideoFormats[archiveLabel(format)] }
 
-func archiveIsMPEG4(format archiveText) bool { return archiveMPEG4Formats[archiveLabel(format)] }
+func archiveIsMPEG4(format flexValue) bool { return archiveMPEG4Formats[archiveLabel(format)] }
 
-func archiveIsSubtitle(format archiveText) bool { return archiveSubtitleFormats[archiveLabel(format)] }
+func archiveIsSubtitle(format flexValue) bool { return archiveSubtitleFormats[archiveLabel(format)] }
 
 // archiveEncrypted recognises a DRM-wrapped rendition.
 //
@@ -552,7 +551,7 @@ func archiveIsSubtitle(format archiveText) bool { return archiveSubtitleFormats[
 // server. Matching the word rather than the four current labels is deliberate
 // — a scheme this cannot recognise is one that produces an unopenable file
 // that looks like a finished download.
-func archiveEncrypted(format archiveText) bool {
+func archiveEncrypted(format flexValue) bool {
 	return strings.Contains(archiveLabel(format), "encrypted")
 }
 
@@ -575,19 +574,19 @@ func archiveHousekeeping(f archiveFile) bool {
 	return strings.HasPrefix(strings.ToLower(f.Name), "logs/")
 }
 
-func archiveAudioRank(format archiveText) int { return archiveRankIn(archiveAudioRanking, format) }
+func archiveAudioRank(format flexValue) int { return archiveRankIn(archiveAudioRanking, format) }
 
-func archiveBookRank(format archiveText) int { return archiveRankIn(archiveBookRanking, format) }
+func archiveBookRank(format flexValue) int { return archiveRankIn(archiveBookRanking, format) }
 
 // archiveRankIn returns a format's position in a ranking, or -1 when it is
 // absent — which, for an allow-list, means "not this kind of file".
-func archiveRankIn(ranking []string, format archiveText) int {
+func archiveRankIn(ranking []string, format flexValue) int {
 	return rankIn(ranking, archiveLabel(format), -1)
 }
 
 // archiveLabel normalises a format label for comparison. The archive writes
 // them for people to read, so they carry capitals and spaces.
-func archiveLabel(format archiveText) string {
+func archiveLabel(format flexValue) string {
 	return strings.ToLower(strings.TrimSpace(string(format)))
 }
 
@@ -630,6 +629,13 @@ func archiveDownloadURL(id, name string) string {
 // ------------------------------------------------------------- the wire
 
 // archiveDoc is the part of the metadata response this reads.
+//
+// The archive's metadata is a schemaless document store where every field may
+// repeat: an item edited twice can carry two titles where its neighbour
+// carries one, and sizes are written as strings by one deriver and as numbers
+// by another. Decoding any of that into a plain Go string fails the whole
+// document and loses the item, so every field read here is a flexValue and
+// keeps the first value it finds.
 type archiveDoc struct {
 	Files    []archiveFile `json:"files"`
 	Metadata archiveItem   `json:"metadata"`
@@ -645,23 +651,23 @@ type archiveDoc struct {
 
 // archiveItem is the item's own metadata.
 type archiveItem struct {
-	Identifier string      `json:"identifier"`
-	Title      archiveText `json:"title"`
-	MediaType  archiveText `json:"mediatype"`
+	Identifier string    `json:"identifier"`
+	Title      flexValue `json:"title"`
+	MediaType  flexValue `json:"mediatype"`
 }
 
 // archiveFile is one entry in the item's file list.
 type archiveFile struct {
-	Name   string      `json:"name"`
-	Source archiveText `json:"source"`
-	Format archiveText `json:"format"`
+	Name   string    `json:"name"`
+	Source flexValue `json:"source"`
+	Format flexValue `json:"format"`
 	// Size is a decimal string, and absent altogether on some entries.
-	Size archiveText `json:"size"`
+	Size flexValue `json:"size"`
 	// Private marks a file that is listed but not served: the download
 	// redirect is issued as normal and the node behind it answers 401. It is
 	// filtered on rather than discovered, because discovering it costs a
 	// failed transfer per file on an item that can hold thirty of them.
-	Private archiveText `json:"private"`
+	Private flexValue `json:"private"`
 }
 
 func (f archiveFile) isOriginal() bool {
@@ -680,42 +686,4 @@ func (f archiveFile) size() int64 {
 		return -1
 	}
 	return n
-}
-
-// archiveText is a metadata value that may arrive as a string, a number, a
-// boolean, or an array of any of those.
-//
-// The archive's metadata is a schemaless document store where every field may
-// repeat: an item edited twice can carry two titles where its neighbour
-// carries one, and sizes are written as strings by one deriver and as numbers
-// by another. Decoding any of that into a plain Go string fails the whole
-// document and loses the item, so every field read here goes through this and
-// keeps the first value it finds.
-type archiveText string
-
-func (t *archiveText) UnmarshalJSON(b []byte) error {
-	var v any
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	*t = archiveText(archiveScalar(v))
-	return nil
-}
-
-func archiveScalar(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case bool:
-		return strconv.FormatBool(x)
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case []any:
-		for _, e := range x {
-			if s := archiveScalar(e); s != "" {
-				return s
-			}
-		}
-	}
-	return ""
 }

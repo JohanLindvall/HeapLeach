@@ -17,6 +17,12 @@ func TestFlexValueReadsEitherSpelling(t *testing.T) {
 		`{"ex":1755000000}`:   "1755000000",
 		`{"ex":null}`:         "",
 		`{}`:                  "",
+		// A field written twice keeps its first value, and a nested one
+		// is no value at all.
+		`{"ex":["",1755000000,"later"]}`: "1755000000",
+		`{"ex":[]}`:                      "",
+		`{"ex":true}`:                    "true",
+		`{"ex":{"at":1}}`:                "",
 	}
 	for raw, want := range cases {
 		var out struct {

@@ -227,7 +227,7 @@ const mastodonFixture = `[
 func TestMastodonFiles(t *testing.T) {
 	statuses := decode[[]mastodonStatus](t, mastodonFixture)
 
-	files := mastodonFiles(statuses)
+	files := fediFiles(mastodonEntries(statuses))
 	want := []struct{ name, link string }{
 		{"115000000000000001_1.jpg", "https://files.example.test/media/000/001/original/first.jpg"},
 		{"115000000000000001_2.mp4", "https://files.example.test/media/000/002/original/second.mp4"},
@@ -516,7 +516,7 @@ func TestLemmyFiles(t *testing.T) {
 		Posts []lemmyPostView `json:"posts"`
 	}](t, lemmyFixture)
 
-	files := lemmyFiles(payload.Posts)
+	files := fediFiles(lemmyEntries(payload.Posts))
 	want := []struct{ name, link string }{
 		{"101 A photograph.jpeg", "https://example.test/pictrs/image/aaaa-bbbb.jpeg"},
 		{"105 From an older instance.webp", "https://other.test/pictrs/image/eeee-ffff.webp"},
@@ -649,7 +649,7 @@ const misskeyFixture = `[
 func TestMisskeyFiles(t *testing.T) {
 	notes := decode[[]misskeyNote](t, misskeyFixture)
 
-	files := misskeyFiles(notes)
+	files := fediFiles(misskeyEntries(notes))
 	if len(files) != 2 {
 		t.Fatalf("found %d files, want 2: %+v", len(files), files)
 	}
