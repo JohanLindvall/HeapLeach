@@ -299,7 +299,7 @@ func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string,
 		key:   key,
 		quiet: true,
 		// A later page failing still leaves the earlier ones.
-		failed: func(error) string { return couldNotFetchNote },
+		failed: func(error) (string, bool) { return couldNotFetchNote, true },
 	})
 	if err != nil {
 		return nil, false, "", fmt.Errorf("rtve: listing %s: %w", endpoint, err)

@@ -67,22 +67,23 @@ func TestWalkPagesEndsAtTheStatedPageCount(t *testing.T) {
 }
 
 // TestWalkPagesFailedHookDefers leaves the note for a failed later page to
-// the walk when the hook returns pageFailed: its own note, or none when the
-// walk is quiet; "" stays no note at all.
+// the walk when the hook declines to decide it: its own note, or none when
+// the walk is quiet; a decided "" stays no note at all.
 func TestWalkPagesFailedHookDefers(t *testing.T) {
 	for _, tc := range []struct {
-		hook  string
-		quiet bool
-		want  string
+		hook    string
+		decided bool
+		quiet   bool
+		want    string
 	}{
-		{pageFailed, false, "partial — could not fetch next page"},
-		{pageFailed, true, ""},
-		{"", false, ""},
-		{"partial — rate limited", true, "partial — rate limited"},
+		{"", false, false, "partial — could not fetch next page"},
+		{"", false, true, ""},
+		{"", true, false, ""},
+		{"partial — rate limited", true, true, "partial — rate limited"},
 	} {
 		_, note, err := walkPages(context.Background(), pageWalk[string]{
 			key: func(s string) string { return s }, limit: -1, quiet: tc.quiet,
-			failed: func(error) string { return tc.hook },
+			failed: func(error) (string, bool) { return tc.hook, tc.decided },
 			fetch: func(_ context.Context, n int) (pageOf[string], error) {
 				if n > 0 {
 					return pageOf[string]{}, errors.New("gone")
@@ -93,5 +94,54 @@ func TestWalkPagesFailedHookDefers(t *testing.T) {
 		if err != nil || note != tc.want {
 			t.Errorf("hook %q, quiet %v: note = %q, err = %v; want %q", tc.hook, tc.quiet, note, err, tc.want)
 		}
+	}
+}
+
+// Each way a walk ends is a reason of its own, rendered into the note the
+// walk has always given; walkEpisodes reads the limit from the reason.
+func TestWalkPagesReportsWhyItEnded(t *testing.T) {
+	gone := errors.New("gone")
+	for _, tc := range []struct {
+		name  string
+		limit int
+		pages []pageOf[string]
+		stop  walkStop
+		note  string
+	}{
+		{"own end", -1, []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"b"}, note: "said by the page"}},
+			walkEnded, "said by the page"},
+		{"limit", 1, []pageOf[string]{{items: []string{"a", "b"}, next: true}}, walkLimit, "partial — file limit"},
+		{"page cap", -1, []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"b"}, next: true}},
+			walkPageLimit, "partial — page limit"},
+		{"repeated", -1, []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"a"}, next: true}},
+			walkRepeated, "partial — repeated or empty page"},
+		{"stop page", -1, []pageOf[string]{{items: []string{"a"}, next: true}, {stop: "partial — redirected"}},
+			walkStopped, "partial — redirected"},
+		{"later page failed", -1, []pageOf[string]{{items: []string{"a"}, next: true}, {}}, walkFetchFailed,
+			couldNotFetchNote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := pageWalk[string]{
+				key: func(s string) string { return s }, limit: tc.limit, limitNote: fileLimitNote, pages: 2,
+				fetch: func(_ context.Context, n int) (pageOf[string], error) {
+					if tc.stop == walkFetchFailed && n == 1 {
+						return pageOf[string]{}, gone
+					}
+					return tc.pages[n], nil
+				},
+			}
+			out, err := walkPagesFor(context.Background(), w)
+			if err != nil || out.stop != tc.stop || w.render(out) != tc.note {
+				t.Errorf("stop %v, note %q, err %v; want %v, %q", out.stop, w.render(out), err, tc.stop, tc.note)
+			}
+			_, note, _ := walkPages(context.Background(), w)
+			if note != tc.note {
+				t.Errorf("walkPages note %q, want %q", note, tc.note)
+			}
+			_, more, _, _ := walkEpisodes(context.Background(), tc.limit, w)
+			if more != (tc.stop == walkLimit) {
+				t.Errorf("walkEpisodes more = %v", more)
+			}
+		})
 	}
 }

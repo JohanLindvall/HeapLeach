@@ -144,7 +144,7 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 	posts, note, err := walkPages(ctx, pageWalk[cumPost]{
 		key:   func(post cumPost) string { return post.ID },
 		limit: opts.maxSources(), limitNote: sourceLimitNote,
-		failed: func(error) string { return "partial — could not read the next post page" },
+		failed: func(error) (string, bool) { return "partial — could not read the next post page", true },
 		fetch: func(ctx context.Context, n int) (pageOf[cumPost], error) {
 			ResolveNote(ctx, fmt.Sprintf("Reading creator posts, page %d", n+1))
 			params.Set("o", strconv.Itoa(offset))

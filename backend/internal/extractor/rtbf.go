@@ -577,9 +577,9 @@ func (r *RTBF) walk(ctx context.Context, list string, seen map[string]bool, limi
 			return pageOf[rtbfEntry]{items: media, next: next != "", end: len(media) == 0}, nil
 		},
 		key: func(e rtbfEntry) string { return e.AssetID },
-		failed: func(err error) string {
+		failed: func(err error) (string, bool) {
 			broke = err
-			return ""
+			return "", true
 		},
 	})
 	return entries, cut, note, cmp.Or(err, broke)

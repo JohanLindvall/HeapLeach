@@ -314,6 +314,16 @@ intact. `sources.go` holds what they share:
   walk, the page cap (`config.MaxAlbumPages` unless `pages` says otherwise),
   the limit and its note, and cancellation, which is never a partial listing.
   `walkListing` (`listing.go`) is its adapter for HTML pagers.
+- Why a walk ended is state, not wording. `walkPagesFor` returns `walked`:
+  the entries and a `walkStop` (the listing's own end, the limit, the page
+  cap, a repeated or empty page, a stop page, a later page that failed)
+  beside the page's and the `failed` hook's notes; `pageWalk.render` alone
+  turns that into the note `walkPages` has always returned, string for
+  string. A caller that needs the reason reads `stop` rather than matching
+  a note: `walkEpisodes` reports `more` from `walkLimit`. `quiet` still
+  silences the walk's own notes for the page cap, a repeated page, a stop
+  page and a failed page alike; telling a site's expected end from an
+  unexpected cut per caller is a separate change with its own note review.
 - Each page says how the listing ends, from what the API states: `total` (the
   count it holds), `pages` (the page count it runs to), `end` (an end flag, a
   missing cursor, or an empty page asked for past the end), or no `next`. Never end on a page shorter than the
@@ -523,8 +533,8 @@ line in the saved queue.
   a first page the caller already read (`root`), a fetch of its own (`fetch`,
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
   (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
-  that singles out one failure returns `pageFailed` for the rest, leaving
-  their note to the walk. `expansionNote` (`sources.go`) builds the job note
+  returns its note and whether it decided one, and a hook that singles out
+  one failure returns false for the rest, leaving their note to the walk. `expansionNote` (`sources.go`) builds the job note
   of a listing expanded into its sources, and `partialNote` that of a page
   or search whose sources a cap cut.
 - `expandSources` keeps, beside the files, the refusals and first failure of

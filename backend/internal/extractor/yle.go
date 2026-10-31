@@ -579,9 +579,9 @@ func (y *Yle) walk(ctx context.Context, lang string, page *ylePage, lists []yleL
 				return pageOf[yleEpisode]{items: eps, next: true, end: len(eps) == 0 || count > 0 && offset >= count}, nil
 			},
 			key: func(ep yleEpisode) string { return ep.id },
-			failed: func(err error) string {
+			failed: func(err error) (string, bool) {
 				broke = err
-				return ""
+				return "", true
 			},
 		})
 		for _, ep := range got {

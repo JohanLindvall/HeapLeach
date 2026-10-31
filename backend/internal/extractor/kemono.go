@@ -136,11 +136,11 @@ func (k *Kemono) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 			}
 			return n
 		},
-		failed: func(err error) string {
+		failed: func(err error) (string, bool) {
 			if httpx.HasStatus(err, http.StatusBadRequest) {
-				return ""
+				return "", true
 			}
-			return pageFailed
+			return "", false
 		},
 		fetch: func(ctx context.Context, _ int) (pageOf[kemonoPost], error) {
 			var posts []kemonoPost

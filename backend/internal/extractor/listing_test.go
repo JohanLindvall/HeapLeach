@@ -212,11 +212,11 @@ func TestWalkListing(t *testing.T) {
 			}
 			if tc.quiet {
 				walk.quiet = true
-				walk.failed = func(err error) string {
+				walk.failed = func(err error) (string, bool) {
 					if httpx.HasStatus(err, http.StatusTooManyRequests) {
-						return "partial — rate limited"
+						return "partial — rate limited", true
 					}
-					return ""
+					return "", true
 				}
 			}
 			links, title, note, err := walkListing(ctx, testClient(), mustParse(t, srv.URL+"/list"), walk)
@@ -274,7 +274,7 @@ func TestWalkPages(t *testing.T) {
 			asked := 0
 			items, note, err := walkPages(context.Background(), pageWalk[string]{
 				key: func(s string) string { return s }, limit: -1, quiet: tc.quiet,
-				failed: func(err error) string { return "partial — " + err.Error() },
+				failed: func(err error) (string, bool) { return "partial — " + err.Error(), true },
 				fetch: func(_ context.Context, n int) (pageOf[string], error) {
 					asked++
 					p := tc.pages[n]

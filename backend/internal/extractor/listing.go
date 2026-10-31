@@ -75,7 +75,7 @@ type listingWalk struct {
 	// quiet and failed are walkPages' own: a listing whose walk stops
 	// where the listing does, and the note for a later page that fails.
 	quiet  bool
-	failed func(error) string
+	failed func(error) (string, bool)
 }
 
 // listingLimit is how many entries a listing may queue as files: the

@@ -302,22 +302,21 @@ func readSeasons[S, T any](ctx context.Context, seasons []S, inTurn bool, read f
 	return list, first
 }
 
-// walkCut is the limit note walkEpisodes hands walkPages, to learn that
-// the walk stopped at its limit with the listing going on.
-const walkCut = "\x00cut"
-
 // walkEpisodes is walkPages for a broadcaster's listing taken up to limit
 // entries (none when negative), saying whether the listing went on past
 // them (more) rather than noting it, so that expandSeries or the caller says
 // what the cap left out in its own words. note is the walk's own, for a
 // listing cut short some other way.
 func walkEpisodes[T any](ctx context.Context, limit int, w pageWalk[T]) (items []T, more bool, note string, err error) {
-	w.limit, w.limitNote = limit, walkCut
-	items, note, err = walkPages(ctx, w)
-	if note == walkCut {
-		return items, true, "", err
+	w.limit, w.limitNote = limit, ""
+	out, err := walkPagesFor(ctx, w)
+	if err != nil {
+		return nil, false, "", err
 	}
-	return items, false, note, err
+	if out.stop == walkLimit {
+		return out.items, true, "", nil
+	}
+	return out.items, false, w.render(out), nil
 }
 
 // nestByLabel reports whether a listing spans more than one distinct

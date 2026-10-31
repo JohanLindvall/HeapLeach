@@ -392,9 +392,9 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 			},
 			key:   func(l listed) string { return l.id },
 			limit: -1,
-			failed: func(err error) string {
+			failed: func(err error) (string, bool) {
 				walkErr = cmp.Or(walkErr, err)
-				return ""
+				return "", true
 			},
 		})
 		walkErr, walkNote = cmp.Or(walkErr, err), cmp.Or(walkNote, note)
