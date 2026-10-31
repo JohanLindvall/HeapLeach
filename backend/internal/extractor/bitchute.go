@@ -270,14 +270,11 @@ func (b *BitChute) channel(ctx context.Context, segment string, opts Options) (*
 		return nil, fmt.Errorf("bitchute: channel %s lists no videos", segment)
 	}
 
-	files, refusals, failed := b.expand(ctx, videos)
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead("bitchute", len(videos), "videos", "channel "+segment, refusals, failed)
+	files, refused, err := b.expand(ctx, segment, videos)
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: b.channelName(ctx, segment), Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
+	return &Result{Title: b.channelName(ctx, segment), Files: files, Note: joinNotes(note, refused)}, nil
 }
 
 // channelVideos pages through a channel's listing.
@@ -343,10 +340,10 @@ func (b *BitChute) channelName(ctx context.Context, segment string) string {
 // is deliberately low, since this is a burst of small requests at one host.
 //
 // The queue follows the channel's own order however the requests interleave
-// (resolveFiles), and a video that will not resolve is dropped rather than
-// failing the rest; why comes back beside the files for when none resolved.
-func (b *BitChute) expand(ctx context.Context, videos []bitchuteVideo) ([]File, []string, error) {
-	return resolveFiles(ctx, videos, func(ctx context.Context, video bitchuteVideo) ([]File, error) {
+// (readListing), and a video that will not resolve is dropped rather than
+// failing the rest; when none resolves, the first reason why is the error.
+func (b *BitChute) expand(ctx context.Context, segment string, videos []bitchuteVideo) ([]File, string, error) {
+	return readListing(ctx, "bitchute", "videos", "channel "+segment, videos, func(ctx context.Context, video bitchuteVideo) ([]File, error) {
 		media, err := b.media(ctx, video.ID)
 		if err != nil {
 			return nil, err

@@ -25,6 +25,9 @@ type mediaCandidate struct {
 	URL     string
 	Quality int
 	IsHLS   bool
+	// Size is the rendition's exact length in bytes, where the source
+	// states one; zero or less states none.
+	Size int64
 }
 
 // qualityPattern finds a vertical resolution in a URL or label: "720p",
@@ -49,6 +52,7 @@ func qualityOf(text string) int {
 // bestCandidate picks the highest quality, preferring a plain file over an
 // adaptive playlist at the same resolution: a single file downloads in
 // parallel and resumes, where a playlist has to be fetched piece by piece.
+// Of two otherwise equal, the larger is taken; past that, the first.
 func bestCandidate(candidates []mediaCandidate) (mediaCandidate, bool) {
 	usable := candidates[:0:0]
 	for _, c := range candidates {
@@ -63,6 +67,7 @@ func bestCandidate(candidates []mediaCandidate) (mediaCandidate, bool) {
 		return cmp.Or(
 			cmp.Compare(b.Quality, a.Quality), // highest first
 			cmpBool(a.IsHLS, b.IsHLS),         // a plain file before a playlist
+			cmp.Compare(b.Size, a.Size),
 		)
 	})
 	return usable[0], true

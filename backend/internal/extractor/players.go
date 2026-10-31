@@ -61,8 +61,10 @@ type playerSite struct {
 	referer func(page string) string
 	// read fetches the page and reports what its player is given.
 	read func(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error)
-	// signed reads the page again when the transfer starts.
-	signed bool
+	// signed reads the page again when the transfer starts. withheld
+	// leaves the link off the queued file as well, which carries only its
+	// name and size until then.
+	signed, withheld bool
 	// peek, when set, puts the whole read off until the transfer starts,
 	// and reads it again on recovery: Extract learns only the video's
 	// title, and that it plays. For a site whose player spends its
@@ -159,6 +161,9 @@ func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 			fresh, _, err := p.resolve(ctx, page)
 			return fresh, err
 		})
+		if p.site.withheld {
+			file.URL = ""
+		}
 	}
 	file.ProxyFallback = p.site.proxyFallback
 	return &Result{Title: title, Files: []File{file}}, nil
@@ -221,7 +226,7 @@ func (p *Player) resolve(ctx context.Context, page string) (*Target, string, err
 		headers = httpx.Referer(referer)
 	}
 	if !best.IsHLS {
-		return &Target{URL: best.URL, Name: title + cmp.Or(video.ext, ".mp4"), Size: -1,
+		return &Target{URL: best.URL, Name: title + cmp.Or(video.ext, ".mp4"), Size: knownSize(best.Size),
 			Headers: headers}, title, nil
 	}
 	ResolveNote(ctx, "Reading video playlist")

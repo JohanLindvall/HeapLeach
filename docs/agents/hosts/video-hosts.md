@@ -6,18 +6,20 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 ## Player pages: one engine, one row per site
 
-pornhub, xhamster, tnaflix, drtuber, pornone, eporner, vidmoly, ok.ru,
-streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid, knuthing and
-noodlemagazine are rows of one table in `playersites.go`, run by the engine in `players.go`, each registered as its
+pornhub, xhamster, tnaflix, drtuber, pornone, eporner, streamable, vidmoly,
+ok.ru, streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid,
+knuthing and noodlemagazine are rows of one table (`playersites.go`, and a
+file of its own for the larger rows), run by the engine in `players.go`, each registered as its
 own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
 one rather than as a block). A row states its forms and recogniser, the
 canonical page a pasted link is read as (`page`), the media referer, and
 `read`, which fetches the page and returns its title and rendition
-candidates. The engine takes the best (`bestCandidate`), follows a playlist
+candidates. The engine takes the best (`bestCandidate`: quality, then a
+plain file over a playlist, then the larger stated size), follows a playlist
 to its segments (named by the segments' container) or hands over a plain
-file, and, for a row marked `signed`, reads the page again when the
-transfer starts. A 404 on the page is reported as the video being gone, for
+file, carrying a size the candidate states exactly, and, for a row marked
+`signed`, reads the page again when the transfer starts. A 404 on the page is reported as the video being gone, for
 every row, keeping the status underneath. New player sites belong in this
 table.
 
@@ -44,6 +46,20 @@ What else a row can ask for:
   (ok.ru) or simply leave its end unmarked, and is taken as it is.
 - **`proxyFallback`.** Opts the row's sources and files into proxy recovery
   (doodstream).
+- **`withheld`.** A signed row's queued file carries no link at all, only
+  its name and exact size, so the item waits against the site it came from
+  rather than the media host (streamable).
+
+## streamable
+
+streamable's "page" is the JSON document its own player reads
+(`ajax.streamable.com/videos/<id>`), served to anyone with no headers. It
+states the transcode's status, the title, and each rendition's height and
+exact byte size; the link is a signed CloudFront one, so the row is signed
+and withheld. `original_size` describes the upload, not the transcode, and
+is never read. A video still uploading, transcoding or failed is reported as
+that, and a 404 as no such video. The renditions are listed in sorted name
+order so that equal ones are chosen alike on every read.
 
 The script-reading rows (streamtape, mixdrop, lulustream) are the most fragile
 extractors here, because each depends on the shape of a script the host can
@@ -289,9 +305,12 @@ names no page at all, is reached through the row's `watch` prefix.
 
 ## Kernel Video Sharing
 
-KVS is a product, not a site. `kvs.go` holds the reusable parts (flashvars
-parsing, license-code permutation) and `kvssites.go` the one `kvs` extractor
-for every install, recognised by the platform's fingerprint below the site
+KVS is a product, not a site. `kvs.go` holds the one `kvs` extractor for
+every install and the reusable parts (flashvars parsing, license-code
+permutation); `kvslisting.go` the walk every listing shares, and
+`kvsbrowse.go` the listings it is handed: a member's videos, a search, and
+whatever else a fetched page turns out to list. The install is recognised
+by the platform's fingerprint below the site
 root: flashvars carrying a `license_code`, the `kt_player` script, or the
 asynchronous `list_videos` controls. There is no install list to keep.
 

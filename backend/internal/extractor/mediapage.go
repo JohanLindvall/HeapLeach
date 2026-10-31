@@ -93,7 +93,7 @@ func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root
 		return &Result{Title: title, Files: []File{media.file(title+media.extensionOr(path.Ext(name)), headers)}}, true
 	}
 	return &Result{Title: title, Files: []File{{
-		Name: name, URL: found.URL, Size: found.Size, Headers: headers,
+		Name: name, URL: found.URL, Size: knownSize(found.Size), Headers: headers,
 	}}}, true
 }
 
@@ -106,12 +106,9 @@ type mediaFinding struct {
 	Title string
 	// Type is the MIME type the page or the host declared for this link, or
 	// "" when nothing declared one. It names the extension for a link whose
-	// path carries none.
+	// path carries none. Its Size is never a rounded listing figure, so
+	// never SizeApprox.
 	Type string
-	// Size is an exact byte length when the source stated one, else -1.
-	// Nothing here is ever a rounded listing figure, so nothing here is ever
-	// SizeApprox.
-	Size int64
 }
 
 // mediaPageFind runs the steps in confidence order and takes the first that
@@ -120,7 +117,7 @@ type mediaFinding struct {
 // mixing them would let a share card outrank a rendition list.
 func mediaPageFind(ctx context.Context, client *httpx.Client, root *html.Node, doc string, u *url.URL) (mediaFinding, bool) {
 	if best, ok := bestCandidate(mediaPageElements(root, u)); ok {
-		return mediaFinding{mediaCandidate: best, Size: -1}, true
+		return mediaFinding{mediaCandidate: best}, true
 	}
 	// JW Player before the metadata, and not after it. A page built on that
 	// player either advertises the player's own embed page in og:video — an
@@ -378,11 +375,11 @@ func jwPlayerBest(feed *jwPlayerFeed) (mediaFinding, bool) {
 		}
 	}
 	source := stated[best.URL]
+	best.Size = source.Filesize
 	return mediaFinding{
 		mediaCandidate: best,
 		Title:          cmp.Or(item.Title, feed.Title),
 		Type:           mediaPageMediaType(source.Type),
-		Size:           knownSize(source.Filesize),
 	}, true
 }
 
@@ -420,7 +417,6 @@ func mediaPageOpenGraph(root *html.Node, base *url.URL) (mediaFinding, bool) {
 			Quality: quality,
 			IsHLS:   mediaPageIsHLS(link, declared),
 			Type:    declared,
-			Size:    -1,
 		}, true
 	}
 	return mediaFinding{}, false
@@ -445,7 +441,6 @@ func mediaPageTwitterStream(root *html.Node, base *url.URL) (mediaFinding, bool)
 		Quality: qualityOf(link),
 		IsHLS:   mediaPageIsHLS(link, declared),
 		Type:    declared,
-		Size:    -1,
 	}, true
 }
 
@@ -531,7 +526,6 @@ func linkedDataObject(obj map[string]any, base *url.URL) (mediaFinding, bool) {
 		IsHLS:   mediaPageIsHLS(link, declared),
 		Title:   linkedDataString(obj["name"]),
 		Type:    declared,
-		Size:    -1,
 	}, true
 }
 

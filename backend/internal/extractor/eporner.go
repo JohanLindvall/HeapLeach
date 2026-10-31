@@ -338,12 +338,6 @@ func epornerQuality(short, label, src string) int {
 
 // ------------------------------------------------------------- a profile
 
-// epornerVideo is one entry in a profile listing.
-type epornerVideo struct {
-	Page  string
-	Title string
-}
-
 // epornerProfile walks a profile tab for the videos it lists, up to the
 // listing cap. A walk the cap cut short says so; one that came back short
 // of the tab's own count otherwise says that ("4 of 9"), for a listing that
@@ -388,13 +382,9 @@ func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL,
 		limit: limit, limitNote: limitNote,
 		fetch: fetchAsAsked(client, headers),
 		read: func(root *html.Node, at, _ *url.URL) listingPage {
-			found := epornerListing(root, at.String(), seen)
-			if len(found) == 0 {
+			lp := listingPage{links: epornerListing(root, at.String(), seen)}
+			if len(lp.links) == 0 {
 				return listingPage{end: true}
-			}
-			var lp listingPage
-			for _, v := range found {
-				lp.links = append(lp.links, listingLink{url: v.Page, title: v.Title})
 			}
 			page++
 			lp.next, _ = url.Parse(epornerProfilePage(u, user, tab, page))
@@ -419,7 +409,7 @@ const epornerListingClass = "streamevents"
 var epornerVideoHref = regexp.MustCompile(`^/` + epornerVideoPrefix + `([A-Za-z0-9]+)/`)
 
 // epornerListing collects the videos one page owns, in the page's own order.
-func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []epornerVideo {
+func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []listingLink {
 	scope := findFirst(root, func(n *html.Node) bool { return hasClass(n, epornerListingClass) })
 	if scope == nil {
 		return nil
@@ -450,13 +440,10 @@ func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []epo
 		}
 	}
 
-	found := make([]epornerVideo, 0, len(order))
+	found := make([]listingLink, 0, len(order))
 	for _, id := range order {
 		seen[id] = true
-		found = append(found, epornerVideo{
-			Page:  pages[id],
-			Title: cmp.Or(titles[id], util.NameFromURL(pages[id]), id),
-		})
+		found = append(found, listingLink{url: pages[id], title: cmp.Or(titles[id], util.NameFromURL(pages[id]), id)})
 	}
 	return found
 }
