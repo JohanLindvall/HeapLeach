@@ -123,6 +123,12 @@ a transient failure.
   returns a `RefusedError`: the route is held back for the site and the file
   tries another, outside the retry budget. Taken at its word, the sentence
   would fail the file on the first address that met it.
+  Recognition accepts the exact bare refusal on both `/d/<code>` and
+  `/e/<code>`, so a nested source refreshed through a refused proxy still
+  reaches `doodRead` and returns `RefusedError`. Arbitrary plain text and HTML
+  quoting the sentence do not identify a player. Otherwise strict source
+  recognition would turn a route refusal into terminal unsupported navigation
+  before the decoder could classify it.
 - **A removed video** is recognised by the not-found page's title (`doodGone`)
   and reported as the host having removed it, rather than as a page without a
   media token.
