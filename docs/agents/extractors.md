@@ -696,8 +696,9 @@ list below.
   `__NEXT_DATA__` read off the tree with `nextDataIn`), CoomerFans posts
   (`coomerFansRead`), PornPics galleries (`pornpicsGalleryRead`) and
   Chevereto pages (`cheveretoFetch`), ok.ru's player (`okruMetadataRead`)
-  and Bandzoogle pages (`bandzoogleRead`, whose recogniser finds a track
-  element and so has always built the tree) do, each string adapter only parsing and delegating, so there is one
+  Bandzoogle pages (`bandzoogleRead`, whose recogniser finds a track
+  element and so has always built the tree) and Imgur's bare media page
+  (`imgurMediaIn`, recognised by its meta) do, each string adapter only parsing and delegating, so there is one
   parser per page. `fetchRoot` and `readDocument` take the probe's tree only
   when recognition already built it (`Page.parsedRoot`); otherwise they parse
   the body for the reader alone, which costs less than the index

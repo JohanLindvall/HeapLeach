@@ -401,3 +401,31 @@ func TestImgurRecognisesAListingByItsJSON(t *testing.T) {
 		t.Error("a page that does not name the site was recognised or cost a request")
 	}
 }
+
+// A bare media page submitted as itself is recognised by its meta, which
+// parses it, and its file is then read off that same tree: nothing is asked
+// (there is no client to ask with), the shared tree is left as it was, and
+// the file is the one the string reader finds.
+func TestImgurSingleMediaReadsTheProbedTree(t *testing.T) {
+	i := NewImgur(nil)
+	p := probedPage(imgurRoot+"/aaa1111", imgurMediaPage)
+	if !i.Recognise(t.Context(), p) {
+		t.Fatal("fixture not recognised")
+	}
+	root := p.HTML()
+	nodes := countNodes(root)
+	files, title, err := i.singleMedia(withPage(t.Context(), p), "aaa1111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := imgurMediaFrom(imgurMediaPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].URL != want || files[0].Size != -1 || title != files[0].Name {
+		t.Errorf("files %+v title %q, want one file at %s of unknown size", files, title, want)
+	}
+	if p.HTML() != root || countNodes(root) != nodes {
+		t.Error("the shared tree changed")
+	}
+}

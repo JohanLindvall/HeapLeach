@@ -14,6 +14,7 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // Imgur resolves posts and albums, and the account, tag and mirrored-subreddit
@@ -216,12 +217,12 @@ func imgurID(seg string) string {
 // to the single-media page for an id that is not a post.
 func (i *Imgur) postFiles(ctx context.Context, id string) ([]File, string, error) {
 	page := imgurRoot + "/gallery/" + url.PathEscape(id)
-	doc, err := i.document(ctx, page)
+	d, err := i.document(ctx, page)
 	if err != nil {
 		return nil, "", fmt.Errorf("imgur: fetch %s: %w", page, err)
 	}
 
-	post, err := imgurPostFrom(doc)
+	post, err := imgurPostFrom(d.body)
 	switch {
 	case errors.Is(err, errNoImgurPost):
 		return i.singleMedia(ctx, id)
@@ -245,11 +246,17 @@ func (i *Imgur) postFiles(ctx context.Context, id string) ([]File, string, error
 // exists for.
 func (i *Imgur) singleMedia(ctx context.Context, id string) ([]File, string, error) {
 	page := imgurRoot + "/" + url.PathEscape(id)
-	doc, err := i.document(ctx, page)
+	d, err := i.document(ctx, page)
 	if err != nil {
 		return nil, "", fmt.Errorf("imgur: fetch %s: %w", page, err)
 	}
-	link, err := imgurMediaFrom(doc)
+	// The probe's tree when this is the page submitted: recognising a bare
+	// media page meant reading its meta, which parsed it.
+	root, err := d.parse()
+	if err != nil {
+		return nil, "", fmt.Errorf("imgur: %s: %w", page, err)
+	}
+	link, err := imgurMediaIn(root)
 	if err != nil {
 		return nil, "", fmt.Errorf("imgur: %s: %w", page, err)
 	}
@@ -259,13 +266,12 @@ func (i *Imgur) singleMedia(ctx context.Context, id string) ([]File, string, err
 
 // document fetches one of the site's pages, reusing the probe when it is
 // the page that was submitted.
-func (i *Imgur) document(ctx context.Context, page string) (string, error) {
+func (i *Imgur) document(ctx context.Context, page string) (*document, error) {
 	u, err := url.Parse(page)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	doc, _, err := fetchDocument(ctx, i.client, u, httpx.Referer(imgurRoot+"/"))
-	return doc, err
+	return readDocument(ctx, i.client, u, httpx.Referer(imgurRoot+"/"))
 }
 
 // imgurFilesOf turns a post's media list into files.
@@ -541,6 +547,12 @@ func imgurMediaFrom(doc string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return imgurMediaIn(root)
+}
+
+// imgurMediaIn is imgurMediaFrom for a page already parsed, which may be
+// the probe's shared tree and is only read.
+func imgurMediaIn(root *html.Node) (string, error) {
 	raw := metaContent(root, "og:image")
 	if raw == "" {
 		return "", errors.New("no media on the page (it may have been removed)")
