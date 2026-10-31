@@ -229,7 +229,7 @@ func (k *Kemono) creator(ctx context.Context, page *Page, api, root, service, cr
 		Name  string `json:"name"`
 		Posts int    `json:"post_count"`
 	}
-	if (askedJSON(ctx, page, k.client, api+"/profile", &profile) ||
+	if (askedJSON(ctx, page, k.client, api+"/profile", kemonoHeaders(root), &profile) ||
 		k.client.GetJSON(ctx, api+"/profile", kemonoHeaders(root), &profile) == nil) && profile.Name != "" {
 		return profile.Name, profile.Posts
 	}

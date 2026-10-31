@@ -54,6 +54,12 @@ type Page struct {
 	// Err is the fetch's failure, if it failed.
 	Err error
 
+	// via and route are who asked: the client, whose User-Agent, language
+	// and cookie jar the answer was for, and the route it went out on. A
+	// page built without them (a fixture) answers any reader.
+	via   *httpx.Client
+	route string
+
 	// parsed is filled once, on first use: the document and what every
 	// recogniser asks of its head, read in one pass, since each unrecognised
 	// page is offered to every recogniser in turn.
@@ -198,7 +204,7 @@ func (c *pageCache) removeLocked(el *list.Element) {
 // any page fetch: a page that would not load is reported in the Page rather
 // than as an error, since a recogniser may still know the URL's form.
 func probePage(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
-	p := &Page{URL: u, Final: u}
+	p := &Page{URL: u, Final: u, via: client, route: httpx.RouteID(ctx)}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return p
 	}
@@ -285,6 +291,11 @@ func probed(ctx context.Context, u *url.URL) *Page {
 	if p == nil || u == nil {
 		return nil
 	}
+	// A page probed through another egress address says nothing of what
+	// this one is served (route recovery can move a read to another).
+	if p.via != nil && p.route != httpx.RouteID(ctx) {
+		return nil
+	}
 	if want := u.String(); p.URL.String() != want && p.Final.String() != want {
 		return nil
 	}
@@ -322,13 +333,52 @@ func cloneURL(u *url.URL) *url.URL {
 	return &c
 }
 
+// probedFor is the probed page for u when it is the response a GET of u
+// with headers, through client on ctx's route, would get (Page.answers);
+// nil when the reader must ask for its own.
+func probedFor(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) *Page {
+	if p := probed(ctx, u); p.answers(client, headers) {
+		return p
+	}
+	return nil
+}
+
+// answers reports whether p stands for a GET of its URL with headers
+// through client: the one place a reader's request is held to the probe's.
+// The probe navigated as a browser does, with no referer, through the
+// registry's client on a route probed checks. A client of another identity —
+// another User-Agent, language or session (httpx.Client.SameIdentity) — is
+// served its own representation, and so is a request carrying any header
+// but a referer: an Accept, a cookie, a credential or an agent of its own.
+// A referer is the one header taken not to change a page, which every
+// caller passing httpx.Referer to fetchDocument or fetchRoot relies on;
+// a host whose page does depend on it fetches with GetPage instead. Other
+// methods and request bodies never reach the probe: these readers GET.
+func (p *Page) answers(client *httpx.Client, headers httpx.Header) bool {
+	if p == nil {
+		return false
+	}
+	if p.via != nil && client != nil && !p.via.SameIdentity(client) {
+		return false
+	}
+	for name := range headers {
+		if !strings.EqualFold(name, httpx.HeaderReferer) {
+			return false
+		}
+	}
+	return true
+}
+
 // fetchDocument is GetPage for the submitted URL that reuses the registry's
 // probe when it already holds the document, so a page an extractor reads
 // whole is fetched once rather than once to recognise and again to read.
-// Any other URL, or a probe that did not get the page, is fetched as usual.
+// Any other URL, a probe that did not get the page, or a request the probe
+// does not answer (Page.answers) is fetched as usual.
 func fetchDocument(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (string, *url.URL, error) {
-	if doc, final, ok := probedDocument(ctx, u); ok {
-		return doc, final, nil
+	if p := probedFor(ctx, client, u, headers); p != nil {
+		if doc, ok := p.Document(); ok {
+			return doc, cloneURL(p.Final), nil
+		}
 	}
 	return client.GetPage(ctx, u.String(), headers, nil)
 }
@@ -348,7 +398,7 @@ func fetchPage(ctx context.Context, client *httpx.Client, link string, headers h
 // is the page's and is shared: a reader that removes or rewrites nodes parses
 // its own copy instead. The final URL is the caller's own.
 func fetchRoot(ctx context.Context, client *httpx.Client, u *url.URL, headers httpx.Header) (*html.Node, *url.URL, error) {
-	if p := probed(ctx, u); p != nil {
+	if p := probedFor(ctx, client, u, headers); p != nil {
 		if doc, ok := p.Document(); ok {
 			if root := p.HTML(); root != nil {
 				return root, cloneURL(p.Final), nil

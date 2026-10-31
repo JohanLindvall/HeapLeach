@@ -399,7 +399,7 @@ func (i *Imgur) listingEntries(ctx context.Context, probe *Page, origin, base st
 				Data []imgurEntry `json:"data"`
 			}
 			asked := n == 0 && probe != nil &&
-				askedJSON(ctx, probe, i.client, imgurListingPage(util.Origin(probe.Final), base, 0), &body)
+				askedJSON(ctx, probe, i.client, imgurListingPage(util.Origin(probe.Final), base, 0), nil, &body)
 			if !asked {
 				if err := i.client.GetJSON(ctx, endpoint, httpx.Referer(imgurRoot+"/"), &body); err != nil {
 					return pageOf[imgurEntry]{}, fmt.Errorf("imgur: fetch %s: %w", endpoint, err)

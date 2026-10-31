@@ -385,14 +385,14 @@ func TestAskedJSONReusesOnlyWhatWasAsked(t *testing.T) {
 	p := htmlPage(t, srv.URL+"/item/7", "<html></html>")
 
 	var out struct{ ID int }
-	if askedJSON(context.Background(), p, client, srv.URL+"/api/7", &out) || hits.Load() != 0 {
+	if askedJSON(context.Background(), p, client, srv.URL+"/api/7", nil, &out) || hits.Load() != 0 {
 		t.Fatalf("an endpoint nobody asked was answered (%d requests)", hits.Load())
 	}
 	if !pageJSON(context.Background(), p, client, srv.URL+"/api/7", nil, &out) {
 		t.Fatal("the recogniser's question went unanswered")
 	}
 	out.ID = 0
-	if !askedJSON(context.Background(), p, client, srv.URL+"/api/7", &out) || out.ID != 7 {
+	if !askedJSON(context.Background(), p, client, srv.URL+"/api/7", nil, &out) || out.ID != 7 {
 		t.Errorf("the recogniser's answer was not reused: %+v", out)
 	}
 	if n := hits.Load(); n != 1 {

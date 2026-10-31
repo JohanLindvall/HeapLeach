@@ -158,7 +158,7 @@ func (a *ArchiveOrg) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 	// The recogniser may have asked the metadata API already, for the page
 	// it probed; that answer is the one to read.
 	var doc archiveDoc
-	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, a.client, archiveMetadataOn(p.URL, id), &doc) {
+	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, a.client, archiveMetadataOn(p.URL, id), nil, &doc) {
 		doc = archiveDoc{}
 		link := archiveMetadataAPI + url.PathEscape(id)
 		if err := a.client.GetJSON(ctx, link, nil, &doc); err != nil {

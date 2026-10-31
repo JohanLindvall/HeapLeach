@@ -80,10 +80,26 @@ memoised values must not be changed. `probedDocument`, `fetchDocument` and
 a URL of its own, so editing either is safe; a reader that edits a tree (the
 WordPress post reader removes related-post blocks) parses a private copy
 rather than taking the shared one from `fetchRoot`. `TestSharedPageIsLeftAsItWas`
-runs concurrent extractions over one page under `-race`. The probe is reused
-only for the submitted URL as it was fetched; a request with other headers,
-a session or another method is not the same representation and fetches its
-own.
+runs concurrent extractions over one page under `-race`.
+
+The probe is reused only for the request it answers, and `Page.answers`
+(`page.go`) is the one place that is decided. A probe records who asked —
+its client and route. `fetchDocument` and `fetchRoot` take it only for a GET
+of the same URL through a client of the same identity
+(`httpx.Client.SameIdentity`: User-Agent, language and cookie jar, so a
+`WithTimeout` copy qualifies and another session does not), on the same
+route, with no header but a referer. A referer is the one header taken not
+to change a page; a host whose page depends on it fetches with `GetPage`.
+Any other header — an agent, an Accept, a cookie, a credential — asks for
+its own response, as does another method or body, which these readers never
+send. A host that knows its page does not depend on a header it sends says
+so where it reads: Bandcamp takes a probe the site served (not its
+challenge) although it asks with an agent of its own. `pageJSON` and
+`askedJSON` name a question by its endpoint and every header but the
+referer (`jsonKey`), and a client of another identity neither reads nor
+fills a page's answers. Fixture pages built without a recorded client
+answer any reader. `TestProbeAnswersOnlyItsOwnRequest` and
+`TestPageJSONKeysTheRequest` pin the variants.
 
 Whether a read may take the probe is decided in one place, `freshRead`
 (`page.go`): a context with the probed page withheld and everything else —

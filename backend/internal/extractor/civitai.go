@@ -308,7 +308,7 @@ func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, e
 // The recogniser's answer for the probed page is read when it asked.
 func (c *Civitai) model(ctx context.Context, u *url.URL, id string) (*Result, error) {
 	var payload civitaiModel
-	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, c.client, civitaiModelOn(p.Final, id), &payload) {
+	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, c.client, civitaiModelOn(p.Final, id), nil, &payload) {
 		payload = civitaiModel{}
 		endpoint := civitaiAPI + "/models/" + url.PathEscape(id)
 		if err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload); err != nil {

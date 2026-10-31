@@ -185,6 +185,19 @@ func (b *Bandcamp) page(ctx context.Context, link string) (*html.Node, error) {
 			return parseHTML(doc)
 		}
 	}
+	// A page the probe was served, rather than the challenge, is the page
+	// whichever agent asks: this host's representation does not depend on
+	// the User-Agent once it serves one, so it is read as it is. That is a
+	// decision about this host, made here; fetchRoot would not take the
+	// probe for a request carrying an agent of its own (Page.answers).
+	if p := probed(ctx, u); p.answers(b.client, nil) && p.Title() != bandcampChallengeTitle {
+		if doc, ok := p.Document(); ok {
+			if root := p.HTML(); root != nil {
+				return root, nil
+			}
+			return parseHTML(doc)
+		}
+	}
 	root, _, err := fetchRoot(ctx, b.client, u, bandcampHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("bandcamp: fetch %s: %w", link, err)

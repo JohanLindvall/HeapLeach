@@ -227,6 +227,17 @@ func (b *cancelBody) Close() error {
 // signature, so callers that sign must use exactly this string.
 func (c *Client) UserAgent() string { return c.ua }
 
+// SameIdentity reports whether c and o ask as the same visitor: the same
+// User-Agent and language, and the same cookie jar, which is the session. A
+// response to one stands for a response to the other; a copy made by
+// WithTimeout or Streaming is the same visitor.
+func (c *Client) SameIdentity(o *Client) bool {
+	if c == nil || o == nil {
+		return c == o
+	}
+	return c == o || (c.ua == o.ua && c.acceptLang == o.acceptLang && c.hc.Jar == o.hc.Jar)
+}
+
 // checkRedirect bounds the redirect chain and re-applies the browser-ish
 // headers. Go already copies non-sensitive headers across hops and manages
 // Referer itself, so this only fills gaps rather than overriding.

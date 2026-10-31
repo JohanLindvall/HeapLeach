@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -54,14 +55,17 @@ func hostLabel(host string) string {
 
 // pageJSON is platformJSON asked once per probed page: every recogniser,
 // and the extractor after it, that puts the same question to the same
-// endpoint shares one answer, keyed by the endpoint. The raw answer is kept
+// endpoint shares one answer, keyed by the request: the endpoint and the
+// headers that change its answer (jsonKey). The page is per route already;
+// a client of another identity (httpx.Client.SameIdentity) neither shares
+// the page's answers nor stores its own among them. The raw answer is kept
 // rather than a decoded one, so each caller may read it into its own shape.
 // It reports false when the endpoint gave no JSON.
 func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header, out any) bool {
-	if client == nil || p == nil {
+	if client == nil || p == nil || (p.via != nil && !p.via.SameIdentity(client)) {
 		return false
 	}
-	raw := memo(p, "json "+endpoint, func() json.RawMessage {
+	raw := memo(p, jsonKey(endpoint, headers), func() json.RawMessage {
 		var raw json.RawMessage
 		if !platformJSON(ctx, client, endpoint, headers, &raw) {
 			return nil
@@ -72,15 +76,29 @@ func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint strin
 }
 
 // askedJSON is pageJSON for an extractor: the answer a recogniser already
-// had from the endpoint, when one asked. When none did it asks nothing and
-// reports false, so the extractor makes its own request, with its own
-// retries, rather than a bounded probe ahead of it.
-func askedJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, out any) bool {
+// had from the endpoint with the same headers, when one asked. When none did
+// it asks nothing and reports false, so the extractor makes its own request,
+// with its own retries, rather than a bounded probe ahead of it.
+func askedJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header, out any) bool {
 	if p == nil {
 		return false
 	}
 	p.memoMu.Lock()
-	_, asked := p.memo["json "+endpoint]
+	_, asked := p.memo[jsonKey(endpoint, headers)]
 	p.memoMu.Unlock()
-	return asked && pageJSON(ctx, p, client, endpoint, nil, out)
+	return asked && pageJSON(ctx, p, client, endpoint, headers, out)
+}
+
+// jsonKey names a JSON question for a page's memo: the endpoint and every
+// header asked with but the referer, which is taken not to change an answer
+// (Page.answers), sorted so that one request has one name.
+func jsonKey(endpoint string, headers httpx.Header) string {
+	var parts []string
+	for name, value := range headers {
+		if !strings.EqualFold(name, httpx.HeaderReferer) {
+			parts = append(parts, strings.ToLower(name)+"="+value)
+		}
+	}
+	slices.Sort(parts)
+	return "json " + strings.Join(append([]string{endpoint}, parts...), "\n")
 }
