@@ -63,7 +63,7 @@ var radioCanadaRest = handoffSite{
 func NewRadioCanada(client *httpx.Client) *RadioCanada {
 	return &RadioCanada{
 		client: client, api: radioCanadaAPIRoot,
-		handoff: &Handoff{client: client, site: radioCanadaRest},
+		handoff: newHandoff(client, radioCanadaRest),
 		about: about{name: "radio-canada", shape: radioCanadaShape,
 			recognises: "pages of ICI Radio-Canada and OHdio whose data layer (`IdsCollection`) names their media, and media console links"},
 	}

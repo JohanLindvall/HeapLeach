@@ -320,7 +320,7 @@ func (h *Handoff) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	ytdlp, ok := tools.Find(ytdlpBinary)
 	if !ok {
 		return nil, fmt.Errorf("%s: %s, and yt-dlp is what fetches from hosts like this; %s (%s)",
-			h.site.name, h.site.why, tools.NotInstalled(ytdlpBinary), u.Redacted())
+			h.name, h.site.why, tools.NotInstalled(ytdlpBinary), u.Redacted())
 	}
 	if h.site.expand {
 		return h.list(ctx, ytdlp, u.String(), opts.maxFiles())
@@ -354,7 +354,7 @@ func (h *Handoff) title(ctx context.Context, ytdlp string, u *url.URL) (string, 
 	// dies later with the same message and less context.
 	title, err := ytdlpTitle(ctx, ytdlp, u.String())
 	if err != nil {
-		return "", fmt.Errorf("%s: yt-dlp could not read %s: %w", h.site.name, u.Redacted(), err)
+		return "", fmt.Errorf("%s: yt-dlp could not read %s: %w", h.name, u.Redacted(), err)
 	}
 	return cmp.Or(title, handoffName(u)), nil
 }
@@ -424,11 +424,11 @@ func (h *Handoff) list(ctx context.Context, ytdlp, target string, limit int) (*R
 		"--print", ytdlpVideoFields, "--print", ytdlpPlaylistFields,
 		"--playlist-end", strconv.Itoa(end), "--", target)
 	if err != nil {
-		return nil, fmt.Errorf("%s: yt-dlp could not read %s: %w", h.site.name, target, err)
+		return nil, fmt.Errorf("%s: yt-dlp could not read %s: %w", h.name, target, err)
 	}
 	lines, err := ytdlpEntries(output)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", h.site.name, err)
+		return nil, fmt.Errorf("%s: %w", h.name, err)
 	}
 
 	var playlist *ytdlpEntry
@@ -442,7 +442,7 @@ func (h *Handoff) list(ctx context.Context, ytdlp, target string, limit int) (*R
 	}
 	if playlist == nil {
 		if len(entries) == 0 {
-			return nil, fmt.Errorf("%s: yt-dlp said nothing about %s", h.site.name, target)
+			return nil, fmt.Errorf("%s: yt-dlp said nothing about %s", h.name, target)
 		}
 		video := entries[0]
 		name := cmp.Or(video.Title, video.ID, "video")
@@ -469,7 +469,7 @@ func (h *Handoff) list(ctx context.Context, ytdlp, target string, limit int) (*R
 		}
 	}
 	if len(res.Files) == 0 {
-		return nil, fmt.Errorf("%s: %s lists no videos", h.site.name, target)
+		return nil, fmt.Errorf("%s: %s lists no videos", h.name, target)
 	}
 	if len(entries) > limit {
 		res.Note = fileLimitNote
@@ -518,7 +518,7 @@ func (h *Handoff) oembedTitle(ctx context.Context, u *url.URL) (string, error) {
 			return "", fmt.Errorf("%s: this host is currently blocking automated clients — "+
 				"even the endpoint it normally serves to anyone answered with a challenge page, "+
 				"and its media sits behind the same one, so there is nothing to fetch until that "+
-				"lifts (%s)", h.site.name, u.Redacted())
+				"lifts (%s)", h.name, u.Redacted())
 		}
 		return "", nil
 	}

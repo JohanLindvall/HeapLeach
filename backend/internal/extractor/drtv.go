@@ -72,7 +72,7 @@ var drRest = handoffSite{
 func NewDRTV(client *httpx.Client) *DRTV {
 	return &DRTV{
 		client: client, api: drAPIRoot,
-		handoff: &Handoff{client: client, site: drRest},
+		handoff: newHandoff(client, drRest),
 		about: about{name: "drtv", shape: drShape,
 			recognises: "programmes, seasons and series (`/drtv/…/<slug>_<id>`) of DR TV, served by its app with the state it boots from"},
 	}

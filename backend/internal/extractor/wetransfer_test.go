@@ -49,7 +49,9 @@ func wetransferServer(t *testing.T, handle func(id string, body map[string]any) 
 	}))
 	t.Cleanup(srv.Close)
 
-	return &Share{client: testClient(), site: &wetransferSite, api: srv.URL}
+	w := newShare(testClient(), &wetransferSite)
+	w.api = srv.URL
+	return w
 }
 
 func TestWeTransferParse(t *testing.T) {
@@ -359,7 +361,8 @@ func TestWeTransferFollowTakesTheRedirectDestination(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &Share{client: testClient(), site: &wetransferSite, api: srv.URL}
+	w := newShare(testClient(), &wetransferSite)
+	w.api = srv.URL
 	short, err := url.Parse(srv.URL + "/t-abcdef1234")
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +394,8 @@ func TestWeTransferFollowLandsOnAnErrorPageForADeadCode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &Share{client: testClient(), site: &wetransferSite, api: srv.URL}
+	w := newShare(testClient(), &wetransferSite)
+	w.api = srv.URL
 	short, _ := url.Parse(srv.URL + "/t-0000000000")
 
 	landed, err := wetransferFollow(context.Background(), w, short)

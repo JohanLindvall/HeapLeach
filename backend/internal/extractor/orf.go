@@ -68,7 +68,7 @@ const orfSite = "https://on.orf.at/"
 func NewORF(client *httpx.Client) *ORF {
 	return &ORF{
 		client: client, site: orfSite,
-		handoff: &Handoff{client: client, site: orfRest},
+		handoff: newHandoff(client, orfRest),
 		about: about{name: "orf", shape: orfShape,
 			recognises: "episodes and series (`/video/<id>`, `/sendereihe/<id>`, `/profile/…`) of ORF ON, whose page carries the runtime configuration (`__NUXT__`) the API credentials are read from"},
 	}

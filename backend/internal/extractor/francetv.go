@@ -68,7 +68,7 @@ var francetvRest = handoffSite{
 func NewFranceTV(client *httpx.Client) *FranceTV {
 	return &FranceTV{
 		client: client, api: francetvAPIRoot,
-		handoff: &Handoff{client: client, site: francetvRest},
+		handoff: newHandoff(client, francetvRest),
 		about: about{name: "francetv", shape: francetvShape,
 			recognises: "video pages (`/…/<id>-<slug>.html`) and programme listings of France TV whose flight data names `video_factory_id`s"},
 	}
