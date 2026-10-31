@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -174,5 +175,75 @@ func TestPageJSONKeysTheRequest(t *testing.T) {
 	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("%d requests, want 1", n)
+	}
+}
+
+// A question a page's memo puts to the network on behalf of a caller whose
+// context then ended is that caller's cancellation, not the page's answer:
+// the page is shared through the cache with every job reading the same
+// URL, so another caller — later, or already waiting — asks again with its
+// own context and gets the answer. A real failure is still kept.
+func TestPageAnswerAskedByACancelledCallerIsNotKept(t *testing.T) {
+	var hits atomic.Int32
+	hold := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+			return
+		}
+		if n == 1 {
+			// The first asker is held until it gives up.
+			select {
+			case <-hold:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(srv.Close)
+	defer close(hold)
+	client := testClient()
+	p := &Page{URL: mustParse(t, srv.URL+"/"), Final: mustParse(t, srv.URL+"/"), via: client}
+	endpoint := srv.URL + "/api"
+
+	leader, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan bool)
+	go func() {
+		var out struct{ OK bool }
+		leaderDone <- pageJSON(leader, p, client, endpoint, nil, &out)
+	}()
+	for hits.Load() == 0 {
+		runtime.Gosched()
+	}
+	waiterDone := make(chan bool)
+	go func() {
+		var out struct{ OK bool }
+		waiterDone <- pageJSON(context.Background(), p, client, endpoint, nil, &out) && out.OK
+	}()
+	cancel()
+	if <-leaderDone {
+		t.Error("the cancelled caller was answered")
+	}
+	if !<-waiterDone {
+		t.Error("a caller waiting on the cancelled ask got its missing answer instead of asking again")
+	}
+	var out struct{ OK bool }
+	before := hits.Load()
+	if !pageJSON(context.Background(), p, client, endpoint, nil, &out) || !out.OK || hits.Load() != before {
+		t.Error("the answer the waiter got was not kept for the next caller")
+	}
+
+	// A failure is the page's answer, and is kept: asked once.
+	before = hits.Load()
+	for range 2 {
+		if pageJSON(context.Background(), p, client, srv.URL+"/missing", nil, &out) {
+			t.Error("a missing endpoint answered")
+		}
+	}
+	if got := hits.Load() - before; got != 1 {
+		t.Errorf("a failed question was asked %d times, want once", got)
 	}
 }

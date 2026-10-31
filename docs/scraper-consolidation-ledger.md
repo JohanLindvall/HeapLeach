@@ -129,3 +129,10 @@ pin (offsets, limits, page numbers). No flag or environment setting was added.
 | BitChute playlist test (case-insensitive `.m3u8` in the link) | adopt `isPlaylistLink`, its exact equivalent |
 | `renditions.go`, KVS, RTP `.m3u8` checks (case-sensitive), knuthing (path extension), Noodlemagazine and media-page checks (declared type as well) | retain: inputs or case rules differ from `isPlaylistLink` |
 | Generic fallback confidence order | unchanged |
+
+## W9 — state scopes
+
+| State | Disposition |
+| --- | --- |
+| `Page.memo` network questions (`pageJSON`, player canonical probe, Bandcamp own-agent read) | **fixed**: an answer computed after the asker's context ended was kept on the shared page, so another job reading the same URL within the cache's lifetime got "no answer" and could miss a recognition. Requirement: the page cache keeps no failure (extractors guide, "Fetching a page once"); a cancellation is the caller's, not the page's. `memoAsked` drops such an answer and a waiter asks again with its own context; real failures and the probe's own timeouts are still kept. `TestPageAnswerAskedByACancelledCallerIsNotKept` failed before the fix |
+| `Page.memo` decodes (Cum servers, Celeb props, LuluStream source) | retain plain `memo`: no network, so no cancellation |

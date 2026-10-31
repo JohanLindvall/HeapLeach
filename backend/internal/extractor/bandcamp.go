@@ -84,7 +84,7 @@ func (b *Bandcamp) Recognise(ctx context.Context, p *Page) bool {
 	if b.client == nil || p.Title() != bandcampChallengeTitle || !p.Has(bandcampChallengeAssets) {
 		return false
 	}
-	doc := memo(p, bandcampAgentKey, func() string {
+	doc := memoAsked(ctx, p, bandcampAgentKey, func() string {
 		ctx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
 		defer cancel()
 		doc, err := b.client.GetString(ctx, p.Final.String(), bandcampHeaders())
@@ -181,7 +181,7 @@ func (b *Bandcamp) page(ctx context.Context, link string) (*html.Node, error) {
 		return nil, fmt.Errorf("bandcamp: %w", err)
 	}
 	if p := probed(ctx, u); p != nil && p.Title() == bandcampChallengeTitle {
-		if doc := memo(p, bandcampAgentKey, func() string { return "" }); doc != "" {
+		if doc := memoAsked(ctx, p, bandcampAgentKey, func() string { return "" }); doc != "" {
 			return parseHTML(doc)
 		}
 	}

@@ -88,6 +88,9 @@ type pageIndex struct {
 type memoEntry struct {
 	once  sync.Once
 	value any
+	// dropped marks an answer memoAsked did not keep: one computed after
+	// its asker's context had ended.
+	dropped bool
 }
 
 // memo runs compute once per page and key, however many recognisers ask:
@@ -109,6 +112,46 @@ func memo[T any](p *Page, key string, compute func() T) T {
 	e.once.Do(func() { e.value = compute() })
 	v, _ := e.value.(T)
 	return v
+}
+
+// memoAsked is memo for a question compute puts to the network with ctx.
+// An answer that comes back after ctx has ended is that caller's
+// cancellation, not the page's answer: it is handed back to that caller
+// alone and not kept, so the page — shared through the cache with every
+// job reading the same URL — goes on as if nobody had asked, and a caller
+// that was waiting on it asks again with its own context. Any other
+// answer, failures and the probe's own timeouts included, is kept as memo
+// keeps it.
+func memoAsked[T any](ctx context.Context, p *Page, key string, compute func() T) T {
+	for {
+		p.memoMu.Lock()
+		if p.memo == nil {
+			p.memo = map[string]*memoEntry{}
+		}
+		e := p.memo[key]
+		if e == nil {
+			e = &memoEntry{}
+			p.memo[key] = e
+		}
+		p.memoMu.Unlock()
+		asked := false
+		e.once.Do(func() {
+			asked = true
+			e.value = compute()
+			if ctx.Err() != nil {
+				e.dropped = true
+				p.memoMu.Lock()
+				if p.memo[key] == e {
+					delete(p.memo, key)
+				}
+				p.memoMu.Unlock()
+			}
+		})
+		if asked || !e.dropped {
+			v, _ := e.value.(T)
+			return v
+		}
+	}
 }
 
 // pageCache keeps recently probed pages so that one URL is fetched once:

@@ -144,7 +144,7 @@ func (p *Player) canonicalPage(ctx context.Context, page *Page) *Page {
 	if err != nil || endpoint == page.Final.String() {
 		return nil
 	}
-	return memo(page, "player "+endpoint, func() *Page {
+	return memoAsked(ctx, page, "player "+endpoint, func() *Page {
 		ctx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
 		defer cancel()
 		req, err := p.client.NewRequest(ctx, http.MethodGet, endpoint, nil)

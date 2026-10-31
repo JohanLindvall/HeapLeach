@@ -65,7 +65,7 @@ func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint strin
 	if client == nil || p == nil || (p.via != nil && !p.via.SameIdentity(client)) {
 		return false
 	}
-	raw := memo(p, jsonKey(endpoint, headers), func() json.RawMessage {
+	raw := memoAsked(ctx, p, jsonKey(endpoint, headers), func() json.RawMessage {
 		var raw json.RawMessage
 		if !platformJSON(ctx, client, endpoint, headers, &raw) {
 			return nil

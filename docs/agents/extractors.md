@@ -79,9 +79,15 @@ tree only when recognition already parsed it (`parseDocument`), so a body
 read without a tree never builds the page's index, and a parse error is
 returned rather than lost behind a nil tree. `TestAcquisitionReusesOnlyACompleteProbe`
 runs every adapter over each probe state. Any extra request a
-recogniser makes goes through `memo(p, key, …)` (`pageJSON` for an API
-question), keyed by what it asks, so several recognisers asking one
-origin's API share one answer. An extractor that reads an endpoint a recogniser may already have asked tries
+recogniser makes goes through `memoAsked(ctx, p, key, …)` (`pageJSON` for an
+API question, the player engine's canonical probe, Bandcamp's own-agent
+read), keyed by what it asks, so several recognisers asking one origin's API
+share one answer. An answer computed after its asker's context ended is that
+caller's cancellation, not the page's: it is not kept, and a caller waiting
+on it asks again with its own context, since the page is shared through the
+cache with every job reading the URL (`TestPageAnswerAskedByACancelledCallerIsNotKept`).
+A failure or the probe's own timeout is still an answer and is kept. Plain
+`memo` is for decoding the page's own body, which no cancellation reaches. An extractor that reads an endpoint a recogniser may already have asked tries
 `askedJSON` first: it hands back that answer, and asks nothing when no
 recogniser did, so the extractor's own request, with its retries, is never
 preceded by a bounded probe of the same thing. A link whose
