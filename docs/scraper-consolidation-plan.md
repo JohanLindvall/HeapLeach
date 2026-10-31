@@ -28,8 +28,13 @@ conversions to table rows should earn their place through a small pilot.
 | E | `renewable` holds Gofile's, RedGifs' and VRT MAX's tokens, with their lifetimes in `config/limits.go`. RTBF and ORF keep their own code, because their device id and site-read credentials do not fit without switches. |
 | F | Rajce is a `shareSite` row, and a contract test covers every registered row. The JW Player readers stay separate: a shared candidate step would change first-source behaviour (see `extractors.md`). Registry and fediverse comments now describe page recognition. |
 
-Private offline replay of the full corpus matched its baseline after the
-shared changes. The guides in `docs/agents/` describe the resulting contracts.
+Private offline replay of the full corpus matched its baseline after
+increments A and B. After all increments it differs on six pages read by the
+generic fallback, whose link expansion always runs into the replay's per-URL
+deadline. The baseline recorded the partial expansion collected by then as a
+success; with increment C, the deadline outranks it. Production extraction
+has no deadline of its own, so this is the intended cancellation fix, seen
+through the harness. The private baseline was not rewritten to match it. The guides in `docs/agents/` describe the resulting contracts.
 
 ## Investigation and current structure
 
