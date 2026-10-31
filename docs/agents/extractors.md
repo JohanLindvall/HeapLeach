@@ -15,7 +15,9 @@ takes it, so order matters where two could.
 
 No extractor claims a domain. `Registry.Extract` probes the submitted URL
 (`page.go`: one bounded GET, redirects followed, the body read only when it
-is text) and offers the `Page` to each `Recognise` in turn; nothing claims it
+is text; a body cut short or past `config.MaxResponseBytes` sets `Page.Err`,
+so recognisers may sniff the prefix but the page cache and `Document` never
+offer it) and offers the `Page` to each `Recognise` in turn; nothing claims it
 and `Direct` takes it. A site that moves domain, or an install nobody listed,
 reaches the right code because the code recognises what it serves. Host
 names may still appear as operational constants (API bases, CDN hosts,

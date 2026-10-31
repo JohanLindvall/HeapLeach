@@ -5,7 +5,6 @@ package extractor
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -41,8 +40,8 @@ func platformJSON(ctx context.Context, client *httpx.Client, endpoint string, he
 		mediaType != "text/plain" && mediaType != "text/css" {
 		return false
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes+1))
-	return err == nil && len(body) <= config.MaxResponseBytes && json.Unmarshal(body, out) == nil
+	body, err := httpx.ReadBody(resp.Body)
+	return err == nil && json.Unmarshal(body, out) == nil
 }
 
 // hostLabel names an install by its host's first label, the part that

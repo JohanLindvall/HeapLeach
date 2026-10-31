@@ -6,7 +6,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -16,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -172,7 +170,7 @@ func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (s
 		return "", nil, false
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
+	body, err := httpx.ReadBody(resp.Body)
 	if err != nil {
 		return "", nil, false
 	}
