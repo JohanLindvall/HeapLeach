@@ -64,3 +64,13 @@ Dispositions: **adopt** (moved to the shared operation), **already shared**
 | WeTransfer short link | redirect follow, body drained | retain |
 | AIA, challenge peek, `StatusError` sample, download streams | separate bounds | retain |
 | Header names | `orf.go` literal `Authorization` → `httpx.HeaderAuthorization`; no other request-header literal outside `httpx` | adopt |
+
+## W6 — ordered outcomes
+
+| Caller | Disposition | Proof |
+| --- | --- | --- |
+| `FanOut` | removed; its scheduling moved into `resolveOutcomes`, which keeps every started item's index, value and error and leaves an unstarted one absent | `TestResolveOutcomesKeepsEveryOutcomeInOrder` (the old goroutine-bound and order test, now with errors kept), `TestResolveOutcomesStopsAtCancellation`, `TestResolveOutcomesIsBounded`, under `-race` |
+| `resolveOutcomes` concurrent mode | adopt: no singleton slices or disguised errors | Same tests |
+| `Autoindex.readAll` | adopt: explicit outcomes; breadth-first levels and in-place node filling unchanged; a read cut short by cancellation is not a failure | `TestAutoindexDoesNotCountACancelledReadAsUnreadable`, existing crawl tests |
+| `resolveListing`, `resolveEach`, `readSeasons`, source expansion | already shared (`resolveOutcomes`) | Existing tests |
+| Private live test using `FanOut` | updated in `hl-priv` to `resolveOutcomes` | `go vet -tags live` |

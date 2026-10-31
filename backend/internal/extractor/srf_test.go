@@ -716,7 +716,7 @@ func TestSRFExtractSeriesNestsBySeason(t *testing.T) {
 	if len(res.Files) != 2 {
 		t.Fatalf("got %d files, want one per episode — the clips in mediaList must not be queued", len(res.Files))
 	}
-	// FanOut collects by index, so the listing's order survives however the
+	// resolveOutcomes collects by index, so the listing's order survives however the
 	// requests interleaved.
 	want := []struct{ name, dir string }{
 		{"The Second (Staffel 2, Folge 1).mp4", "Staffel 2"},

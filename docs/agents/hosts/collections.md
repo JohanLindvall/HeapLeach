@@ -2,7 +2,7 @@
 
 Notes on hosts whose pages are collections: indexes of other hosts' albums,
 creators' posts, galleries and music. The shared listing machinery — source
-expansion, `FanOut`, caps and folder names — is in
+expansion, `resolveOutcomes`, caps and folder names — is in
 [extractors.md](../extractors.md).
 
 ## balbums

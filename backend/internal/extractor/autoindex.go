@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -262,15 +263,17 @@ func autoindexPending(level []*autoindexNode, visited map[string]bool) bool {
 // user actually named — was already read on its own, where its failure is
 // reported.
 func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) (failed bool) {
-	// The nodes are filled in place; FanOut is used for its bounded, ordered
-	// scheduling, and collects only the failures.
-	failures := FanOut(ctx, nodes, func(ctx context.Context, node *autoindexNode) ([]bool, error) {
+	// Each node is filled in place by the one worker that reads it, so the
+	// outcomes carry only whether it could be read. A read cut short by the
+	// crawl's cancellation is not one more unreadable directory: the
+	// cancellation is the caller's to report.
+	outcomes := resolveOutcomes(ctx, nodes, false, func(ctx context.Context, node *autoindexNode) (struct{}, error) {
 		if err := a.read(ctx, node); err != nil && ctx.Err() == nil {
-			return []bool{true}, nil
+			return struct{}{}, err
 		}
-		return nil, nil
+		return struct{}{}, nil
 	})
-	return len(failures) > 0
+	return slices.ContainsFunc(outcomes, func(o outcome[*autoindexNode, struct{}]) bool { return o.err != nil })
 }
 
 // read fetches one directory and fills in its files and subdirectories.

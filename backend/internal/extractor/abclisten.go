@@ -166,7 +166,7 @@ func (a *ABCListen) episode(u *url.URL, doc abcListenDoc) (*Result, error) {
 //
 // Every episode has to be opened. The listing names each one and links to it
 // but keeps the media on the episode's own page, and carries nothing that
-// stands in for it, so this is the shape FanOut exists for: several at a
+// stands in for it, so this is the shape resolveOutcomes exists for: several at a
 // time, in the listing's order, and an episode that will not load dropped
 // rather than sinking a job of hundreds.
 func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPage) (*Result, error) {

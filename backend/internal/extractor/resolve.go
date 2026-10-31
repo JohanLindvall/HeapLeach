@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // Resolving a listing's items: a page, a release or an episode that has to
@@ -32,6 +35,12 @@ type outcome[T, R any] struct {
 // a cancelled map is settled by its finaliser, where the caller's
 // cancellation outranks whatever resolved first (readListing,
 // outcomeSummary.noneResolved, expandSeries).
+//
+// The concurrent mode runs no more workers than there are items or slots,
+// each taking the next index in turn; outcomes are kept by index, so the
+// order is the listing's however the requests interleave. A serial reader
+// — one whose host refuses in a way that should stop the rest, or whose
+// state is not safe to share — asks inTurn and never gets a goroutine.
 func resolveOutcomes[T, R any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (R, error)) []outcome[T, R] {
 	if inTurn {
 		var outcomes []outcome[T, R]
@@ -44,16 +53,39 @@ func resolveOutcomes[T, R any](ctx context.Context, items []T, inTurn bool, reso
 		}
 		return outcomes
 	}
-	// FanOut drops an item whose fetch errored, so the error travels as a
-	// value instead.
-	indices := make([]int, len(items))
-	for i := range indices {
-		indices[i] = i
+	slots := make([]outcome[T, R], len(items))
+	started := make([]bool, len(items))
+	var wg sync.WaitGroup
+	indices := make(chan int)
+	for range min(len(items), config.PageFetchConcurrency) {
+		wg.Go(func() {
+			for i := range indices {
+				if ctx.Err() != nil {
+					return
+				}
+				got, err := resolve(ctx, items[i])
+				slots[i], started[i] = outcome[T, R]{index: i, item: items[i], got: got, err: err}, true
+			}
+		})
 	}
-	return FanOut(ctx, indices, func(ctx context.Context, i int) ([]outcome[T, R], error) {
-		got, err := resolve(ctx, items[i])
-		return []outcome[T, R]{{index: i, item: items[i], got: got, err: err}}, nil
-	})
+dispatch:
+	for i := range items {
+		select {
+		case indices <- i:
+		case <-ctx.Done():
+			break dispatch
+		}
+	}
+	close(indices)
+	wg.Wait()
+
+	var outcomes []outcome[T, R]
+	for i, ok := range started {
+		if ok {
+			outcomes = append(outcomes, slots[i])
+		}
+	}
+	return outcomes
 }
 
 // itemRefusal is a host declining one item for a reason of its own: a

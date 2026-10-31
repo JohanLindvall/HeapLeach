@@ -663,3 +663,30 @@ func TestAutoindexResolvesAgainstTheDirectory(t *testing.T) {
 		t.Errorf("url = %q, want %q", res.Files[0].URL, want)
 	}
 }
+
+// A directory whose read is cut short by the crawl's own cancellation is
+// not reported as unreadable: readAll says nothing failed, and the
+// cancellation is left for the caller to report.
+func TestAutoindexDoesNotCountACancelledReadAsUnreadable(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	a := NewAutoindex(testClient())
+	nodes := []*autoindexNode{{base: mustParse(t, srv.URL+"/pub/a/")}, {base: mustParse(t, srv.URL+"/pub/b/")}}
+	if a.readAll(ctx, nodes) {
+		t.Error("a read the cancellation cut short was counted as an unreadable directory")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the fixture did not cancel")
+	}
+	// The same directories failing on their own are counted.
+	gone := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(gone.Close)
+	if !a.readAll(t.Context(), []*autoindexNode{{base: mustParse(t, gone.URL+"/pub/a/")}}) {
+		t.Error("a directory that will not load was not counted")
+	}
+}

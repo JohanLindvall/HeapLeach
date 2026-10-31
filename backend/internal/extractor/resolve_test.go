@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -346,5 +347,50 @@ func TestNestedListingsMultiplyTheirBound(t *testing.T) {
 				t.Errorf("peak %d of %d leaves, want %d", peak.Load(), total.Load(), want)
 			}
 		})
+	}
+}
+
+// Every started item has exactly one outcome, in the input's order, with
+// its own error kept beside the values rather than dropped, and the map
+// starts no more goroutines than it has slots.
+func TestResolveOutcomesKeepsEveryOutcomeInOrder(t *testing.T) {
+	items := make([]int, 2000)
+	for i := range items {
+		items[i] = i
+	}
+	started := make(chan struct{}, config.PageFetchConcurrency)
+	release := make(chan struct{})
+	result := make(chan []outcome[int, int], 1)
+	before := runtime.NumGoroutine()
+	go func() {
+		result <- resolveOutcomes(context.Background(), items, false, func(_ context.Context, i int) (int, error) {
+			if i < config.PageFetchConcurrency {
+				started <- struct{}{}
+			}
+			<-release
+			if i%7 == 0 {
+				return 0, fmt.Errorf("item %d unavailable", i)
+			}
+			return i * 10, nil
+		})
+	}()
+	for range config.PageFetchConcurrency {
+		<-started
+	}
+	peak := runtime.NumGoroutine() - before
+	close(release)
+	got := <-result
+	if peak > config.PageFetchConcurrency+2 {
+		t.Errorf("launched %d goroutines for %d slots", peak, config.PageFetchConcurrency)
+	}
+	if len(got) != len(items) {
+		t.Fatalf("%d outcomes for %d items", len(got), len(items))
+	}
+	for i, o := range got {
+		failed := i%7 == 0
+		if o.index != i || o.item != i || (o.err != nil) != failed || !failed && o.got != i*10 ||
+			failed && o.err.Error() != fmt.Sprintf("item %d unavailable", i) {
+			t.Fatalf("outcome %d = %+v", i, o)
+		}
 	}
 }

@@ -427,8 +427,7 @@ intact. `sources.go` holds what they share:
   when it passes the cap or the listing goes on, and the registry cuts the
   files to the cap.
 - Entries that need their own page are then read concurrently through
-  `resolveListing`/`resolveOutcomes` (`resolve.go`, on `FanOut` in
-  `fanout.go`), bounded by `config.PageFetchConcurrency`, with results
+  `resolveListing`/`resolveOutcomes` (`resolve.go`), bounded by `config.PageFetchConcurrency`, with results
   collected by index so the job lists files in the site's own order however
   the requests interleave. One that will not load is skipped rather than
   failing a job of hundreds; when none loads, `noneRead` says why, and when
@@ -440,8 +439,10 @@ intact. `sources.go` holds what they share:
   `readListing`, `outcomeSummary.noneResolved`, `expandSeries`, the walkers' cap exits and
   the album callers that finish by hand — checks the caller's cancellation
   **first**: a listing cut short and returned as a success would be saved
-  as if it were the whole listing. `FanOut` remains for callers that only
-  fill values and need no outcomes (`Autoindex.readAll`).
+  as if it were the whole listing. It is the only scheduler: callers that
+  fill values in place and need only whether each item could be read use it
+  too (`Autoindex.readAll`, which keeps a read cut short by cancellation
+  from counting as an unreadable directory).
 - The `PageFetchConcurrency` bound is per map, not per extraction: a
   listing whose items are listings (source expansion through the registry,
   a WordPress category's posts) multiplies it. What bounds the extraction is
@@ -619,8 +620,8 @@ list below.
   still transcoding) returns an `itemRefusal` (`resolve.go`), so that
   reason outranks a failure in the error. Where every item costs a request at
   listing time, the listing is held to `listingLimit` and notes the cut.
-  A listing of items to resolve uses these rather than `FanOut` alone, which
-  drops every error.
+  A listing of items to resolve uses these rather than reading
+  `resolveOutcomes` by hand, so its refusals and first failure are kept.
 - `linkExt` (`html.go`): the extension a link's file name carries,
   lowercased, read off the path's last element (so a trailing slash still
   names it), with a fallback where it names none.
@@ -721,7 +722,7 @@ list below.
   `Direct.pageSniff` must keep its content-type gate and fallback order.
 - `knownSize` and `parsedSize` (`contract.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
-- `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
+- `resolveOutcomes`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
 - `fixturePage`, `htmlPage`, `expectRecognised` and `expectShape`
   (`recognise_test.go`): recognition fixtures, checked from an unrelated host
   as well.
