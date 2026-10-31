@@ -63,6 +63,7 @@ import (
 // ordinary rangeable file — segmented, resumable, skippable when it is
 // already on disk — instead of a segment list.
 type RTPPlay struct {
+	about
 	client *httpx.Client
 }
 
@@ -118,20 +119,16 @@ var (
 )
 
 // NewRTPPlay builds the RTP Play extractor.
-func NewRTPPlay(client *httpx.Client) *RTPPlay { return &RTPPlay{client: client} }
-
-func (r *RTPPlay) Name() string { return "rtpplay" }
+func NewRTPPlay(client *httpx.Client) *RTPPlay {
+	return &RTPPlay{client: client, about: about{name: "rtpplay", shape: rtpShape,
+		recognises: "episodes and seasons (`/play/p<id>[/e<id>]`) of RTP Play, whose page carries its player or its episode list"}}
+}
 
 // rtpEpisodeLink is a link to an episode, as a season page lists them.
 var rtpEpisodeLink = regexp.MustCompile(`/play/p[0-9]+/e[0-9]+`)
 
-// Recognises is the inventory's description.
-func (r *RTPPlay) Recognises() string {
-	return "episodes and seasons (`/play/p<id>[/e<id>]`) of RTP Play, whose page carries its player or its episode list"
-}
-
-// Shape reports an episode or season link.
-func (r *RTPPlay) Shape(u *url.URL) bool { return rtpTarget(u).program != "" }
+// rtpShape is an episode or season link.
+func rtpShape(u *url.URL) bool { return rtpTarget(u).program != "" }
 
 // Recognise takes an episode page carrying RTP's player configuration, or
 // a season page listing its episodes, which is what each is read by.

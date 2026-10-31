@@ -36,7 +36,8 @@ func TestArteCollectionKeepsTheSeasonsItCanRead(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	a := &Arte{client: testClient(), api: srv.URL}
+	a := NewArte(testClient())
+	a.api = srv.URL
 
 	res, err := a.collection(context.Background(), "en", "RC-000001")
 	if err != nil {

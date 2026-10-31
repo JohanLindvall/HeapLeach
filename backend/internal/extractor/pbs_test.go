@@ -335,7 +335,7 @@ func pbsEncodings(t *testing.T) (root, hls, mp4 string) {
 }
 
 func newTestPBS() *PBS {
-	return &PBS{client: testClient()}
+	return NewPBS(testClient())
 }
 
 // TestPBSProgressiveProbesRatherThanIndexes covers the encoding walk. Which

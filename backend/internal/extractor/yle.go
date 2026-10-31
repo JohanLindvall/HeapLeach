@@ -52,6 +52,7 @@ import (
 // programme is the page's to say: asked of the preview, a series answers
 // with one of its episodes.
 type Yle struct {
+	about
 	client *httpx.Client
 	// player and site are where the preview and the pages are, fields so
 	// that tests can stand in for them.
@@ -77,21 +78,13 @@ func NewYle(client *httpx.Client) *Yle {
 	return &Yle{
 		client: client, player: ylePlayerRoot,
 		site: map[string]string{"fin": "https://areena.yle.fi", "swe": "https://arenan.yle.fi"},
+		about: about{name: "yle", shape: yleShape,
+			recognises: "programmes and series (`…/1-<id>`) of Yle Areena, whose page carries the Areena web app's configuration"},
 	}
 }
 
-func (y *Yle) Name() string { return "yle" }
-
 // yleShape is a link ending in an item id: /1-<n>, /podcastit/1-<n>, …
 var yleShape = pathShape(`(?:^|/)1-[0-9]+/?$`)
-
-// Recognises is the inventory's description.
-func (y *Yle) Recognises() string {
-	return "programmes and series (`…/1-<id>`) of Yle Areena, whose page carries the Areena web app's configuration"
-}
-
-// Shape reports a link ending in an item id.
-func (y *Yle) Shape(u *url.URL) bool { return yleShape(u) }
 
 // Recognise takes an item page of Areena or Arenan: its environment names
 // the Areena web app (areena-web-items) whose APIs this reads. The link as

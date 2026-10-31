@@ -27,6 +27,7 @@ import (
 // audio rendition as a track of its own, which the downloader joins to the
 // video. They used to fail, saying to use the external downloader.
 type SVTPlay struct {
+	about
 	client *httpx.Client
 	// api is the player API's base, and graphql SVT Play's own API, fields
 	// so that tests can stand in for them.
@@ -78,10 +79,10 @@ var svtVideoLink = regexp.MustCompile(`/video/([A-Za-z0-9_-]{4,})[/"]`)
 
 // NewSVTPlay builds the SVT Play extractor.
 func NewSVTPlay(client *httpx.Client) *SVTPlay {
-	return &SVTPlay{client: client, api: svtVideoAPI, graphql: svtGraphQL}
+	return &SVTPlay{client: client, api: svtVideoAPI, graphql: svtGraphQL,
+		about: about{name: "svtplay", shape: svtPlayShape,
+			recognises: "videos (`/video/<id>`) and programme pages of SVT Play whose page data names the player API's `videoSvtId`s"}}
 }
-
-func (s *SVTPlay) Name() string { return "svtplay" }
 
 // svtShape is a video link: /video/<id>[/<programme>[/<episode>]].
 var svtShape = pathShape(`^/video/[A-Za-z0-9_-]{4,}(?:/[^/]+){0,2}/?$`)
@@ -90,11 +91,6 @@ var svtShape = pathShape(`^/video/[A-Za-z0-9_-]{4,}(?:/[^/]+){0,2}/?$`)
 // the link scanner to single out, but one a marked page may claim.
 var svtSeriesShape = pathShape(`^/[a-z0-9][a-z0-9-]*/?$`)
 
-// Recognises is the inventory's description.
-func (s *SVTPlay) Recognises() string {
-	return "videos (`/video/<id>`) and programme pages of SVT Play whose page data names the player API's `videoSvtId`s"
-}
-
 // svtIDLetter and svtIDDigit tell an SVT video id, which mixes the two,
 // from the words and the bare numbers other sites put after /video/.
 var (
@@ -102,9 +98,9 @@ var (
 	svtIDDigit  = regexp.MustCompile(`[0-9]`)
 )
 
-// Shape reports a video link whose id has SVT's mixed form. Only the link
+// svtPlayShape is a video link whose id has SVT's mixed form. Only the link
 // scanner needs it that narrow: a probed page says for itself.
-func (s *SVTPlay) Shape(u *url.URL) bool {
+func svtPlayShape(u *url.URL) bool {
 	if !svtShape(u) {
 		return false
 	}

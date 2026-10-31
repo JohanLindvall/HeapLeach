@@ -48,6 +48,7 @@ import (
 // whole programmes are listed beside them. Anything else on france.tv,
 // such as a live channel's page, is still handed to yt-dlp.
 type FranceTV struct {
+	about
 	client *httpx.Client
 	// api is the player API's base, a field so that tests can stand in for
 	// it.
@@ -68,22 +69,14 @@ func NewFranceTV(client *httpx.Client) *FranceTV {
 	return &FranceTV{
 		client: client, api: francetvAPIRoot,
 		handoff: &Handoff{client: client, site: francetvRest},
+		about: about{name: "francetv", shape: francetvShape,
+			recognises: "video pages (`/…/<id>-<slug>.html`) and programme listings of France TV whose flight data names `video_factory_id`s"},
 	}
 }
-
-func (f *FranceTV) Name() string { return "francetv" }
 
 // francetvShape is a video page (/…/<id>-<slug>.html) or a programme's
 // every video (/…/toutes-les-videos/).
 var francetvShape = pathShape(`/[0-9]{6,}-[^/]+\.html$`, `/toutes-les-videos/?$`)
-
-// Recognises is the inventory's description.
-func (f *FranceTV) Recognises() string {
-	return "video pages (`/…/<id>-<slug>.html`) and programme listings of France TV whose flight data names `video_factory_id`s"
-}
-
-// Shape reports a video page or a programme's every video.
-func (f *FranceTV) Shape(u *url.URL) bool { return francetvShape(u) }
 
 // Recognise takes a page whose flight data names the player's video ids
 // (video_factory_id), which is what this resolves: a video page, known by

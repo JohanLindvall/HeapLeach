@@ -42,6 +42,7 @@ import (
 // Anything else on orf.at — its radio, its news pages — is still handed to
 // yt-dlp, as all of it was.
 type ORF struct {
+	about
 	client *httpx.Client
 	// site is where the runtime configuration is read from, a field so that
 	// tests can stand in for it.
@@ -68,20 +69,15 @@ func NewORF(client *httpx.Client) *ORF {
 	return &ORF{
 		client: client, site: orfSite,
 		handoff: &Handoff{client: client, site: orfRest},
+		about: about{name: "orf", shape: orfShape,
+			recognises: "episodes and series (`/video/<id>`, `/sendereihe/<id>`, `/profile/…`) of ORF ON, whose page carries the runtime configuration (`__NUXT__`) the API credentials are read from"},
 	}
 }
 
-func (o *ORF) Name() string { return "orf" }
-
-// Recognises is the inventory's description.
-func (o *ORF) Recognises() string {
-	return "episodes and series (`/video/<id>`, `/sendereihe/<id>`, `/profile/…`) of ORF ON, whose page carries the runtime configuration (`__NUXT__`) the API credentials are read from"
-}
-
-// Shape reports an episode or series link as ORF ON writes them, with the
+// orfShape is an episode or series link as ORF ON writes them, with the
 // slug after the id: a bare /video/<number> is every other video site's
 // form too, and only a probed page can say it is this one.
-func (o *ORF) Shape(u *url.URL) bool {
+func orfShape(u *url.URL) bool {
 	kind, _ := orfLink(u)
 	segs := util.PathSegments(u)
 	return kind != 0 && (segs[0] == "profile" || len(segs) >= 3)
@@ -100,21 +96,19 @@ const (
 	orfSeries
 )
 
-var orfNumber = regexp.MustCompile(`^[0-9]+$`)
-
 // orfLink tells what a link names: on.orf.at's /video/<id>[/<segment>][/slug]
 // and /sendereihe/<id>[/slug], and the older tvthek.orf.at's
 // /profile/<name>/<series>[/<title>/<episode>].
 func orfLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
 	switch {
-	case len(segs) >= 2 && segs[0] == "video" && orfNumber.MatchString(segs[1]):
+	case len(segs) >= 2 && segs[0] == "video" && allDigits(segs[1]):
 		return orfEpisode, segs[1]
-	case len(segs) >= 2 && segs[0] == "sendereihe" && orfNumber.MatchString(segs[1]):
+	case len(segs) >= 2 && segs[0] == "sendereihe" && allDigits(segs[1]):
 		return orfSeries, segs[1]
-	case len(segs) >= 5 && segs[0] == "profile" && orfNumber.MatchString(segs[4]):
+	case len(segs) >= 5 && segs[0] == "profile" && allDigits(segs[4]):
 		return orfEpisode, segs[4]
-	case len(segs) >= 3 && segs[0] == "profile" && orfNumber.MatchString(segs[2]):
+	case len(segs) >= 3 && segs[0] == "profile" && allDigits(segs[2]):
 		return orfSeries, segs[2]
 	}
 	return 0, ""

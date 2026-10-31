@@ -61,6 +61,7 @@ import (
 // catalogue is neither: pages and media alike answered a European address
 // with no token, cookie or referer.
 type ABCListen struct {
+	about
 	client *httpx.Client
 }
 
@@ -99,20 +100,13 @@ const (
 )
 
 // NewABCListen builds the ABC listen extractor.
-func NewABCListen(client *httpx.Client) *ABCListen { return &ABCListen{client: client} }
-
-func (a *ABCListen) Name() string { return "abclisten" }
+func NewABCListen(client *httpx.Client) *ABCListen {
+	return &ABCListen{client: client, about: about{name: "abclisten", shape: abcListenShape,
+		recognises: "episodes and programmes (`/listen/programs/…`) of ABC listen, by the page props its `__NEXT_DATA__` island carries"}}
+}
 
 // abcListenShape is a programme or one of its episodes.
 var abcListenShape = pathShape(`^/listen/programs/[^/]+`)
-
-// Recognises is the inventory's description.
-func (a *ABCListen) Recognises() string {
-	return "episodes and programmes (`/listen/programs/…`) of ABC listen, by the page props its `__NEXT_DATA__` island carries"
-}
-
-// Shape reports a programme or episode link.
-func (a *ABCListen) Shape(u *url.URL) bool { return abcListenShape(u) }
 
 // Recognise takes a page of the listen section carrying the JSON island
 // (__NEXT_DATA__ with its pageProps) that this reads episodes and listings

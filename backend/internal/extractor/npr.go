@@ -61,6 +61,7 @@ import (
 // the part file goes on naming the same transfer between runs: nothing about
 // the URL the page published expires.
 type NPR struct {
+	about
 	client *httpx.Client
 }
 
@@ -92,21 +93,14 @@ const (
 )
 
 // NewNPR builds the NPR extractor.
-func NewNPR(client *httpx.Client) *NPR { return &NPR{client: client} }
-
-func (n *NPR) Name() string { return "npr" }
+func NewNPR(client *httpx.Client) *NPR {
+	return &NPR{client: client, about: about{name: "npr", shape: nprShape,
+		recognises: "NPR pages carrying audio players (`data-audio`): stories, programmes, podcasts and sections"}}
+}
 
 // nprShape is a story (/<yyyy>/<mm>/<dd>/<id>/<slug>), a programme
 // (/programs/<slug>/) or a podcast (/podcasts/<id>/<slug>).
 var nprShape = pathShape(`^/[0-9]{4}/[0-9]{2}/[0-9]{2}/(?:[0-9]{6,}|nx-s[0-9]+-[0-9]+)/[^/]+`, `^/programs/[^/]+`, `^/podcasts/[0-9]+/[^/]+`)
-
-// Recognises is the inventory's description.
-func (n *NPR) Recognises() string {
-	return "NPR pages carrying audio players (`data-audio`): stories, programmes, podcasts and sections"
-}
-
-// Shape reports a story, programme or podcast link.
-func (n *NPR) Shape(u *url.URL) bool { return nprShape(u) }
 
 // Recognise takes an NPR page carrying audio, in the player blocks
 // (data-audio) this lists: any page of the site that has them, a section

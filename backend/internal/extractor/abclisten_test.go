@@ -21,7 +21,7 @@ func testABCListen(t *testing.T) *ABCListen {
 	t.Helper()
 	// No retries: a test that means to see a failure should see it at once,
 	// and none of these fixtures is worth asking twice for.
-	return &ABCListen{client: httpx.New("test-agent", "en-AU", 0, 5*time.Second)}
+	return NewABCListen(httpx.New("test-agent", "en-AU", 0, 5*time.Second))
 }
 
 // abcListenHTML wraps a JSON island in the least page that carries one, which
@@ -54,11 +54,11 @@ const abcListenAACIsland = `{
       "allowMediaDownload": "all",
       "documentProps": {
         "id": "100000001",
-        "title": "00s Night",
+        "title": "Decade Night",
         "docType": "audioepisode",
         "duration": 7200,
         "webDistributionRestricted": false,
-        "analytics": { "document": { "program": { "name": "00s Night", "id": "2000001" } } },
+        "analytics": { "document": { "program": { "name": "Decade Night", "id": "2000001" } } },
         "renditions": [
           { "bitrate": null, "codec": "", "MIMEType": "", "fileSize": null, "height": null, "url": "" },
           { "bitrate": 192, "codec": "MPEG Audio", "MIMEType": "audio/mpeg", "fileSize": 41065013, "height": null,
@@ -76,11 +76,11 @@ const abcListenAACIsland = `{
 // TestABCListenEpisodePicksTheWholeFileNotTheLabel covers all three traps at
 // once, because they arrive together on a real page.
 func TestABCListenEpisodePicksTheWholeFileNotTheLabel(t *testing.T) {
-	page, err := abcListenParse(abcListenHTML("00s Night - ABC listen", abcListenAACIsland))
+	page, err := abcListenParse(abcListenHTML("Decade Night - ABC listen", abcListenAACIsland))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	u, _ := url.Parse("https://www.abc.net.au/listen/programs/00s-night/00s-night/100000001")
+	u, _ := url.Parse("https://www.abc.net.au/listen/programs/decade-night/decade-night/100000001")
 
 	res, err := testABCListen(t).episode(u, page.props.Data.DocumentProps)
 	if err != nil {
@@ -103,7 +103,7 @@ func TestABCListenEpisodePicksTheWholeFileNotTheLabel(t *testing.T) {
 	}
 	// The programme is named the same as the episode, so saying it twice
 	// would be noise.
-	if want := "100000001 00s Night.aac"; file.Name != want {
+	if want := "100000001 Decade Night.aac"; file.Name != want {
 		t.Errorf("name = %q, want %q", file.Name, want)
 	}
 	// A media-core length is the object's own, so it is exact and a file
@@ -125,13 +125,13 @@ func TestABCListenEpisodePicksTheWholeFileNotTheLabel(t *testing.T) {
 const abcListenLegacyIsland = `{
   "props": { "pageProps": {
     "data": { "documentProps": {
-      "id": "13739740",
-      "title": "Controlling the chatter in your head",
+      "id": "12345678",
+      "title": "Quieting a busy mind",
       "docType": "audioepisode",
-      "analytics": { "document": { "program": { "name": "All In The Mind" } } },
+      "analytics": { "document": { "program": { "name": "Of Minds And Matter" } } },
       "renditions": [
         { "bitrate": 192, "codec": "MPEG-1 Audio layer 3", "MIMEType": "audio/mp3", "fileSize": 41931072, "height": null,
-          "url": "https://legacy.example.test/rn/podcast/2022/02/aim_20220206.mp3" }
+          "url": "https://legacy.example.test/rn/podcast/2020/01/an_episode.mp3" }
       ]
     } }
   } }
@@ -141,11 +141,11 @@ const abcListenLegacyIsland = `{
 // got wrong in the other direction: a length that is merely close would have
 // the skip check compare against a number the file can never reach.
 func TestABCListenDerivedLengthIsNotExact(t *testing.T) {
-	page, err := abcListenParse(abcListenHTML("Controlling the chatter in your head - ABC listen", abcListenLegacyIsland))
+	page, err := abcListenParse(abcListenHTML("Quieting a busy mind - ABC listen", abcListenLegacyIsland))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	u, _ := url.Parse("https://www.abc.net.au/listen/programs/allinthemind/chatter/13739740")
+	u, _ := url.Parse("https://www.abc.net.au/listen/programs/of-minds-and-matter/a-busy-mind/12345678")
 
 	res, err := testABCListen(t).episode(u, page.props.Data.DocumentProps)
 	if err != nil {
@@ -160,10 +160,10 @@ func TestABCListenDerivedLengthIsNotExact(t *testing.T) {
 	}
 	// A lone file lands in the download directory with nothing around it, so
 	// the name has to say which programme it belongs to.
-	if want := "13739740 All In The Mind - Controlling the chatter in your head.mp3"; file.Name != want {
+	if want := "12345678 Of Minds And Matter - Quieting a busy mind.mp3"; file.Name != want {
 		t.Errorf("name = %q, want %q", file.Name, want)
 	}
-	if want := "All In The Mind - Controlling the chatter in your head"; res.Title != want {
+	if want := "Of Minds And Matter - Quieting a busy mind"; res.Title != want {
 		t.Errorf("title = %q, want %q", res.Title, want)
 	}
 }
@@ -226,7 +226,7 @@ func TestABCListenAppOnlyProgrammeSaysSo(t *testing.T) {
 const abcListenPersonIsland = `{
   "props": { "pageProps": {
     "data": { "documentProps": {
-      "id": "11866382",
+      "id": "100000007",
       "title": "A Presenter",
       "docType": "person",
       "renditions": []
@@ -240,7 +240,7 @@ func TestABCListenPresenterPageIsNotAnEpisode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	_, err := extract(t, testABCListen(t), srv.URL+"/listen/radionational/a-presenter/11866382", Options{})
+	_, err := extract(t, testABCListen(t), srv.URL+"/listen/radionational/a-presenter/100000007", Options{})
 	if err == nil {
 		t.Fatal("a presenter page resolved to something downloadable")
 	}
@@ -299,7 +299,7 @@ func TestABCListenGeoRefusalIsASentence(t *testing.T) {
 	page = abcListenHTML("A Restricted Episode - ABC listen",
 		abcListenGeoIsland(srv.URL+"/geo-001/audio/02/n5/Z/40.mp3"))
 
-	res := extractOK(t, testABCListen(t), srv.URL+"/listen/programs/abc-rewind/an-episode/106914352", Options{})
+	res := extractOK(t, testABCListen(t), srv.URL+"/listen/programs/a-look-back/an-episode/100000005", Options{})
 	// Extraction must not refuse: whether the caller is in Australia is not
 	// something the page can say, and someone there downloads this fine.
 	file := res.Files[0]
@@ -355,12 +355,12 @@ func abcListenGeoIsland(link string) string {
   "props": { "pageProps": {
     "webDistributionRestricted": false,
     "data": { "documentProps": {
-      "id": "106914352",
+      "id": "100000005",
       "title": "An Episode",
       "docType": "audioepisode",
       "webDistributionRestricted": false,
       "allowMediaDownload": "all",
-      "analytics": { "document": { "program": { "name": "ABC Rewind" } } },
+      "analytics": { "document": { "program": { "name": "A Look Back" } } },
       "renditions": [
         { "bitrate": 192, "codec": "MPEG Audio", "MIMEType": "audio/mpeg", "fileSize": 49249399, "height": null,
           "url": %q }
@@ -381,9 +381,9 @@ func abcListenProgrammeIsland() string {
     "webDistributionRestricted": false,
     "data": null,
     "programCollectionPrepared": {
-      "id": "105470722",
+      "id": "100000008",
       "headingPrepared": "More from A Programme",
-      "programId": "2892006",
+      "programId": "2000002",
       "programTemplate": "audio",
       "loadMoreUrl": "/listen/programs/a-programme",
       "pagination": { "collectionLoaderLimit": 2, "offset": 0, "size": 2, "total": 4 },
@@ -401,7 +401,7 @@ func abcListenProgrammeIsland() string {
 // which is why nothing here decodes that field.
 const abcListenMoreEpisodes = `{
   "collection": {
-    "id": "105470722",
+    "id": "100000008",
     "programId": null,
     "programTemplate": "audio",
     "pagination": { "collectionLoaderLimit": "50", "offset": 2, "size": 50, "total": 4 },
@@ -540,7 +540,7 @@ func TestABCListenProgrammeExpands(t *testing.T) {
 	// episodes the page already rendered rather than repeating them.
 	for _, want := range []string{
 		abcListenEpisodesPath + "/listen/programs/a-programme?",
-		"collectionId=105470722", "offset=2", "size=50",
+		"collectionId=100000008", "offset=2", "size=50",
 	} {
 		if !strings.Contains(listing, want) {
 			t.Errorf("listing request %q is missing %q", listing, want)
@@ -592,10 +592,10 @@ func TestABCListenProgrammeOfAppOnlyEpisodesSaysWhy(t *testing.T) {
 // it does when half of it is missing.
 func TestABCListenNameKeepsTheId(t *testing.T) {
 	tests := []struct{ id, title, want string }{
-		{"106964748", "Why should I spend time in nature?", "106964748 Why should I spend time in nature?"},
-		{"106964748", "", "106964748"},
+		{"100000006", "Why does the sky look blue?", "100000006 Why does the sky look blue?"},
+		{"100000006", "", "100000006"},
 		{"", "An Episode", "An Episode"},
-		{" 106964748 ", " An Episode ", "106964748 An Episode"},
+		{" 100000006 ", " An Episode ", "100000006 An Episode"},
 	}
 	for _, tc := range tests {
 		if got := abcListenName(tc.id, tc.title); got != tc.want {

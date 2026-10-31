@@ -53,6 +53,7 @@ import (
 //
 // It used to go to yt-dlp, whose RTBF extractor no longer works.
 type RTBF struct {
+	about
 	client *httpx.Client
 	// bff and exposure are the APIs' bases, fields so that tests can stand
 	// in for them.
@@ -77,22 +78,16 @@ const (
 
 // NewRTBF builds the RTBF Auvio extractor.
 func NewRTBF(client *httpx.Client) *RTBF {
-	return &RTBF{client: client, bff: rtbfBFF, exposure: rtbfExposure}
+	return &RTBF{client: client, bff: rtbfBFF, exposure: rtbfExposure, about: about{name: "rtbf", shape: rtbfShape,
+		recognises: "media, programmes and live pages of RTBF Auvio (`/media/<slug>-<id>`, `/emission/<slug>-<id>`) whose page addresses the Auvio API, and RTBF pages embedding Auvio players"}}
 }
-
-func (r *RTBF) Name() string { return "rtbf" }
 
 // rtbfAuvioAPI marks an Auvio page: its widgets are addressed by the BFF
 // API's paths, which this reads too.
 var rtbfAuvioAPI = regexp.MustCompile(`/auvio/v1\.[0-9]+/widgets/`)
 
-// Recognises is the inventory's description.
-func (r *RTBF) Recognises() string {
-	return "media, programmes and live pages of RTBF Auvio (`/media/<slug>-<id>`, `/emission/<slug>-<id>`) whose page addresses the Auvio API, and RTBF pages embedding Auvio players"
-}
-
-// Shape reports a media, programme, live or embedded-player link.
-func (r *RTBF) Shape(u *url.URL) bool {
+// rtbfShape is a media, programme, live or embedded-player link.
+func rtbfShape(u *url.URL) bool {
 	kind, _ := rtbfLink(u)
 	return kind != rtbfOther
 }
@@ -115,10 +110,7 @@ const (
 	rtbfOther
 )
 
-var (
-	rtbfTrailingID = regexp.MustCompile(`(?:^|-)([0-9]+)$`)
-	rtbfNumber     = regexp.MustCompile(`^[0-9]+$`)
-)
+var rtbfTrailingID = regexp.MustCompile(`(?:^|-)([0-9]+)$`)
 
 // rtbfLink tells what a link names: Auvio's /media/<slug>-<id>,
 // /emission/<slug>-<id>, an embedded player's /embed/…/media/<id>, the
@@ -140,7 +132,7 @@ func rtbfLink(u *url.URL) (kind int, id string) {
 			return rtbfProgramme, segs[1]
 		case segs[0] == "live", segs[0] == "chaine", segs[0] == "direct":
 			return rtbfLive, ""
-		case segs[0] == "embed" && len(segs) >= 3 && rtbfNumber.MatchString(last):
+		case segs[0] == "embed" && len(segs) >= 3 && allDigits(last):
 			switch segs[len(segs)-2] {
 			case "media":
 				return rtbfMedia, last
@@ -149,7 +141,7 @@ func rtbfLink(u *url.URL) (kind int, id string) {
 			}
 		}
 	}
-	if len(segs) > 0 && segs[0] == "auvio" && rtbfNumber.MatchString(u.Query().Get("id")) {
+	if len(segs) > 0 && segs[0] == "auvio" && allDigits(u.Query().Get("id")) {
 		return rtbfMedia, u.Query().Get("id")
 	}
 	return rtbfOther, ""

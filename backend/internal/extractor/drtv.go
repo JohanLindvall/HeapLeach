@@ -53,6 +53,7 @@ import (
 // request a page, and an episode's videos are read when its transfer
 // starts. Anything else on dr.dk is still handed to yt-dlp.
 type DRTV struct {
+	about
 	client *httpx.Client
 	// api is the API's base, a field so that tests can stand in for it.
 	api     string
@@ -72,21 +73,16 @@ func NewDRTV(client *httpx.Client) *DRTV {
 	return &DRTV{
 		client: client, api: drAPIRoot,
 		handoff: &Handoff{client: client, site: drRest},
+		about: about{name: "drtv", shape: drShape,
+			recognises: "programmes, seasons and series (`/drtv/…/<slug>_<id>`) of DR TV, served by its app with the state it boots from"},
 	}
 }
-
-func (d *DRTV) Name() string { return "drtv" }
 
 // drShell marks DR TV's app: the state it boots from, its route table.
 const drShell = `window.__data = {"app":{"config"`
 
-// Recognises is the inventory's description.
-func (d *DRTV) Recognises() string {
-	return "programmes, seasons and series (`/drtv/…/<slug>_<id>`) of DR TV, served by its app with the state it boots from"
-}
-
-// Shape reports a DR TV link ending in an item id.
-func (d *DRTV) Shape(u *url.URL) bool { return drLink(u) != "" }
+// drShape is a DR TV link ending in an item id.
+func drShape(u *url.URL) bool { return drLink(u) != "" }
 
 // Recognise takes a page of DR TV's app (its boot state, window.__data)
 // under /drtv/. One naming no item is handed to yt-dlp, as before.

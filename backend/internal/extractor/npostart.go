@@ -68,6 +68,7 @@ import (
 // season's human label is null for a good part of the catalogue, so the
 // folder falls back to the season's slug.
 type NPOStart struct {
+	about
 	client *httpx.Client
 }
 
@@ -96,20 +97,13 @@ const (
 )
 
 // NewNPOStart builds the NPO Start extractor.
-func NewNPOStart(client *httpx.Client) *NPOStart { return &NPOStart{client: client} }
-
-func (n *NPOStart) Name() string { return "npo" }
+func NewNPOStart(client *httpx.Client) *NPOStart {
+	return &NPOStart{client: client, about: about{name: "npo", shape: npoShape,
+		recognises: "episodes and series (`/start/afspelen/<slug>`, `/start/serie/<slug>`) of NPO Start, served by its app"}}
+}
 
 // npoShape is a player or series link under /start.
 var npoShape = pathShape(`^/start/(?:afspelen|serie)/[^/]+`)
-
-// Recognises is the inventory's description.
-func (n *NPOStart) Recognises() string {
-	return "episodes and series (`/start/afspelen/<slug>`, `/start/serie/<slug>`) of NPO Start, served by its app"
-}
-
-// Shape reports a player or series link.
-func (n *NPOStart) Shape(u *url.URL) bool { return npoShape(u) }
 
 // Recognise takes a player or series page served by the NPO Start app,
 // whose bundle lives under /start/_next/: the page is a shell, and the

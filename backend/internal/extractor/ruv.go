@@ -52,6 +52,7 @@ import (
 // extraction, so a wholly Iceland-only series costs one failed request
 // rather than one per episode.
 type RUV struct {
+	about
 	client *httpx.Client
 }
 
@@ -91,20 +92,13 @@ const ruvProgramQuery = `query getEpisode($programID: Int!) {
 }`
 
 // NewRUV builds the RÚV extractor.
-func NewRUV(client *httpx.Client) *RUV { return &RUV{client: client} }
-
-func (r *RUV) Name() string { return "ruv" }
+func NewRUV(client *httpx.Client) *RUV {
+	return &RUV{client: client, about: about{name: "ruv", shape: ruvShape,
+		recognises: "programmes and episodes (`/<station>/spila/<slug>/<id>`) of RÚV's player, whose page configures its GraphQL endpoint (`window._GQL_`)"}}
+}
 
 // ruvShape is a playable link: /<station>/spila/<slug>/<programme id>[/<episode>].
 var ruvShape = pathShape(`^/[a-z]+/` + ruvPlayPath + `/[^/]+/[0-9]+(?:/[^/]+)?/?$`)
-
-// Recognises is the inventory's description.
-func (r *RUV) Recognises() string {
-	return "programmes and episodes (`/<station>/spila/<slug>/<id>`) of RÚV's player, whose page configures its GraphQL endpoint (`window._GQL_`)"
-}
-
-// Shape reports a playable link.
-func (r *RUV) Shape(u *url.URL) bool { return ruvShape(u) }
 
 // Recognise takes a playable link served by the player, whose page
 // configures the GraphQL endpoint (window._GQL_) this reads the programme

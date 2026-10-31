@@ -59,6 +59,7 @@ import (
 // anyone who asks. Believing any of them would refuse most of the catalogue,
 // and nothing here reads them.
 type RTVE struct {
+	about
 	client *httpx.Client
 }
 
@@ -105,17 +106,13 @@ var rtvePresets = []string{"HD_FULL", "HD_READY", "HQ", "HIGH", "MED"}
 var rtveProgrammeID = regexp.MustCompile(`(?:api/programas|/modulos/[a-z]+)/(\d+)`)
 
 // NewRTVE builds the RTVE Play extractor.
-func NewRTVE(client *httpx.Client) *RTVE { return &RTVE{client: client} }
-
-func (r *RTVE) Name() string { return "rtve" }
-
-// Recognises is the inventory's description.
-func (r *RTVE) Recognises() string {
-	return "videos and programmes (`/play/videos/…`, `/v/<id>`) of RTVE Play, whose page names its asset or programme id"
+func NewRTVE(client *httpx.Client) *RTVE {
+	return &RTVE{client: client, about: about{name: "rtve", shape: rtveShape,
+		recognises: "videos and programmes (`/play/videos/…`, `/v/<id>`) of RTVE Play, whose page names its asset or programme id"}}
 }
 
-// Shape reports a video or programme link.
-func (r *RTVE) Shape(u *url.URL) bool { return rtveTarget(u) != rtveRef{} }
+// rtveShape is a video or programme link.
+func rtveShape(u *url.URL) bool { return rtveTarget(u) != rtveRef{} }
 
 // Recognise takes a video or programme page of RTVE Play that names what
 // it plays: the player's asset id (data-idasset), or the programme's id in

@@ -68,6 +68,7 @@ import (
 // episodeComposition endpoint returns all three seasons of the same show in
 // one request, numbered, so that is what is asked.
 type SRF struct {
+	about
 	client *httpx.Client
 	// il is the Integration Layer's base, a field only so a test can point
 	// it at a fixture server.
@@ -116,17 +117,13 @@ var srfURNPattern = regexp.MustCompile(`^urn:[a-z]+:[a-z]+:(?:[a-z]+:)?[A-Za-z0-
 var srfUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // NewSRF builds the Play SRF extractor.
-func NewSRF(client *httpx.Client) *SRF { return &SRF{client: client, il: srfIL} }
-
-func (s *SRF) Name() string { return "srf" }
-
-// Recognises is the inventory's description.
-func (s *SRF) Recognises() string {
-	return "programmes and shows of Play SRF (a `urn=` or a show's `id=` in the query) whose page names its `urn:srf:` media"
+func NewSRF(client *httpx.Client) *SRF {
+	return &SRF{client: client, il: srfIL, about: about{name: "srf", shape: srfShape,
+		recognises: "programmes and shows of Play SRF (a `urn=` or a show's `id=` in the query) whose page names its `urn:srf:` media"}}
 }
 
-// Shape reports a link naming a media urn, or a Play show page by its id.
-func (s *SRF) Shape(u *url.URL) bool { return srfTarget(u).urn != "" }
+// srfShape is a link naming a media urn, or a Play show page by its id.
+func srfShape(u *url.URL) bool { return srfTarget(u).urn != "" }
 
 // Recognise takes a page of Play SRF naming what it plays: its media are
 // addressed by urn:srf: urns, which the Integration Layer resolves.

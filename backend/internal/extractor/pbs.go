@@ -56,6 +56,7 @@ import (
 // out at 720p where the stream carries 1080p. Closing that gap needs a muxer,
 // which is the whole trade this program declines to make.
 type PBS struct {
+	about
 	client *httpx.Client
 }
 
@@ -87,9 +88,10 @@ var pbsPlayerID = regexp.MustCompile(`player\.pbs\.org/(?:widget/)?(?:viral|port
 var pbsSeasonInfo = regexp.MustCompile(`(?i)^season\s+(\d+)`)
 
 // NewPBS builds the PBS extractor.
-func NewPBS(client *httpx.Client) *PBS { return &PBS{client: client} }
-
-func (p *PBS) Name() string { return "pbs" }
+func NewPBS(client *httpx.Client) *PBS {
+	return &PBS{client: client, about: about{name: "pbs", shape: pbsShape,
+		recognises: "videos (`/video/<slug>/`), shows (`/show/<slug>/`) and player links of PBS, by the player a video page embeds or the videos a show page lists"}}
+}
 
 // pbsPlayerPaths are the player's three names for itself, the first path
 // segment of a player link (/widget/partnerplayer/ for the last).
@@ -102,17 +104,12 @@ var pbsPlayerRef = regexp.MustCompile(`/(?:widget/)?(?:viral|portal|partner)play
 // pbsVideoHref is a video link as a show page lists them.
 var pbsVideoHref = regexp.MustCompile(`href="[^"]*/video/[a-z0-9-]+/?"`)
 
-// Recognises is the inventory's description.
-func (p *PBS) Recognises() string {
-	return "videos (`/video/<slug>/`), shows (`/show/<slug>/`) and player links of PBS, by the player a video page embeds or the videos a show page lists"
-}
-
 // pbsSlug is a video slug as PBS writes them: words, then a short id.
 // Another site's /video/<number> is not one.
 var pbsSlug = regexp.MustCompile(`^[a-z0-9-]*[a-z][a-z0-9-]*-[a-z0-9]+$`)
 
-// Shape reports a video, show or player link.
-func (p *PBS) Shape(u *url.URL) bool {
+// pbsShape is a video, show or player link.
+func pbsShape(u *url.URL) bool {
 	target := pbsTargetOf(u)
 	return target != nil && (target.slug == "" || pbsSlug.MatchString(target.slug))
 }

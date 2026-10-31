@@ -51,6 +51,7 @@ import (
 // instead of a field. The BBC names a programme in up to three levels, and
 // which of them is the episode's own name depends on how many were filled in.
 type BBCSounds struct {
+	about
 	client *httpx.Client
 }
 
@@ -68,23 +69,16 @@ const (
 )
 
 // NewBBCSounds builds the BBC Sounds extractor.
-func NewBBCSounds(client *httpx.Client) *BBCSounds { return &BBCSounds{client: client} }
-
-func (b *BBCSounds) Name() string { return "bbcsounds" }
+func NewBBCSounds(client *httpx.Client) *BBCSounds {
+	return &BBCSounds{client: client, about: about{name: "bbcsounds", shape: bbcShape,
+		recognises: "episodes, brands and series (`/sounds/play/<pid>`, `/sounds/brand/<pid>`, `/sounds/series/<pid>`) served by the BBC Sounds web app"}}
+}
 
 // bbcShape is an episode, brand or series: /sounds/<kind>/<pid>.
 var bbcShape = pathShape(`^/sounds/(?:play|brand|series)/[A-Za-z0-9:]+`)
 
 // bbcSoundsBundle is where the Sounds web app is served from.
 const bbcSoundsBundle = "/sounds/web/sounds-web-spa/"
-
-// Recognises is the inventory's description.
-func (b *BBCSounds) Recognises() string {
-	return "episodes, brands and series (`/sounds/play/<pid>`, `/sounds/brand/<pid>`, `/sounds/series/<pid>`) served by the BBC Sounds web app"
-}
-
-// Shape reports an episode, brand or series link.
-func (b *BBCSounds) Shape(u *url.URL) bool { return bbcShape(u) }
 
 // Recognise takes an episode, brand or series page served by the Sounds web
 // app (its bundle path): the page is the app's shell, and what it plays is

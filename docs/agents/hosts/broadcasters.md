@@ -117,9 +117,14 @@ A rendition's place in a quality ladder is `rankIn` (`renditions.go`), each call
 saying where an unknown name lands. A file's extension read off its link is
 `linkExt` (`html.go`), read off the link's last path element, lowercased,
 with the broadcaster's usual container as fallback. A
-probe of whether a host serves a file to this address at all (abclisten,
-yle, zdf, drtv) is one `httpx.Client.StatusOnce`, each keeping its own
-answer for a probe that could not be made. An episode
+probe of whether a host serves a file to this address at all is one
+`httpx.Client.StatusOnce`. abclisten and yle ask it through `refusesByte`,
+a request for the file's first byte that takes a 403 for a refusal and a
+probe that could not be made for none; zdf (a HEAD) and drtv ask it
+directly, each keeping its own answer for a probe that could not be made.
+A listing whose items are shown in one region alone is cut by
+`regionGate` (drtv, yle), which asks of those items until one can tell
+and lets that answer stand for the rest. An episode
 resolved at transfer time is `lazyEpisode`, one resolved now and read again
 at transfer time `refreshing` (`extractor.go`, shared with the signed file
 hosts), and a listing's note is assembled from

@@ -46,6 +46,7 @@ import (
 // which names the series and the episode in fields of their own and leaves
 // both empty when there is no series to name.
 type NRK struct {
+	about
 	client *httpx.Client
 }
 
@@ -71,24 +72,17 @@ var nrkEpisodeLink = regexp.MustCompile(`/episode/([A-Za-z][A-Za-z0-9]{5,})`)
 // NewNRK builds the NRK TV extractor. It takes tv.nrk.no alone: radio and the
 // news site share the same player API but not the catalogue below, and
 // claiming them would promise more than this resolves.
-func NewNRK(client *httpx.Client) *NRK { return &NRK{client: client} }
-
-func (n *NRK) Name() string { return "nrk" }
-
-// nrkShape is a programme or series link; the share links are /se?v= and
-// /se?s=.
-var nrkShape = pathShape(`^/(?:program|serie)/[^/]+`)
-
-// Recognises is the inventory's description.
-func (n *NRK) Recognises() string {
-	return "programmes and series (`/program/<id>`, `/serie/<slug>`, `/se?v=`) of NRK TV, whose page data names programmes by `prfId`"
+func NewNRK(client *httpx.Client) *NRK {
+	return &NRK{client: client, about: about{name: "nrk", shape: nrkShape,
+		recognises: "programmes and series (`/program/<id>`, `/serie/<slug>`, `/se?v=`) of NRK TV, whose page data names programmes by `prfId`"}}
 }
 
-// Shape reports a programme, series or share link.
-func (n *NRK) Shape(u *url.URL) bool {
-	if nrkShape(u) {
-		return true
-	}
+// nrkShape is a programme or series link, or a share link: /se?v= or
+// /se?s=.
+var nrkShape = eitherShape(pathShape(`^/(?:program|serie)/[^/]+`), nrkShareShape)
+
+// nrkShareShape is a share link, /se?v=<id> or /se?s=<id>.
+func nrkShareShape(u *url.URL) bool {
 	q := u.Query()
 	return strings.Trim(u.Path, "/") == "se" && (q.Get("v") != "" || q.Get("s") != "")
 }

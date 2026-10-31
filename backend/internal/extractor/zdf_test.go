@@ -256,7 +256,7 @@ func zdfParse(t *testing.T, body string) *zdfResponse {
 func TestZDFFileTakesTheLargestOrdinaryRendition(t *testing.T) {
 	doc := zdfParse(t, zdfProgramme)
 
-	file, err := (&ZDF{}).file(context.Background(), &doc.Document, newZDFReach(nil))
+	file, err := NewZDF(nil).file(context.Background(), &doc.Document, newZDFReach(nil))
 	if err != nil {
 		t.Fatalf("file: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestZDFDescribedPlaylistComesWithItsAudio(t *testing.T) {
 		}},
 	}
 
-	file, err := (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	file, err := NewZDF(zdfTestClient()).file(context.Background(), doc, newZDFReach(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestZDFDescribedPlaylistComesWithItsAudio(t *testing.T) {
 	}
 
 	master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1609656,CODECS=\"avc1.4d401f\"\nindex-f1-v1.m3u8\n"
-	_, err = (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	_, err = NewZDF(zdfTestClient()).file(context.Background(), doc, newZDFReach(nil))
 	if err == nil || !strings.Contains(err.Error(), "names no audio") {
 		t.Errorf("err = %v; want a playlist with no audio anywhere refused, saying so", err)
 	}
@@ -419,7 +419,7 @@ func TestZDFPlaylistResolvesToSegments(t *testing.T) {
 		}},
 	}
 
-	file, err := (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	file, err := NewZDF(zdfTestClient()).file(context.Background(), doc, newZDFReach(nil))
 	if err != nil {
 		t.Fatalf("file: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestZDFPlaylistResolvesToSegments(t *testing.T) {
 func TestZDFAnnouncedProgrammeQuotesTheBroadcaster(t *testing.T) {
 	doc := zdfParse(t, zdfAnnounced)
 
-	_, err := (&ZDF{}).file(context.Background(), &doc.Document, newZDFReach(nil))
+	_, err := NewZDF(nil).file(context.Background(), &doc.Document, newZDFReach(nil))
 	if err == nil {
 		t.Fatal("a document with no renditions was accepted")
 	}
@@ -461,7 +461,7 @@ func TestZDFAnnouncedProgrammeQuotesTheBroadcaster(t *testing.T) {
 func TestZDFWatershedQuotesTheRightField(t *testing.T) {
 	doc := zdfParse(t, zdfWatershed)
 
-	_, err := (&ZDF{}).file(context.Background(), &doc.Document, newZDFReach(nil))
+	_, err := NewZDF(nil).file(context.Background(), &doc.Document, newZDFReach(nil))
 	if err == nil {
 		t.Fatal("a document with no renditions was accepted")
 	}
@@ -492,7 +492,7 @@ func TestZDFRegionIsProbedOnceAndNamed(t *testing.T) {
 
 	res := decode[zdfResponse](t, strings.Replace(zdfRegionLocked, "%s", srv.URL, 1))
 
-	z := &ZDF{client: zdfTestClient()}
+	z := NewZDF(zdfTestClient())
 	reach := newZDFReach(z.client)
 	for range 3 {
 		_, err := z.file(context.Background(), &res.Document, reach)
@@ -520,7 +520,7 @@ func TestZDFRegionWithinReachIsNotRefused(t *testing.T) {
 
 	res := decode[zdfResponse](t, strings.Replace(zdfRegionLocked, "%s", srv.URL, 1))
 
-	z := &ZDF{client: zdfTestClient()}
+	z := NewZDF(zdfTestClient())
 	file, err := z.file(context.Background(), &res.Document, newZDFReach(z.client))
 	if err != nil {
 		t.Fatalf("a programme this address can reach was refused: %v", err)

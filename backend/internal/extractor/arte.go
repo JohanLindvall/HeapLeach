@@ -31,6 +31,7 @@ import (
 // each programme with its title, so the collection costs one request. Its
 // programmes' streams are resolved when their transfers start.
 type Arte struct {
+	about
 	client *httpx.Client
 	// api is the player API's base, a field so that tests can stand in for
 	// it.
@@ -50,18 +51,12 @@ var (
 
 // NewArte builds the ARTE extractor.
 func NewArte(client *httpx.Client) *Arte {
-	return &Arte{client: client, api: arteAPIRoot}
+	return &Arte{client: client, api: arteAPIRoot, about: about{name: "arte", shape: arteShape,
+		recognises: "programmes and collections (`/<lang>/videos/<id>/`, `/embeds/<lang>/<id>`) of ARTE, whose page calls its player API (`/api/player/v2/`)"}}
 }
 
-func (a *Arte) Name() string { return "arte" }
-
-// Recognises is the inventory's description.
-func (a *Arte) Recognises() string {
-	return "programmes and collections (`/<lang>/videos/<id>/`, `/embeds/<lang>/<id>`) of ARTE, whose page calls its player API (`/api/player/v2/`)"
-}
-
-// Shape reports a programme or collection link.
-func (a *Arte) Shape(u *url.URL) bool {
+// arteShape is a programme or collection link.
+func arteShape(u *url.URL) bool {
 	_, id := arteLink(u)
 	return id != ""
 }

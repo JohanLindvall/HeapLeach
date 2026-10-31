@@ -60,6 +60,7 @@ import (
 // says which question to ask, not what the answer is. See zdfReach for who
 // asks it.
 type ZDF struct {
+	about
 	client *httpx.Client
 }
 
@@ -117,21 +118,14 @@ var zdfRegions = map[string]string{
 }
 
 // NewZDF builds the ZDF extractor.
-func NewZDF(client *httpx.Client) *ZDF { return &ZDF{client: client} }
-
-func (z *ZDF) Name() string { return "zdf" }
+func NewZDF(client *httpx.Client) *ZDF {
+	return &ZDF{client: client, about: about{name: "zdf", shape: zdfShape,
+		recognises: "videos and show pages (`/…/<slug>-<number>`) of the ZDF Mediathek, whose page data names its PTMD player templates"}}
+}
 
 // zdfShape is a page whose last segment is a document id, <slug>-<number>,
 // filed under at least one section: /<section>/…/<slug>-<number>.
 var zdfShape = pathShape(`^/(?:[a-z0-9-]+/)+[a-z0-9-]+-[0-9]+/?$`)
-
-// Recognises is the inventory's description.
-func (z *ZDF) Recognises() string {
-	return "videos and show pages (`/…/<slug>-<number>`) of the ZDF Mediathek, whose page data names its PTMD player templates"
-}
-
-// Shape reports a page ending in a document id.
-func (z *ZDF) Shape(u *url.URL) bool { return zdfShape(u) }
 
 // Recognise takes a Mediathek page ending in a document id: its page data
 // configures the player's media service (ptmdService, ptmdTemplate).

@@ -555,7 +555,9 @@ func srfServer(t *testing.T, compositions map[string]string, listings []string) 
 
 func srfWith(t *testing.T, srv *httptest.Server) *SRF {
 	t.Helper()
-	return &SRF{client: testClient(), il: srv.URL + "/il"}
+	s := NewSRF(testClient())
+	s.il = srv.URL + "/il"
+	return s
 }
 
 // TestSRFExtractProgrammeTakesTheFile is the whole progressive path end to

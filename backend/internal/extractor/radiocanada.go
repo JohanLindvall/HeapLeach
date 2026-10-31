@@ -43,6 +43,7 @@ import (
 // Any other page of the site, an article without a player of its own, is
 // still handed to yt-dlp.
 type RadioCanada struct {
+	about
 	client *httpx.Client
 	// api is the media API's base, a field so that tests can stand in for
 	// it.
@@ -63,24 +64,16 @@ func NewRadioCanada(client *httpx.Client) *RadioCanada {
 	return &RadioCanada{
 		client: client, api: radioCanadaAPIRoot,
 		handoff: &Handoff{client: client, site: radioCanadaRest},
+		about: about{name: "radio-canada", shape: radioCanadaShape,
+			recognises: "pages of ICI Radio-Canada and OHdio whose data layer (`IdsCollection`) names their media, and media console links"},
 	}
 }
-
-func (r *RadioCanada) Name() string { return "radio-canada" }
 
 // radioCanadaShape is a media link (/widgets/mediaconsole/<app>/<id>,
 // …/media-<id>), a news video (/info/videos/<id>/<slug>) or an OHdio
 // programme or episode (/ohdio/<kind>/<id>/<slug>…).
 var radioCanadaShape = pathShape(`/widgets/mediaconsole/[a-z0-9]+/[0-9]+`, `/media-[0-9]+(?:/|$)`,
 	`^/info/videos/[0-9-]+/[^/]+`, `^/ohdio/[a-z-]+/[0-9]+/[^/]+`)
-
-// Recognises is the inventory's description.
-func (r *RadioCanada) Recognises() string {
-	return "pages of ICI Radio-Canada and OHdio whose data layer (`IdsCollection`) names their media, and media console links"
-}
-
-// Shape reports a media, news video or OHdio link.
-func (r *RadioCanada) Shape(u *url.URL) bool { return radioCanadaShape(u) }
 
 // Recognise takes a page of the site by its data layer (IdsCollection),
 // which names the page's own media and is what this reads. A page whose

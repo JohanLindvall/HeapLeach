@@ -55,6 +55,7 @@ import (
 // series that has seasons. They are recognised by their ids instead: see
 // ardWithoutVariants.
 type ARD struct {
+	about
 	client *httpx.Client
 }
 
@@ -83,14 +84,8 @@ const (
 
 // NewARD builds the ARD Mediathek extractor.
 func NewARD(client *httpx.Client) *ARD {
-	return &ARD{client: client}
-}
-
-func (a *ARD) Name() string { return "ard" }
-
-// Recognises is the inventory's description.
-func (a *ARD) Recognises() string {
-	return "videos (`/video/…/<id>`) and programmes (`/sendung/`, `/serie/`, `/film/`) of the ARD Mediathek, whose page loads from its page gateway"
+	return &ARD{client: client, about: about{name: "ard", shape: ardShape,
+		recognises: "videos (`/video/…/<id>`) and programmes (`/sendung/`, `/serie/`, `/film/`) of the ARD Mediathek, whose page loads from its page gateway"}}
 }
 
 // ardShapeIDLen is how long a content id is before the link scanner takes
@@ -98,8 +93,8 @@ func (a *ARD) Recognises() string {
 // dozens of characters; another site's /video/<number> does not.
 const ardShapeIDLen = 24
 
-// Shape reports a video or programme link with its content id.
-func (a *ARD) Shape(u *url.URL) bool {
+// ardShape is a video or programme link with its content id.
+func ardShape(u *url.URL) bool {
 	ref := ardTarget(u)
 	return len(ref.item) >= ardShapeIDLen || len(ref.show) >= ardShapeIDLen
 }

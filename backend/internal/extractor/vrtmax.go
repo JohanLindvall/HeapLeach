@@ -58,6 +58,7 @@ import (
 // — so it is put into words here, with the code kept beside them so a reader
 // can check the translation against what VRT actually said.
 type VRTMax struct {
+	about
 	client *httpx.Client
 
 	// mu guards the player token, which every episode of a series shares.
@@ -170,23 +171,16 @@ var vrtRefusals = map[string]string{
 }
 
 // NewVRTMax builds the VRT MAX extractor.
-func NewVRTMax(client *httpx.Client) *VRTMax { return &VRTMax{client: client} }
-
-func (v *VRTMax) Name() string { return "vrtmax" }
+func NewVRTMax(client *httpx.Client) *VRTMax {
+	return &VRTMax{client: client, about: about{name: "vrtmax", shape: vrtShape,
+		recognises: "programmes and episodes (`/vrtmax/a-z/…`) of VRT MAX, served by its app"}}
+}
 
 // vrtShape is a programme or episode in the catalogue: /vrtmax/a-z/<programme>/….
 var vrtShape = pathShape(`^/(?:vrtmax|vrtnu)/a-z/[^/]+`)
 
 // vrtShell marks the VRT MAX app: the resources it is served from.
 const vrtShell = "/vrtnu-resources/"
-
-// Recognises is the inventory's description.
-func (v *VRTMax) Recognises() string {
-	return "programmes and episodes (`/vrtmax/a-z/…`) of VRT MAX, served by its app"
-}
-
-// Shape reports a catalogue link.
-func (v *VRTMax) Shape(u *url.URL) bool { return vrtShape(u) }
 
 // Recognise takes a catalogue page served by the VRT MAX app, which ships
 // nothing but its shell (/vrtnu-resources/): the page is the API's to
@@ -482,9 +476,8 @@ func (v *VRTMax) playerToken(ctx context.Context) (string, error) {
 // object full of nulls, so it has to be looked for: left alone it would
 // surface much later as "this page holds no episodes".
 func (v *VRTMax) gql(ctx context.Context, query, id string) (*vrtResponse, error) {
-	body := map[string]any{"query": query, "variables": map[string]string{"id": id}}
 	var out vrtResponse
-	if err := v.client.PostJSON(ctx, vrtGraphQL, vrtAPIHeader, body, &out); err != nil {
+	if err := postGraphQL(ctx, v.client, vrtGraphQL, vrtAPIHeader, query, map[string]string{"id": id}, &out); err != nil {
 		return nil, fmt.Errorf("vrtmax: query %s: %w", id, err)
 	}
 	if len(out.Errors) > 0 {
