@@ -68,6 +68,8 @@ func rajceExtract(ctx context.Context, s *Share, u *url.URL, opts Options) (*Res
 	if err != nil {
 		return nil, err
 	}
+	// fetchDocument hands back a URL of the caller's own, never the shared
+	// probe's, so it may be edited in place.
 	page.Fragment, page.RawFragment = "", ""
 	res := &Result{Title: cmp.Or(strings.TrimSpace(album.Title), util.NameFromURL(page.String()))}
 	headers := httpx.Referer(page.String())

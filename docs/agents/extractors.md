@@ -65,6 +65,18 @@ path names a non-page file and matches no `Shape` skips the probe
 (`probeWorthy`): probing would download the start of the file the fallback
 is about to fetch.
 
+A `Page` is borrowed, never owned: the cache hands one to every concurrent
+caller and every recogniser reads it. Its URLs, header, body, parsed tree and
+memoised values must not be changed. `probedDocument`, `fetchDocument` and
+`fetchRoot` hand back a final URL the caller owns, and the cache probes with
+a URL of its own, so editing either is safe; a reader that edits a tree (the
+WordPress post reader removes related-post blocks) parses a private copy
+rather than taking the shared one from `fetchRoot`. `TestSharedPageIsLeftAsItWas`
+runs concurrent extractions over one page under `-race`. The probe is reused
+only for the submitted URL as it was fetched; a request with other headers,
+a session or another method is not the same representation and fetches its
+own.
+
 ### The supported-site inventory
 
 The inventory in README.md is **generated** from the registry by `make
