@@ -9,46 +9,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // pointerNamed is the pointer site of that name, with no client or registry
 // behind it.
 func pointerNamed(t *testing.T, name string) *Pointer {
 	t.Helper()
-	p := NewPointer(nil, name)
+	p := NewPointer(nil, nil, name)
 	if p == nil {
 		t.Fatalf("no pointer site %s", name)
 	}
 	return p
-}
-
-// TestPointerSitesAreUsable guards the table: every field ends up in front
-// of the user or decides what is downloaded, and every site is registered
-// and handed the registry it resolves through.
-func TestPointerSitesAreUsable(t *testing.T) {
-	reg := NewRegistry(&config.Config{}, nil)
-	registered := map[string]bool{}
-	for _, e := range reg.extractors {
-		if p, ok := e.(*Pointer); ok {
-			registered[p.Name()] = p.registry == reg
-		}
-	}
-	seen := map[string]bool{}
-	for _, site := range pointerSites {
-		if site.name == "" || site.shape == nil || site.recognise == nil || site.recognises == "" ||
-			site.links == nil || site.missing == "" {
-			t.Errorf("%q is missing a field", site.name)
-		}
-		if seen[site.name] {
-			t.Errorf("two pointer sites are both named %q", site.name)
-		}
-		seen[site.name] = true
-		if !registered[site.name] {
-			t.Errorf("%s is not registered, or not handed its registry", site.name)
-		}
-	}
 }
 
 // A preview page in the shape the search serves: a viewer, and beside it the
@@ -179,8 +150,7 @@ func TestPointerResolvesThroughTheRegistry(t *testing.T) {
 	client := testClient()
 	reg := &Registry{fallback: NewDirect(nil)}
 	reg.extractors = []Extractor{stubExtractor{hostClaim: "tube.example.test", title: "a synthetic clip"}}
-	p := NewPointer(client, "alohatube")
-	p.registry = reg
+	p := NewPointer(client, reg, "alohatube")
 
 	u, err := url.Parse(srv.URL + "/ktm/view.cgi?gid=1234567")
 	if err != nil {
@@ -202,7 +172,7 @@ func TestPointerReportsAPageThatPointsNowhere(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	p := NewPointer(testClient(), "yandex")
+	p := NewPointer(testClient(), nil, "yandex")
 	u, err := url.Parse(srv.URL + "/video/preview/1234567890")
 	if err != nil {
 		t.Fatal(err)

@@ -31,9 +31,28 @@ type Registry struct {
 
 // NewRegistry wires up every supported extractor, in the order a probed page
 // is offered to them: the first whose Recognise takes the page extracts it.
-// Several link forms overlap, so the order is part of the behaviour.
+// Several link forms overlap, so the order is part of the behaviour, and
+// this list is the one place it is written down.
+//
+// The registry is allocated first, so the extractors that resolve what
+// they find through the registry they are part of — the link harvester,
+// the pointer pages, the indexes and the fallback — are each handed it as
+// they are built, rather than wired afterwards or given one of their own.
 func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
-	extractors := []Extractor{
+	direct := NewDirect(client)
+	reg := &Registry{
+		client:   client,
+		fallback: direct,
+		limits:   Limits{Sources: cfg.MaxSources, Files: cfg.MaxFiles},
+	}
+	direct.registry = reg
+	reg.extractors = slices.Concat([]Extractor{
+		// The link harvester claims no host: only an explicit "links:"
+		// prefix reaches it. It leads the list because the prefix, not the
+		// page, decides: a harvest of a page another extractor recognises
+		// would otherwise be routed there, which would try to fetch
+		// "links://..." and fail on the scheme.
+		NewLinks(client, reg),
 		NewGofile(cfg, client),
 		NewMega(client),
 		NewBunkr(client),
@@ -75,7 +94,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewBBCSounds(client),
 		NewVimeo(client),
 		NewNiconico(client),
-		NewPointer(client, "yandex"),
+		NewPointer(client, reg, "yandex"),
 		NewBooru(client),
 		NewFourChan(client),
 		NewRedGifs(client),
@@ -116,55 +135,35 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPlayer(client, &sendvidPlayer),
 		NewPlayer(client, &knuthingPlayer),
 		NewPlayer(client, &noodlePlayer),
-	}
-	// Platform families: one extractor covering every install of a piece of
-	// software, recognised by what the install serves — its API, its
-	// bundle, its markup — rather than by a list of hosts. Registered after
-	// the single-site extractors, whose recognisers are narrower and the
-	// better answer for a page both would take.
-	extractors = append(extractors, NewMediaWiki(client))
-	extractors = append(extractors, NewHandoffs(client)...)
-	extractors = append(extractors, NewPeerTube(client))
-	extractors = append(extractors, NewChevereto(client))
-	extractors = append(extractors, NewBandzoogle(client))
-	extractors = append(extractors, NewFoolFuuka(client))
-	extractors = append(extractors, NewKVS(client))
-	// The fediverse's paths are its conventions rather than any one
-	// server's, and its /c/<name> is also Rumble's and PeerTube's channel
-	// shape. So it comes after every family whose recogniser is narrower,
-	// or a page both would take goes to it.
-	extractors = append(extractors, NewFediverse(client))
 
-	// Last of all, the generic capabilities: a bare HLS manifest is a
-	// manifest whatever serves it, and these must never take a page a more
-	// specific extractor would have recognised.
-	extractors = append(extractors, NewHLSDirect(client))
-
-	direct := NewDirect(client)
-	reg := &Registry{
-		client:   client,
-		fallback: direct,
-		limits:   Limits{Sources: cfg.MaxSources, Files: cfg.MaxFiles},
-	}
-	direct.registry = reg
-	// The link harvester resolves what it finds through the registry it is
-	// part of, so it is handed that registry rather than building one. It
-	// claims no host: only an explicit "links:" prefix reaches it.
-	//
-	// It leads the list because the prefix, not the page, decides: a
-	// harvest of a page another extractor recognises would otherwise be
-	// routed there, which would try to fetch "links://..." and fail on the
-	// scheme.
-	reg.extractors = append([]Extractor{NewLinks(client, reg)}, extractors...)
-	// The pages that only point at a video elsewhere host nothing either,
-	// and resolve what they point at through the registry for the same
-	// reason, so they are handed it once it exists.
-	reg.extractors = append(reg.extractors, NewPointer(client, "alohatube"))
-	wirePointers(reg)
-	// The album index hosts nothing either, and resolves each result the
-	// same way, so it is wired once the registry exists for the same reason.
-	reg.extractors = append(reg.extractors, NewBalbums(client, reg))
-	reg.extractors = append(reg.extractors, NewVoyeurKing(client, reg))
+		// Platform families: one extractor covering every install of a
+		// piece of software, recognised by what the install serves — its
+		// API, its bundle, its markup — rather than by a list of hosts.
+		// Registered after the single-site extractors, whose recognisers
+		// are narrower and the better answer for a page both would take.
+		NewMediaWiki(client),
+	}, NewHandoffs(client), []Extractor{
+		NewPeerTube(client),
+		NewChevereto(client),
+		NewBandzoogle(client),
+		NewFoolFuuka(client),
+		NewKVS(client),
+		// The fediverse's paths are its conventions rather than any one
+		// server's, and its /c/<name> is also Rumble's and PeerTube's
+		// channel shape. So it comes after every family whose recogniser
+		// is narrower, or a page both would take goes to it.
+		NewFediverse(client),
+		// Then the generic capabilities: a bare HLS manifest is a manifest
+		// whatever serves it, and this must never take a page a more
+		// specific extractor would have recognised.
+		NewHLSDirect(client),
+		// Last, the pages that host nothing themselves: one that only
+		// points at a video elsewhere, and the album indexes, each
+		// resolving what it finds through the registry.
+		NewPointer(client, reg, "alohatube"),
+		NewBalbums(client, reg),
+		NewVoyeurKing(client, reg),
+	})
 	return reg
 }
 

@@ -9,7 +9,13 @@ Notes on individual hosts are in [`hosts/`](hosts/), indexed
 `extractor.Extractor` is `Name/Extract`, and every registered extractor is
 also a `Recogniser` (`Shape/Recognise`) and a `Describer` (`Recognises`).
 Register new extractors in `NewRegistry` (`registry.go`); the first to
-recognise a page takes it, so order matters where two could. `File`,
+recognise a page takes it, so order matters where two could. That list is
+the only production record of the order: `registryOrder` in `rows_test.go` restates it
+independently, so a change in which extractor wins has to be made in both on
+purpose, and `TestEveryDeclaredRowIsRegistered` reads the package source for
+every Player, Share, Pointer and Handoff row so none is declared and left out.
+Extractors that resolve through the registry (links, pointers, indexes, the
+fallback) are handed it as they are built. `File`,
 `Target`, tracks and `Pace` live in `contract.go`, and the errors that steer
 the queue in `errors.go`.
 
@@ -533,9 +539,8 @@ list below.
   of its own: `newShare` makes the extractor's the union of its forms'. A form with no
   recogniser is a link that only redirects: followed, never recognised.
   `TestShareFormsNeverReadTheHost` holds the rows to the same no-host rule as
-  `Shape`/`Recognise`, and `TestShareRowsAreCompleteAndRegisteredOnce`
-  checks that every registered row has its callbacks, a recognising form and
-  one stable place in the registry. Hosts with state of their own (tokens,
+  `Shape`/`Recognise`, and `TestRegisteredRowsAreComplete` checks that
+  every registered row has its callbacks and a recognising form. Hosts with state of their own (tokens,
   quotas, cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps
   their per-route waits. Do not convert a stateless extractor whose
   `Recognise` accepts pages its `Shape` does not advertise (Erome's profile

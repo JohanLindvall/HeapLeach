@@ -19,8 +19,8 @@ how the page is read: `parse`, for a row whose page is all it reads, or
 own. A `parse` row names the Referer the page is fetched with (`asks`) and
 receives a `playerPage`: the body, the final URL, the page as asked for, and
 the tree on demand (`tree`, `title`, `heading`), the probe's own when it
-holds the page. A scan of the body never parses it. `TestPlayerSitesAreCompleteAndRegistered`
-holds every row to exactly one of the two, `withheld` only on a `signed`
+holds the page. A scan of the body never parses it. `TestRegisteredRowsAreComplete`
+(`rows_test.go`) holds every row to exactly one of the two, `withheld` only on a `signed`
 row and no `peek` row signed; `TestPlayerPageRowsReadTheProbedPage`
 reads the converted rows through the registry for one request each.
 Either way the row returns the title and rendition candidates. The engine takes the best (`bestCandidate`: quality, then a
@@ -307,8 +307,9 @@ unknown player from being saved as a page.
 Each row is constructed by name (`NewPointer`) where its form sits in the
 registry, since a form shared with another host goes to whichever comes
 first: a preview's `/video/preview/<id>` is also a `/video/...` form that a
-later host claims. `wirePointers` hands every row the registry once it
-exists. "Off-site" is per row: yandex excludes its country domains and
+later host claims. `NewRegistry` allocates the registry before building its
+list, so each row is handed the registry it resolves through as it is
+constructed. "Off-site" is per row: yandex excludes its country domains and
 `yastatic`, alohatube its own domain, since each page links its own furniture
 the same way it links the video.
 

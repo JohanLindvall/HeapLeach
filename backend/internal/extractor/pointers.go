@@ -110,29 +110,17 @@ const (
 	yandexBundle = "/fiji-static/"
 )
 
-// NewPointer builds the extractor for the named site, or nil for a name not
-// in the table. Each is registered where its form sits among the others',
-// since a form shared with another host goes to whichever comes first.
-//
-// It resolves what it finds through the registry it is part of, which is
-// not built yet when it is: wirePointers hands it that registry once it is.
-func NewPointer(client *httpx.Client, name string) *Pointer {
+// NewPointer builds the extractor for the named site, resolving what it
+// finds through registry, or nil for a name not in the table. Each is
+// registered where its form sits among the others', since a form shared
+// with another host goes to whichever comes first.
+func NewPointer(client *httpx.Client, registry *Registry, name string) *Pointer {
 	for _, site := range pointerSites {
 		if site.name == name {
-			return &Pointer{about: site.about, client: client, site: site}
+			return &Pointer{about: site.about, client: client, registry: registry, site: site}
 		}
 	}
 	return nil
-}
-
-// wirePointers hands every pointer site among the extractors the registry
-// they are part of.
-func wirePointers(reg *Registry) {
-	for _, e := range reg.extractors {
-		if p, ok := e.(*Pointer); ok {
-			p.registry = reg
-		}
-	}
 }
 
 // Recognise reports whether the probed page is the site's.

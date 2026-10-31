@@ -18,22 +18,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// TestHandoffSitesAreUsable guards the table itself. Every field of it ends
-// up in front of the user: the name opens each error and labels the host in
-// the UI, and `why` completes a sentence explaining what yt-dlp is for.
-func TestHandoffSitesAreUsable(t *testing.T) {
-	seen := make(map[string]bool, len(handoffSites))
-	for _, site := range handoffSites {
-		if site.name == "" || site.why == "" || site.recognise == nil || site.shape == nil || site.recognises == "" {
-			t.Errorf("%s is missing a name, a reason, a form or a recogniser", site.name)
-		}
-		if seen[site.name] {
-			t.Errorf("two handoff hosts are both named %q", site.name)
-		}
-		seen[site.name] = true
-	}
-}
-
 // handoffNamed is the registered handoff of that name.
 func handoffNamed(t *testing.T, name string) *Handoff {
 	t.Helper()

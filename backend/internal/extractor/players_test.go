@@ -9,41 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
-
-// TestPlayerSitesAreCompleteAndRegistered checks every row: each fills in
-// what the engine calls, and each is registered once, in the table's order,
-// under its own name.
-func TestPlayerSitesAreCompleteAndRegistered(t *testing.T) {
-	reg := NewRegistry(&config.Config{}, nil)
-	var registered []string
-	for _, e := range reg.extractors {
-		if p, ok := e.(*Player); ok {
-			registered = append(registered, p.Name())
-		}
-	}
-	var want []string
-	for _, site := range playerSites {
-		if site.name == "" || site.recognises == "" || site.shape == nil || site.recognise == nil ||
-			(site.read == nil) == (site.parse == nil) || site.parse == nil && site.asks != nil ||
-			site.withheld && !site.signed || site.peek != nil && site.signed ||
-			site.listing != nil && site.listing.shape == nil ||
-			site.listing != nil && (site.listing.walk == nil) == (site.listing.links == nil) {
-			t.Errorf("row %q leaves out something the engine calls", site.name)
-		}
-		want = append(want, site.name)
-	}
-	if !slices.Equal(registered, want) {
-		t.Errorf("registered %v, want the table's %v", registered, want)
-	}
-}
 
 // TestPlayerPages covers each row's canonical page: the form whose page
 // serves the player, whichever form was pasted.

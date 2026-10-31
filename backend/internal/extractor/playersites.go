@@ -25,13 +25,6 @@ import (
 // The player sites: one row of the Player engine's table (players.go) each,
 // with what is particular to reading that site's page.
 
-// The player sites, in the order NewRegistry registers them.
-var playerSites = []*playerSite{
-	&pornhubPlayer, &xhamsterPlayer, &tnaflixPlayer, &drtuberPlayer, &pornonePlayer, &epornerPlayer,
-	&streamablePlayer, &vidmolyPlayer, &okruPlayer, &streamtapePlayer, &doodPlayer, &mixdropPlayer, &luluPlayer, &vidsPlayer,
-	&sendvidPlayer, &knuthingPlayer, &noodlePlayer,
-}
-
 // ---------------------------------------------------------------- pornhub
 
 const pornhubRoot = "https://www.pornhub.com"
