@@ -297,6 +297,89 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 	}
 }
 
+// Discover a file through a folder, then refresh its strict nested source on
+// another address. A proxy serving a bare refusal must be cooled and replaced,
+// without turning the recognised file into unsupported navigation.
+func TestDoodFolderRefreshSkipsRefusedProxy(t *testing.T) {
+	m := busyManager(t)
+	var origin string
+	var refusedRoute, refusedPages atomic.Int32
+	const payload = "synthetic video bytes"
+	handler := func(route int32) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(httpx.HeaderContentType, "text/html")
+			if route != 0 && (r.URL.Path == "/d/synthetic" || r.URL.Path == "/e/synthetic") {
+				refusedRoute.CompareAndSwap(0, route)
+				if refusedRoute.Load() == route {
+					refusedPages.Add(1)
+					fmt.Fprint(w, "The resource you are looking for has been removed or is temporarily unavailable.")
+					return
+				}
+			}
+			switch {
+			case r.URL.Path == "/folder":
+				fmt.Fprint(w, `<title>Invented Folder</title><a href="/d/synthetic">Invented Clip</a>`)
+			case r.URL.Path == "/d/synthetic":
+				fmt.Fprint(w, `<meta name="og:sitename" content="DoodStream.com"><iframe src="/e/synthetic"></iframe>`)
+			case r.URL.Path == "/e/synthetic":
+				http.SetCookie(w, &http.Cookie{Name: "route", Value: fmt.Sprint(route), Path: "/"})
+				fmt.Fprintf(w, `<title>Invented Clip</title><script>fetch('/pass_md5/session/route%d')</script>`, route)
+			case strings.HasPrefix(r.URL.Path, "/pass_md5/") || strings.HasPrefix(r.URL.Path, "/media/"):
+				cookie, err := r.Cookie("route")
+				if err != nil || cookie.Value != fmt.Sprint(route) || r.Referer() != origin+"/e/synthetic" {
+					t.Errorf("request crossed sessions: route=%d cookie=%v error=%v referer=%s", route, cookie, err, r.Referer())
+				}
+				if strings.HasPrefix(r.URL.Path, "/pass_md5/") {
+					fmt.Fprintf(w, "%s/media/route%d/", origin, route)
+					return
+				}
+				if route == 0 {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				if !strings.HasPrefix(r.URL.Path, fmt.Sprintf("/media/route%d/", route)) {
+					t.Error("media reused a different route's signed URL")
+				}
+				w.Header().Set(httpx.HeaderContentType, "video/mp4")
+				http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader(payload))
+			default:
+				http.NotFound(w, r)
+			}
+		}
+	}
+	origin = testServer(t, handler(0)).URL
+	var endpoints []string
+	for i, address := range []string{"127.0.0.2", "127.0.0.3"} {
+		endpoints = append(endpoints, proxyServer(t, address, handler(int32(i+1))).URL)
+	}
+	pool := attachPool(t, m, endpoints)
+	m.cfg.ProxyRetries = 0 // An address refusal must not spend this budget.
+	m.Start()
+	id, err := m.Add(origin+"/folder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLocked(t, m, 5*time.Second, func() bool {
+		job := m.jobs[id]
+		return job.Err != "" || (len(job.Items) == 1 && job.Items[0].Status.Terminal())
+	})
+	m.mu.Lock()
+	job := m.jobs[id]
+	if job.Err != "" || len(job.Items) != 1 || job.Items[0].Status != StatusDone {
+		m.mu.Unlock()
+		t.Fatalf("folder file did not recover: %+v", m.Snapshot().Jobs[0])
+	}
+	path, retries := job.Items[0].Path, job.Items[0].proxyRetries
+	m.mu.Unlock()
+	body, err := os.ReadFile(filepath.Join(m.DownloadDir(), path))
+	if err != nil || string(body) != payload || retries != 0 {
+		t.Fatalf("download=%q error=%v proxy retries=%d", body, err, retries)
+	}
+	if refusedPages.Load() != 2 || pool.Page(config.GroupWAF, proxy.Query{}).Summary.Cooling != 1 {
+		t.Fatalf("refused pages=%d inventory=%+v", refusedPages.Load(), pool.Page(config.GroupWAF, proxy.Query{}).Summary)
+	}
+}
+
 func TestSourceProgressIncludesRetryAttemptAndClearsAfterCancellation(t *testing.T) {
 	m := busyManager(t)
 	origin := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

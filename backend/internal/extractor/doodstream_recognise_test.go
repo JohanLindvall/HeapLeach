@@ -42,6 +42,32 @@ func TestDoodLandingSiteMetadata(t *testing.T) {
 	}
 }
 
+// Recognition must reach the player's refusal handling during a routed
+// refresh too. The URL form and the exact bare refusal identify that answer;
+// an arbitrary sentence or an HTML page quoting it does not.
+func TestDoodRecognisesAddressRefusal(t *testing.T) {
+	const refusal = "The resource you are looking for has been removed or is temporarily unavailable."
+	for _, tc := range []struct {
+		name, path, body string
+		want             bool
+	}{
+		{"landing", "/d/synthetic", refusal, true},
+		{"player", "/e/synthetic", refusal, true},
+		{"whitespace", "/d/synthetic", "\n " + refusal + "\r\n", true},
+		{"other-path", "/help", refusal, false},
+		{"other-sentence", "/d/synthetic", "This page is temporarily unavailable.", false},
+		{"quoted-in-html", "/d/synthetic", "<html><p>" + refusal + "</p></html>", false},
+		{"removed-video", "/d/synthetic", "<html><title>Video not found</title></html>", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page := htmlPage(t, "https://alias.example.test"+tc.path, tc.body)
+			if got := NewDoodStream(nil).Recognise(t.Context(), page); got != tc.want {
+				t.Fatalf("recognised=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // Followed sources use strict recognition. A landing page whose site is named
 // only in metadata must reach its player, including the player's challenge
 // handling, rather than being discarded as an unrecognised navigation link.

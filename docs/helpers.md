@@ -179,7 +179,8 @@ retry another route, within the configured retry budget. User cancellation
 does not penalise a route. An address the host refuses the player to (a bare
 "removed or temporarily unavailable" sentence where the player should be,
 which other addresses are not shown) is skipped the same way, and the file
-tries another. Missing videos and parser errors remain final.
+tries another. This also applies when a file discovered in a folder is
+refreshed through a new proxy. Missing videos and parser errors remain final.
 Progress messages show the player/token stage and connection attempt in the
 browser and terminal, including while the source is still being resolved.
 

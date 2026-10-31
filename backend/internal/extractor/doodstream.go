@@ -47,6 +47,11 @@ var errDoodReload = errors.New("player requested RELOAD")
 // is the player's, not ours: the host checks the total length.
 const doodTailLength = 10
 
+// A refused address gets this bare response on both landing and player
+// pages. Match it exactly during identification: arbitrary text is not proof
+// of this player, and a real removed video has its own HTML page.
+const doodRefusalText = "The resource you are looking for has been removed or is temporarily unavailable."
+
 var doodPlayer = playerSite{
 	name:  "doodstream",
 	shape: doodShape,
@@ -57,7 +62,7 @@ var doodPlayer = playerSite{
 		if !doodShape(p.Final) {
 			return false
 		}
-		if doodPassPath.MatchString(p.Body) || doodChallengePage(p.Body) {
+		if doodPassPath.MatchString(p.Body) || strings.TrimSpace(p.Body) == doodRefusalText || doodChallengePage(p.Body) {
 			return true
 		}
 		// The landing page also identifies its site with the nonstandard
@@ -65,8 +70,9 @@ var doodPlayer = playerSite{
 		named := p.Named("DoodStream", "DoodStream.com") || strings.EqualFold(p.Meta("og:sitename"), "DoodStream.com")
 		return doodLanding(p.Final) && named && p.frames(doodPlayerFrame)
 	},
-	recognises: "players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its " +
-		"player gate, and landing pages (`/d/<code>`) naming DoodStream in their title or site metadata and framing its player",
+	recognises: "players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint, " +
+		"landing pages (`/d/<code>`) naming DoodStream in their title or site metadata and framing its player, " +
+		"or either form showing its player gate or exact bare address refusal",
 	// The embed page is the one carrying the token endpoint; a /d/ link is
 	// the same video behind a landing page.
 	page:          func(u *url.URL) (string, error) { return strings.Replace(u.String(), "/d/", "/e/", 1), nil },
