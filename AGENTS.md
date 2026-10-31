@@ -147,6 +147,20 @@ or transfers during parsing checks. The private corpus owns these copies;
 public regression fixtures remain synthetic. See the replay commands in
 `hl-priv/README.md` and [extractors.md](docs/agents/extractors.md).
 
+**Standing rule: every test or fix that touches live data records the
+responses it received in `hl-priv`.** That covers live tests, ad hoc
+investigations, reproductions of a reported failure, and requests made
+through a proxy or a leased route, not only corpus runs. Commit the
+recorded pages, API responses, redirects and metadata-helper output to
+`hl-priv` with the change they informed, so a later reviewer can replay the
+same evidence offline and verify the fix without asking the site again.
+Keep the request identity a replay needs — method, URL, body,
+representation headers, and for a routed request which route or proxy kind
+answered — but never cookies, credentials, signed tokens tied to an
+account, or the proxy's address and login. Media bodies are still not
+recorded. A live check whose responses were not recorded is not evidence a
+reviewer can rely on: record it, or say plainly that it was not.
+
 Before committing here, check that
 nothing slipped in:
 
