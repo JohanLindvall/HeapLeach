@@ -304,10 +304,9 @@ func TestSummariseCountsItems(t *testing.T) {
 // TestNestedListingsMultiplyTheirBound measures what nested expansion asks
 // at once today: the bound holds per map, not per extraction, so a listing
 // whose items are listings reaches PageFetchConcurrency² leaves in flight,
-// and each concurrent root job multiplies that again. It is the baseline an
-// extraction-wide request admission is to be measured against (see C in
-// docs/scraper-reuse-investigation.md); when one lands, this test is where
-// its bound is pinned instead.
+// and each concurrent root job multiplies that again. The maps bound
+// callbacks, not requests: TestNestedDiscoveryRequestsInFlight measures the
+// same nesting at the HTTP boundary.
 func TestNestedListingsMultiplyTheirBound(t *testing.T) {
 	c := config.PageFetchConcurrency
 	for _, roots := range []int{1, 2} {
