@@ -126,19 +126,19 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		return nil, err
 	}
 
-	root, note, err := g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
+	root, end, err := g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	if errors.Is(err, errGofileStaleToken) {
 		if token, err = g.account.renew(ctx, token, g.mintAccount); err != nil {
 			return nil, err
 		}
-		root, note, err = g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
+		root, end, err = g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	// A root listing cut short is noted before the walk adds its own.
-	res := &Result{Title: root.Name, Note: note}
+	res := &Result{Title: root.Name, Note: end.render()}
 	if err := walkTree(ctx, opts, res, root.ID, root, g.lister(token, opts.Password)); err != nil {
 		return nil, err
 	}
@@ -152,13 +152,13 @@ func (g *Gofile) lister(token, password string) treeList[*gofileContent] {
 	return func(ctx context.Context, w *treeWalk, c *gofileContent, depth int) ([]treeItem[*gofileContent], error) {
 		if depth > 0 {
 			var (
-				note string
-				err  error
+				end walkEnd
+				err error
 			)
-			if c, note, err = g.fetchContent(ctx, c.ID, token, password, w.room()); err != nil {
+			if c, end, err = g.fetchContent(ctx, c.ID, token, password, w.room()); err != nil {
 				return nil, err
 			}
-			w.partial(note)
+			w.ended(end)
 		}
 		var items []treeItem[*gofileContent]
 		if c.Type == "file" { // a share of one file
@@ -214,21 +214,22 @@ func (g *Gofile) file(c *gofileContent, token string) *File {
 var errGofileStaleToken = errors.New("gofile: account token rejected")
 
 // fetchContent GETs one content id, following its pages and merging them,
-// with the note for a listing that stopped short of its end. room is how
+// with why the listing ended (walkEnd), for a caller to note one that
+// stopped short of its end. room is how
 // many files the caller can still take: once a page brings the folder's
 // files past it the rest are not read, since none of them would fit, and
 // the tree walk says the file limit cut the share.
-func (g *Gofile) fetchContent(ctx context.Context, id, token, password string, room int) (*gofileContent, string, error) {
+func (g *Gofile) fetchContent(ctx context.Context, id, token, password string, room int) (*gofileContent, walkEnd, error) {
 	secret, err := g.ensureSecret(ctx)
 	if err != nil {
-		return nil, "", err
+		return nil, walkEnd{}, err
 	}
 
 	var (
 		head  *gofileContent
 		files = make(map[string]bool)
 	)
-	children, note, err := walkPages(ctx, pageWalk[*gofileContent]{
+	walk, err := walkPagesFor(ctx, pageWalk[*gofileContent]{
 		key:   func(c *gofileContent) string { return c.ID },
 		limit: -1,
 		fetch: func(ctx context.Context, n int) (pageOf[*gofileContent], error) {
@@ -280,8 +281,9 @@ func (g *Gofile) fetchContent(ctx context.Context, id, token, password string, r
 		},
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, walkEnd{}, err
 	}
+	children := walk.items
 	merged := *head
 	merged.Children = make(map[string]gofileContent, len(children))
 	merged.ChildrenIDs = make([]string, 0, len(children))
@@ -289,7 +291,7 @@ func (g *Gofile) fetchContent(ctx context.Context, id, token, password string, r
 		merged.Children[c.ID] = *c
 		merged.ChildrenIDs = append(merged.ChildrenIDs, c.ID)
 	}
-	return &merged, note, nil
+	return &merged, walk.walkEnd, nil
 }
 
 // websiteToken reproduces gofile's client-side request signature.

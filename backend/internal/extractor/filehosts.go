@@ -287,7 +287,7 @@ type mediafireFolder struct {
 // are read, the subfolders failing leaves them standing, said so.
 func mediafireContent(ctx context.Context, s *Share, w *treeWalk, key string) ([]mediafireFile, []mediafireFolder, error) {
 	room := w.room()
-	files, note, err := walkPages(ctx, pageWalk[mediafireFile]{
+	files, err := walkPagesFor(ctx, pageWalk[mediafireFile]{
 		key: func(f mediafireFile) string {
 			return cmp.Or(f.QuickKey, f.Links.NormalDownload, f.Filename)
 		},
@@ -300,11 +300,11 @@ func mediafireContent(ctx context.Context, s *Share, w *treeWalk, key string) ([
 	if err != nil {
 		return nil, nil, err
 	}
-	w.partial(note)
-	if len(files) > room {
-		return files, nil, nil
+	w.ended(files.walkEnd)
+	if len(files.items) > room {
+		return files.items, nil, nil
 	}
-	folders, note, err := walkPages(ctx, pageWalk[mediafireFolder]{
+	folders, err := walkPagesFor(ctx, pageWalk[mediafireFolder]{
 		key:   func(f mediafireFolder) string { return f.FolderKey },
 		limit: -1,
 		fetch: func(ctx context.Context, n int) (pageOf[mediafireFolder], error) {
@@ -314,13 +314,13 @@ func mediafireContent(ctx context.Context, s *Share, w *treeWalk, key string) ([
 	})
 	switch {
 	case err == nil:
-		w.partial(note)
-	case ctx.Err() != nil || len(files) == 0:
+		w.ended(folders.walkEnd)
+	case ctx.Err() != nil || len(files.items) == 0:
 		return nil, nil, err
 	default:
 		w.note("unreadable folders")
 	}
-	return files, folders, nil
+	return files.items, folders.items, nil
 }
 
 // mediafireChunk is one chunk of a folder's content.

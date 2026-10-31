@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -131,12 +132,23 @@ func TestWalkPagesReportsWhyItEnded(t *testing.T) {
 				},
 			}
 			out, err := walkPagesFor(context.Background(), w)
-			if err != nil || out.stop != tc.stop || w.render(out) != tc.note {
-				t.Errorf("stop %v, note %q, err %v; want %v, %q", out.stop, w.render(out), err, tc.stop, tc.note)
+			if err != nil || out.stop != tc.stop || out.render() != tc.note {
+				t.Errorf("stop %v, note %q, err %v; want %v, %q", out.stop, out.render(), err, tc.stop, tc.note)
 			}
 			_, note, _ := walkPages(context.Background(), w)
 			if note != tc.note {
 				t.Errorf("walkPages note %q, want %q", note, tc.note)
+			}
+			// A tree takes the same end as a bare reason, and marks its
+			// note partial itself, once.
+			want := strings.TrimPrefix(tc.note, partialPrefix)
+			if out.reason() != want {
+				t.Errorf("reason %q, want %q", out.reason(), want)
+			}
+			tree := &treeWalk{res: &Result{}}
+			tree.ended(out.walkEnd)
+			if tree.res.Note != partial(want) {
+				t.Errorf("tree note %q, want %q", tree.res.Note, partial(want))
 			}
 			_, more, _, _ := walkEpisodes(context.Background(), tc.limit, w)
 			if more != (tc.stop == walkLimit) {

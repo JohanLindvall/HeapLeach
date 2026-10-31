@@ -158,10 +158,11 @@ func TestGofileFetchContentPages(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g, asked := gofileContentServer(t, tc.pages, tc.hasNext)
-			c, note, err := g.fetchContent(context.Background(), "root", "token", "", tc.room)
+			c, end, err := g.fetchContent(context.Background(), "root", "token", "", tc.room)
 			if err != nil {
 				t.Fatal(err)
 			}
+			note := end.render()
 			if got := strings.Join(c.ChildrenIDs, ","); got != tc.ids || note != tc.note || asked.Load() != tc.asked {
 				t.Errorf("children = %s, note = %q, asked %d; want %s, %q, %d", got, note, asked.Load(), tc.ids, tc.note, tc.asked)
 			}
@@ -177,8 +178,8 @@ func TestGofileFetchContentPages(t *testing.T) {
 		pages[i] = []string{strconv.Itoa(i)}
 	}
 	g, _ := gofileContentServer(t, pages, always)
-	c, note, err := g.fetchContent(context.Background(), "root", "token", "", 1<<20)
-	if err != nil || len(c.ChildrenIDs) != config.MaxAlbumPages || note != "partial — page limit" {
-		t.Fatalf("children = %d, note = %q, err = %v", len(c.ChildrenIDs), note, err)
+	c, end, err := g.fetchContent(context.Background(), "root", "token", "", 1<<20)
+	if err != nil || len(c.ChildrenIDs) != config.MaxAlbumPages || end.stop != walkPageLimit || end.render() != "partial — page limit" {
+		t.Fatalf("children = %d, end = %+v, err = %v", len(c.ChildrenIDs), end, err)
 	}
 }

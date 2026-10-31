@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"path"
-	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -63,10 +62,10 @@ func (w *treeWalk) note(reason string) {
 	w.res.Note = joinNotes(w.res.Note, partial(reason))
 }
 
-// partial adds a "partial — …" note a folder's own listing came back with,
-// such as walkPages', once; an empty note adds nothing.
-func (w *treeWalk) partial(note string) {
-	w.note(strings.TrimPrefix(note, partialPrefix))
+// ended adds why a folder's paged listing stopped short (walkPagesFor), once;
+// a listing read to its end adds nothing.
+func (w *treeWalk) ended(end walkEnd) {
+	w.note(end.reason())
 }
 
 // room is how many more files the walk may take. A list function that pages

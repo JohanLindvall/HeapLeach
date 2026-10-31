@@ -264,7 +264,7 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 		subfolders []*html.Node
 		locked     error
 	)
-	cards, note, err := walkPages(ctx, pageWalk[filesterCard]{
+	walk, err := walkPagesFor(ctx, pageWalk[filesterCard]{
 		key:   func(c filesterCard) string { return c.slug },
 		limit: room + 1,
 		pages: budget,
@@ -344,7 +344,8 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 		w.note("could not read a folder page")
 		return nil, nil
 	}
-	w.partial(note)
+	w.ended(walk.walkEnd)
+	cards := walk.items
 	items := make([]treeItem[*url.URL], 0, len(cards)+len(subfolders))
 	for _, c := range cards {
 		items = append(items, treeItem[*url.URL]{File: c.file})

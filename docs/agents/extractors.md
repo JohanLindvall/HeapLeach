@@ -335,12 +335,17 @@ intact. `sources.go` holds what they share:
   the limit and its note, and cancellation, which is never a partial listing.
   `walkListing` (`listing.go`) is its adapter for HTML pagers.
 - Why a walk ended is state, not wording. `walkPagesFor` returns `walked`:
-  the entries and a `walkStop` (the listing's own end, the limit, the page
-  cap, a repeated or empty page, a stop page, a later page that failed)
-  beside the page's and the `failed` hook's notes; `pageWalk.render` alone
-  turns that into the note `walkPages` has always returned, string for
-  string. A caller that needs the reason reads `stop` rather than matching
-  a note: `walkEpisodes` reports `more` from `walkLimit`. `quiet` still
+  the entries and a `walkEnd`, which carries the `walkStop` (the listing's
+  own end, the limit, the page cap, a repeated or empty page, a stop page, a
+  later page that failed) beside the page's and the `failed` hook's notes
+  and the walk's `quiet` and `limitNote`. `walkEnd.render` alone turns that
+  into the note `walkPages` has always returned, string for string, and
+  `walkEnd.reason` into the same thing as a bare reason for a caller that
+  marks its result partial itself. A caller that needs the reason reads
+  `stop` rather than matching a note: `walkEpisodes` reports `more` from
+  `walkLimit`, and a folder tree takes the `walkEnd` itself
+  (`treeWalk.ended`). `walkPages` remains the adapter for callers that need
+  only the items and the displayed note. `quiet` still
   silences the walk's own notes for the page cap, a repeated page, a stop
   page and a failed page alike; telling a site's expected end from an
   unexpected cut per caller is a separate change with its own note review.
@@ -546,8 +551,8 @@ line in the saved queue.
   host's order, with the depth, folder and file caps, one folder per child
   through `sourceFolder` (`treeDir`), and an unreadable subfolder reported
   as partial. A host supplies only the reader for one folder; one that pages
-  a folder adds its listing's note with `treeWalk.partial` and may stop
-  reading past `treeWalk.room()`.
+  a folder walks it with `walkPagesFor`, hands why the listing ended to
+  `treeWalk.ended` and may stop reading past `treeWalk.room()`.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
 - `walkPages` (`pages.go`), above, for any paged listing, and its HTML

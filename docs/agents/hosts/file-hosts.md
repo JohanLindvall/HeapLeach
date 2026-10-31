@@ -49,12 +49,13 @@ one the reader wraps in `treeStop` (filester's password gate), fails the job.
 
 A folder that is itself paged — gofile's pages, mediafire's chunks,
 filester's folder pages — is read
-through `walkPages`, and a listing that stopped short (the page cap, a later
-page that failed, a page that added nothing) is put on the walk's note with
-`treeWalk.partial`. The reader stops reading once the folder's files exceed
+through `walkPagesFor`, and why a listing stopped short (the page cap, a later
+page that failed, a page that added nothing) is handed to the tree as it is,
+`treeWalk.ended`, which words it in the walk's note; no note is read back. The reader stops reading once the folder's files exceed
 `treeWalk.room()`: none past it could be taken, and the walk says the file
 limit cut the share. The root of a gofile share is read before the walk,
-against the file limit itself, and its note seeds the result's.
+against the file limit itself, and its walk's end, rendered, seeds the
+result's note.
 
 mega builds its tree from one listing and autoindex crawls a server's own
 pages, so neither goes through it; their bounds and notes are their own,

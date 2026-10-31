@@ -316,7 +316,7 @@ func walkEpisodes[T any](ctx context.Context, limit int, w pageWalk[T]) (items [
 	if out.stop == walkLimit {
 		return out.items, true, "", nil
 	}
-	return out.items, false, w.render(out), nil
+	return out.items, false, out.render(), nil
 }
 
 // nestByLabel reports whether a listing spans more than one distinct

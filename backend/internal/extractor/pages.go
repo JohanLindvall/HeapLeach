@@ -5,6 +5,7 @@ package extractor
 import (
 	"cmp"
 	"context"
+	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
@@ -92,11 +93,13 @@ const (
 	walkFetchFailed
 )
 
-// walked is what a walk came to: its entries, why it ended, and the notes
-// the pages and hooks gave for it, which render turns into the walk's note.
-type walked[T any] struct {
-	items []T
-	stop  walkStop
+// walkEnd is why a walk ended, apart from its entries: the stop, the notes
+// the pages and hooks gave for it, and the walk's own wording policy (quiet,
+// limitNote). It is what a caller that does not need the entries' type —
+// the tree a folder's walk belongs to — takes, and renders itself, so no
+// caller reads a walk's reason back out of its note.
+type walkEnd struct {
+	stop walkStop
 	// note is the ending page's own note (pageOf.note), and stopped its
 	// stop reason, when it was a stop page.
 	note, stopped string
@@ -104,34 +107,66 @@ type walked[T any] struct {
 	// fetched, and decided whether the hook gave one.
 	failure string
 	decided bool
+	// quiet and limitNote are the walk's (pageWalk).
+	quiet     bool
+	limitNote string
+}
+
+// walked is what a walk came to: its entries and why it ended.
+type walked[T any] struct {
+	items []T
+	walkEnd
+}
+
+// given is the note a caller gave for the walk's end — a page's, a stop
+// page's, the failed hook's or the limit's — when that is what says it.
+// own is the walk's own reason, bare, when it says it instead; a quiet
+// walk has none.
+func (e walkEnd) given() (note string, own string) {
+	mine := func(reason string) string {
+		if e.quiet {
+			return ""
+		}
+		return reason
+	}
+	switch e.stop {
+	case walkLimit:
+		return e.limitNote, ""
+	case walkPageLimit:
+		return "", mine("page limit")
+	case walkRepeated:
+		return "", mine("repeated or empty page")
+	case walkStopped:
+		if e.note != "" {
+			return e.note, ""
+		}
+		if e.quiet {
+			return "", ""
+		}
+		return e.stopped, ""
+	case walkFetchFailed:
+		if e.decided {
+			return e.failure, ""
+		}
+		return "", mine(strings.TrimPrefix(couldNotFetchNote, partialPrefix))
+	}
+	return e.note, ""
 }
 
 // render is the note a walk that ended so says, exactly as walkPages has
 // always worded it: the page's or the hook's note where they give one, the
 // limit's note, and the walk's own, which a quiet listing does not take.
-func (w pageWalk[T]) render(out walked[T]) string {
-	own := func(note string) string {
-		if w.quiet {
-			return ""
-		}
-		return note
-	}
-	switch out.stop {
-	case walkLimit:
-		return w.limitNote
-	case walkPageLimit:
-		return own("partial — page limit")
-	case walkRepeated:
-		return own("partial — repeated or empty page")
-	case walkStopped:
-		return cmp.Or(out.note, own(out.stopped))
-	case walkFetchFailed:
-		if out.decided {
-			return out.failure
-		}
-		return own(couldNotFetchNote)
-	}
-	return out.note
+func (e walkEnd) render() string {
+	note, own := e.given()
+	return cmp.Or(note, partial(own))
+}
+
+// reason is the walk's end as a bare reason, without the "partial — " a
+// note opens with, for a caller that marks its result partial itself: a
+// tree, whose note says "partial — " once for every folder it read.
+func (e walkEnd) reason() string {
+	note, own := e.given()
+	return cmp.Or(strings.TrimPrefix(note, partialPrefix), own)
 }
 
 // walkPages follows a paged listing from its first page and returns its
@@ -148,12 +183,13 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 	if err != nil {
 		return nil, "", err
 	}
-	return out.items, w.render(out), nil
+	return out.items, out.render(), nil
 }
 
 // walkPagesFor is walkPages with why the walk ended (walked) in place of its
 // note.
 func walkPagesFor[T any](ctx context.Context, w pageWalk[T]) (out walked[T], err error) {
+	out.quiet, out.limitNote = w.quiet, w.limitNote
 	pages := w.pages
 	if pages <= 0 {
 		pages = config.MaxAlbumPages
