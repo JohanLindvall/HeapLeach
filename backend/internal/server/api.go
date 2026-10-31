@@ -105,51 +105,32 @@ func (s *Server) handleClear(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"removed": s.mgr.ClearFinished()})
 }
 
-func (s *Server) handleJobCancel(w http.ResponseWriter, r *http.Request) {
-	s.jobAction(w, r, s.mgr.CancelJob)
-}
-
-func (s *Server) handleJobRetry(w http.ResponseWriter, r *http.Request) {
-	s.jobAction(w, r, s.mgr.RetryJob)
-}
-
-func (s *Server) handleJobRemove(w http.ResponseWriter, r *http.Request) {
-	s.jobAction(w, r, s.mgr.RemoveJob)
-}
-
 // handleJobLimits replaces a job's own limits; a field left out has none.
 func (s *Server) handleJobLimits(w http.ResponseWriter, r *http.Request) {
 	var req download.JobLimit
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if err := s.mgr.SetJobLimit(r.PathValue("jobID"), req); err != nil {
-		writeManagerError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-func (s *Server) handleItemCancel(w http.ResponseWriter, r *http.Request) {
-	s.itemAction(w, r, s.mgr.CancelItem)
-}
-
-func (s *Server) handleItemRetry(w http.ResponseWriter, r *http.Request) {
-	s.itemAction(w, r, s.mgr.RetryItem)
+	writeDone(w, s.mgr.SetJobLimit(r.PathValue("jobID"), req))
 }
 
 // jobAction applies a manager method to the job named in the path.
-func (s *Server) jobAction(w http.ResponseWriter, r *http.Request, fn func(string) error) {
-	if err := fn(r.PathValue("jobID")); err != nil {
-		writeManagerError(w, err)
-		return
+func jobAction(fn func(string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeDone(w, fn(r.PathValue("jobID")))
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // itemAction applies a manager method to the item named in the path.
-func (s *Server) itemAction(w http.ResponseWriter, r *http.Request, fn func(string, string) error) {
-	if err := fn(r.PathValue("jobID"), r.PathValue("itemID")); err != nil {
+func itemAction(fn func(string, string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeDone(w, fn(r.PathValue("jobID"), r.PathValue("itemID")))
+	}
+}
+
+// writeDone answers an action that returns nothing but whether it worked.
+func writeDone(w http.ResponseWriter, err error) {
+	if err != nil {
 		writeManagerError(w, err)
 		return
 	}
@@ -210,23 +191,23 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, config.MaxRequestBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(out); err != nil {
-		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
-			return false
+	err := dec.Decode(out)
+	problem := "invalid request body: "
+	if err == nil {
+		// Anything after the value, a second one included, is refused.
+		if err = dec.Decode(new(any)); err == io.EOF {
+			return true
 		}
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return false
+		problem += "expected a single JSON value"
+	} else {
+		problem += err.Error()
 	}
-	if err := dec.Decode(new(any)); err != io.EOF {
-		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
-			return false
-		}
-		writeError(w, http.StatusBadRequest, "invalid request body: expected a single JSON value")
-		return false
+	if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
+	} else {
+		writeError(w, http.StatusBadRequest, problem)
 	}
-	return true
+	return false
 }
 
 // jsonHeaders marks a reply as JSON of the moment: live state must never be

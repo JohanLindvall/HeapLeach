@@ -16,7 +16,11 @@ there too.
 extractors' `withExtractRetries` shares, so a re-asked answer waits as a
 failed request would); `DoOnce` does not, and `StatusOnce`
 is `DoOnce` reduced to the status, for a probe of whether a host serves an
-address at all. One status is
+address at all. Both run one loop (`send`) with the budgets given: `Do` with
+the client's retries and `config.RateLimitRetries`, `DoOnce` with none of
+either, so a single attempt reads every answer exactly as `Do`'s last one
+would. `GetJSON`, `PostJSON`, `Fetch` and `StatusOnce` build their requests
+with `request`, which applies header maps over the defaults in order. One status is
 handled apart from the rest: **429 is waited out, not counted as a failure.**
 A rate limit is the server saying *later*, not *no*, so `Do` honours
 `Retry-After` when the response states one and otherwise backs off from
@@ -95,7 +99,8 @@ These shape how routes are scored; the routes themselves are in
 
 - Proxy connection and response-header timeouts both penalise the route and
   cool its endpoint across services. The dial is bounded by
-  `config.ProxyDialTimeout` (5 seconds, set in `ThroughProxy`): most routes in
+  `config.ProxyDialTimeout` (5 seconds, set in `ThroughProxy`) rather than the
+  `config.DialTimeout` every other path's `dialer` uses: most routes in
   a public feed are dead and most dead ones never answer, so the dial timeout
   is what each costs a file.
 - An unanswered explicit proxy connection returns `httpx.ProxyConnectError`,

@@ -8,17 +8,14 @@ import (
 	"strconv"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set(httpx.HeaderCacheControl, "no-store")
 	writeJSON(w, http.StatusOK, s.mgr.CurrentSettings())
 }
 
 func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set(httpx.HeaderCacheControl, "no-store")
 	values := r.URL.Query()
 	q := proxy.Query{Search: values.Get("search"), Status: values.Get("status"), Sort: values.Get("sort"), Site: values.Get("site")}
 	// A former group's name, from a page loaded before the groups merged,

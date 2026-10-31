@@ -12,7 +12,9 @@ import (
 	"html"
 	"math/rand/v2"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -128,6 +130,19 @@ func TrimTitleSuffix(title string, separators ...string) string {
 		}
 	}
 	return title
+}
+
+// ExecutableDir is the directory holding the running binary, symlinks
+// resolved, where its helpers and data are installed beside it.
+func ExecutableDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe), nil
 }
 
 // Backoff returns an exponentially growing delay with +/-25% jitter, capped

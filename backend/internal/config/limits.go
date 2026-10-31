@@ -28,6 +28,9 @@ const (
 	// the host a CAPTCHA.
 	RouteExtraBackoffMax = 10 * time.Minute
 
+	// DialTimeout bounds opening a connection, and its TLS handshake, on
+	// every path but a proxy route's (ProxyDialTimeout).
+	DialTimeout = 15 * time.Second
 	// ProxyDialTimeout bounds the connection to a proxy itself. Most routes
 	// in a public feed are dead, and most dead ones never answer at all, so
 	// this is what one costs a file to find out. A live proxy answers in

@@ -53,16 +53,13 @@ type Client struct {
 func New(userAgent, acceptLanguage string, maxRetries int, timeout time.Duration) *Client {
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	standard := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   15 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer(config.DialTimeout).DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   16,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
+		TLSHandshakeTimeout:   config.DialTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		// Verified by chains rather than by crypto/tls alone, so a server
 		// that leaves its intermediate out is completed the way a browser
@@ -132,6 +129,13 @@ func (c *Client) Streaming() *Client {
 		cp.headerTimeout = headerTimeout
 	}
 	return &cp
+}
+
+// dialer opens connections bounded by timeout, kept alive the same way on
+// every path: the standard transport, a proxy route and the browser-shaped
+// handshake.
+func dialer(timeout time.Duration) *net.Dialer {
+	return &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
 }
 
 var errHeaderTimeout = errors.New("timed out waiting for response headers")
@@ -335,6 +339,21 @@ func HasStatus(err error, codes ...int) bool {
 // Do executes req, retrying transient failures with exponential backoff.
 // The returned response body is still open and belongs to the caller.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	return c.send(req, c.maxRetries, config.RateLimitRetries)
+}
+
+// DoOnce performs a single attempt with no retrying, for a request whose
+// failure is itself the useful answer — an optional extra connection that a
+// host turns away should be recognised at once, not after backing off
+// through the retry budget first. A retryable status is returned as a
+// StatusError, as Do returns one when its budget is spent.
+func (c *Client) DoOnce(req *http.Request) (*http.Response, error) {
+	return c.send(req, 0, 0)
+}
+
+// send is Do with the budgets given: retries for failed attempts, and
+// limits for rate limits waited out.
+func (c *Client) send(req *http.Request, retries, limits int) (*http.Response, error) {
 	var (
 		lastErr error
 		// A rate limit keeps a budget of its own. It is not a failure but a
@@ -345,12 +364,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	)
 	for attempt := 0; ; attempt++ {
 		attemptReq := req.Clone(req.Context())
-		if req.GetBody != nil {
-			body, err := req.GetBody()
-			if err != nil {
-				return nil, err
-			}
-			attemptReq.Body = body
+		if err := rewind(attemptReq); err != nil {
+			return nil, err
 		}
 
 		resp, err := c.do(attemptReq)
@@ -382,7 +397,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			wait, stated := retryAfter(resp)
 			lastErr = NewStatusError(resp)
 			drain(resp)
-			if limited >= config.RateLimitRetries {
+			if limited >= limits {
 				return nil, lastErr
 			}
 			limited++
@@ -398,7 +413,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			wait, _ := retryAfter(resp)
 			lastErr = NewStatusError(resp)
 			drain(resp)
-			if attempt < c.maxRetries {
+			if attempt < retries {
 				if err := util.SleepCtx(req.Context(), max(wait, RetryDelay(attempt))); err != nil {
 					return nil, err
 				}
@@ -409,7 +424,7 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 
-		if attempt >= c.maxRetries {
+		if attempt >= retries {
 			// Not wrapped with the URL: a StatusError already leads with it,
 			// and http.Client reports a transport failure as `Get "<url>":
 			// EOF`, so a prefix here printed every address twice.
@@ -421,36 +436,15 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	}
 }
 
-// DoOnce performs a single attempt with no retrying, for a request whose
-// failure is itself the useful answer — an optional extra connection that a
-// host turns away should be recognised at once, not after backing off
-// through the retry budget first.
-func (c *Client) DoOnce(req *http.Request) (*http.Response, error) {
-	resp, err := c.do(req)
-	if err != nil {
-		if ctxErr := req.Context().Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, err
-	}
-	if retryableStatus(resp.StatusCode) {
-		err := NewStatusError(resp)
-		drain(resp)
-		return nil, err
-	}
-	return resp, nil
-}
-
 // StatusOnce asks url once, with no retrying, and answers with the status
 // alone, the body unread: for a probe of whether a host serves something to
 // this address at all. An error is a request that could not be made or got
 // no usable answer, which says nothing either way.
 func (c *Client) StatusOnce(ctx context.Context, method, url string, h Header) (int, error) {
-	req, err := c.NewRequest(ctx, method, url, nil)
+	req, err := c.request(ctx, method, url, nil, h)
 	if err != nil {
 		return 0, err
 	}
-	h.Apply(req)
 	resp, err := c.DoOnce(req)
 	if err != nil {
 		return 0, err
@@ -487,10 +481,11 @@ func responseBytes(resp *http.Response) ([]byte, error) {
 	return body, nil
 }
 
-// JSON performs the request and decodes a JSON body into out.
+// JSON performs the request and decodes a JSON body into out. A nil out
+// only checks the answer's status.
 func (c *Client) JSON(req *http.Request, out any) error {
 	body, err := c.Bytes(req)
-	if err != nil {
+	if err != nil || out == nil {
 		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
@@ -528,11 +523,10 @@ func (c *Client) GetPage(ctx context.Context, rawURL string, headers Header, isC
 // read and closed, for its headers and for the address that answered after
 // redirects (resp.Request.URL); it is nil only where none arrived.
 func (c *Client) Fetch(ctx context.Context, rawURL string, headers Header) ([]byte, *http.Response, error) {
-	req, err := c.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	req, err := c.request(ctx, http.MethodGet, rawURL, nil, headers)
 	if err != nil {
 		return nil, nil, err
 	}
-	headers.Apply(req)
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, nil, err
@@ -543,38 +537,47 @@ func (c *Client) Fetch(ctx context.Context, rawURL string, headers Header) ([]by
 
 // GetJSON fetches and decodes a JSON document.
 func (c *Client) GetJSON(ctx context.Context, url string, headers Header, out any) error {
-	req, err := c.NewRequest(ctx, http.MethodGet, url, nil)
+	req, err := c.request(ctx, http.MethodGet, url, nil, askJSON, headers)
 	if err != nil {
 		return err
 	}
-	req.Header.Set(HeaderAccept, AcceptJSON)
-	headers.Apply(req)
 	return c.JSON(req, out)
 }
 
-// PostJSON posts a JSON document and decodes the JSON response.
+// PostJSON posts a JSON document, an empty body for a nil one, and decodes
+// the JSON response into out unless out is nil.
 func (c *Client) PostJSON(ctx context.Context, url string, headers Header, in, out any) error {
-	var body []byte
+	body := []byte{}
 	if in != nil {
 		var err error
 		if body, err = json.Marshal(in); err != nil {
 			return err
 		}
-	} else {
-		body = []byte{}
 	}
-	req, err := c.NewRequest(ctx, http.MethodPost, url, body)
+	req, err := c.request(ctx, http.MethodPost, url, body, sendJSON, headers)
 	if err != nil {
 		return err
 	}
-	req.Header.Set(HeaderContentType, ContentTypeJSON)
-	req.Header.Set(HeaderAccept, AcceptJSON)
-	headers.Apply(req)
-	if out == nil {
-		_, err := c.Bytes(req)
-		return err
-	}
 	return c.JSON(req, out)
+}
+
+// The headers a JSON exchange carries under the caller's own.
+var (
+	askJSON  = Header{HeaderAccept: AcceptJSON}
+	sendJSON = Header{HeaderAccept: AcceptJSON, HeaderContentType: ContentTypeJSON}
+)
+
+// request is NewRequest with each of headers applied over the defaults, in
+// order.
+func (c *Client) request(ctx context.Context, method, url string, body []byte, headers ...Header) (*http.Request, error) {
+	req, err := c.NewRequest(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range headers {
+		h.Apply(req)
+	}
+	return req, nil
 }
 
 // retryableStatus reports whether a status warrants another attempt.
@@ -621,6 +624,19 @@ func retryAfter(resp *http.Response) (time.Duration, bool) {
 // too, so both share one schedule.
 func RetryDelay(attempt int) time.Duration {
 	return util.Backoff(attempt, config.RequestRetryBase, config.RequestRetryMax)
+}
+
+// rewind gives req a fresh copy of its body, for another attempt at it.
+func rewind(req *http.Request) error {
+	if req.GetBody == nil {
+		return nil
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return err
+	}
+	req.Body = body
+	return nil
 }
 
 // drain empties and closes a body so the connection returns to the pool.

@@ -78,12 +78,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("GET /api/proxies", s.handleProxies)
 	mux.HandleFunc("POST /api/clear", s.handleClear)
-	mux.HandleFunc("POST /api/jobs/{jobID}/cancel", s.handleJobCancel)
-	mux.HandleFunc("POST /api/jobs/{jobID}/retry", s.handleJobRetry)
-	mux.HandleFunc("DELETE /api/jobs/{jobID}", s.handleJobRemove)
+	mux.HandleFunc("POST /api/jobs/{jobID}/cancel", jobAction(s.mgr.CancelJob))
+	mux.HandleFunc("POST /api/jobs/{jobID}/retry", jobAction(s.mgr.RetryJob))
+	mux.HandleFunc("DELETE /api/jobs/{jobID}", jobAction(s.mgr.RemoveJob))
 	mux.HandleFunc("POST /api/jobs/{jobID}/limits", s.handleJobLimits)
-	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/cancel", s.handleItemCancel)
-	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/retry", s.handleItemRetry)
+	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/cancel", itemAction(s.mgr.CancelItem))
+	mux.HandleFunc("POST /api/jobs/{jobID}/items/{itemID}/retry", itemAction(s.mgr.RetryItem))
 
 	// Keep the SPA fallback outside the API mux. Otherwise an unknown API
 	// path, or the wrong method on a real endpoint, returns HTML with 200.
