@@ -11,9 +11,9 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -27,15 +27,12 @@ type RedGifs struct {
 	about
 	client *httpx.Client
 
-	mu       sync.Mutex
-	token    string
-	tokenAge time.Time
+	token renewable[string]
 }
 
 const (
 	redgifsAPI      = "https://api.redgifs.com/v2"
 	redgifsRoot     = "https://www.redgifs.com"
-	redgifsTokenTTL = time.Hour
 	redgifsPageSize = 80
 )
 
@@ -136,7 +133,7 @@ func (r *RedGifs) user(ctx context.Context, name string, opts Options) (*Result,
 // call performs an authenticated request, minting a token when needed and
 // retrying once if the one held has expired.
 func (r *RedGifs) call(ctx context.Context, path string, out any) error {
-	token, err := r.ensureToken(ctx, false)
+	token, err := r.token.get(ctx, r.mintToken)
 	if err != nil {
 		return err
 	}
@@ -151,33 +148,26 @@ func (r *RedGifs) call(ctx context.Context, path string, out any) error {
 	if !httpx.HasStatus(err, http.StatusUnauthorized) {
 		return err
 	}
-	if token, err = r.ensureToken(ctx, true); err != nil {
+	if token, err = r.token.renew(ctx, token, r.mintToken); err != nil {
 		return err
 	}
 	headers[httpx.HeaderAuthorization] = "Bearer " + token
 	return r.client.GetJSON(ctx, redgifsAPI+path, headers, out)
 }
 
-// ensureToken returns a bearer token, requesting a fresh one when needed.
-func (r *RedGifs) ensureToken(ctx context.Context, force bool) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if !force && r.token != "" && time.Since(r.tokenAge) < redgifsTokenTTL {
-		return r.token, nil
-	}
+// mintToken asks for a temporary bearer token, for r.token.
+func (r *RedGifs) mintToken(ctx context.Context) (string, time.Time, error) {
 	var payload struct {
 		Token string `json:"token"`
 	}
 	if err := r.client.GetJSON(ctx, redgifsAPI+"/auth/temporary",
 		httpx.Referer(redgifsRoot+"/"), &payload); err != nil {
-		return "", fmt.Errorf("request token: %w", err)
+		return "", time.Time{}, fmt.Errorf("request token: %w", err)
 	}
 	if payload.Token == "" {
-		return "", fmt.Errorf("no token returned")
+		return "", time.Time{}, fmt.Errorf("no token returned")
 	}
-	r.token, r.tokenAge = payload.Token, time.Now()
-	return r.token, nil
+	return payload.Token, time.Now().Add(config.RedGifsTokenTTL), nil
 }
 
 // redgifsItem is one piece of media.

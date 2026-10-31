@@ -503,6 +503,19 @@ line in the saved queue.
   media and stay with their owners.
 - `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,
   with the caller choosing the value for a name not on it.
+- `renewable` (`renewable.go`): a process-wide credential an extractor holds
+  for every job — Gofile's guest account, RedGifs' bearer token, VRT MAX's
+  player token. `get` reuses the value until it expires; `renew(stale)`
+  replaces it once however many callers were refused with the same value,
+  and returns an existing replacement to a refusal that arrives late. Only a
+  validated value is cached, a failed renewal is retried by the next caller,
+  and waiting is cancelable while the fetch runs detached from any one
+  caller's cancellation. Requesting and decoding, what counts as refused,
+  device ids and retry policy stay in the extractor; TTLs and margins live
+  in `config/limits.go`. RTBF's session (with its device id) and ORF's
+  site-read API credentials keep their own code, as do page memoisation,
+  platform `hostMemo`, per-post loaders and address-bound tickets such as
+  Keep2Share's and `Target.Discard`: their identities and lifetimes differ.
 - `rawText`, `scriptTexts`, `linkedData` and `jsonAttr` (`html.go`): script
   payloads and JSON attributes as written. Decode JSON-LD, `__NEXT_DATA__`
   and `data-page` through these, never through `textOf`, which collapses

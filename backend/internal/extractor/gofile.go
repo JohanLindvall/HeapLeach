@@ -49,9 +49,10 @@ type Gofile struct {
 	// api is the content API's base, a field so a test can serve it.
 	api string
 
-	mu       sync.Mutex
-	token    string
-	tokenAge time.Time
+	// account is the guest account token every request is signed with.
+	account renewable[string]
+
+	mu sync.Mutex
 	// secret is what currently signs, and secretUntil is when it must be
 	// looked up again.
 	secret      string
@@ -81,9 +82,6 @@ const (
 
 	// gofileSlot is the width of the time slot mixed into the signature.
 	gofileSlot = 4 * time.Hour
-	// gofileTokenTTL re-mints the guest account well inside the 6-hour
-	// window the web app allows a page to keep signing.
-	gofileTokenTTL = 3 * time.Hour
 )
 
 // NewGofile builds the gofile extractor.
@@ -123,14 +121,14 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		code = c
 	}
 
-	token, err := g.ensureToken(ctx, false)
+	token, err := g.account.get(ctx, g.mintAccount)
 	if err != nil {
 		return nil, err
 	}
 
 	root, note, err := g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	if errors.Is(err, errGofileStaleToken) {
-		if token, err = g.ensureToken(ctx, true); err != nil {
+		if token, err = g.account.renew(ctx, token, g.mintAccount); err != nil {
 			return nil, err
 		}
 		root, note, err = g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
@@ -304,15 +302,8 @@ func (g *Gofile) websiteToken(accountToken, secret string, now time.Time) string
 	return hex.EncodeToString(sum[:])
 }
 
-// ensureToken returns a guest account token, minting one when needed.
-func (g *Gofile) ensureToken(ctx context.Context, force bool) (string, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if !force && g.token != "" && time.Since(g.tokenAge) < gofileTokenTTL {
-		return g.token, nil
-	}
-
+// mintAccount creates a guest account, for g.account.
+func (g *Gofile) mintAccount(ctx context.Context) (string, time.Time, error) {
 	var env struct {
 		Status string `json:"status"`
 		Data   struct {
@@ -322,14 +313,12 @@ func (g *Gofile) ensureToken(ctx context.Context, force bool) (string, error) {
 	err := g.client.PostJSON(ctx, gofileAPI+"/accounts",
 		httpx.SiteOrigin(gofileRoot), nil, &env)
 	if err != nil {
-		return "", fmt.Errorf("gofile: create guest account: %w", err)
+		return "", time.Time{}, fmt.Errorf("gofile: create guest account: %w", err)
 	}
 	if env.Status != "ok" || env.Data.Token == "" {
-		return "", fmt.Errorf("gofile: create guest account: unexpected status %q", env.Status)
+		return "", time.Time{}, fmt.Errorf("gofile: create guest account: unexpected status %q", env.Status)
 	}
-
-	g.token, g.tokenAge = env.Data.Token, time.Now()
-	return g.token, nil
+	return env.Data.Token, time.Now().Add(config.GofileTokenTTL), nil
 }
 
 // explain turns an HTTP failure into an actionable message. A 401 with

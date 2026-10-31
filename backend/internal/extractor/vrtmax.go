@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -61,10 +60,8 @@ type VRTMax struct {
 	about
 	client *httpx.Client
 
-	// mu guards the player token, which every episode of a series shares.
-	mu     sync.Mutex
-	token  string
-	expiry time.Time
+	// token is the player token, which every episode of a series shares.
+	token renewable[string]
 }
 
 const (
@@ -445,29 +442,27 @@ func (v *VRTMax) media(ctx context.Context, streamID string) (*vrtMedia, error) 
 // episodes takes longer than a token lives, and a job that began with a valid
 // one would start failing partway down the list.
 func (v *VRTMax) playerToken(ctx context.Context) (string, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.token != "" && time.Now().Before(v.expiry) {
-		return v.token, nil
-	}
+	return v.token.get(ctx, v.mintPlayerToken)
+}
 
+// mintPlayerToken asks the token service for a player token, which expires
+// when the service says, less a margin, or after config.VRTTokenLife.
+func (v *VRTMax) mintPlayerToken(ctx context.Context) (string, time.Time, error) {
 	var out struct {
 		Token   string `json:"vrtPlayerToken"`
 		Expires string `json:"expirationDate"`
 	}
 	if err := v.client.PostJSON(ctx, vrtMediaAPI+"tokens", nil, nil, &out); err != nil {
-		return "", fmt.Errorf("vrtmax: player token: %w", err)
+		return "", time.Time{}, fmt.Errorf("vrtmax: player token: %w", err)
 	}
 	if out.Token == "" {
-		return "", errors.New("vrtmax: the token service answered without a token")
+		return "", time.Time{}, errors.New("vrtmax: the token service answered without a token")
 	}
-
-	v.token = out.Token
-	v.expiry = time.Now().Add(config.VRTTokenLife)
+	expiry := time.Now().Add(config.VRTTokenLife)
 	if when, err := time.Parse(time.RFC3339, out.Expires); err == nil {
-		v.expiry = when.Add(-config.VRTTokenMargin)
+		expiry = when.Add(-config.VRTTokenMargin)
 	}
-	return v.token, nil
+	return out.Token, expiry, nil
 }
 
 // gql posts one query and returns the decoded response.
