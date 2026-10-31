@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -185,7 +184,7 @@ func (i redgifsItem) file() (File, bool) {
 	if link == "" {
 		return File{}, false
 	}
-	name := i.name() + path.Ext(util.NameFromURL(link))
+	name := i.name() + linkExtAsIs(link, "")
 	return File{
 		Name:    name,
 		URL:     link,

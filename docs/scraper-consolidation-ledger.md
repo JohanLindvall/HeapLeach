@@ -89,3 +89,13 @@ Dispositions: **adopt** (moved to the shared operation), **already shared**
 
 Values are unchanged; request sequences are those the existing host tests
 pin (offsets, limits, page numbers). No flag or environment setting was added.
+
+### Naming and size helpers
+
+| Site of use | Disposition |
+| --- | --- |
+| RedGifs file name (`path.Ext(util.NameFromURL(link))`) | adopt `linkExtAsIs(link, "")`, its exact equivalent; `TestRedgifsItemFile` |
+| `fediExt` (drops an "extension" longer than six), `bitchuteExt` (letter rule, `.mp4` fallback), media-page extension check (lower case, set lookup) | retain: each rule differs from `linkExt`/`linkExtAsIs` |
+| Autoindex size column (`0` and listed numbers kept as given) | retain: `parsedSize` maps zero to unknown |
+| Bunkr listing size (`parseHumanSize`, approximate) | already shared |
+| `util.Unescape`, `util.TitleName`, `sourceFolder` | already shared; no inline copies (`feedSlashes` maps to `-`, a different rule kept for feed names) |
