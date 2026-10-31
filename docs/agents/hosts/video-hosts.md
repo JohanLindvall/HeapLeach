@@ -88,6 +88,11 @@ page embedding one of its players is reached by the generic link scanner, and
 the player goes through the native token resolver and the range engine, so
 linked players work without an extractor for every blog that embeds them.
 
+Landing pages require both the `/d/<code>` form and an `/e/<code>` player
+frame, with the site named in the title or site metadata. The host also uses
+the nonstandard `og:sitename` key with `DoodStream.com`; read that marker
+directly so recognition does not depend on the title retaining the brand.
+
 The final page URL after redirects supplies both the token endpoint's origin
 and the media referer, refreshed together on each attempt. The token endpoint
 can also answer `RELOAD`, which the player handles with `location.reload()`:

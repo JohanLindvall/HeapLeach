@@ -779,6 +779,20 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 			return ex, nil, page.Err
 		}
 		if strict && ex == r.fallback {
+			// A failed probe says nothing about whether the page is supported.
+			// Keep its error for source retries and route recovery; only a
+			// successfully read, unrecognised page or a missing link is
+			// navigation.
+			if page.Err != nil {
+				return ex, nil, page.Err
+			}
+			if page.Status >= http.StatusBadRequest && page.Status != http.StatusNotFound && page.Status != http.StatusGone {
+				return ex, nil, &httpx.StatusError{
+					Code: page.Status, Status: fmt.Sprintf("%d %s", page.Status, http.StatusText(page.Status)),
+					URL: u.Redacted(), Header: page.Header,
+					Body: strings.Clone(page.Body[:min(len(page.Body), config.ErrorBodySample)]),
+				}
+			}
 			return ex, nil, fmt.Errorf("%s: %w", u.Redacted(), errUnrecognised)
 		}
 		ctx, challenge := httpx.CaptureChallenges(ctx)

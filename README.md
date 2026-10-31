@@ -197,7 +197,7 @@ Sites change, so fixture tests alone cannot guarantee current live support.
 | `cyberdrop` | albums (`/a/<id>`) listing `#file` entries with a `file-size`, and file pages (`/f/<slug>`, `/e/<slug>`) whose script asks the `/api/file/info/` metadata endpoint |
 | `dailymotion` | videos and playlists (`/video/<xid>`, `/playlist/<xid>`) rendered by the Dailymotion server-side app (its `neon` bundle), short links included |
 | `direct` | anything else: a page's supported links or embedded player, or the URL as a plain file |
-| `doodstream` | players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its player gate, and landing pages (`/d/<code>`) named DoodStream that frame such a player |
+| `doodstream` | players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its player gate, and landing pages (`/d/<code>`) naming DoodStream in their title or site metadata and framing its player |
 | `drive` | file links (`/file/d/<id>`, `/open?id=`, `/uc?id=`) whose page is the Google Drive file viewer (its `apps-fileview` bundle), or the download confirmation form |
 | `dropbox` | share links (`/s/…`, `/sh/…`, `/scl/fi/…`, `/scl/fo/…`) whose page is the Dropbox viewer, loading its `/static/atlas/` bundle |
 | `drtuber` | watch pages and players (`/video/<id>/<slug>`, `/embed/<id>`) whose player is configured from the DrTuber `player_config_json` endpoint |

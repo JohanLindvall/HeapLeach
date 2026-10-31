@@ -60,10 +60,13 @@ var doodPlayer = playerSite{
 		if doodPassPath.MatchString(p.Body) || doodChallengePage(p.Body) {
 			return true
 		}
-		return doodLanding(p.Final) && p.Named("DoodStream") && p.frames(doodPlayerFrame)
+		// The landing page also identifies its site with the nonstandard
+		// og:sitename key; that remains usable when its title has no brand.
+		named := p.Named("DoodStream", "DoodStream.com") || strings.EqualFold(p.Meta("og:sitename"), "DoodStream.com")
+		return doodLanding(p.Final) && named && p.frames(doodPlayerFrame)
 	},
 	recognises: "players (`/e/<code>`) naming the DoodStream `/pass_md5/` token endpoint or showing its " +
-		"player gate, and landing pages (`/d/<code>`) named DoodStream that frame such a player",
+		"player gate, and landing pages (`/d/<code>`) naming DoodStream in their title or site metadata and framing its player",
 	// The embed page is the one carrying the token endpoint; a /d/ link is
 	// the same video behind a landing page.
 	page:          func(u *url.URL) (string, error) { return strings.Replace(u.String(), "/d/", "/e/", 1), nil },
