@@ -238,7 +238,7 @@ filester file shares use `/d/<slug>`. The script POSTs the slug to
 `/v2/api/public/download` and builds the storage link from the answer
 (`server` + `/v2/` + `file` + `?token=`). The token lasts half an hour and
 encodes the requesting address, so it is minted through `Resolve`, by
-`signedResult` (`extractor.go`), as turbo's is: signed once at extraction so
+`signedResult` (`contract.go`), as turbo's is: signed once at extraction so
 a dead link fails the job at once and the queue shows the real name, and
 again when the transfer starts. The `download=true&n=` the page's button adds only sets a disposition name and is
 left off. The site moves between top-level domains, all serving one API; the

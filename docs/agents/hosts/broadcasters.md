@@ -129,7 +129,7 @@ A listing whose items are shown in one region alone is cut by
 `regionGate` (drtv, yle), which asks of those items until one can tell
 and lets that answer stand for the rest. An episode
 resolved at transfer time is `lazyEpisode`, one resolved now and read again
-at transfer time `refreshing` (`extractor.go`, shared with the signed file
+at transfer time `refreshing` (`contract.go`, shared with the signed file
 hosts), and a listing's note is assembled from
 `cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
 files and targets through `hlsMedia.file` and `hlsMedia.target` only; a

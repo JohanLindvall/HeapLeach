@@ -8,8 +8,10 @@ Notes on individual hosts are in [`hosts/`](hosts/), indexed
 
 `extractor.Extractor` is `Name/Extract`, and every registered extractor is
 also a `Recogniser` (`Shape/Recognise`) and a `Describer` (`Recognises`).
-Register new extractors in `NewRegistry`; the first to recognise a page
-takes it, so order matters where two could.
+Register new extractors in `NewRegistry` (`registry.go`); the first to
+recognise a page takes it, so order matters where two could. `File`,
+`Target`, tracks and `Pace` live in `contract.go`, and the errors that steer
+the queue in `errors.go`.
 
 ### Dispatch is by page, never by host
 
@@ -141,7 +143,7 @@ one.
 ### How a host may be used: `Pace`
 
 An extractor declares the host's limits with `Pace` (documented field by field
-in `extractor.go`): `Streams` caps connections per file, `Files` caps
+in `contract.go`): `Streams` caps connections per file, `Files` caps
 transfers to the host at once, `Group` shares that limit across aliases and
 storage servers, `PerRoute` applies it per egress address through the proxy
 pool ([proxies.md](proxies.md)), `DirectFirst` keeps a per-address file on the
@@ -554,7 +556,7 @@ list below.
   (`finished`), and opt into proxy recovery (`proxyFallback`, which
   `Registry.Extract` reads off the `*Player`; no other extractor opts a
   source in). Add a new video site as a row, not an extractor.
-- `refreshing` and `signedResult` (`extractor.go`): a file whose link is
+- `refreshing` and `signedResult` (`contract.go`): a file whose link is
   signed per visit, resolved now and signed again when its transfer starts.
 - `unpackJS` and `jwSource` (`jsdecode.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
@@ -700,7 +702,7 @@ list below.
   metadata a 4xx body carries, Bandcamp reads a document fetched with
   another User-Agent, WordPress edits its private tree, and
   `Direct.pageSniff` must keep its content-type gate and fallback order.
-- `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
+- `knownSize` and `parsedSize` (`contract.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
 - `fixturePage`, `htmlPage`, `expectRecognised` and `expectShape`
