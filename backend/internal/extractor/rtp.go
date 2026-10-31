@@ -228,15 +228,15 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 			"the page carries no stream for this programme")}
 	}
 
-	media, err := broadcastMedia(ctx, r.client, "rtpplay", page, manifest, headers)
-	if err != nil {
-		return nil, "", err
-	}
 	name := cmp.Or(title, program)
 	// Named off the segments, not the variant URL: RTP's manifests are
 	// nginx-vod-module urlsets, which spell the source MP4s out in the path
 	// of an MPEG-TS stream. See segmentsExtension.
-	return new(media.file(name+media.extension(), headers)), name, nil
+	file, err := broadcastFile(ctx, r.client, "rtpplay", page, manifest, name, headers, segmentsExt)
+	if err != nil {
+		return nil, "", err
+	}
+	return file, name, nil
 }
 
 // season expands a programme page into its episodes.

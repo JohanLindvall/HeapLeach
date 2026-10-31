@@ -372,15 +372,15 @@ Relevant sources: [broadcast.go](../backend/internal/extractor/broadcast.go),
 [nrk.go](../backend/internal/extractor/nrk.go),
 [bbcsounds.go](../backend/internal/extractor/bbcsounds.go).
 
-- [ ] Prototype a narrow finalizer for the two unmodified segment-based
+- [x] Prototype a narrow finalizer for the two unmodified segment-based
   callers. It composes `broadcastMedia` and existing media conversion methods;
   it never copies `Target` or `File` media fields by hand.
-- [ ] If the variant-fallback family benefits too, expose that choice as a
+- [x] If the variant-fallback family benefits too, expose that choice as a
   small named policy or a separate helper. Keep the extension choice visible
   where it affects files already on disk.
-- [ ] Keep custom post-processing in the provider. If supporting it requires
+- [x] Keep custom post-processing in the provider. If supporting it requires
   a collection of before/after hooks, leave that caller on `broadcastMedia`.
-- [ ] Keep refusal classification, progressive-file preference, language
+- [x] Keep refusal classification, progressive-file preference, language
   selection and API response schemas out of the finalizer.
 
 Acceptance: filenames stay byte-for-byte stable; keys, audio, subtitles,
@@ -590,7 +590,7 @@ interchangeable, or that the proposed abstractions already improve performance.
 - [x] Migrated listings distinguish expected ends from incomplete work using
   typed state, with reviewed user-visible notes.
 - [x] Nested discovery has a measured HTTP bound and no parent/child deadlock.
-- [ ] Selected media-finalization adopters preserve every file and track field.
+- [x] Selected media-finalization adopters preserve every file and track field.
 - [ ] Existing paths, recognition, ordering, caps and route behavior remain
   stable except for explicitly tested changes.
 - [ ] Obsolete adapters are deleted; remaining exceptions are explained next

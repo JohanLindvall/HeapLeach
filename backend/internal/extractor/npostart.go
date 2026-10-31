@@ -385,11 +385,7 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 	// in it, which outlasts any queue this program will hold, so the
 	// segments are resolved now rather than through File.Resolve.
 	headers := httpx.Referer(npoRoot)
-	media, err := broadcastMedia(ctx, n.client, "npo", productID, link.Stream.URL, headers)
-	if err != nil {
-		return nil, err
-	}
-	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
+	return broadcastFile(ctx, n.client, "npo", productID, link.Stream.URL, "", headers, variantExt)
 }
 
 // errNPONotFound is NPO answering a slug it does not know.

@@ -369,13 +369,9 @@ func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if playlist == "" {
 		return nil, fmt.Errorf("rtve: %s offers neither a file nor a playlist", video.ID)
 	}
-	media, err := broadcastMedia(ctx, r.client, "rtve", video.ID, playlist, headers)
-	if err != nil {
-		return nil, err
-	}
 	// Named off the segments, not the variant URL, whose directory naming
 	// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.
-	return new(media.file(video.name()+media.extension(), headers)), nil
+	return broadcastFile(ctx, r.client, "rtve", video.ID, playlist, video.name(), headers, segmentsExt)
 }
 
 // rtveByExtension picks the media list entry whose path ends in ext.

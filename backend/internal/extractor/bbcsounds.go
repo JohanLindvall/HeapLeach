@@ -243,11 +243,7 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	media, err := broadcastMedia(ctx, b.client, "bbcsounds", item.pid(), stream, headers)
-	if err != nil {
-		return nil, err
-	}
-	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
+	return broadcastFile(ctx, b.client, "bbcsounds", item.pid(), stream, "", headers, variantExt)
 }
 
 // stream asks the media selector for a version's playlist.

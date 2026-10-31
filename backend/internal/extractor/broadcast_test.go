@@ -6,8 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -368,5 +371,52 @@ func TestNextData(t *testing.T) {
 	}
 	if _, ok := nextData(`<script id="other">{}</script>`); ok {
 		t.Error("read an island from a page with none")
+	}
+}
+
+// broadcastFile resolves a programme's playlist into its file with every
+// media field carried, named prefix and the extension its broadcaster
+// chose: off the segments (an MPEG-TS stream whose manifest path spells
+// ".mp4" stays ".ts"), or off the variant's own path where the segments'
+// say nothing more.
+func TestBroadcastFileNamesByTheChosenExtension(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/source.mp4/master.m3u8", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720\nindex.m3u8\n")
+	})
+	mux.HandleFunc("/source.mp4/index.m3u8", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n"+`#EXT-X-KEY:METHOD=AES-128,URI="key.bin"`+
+			"\n#EXTINF:6,\nseg-1.ts\n#EXTINF:6,\nseg-2.ts\n#EXT-X-ENDLIST\n")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	headers := httpx.Referer("https://broadcaster.example.test/")
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		ext    func(*hlsMedia) string
+		want   string
+	}{
+		{"segments", "Episode One", segmentsExt, "Episode One.ts"},
+		{"variant", "", variantExt, ".mp4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := broadcastFile(context.Background(), testClient(), "site", "id", srv.URL+"/source.mp4/master.m3u8",
+				tc.prefix, headers, tc.ext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.Name != tc.want {
+				t.Errorf("name %q, want %q", f.Name, tc.want)
+			}
+			if len(f.Segments) != 2 || f.SegmentKey == nil || f.SegmentKey.URI != srv.URL+"/source.mp4/key.bin" ||
+				f.Headers[httpx.HeaderReferer] != headers[httpx.HeaderReferer] {
+				t.Errorf("media fields lost: %+v", f)
+			}
+		})
+	}
+	if _, err := broadcastFile(context.Background(), testClient(), "site", "id", srv.URL+"/missing.m3u8", "", nil, segmentsExt); err == nil ||
+		!strings.HasPrefix(err.Error(), "site: id: ") {
+		t.Errorf("err = %v, want the broadcaster's own context", err)
 	}
 }

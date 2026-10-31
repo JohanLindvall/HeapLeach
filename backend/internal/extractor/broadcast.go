@@ -55,6 +55,32 @@ func broadcastMedia(ctx context.Context, client *httpx.Client, site, name, link 
 	return media, nil
 }
 
+// broadcastFile is a programme's playlist resolved into its file (File via
+// hlsMedia.file, every media field carried), named prefix and the extension
+// ext chooses: a broadcaster whose resolution ends there and does nothing
+// else with the media. One that labels audio, checks for it, or builds a
+// Target with subtitles of its own stays on broadcastMedia.
+func broadcastFile(ctx context.Context, client *httpx.Client, site, name, link, prefix string,
+	headers httpx.Header, ext func(*hlsMedia) string) (*File, error) {
+	media, err := broadcastMedia(ctx, client, site, name, link, headers)
+	if err != nil {
+		return nil, err
+	}
+	return new(media.file(prefix+ext(media), headers)), nil
+}
+
+// The extensions broadcastFile names a file by, which decide the names of
+// files already on disk and so are the broadcaster's to choose, by name.
+
+// segmentsExt names a file off its segments, never the variant URL:
+// packagers spell the source MP4 into the manifest path of an MPEG-TS
+// stream (segmentsExtension).
+func segmentsExt(m *hlsMedia) string { return m.extension() }
+
+// variantExt names a file off its segments where they say, else off the
+// variant playlist's own path.
+func variantExt(m *hlsMedia) string { return m.extensionOr(playlistExtension(m.Variant)) }
+
 // progressiveFile is a programme's plain file, named only by its extension
 // ext. Its length is left for the response to state: the broadcasters that
 // publish one print no byte count of it, or one of another rendition.

@@ -134,7 +134,14 @@ hosts), and a listing's note is assembled from
 `cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
 files and targets through `hlsMedia.file` and `hlsMedia.target` only; a
 broadcaster's playlist is resolved through `broadcastMedia`, whose failure
-reads `<site>: <name>: <cause>`, and a plain progressive file is
+reads `<site>: <name>: <cause>`. One whose resolution ends with the file
+uses `broadcastFile`, naming the extension policy where it decides names on
+disk: `segmentsExt` (svtplay, ard, rtve and rtp, whose manifest paths spell
+".mp4" over MPEG-TS segments) or `variantExt` (npostart, nrk and bbcsounds,
+which fall back to the variant playlist's path). One that labels or checks
+audio, adds subtitles or builds a Target (srf, raiplay, vrtmax, arte,
+francetv, orf, rtbf) keeps `broadcastMedia` and its own tail rather than
+hooks on a shared one. A plain progressive file is
 `progressiveFile`, its length left to the response. A refusal written in
 the body of a failed request (vrtmax's code, npostart's sentence,
 francetv's code, rtbf's play answer) is read with `refusalBody`, limited

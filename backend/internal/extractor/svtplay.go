@@ -280,12 +280,11 @@ func (s *SVTPlay) episode(ctx context.Context, id string) (file *File, program, 
 	}
 
 	headers := httpx.Referer(svtRoot + "/")
-	media, err := broadcastMedia(ctx, s.client, "svtplay", id, manifest, headers)
+	file, err = broadcastFile(ctx, s.client, "svtplay", id, manifest, "", headers, segmentsExt)
 	if err != nil {
 		return nil, "", "", err
 	}
-
-	return new(media.file(media.extension(), headers)), meta.ProgramTitle, meta.EpisodeTitle, nil
+	return file, meta.ProgramTitle, meta.EpisodeTitle, nil
 }
 
 // svtVideo is the part of the player API response we use.

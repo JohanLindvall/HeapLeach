@@ -370,14 +370,14 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 	if !ok {
 		return nil, "", "", fmt.Errorf("ard: %s offers no stream", id)
 	}
-	stream, err := broadcastMedia(ctx, a.client, "ard", id, best.URL, headers)
-	if err != nil {
-		return nil, "", "", err
-	}
 	// Named off the segments, not the variant URL: ARD's packager builds
 	// manifest paths out of the source file's name, ".mp4.csmil/" over
 	// MPEG-TS parts. See segmentsExtension.
-	return new(stream.file(stream.extension(), headers)), show, episode, nil
+	file, err = broadcastFile(ctx, a.client, "ard", id, best.URL, "", headers, segmentsExt)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return file, show, episode, nil
 }
 
 // ardItem is the item document, which describes one video.

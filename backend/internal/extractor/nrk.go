@@ -332,11 +332,7 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 	}
 
 	headers := httpx.Referer(nrkRoot + "/")
-	media, err := broadcastMedia(ctx, n.client, "nrk", id, stream, headers)
-	if err != nil {
-		return nil, err
-	}
-	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
+	return broadcastFile(ctx, n.client, "nrk", id, stream, "", headers, variantExt)
 }
 
 // title names a programme, and never fails: a missing title costs a good
