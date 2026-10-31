@@ -136,3 +136,18 @@ pin (offsets, limits, page numbers). No flag or environment setting was added.
 | --- | --- |
 | `Page.memo` network questions (`pageJSON`, player canonical probe, Bandcamp own-agent read) | **fixed**: an answer computed after the asker's context ended was kept on the shared page, so another job reading the same URL within the cache's lifetime got "no answer" and could miss a recognition. Requirement: the page cache keeps no failure (extractors guide, "Fetching a page once"); a cancellation is the caller's, not the page's. `memoAsked` drops such an answer and a waiter asks again with its own context; real failures and the probe's own timeouts are still kept. `TestPageAnswerAskedByACancelledCallerIsNotKept` failed before the fix |
 | `Page.memo` decodes (Cum servers, Celeb props, LuluStream source) | retain plain `memo`: no network, so no cancellation |
+| `renewable[T]` (Gofile account, RedGifs token, VRT token) | retain: its cancelable waiter, detached shared fetch and refused-generation renewal are its own; `renewable_test.go` |
+| `hostMemo` | retain: success-only, extractor lifetime; concurrent misses may each compute, as documented |
+| `cumPostLoader` | retain: one post's metadata, read under its lock and checked for cancellation once the lock is held; a failed read is not kept |
+| ORF configuration, RTBF device session, Filester protected-folder jar, Keep2Share tickets, `routeWaits` | retain: scopes and invalidation differ (plan W9 table); none shares a key, lifetime and invalidation rule with another |
+| Gofile signing secret (`gofilewt.go`) and guest account | retain: different state, kept apart |
+
+No universal cache interface or background refresh was introduced.
+
+## W11 — files and adapters
+
+| Item | Disposition |
+| --- | --- |
+| `extractor.go` | split into `contract.go`, `errors.go`, `registry.go` with no symbol changes; `extractor.go` keeps `Result`, the interfaces, `Options`/`Limits` and `about` |
+| `fanout.go`, `wirePointers`, `playerSites`, `francetvPageTitle` | removed: no remaining caller in this repository or the private overlay |
+| String adapters kept for synthetic parser tests (`imgurMediaFrom` and the NPR, ABC listen, CoomerFans, PornPics adapters) | retain: each only parses and delegates, so there is one parser per page |
