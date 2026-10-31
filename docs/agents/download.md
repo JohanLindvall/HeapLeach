@@ -45,9 +45,14 @@ at the test. Accessors the code itself never needs, such as
 
 **Clear finished only forgets successful jobs** (`Job.complete`): the source
 has no error and every item is done. Terminal jobs can still have failures,
-and even a done status can include canceled files or a partial listing, so
-neither status alone is enough. Incomplete jobs and their pending retries
-remain available. The UI's `isComplete` predicate mirrors this rule.
+and even a done status can include canceled files, so neither status alone is
+enough. Incomplete jobs and their pending retries remain available. The UI's
+`isComplete` predicate mirrors this rule. It judges transfers only: a listing
+the extractor admitted was cut short or left items out says so in
+`Result.Note`, which reaches the shown title, but every item it did list being
+done makes the job complete. Nothing reads extraction completeness from the
+note; making it count would need a field of its own carried through
+persistence, snapshots, the UI and the CLI.
 
 **Stopping is allowed during shutdown; starting is not.** The job actions look
 their job up through `jobLocked`, which returns with `mu` held. Retries and

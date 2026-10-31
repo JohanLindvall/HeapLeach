@@ -192,7 +192,7 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	var doc rtbfMediaDoc
 	if err := r.client.GetJSON(ctx, r.bffURL("embed/media/"+url.PathEscape(id)), rtbfHeaders(), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &broadcastRefusal{"rtbf", id, rtbfGone}
+			return nil, &itemRefusal{"rtbf", id, rtbfGone}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", id, err)
 	}
@@ -203,7 +203,7 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	}
 	stem := cmp.Or(joinTitle(strings.TrimSpace(cmp.Or(programme, data.Title)), strings.TrimSpace(data.Subtitle), titleContains), id)
 	if strings.EqualFold(data.PlayerType, "LIVE") {
-		return nil, &broadcastRefusal{"rtbf", stem, refusedLiveStream}
+		return nil, &itemRefusal{"rtbf", stem, refusedLiveStream}
 	}
 	target, err := r.stream(ctx, cmp.Or(data.AssetID, id+"_6BA97Bb"), stem)
 	if err != nil {
@@ -273,7 +273,7 @@ func (p *rtbfPlay) refusal(title string, now time.Time) error {
 			}
 		}
 	}
-	return &broadcastRefusal{"rtbf", title, reason}
+	return &itemRefusal{"rtbf", title, reason}
 }
 
 // play asks Red Bee to play a media, with the anonymous session, made
@@ -301,7 +301,7 @@ func (r *RTBF) play(ctx context.Context, assetID, title string) (*rtbfPlay, erro
 		case forbidden && refused.Message != "":
 			return nil, refused.refusal(title, time.Now())
 		case httpx.HasStatus(err, http.StatusNotFound):
-			return nil, &broadcastRefusal{"rtbf", title, rtbfGone}
+			return nil, &itemRefusal{"rtbf", title, rtbfGone}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", title, err)
 	}
@@ -348,7 +348,7 @@ func (r *RTBF) stream(ctx context.Context, assetID, stem string) (*Target, error
 		return nil, err
 	}
 	if answer.StreamInfo.Live {
-		return nil, &broadcastRefusal{"rtbf", stem, refusedLiveStream}
+		return nil, &itemRefusal{"rtbf", stem, refusedLiveStream}
 	}
 	headers := rtbfHeaders()
 	hls, file, protected := answer.playable()
@@ -366,9 +366,9 @@ func (r *RTBF) stream(ctx context.Context, assetID, stem string) (*Target, error
 	case file != "":
 		return &Target{URL: file, Name: stem + linkExt(file, ".mp3"), Size: -1, Headers: headers}, nil
 	case protected:
-		return nil, &broadcastRefusal{"rtbf", stem, refusedDRM}
+		return nil, &itemRefusal{"rtbf", stem, refusedDRM}
 	}
-	return nil, &broadcastRefusal{"rtbf", stem, "Auvio offers no stream of it to download"}
+	return nil, &itemRefusal{"rtbf", stem, "Auvio offers no stream of it to download"}
 }
 
 // audioTracks is how many audio tracks the asset itself has, or 0 where
@@ -418,7 +418,7 @@ func (r *RTBF) programme(ctx context.Context, slug string) (*Result, error) {
 	}
 	if err := r.client.GetJSON(ctx, r.bffURL("pages/emission/"+url.PathEscape(slug)), rtbfHeaders(), &page); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &broadcastRefusal{"rtbf", slug, "it is not on Auvio"}
+			return nil, &itemRefusal{"rtbf", slug, "it is not on Auvio"}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", slug, err)
 	}
@@ -498,13 +498,13 @@ func (r *RTBF) listedFile(ctx context.Context, l rtbfListed) (*File, error) {
 	if answer != nil {
 		switch hls, file, protected := answer.playable(); {
 		case answer.StreamInfo.Live:
-			return nil, &broadcastRefusal{site: "rtbf", reason: "it is a live stream"}
+			return nil, &itemRefusal{site: "rtbf", reason: "it is a live stream"}
 		case hls != "":
 			ext = ".mp4"
 		case file != "":
 			ext = linkExt(file, ".mp3")
 		case protected:
-			return nil, &broadcastRefusal{site: "rtbf", reason: refusedDRM}
+			return nil, &itemRefusal{site: "rtbf", reason: refusedDRM}
 		}
 	}
 	file := r.lazy(l, cmp.Or(ext, ".mp4"))

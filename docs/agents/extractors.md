@@ -455,8 +455,10 @@ line in the saved queue.
   first-source behaviour the player rows rely on or need the JS reader to
   parse fields it does not have. Revisit only with fixtures that pin the
   intended ordering, the sprite exclusion and each caller's preference.
-- `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
-  for DRM and geo refusals in the broadcaster's own words, `expandSeries`
+- `broadcast.go`: what the public broadcasters share — `itemRefusal`
+  (declared beside the listing finishers in `resolve.go`, since other
+  listings refuse items too) for DRM and geo refusals in the broadcaster's
+  own words, `expandSeries`
   for a series resolved while it is listed (capped by a request budget, noted
   where cut, filed by season, one error when nothing plays) and
   `listSeries`, which ends a listing with it, beneath it
@@ -475,13 +477,22 @@ line in the saved queue.
   videos, a profile's posts, albums or galleries), resolved concurrently
   with the files kept in order and the refusals and first failure beside
   them, and the one error, `<site>: none of the <n> <noun> on <where> could
-  be read: <reason>`, for when none could; when some could, the refusals
-  go in the note (`refusedNote`). A listing that needs each item
-  beside what it resolved to uses `resolveOutcomes` and `sortOutcomes`
-  directly; `resolveEach` and `expandSeries` share the same outcome
-  handling. An item whose host states why it holds nothing (a live stream,
-  a video still transcoding) returns a `broadcastRefusal`, so that reason
-  outranks a failure in the error. Where every item costs a request at
+  be read: <reason>`, for when none could. `resolveListing`, `readListing`
+  and `resolveEach` keep the whole account of the items, `outcomeSummary`
+  (`summarise`): resolved, empty, refused (each reason, in order), failed
+  (counted, the first kept as the diagnostic), unrecognised and not
+  started, counted per item rather than per file. When some resolved,
+  `outcomeSummary.note` says what was left out — the refusals per reason
+  (`refusedNote`), then "N left out: could not be read" (`unreadNote`) —
+  so one unreadable item beside others that resolved is never silent. An
+  item that resolved to nothing is not mentioned, and a link no extractor
+  recognised is navigation, never a failure. `expandSeries` always notes
+  unreadable episodes and leaves refusals to the broadcaster
+  (`noteRefused`). A listing that needs each item beside what it resolved
+  to uses `resolveOutcomes` with `summarise` or `sortOutcomes` directly. An
+  item whose host states why it holds nothing (a live stream, a video
+  still transcoding) returns an `itemRefusal` (`resolve.go`), so that
+  reason outranks a failure in the error. Where every item costs a request at
   listing time, the listing is held to `listingLimit` and notes the cut.
   A listing of items to resolve uses these rather than `FanOut` alone, which
   drops every error.

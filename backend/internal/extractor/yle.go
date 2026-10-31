@@ -205,7 +205,7 @@ func (y *Yle) preview(ctx context.Context, lang, id string) (*yleOndemand, error
 	}
 	if err := y.client.GetJSON(ctx, y.player+url.PathEscape(id)+".json?"+query.Encode(), y.headers(lang), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &broadcastRefusal{"yle", id, "it does not exist"}
+			return nil, &itemRefusal{"yle", id, "it does not exist"}
 		}
 		return nil, fmt.Errorf("yle: %s: %w", id, err)
 	}
@@ -222,7 +222,7 @@ func (y *Yle) preview(ctx context.Context, lang, id string) (*yleOndemand, error
 				Title yleText `json:"title"`
 			}
 			_ = json.Unmarshal(raw, &named)
-			return nil, &broadcastRefusal{"yle", cmp.Or(named.Title.in(lang), id), reason}
+			return nil, &itemRefusal{"yle", cmp.Or(named.Title.in(lang), id), reason}
 		}
 	}
 	return nil, fmt.Errorf("yle: %s: the player API names no state it is in", id)
@@ -255,7 +255,7 @@ func (y *Yle) programme(ctx context.Context, lang, id string) (*Target, string, 
 		}
 		return &Target{URL: od.MediaURL, Name: title + od.extension(), Size: -1, Headers: headers}, title, nil
 	}
-	return nil, "", &broadcastRefusal{"yle", title, "it offers no stream to download"}
+	return nil, "", &itemRefusal{"yle", title, "it offers no stream to download"}
 }
 
 // headers are what the site's own player sends.

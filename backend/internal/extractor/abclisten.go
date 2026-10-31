@@ -450,7 +450,7 @@ func abcListenName(id, title string) string {
 // that a programme whose every episode is withheld says so rather than that
 // its episodes failed.
 func abcListenAppOnly(link string) error {
-	return &broadcastRefusal{site: "abclisten", reason: "the ABC publishes " + link +
+	return &itemRefusal{site: "abclisten", reason: "the ABC publishes " + link +
 		" through its listen app only, so the web page carries nothing to fetch"}
 }
 

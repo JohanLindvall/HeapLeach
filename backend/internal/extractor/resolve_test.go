@@ -22,7 +22,7 @@ func TestResolveFilesKeepsOrderAndReasons(t *testing.T) {
 	resolve := func(_ context.Context, item string) ([]File, error) {
 		switch item {
 		case "refused-1", "refused-2":
-			return nil, &broadcastRefusal{"site", item, "withheld " + item}
+			return nil, &itemRefusal{"site", item, "withheld " + item}
 		case "failed-1", "failed-2":
 			return nil, errors.New("site: " + item)
 		case "empty":
@@ -142,7 +142,7 @@ func TestListingFinishersPreferCancellation(t *testing.T) {
 	files, note, err := readListing(context.Background(), "site", "posts", "a listing", []string{"a", "b", "c"},
 		func(_ context.Context, item string) ([]File, error) {
 			if item == "b" {
-				return nil, &broadcastRefusal{site: "site", reason: "it is gone"}
+				return nil, &itemRefusal{site: "site", reason: "it is gone"}
 			}
 			return []File{{Name: item}}, nil
 		})
@@ -193,5 +193,99 @@ func TestReadSeasonsStopsAtCancellation(t *testing.T) {
 	})
 	if first == nil || !reflect.DeepEqual(list.items, []string{"2", "2b", "3", "3b"}) || list.note != unreadableSeasons {
 		t.Fatalf("items=%v note=%q first=%v", list.items, list.note, first)
+	}
+}
+
+// A listing some of whose items resolved says what it left out: refusals per
+// reason, then the items that could not be read, whether a request or a
+// parse failed. An item that resolved to nothing is the item as it is and
+// goes unmentioned. When nothing resolved the error says why, a refusal
+// outranking a failure; a cancellation outranks everything. Files keep the
+// listing's order throughout.
+func TestReadListingAccountsForEveryItem(t *testing.T) {
+	network := fmt.Errorf("site: fetch: %w", context.DeadlineExceeded)
+	parse := errors.New("site: post has no attachments block")
+	refusal := &itemRefusal{site: "site", reason: "it is gone"}
+	resolve := func(_ context.Context, item string) ([]File, error) {
+		switch item {
+		case "network":
+			return nil, network
+		case "parse":
+			return nil, parse
+		case "refused":
+			return nil, refusal
+		case "empty":
+			return nil, nil
+		}
+		return []File{{Name: item + "1"}, {Name: item + "2"}}, nil
+	}
+	for _, tc := range []struct {
+		name  string
+		items []string
+		files string
+		note  string
+		err   string
+	}{
+		{"all resolve", []string{"a", "b"}, "[a1 a2 b1 b2]", "", ""},
+		{"network failure", []string{"a", "network", "b"}, "[a1 a2 b1 b2]", "1 left out: could not be read", ""},
+		{"parse failure", []string{"parse", "a"}, "[a1 a2]", "1 left out: could not be read", ""},
+		{"refusal", []string{"a", "refused"}, "[a1 a2]", "1 left out: it is gone", ""},
+		{"refusals and failures", []string{"refused", "network", "a", "parse", "refused"}, "[a1 a2]",
+			"2 left out: it is gone; 2 left out: could not be read", ""},
+		{"empty item", []string{"a", "empty"}, "[a1 a2]", "", ""},
+		{"only empty", []string{"empty"}, "[]", "",
+			"site: none of the 1 posts on a listing could be read: they hold nothing to download"},
+		{"all failed", []string{"network", "parse"}, "[]", "",
+			"site: none of the 2 posts on a listing could be read: fetch: context deadline exceeded"},
+		{"refusal outranks failure", []string{"parse", "refused"}, "[]", "",
+			"site: none of the 2 posts on a listing could be read: it is gone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, note, err := readListing(context.Background(), "site", "posts", "a listing", tc.items, resolve)
+			if fmt.Sprint(err) != cmpOrNil(tc.err) {
+				t.Fatalf("err = %v, want %s", err, tc.err)
+			}
+			if got := fmt.Sprint(fileNames(files)); got != tc.files || note != tc.note {
+				t.Errorf("files %s, note %q; want %s, %q", got, note, tc.files, tc.note)
+			}
+		})
+	}
+
+	// Cancelled after some items resolved: the cancellation, not a listing.
+	ctx, cancel := context.WithCancel(context.Background())
+	files, note, err := readListing(ctx, "site", "posts", "a listing", []string{"a", "network", "b"},
+		func(ctx context.Context, item string) ([]File, error) {
+			defer cancel()
+			return resolve(ctx, item)
+		})
+	if !errors.Is(err, context.Canceled) || files != nil || note != "" {
+		t.Errorf("cancelled: files %v, note %q, err %v", files, note, err)
+	}
+}
+
+// cmpOrNil is want as fmt prints an error, "<nil>" when there is none.
+func cmpOrNil(want string) string {
+	if want == "" {
+		return "<nil>"
+	}
+	return want
+}
+
+// The account keeps refused, failed, empty, unrecognised and unstarted items
+// apart, counting items rather than files.
+func TestSummariseCountsItems(t *testing.T) {
+	outcomes := []outcome[string, []File]{
+		{index: 0, got: []File{{}, {}, {}}},
+		{index: 1},
+		{index: 2, err: &itemRefusal{site: "s", reason: "live"}},
+		{index: 3, err: fmt.Errorf("s: %w", errUnrecognised)},
+		{index: 4, err: errors.New("first")},
+		{index: 5, err: errors.New("second")},
+	}
+	s := summarise(8, outcomes, func(got []File) bool { return len(got) > 0 })
+	want := outcomeSummary{listed: 8, attempted: 6, succeeded: 1, empty: 1, failures: 2, unrecognised: 1,
+		refusals: []string{"live"}, failed: outcomes[4].err}
+	if !reflect.DeepEqual(s, want) || s.notStarted() != 2 {
+		t.Errorf("summary = %+v (not started %d)", s, s.notStarted())
 	}
 }

@@ -342,7 +342,7 @@ func (r *RTVE) metadata(ctx context.Context, id string) (*rtveVideo, error) {
 // file turns a video document into the file to fetch.
 func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if !video.playable() {
-		return nil, &broadcastRefusal{"rtve", video.name(), rtveReason(video.Country)}
+		return nil, &itemRefusal{"rtve", video.name(), rtveReason(video.Country)}
 	}
 
 	links, err := r.media(ctx, video.ID)

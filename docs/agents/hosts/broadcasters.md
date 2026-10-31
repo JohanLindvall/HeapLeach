@@ -8,7 +8,7 @@ to yt-dlp, the extractor keeps a `Handoff` for them.
 
 The public broadcasters' APIs have nothing in common, so each keeps its own
 extractor, but they share `broadcast.go`. A programme a broadcaster declines
-(gone, live, DRM-protected, licensed elsewhere) is a `broadcastRefusal`
+(gone, live, DRM-protected, licensed elsewhere) is an `itemRefusal`
 reading `<site>: <title>: <reason>`, so that a series refused in full says
 why once rather than once an episode; `resolveEach` fans a listing out,
 keeping each file beside its item in order with the refusals and the first
@@ -47,7 +47,9 @@ limit"). A walk of the listing stops at the same budget
 and says whether the listing went on (`more`), or the caller passes the count
 the listing stated (`listed`); either way the note says what the cap left
 out ("1000 of 3000 episodes", "first 1000 episodes"), and a listing that ended
-by itself says nothing. Episodes are filed by their season's label through
+by itself says nothing. Episodes that could not be read beside others that
+resolved are always counted ("2 left out: could not be read"); refusals are
+counted only where the broadcaster asks (`noteRefused`). Episodes are filed by their season's label through
 `sourceFolder` when more than one label is listed (`nestByLabel`), or always
 when the caller had several seasons (`split`, npostart's rule); the label is
 read after resolving, so pbs and svtplay, which learn a video's season or
@@ -177,7 +179,7 @@ others and the listing does not say which, so each programme's configuration
 is read as the collection is (`expandSeries`, a season's programmes filed
 under it). A season that cannot be read is left out, the note saying so,
 unless it is the collection's first entry. One not shown here is left out, the
-note counting the reasons (`broadcastRefusal`); one that could not be read for
+note counting the reasons (`itemRefusal`); one that could not be read for
 another cause is kept, for its transfer to try again. Their streams are
 resolved when the transfers start.
 

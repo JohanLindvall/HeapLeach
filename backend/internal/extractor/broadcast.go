@@ -25,34 +25,12 @@ import (
 // after its series, a listing of episodes resolved one by one or when
 // their transfers start, and a note on what a listing left out.
 
-// broadcastRefusal is a broadcaster declining a programme: gone, live,
-// protected, or shown only somewhere else. It is a type so that a listing
-// can leave such programmes out, saying why once, rather than queue them all
-// to fail. site is the extractor's prefix and title the programme's name, or
-// its id; a refusal that names neither leaves title empty.
-type broadcastRefusal struct{ site, title, reason string }
-
-func (e *broadcastRefusal) Error() string {
-	if e.title == "" {
-		return e.site + ": " + e.reason
-	}
-	return e.site + ": " + e.title + ": " + e.reason
-}
-
 // The reasons several broadcasters give in the same words.
 const (
 	refusedDRM           = "it is DRM-protected"
 	refusedLiveBroadcast = "it is a live broadcast, which has no end to download to"
 	refusedLiveStream    = "it is a live stream, which has no end to download to"
 )
-
-// refusalReason is the reason a broadcaster gave, when err is its refusal.
-func refusalReason(err error) (string, bool) {
-	if refusal, ok := errors.AsType[*broadcastRefusal](err); ok {
-		return refusal.reason, true
-	}
-	return "", false
-}
 
 // refusalBody decodes the body of a failed request as JSON, for a
 // broadcaster that says why it refused there rather than in a document of
@@ -133,16 +111,17 @@ type listedItem[T any] struct {
 // listing's order. One item refused or failing must not sink the rest; but
 // when nothing resolves, why is the whole answer, so the broadcaster's
 // reasons are kept in order, and the first other failure beside them, for
-// the caller to report (firstReason).
-func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) (resolved []listedItem[T], refusals []string, failed error) {
+// the caller to report (firstReason), in the account of the items
+// (outcomeSummary) that also counts the failures for the note.
+func resolveEach[T any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (*File, error)) ([]listedItem[T], outcomeSummary) {
 	outcomes := resolveOutcomes(ctx, items, inTurn, resolve)
-	refusals, failed = sortOutcomes(outcomes)
+	var resolved []listedItem[T]
 	for _, out := range outcomes {
 		if out.err == nil && out.got != nil {
 			resolved = append(resolved, listedItem[T]{item: out.item, file: *out.got})
 		}
 	}
-	return resolved, refusals, failed
+	return resolved, summarise(len(items), outcomes, func(got *File) bool { return got != nil })
 }
 
 // series is a broadcaster's listing of episodes, as expandSeries takes it.
@@ -198,7 +177,8 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 		note = fmt.Sprintf("first %d %s", len(items), s.noun)
 	}
 
-	resolved, refusals, failed := resolveEach(ctx, items, s.inTurn, s.resolve)
+	resolved, outcomes := resolveEach(ctx, items, s.inTurn, s.resolve)
+	refusals, failed := outcomes.refusals, outcomes.failed
 	if s.refused != nil {
 		*s.refused = refusals
 	}
@@ -219,6 +199,9 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 	if s.noteRefused {
 		note = joinNotes(note, refusedNote(refusals))
 	}
+	// A refusal is the broadcaster's to word, or to keep quiet about; an
+	// episode that could not be read is always said to be missing.
+	note = joinNotes(note, unreadNote(outcomes.failures))
 	return resolved, note, nil
 }
 

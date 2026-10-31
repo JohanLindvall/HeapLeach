@@ -376,9 +376,9 @@ listing, with the first document from the probe or the browse fetch. Its
 reader stops at the stated total, and a later page that fails, repeats or
 adds nothing is the end of the listing rather than a partial one. Every video
 is a page to read, so the walk is held to the file cap and notes when that
-cut it. The videos are read through `resolveFiles` (`kvsListingResult`);
-when none can be, `noneRead` gives the first reason, and videos refused
-beside others that resolved are counted in the note. A listing with no
+cut it. The videos are read through `readListing` (`kvsListingResult`);
+when none can be, `noneRead` gives the first reason, and videos refused or
+unreadable beside others that resolved are counted in the note. A listing with no
 videos at all is a `kvsEmpty`, which `kvsBrowse` reads, like a 404 on a
 listing's first page, as a number that was the section's own name.
 

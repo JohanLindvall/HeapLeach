@@ -28,8 +28,8 @@ a partial job. When none of the albums found resolves, the error is
 A creator's page on coomerfans lists posts but keeps the media on each post's
 own page, and the listing cannot be worked from instead: a post holding a
 video shows no thumbnail there at all. So every post is opened, through
-`resolveFiles`, and a profile none of whose posts could be read says why
-(`noneRead`). The creator's pages are walked by `walkListing` as a quiet
+`readListing`, and a profile none of whose posts could be read says why
+(`noneRead`); one with some unreadable posts counts them in the note. The creator's pages are walked by `walkListing` as a quiet
 listing following its next links: the listing states no length, so a later
 page that fails or adds nothing ends it without a note. Every post costs a
 request, so the walk is held to `listingLimit` and says so when it cuts.
@@ -143,9 +143,10 @@ from `/music` — which also carries a `data-tralbum`, empty and of no
 its one release. Each release of a discography is a page to read, so a
 catalogue is read as far as `config.MaxResolvedReleases` releases, the note
 saying what that left out, and the registry holds the tracks to the user's
-file cap. The releases are read through `resolveFiles` (`resolve.go`); when
-none can be, `noneRead` gives the first reason, and releases refused beside
-others that resolved are counted in the note (`refusedNote`).
+file cap. The releases are read through `resolveListing` (`resolve.go`);
+when none can be, `noneRead` gives the first reason, and releases refused or
+unreadable beside others that resolved are counted in the note
+(`outcomeSummary.note`).
 
 ## bandzoogle
 

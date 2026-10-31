@@ -214,8 +214,8 @@ func TestBandcampRecognisesThroughTheClientChallenge(t *testing.T) {
 }
 
 // A band's discography reads each release, keeping their tracks in the
-// grid's order; one release that cannot be read is left out, and when none
-// can the error says why.
+// grid's order; one release that cannot be read is left out and counted in
+// the note, and when none can the error says why.
 func TestBandcampDiscographyReadsEachRelease(t *testing.T) {
 	grid := `<html><head><meta property="og:site_name" content="A Band"></head><body>
 <ol id="music-grid"><li><a href="/album/first">First</a></li><li><a href="/album/gone">Gone</a></li></ol></body></html>`
@@ -235,7 +235,7 @@ func TestBandcampDiscographyReadsEachRelease(t *testing.T) {
 	b := NewBandcamp(testClient())
 
 	res := extractOK(t, b, srv.URL+"/", Options{})
-	if len(res.Files) != 3 || res.Title != "A Band" || res.Note != "" {
+	if len(res.Files) != 3 || res.Title != "A Band" || res.Note != "1 left out: could not be read" {
 		t.Errorf("%d files, title %q, note %q", len(res.Files), res.Title, res.Note)
 	}
 

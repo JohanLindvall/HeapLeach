@@ -229,7 +229,7 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 		stem = r.name(ctx, app, id)
 	}
 	if answer.URL == "" {
-		return nil, &broadcastRefusal{"radio-canada", stem, cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
+		return nil, &itemRefusal{"radio-canada", stem, cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
 	}
 	headers := radioCanadaHeaders()
 	master := radioCanadaUnfiltered(answer.URL)

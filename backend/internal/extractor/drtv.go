@@ -132,7 +132,7 @@ func (d *DRTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, 
 	case "show":
 		return d.series(ctx, item, opts)
 	case "channel":
-		return nil, &broadcastRefusal{"drtv", cmp.Or(strings.TrimSpace(item.Title), id), "it is a live channel, which has no end to download to"}
+		return nil, &itemRefusal{"drtv", cmp.Or(strings.TrimSpace(item.Title), id), "it is a live channel, which has no end to download to"}
 	}
 	// A list, an event or another page DR TV composes: as before.
 	return d.handoff.Extract(ctx, u, opts)
@@ -229,7 +229,7 @@ func (d *DRTV) item(ctx context.Context, id string) (*drItem, error) {
 	var item drItem
 	if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id), url.Values{"expand": {"all"}}), drHeaders(), &item); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &broadcastRefusal{"drtv", id, drGone}
+			return nil, &itemRefusal{"drtv", id, drGone}
 		}
 		return nil, fmt.Errorf("drtv: %s: %w", id, err)
 	}
@@ -259,9 +259,9 @@ func (d *DRTV) videos(ctx context.Context, id, title string) ([]drStream, error)
 	}](err); ok {
 		switch {
 		case answer.Code == 8009:
-			return nil, &broadcastRefusal{"drtv", title, "DR TV offers no stream of it without signing in"}
+			return nil, &itemRefusal{"drtv", title, "DR TV offers no stream of it without signing in"}
 		case strings.Contains(strings.ToLower(answer.Message), "not found"):
-			return nil, &broadcastRefusal{"drtv", title, drGone}
+			return nil, &itemRefusal{"drtv", title, drGone}
 		}
 	}
 	return nil, fmt.Errorf("drtv: %s: %w", title, err)
@@ -291,9 +291,9 @@ func (d *DRTV) programme(ctx context.Context, item *drItem, stem string) (*Targe
 	}
 	if chosen == nil {
 		if protected {
-			return nil, &broadcastRefusal{"drtv", stem, refusedDRM}
+			return nil, &itemRefusal{"drtv", stem, refusedDRM}
 		}
-		return nil, &broadcastRefusal{"drtv", stem, "DR TV offers no stream of it to download"}
+		return nil, &itemRefusal{"drtv", stem, "DR TV offers no stream of it to download"}
 	}
 	headers := drHeaders()
 	media, err := resolveMediaPlaylist(ctx, d.client, chosen.URL, headers)

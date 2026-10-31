@@ -213,7 +213,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 	// file has been turned away, the rest need not be asked for.
 	domestic := !strings.EqualFold(ep.Scope, ruvGlobalScope)
 	if domestic && s.outsideIceland {
-		return nil, &broadcastRefusal{"ruv", ep.label(), ruvDomesticRefusal}
+		return nil, &itemRefusal{"ruv", ep.label(), ruvDomesticRefusal}
 	}
 
 	headers := httpx.Referer(ruvRoot + "/")
@@ -230,7 +230,7 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 	if err != nil {
 		if domestic && httpx.HasStatus(err, http.StatusForbidden) {
 			s.outsideIceland = true
-			return nil, &broadcastRefusal{"ruv", ep.label(), ruvDomesticRefusal}
+			return nil, &itemRefusal{"ruv", ep.label(), ruvDomesticRefusal}
 		}
 		return nil, fmt.Errorf("ruv: %s: %w", ep.label(), err)
 	}
