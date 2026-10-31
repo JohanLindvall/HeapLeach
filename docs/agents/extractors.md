@@ -608,14 +608,20 @@ line in the saved queue.
   treat memoised values as immutable. A canonical URL that differs from the
   probed one reads its own page. A reader that only extraction needs still
   takes the root, through `fetchRoot`, so the tree recognition parsed is not
-  parsed again: NPR (`nprRead`) and ABC listen (`abcListenRead`, its
-  `__NEXT_DATA__` read off the tree with `nextDataIn`) do, each with its
-  string adapter beside it, and `TestProbedReadersReuseTheParsedDocument`
-  holds both paths to the same result (`BenchmarkProbedReaders` measures
-  them). Before moving another reader over, check what it reads besides the
-  tree: Niconico keeps metadata a 4xx body carries, Bandcamp reads a
-  document fetched with another User-Agent, and WordPress edits its private
-  tree.
+  parsed again: NPR (`nprRead`), ABC listen (`abcListenRead`, its
+  `__NEXT_DATA__` read off the tree with `nextDataIn`), CoomerFans posts
+  (`coomerFansRead`), PornPics galleries (`pornpicsGalleryRead`) and
+  Chevereto pages (`cheveretoFetch`) do, each string adapter only parsing
+  and delegating, so there is one parser per page. `TestProbedReadersReuseTheParsedDocument`
+  holds both paths to the same result with no client to fetch through
+  (`BenchmarkProbedReaders` measures them). A read that must be fresh stays
+  fresh: CoomerFans' video resolver re-reads the post at transfer time for
+  a new signed link, and Chevereto's password unlock parses the answer to
+  its POST, a different document from the gate. Before moving another
+  reader over, check what it reads besides the tree: Niconico keeps
+  metadata a 4xx body carries, Bandcamp reads a document fetched with
+  another User-Agent, WordPress edits its private tree, and
+  `Direct.pageSniff` must keep its content-type gate and fallback order.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
   `File.Size` wants it, -1 for anything that is not a length.
 - `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.

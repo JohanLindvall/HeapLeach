@@ -103,6 +103,11 @@ func (c *CoomerFans) post(ctx context.Context, u *url.URL) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	return coomerFansPostResult(u, title, files)
+}
+
+// coomerFansPostResult is a single post's job: its files under its title.
+func coomerFansPostResult(u *url.URL, title string, files []File) (*Result, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("coomerfans: %s holds no media (it may be text only)", u.Redacted())
 	}
@@ -112,16 +117,23 @@ func (c *CoomerFans) post(ctx context.Context, u *url.URL) (*Result, error) {
 // postFiles reads one post page into downloadable files.
 func (c *CoomerFans) postFiles(ctx context.Context, u *url.URL) ([]File, string, error) {
 	page := u.String()
-	doc, _, err := fetchDocument(ctx, c.client, u, httpx.Referer(coomerFansRoot+"/"))
+	// The probe's own tree is read when it holds the page, so the post
+	// recognised is not parsed again.
+	root, _, err := fetchRoot(ctx, c.client, u, httpx.Referer(coomerFansRoot+"/"))
 	if err != nil {
 		return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", page, err)
 	}
 
-	title, media, err := coomerFansPost(doc, u)
+	title, media, err := coomerFansRead(root, u)
 	if err != nil {
 		return nil, "", fmt.Errorf("coomerfans: %s: %w", page, err)
 	}
+	return c.mediaFiles(u, title, media), title, nil
+}
 
+// mediaFiles turns a post's media into downloadable files.
+func (c *CoomerFans) mediaFiles(u *url.URL, title string, media []coomerFansItem) []File {
+	page := u.String()
 	files := make([]File, 0, len(media))
 	for _, item := range media {
 		name := cmp.Or(util.NameFromURL(item.URL), title)
@@ -137,10 +149,14 @@ func (c *CoomerFans) postFiles(ctx context.Context, u *url.URL) ([]File, string,
 		}
 		files = append(files, file)
 	}
-	return files, title, nil
+	return files
 }
 
 // videoResolver re-reads the post page for a fresh signed link.
+//
+// The page is fetched afresh rather than taken from the probe: the link
+// read when the job was listed is the one that expired, so an earlier page
+// is never the answer here.
 //
 // The video is found again by its storage path rather than by position: the
 // signature changes on every visit, and a post can hold more than one video,
@@ -194,13 +210,20 @@ type coomerFansItem struct {
 	Video bool
 }
 
-// coomerFansPost reads a post page's title and media. Kept apart from the
-// fetch so it can be tested against a page rather than against the site.
+// coomerFansPost is coomerFansRead for a page held as a string: the
+// transfer-time re-read and the fixtures.
 func coomerFansPost(doc string, base *url.URL) (string, []coomerFansItem, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return "", nil, err
 	}
+	return coomerFansRead(root, base)
+}
+
+// coomerFansRead reads a parsed post page's title and media. Kept apart from
+// the fetch so it can be tested against a page rather than against the site.
+// The tree may be the shared probe's, so it is only read.
+func coomerFansRead(root *html.Node, base *url.URL) (string, []coomerFansItem, error) {
 	body := findFirst(root, func(n *html.Node) bool { return hasClass(n, coomerFansBodyClass) })
 	if body == nil {
 		return "", nil, fmt.Errorf("no post body (the post may have been removed)")

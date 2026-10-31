@@ -127,7 +127,7 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opt
 			"paste a link to one rather than to the site", cheveretoLabel, u.Redacted())
 	}
 
-	_, root, err := cheveretoFetch(ctx, client, u, opts)
+	root, err := cheveretoFetch(ctx, client, u, opts)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", cheveretoLabel, err)
 	}
@@ -197,7 +197,7 @@ func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *
 		fetch: func(ctx context.Context, n int) (pageOf[cheveretoEntry], error) {
 			if n > 0 {
 				var err error
-				if _, root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
+				if root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
 					return pageOf[cheveretoEntry]{}, err
 				}
 			}
@@ -384,7 +384,7 @@ func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []chevere
 		if err != nil {
 			return nil, err
 		}
-		_, root, err := cheveretoFetch(ctx, client, u, opts)
+		root, err := cheveretoFetch(ctx, client, u, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -558,24 +558,21 @@ func cheveretoTitle(root *html.Node, u *url.URL) string {
 
 // ----------------------------------------------------------- password gate
 
-// cheveretoFetch reads a page, unlocking it first when it turns out to be the
-// password gate rather than the content. It hands back the document and its
-// parse together: the gate check has to parse it anyway, and every caller
-// goes on to read the tree.
-func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (string, *html.Node, error) {
-	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
+// cheveretoFetch reads a page's tree, unlocking it first when it turns out
+// to be the password gate rather than the content. The tree is the probe's
+// own when it holds the page, so a page recognised is not parsed again; it
+// is shared, and every reader here only reads it. An unlocked page is the
+// answer to the password, a different document, parsed from that answer.
+func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*html.Node, error) {
+	root, _, err := fetchRoot(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
-		return "", nil, fmt.Errorf("fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", nil, fmt.Errorf("parse %s: %w", u.Redacted(), err)
+		return nil, fmt.Errorf("fetch %s: %w", u.Redacted(), err)
 	}
 	if !cheveretoGated(root) {
-		return doc, root, nil
+		return root, nil
 	}
 	if opts.Password == "" {
-		return "", nil, ErrPasswordRequired
+		return nil, ErrPasswordRequired
 	}
 	return cheveretoUnlock(ctx, client, u, root, opts.Password)
 }
@@ -589,7 +586,7 @@ func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts 
 // gate prints as a hidden field; an install with a captcha on the gate is out
 // of reach either way, and says so by answering with the gate again.
 func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
-	root *html.Node, password string) (string, *html.Node, error) {
+	root *html.Node, password string) (*html.Node, error) {
 
 	form := url.Values{}
 	form.Set(cheveretoPasswordField, password)
@@ -599,7 +596,7 @@ func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
 
 	req, err := client.NewRequest(ctx, http.MethodPost, u.String(), []byte(form.Encode()))
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeForm)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
@@ -607,19 +604,18 @@ func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
 
 	body, err := client.Bytes(req)
 	if err != nil {
-		return "", nil, fmt.Errorf("unlock %s: %w", u.Redacted(), err)
+		return nil, fmt.Errorf("unlock %s: %w", u.Redacted(), err)
 	}
-	doc := string(body)
-	unlocked, err := parseHTML(doc)
+	unlocked, err := parseHTML(string(body))
 	if err != nil {
-		return "", nil, fmt.Errorf("parse %s: %w", u.Redacted(), err)
+		return nil, fmt.Errorf("parse %s: %w", u.Redacted(), err)
 	}
 	// The gate answers a wrong password with itself, so the way to tell a
 	// refusal from an acceptance is that the form is still there.
 	if cheveretoGated(unlocked) {
-		return "", nil, fmt.Errorf("the password for %s was not accepted", u.Redacted())
+		return nil, fmt.Errorf("the password for %s was not accepted", u.Redacted())
 	}
-	return doc, unlocked, nil
+	return unlocked, nil
 }
 
 // cheveretoGated reports whether a page is the password gate.

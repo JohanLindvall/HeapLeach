@@ -4,9 +4,11 @@ package extractor
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -38,7 +40,52 @@ func probedReaders() []probedReader {
 				return NewABCListen(nil).episode(u, page.props.Data.DocumentProps)
 			},
 		},
+		{
+			name: "coomerfans", link: "https://coomerfans.com/p/1/2/onlyfans", doc: coomerFansPostPage,
+			ex: NewCoomerFans(nil),
+			fromString: func(doc string, u *url.URL) (*Result, error) {
+				title, media, err := coomerFansPost(doc, u)
+				if err != nil {
+					return nil, err
+				}
+				return coomerFansPostResult(u, title, NewCoomerFans(nil).mediaFiles(u, title, media))
+			},
+		},
+		{
+			name: "pornpics", link: "https://pics.example.test/galleries/a-gallery-name-10000001/",
+			doc: strings.Replace(pornpicsGalleryPage, "</head>", `<script>var PP_LANG = "en";</script></head>`, 1),
+			ex:  NewPornPics(nil), fromString: pornpicsGallery,
+		},
+		{
+			name: "chevereto", link: "https://pics.example.test/i/holiday.AAA111", doc: cheveretoImageViewer,
+			ex: NewChevereto(nil),
+			fromString: func(doc string, u *url.URL) (*Result, error) {
+				root, err := parseHTML(doc)
+				if err != nil {
+					return nil, err
+				}
+				return cheveretoSingle(root, u, cheveretoTitle(root, u))
+			},
+		},
 	}
+}
+
+// withoutHooks is a result with its files' hooks taken out, which no two
+// closures compare equal by, and which hooks each file had, for comparing
+// two results field by field.
+func withoutHooks(res *Result) (*Result, []string) {
+	if res == nil {
+		return nil, nil
+	}
+	out := *res
+	out.Files = make([]File, len(res.Files))
+	hooks := make([]string, len(res.Files))
+	for i, f := range res.Files {
+		hooks[i] = fmt.Sprintf("resolve=%v refresh=%v check=%v pace=%v", f.Resolve != nil, f.Refresh != nil, f.Check != nil, f.Pace != nil)
+		f.Resolve, f.Refresh, f.Check, f.Pace = nil, nil, nil, nil
+		out.Files[i] = f
+	}
+	return &out, hooks
 }
 
 // probedPage is a 200 HTML page as the registry's probe leaves it.
@@ -69,8 +116,10 @@ func TestProbedReadersReuseTheParsedDocument(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("from the tree:\n%+v\nfrom the string:\n%+v", got, want)
+			gotRes, gotHooks := withoutHooks(got)
+			wantRes, wantHooks := withoutHooks(want)
+			if !reflect.DeepEqual(gotRes, wantRes) || !reflect.DeepEqual(gotHooks, wantHooks) {
+				t.Errorf("from the tree:\n%+v %v\nfrom the string:\n%+v %v", gotRes, gotHooks, wantRes, wantHooks)
 			}
 			if p.HTML() != root || countNodes(root) != nodes {
 				t.Error("the shared tree changed")

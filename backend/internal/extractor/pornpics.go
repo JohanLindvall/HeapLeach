@@ -131,25 +131,33 @@ func (p *PornPics) Extract(ctx context.Context, u *url.URL, opts Options) (*Resu
 // gallery reads one gallery page into its images.
 func (p *PornPics) gallery(ctx context.Context, u *url.URL) (*Result, error) {
 	// No headers: the pages need none, and neither do the images they name.
-	doc, _, err := fetchDocument(ctx, p.client, u, nil)
+	// The probe's own tree is read when it holds the page, so the gallery
+	// recognised is not parsed again.
+	root, _, err := fetchRoot(ctx, p.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: fetch %s: %w", u.Redacted(), err)
 	}
-	res, err := pornpicsGallery(doc, u)
+	res, err := pornpicsGalleryRead(root, u)
 	if err != nil {
 		return nil, fmt.Errorf("pornpics: %w", err)
 	}
 	return res, nil
 }
 
-// pornpicsGallery pulls the full-size images out of a fetched gallery page.
-// Kept apart from the fetch so a fixture can stand in for the page.
+// pornpicsGallery is pornpicsGalleryRead for a page held as a string, as
+// the fixtures hold theirs.
 func pornpicsGallery(doc string, u *url.URL) (*Result, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", u.Redacted(), err)
 	}
+	return pornpicsGalleryRead(root, u)
+}
 
+// pornpicsGalleryRead pulls the full-size images out of a parsed gallery
+// page. Kept apart from the fetch so a fixture can stand in for the page;
+// the tree may be the shared probe's, so it is only read.
+func pornpicsGalleryRead(root *html.Node, u *url.URL) (*Result, error) {
 	seen := make(map[string]bool)
 	var files []File
 	for _, a := range findAll(root, pornpicsIsLink) {
