@@ -380,19 +380,19 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, op
 // say so. The first page is the one the recogniser asked for the probed page,
 // when it did.
 //
-// The listings disagree about what running past the end means, so the walk
-// is a quiet one. An account's stops answering, so the array comes back
-// empty. A mirrored subreddit's answers with its first page again, and goes
-// on doing so forever, so a page carrying no row not already seen is the end
-// too. A tag's does neither: it keeps handing back older posts for as long as
-// it is asked, which is what the cap is for. A later page failing leaves the
-// posts already collected intact, which is worth more than the few at the
-// end.
+// The listings disagree about what running past the end means. An
+// account's stops answering, so the array comes back empty. A mirrored
+// subreddit's answers with its first page again, and goes on doing so
+// forever, so a page carrying no row not already seen is the end too: both
+// are a page that adds nothing, the end the walk accepts. A tag's does
+// neither: it keeps handing back older posts for as long as it is asked,
+// which is what the cap is for. A later page failing, or the page cap, leaves
+// the posts already collected intact, and says the listing was cut.
 func (i *Imgur) listingEntries(ctx context.Context, probe *Page, origin, base string, opts Options) ([]imgurEntry, string, error) {
 	limit, limitNote := listingLimit(opts)
 	return walkPages(ctx, pageWalk[imgurEntry]{
 		key:   func(entry imgurEntry) string { return entry.Hash },
-		limit: limit, limitNote: limitNote, quiet: true,
+		limit: limit, limitNote: limitNote, ends: walkAccepts{repeated: true},
 		fetch: func(ctx context.Context, n int) (pageOf[imgurEntry], error) {
 			endpoint := imgurListingPage(origin, base, n)
 			var body struct {

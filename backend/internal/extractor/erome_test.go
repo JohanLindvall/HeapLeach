@@ -238,15 +238,17 @@ func eromeWalkServer(t *testing.T, handler http.HandlerFunc) (*Erome, string) {
 }
 
 // Asking past the last page is how the walk finds the end of a profile, so
-// a later page that will not load ends it quietly — but a rate limit means
-// the opposite, and the walk says so.
+// a later page answering 404 or 410 ends it quietly — but a rate limit or a
+// server error means the opposite, and the walk says so.
 func TestEromeProfileAlbumsEndsAtAMissingPageButAdmitsARateLimit(t *testing.T) {
 	for _, tc := range []struct {
 		status int
 		note   string
 	}{
 		{http.StatusNotFound, ""},
+		{http.StatusGone, ""},
 		{http.StatusTooManyRequests, "partial — rate limited"},
+		{http.StatusBadGateway, "partial — could not fetch next page"},
 	} {
 		e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Query().Get("page") == "2" {

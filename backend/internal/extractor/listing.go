@@ -72,8 +72,10 @@ type listingWalk struct {
 	// missing is the error for a first page without its listing, in place
 	// of "no video listing on this page".
 	missing string
-	// quiet and failed are walkPages' own: a listing whose walk stops
-	// where the listing does, and the note for a later page that fails.
+	// ends, quiet and failed are walkPages' own: the ends the listing
+	// takes as its own, the older blanket form of that, and the note for a
+	// later page that fails.
+	ends   walkAccepts
 	quiet  bool
 	failed func(error) (string, bool)
 }
@@ -101,11 +103,11 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 	pages := make(map[string]bool)
 	links, note, err = walkPages(ctx, pageWalk[listingLink]{
 		key:   func(link listingLink) string { return cmp.Or(link.key, link.url) },
-		limit: w.limit, limitNote: w.limitNote, quiet: w.quiet, failed: w.failed,
+		limit: w.limit, limitNote: w.limitNote, ends: w.ends, quiet: w.quiet, failed: w.failed,
 		fetch: func(ctx context.Context, n int) (pageOf[listingLink], error) {
 			const repeated = "partial — repeated page"
 			if pages[key(page)] {
-				return pageOf[listingLink]{stop: repeated}, nil
+				return pageOf[listingLink]{stop: repeated, stopped: stopRepeatedPage}, nil
 			}
 			pages[key(page)] = true
 			var (
@@ -129,7 +131,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 				return pageOf[listingLink]{}, err
 			}
 			if key(final) != key(page) && pages[key(final)] {
-				return pageOf[listingLink]{stop: repeated}, nil
+				return pageOf[listingLink]{stop: repeated, stopped: stopRepeatedPage}, nil
 			}
 			pages[key(final)] = true
 			if n == 0 {
@@ -138,7 +140,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 				}
 				first = final
 			} else if !w.anyRedirect && (!sameSite(final, page) || !samePath(final, page) || final.RawQuery != page.RawQuery) {
-				return pageOf[listingLink]{stop: "partial — next page redirected to another listing"}, nil
+				return pageOf[listingLink]{stop: "partial — next page redirected to another listing", stopped: stopRedirected}, nil
 			}
 			p := w.read(root, final, first)
 			switch {
@@ -147,7 +149,7 @@ func walkListing(ctx context.Context, client *httpx.Client, first *url.URL, w li
 			case p.missing && n == 0:
 				return pageOf[listingLink]{}, fmt.Errorf("%s: %s", w.name, cmp.Or(w.missing, "no video listing on this page"))
 			case p.missing:
-				return pageOf[listingLink]{stop: "partial — listing is missing on next page", note: p.note}, nil
+				return pageOf[listingLink]{stop: "partial — listing is missing on next page", stopped: stopMissing, note: p.note}, nil
 			}
 			if n == 0 {
 				title = cmp.Or(p.title, title)

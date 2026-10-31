@@ -281,7 +281,7 @@ func (l *filesterLister) list(ctx context.Context, w *treeWalk, first *url.URL, 
 				if n == 0 {
 					return pageOf[filesterCard]{}, errFilesterNoListing
 				}
-				return pageOf[filesterCard]{stop: "partial — folder listing missing from a page"}, nil
+				return pageOf[filesterCard]{stop: "partial — folder listing missing from a page", stopped: stopMissing}, nil
 			}
 			if n == 0 {
 				if depth == 0 {

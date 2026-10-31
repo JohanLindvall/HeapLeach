@@ -5,9 +5,12 @@ package extractor
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // TestWalkPagesWeighsTheLimit counts the limit in what entries hold: pages
@@ -155,5 +158,80 @@ func TestWalkPagesReportsWhyItEnded(t *testing.T) {
 				t.Errorf("walkEpisodes more = %v", more)
 			}
 		})
+	}
+}
+
+// The completion matrix: what a walk says for each way a listing ends,
+// under the ends its caller accepts (walkAccepts) and under none.
+func TestWalkEndPolicies(t *testing.T) {
+	status := func(code int) error { return &httpx.StatusError{Code: code} }
+	sentinel := walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound, http.StatusGone}}
+	for _, tc := range []struct {
+		name    string
+		ends    walkAccepts
+		pages   []pageOf[string]
+		failAt  error
+		limit   int
+		want    string
+		wantErr bool
+	}{
+		{name: "stated total reached", pages: []pageOf[string]{{items: []string{"a"}, next: true, total: 2}, {items: []string{"b"}, next: true, total: 2}}},
+		{name: "end flag", pages: []pageOf[string]{{items: []string{"a"}, end: true}}},
+		{name: "short page that goes on", pages: []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"b"}}}},
+		{name: "repeated page, accepted", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"a"}, next: true}}},
+		{name: "repeated page, not accepted", pages: []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"a"}, next: true}},
+			want: "partial — repeated or empty page"},
+		{name: "missing listing, accepted", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}, {stop: "partial — listing is missing on next page", stopped: stopMissing}}},
+		{name: "redirect, not accepted by the sentinel", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}, {stop: "partial — redirected", stopped: stopRedirected}},
+			want: "partial — redirected"},
+		{name: "later 404, accepted", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}}, failAt: status(http.StatusNotFound)},
+		{name: "later 404, not accepted", pages: []pageOf[string]{{items: []string{"a"}, next: true}}, failAt: status(http.StatusNotFound),
+			want: couldNotFetchNote},
+		{name: "later 5xx", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}}, failAt: status(http.StatusBadGateway),
+			want: couldNotFetchNote},
+		{name: "later 429", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}}, failAt: status(http.StatusTooManyRequests),
+			want: "partial — rate limited"},
+		{name: "page cap", ends: sentinel, pages: []pageOf[string]{{items: []string{"a"}, next: true}, {items: []string{"b"}, next: true}},
+			want: "partial — page limit"},
+		{name: "item cap", ends: sentinel, limit: 1, pages: []pageOf[string]{{items: []string{"a", "b"}, next: true}}, want: fileLimitNote},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limit := tc.limit
+			if limit == 0 {
+				limit = -1
+			}
+			w := pageWalk[string]{
+				key: func(s string) string { return s }, limit: limit, limitNote: fileLimitNote, pages: 2, ends: tc.ends,
+				fetch: func(_ context.Context, n int) (pageOf[string], error) {
+					if n >= len(tc.pages) {
+						return pageOf[string]{}, tc.failAt
+					}
+					return tc.pages[n], nil
+				},
+			}
+			out, err := walkPagesFor(context.Background(), w)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := out.render(); got != tc.want {
+				t.Errorf("note %q, want %q (stop %v)", got, tc.want, out.stop)
+			}
+			if tc.failAt != nil && !errors.Is(out.err, tc.failAt) {
+				t.Errorf("the failure was not kept: %v", out.err)
+			}
+		})
+	}
+
+	// Cancellation outranks everything collected, accepted end or not.
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := walkPagesFor(ctx, pageWalk[string]{
+		key: func(s string) string { return s }, limit: -1, ends: sentinel,
+		fetch: func(_ context.Context, n int) (pageOf[string], error) {
+			cancel()
+			return pageOf[string]{items: []string{"a"}, end: true}, nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the cancellation", err)
 	}
 }

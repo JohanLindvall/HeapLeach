@@ -22,6 +22,7 @@ const noteSeparator = "; "
 const (
 	fileLimit   = "file limit"
 	sourceLimit = "source limit"
+	rateLimited = "rate limited"
 
 	fileLimitNote     = partialPrefix + fileLimit
 	sourceLimitNote   = partialPrefix + sourceLimit

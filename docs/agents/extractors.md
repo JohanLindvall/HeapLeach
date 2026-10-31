@@ -376,10 +376,9 @@ intact. `sources.go` holds what they share:
   `stop` rather than matching a note: `walkEpisodes` reports `more` from
   `walkLimit`, and a folder tree takes the `walkEnd` itself
   (`treeWalk.ended`). `walkPages` remains the adapter for callers that need
-  only the items and the displayed note. `quiet` still
-  silences the walk's own notes for the page cap, a repeated page, a stop
-  page and a failed page alike; telling a site's expected end from an
-  unexpected cut per caller is a separate change with its own note review.
+  only the items and the displayed note. The later page's error is kept
+  whole (`walkEnd.err`), so a caller reads its status or challenge rather
+  than the note.
 - Each page says how the listing ends, from what the API states: `total` (the
   count it holds), `pages` (the page count it runs to), `end` (an end flag, a
   missing cursor, or an empty page asked for past the end), or no `next`. Never end on a page shorter than the
@@ -387,11 +386,21 @@ intact. `sources.go` holds what they share:
   so. Asking one page past the end is cheap and right where nothing else
   says. A host that ignores its paging parameter serves page one again, which
   adds nothing and ends the walk.
-- A listing whose end is found by asking past it — a 404, an empty page, the
-  first page again — is `quiet`: the walk adds no note of its own there, and
-  `failed` maps the failures that are a cut (a rate limit). `stop` marks a
-  page that is not the listing's (missing, repeated, redirected) and `note` a
-  reason the walk ends early, such as a next page that cannot be followed.
+- A listing whose end is found by asking past it declares which ends are
+  its own (`pageWalk.ends`, `walkAccepts`): a page that adds nothing or is
+  served again (`repeated`), a later page without the listing (`missing`) or
+  moved to another (`redirected`), or particular later-page statuses (a 404
+  asked for page n+1). Those end the walk with no note. Anything not
+  declared is a cut and keeps its note: a timeout, a challenge or a server
+  error ("could not fetch next page"), a rate limit the client could not
+  outwait ("rate limited", read off the kept error), and the page cap. A
+  stop page carries its kind (`pageOf.stopped`: `stopRepeatedPage`,
+  `stopMissing`, `stopRedirected`) beside its wording, and the policy reads
+  the kind, never the text. `TestWalkEndPolicies` is the matrix. `quiet` is
+  the older blanket form, accepting every end alike, and remains only until
+  its callers declare their ends; `failed` maps a failure to a note of the
+  caller's own where the shared wording does not fit. `note` is a reason the
+  walk ends early, such as a next page that cannot be followed.
 - Stop **at** the cap rather than collecting everything and truncating: a
   broad search can state tens of thousands of pages. Where every entry costs a
   request at listing time, the cap is `listingLimit` (the lower of the source
@@ -612,7 +621,7 @@ list below.
   it rather than beside a copy of it. Options cover the rest:
   a first page the caller already read (`root`), a fetch of its own (`fetch`,
   `fetchAsAsked`), page identity (`key`), redirects judged by the reader
-  (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
+  (`anyRedirect`), and the engine's `ends`, `quiet` and `failed`; a `failed` hook
   returns its note and whether it decided one, and a hook that singles out
   one failure returns false for the rest, leaving their note to the walk. `expansion.note` (`sources.go`) builds the job note
   of a listing expanded into its sources, `partialNote` its caps.

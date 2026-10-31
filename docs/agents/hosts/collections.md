@@ -99,12 +99,14 @@ only to titles that actually repeat, so the ordinary case keeps clean names.
 Its form, "title id" compared case for case, predates the shared
 `sourceFolders` ("title [id]", case-blind) and is kept through
 `expandSourcesNamed`, since changing it would rename every repeated album
-already downloaded. A
-walk that hits a rate limit it cannot outwait returns what it got, and its
-`failed` hook marks the job "partial — rate limited" rather than letting it
-pass for complete; the mark is a note, not part of the title, so the folder
-stays put. The profile is a quiet, numbered `walkListing`: any other failed
-page is the end of the profile. Every album costs a request of its own, so
+already downloaded. The
+profile is a numbered `walkListing` that accepts as its end what the host
+answers past the last page: a 404 or 410, a page adding nothing, or one
+without the listing. A walk cut any other way returns what it got and says
+so — "partial — rate limited" for a rate limit it cannot outwait, "could not
+fetch next page" for a timeout or server error, "page limit" at the page cap
+— rather than letting part of a profile pass for complete; the mark is a
+note, not part of the title, so the folder stays put. Every album costs a request of its own, so
 the albums are held to `listingLimit`. They are expanded like any other
 sources (`expandSourcesNamed`): taken whole up to the file cap, which is
 noted where it cuts, with a failed album's reason kept, so a profile none of

@@ -254,12 +254,19 @@ func TestImgurListingEntriesStop(t *testing.T) {
 		{name: "empty page", after: "", rows: 3},
 		{name: "first page again", after: pages["0"], rows: 3},
 		{name: "capped", after: pages["0"], limit: 2, rows: 2, note: "partial — source limit"},
+		// A page that fails is no end the listing states: what was read
+		// stands, and the listing is said to have been cut.
+		{name: "later page fails", after: "fail", rows: 3, note: "partial — could not fetch next page"},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			page := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/t/cats/page/"), "/hit.json")
 			body, ok := pages[page]
 			if !ok {
 				body = tc.after
+			}
+			if body == "fail" {
+				w.WriteHeader(http.StatusBadGateway)
+				return
 			}
 			_, _ = w.Write([]byte(`{"data":[` + body + `]}`))
 		}))

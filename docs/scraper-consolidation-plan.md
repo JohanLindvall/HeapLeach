@@ -265,7 +265,7 @@ behaviors. See [listing.go](../backend/internal/extractor/listing.go) and
 
 **Implementation steps:**
 
-- [ ] Keep the current renderer as a compatibility adapter first. Add typed
+- [x] Keep the current renderer as a compatibility adapter first. Add typed
   distinctions for the evidence a reader supplies, such as expected missing
   next page versus redirect outside the listing; `pageOf.stop` currently
   carries display text, which should not become a control-flow input.
@@ -276,7 +276,7 @@ behaviors. See [listing.go](../backend/internal/extractor/listing.go) and
 - [ ] Use shared named policies only when at least two callers have the same
   conditions. Keep the reader responsible for recognizing its own end page,
   following filters and advancing its cursor.
-- [ ] Retain the original error in typed completion state where a caller
+- [x] Retain the original error in typed completion state where a caller
   needs to distinguish status, challenge and transport failure. Rendering a
   note must not be how a caller recovers that information.
 - [ ] Migrate one caller per behavior review. Preserve first-page errors and

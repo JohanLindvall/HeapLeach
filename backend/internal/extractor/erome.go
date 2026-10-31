@@ -125,23 +125,19 @@ func (e *Erome) profileAlbums(ctx context.Context, u *url.URL, opts Options) (al
 	page := 1
 	limit, limitNote := listingLimit(opts)
 	found, title, note, err := walkListing(ctx, e.client, &first, listingWalk{
-		name: "erome", title: strings.Join(util.PathSegments(u), "-"), quiet: true, root: root,
+		name: "erome", title: strings.Join(util.PathSegments(u), "-"), root: root,
 		limit: limit, limitNote: limitNote,
-		// A page that will not load is ordinarily the end of the listing:
-		// asking past the last one is how the walk learns where to stop. A
-		// rate limit is not that. The host has said come back, the client
-		// has already waited it out as far as it will go, and reading it as
-		// the end would hand back part of a profile as though it were the
-		// whole of it. It is a note rather than part of the title because
-		// the title names the folder: a partial run filed under "(partial —
-		// rate limited)" and the complete run after it under the plain name
-		// was every file downloaded twice.
-		failed: func(err error) (string, bool) {
-			if httpx.HasStatus(err, http.StatusTooManyRequests) {
-				return "partial — rate limited", true
-			}
-			return "", true
-		},
+		// Asking past the last page is how the walk learns where to stop:
+		// the host answers it 404 (or 410), or with a page that adds
+		// nothing or carries no listing. Those are the profile's end. Any
+		// other failure is not: a rate limit the client could not outwait,
+		// a timeout, a server error, or the page cap leave the walk's note,
+		// so part of a profile never passes for the whole of it. It is a
+		// note rather than part of the title because the title names the
+		// folder: a partial run filed under "(partial — rate limited)" and
+		// the complete run after it under the plain name was every file
+		// downloaded twice.
+		ends:  walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound, http.StatusGone}},
 		fetch: fetchAsAsked(e.client, headers),
 		read: func(root *html.Node, base, _ *url.URL) listingPage {
 			p := listingPage{title: cmp.Or(firstText(root, atom.H1), trimSiteSuffix(firstText(root, atomTitle)))}

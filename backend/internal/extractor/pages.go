@@ -5,9 +5,11 @@ package extractor
 import (
 	"cmp"
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // pageOf is one page of a paged listing, as its fetch hands it to walkPages.
@@ -32,8 +34,68 @@ type pageOf[T any] struct {
 	note string
 	// stop marks a page that is not the listing's — missing, read twice,
 	// redirected elsewhere: the walk ends without its items, with stop as
-	// its note unless quiet (and note, when set, in its place).
-	stop string
+	// its note unless the walk accepts that end (and note, when set, in its
+	// place). stopped says which of those it was, for the walk's policy to
+	// read (walkAccepts) rather than the wording.
+	stop    string
+	stopped pageStop
+}
+
+// pageStop is what a stop page was, as its reader saw it.
+type pageStop int
+
+const (
+	// stopOther is a page not the listing's for a reason of the reader's
+	// own, which no policy accepts but quiet.
+	stopOther pageStop = iota
+	// stopRepeatedPage is a page already read, served again.
+	stopRepeatedPage
+	// stopMissing is a page without the listing on it.
+	stopMissing
+	// stopRedirected is a page that moved to another listing.
+	stopRedirected
+)
+
+// walkAccepts is how a listing ends when it ends normally, as its caller
+// knows the host: each field an end taken as the listing's own, with no
+// note, where by default it is a cut and says so. Anything not accepted —
+// a timeout, a challenge, a rate limit, an exhausted page budget — keeps
+// its note.
+type walkAccepts struct {
+	// repeated is a page that adds nothing new, or a page read before
+	// served again: the host's way of saying there is no more.
+	repeated bool
+	// missing is a later page without the listing on it.
+	missing bool
+	// redirected is a later page that moved to another listing.
+	redirected bool
+	// statuses are the HTTP statuses a later page answers with past the
+	// end: a 404 asked for page n+1, say.
+	statuses []int
+}
+
+// accepts reports whether the walk takes this end as the listing's own.
+func (a walkAccepts) accepts(end walkEnd) bool {
+	switch end.stop {
+	case walkRepeated:
+		return a.repeated
+	case walkStopped:
+		switch end.stopKind {
+		case stopRepeatedPage:
+			return a.repeated
+		case stopMissing:
+			return a.missing
+		case stopRedirected:
+			return a.redirected
+		}
+	case walkFetchFailed:
+		for _, status := range a.statuses {
+			if httpx.HasStatus(end.err, status) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // pageWalk describes a paged listing to walkPages. Where the listing is —
@@ -58,10 +120,12 @@ type pageWalk[T any] struct {
 	weigh func([]T) int
 	// pages caps the pages read, config.MaxAlbumPages when zero.
 	pages int
-	// quiet is a listing whose walk stops where the listing does: a page
-	// that adds nothing, a stop page, the page cap, a later page that
-	// fails. It is no partial listing, so the walk adds no note of its
-	// own; the pages' notes and limitNote still stand.
+	// ends are the ends this listing takes as its own (walkAccepts).
+	ends walkAccepts
+	// quiet is the older, broader form of ends, kept while callers move
+	// to it: every end the walk would note — a page that adds nothing, a
+	// stop page, the page cap, a later page that fails — is taken as the
+	// listing's own. The pages' notes and limitNote still stand.
 	quiet bool
 	// failed decides the note for a later page that could not be
 	// fetched: the note it returns, "" being none, in place of the walk's
@@ -101,14 +165,19 @@ const (
 type walkEnd struct {
 	stop walkStop
 	// note is the ending page's own note (pageOf.note), and stopped its
-	// stop reason, when it was a stop page.
+	// stop reason and stopKind what it was, when it was a stop page.
 	note, stopped string
+	stopKind      pageStop
+	// err is why a later page could not be fetched, kept whole so a caller
+	// reads the status or the challenge rather than the note.
+	err error
 	// failure is the failed hook's note for a page that could not be
 	// fetched, and decided whether the hook gave one.
 	failure string
 	decided bool
-	// quiet and limitNote are the walk's (pageWalk).
+	// quiet, ends and limitNote are the walk's (pageWalk).
 	quiet     bool
+	ends      walkAccepts
 	limitNote string
 }
 
@@ -123,8 +192,9 @@ type walked[T any] struct {
 // own is the walk's own reason, bare, when it says it instead; a quiet
 // walk has none.
 func (e walkEnd) given() (note string, own string) {
+	accepted := e.quiet || e.ends.accepts(e)
 	mine := func(reason string) string {
-		if e.quiet {
+		if accepted {
 			return ""
 		}
 		return reason
@@ -140,13 +210,18 @@ func (e walkEnd) given() (note string, own string) {
 		if e.note != "" {
 			return e.note, ""
 		}
-		if e.quiet {
+		if accepted {
 			return "", ""
 		}
 		return e.stopped, ""
 	case walkFetchFailed:
 		if e.decided {
 			return e.failure, ""
+		}
+		// A rate limit the client waited out as far as it would is said
+		// as such: the host asked to come back, not that the listing ended.
+		if httpx.HasStatus(e.err, http.StatusTooManyRequests) && !e.quiet {
+			return "", mine(rateLimited)
 		}
 		return "", mine(strings.TrimPrefix(couldNotFetchNote, partialPrefix))
 	}
@@ -189,7 +264,7 @@ func walkPages[T any](ctx context.Context, w pageWalk[T]) (items []T, note strin
 // walkPagesFor is walkPages with why the walk ended (walked) in place of its
 // note.
 func walkPagesFor[T any](ctx context.Context, w pageWalk[T]) (out walked[T], err error) {
-	out.quiet, out.limitNote = w.quiet, w.limitNote
+	out.quiet, out.ends, out.limitNote = w.quiet, w.ends, w.limitNote
 	pages := w.pages
 	if pages <= 0 {
 		pages = config.MaxAlbumPages
@@ -210,14 +285,14 @@ func walkPagesFor[T any](ctx context.Context, w pageWalk[T]) (out walked[T], err
 			if n == 0 {
 				return walked[T]{}, err
 			}
-			out.stop = walkFetchFailed
+			out.stop, out.err = walkFetchFailed, err
 			if w.failed != nil {
 				out.failure, out.decided = w.failed(err)
 			}
 			break
 		}
 		if p.stop != "" {
-			out.stop, out.note, out.stopped = walkStopped, p.note, p.stop
+			out.stop, out.note, out.stopped, out.stopKind = walkStopped, p.note, p.stop, p.stopped
 			break
 		}
 		before := len(out.items)

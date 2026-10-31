@@ -230,8 +230,9 @@ func TestGelbooru01KeepsWhatItGot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a refused second page threw away the first: %v", err)
 	}
-	if note != "partial — could not fetch next page" {
-		t.Errorf("note = %q, want the walk cut short said so", note)
+	// A rate limit is said as one: the host asked to come back later.
+	if note != "partial — rate limited" {
+		t.Errorf("note = %q, want the walk cut short by the rate limit said so", note)
 	}
 	if len(files) != gelbooru01PageSize {
 		t.Errorf("kept %d files, want the %d the board did answer with", len(files), gelbooru01PageSize)
