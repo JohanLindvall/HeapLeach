@@ -31,9 +31,8 @@ type RedGifs struct {
 }
 
 const (
-	redgifsAPI      = "https://api.redgifs.com/v2"
-	redgifsRoot     = "https://www.redgifs.com"
-	redgifsPageSize = 80
+	redgifsAPI  = "https://api.redgifs.com/v2"
+	redgifsRoot = "https://www.redgifs.com"
 )
 
 // NewRedGifs builds the redgifs extractor.
@@ -108,7 +107,7 @@ func (r *RedGifs) user(ctx context.Context, name string, opts Options) (*Result,
 				Pages int           `json:"pages"`
 			}
 			path := fmt.Sprintf("/users/%s/search?order=new&count=%d&page=%d",
-				url.PathEscape(name), redgifsPageSize, n+1)
+				url.PathEscape(name), config.RedGifsPageSize, n+1)
 			if err := r.call(ctx, path, &payload); err != nil {
 				return pageOf[redgifsItem]{}, fmt.Errorf("redgifs: user %s: %w", name, err)
 			}

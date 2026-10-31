@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // A gallery page shaped like the site's, carrying every trap that decides how
@@ -155,7 +157,7 @@ func TestPornPicsPlainListingIsPagedThroughItsOwnPath(t *testing.T) {
 	}
 	// The second block starts a whole page size on, not one item on.
 	want = "https://www.pornpics.com/some-category/?limit=500&offset=520&orientation=straight"
-	if got := pager(pornpicsFirstOffset + pornpicsPageSize); got != want {
+	if got := pager(pornpicsFirstOffset + config.PornPicsPageSize); got != want {
 		t.Errorf("page 2 = %q, want %q", got, want)
 	}
 	if strings.Contains(pager(pornpicsFirstOffset), "srch.php") {

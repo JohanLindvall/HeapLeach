@@ -478,6 +478,17 @@ reads `opts.maxFiles()` rather than the constant. Zero means the default, and
 there is no "unlimited": every file of a job is also a row in the UI and a
 line in the saved queue.
 
+A host's own request sizes and waits are sorted by purpose. What the
+application chooses — a pause between pages (`Gelbooru01Pace`), a cooldown
+after a refusal (`GofileRejectionCooldown`), a page size asked for below what
+the server allows (`PornPicsPageSize`, `ORFPageSize`, `RedGifsPageSize`) — is
+a tunable in `config/limits.go` under the host's name, even where two hosts
+share a value. What the server fixes stays beside the code that speaks its
+protocol: a page size that is the API's own ceiling (the fediverse strides,
+MediaWiki, BitChute, Niconico, Civitai, RTBF, ABC listen, the booru families'
+limit) or the unit an offset counts in (`gelbooru01PageSize`), where changing
+the number would not be a different setting but a broken walk.
+
 ### Titles, notes and folders
 
 - **What names a job's folder is `Result.Title` alone.** Anything an extractor

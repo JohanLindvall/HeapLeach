@@ -428,7 +428,7 @@ func TestGofileSignatureRejectedStopsSigning(t *testing.T) {
 
 	// Once the cooldown has passed, it tries again.
 	g.mu.Lock()
-	g.rejectedAt = time.Now().Add(-gofileRejectionCooldown - time.Second)
+	g.rejectedAt = time.Now().Add(-config.GofileRejectionCooldown - time.Second)
 	g.mu.Unlock()
 	if _, err := g.ensureSecret(context.Background()); err != nil {
 		t.Fatalf("still refusing after the cooldown: %v", err)

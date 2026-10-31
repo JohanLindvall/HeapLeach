@@ -74,3 +74,18 @@ Dispositions: **adopt** (moved to the shared operation), **already shared**
 | `Autoindex.readAll` | adopt: explicit outcomes; breadth-first levels and in-place node filling unchanged; a read cut short by cancellation is not a failure | `TestAutoindexDoesNotCountACancelledReadAsUnreadable`, existing crawl tests |
 | `resolveListing`, `resolveEach`, `readSeasons`, source expansion | already shared (`resolveOutcomes`) | Existing tests |
 | Private live test using `FanOut` | updated in `hl-priv` to `resolveOutcomes` | `go vet -tags live` |
+
+## W10 — tunables and headers
+
+| Constant | Classification | Disposition |
+| --- | --- | --- |
+| `gelbooru01Pace` | application wait | moved: `config.Gelbooru01Pace` |
+| `gofileRejectionCooldown` | application cooldown | moved: `config.GofileRejectionCooldown` |
+| `pornpicsPageSize` | request size chosen below the route's clamp; also the block offset step, which moves with it | moved: `config.PornPicsPageSize` |
+| `orfPageSize`, `redgifsPageSize` | request sizes asked for | moved: `config.ORFPageSize`, `config.RedGifsPageSize` |
+| `gelbooru01PageSize` | protocol: the board's fixed page, the unit `pid` counts in | retain |
+| `booruPageSize`, `civitaiPageSize`, `niconicoPageSize`, `mediaWikiPageSize`, `bitchutePageSize`, `rtbfPage`, `abcListenPageSize`, fediverse strides, `balbumsPerPage` | protocol: the server's documented ceiling | retain |
+| `gofileSlot` | protocol: the signing window | retain |
+
+Values are unchanged; request sequences are those the existing host tests
+pin (offsets, limits, page numbers). No flag or environment setting was added.

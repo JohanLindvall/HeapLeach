@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -233,7 +234,7 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 	episodes, walkNote, err := walkPages(ctx, pageWalk[orfEpisodeDoc]{
 		fetch: func(ctx context.Context, n int) (pageOf[orfEpisodeDoc], error) {
 			var doc orfEpisodesPage
-			if err := o.get(ctx, fmt.Sprintf("profile/%s/episodes?limit=%d&page=%d", url.PathEscape(id), orfPageSize, n+1), &doc); err != nil {
+			if err := o.get(ctx, fmt.Sprintf("profile/%s/episodes?limit=%d&page=%d", url.PathEscape(id), config.ORFPageSize, n+1), &doc); err != nil {
 				return pageOf[orfEpisodeDoc]{}, err
 			}
 			items := doc.Embedded.Items
@@ -293,9 +294,6 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 		leftOutNote(austria, " that ORF shows in Austria only"), leftOutNote(drm, " that are DRM-protected"))
 	return &Result{Title: cmp.Or(title, "series "+id), Files: files, Note: note}, nil
 }
-
-// orfPageSize is how many episodes a page of a series asks for.
-const orfPageSize = 100
 
 // lazy is a series' episode, read again and resolved when its transfer
 // starts.

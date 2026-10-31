@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -80,12 +81,6 @@ const (
 	// carried that many galleries in its markup. It is the site's own
 	// startOffset, which it writes as 0x14.
 	pornpicsFirstOffset = 20
-
-	// pornpicsPageSize is how many galleries a block asks for. The own-path
-	// route clamps offset+limit at a thousand and so runs out on its own;
-	// the search endpoint does not clamp, which is what MaxListingFiles is
-	// there to stop.
-	pornpicsPageSize = 500
 )
 
 // NewPornPics builds the pornpics extractor.
@@ -209,7 +204,7 @@ func (p *PornPics) listing(ctx context.Context, u *url.URL, opts Options) (*Resu
 			if n == 0 {
 				return pageOf[string]{items: first, next: true}, nil
 			}
-			links, err := p.block(ctx, pager(pornpicsFirstOffset+(n-1)*pornpicsPageSize), u)
+			links, err := p.block(ctx, pager(pornpicsFirstOffset+(n-1)*config.PornPicsPageSize), u)
 			return pageOf[string]{items: links, next: true, end: len(links) == 0}, err
 		},
 	})
@@ -285,7 +280,7 @@ func pornpicsSearchPager(u *url.URL, query, lang string) func(int) string {
 		values.Set("q", query)
 		values.Set("lang", lang)
 		values.Set("offset", strconv.Itoa(offset))
-		values.Set("limit", strconv.Itoa(pornpicsPageSize))
+		values.Set("limit", strconv.Itoa(config.PornPicsPageSize))
 		return endpoint + "?" + values.Encode()
 	}
 }
@@ -305,7 +300,7 @@ func pornpicsPathPager(u *url.URL) func(int) string {
 	return func(offset int) string {
 		values := maps.Clone(base)
 		values.Set("offset", strconv.Itoa(offset))
-		values.Set("limit", strconv.Itoa(pornpicsPageSize))
+		values.Set("limit", strconv.Itoa(config.PornPicsPageSize))
 		next := page
 		next.RawQuery = values.Encode()
 		return next.String()

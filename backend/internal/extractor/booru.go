@@ -11,8 +11,8 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -107,14 +107,6 @@ const (
 	// way to ask for more, and its pid counts posts, so this is the step from
 	// one page to the next.
 	gelbooru01PageSize = 20
-	// gelbooru01Pace is the wait between listing pages.
-	//
-	// Twenty posts to a page makes a long search a great many requests in a
-	// row, and these boards answer a burst of them with 429: measured, a walk
-	// with no pause is refused around the thirteenth page, and the same walk
-	// with a second between pages is not refused at all. Backing off after
-	// the refusal costs more than this does, and yields less.
-	gelbooru01Pace = time.Second
 	// Markers on the pages a board serves: a thumbnail on a listing, and the
 	// full image on a post's own page.
 	gelbooru01ThumbClass = "thumb"
@@ -442,7 +434,7 @@ func (b *Booru) posts(ctx context.Context, site *booruSite, tags, single string,
 			return posts, 0, err
 		}
 		if page > 0 {
-			if err := util.SleepCtx(ctx, gelbooru01Pace); err != nil {
+			if err := util.SleepCtx(ctx, config.Gelbooru01Pace); err != nil {
 				return nil, 0, err
 			}
 		}

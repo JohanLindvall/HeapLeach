@@ -61,10 +61,6 @@ type Gofile struct {
 	rejectedAt time.Time
 }
 
-// gofileRejectionCooldown is how long a refused signature stops further
-// signed requests. Long enough that a queue cannot become a burst of them.
-const gofileRejectionCooldown = 15 * time.Minute
-
 const (
 	gofileAPI  = "https://api.gofile.io"
 	gofileRoot = "https://gofile.io"

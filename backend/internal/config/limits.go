@@ -590,6 +590,28 @@ const (
 	// MediaWikiInterval spaces out calls to one wiki's API.
 	MediaWikiInterval = time.Second
 
+	// Gelbooru01Pace is the wait between a legacy booru's listing pages.
+	//
+	// Twenty posts to a page makes a long search a great many requests in a
+	// row, and these boards answer a burst of them with 429: measured, a walk
+	// with no pause is refused around the thirteenth page, and the same walk
+	// with a second between pages is not refused at all. Backing off after
+	// the refusal costs more than this does, and yields less.
+	Gelbooru01Pace = time.Second
+
+	// PornPicsPageSize is how many galleries one block request asks for,
+	// and so the step from one block's offset to the next. The own-path
+	// route clamps offset+limit at a thousand and so runs out on its own;
+	// the search endpoint does not clamp, which is what MaxListingFiles is
+	// there to stop.
+	PornPicsPageSize = 500
+
+	// ORFPageSize is how many episodes one page of a series asks for.
+	ORFPageSize = 100
+
+	// RedGifsPageSize is how many entries one listing page asks for.
+	RedGifsPageSize = 80
+
 	// ThrottleMinWait keeps a rate-limited reader from spinning through
 	// sub-millisecond sleeps when the limit is very low.
 	ThrottleMinWait = 5 * time.Millisecond
@@ -755,6 +777,10 @@ const (
 	// GofileTokenTTL re-mints the guest account well inside the 6-hour
 	// window the web app allows a page to keep signing.
 	GofileTokenTTL = 3 * time.Hour
+
+	// GofileRejectionCooldown is how long a refused signature stops further
+	// signed requests. Long enough that a queue cannot become a burst of them.
+	GofileRejectionCooldown = 15 * time.Minute
 
 	// RedGifsTokenTTL is how long a temporary bearer token is reused before
 	// another is asked for.

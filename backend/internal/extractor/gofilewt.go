@@ -69,11 +69,11 @@ func (g *Gofile) ensureSecret(ctx context.Context) (string, error) {
 
 	// A refused signature means what we hold is wrong, and gofile blocks an
 	// address that keeps proving it. Nothing is sent until that has aged out.
-	if since := time.Since(g.rejectedAt); !g.rejectedAt.IsZero() && since < gofileRejectionCooldown {
+	if since := time.Since(g.rejectedAt); !g.rejectedAt.IsZero() && since < config.GofileRejectionCooldown {
 		return "", fmt.Errorf("gofile: the last request was refused as wrongly signed, and "+
 			"repeating that gets this address blocked — waiting %s before trying again; "+
 			"set HEAPLEACH_GOFILE_SECRET if you know the current secret",
-			(gofileRejectionCooldown - since).Round(time.Second))
+			(config.GofileRejectionCooldown - since).Round(time.Second))
 	}
 
 	// A secret the user configured is their answer, not a guess to improve.
