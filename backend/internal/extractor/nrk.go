@@ -321,7 +321,7 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 		return nil, fmt.Errorf("nrk: manifest for %s: %w", id, err)
 	}
 	if !strings.EqualFold(doc.Playability, "playable") {
-		return nil, &broadcastRefusal{"nrk", id, doc.refusal()}
+		return nil, &itemRefusal{"nrk", id, doc.refusal()}
 	}
 
 	// stream's refusals are written to follow the programme id as a sentence

@@ -151,18 +151,18 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 	// the user's cap.
 	listed := len(links)
 	links = links[:min(len(links), config.MaxResolvedReleases)]
-	files, refusals, failed := resolveFiles(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+	files, outcomes := resolveListing(ctx, links, func(ctx context.Context, link string) ([]File, error) {
 		release, err := b.release(ctx, link)
 		if err != nil {
 			return nil, err
 		}
 		return release.files(b), nil
 	})
-	if err := noneResolved(ctx, files, "bandcamp", len(links), "releases", u.Redacted(), refusals, failed); err != nil {
+	if err := noneResolved(ctx, files, "bandcamp", len(links), "releases", u.Redacted(), outcomes.refusals, outcomes.failed); err != nil {
 		return nil, err
 	}
 	band := cmp.Or(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
-	return &Result{Title: band, Files: files, Note: joinNotes(cappedNote(len(links), listed, "releases"), refusedNote(refusals))}, nil
+	return &Result{Title: band, Files: files, Note: joinNotes(cappedNote(len(links), listed, "releases"), outcomes.note())}, nil
 }
 
 // release reads one album or track page.

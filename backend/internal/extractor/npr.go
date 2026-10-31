@@ -112,22 +112,29 @@ func (n *NPR) Recognise(_ context.Context, p *Page) bool {
 // Extract reads a page and lists every piece of audio on it.
 func (n *NPR) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	// No headers: the pages need none, and neither does the audio they name.
-	doc, _, err := fetchDocument(ctx, n.client, u, nil)
+	// The probe's own tree is read when it holds the page, so the document
+	// recognised is not parsed again.
+	root, _, err := fetchRoot(ctx, n.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("npr: fetch %s: %w", u.Redacted(), err)
 	}
-	return nprResult(doc, u)
+	return nprRead(root, u)
 }
 
-// nprResult turns a fetched page into a job. Kept apart from the fetch so a
-// fixture can stand in for the page, since every decision this host needs is
-// made here.
+// nprResult is nprRead for a page held as a string, as the fixtures hold
+// theirs.
 func nprResult(doc string, u *url.URL) (*Result, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, fmt.Errorf("npr: %s: %w", u.Redacted(), err)
 	}
+	return nprRead(root, u)
+}
 
+// nprRead turns a parsed page into a job. Kept apart from the fetch so a
+// fixture can stand in for the page, since every decision this host needs is
+// made here. The tree may be the shared probe's, so it is only read.
+func nprRead(root *html.Node, u *url.URL) (*Result, error) {
 	listed := nprAudioFrom(root)
 	if len(listed) == 0 {
 		return nil, fmt.Errorf("npr: no audio on %s — the page embeds none, which is how a text "+

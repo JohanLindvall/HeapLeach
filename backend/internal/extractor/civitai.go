@@ -231,11 +231,11 @@ func (c *Civitai) walk(ctx context.Context, next string, opts Options) ([]civita
 	return walkPages(ctx, pageWalk[civitaiImage]{
 		key:   func(item civitaiImage) string { return strconv.FormatInt(item.ID, 10) },
 		limit: opts.maxFiles(), limitNote: fileLimitNote,
-		failed: func(err error) string {
+		failed: func(err error) (string, bool) {
 			if httpx.HasStatus(err, http.StatusServiceUnavailable) {
-				return "partial — the image search stayed overloaded"
+				return "partial — the image search stayed overloaded", true
 			}
-			return pageFailed
+			return "", false
 		},
 		fetch: func(ctx context.Context, _ int) (pageOf[civitaiImage], error) {
 			payload, err := c.page(ctx, next)

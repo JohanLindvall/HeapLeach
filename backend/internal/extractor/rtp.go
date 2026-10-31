@@ -203,7 +203,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	// it is settled entirely from the page.
 	manifest := rtpManifest(doc, program)
 	if rtpProtected(doc, manifest) {
-		return nil, "", &broadcastRefusal{"rtpplay", page, "DRM protected — RTP serves its entertainment " +
+		return nil, "", &itemRefusal{"rtpplay", page, "DRM protected — RTP serves its entertainment " +
 			"and fiction under FairPlay and Widevine, which nothing here can decrypt"}
 	}
 
@@ -224,7 +224,7 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 		// when there is not it says so in words meant for a viewer. Those are
 		// passed through: whether the episode expired, was never published or
 		// is licensed elsewhere is something only RTP knows.
-		return nil, "", &broadcastRefusal{"rtpplay", page, cmp.Or(rtpUnavailable(root),
+		return nil, "", &itemRefusal{"rtpplay", page, cmp.Or(rtpUnavailable(root),
 			"the page carries no stream for this programme")}
 	}
 

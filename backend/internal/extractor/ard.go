@@ -352,7 +352,7 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 
 	widget := doc.Widgets[0]
 	if reason := widget.refusal(); reason != "" {
-		return nil, "", "", &broadcastRefusal{"ard", id, reason}
+		return nil, "", "", &itemRefusal{"ard", id, reason}
 	}
 	media := widget.MediaCollection.Embedded
 	show = cmp.Or(widget.Show.Title, media.Meta.SeriesTitle)

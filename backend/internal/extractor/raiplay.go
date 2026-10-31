@@ -272,7 +272,7 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 	case !raiEmpty(asset.LicenceServerMap):
 		return "", fmt.Errorf("raiplay: %s is DRM protected", title)
 	case asset.refused():
-		return "", &broadcastRefusal{"raiplay", title, raiReason(asset.Description)}
+		return "", &itemRefusal{"raiplay", title, raiReason(asset.Description)}
 	case link == "":
 		return "", fmt.Errorf("raiplay: %s: the relinker named no stream", title)
 	case !strings.EqualFold(asset.CT, "m3u8"):

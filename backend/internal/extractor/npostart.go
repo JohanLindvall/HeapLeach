@@ -368,13 +368,13 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 		map[string]string{"profileName": "hls", "referrerUrl": npoRoot}, &link)
 	if err != nil {
 		if reason := npoReason(err); reason != "" {
-			return nil, &broadcastRefusal{"npo", productID, reason}
+			return nil, &itemRefusal{"npo", productID, reason}
 		}
 		return nil, fmt.Errorf("npo: stream for %s: %w", productID, err)
 	}
 
 	if scheme, ok := link.Stream.encrypted(); ok {
-		return nil, &broadcastRefusal{"npo", productID, "DRM protected — NPO serves it under " + scheme +
+		return nil, &itemRefusal{"npo", productID, "DRM protected — NPO serves it under " + scheme +
 			", and there is no key here to unlock it with"}
 	}
 	if link.Stream.URL == "" {

@@ -364,6 +364,8 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	}
 	title := cmp.Or(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
 	// Related-post plugins can append their own thumbnails inside entry-content.
+	// Removing them edits the tree, which is why wordPressFetch parses a
+	// private copy rather than borrowing a shared page's (fetchRoot).
 	for _, related := range findAll(content, func(n *html.Node) bool {
 		return hasAnyClass(n, "crp_related", "related-posts", "wp-block-query")
 	}) {

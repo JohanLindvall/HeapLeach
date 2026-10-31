@@ -135,6 +135,13 @@ func refusedNote(reasons []string) string {
 	return joinNotes(notes...)
 }
 
+// unreadNote says n items of a listing could not be read — a request or a
+// parse that failed — or nothing when none were. It sits beside
+// refusedNote's counts, in the same words: the items were left out.
+func unreadNote(n int) string {
+	return leftOutNote(n, ": could not be read")
+}
+
 // brokenNote says a listing's walk broke off partway, when it did.
 func brokenNote(err error) string {
 	if err == nil {

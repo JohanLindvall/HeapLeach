@@ -259,7 +259,7 @@ func TestRUVDomesticIsRefusedInWords(t *testing.T) {
 	if err == nil {
 		t.Fatal("an Iceland-only episode resolved from outside Iceland")
 	}
-	var refusal *broadcastRefusal
+	var refusal *itemRefusal
 	if !errors.As(err, &refusal) {
 		t.Fatalf("error = %v, want a refusal this run can recognise", err)
 	}
@@ -296,7 +296,7 @@ func TestRUVGlobalFailureIsNotAGeoBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("a refused playlist resolved anyway")
 	}
-	if _, ok := errors.AsType[*broadcastRefusal](err); ok {
+	if _, ok := errors.AsType[*itemRefusal](err); ok {
 		t.Errorf("a Global episode was reported as Iceland-only: %v", err)
 	}
 	if session.outsideIceland {
