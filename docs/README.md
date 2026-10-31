@@ -31,5 +31,7 @@ checks and suggested first contributions. [AGENTS.md](../AGENTS.md) links the
 area guides with the invariants for each part of the code.
 
 The [service audit](audit-2026-10-03.md) records a dated review; use the current
-guides for present behavior. Vulnerabilities follow the
-[security policy](../SECURITY.md).
+guides for present behavior. The
+[scraper consolidation plan](scraper-consolidation-plan.md) records the
+investigation and proposed reuse work from 2026-10-31. Vulnerabilities follow
+the [security policy](../SECURITY.md).
