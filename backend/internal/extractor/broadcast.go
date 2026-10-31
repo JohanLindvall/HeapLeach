@@ -211,7 +211,7 @@ func expandSeries[T any](ctx context.Context, s series[T]) ([]listedItem[T], str
 		*s.refused = refusals
 	}
 	// The caller's cancellation outranks what resolved before it, as in
-	// noneResolved.
+	// outcomeSummary.noneResolved.
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}

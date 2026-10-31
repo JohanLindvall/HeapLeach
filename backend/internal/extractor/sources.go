@@ -345,9 +345,9 @@ func (e expansion) childNote(w sourceWords) string {
 
 // unresolved is how an expansion of the sources on where finishes when it
 // is no success: the caller's cancellation, or noneRead's error when no
-// source yielded files (noneResolved); nil otherwise.
+// source yielded files (outcomeSummary.noneResolved); nil otherwise.
 func (e expansion) unresolved(ctx context.Context, site, noun, where string) error {
-	return noneResolved(ctx, e.files, site, e.listed, noun, where, e.refusals, e.failed)
+	return e.outcomeSummary.noneResolved(ctx, e.files, site, noun, where)
 }
 
 // opening is an expansion's extract for a host reading the pages its own

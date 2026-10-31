@@ -398,19 +398,19 @@ handwritten registry inventory.
   adapted page parser or custom `read`. Keep the existing listing `walk` versus
   `links` exclusivity check. Test coherent signing options, including that
   `withheld` cannot silently apply to an unsigned eager file.
-- [ ] Pin registry precedence with pages recognized by overlapping families;
+- [x] Pin registry precedence with pages recognized by overlapping families;
   deterministic construction alone does not prove the intended precedence.
-- [ ] Keep `Shape` narrow enough for link discovery while allowing `Recognise`
+- [x] Keep `Shape` narrow enough for link discovery while allowing `Recognise`
   to identify a broader directly submitted page. Share's current forms couple
   those two sets; preserve dedicated Erome and PornPics extractors unless a
   separate, worthwhile change explicitly decouples them.
-- [ ] Keep outcome summaries intact until final rendering. Remove tuple
+- [x] Keep outcome summaries intact until final rendering. Remove tuple
   adapters that discard counts once their callers have migrated; the adoption
   branch already removes `resolveFiles` and `sortOutcomes`.
-- [ ] Reuse `expansion.note`, `outcomeSummary.note`, `noneResolved` and
+- [x] Reuse `expansion.note`, `outcomeSummary.note`, `noneResolved` and
   `listSeries` at collection finishers instead of rebuilding their phrases.
   Preserve deliberate provider omission policies.
-- [ ] Update the choice table and matching host notes in each implementation
+- [x] Update the choice table and matching host notes in each implementation
   commit. Regenerate the inventory when registration or descriptions change.
 
 Use a deletion checklist in each commit: which duplicate body, parser,

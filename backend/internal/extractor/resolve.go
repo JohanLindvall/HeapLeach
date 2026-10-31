@@ -31,7 +31,7 @@ type outcome[T, R any] struct {
 // settles, and an item not reached has no outcome. What the caller makes of
 // a cancelled map is settled by its finaliser, where the caller's
 // cancellation outranks whatever resolved first (readListing,
-// noneResolved, expandSeries).
+// outcomeSummary.noneResolved, expandSeries).
 func resolveOutcomes[T, R any](ctx context.Context, items []T, inTurn bool, resolve func(context.Context, T) (R, error)) []outcome[T, R] {
 	if inTurn {
 		var outcomes []outcome[T, R]
@@ -176,26 +176,27 @@ func noneRead(site string, n int, noun, where string, refusals []string, failed 
 // could not be read, beside others that resolved (outcomeSummary.note). When
 // none resolves, the error is the first reason why (noneRead). Once the
 // caller has cancelled, the error is that, whatever had resolved
-// (noneResolved).
+// (outcomeSummary.noneResolved).
 func readListing[T any](ctx context.Context, site, noun, where string, items []T,
 	resolve func(context.Context, T) ([]File, error)) ([]File, string, error) {
 	files, s := resolveListing(ctx, items, resolve)
-	if err := noneResolved(ctx, files, site, len(items), noun, where, s.refusals, s.failed); err != nil {
+	if err := s.noneResolved(ctx, files, site, noun, where); err != nil {
 		return nil, "", err
 	}
 	return files, s.note(), nil
 }
 
-// noneResolved is how a listing of n items on where finishes: the caller's
-// cancellation, which outranks everything that resolved before it — a
-// listing cut short and returned as a success would be saved as the whole
-// listing; else noneRead's error when no item yielded files; else nil.
-func noneResolved(ctx context.Context, files []File, site string, n int, noun, where string, refusals []string, failed error) error {
+// noneResolved is how a listing of s.listed items on where, which came to
+// files, finishes: the caller's cancellation, which outranks everything
+// that resolved before it — a listing cut short and returned as a success
+// would be saved as the whole listing; else noneRead's error when no item
+// yielded files, from the summary's own refusals and failure; else nil.
+func (s outcomeSummary) noneResolved(ctx context.Context, files []File, site, noun, where string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if len(files) > 0 {
 		return nil
 	}
-	return noneRead(site, n, noun, where, refusals, failed)
+	return noneRead(site, s.listed, noun, where, s.refusals, s.failed)
 }

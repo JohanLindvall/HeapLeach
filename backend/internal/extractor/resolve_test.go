@@ -146,7 +146,7 @@ func TestListingFinishersPreferCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || files != nil {
 		t.Fatalf("cancelled listing: files=%v err=%v", files, err)
 	}
-	if err := noneResolved(ctx, []File{{Name: "a"}}, "site", 1, "posts", "x", nil, nil); !errors.Is(err, context.Canceled) {
+	if err := (outcomeSummary{listed: 1, attempted: 1, succeeded: 1}).noneResolved(ctx, []File{{Name: "a"}}, "site", "posts", "x"); !errors.Is(err, context.Canceled) {
 		t.Errorf("noneResolved with files after cancellation = %v", err)
 	}
 

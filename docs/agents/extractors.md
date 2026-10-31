@@ -421,7 +421,7 @@ intact. `sources.go` holds what they share:
   concurrent modes both start nothing once the context ends, let started
   work settle, and keep each outcome's index and error. `readSeasons`,
   `resolveEach` and source expansion go through it. Every finisher —
-  `readListing`, `noneResolved`, `expandSeries`, the walkers' cap exits and
+  `readListing`, `outcomeSummary.noneResolved`, `expandSeries`, the walkers' cap exits and
   the album callers that finish by hand — checks the caller's cancellation
   **first**: a listing cut short and returned as a success would be saved
   as if it were the whole listing. `FanOut` remains for callers that only
@@ -507,10 +507,10 @@ list below.
 
 | The site | Write | Where |
 | --- | --- | --- |
-| A video page whose player names its renditions | a `playerSite` row | `playersites.go` |
+| A video page whose player names its renditions | a `playerSite` row: `parse` when the page is all it reads, `read` for an API or handshake | `playersites.go` |
 | A stateless share or album page read by its own parser | a `shareSite` row, unless its `Recognise` must accept pages its forms do not describe | `shares.go` |
 | A link that only hands off to another host's page, or a page that only points at one | a `handoffSite` or `pointerSite` row | `handoffs.go`, `pointers.go` |
-| Software many operators run | one platform-family extractor keyed on its fingerprint | [Platform families](#platform-families) |
+| Software many operators run | one platform-family extractor keyed on its fingerprint, registered after the single-site extractors and before the fediverse (`TestRegistryPrefersTheNarrowerFamily`) | [Platform families](#platform-families) |
 | A host with tokens, quotas, cooldowns, sessions or signing of its own | a dedicated extractor, composing the helpers below | its own file |
 
 - `about` (`extractor.go`): an extractor's name, inventory text and shape

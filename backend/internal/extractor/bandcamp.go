@@ -158,7 +158,7 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 		}
 		return release.files(b), nil
 	})
-	if err := noneResolved(ctx, files, "bandcamp", len(links), "releases", u.Redacted(), outcomes.refusals, outcomes.failed); err != nil {
+	if err := outcomes.noneResolved(ctx, files, "bandcamp", "releases", u.Redacted()); err != nil {
 		return nil, err
 	}
 	band := cmp.Or(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
