@@ -33,6 +33,7 @@ area guides with the invariants for each part of the code.
 The [service audit](audit-2026-10-03.md) records a dated review; use the current
 guides for present behavior. The
 [scraper consolidation plan](scraper-consolidation-plan.md) records the
-2026-10-31 audit, completed adoption work, and the proposed migration for page
-freshness, parser reuse, listing completion and discovery request limits.
+2026-10-31 source audit and a behavior-preserving migration plan covering all
+scraper families, shared infrastructure, compatibility gates, verified bug fixes
+and recorded replay.
 Vulnerabilities follow the [security policy](../SECURITY.md).
