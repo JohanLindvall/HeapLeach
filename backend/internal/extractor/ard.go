@@ -3,8 +3,8 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -55,7 +55,7 @@ import (
 // series that has seasons. They are recognised by their ids instead: see
 // ardWithoutVariants.
 type ARD struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -84,10 +84,26 @@ const (
 
 // NewARD builds the ARD Mediathek extractor.
 func NewARD(client *httpx.Client) *ARD {
-	return &ARD{hostSet: hostSet{"ardmediathek.de"}, client: client}
+	return &ARD{client: client, about: about{name: "ard", shape: ardShape,
+		recognises: "videos (`/video/…/<id>`) and programmes (`/sendung/`, `/serie/`, `/film/`) of the ARD Mediathek, whose page loads from its page gateway"}}
 }
 
-func (a *ARD) Name() string { return "ard" }
+// ardShapeIDLen is how long a content id is before the link scanner takes
+// it for one. An id is base64 of a whole content identifier and runs to
+// dozens of characters; another site's /video/<number> does not.
+const ardShapeIDLen = 24
+
+// ardShape is a video or programme link with its content id.
+func ardShape(u *url.URL) bool {
+	ref := ardTarget(u)
+	return len(ref.item) >= ardShapeIDLen || len(ref.show) >= ardShapeIDLen
+}
+
+// Recognise takes a video or programme page of the Mediathek: its state is
+// read from the page gateway (/page-gateway/), the API this resolves with.
+func (a *ARD) Recognise(_ context.Context, p *Page) bool {
+	return ardTarget(p.Final) != ardRef{} && p.Has("/page-gateway/") && p.Named("ARD Mediathek")
+}
 
 // Extract handles a single video, or a programme that expands to every
 // episode listed under it.
@@ -178,149 +194,127 @@ func (a *ARD) video(ctx context.Context, id string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A lone file is written straight into the download directory with no
-	// folder to say what it belongs to, so the name carries the programme as
-	// well — unless, as is usual here, the episode title already repeats it.
-	title := ardJoin(show, util.FirstNonEmpty(episode, id))
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	// The episode title usually repeats the programme already.
+	return soleFile(joinTitle(show, cmp.Or(episode, id), titleContains), file), nil
 }
 
 // series expands a programme into one file per episode, filed by season when
 // the programme has more than one.
 func (a *ARD) series(ctx context.Context, u *url.URL, ref ardRef) (*Result, error) {
-	title, episodes, err := a.episodes(ctx, ref)
+	title, episodes, more, walkNote, err := a.episodes(ctx, ref, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("ard: %s lists nothing to download", u.Redacted())
 	}
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep ardEpisodeRef) string { return ep.season })
 
 	// Every episode needs a request of its own, and a series runs to
 	// hundreds; fetched one after another the job would sit resolving for
 	// minutes before a byte moved.
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep ardEpisodeRef) ([]ardResolved, error) {
-		file, _, episodeTitle, err := a.episode(ctx, ep.id)
-		if err != nil {
-			// One refused episode must not sink the rest, but its reason is
-			// kept: when every episode is refused they are refused for the
-			// same reason, and reporting it once is the only useful answer.
-			if refused, ok := errors.AsType[*ardRefused](err); ok {
-				return []ardResolved{{refusal: refused.reason}}, nil
+	return listSeries(ctx, cmp.Or(title, ref.show), series[broadcastEpisode]{
+		site: "ard", noun: "entries", link: u.Redacted(),
+		items: episodes, more: more,
+		label: broadcastEpisode.seasonOf,
+		// The item's own title wins over the listing's short one here.
+		resolve: func(ctx context.Context, ep broadcastEpisode) (*File, error) {
+			file, _, episodeTitle, err := a.episode(ctx, ep.id)
+			if err != nil {
+				return nil, err
 			}
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(episodeTitle, ep.name, ep.id) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return []ardResolved{{file: file}}, nil
-	})
-
-	result := &Result{Title: util.FirstNonEmpty(title, ref.show)}
-	var refusal string
-	for _, r := range resolved {
-		if r.file == nil {
-			if refusal == "" {
-				refusal = r.refusal
-			}
-			continue
-		}
-		result.Files = append(result.Files, *r.file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("ard: none of the %d entries of %s are playable: %s",
-			len(episodes), u.Redacted(),
-			util.FirstNonEmpty(refusal, "the listing names them but no stream is offered"))
-	}
-	return result, nil
+			file.Name = cmp.Or(episodeTitle, ep.name, ep.id) + file.Name
+			return file, nil
+		},
+		unplayable: "the listing names them but no stream is offered",
+	}, walkNote)
 }
 
-// ardResolved is what expanding one listing entry produced: a file, or ARD's
-// reason for offering none.
-type ardResolved struct {
-	file    *File
-	refusal string
-}
-
-// ardEpisodeRef is one entry of a programme's listing.
-type ardEpisodeRef struct {
-	id     string
-	name   string
-	season string
-}
-
-// episodes names a programme and lists what to download from it.
-func (a *ARD) episodes(ctx context.Context, ref ardRef) (string, []ardEpisodeRef, error) {
+// episodes names a programme and lists what to download from it, up to
+// limit entries a listing, saying whether one went on past that, and the
+// note for a listing whose walk was cut short some other way.
+func (a *ARD) episodes(ctx context.Context, ref ardRef, limit int) (title string, refs []broadcastEpisode, more bool, note string, err error) {
 	// A season named in the link is taken on its own, and its name goes in
 	// the job title rather than into a folder below it: two seasons fetched
 	// from two links would otherwise land in one folder, where episode names
 	// that start again at "Folge 1" collide.
 	if ref.season != "" {
-		widget, teasers, err := a.pages(ctx, ref.show, ref.season)
+		l, err := a.pages(ctx, ref.show, ref.season, limit)
 		if err != nil {
-			return "", nil, err
+			return "", nil, false, "", err
 		}
-		return ardJoin(ardShowTitle(teasers), widget.Title), ardRefs(teasers, ""), nil
+		return joinTitle(ardShowTitle(l.teasers), l.widget.Title, titleContains), ardRefs(l.teasers, ""), l.more, l.note, nil
 	}
 
-	first, teasers, err := a.pages(ctx, ref.show, "")
+	flat, err := a.pages(ctx, ref.show, "", limit)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, "", err
 	}
-	seasons := ardSeasons(teasers)
+	seasons := ardSeasons(flat.teasers)
 	if len(seasons) < 2 {
-		return first.Title, ardRefs(teasers, ""), nil
+		return flat.widget.Title, ardRefs(flat.teasers, ""), flat.more, flat.note, nil
 	}
 
 	// A series with seasons is fetched again, one season at a time, and the
 	// flat listing above is discarded rather than sorted: the season endpoint
 	// is the only one that names the seasons ("Staffel 2") and the only one
 	// that leaves out the audio-described copies.
-	var refs []ardEpisodeRef
-	for _, season := range seasons {
-		widget, seasonTeasers, err := a.pages(ctx, ref.show, season)
+	// One unreadable season does not lose the others.
+	list, _ := readSeasons(ctx, seasons, true, func(ctx context.Context, season string) (seasonList[broadcastEpisode], error) {
+		l, err := a.pages(ctx, ref.show, season, limit)
 		if err != nil {
-			continue // one unreadable season should not lose the others
+			return seasonList[broadcastEpisode]{}, err
 		}
 		// A season with no name of its own still needs a folder, or its
 		// episodes would be written beside the folders of every other season
 		// rather than into one of their own.
-		refs = append(refs, ardRefs(seasonTeasers, util.FirstNonEmpty(widget.Title, "Staffel "+season))...)
+		listed := ardRefs(l.teasers, cmp.Or(l.widget.Title, "Staffel "+season))
+		return seasonList[broadcastEpisode]{items: listed, more: l.more, note: l.note}, nil
+	})
+	if len(list.items) == 0 {
+		return flat.widget.Title, ardRefs(flat.teasers, ""), flat.more, flat.note, nil
 	}
-	if len(refs) == 0 {
-		refs = ardRefs(teasers, "")
-	}
-	return first.Title, refs, nil
+	return flat.widget.Title, list.items, list.more, list.note, nil
 }
 
-// pages fetches every page of one listing and returns the first page's widget
-// — which carries the name and the season list — alongside the whole of it.
-func (a *ARD) pages(ctx context.Context, show, season string) (*ardWidget, []ardTeaser, error) {
-	first, err := a.page(ctx, show, season, 0)
+// ardListing is one listing read: the first page's widget, which carries
+// the name and the season list, the entries of every page up to the limit,
+// whether the listing went on past that, and the note for a walk cut short
+// some other way.
+type ardListing struct {
+	widget  *ardWidget
+	teasers []ardTeaser
+	more    bool
+	note    string
+}
+
+// pages fetches every page of one listing, up to limit entries.
+func (a *ARD) pages(ctx context.Context, show, season string, limit int) (*ardListing, error) {
+	var first *ardWidget
+	teasers, more, note, err := walkEpisodes(ctx, limit, pageWalk[ardTeaser]{
+		fetch: func(ctx context.Context, n int) (pageOf[ardTeaser], error) {
+			widget, err := a.page(ctx, show, season, n)
+			if err != nil {
+				return pageOf[ardTeaser]{}, err
+			}
+			if first == nil {
+				first = widget
+			}
+			// Only totalElements is worth reading out of the pagination
+			// block, and only the first page's: on every page after it,
+			// pageNumber and pageSize come back as an offset and a count
+			// instead, so a walk that trusted them would either stop early
+			// or never stop. A listing that states no total is its first
+			// page alone.
+			total := first.Pagination.TotalElements
+			return pageOf[ardTeaser]{items: widget.Teasers, next: total > 0, end: len(widget.Teasers) == 0,
+				total: total}, nil
+		},
+		key: func(t ardTeaser) string { return t.id() },
+	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	teasers := first.Teasers
-	// Only totalElements is worth reading out of the pagination block: on
-	// every page after the first, pageNumber and pageSize come back as an
-	// offset and a count instead, so a loop that trusted them would either
-	// stop early or never stop.
-	for n := 1; len(teasers) < first.Pagination.TotalElements && len(teasers) < config.MaxListingVideos; n++ {
-		next, err := a.page(ctx, show, season, n)
-		if err != nil || len(next.Teasers) == 0 {
-			break
-		}
-		teasers = append(teasers, next.Teasers...)
-	}
-	return first, teasers, nil
+	return &ardListing{widget: first, teasers: teasers, more: more, note: note}, nil
 }
 
 // page fetches one page of a programme's listing, or of one season of it.
@@ -358,71 +352,33 @@ func (a *ARD) episode(ctx context.Context, id string) (file *File, show, episode
 
 	widget := doc.Widgets[0]
 	if reason := widget.refusal(); reason != "" {
-		return nil, "", "", &ardRefused{id: id, reason: reason}
+		return nil, "", "", &broadcastRefusal{"ard", id, reason}
 	}
 	media := widget.MediaCollection.Embedded
-	show = util.FirstNonEmpty(widget.Show.Title, media.Meta.SeriesTitle)
-	episode = util.FirstNonEmpty(widget.Title, media.Meta.Title)
+	show = cmp.Or(widget.Show.Title, media.Meta.SeriesTitle)
+	episode = cmp.Or(widget.Title, media.Meta.Title)
 	headers := httpx.Referer(ardRoot + "/")
 
 	// The file, whenever there is one: rangeable, resumable, and skipped on a
 	// second run once its length matches what is on disk. ARD publishes no
 	// byte count of its own, so that length comes from the response headers.
 	if best, ok := media.best(ardMimeMP4); ok {
-		return &File{
-			Name:    ".mp4",
-			URL:     best.URL,
-			Size:    -1,
-			Headers: headers,
-		}, show, episode, nil
+		return progressiveFile(best.URL, ".mp4", headers), show, episode, nil
 	}
 
 	best, ok := media.best(ardMimeHLS)
 	if !ok {
 		return nil, "", "", fmt.Errorf("ard: %s offers no stream", id)
 	}
-	stream, err := resolveMediaPlaylist(ctx, a.client, best.URL, headers)
+	stream, err := broadcastMedia(ctx, a.client, "ard", id, best.URL, headers)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("ard: %s: %w", id, err)
+		return nil, "", "", err
 	}
-	return &File{
-		// Named off the segments, not the variant URL: ARD's packager builds
-		// manifest paths out of the source file's name, ".mp4.csmil/" over
-		// MPEG-TS parts. See segmentsExtension.
-		Name:       stream.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   stream.Segments,
-		SegmentKey: stream.Key,
-		Audio:      stream.Audio,
-		Subtitles:  stream.Subtitles,
-	}, show, episode, nil
+	// Named off the segments, not the variant URL: ARD's packager builds
+	// manifest paths out of the source file's name, ".mp4.csmil/" over
+	// MPEG-TS parts. See segmentsExtension.
+	return new(stream.file(stream.extension(), headers)), show, episode, nil
 }
-
-// ardJoin names something by its programme and its episode together.
-//
-// Containment rather than equality, unlike nrkJoin: ARD writes an episode
-// title that spells the series out in full — "Folge 12 · Staffel 4 | A Drama
-// (S04/E12)" — so prefixing the programme as well would say it twice.
-func ardJoin(show, episode string) string {
-	switch {
-	case episode == "":
-		return show
-	case show == "" || strings.Contains(strings.ToLower(episode), strings.ToLower(show)):
-		return episode
-	}
-	return show + " - " + episode
-}
-
-// ardRefused is ARD declining to play something. It is a type rather than a
-// message so that expanding a series can report one reason once instead of
-// the same refusal several hundred times.
-type ardRefused struct {
-	id     string
-	reason string
-}
-
-func (e *ardRefused) Error() string { return "ard: " + e.id + ": " + e.reason }
 
 // ardItem is the item document, which describes one video.
 type ardItem struct {
@@ -490,14 +446,10 @@ type ardMedia struct {
 	} `json:"meta"`
 	// IsGeoBlocked is ARD's own statement that this is for Germany only.
 	IsGeoBlocked bool `json:"isGeoBlocked"`
-	// Live is present, and non-null, only for a live relay.
-	Live    *ardLive    `json:"live"`
+	// Live is present, and non-null, only for a live relay; only its
+	// presence is read.
+	Live    *struct{}   `json:"live"`
 	Streams []ardStream `json:"streams"`
-}
-
-// ardLive marks a live relay and says how far back its window reaches.
-type ardLive struct {
-	DVRWindowSeconds int `json:"dvrWindowSeconds"`
 }
 
 // ardStream is one presentation of a video.
@@ -623,10 +575,10 @@ func ardSeasons(teasers []ardTeaser) []string {
 }
 
 // ardRefs turns a listing into the episodes to fetch from it.
-func ardRefs(teasers []ardTeaser, season string) []ardEpisodeRef {
+func ardRefs(teasers []ardTeaser, season string) []broadcastEpisode {
 	teasers = ardWithoutVariants(ardEpisodesOnly(teasers))
 
-	var refs []ardEpisodeRef
+	var refs []broadcastEpisode
 	seen := make(map[string]bool, len(teasers))
 	for _, t := range teasers {
 		id := t.id()
@@ -634,7 +586,7 @@ func ardRefs(teasers []ardTeaser, season string) []ardEpisodeRef {
 			continue
 		}
 		seen[id] = true
-		refs = append(refs, ardEpisodeRef{id: id, name: t.ShortTitle, season: season})
+		refs = append(refs, broadcastEpisode{id: id, name: t.ShortTitle, season: season})
 	}
 	return refs
 }

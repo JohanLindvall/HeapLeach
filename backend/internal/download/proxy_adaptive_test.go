@@ -20,6 +20,14 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
 
+// The proxy pool's own upgrade timings (proxytron's lease package, which
+// does not export them): a route is judged only after the warmup, and then
+// once per interval.
+const (
+	leaseUpgradeWarmup   = 20 * time.Second
+	leaseUpgradeInterval = 10 * time.Second
+)
+
 func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 	for _, mode := range []string{"resume", "cancel", "no ranges", "disabled", "removed"} {
 		t.Run(mode, func(t *testing.T) {
@@ -68,10 +76,10 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			})
 			pool := attachPool(t, m, []string{slow.URL, fast.URL})
 			ids := make(map[string]string)
-			for _, row := range pool.Page("keep2share", proxy.Query{}).Rows {
+			for _, row := range pool.Page(config.GroupKeep2Share, proxy.Query{}).Rows {
 				ids[row.URL] = row.ID
 			}
-			warm := pool.Acquire("keep2share", ids[fast.URL], 1)
+			warm := pool.Acquire(config.GroupKeep2Share, ids[fast.URL], 1)
 			if warm == nil {
 				t.Fatal("could not measure the alternative route")
 			}
@@ -95,9 +103,9 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			// the production warmup. The transfer and resume are real HTTP.
 			m.mu.Lock()
 			now := time.Now()
-			it.lastBytes, it.lastSample, it.speed = 0, now.Add(-config.ProxyUpgradeWarmup), 0
+			it.lastBytes, it.lastSample, it.speed = 0, now.Add(-leaseUpgradeWarmup), 0
 			m.sampleLocked(now)
-			m.sampleLocked(now.Add(config.ProxyUpgradeInterval))
+			m.sampleLocked(now.Add(leaseUpgradeInterval))
 			reserved := it.routeUpgrade != nil
 			if mode == "cancel" || mode == "no ranges" {
 				cancelItemLocked(it)
@@ -110,9 +118,7 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			if reserved != (mode != "no ranges") {
 				t.Fatalf("upgrade reserved=%v in mode %s", reserved, mode)
 			}
-			waitFor(t, 5*time.Second, func() bool {
-				m.mu.Lock()
-				defer m.mu.Unlock()
+			waitLocked(t, m, 5*time.Second, func() bool {
 				return it.Status.Terminal() && !it.inFlight
 			})
 			if mode == "resume" || mode == "disabled" || mode == "removed" {
@@ -124,7 +130,7 @@ func TestAdaptiveProxyHandoffResumesAndReleasesBothLeases(t *testing.T) {
 			} else if it.Status != StatusCanceled || resolutions.Load() != 1 {
 				t.Fatalf("cancellation started another transfer: status=%s resolutions=%d", it.Status, resolutions.Load())
 			}
-			page := pool.Page("keep2share", proxy.Query{})
+			page := pool.Page(config.GroupKeep2Share, proxy.Query{})
 			if page.Summary.Active != 0 || page.Summary.Cooling != 0 {
 				t.Fatalf("handoff leaked leases or penalised cancellation: %+v", page.Summary)
 			}

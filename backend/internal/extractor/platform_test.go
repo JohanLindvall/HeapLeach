@@ -18,8 +18,15 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// Each instance is a fresh, unregistered origin. Detection must reach the
-// existing extractor, retaining original files, headers and transfer pacing.
+// Each instance is a fresh origin whose page answers with a refusal, as a
+// challenged one does: recognition must then reach the extractor through the
+// platform's API, retaining original files, headers and transfer pacing.
+// platformRegistry is the whole registry over a client that does not retry,
+// for a test extracting from its own server.
+func platformRegistry() *Registry {
+	return NewRegistry(&config.Config{}, testClient())
+}
+
 func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
 	for _, tc := range []struct {
 		name, page, api, body, file string
@@ -53,12 +60,13 @@ func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.RequestURI() == tc.page {
+					w.Header().Set(httpx.HeaderContentType, "text/html")
+					w.WriteHeader(http.StatusForbidden)
+					fmt.Fprint(w, `<title>Access denied</title><a href="/wiki/File:Ignored.bin">Advertisement</a>`)
+					return
+				}
 				if r.URL.Path != tc.api {
-					if r.URL.Path == strings.Split(tc.page, "?")[0] {
-						w.Header().Set(httpx.HeaderContentType, "text/html")
-						fmt.Fprint(w, `<title>Platform page</title><a href="/wiki/File:Ignored.bin">Advertisement</a>`)
-						return
-					}
 					http.NotFound(w, r)
 					return
 				}
@@ -69,8 +77,7 @@ func TestPlatformDetectionAtUnknownOrigins(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
-			client := httpx.New("test-agent", "en-US", 0, time.Second)
-			res, _, err := NewRegistry(&config.Config{}, client).Extract(context.Background(), srv.URL+tc.page, Options{})
+			res, _, err := platformRegistry().Extract(context.Background(), srv.URL+tc.page, Options{})
 			if err != nil || res == nil {
 				t.Fatalf("extract: %v, %v", res, err)
 			}
@@ -101,6 +108,13 @@ func TestPlatformFoolFuukaBoardAndSearch(t *testing.T) {
 	for _, route := range []string{"/b/", "/b/search/text/sample/"} {
 		t.Run(route, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/b/" {
+					// A board page says what it is; a search is asked of the API.
+					w.Header().Set(httpx.HeaderContentType, "text/html")
+					fmt.Fprint(w, `<html><head><meta name="generator" content="FoolFuuka 2.2.0">
+<script src="/foolfuuka/theme/board.js"></script></head><body></body></html>`)
+					return
+				}
 				if !strings.HasPrefix(r.URL.Path, "/_/api/chan/") {
 					http.NotFound(w, r)
 					return
@@ -113,9 +127,10 @@ func TestPlatformFoolFuukaBoardAndSearch(t *testing.T) {
 				fmt.Fprint(w, foolFuukaThreadJSON)
 			}))
 			defer srv.Close()
-			res, err := NewDirect(httpx.New("test", "en", 0, time.Second)).Extract(context.Background(), mustParse(t, srv.URL+route), Options{})
-			if err != nil || res == nil || len(res.Files) != 4 {
-				t.Fatalf("archive = %v, %v", res, err)
+			reg := platformRegistry()
+			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{})
+			if err != nil || ex.Name() != "foolfuuka" || len(res.Files) != 4 {
+				t.Fatalf("archive = %v via %v, %v", res, ex, err)
 			}
 		})
 	}
@@ -123,8 +138,8 @@ func TestPlatformFoolFuukaBoardAndSearch(t *testing.T) {
 
 func TestPlatformHTMLIdentification(t *testing.T) {
 	for _, tc := range []struct{ name, page, body string }{
-		{"legacy gelbooru", "/index.php?page=post&s=view&id=42", strings.Replace(gelbooru01PostPage, "<head>", `<head><meta name="generator" content="Gelbooru 0.1">`, 1)},
-		{"custom wiki", "/An_article", `<meta name="generator" content="MediaWiki 1.43"><link rel="EditURI" href="/custom/api.php?action=rsd">`},
+		{"legacy gelbooru", "/index.php?page=post&s=view&id=42", gelbooru01PostPage},
+		{"custom wiki", "/An_article", mediaWikiRenderedPage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,10 +159,10 @@ func TestPlatformHTMLIdentification(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
-			client := httpx.New("test", "en", 0, time.Second)
-			res, err := NewDirect(client).pageSniff(context.Background(), mustParse(t, srv.URL+tc.page), Options{})
+			reg := platformRegistry()
+			res, ex, err := reg.Extract(context.Background(), srv.URL+tc.page, Options{})
 			if err != nil || res == nil || len(res.Files) == 0 || strings.HasPrefix(res.Files[0].URL, srv.URL) {
-				t.Fatalf("HTML platform = %v, %v", res, err)
+				t.Fatalf("HTML platform = %v via %v, %v", res, ex, err)
 			}
 		})
 	}
@@ -156,24 +171,25 @@ func TestPlatformHTMLIdentification(t *testing.T) {
 func TestPlatformKVSFailedPlayerDoesNotFollowRelatedVideos(t *testing.T) {
 	doc := `<script>var flashvars = {license_code: '123456789'};</script>
 <div id="list_videos_related"><a class="item" href="/videos/42/related/">Related</a></div>`
-	res, err := platformPage(context.Background(), nil, mustParse(t, "https://example.test/watch/sample"), mustParseDoc(t, doc), doc, Options{})
-	if err == nil || res != nil {
-		t.Fatalf("broken identified player fell through: %v, %v", res, err)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		fmt.Fprint(w, doc)
+	}))
+	defer srv.Close()
+	reg := platformRegistry()
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/watch/sample", Options{})
+	if err == nil || res != nil || ex == nil || ex.Name() != "kvs" {
+		t.Fatalf("broken identified player fell through: %v via %v, %v", res, ex, err)
 	}
 }
 
+// The forms a link alone is followed for stay specific: the paths every site
+// has are recognised only once fetched, never singled out on a page.
 func TestPlatformDetectionDoesNotBroadenKnownLinks(t *testing.T) {
-	reg := NewRegistry(&config.Config{}, httpx.New("test", "en", 0, time.Second))
-	for _, path := range []string{"/posts/42", "/u/sample", "/b/thread/42/", "/wiki/Article", "/members/42/videos/", "/sample/user/creator"} {
-		ex, known := reg.Known(mustParse(t, "https://example.test"+path))
-		// /u/name was already claimed by the fediverse path matcher.
-		if wantKnown := path == "/u/sample"; known != wantKnown || (known && ex.Name() != "fediverse") {
-			t.Errorf("ordinary navigation %s newly claimed by %s before inspecting content", path, ex.Name())
-		}
-	}
-	for _, host := range []string{"pixeldrain.com", "desuarchive.org", "thisvid.com", "kemono.cr", "e621.net"} {
-		if _, known := reg.Known(mustParse(t, "https://"+host)); !known {
-			t.Errorf("lost registered host %s for embedded-link discovery", host)
+	reg := platformRegistry()
+	for _, path := range []string{"/", "/about", "/wiki/Article", "/b/", "/search/sample/", "/home"} {
+		if ex, known := reg.Known(mustParse(t, "https://example.test"+path)); known {
+			t.Errorf("ordinary navigation %s claimed by %s before inspecting content", path, ex.Name())
 		}
 	}
 }
@@ -204,9 +220,10 @@ func TestPlatformKemonoCreatorAndPost(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			res, err := NewDirect(httpx.New("test", "en", 0, time.Second)).Extract(context.Background(), mustParse(t, srv.URL+route), Options{})
-			if err != nil || res == nil || len(res.Files) != 1 {
-				t.Fatalf("extract = %v, %v", res, err)
+			reg := platformRegistry()
+			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{})
+			if err != nil || res == nil || len(res.Files) != 1 || ex.Name() != "kemono" {
+				t.Fatalf("extract = %v via %v, %v", res, ex, err)
 			}
 			if res.Files[0].URL != srv.URL+"/data/aa/sample.bin" {
 				t.Fatalf("attachment = %v", res.Files[0])
@@ -220,9 +237,10 @@ func TestPlatformKemonoCreatorAndPost(t *testing.T) {
 
 func TestPlatformMediaWikiArticle(t *testing.T) {
 	srv, _ := mediaWikiServer(t)
-	res, err := NewDirect(httpx.New("test", "en", 0, time.Second)).Extract(context.Background(), mustParse(t, srv.URL+"/wiki/Synthetic_article"), Options{})
-	if err != nil || res == nil || len(res.Files) == 0 || strings.HasPrefix(res.Files[0].URL, srv.URL) {
-		t.Fatalf("article was not resolved through the wiki API: %v, %v", res, err)
+	reg := platformRegistry()
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/wiki/Synthetic_article", Options{})
+	if err != nil || res == nil || len(res.Files) == 0 || strings.HasPrefix(res.Files[0].URL, srv.URL) || ex.Name() != "mediawiki" {
+		t.Fatalf("article was not resolved through the wiki API: %v via %v, %v", res, ex, err)
 	}
 }
 
@@ -248,12 +266,10 @@ func TestPlatformKVSListings(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			client := httpx.New("test", "en", 0, time.Second)
-			d := NewDirect(client)
-			d.registry = NewRegistry(&config.Config{}, client)
-			res, err := d.pageSniff(context.Background(), mustParse(t, srv.URL+route), Options{limits: Limits{Files: 1}})
-			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != kvsHighDirect {
-				t.Fatalf("listing = %v, %v", res, err)
+			reg := platformRegistry()
+			res, ex, err := reg.Extract(context.Background(), srv.URL+route, Options{limits: Limits{Files: 1}})
+			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != kvsHighDirect || ex.Name() != "kvs" {
+				t.Fatalf("listing = %v via %v, %v", res, ex, err)
 			}
 			if listingCalls.Load() != 1 {
 				t.Errorf("listing fetched %d times", listingCalls.Load())
@@ -277,9 +293,10 @@ func TestPlatformUnrelatedPagesFallThrough(t *testing.T) {
 			}))
 			defer srv.Close()
 			u := mustParse(t, srv.URL+route)
-			res, err := NewDirect(httpx.New("test", "en", 0, time.Second)).Extract(context.Background(), u, Options{})
-			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != u.String() {
-				t.Fatalf("false positive: %v, %v", res, err)
+			reg := platformRegistry()
+			res, ex, err := reg.Extract(context.Background(), u.String(), Options{})
+			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != u.String() || ex.Name() != "direct" {
+				t.Fatalf("false positive: %v via %v, %v", res, ex, err)
 			}
 		})
 	}
@@ -287,6 +304,10 @@ func TestPlatformUnrelatedPagesFallThrough(t *testing.T) {
 
 func TestPlatformIdentifiedFailureDoesNotSavePage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sample/user/creator" {
+			http.Error(w, "denied", http.StatusForbidden) // the page cannot say
+			return
+		}
 		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
 		if strings.HasSuffix(r.URL.Path, "/profile") {
 			fmt.Fprint(w, `{"id":"creator","service":"sample","name":"A Creator"}`)
@@ -295,9 +316,10 @@ func TestPlatformIdentifiedFailureDoesNotSavePage(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	res, err := NewDirect(httpx.New("test", "en", 0, time.Second)).Extract(context.Background(), mustParse(t, srv.URL+"/sample/user/creator"), Options{})
-	if err == nil || res != nil {
-		t.Fatalf("empty identified creator should fail, got %v, %v", res, err)
+	reg := platformRegistry()
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/sample/user/creator", Options{})
+	if err == nil || res != nil || ex.Name() != "kemono" {
+		t.Fatalf("empty identified creator should fail, got %v via %v, %v", res, ex, err)
 	}
 }
 
@@ -332,8 +354,37 @@ func TestPlatformProbeIsBoundedAndDoesNotRetry(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, err := NewDirect(httpx.New("test", "en", 0, time.Second)).Extract(ctx, mustParse(t, "https://example.test/posts/42"), Options{})
+	res, _, err := platformRegistry().Extract(ctx, "https://example.test/posts/42", Options{})
 	if res != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled detection = %v, %v", res, err)
+	}
+}
+
+// An extractor reads the answer a recogniser already had from an endpoint,
+// and asks nothing itself through askedJSON when no recogniser did.
+func TestAskedJSONReusesOnlyWhatWasAsked(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"id":7}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := testClient()
+	p := htmlPage(t, srv.URL+"/item/7", "<html></html>")
+
+	var out struct{ ID int }
+	if askedJSON(context.Background(), p, client, srv.URL+"/api/7", &out) || hits.Load() != 0 {
+		t.Fatalf("an endpoint nobody asked was answered (%d requests)", hits.Load())
+	}
+	if !pageJSON(context.Background(), p, client, srv.URL+"/api/7", nil, &out) {
+		t.Fatal("the recogniser's question went unanswered")
+	}
+	out.ID = 0
+	if !askedJSON(context.Background(), p, client, srv.URL+"/api/7", &out) || out.ID != 7 {
+		t.Errorf("the recogniser's answer was not reused: %+v", out)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the endpoint was asked %d times, want once", n)
 	}
 }

@@ -6,44 +6,82 @@ Notes on individual hosts are in [`hosts/`](hosts/), indexed
 
 ## The contract
 
-`extractor.Extractor` is `Name/Match/Extract`. `Registry.Find` walks the
-registered hosts and falls back to `Direct`, which matches everything — so it
-**never returns nil**. Register new hosts in `NewRegistry`.
+`extractor.Extractor` is `Name/Extract`, and every registered extractor is
+also a `Recogniser` (`Shape/Recognise`) and a `Describer` (`Recognises`).
+Register new extractors in `NewRegistry`; the first to recognise a page
+takes it, so order matters where two could.
+
+### Dispatch is by page, never by host
+
+No extractor claims a domain. `Registry.Extract` probes the submitted URL
+(`page.go`: one bounded GET, redirects followed, the body read only when it
+is text) and offers the `Page` to each `Recognise` in turn; nothing claims it
+and `Direct` takes it. A site that moves domain, or an install nobody listed,
+reaches the right code because the code recognises what it serves. Host
+names may still appear as operational constants (API bases, CDN hosts,
+referers, `Pace` groups), never as the reason an extractor was chosen.
+`TestRecognitionNeverReadsTheHost` fails the build if a `Shape` or
+`Recognise` reads a URL's host, and `expectRecognised`/`expectShape`
+(`recognise_test.go`) re-run each fixture with the page served from an
+unrelated host.
+
+Recognition is **deep**: `Recognise` checks the URL's form *and* page content
+the extractor's own logic depends on (the player configuration, embedded
+JSON, script or DOM structure it parses). The site's name (`Page.Named`) is
+never enough alone; a pure app shell pairs it with a structural marker such
+as the bundle it loads (`Page.Script`). Each test carries a negative fixture
+with the right form and name but without the marker. When the page cannot
+say (a challenge stood in for it, or the HTML is an empty shell) a bounded
+origin request (`platformJSON`) may decide, but only after the form matched,
+since every unrecognised page is offered to every recogniser.
+
+`Shape` is the half that needs no fetch: the link's path, query and
+fragment. `Registry.Known` uses it for link discovery (the harvester, the
+page scanner, the index extractors), and `Guess` for a job's label before it
+is read. A link followed for its form is extracted strictly
+(`Options.strict`): if its page turns out to be no extractor's, it is dropped
+as navigation (`errUnrecognised`) rather than handed to the fallback. Keep
+forms specific enough that a site's own navigation does not turn into a
+probe per link.
+
+### Fetching a page once
+
+Probes go through `pageCache`: per route (a page fetched through one egress
+address says nothing of another's), shared by concurrent callers, kept for
+`config.PageCacheTTL`, and never keeping a failure or a challenge. An
+extractor that reads the submitted page whole uses `fetchDocument`, which
+hands it the probed document instead of fetching again; any extra request a
+recogniser makes goes through `memo(p, key, …)` (`pageJSON` for an API
+question), keyed by what it asks, so several recognisers asking one
+origin's API share one answer. An extractor that reads an endpoint a recogniser may already have asked tries
+`askedJSON` first: it hands back that answer, and asks nothing when no
+recogniser did, so the extractor's own request, with its retries, is never
+preceded by a bounded probe of the same thing. A link whose
+path names a non-page file and matches no `Shape` skips the probe
+(`probeWorthy`): probing would download the start of the file the fallback
+is about to fetch.
 
 ### The supported-site inventory
 
-The supported-site table in README.md is **generated** from the registry by
-`make hosts`, between two markers, and `make hosts-check` fails CI when the
-file and the code disagree — so edit the extractor, never that table. Adding a
-host is one line in `NewRegistry` plus `make hosts` in the same commit.
-The inventory is collapsed on the front page; its markers stay in README.md.
-The explanatory URL-format table lives in `docs/supported-links.md` and is
-maintained separately because it documents behavior, not registry membership.
-`hosts-check` regenerates into a copy and compares it with README.md as it
-stands, so it judges the working tree whatever else is in flight there; in CI
-the tree is the commit, which is what makes a regeneration that was never
-committed fail the build.
-
-`SiteLister` is the optional half of the contract. An extractor that claims a
-plain list of domains embeds a `hostSet` (`hosts.go`): one declaration that
-answers both `Match` and `Sites`, so the inventory cannot disagree with the
-matcher, and `catalogue_test.go` checks that every host so declared routes
-back to the extractor declaring it. Only an extractor whose `Match` is more
-than a host list — a section of a domain, a wildcard TLD, a document shape —
-writes `Sites()` by hand, in `catalogue.go`; one that skips it altogether must
-be named for its domain, since the catalogue then uses the name as the site.
+The inventory in README.md is **generated** from the registry by `make
+hosts`, between two markers, and `make hosts-check` fails CI when the file
+and the code disagree — so edit the extractor's `Recognises`, never that
+table. Adding an extractor is one line in `NewRegistry` plus `make hosts` in
+the same commit. The inventory is collapsed on the front page; its markers
+stay in README.md. The explanatory URL-format table lives in
+`docs/supported-links.md` and is maintained separately because it documents
+behavior, not registry membership. `hosts-check` regenerates into a copy and
+compares it with README.md as it stands, so it judges the working tree
+whatever else is in flight there; in CI the tree is the commit, which is
+what makes a regeneration that was never committed fail the build.
 
 ### Platform families
 
-Some extractors cover software that many operators run rather than one site.
-Their families are named in `config/config.go` (`FamilyKVS`, `FamilyPeerTube`,
-`FamilyChevereto`, `FamilyFoolFuuka`, `FamilyFediverse`, `FamilyMediaWiki`,
-`FamilyBandzoogle`). A compiled-in install list can only trail such a
-platform, so `HEAPLEACH_EXTRA_HOSTS` adds installs at runtime, and it is the
-one setting that names hosts rather than tuning behaviour. It reads
-`family:host,host;family:host`; the legacy `HEAPLEACH_KVS_HOSTS` is honoured
-as the `kvs` family. The generic fallback also recognises several platforms at
-a URL nobody registered ([below](#platform-detection)).
+Some extractors cover software that many operators run rather than one site
+(KVS, PeerTube, Chevereto, FoolFuuka, the fediverse, MediaWiki, Bandzoogle,
+the booru engines). Each is one recogniser keyed on the software's own
+fingerprint, so there is no install list to keep and no setting to extend
+one.
 
 ### How a host may be used: `Pace`
 
@@ -137,42 +175,36 @@ ends.
 
 ## The generic fallback
 
-`Direct` checks an ordinary HTML page for every registered host's links before
-using a generic embedded player. This is how a page embedding a supported
-player works without an extractor of its own. `filelinks.go` shares the
-`links:` harvester's bounded expansion, but never follows links assigned to
-the generic fallback, so a plain HTML navigation link cannot start another
-scan. Named hosts and recognised platforms keep their own extractors.
-K2S/FileBoom links are deduplicated by service and file ID across aliases;
-other links keep their full URLs, including Mega keys. The fetch checks HTML
-headers before reading a bounded body, and supports extensionless pages and
-common HTML/script extensions. Supported links that all fail are reported as
-an error rather than saved as an HTML shell, and partial results report
-counts.
+`Direct` takes what no extractor recognised. It reads the probed document
+(`Direct.document`) rather than fetching it again, recognises WordPress
+categories and DarkGram albums in it, and otherwise scans it for links of a
+supported form before using a generic embedded player. This is how a page
+embedding a supported player works without an extractor of its own.
+`filelinks.go` shares the `links:` harvester's bounded expansion; its links
+are extracted strictly, so a link that only had a supported form is dropped
+once its page proves to be nobody's, and a page whose links were all of that
+kind falls through to its own media. Keep2Share links are deduplicated by
+file ID alone, across both of its hosts, which share one store; other links
+keep their full URLs, including Mega keys.
+Supported links that all fail are reported as an error rather than saved as
+an HTML shell, and partial results report counts.
 
-### Platform detection
+### Platforms behind a closed page
 
-The fallback also identifies unregistered installs of known platforms.
-`platform.go` supplies bounded, single-attempt JSON probes and page-marker
-detection. Pixeldrain file/list/filesystem metadata, booru original-media
-records, FoolFuuka archive records, Kemono creator profiles and MediaWiki
-siteinfo select the existing extractors at the pasted URL's origin. KVS player
-signatures and asynchronous listing controls identify its pages, including
-members and searches; a generic videos container alone does not. MediaWiki's
-generator and EditURI link also locate custom API directories. Recognised page
-content is tried before guessed APIs, so an ordinary blog post with an
-embedded album does not probe unrelated services. The fediverse's `/u/` and
-`/post/` path matches overlap two of these platforms; if nodeinfo does not
-identify the site, their APIs get a turn.
+Most platforms are recognised in the probed page itself. When the page cannot
+say — challenged, not OK, empty, or a proof-of-work interstitial served with
+200 (`Page.Silent`) — a recogniser whose URL form matched may ask the page's
+own origin a bounded, single-attempt question instead (`pageJSON`, memoised
+per page, so every recogniser asking the same endpoint shares one answer):
+pixeldrain file metadata, booru post records, FoolFuuka archive records,
+Kemono creator profiles, MediaWiki siteinfo, PeerTube's config. An extractor
+then reads the memoised answers back through `probed` and `askedJSON`
+instead of asking again. Positive identification commits to an extractor, whose errors must be
+returned rather than falling back to saving the page shell.
 
-Keep these broad URL shapes out of `Registry.Known`: its answer controls which
-links the ordinary page scanner follows. Host registrations provide that
-discovery boundary, the generated inventory, canonical aliases and per-site
-settings (including booru filters), so a host stays registered even where
-direct input would autodetect it; dropping the registration silently loses
-embedded-link discovery. Positive identification commits to an extractor,
-whose errors must be returned rather than falling back to saving the page
-shell.
+Keep forms that are this broad out of `Shape` where they would make ordinary
+navigation a probe per link; `TestRegistryKnowsLinksByTheirForm` pins which
+forms the link scanner follows.
 
 ### DarkGram albums
 
@@ -223,27 +255,62 @@ intact. `sources.go` holds what they share:
   the file cap **a source at a time**: an album is taken whole or not at all,
   resolving stops once the cap is reached, and only a first album larger than
   the cap on its own is cut. The note counts the sources actually in the job.
+  An extractor expanding its own albums or posts rather than registry links
+  uses the same fan-out through `expandSourcesWith`, so its cap, folders and
+  refusals behave alike.
 - **The folders.** Each source gets a folder named after its title
   (`sourceFolder`). Titles are not unique, so `expandSources` counts the names
   first and gives a repeated one the source's own id (`sourceTag`), which
   keeps two different files of one name from sitting side by side as "(2)" and
   "(3)". A title that stands alone keeps its plain name, which is what
-  anything already downloaded under it is filed as.
-- **The note.** "N of M" admits a truncated answer.
+  anything already downloaded under it is filed as. A host whose repeated
+  titles were filed under a form of its own before this existed keeps that
+  form through `expandSourcesNamed`'s `folders` hook, since renaming them
+  would download them all again.
+- **The note.** "N of M" admits a truncated answer (`partialNote`, on
+  `cappedNote`); a listing expanded into its sources says what its walk,
+  the file cap and the sources that did not resolve left out
+  (`expansionNote`).
 
 ### Walking pages
 
-- Pages are fetched concurrently with `FanOut` (`fanout.go`), bounded by
-  `config.PageFetchConcurrency`, with results collected by index so the job
-  lists files in the site's own order however the requests interleave. A page
-  that will not load is skipped rather than failing a job of hundreds.
+- Every paged listing that is not a folder tree, broadcaster series included
+  (`walkEpisodes`), walks through `walkPages` (`pages.go`). The caller's `fetch` reads page *n*
+  and keeps the cursor, offset or page number in its own closure; the engine
+  owns the rest, once: a first page that fails is the caller's error as it
+  stands and a later one a partial listing (or quiet, or the `failed` hook's
+  note), entries deduplicated by `key`, a page that adds nothing ends the
+  walk, the page cap (`config.MaxAlbumPages` unless `pages` says otherwise),
+  the limit and its note, and cancellation, which is never a partial listing.
+  `walkListing` (`listing.go`) is its adapter for HTML pagers.
+- Each page says how the listing ends, from what the API states: `total` (the
+  count it holds), `pages` (the page count it runs to), `end` (an end flag, a
+  missing cursor, or an empty page asked for past the end), or no `next`. Never end on a page shorter than the
+  page size asked for: hosts commonly serve fewer than asked without saying
+  so. Asking one page past the end is cheap and right where nothing else
+  says. A host that ignores its paging parameter serves page one again, which
+  adds nothing and ends the walk.
+- A listing whose end is found by asking past it — a 404, an empty page, the
+  first page again — is `quiet`: the walk adds no note of its own there, and
+  `failed` maps the failures that are a cut (a rate limit). `stop` marks a
+  page that is not the listing's (missing, repeated, redirected) and `note` a
+  reason the walk ends early, such as a next page that cannot be followed.
 - Stop **at** the cap rather than collecting everything and truncating: a
-  broad search can state tens of thousands of pages.
-- Follow a listing by the count it states and by what each page adds, never by
-  the page size asked for. Hosts commonly serve fewer than asked without
-  saying so, or ignore a paging parameter and serve page one again, which
-  reads as the end of a one-page listing. Deduplicate, and stop on a page that
-  adds nothing.
+  broad search can state tens of thousands of pages. Where every entry costs a
+  request at listing time, the cap is `listingLimit` (the lower of the source
+  and file caps); otherwise the file cap. Where an entry may hold several
+  files or none — a post, a status, a search hit — `weigh` counts the file
+  cap in what the entries hold rather than in entries, so a page of text
+  posts never uses it up; the page that reaches the cap is kept whole, noted
+  when it passes the cap or the listing goes on, and the registry cuts the
+  files to the cap.
+- Entries that need their own page are then read concurrently through
+  `resolveFiles`/`resolveOutcomes` (`resolve.go`, on `FanOut` in
+  `fanout.go`), bounded by `config.PageFetchConcurrency`, with results
+  collected by index so the job lists files in the site's own order however
+  the requests interleave. One that will not load is skipped rather than
+  failing a job of hundreds; when none loads, `noneRead` says why, and when
+  some do, the note says how many the host refused and why (`refusedNote`).
 
 ### Caps
 
@@ -265,6 +332,23 @@ line in the saved queue.
   folder never does. A note in the title would change the folder whenever a
   cap was raised or a rate limit waited out, and the next run would file
   everything somewhere new and download it all again.
+- **A note is built from the helpers in `notes.go`, so every extractor's
+  reads alike.** `joinNotes` is the one joiner: "; " between parts, empty
+  parts dropped, a part the note already holds not repeated (a joined note's
+  parts count one by one), and "partial — " said once, at the note's start —
+  "partial — invalid next page; file limit". The reasons a walk stops on
+  most are constants — `fileLimitNote`, `sourceLimitNote`, `invalidNextNote`,
+  `couldNotFetchNote`, and bare `fileLimit` and `sourceLimit` for a tree
+  walk's `note` — so they cannot drift apart. The parts: `partial` marks one
+  as a cut, `cappedNote` says "N of M <unit>" (bare "N of M" with no unit),
+  `resolvedNote` "N of M <noun> resolved", `countNote` "N <words>" in the
+  caller's words, `leftOutNote` "N left out…" on it, `refusedNote` counts
+  refusals per reason ("3 left out: gone; 1 left out: live", on `tally`),
+  and `brokenNote` a walk that broke off. An "N of M" is never prefixed with
+  "partial — ": the count already says the answer is short, and a cut it
+  stands beside carries its own "partial — " reason. A hand-built count, or
+  a join of its own, is what these replace; a new note uses them rather than
+  a `Sprintf` that only nearly matches.
 - **A slash in a title is not a path.** `SafeName` keeps only what follows the
   last separator, which is right for a name a server hands over (RFC 6266 says
   to strip a `Content-Disposition` name of its path) and wrong for a title:
@@ -280,13 +364,117 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
-- `refetchedVideo` (`tube.go`): a single video whose link is signed per visit,
-  re-read when its transfer starts.
-- `unpackJS` (`streamhosts.go`): reverses the p,a,c,k,e,d packer,
-  host-neutral.
+- `about` (`extractor.go`): an extractor's name, inventory text and shape
+  as one embedded row, so its constructor reads as data rather than three
+  hand-written methods. Every extractor embeds it, and so does every engine
+  row (`playerSite`, `shareSite`, `pointerSite`, `handoffSite`), whose
+  literals keep writing `name:`, `shape:` and `recognises:` as promoted
+  fields; each engine's constructor copies the row's `about` into the
+  extractor, so build engines and extractors with their constructors, never
+  as bare literals, or they have no name and no shape. A shape handed to it
+  is a plain function named `…Shape`, nil for an extractor with no form
+  worth a probe; `TestRecognitionNeverReadsTheHost` checks those too.
+  `eitherShape` combines shapes.
+- The `Share` engine (`shares.go`): a file host whose share or album page
+  is read by its own code is a `shareSite` row — its name, inventory line,
+  forms (a shape plus what a page of that shape must carry; the first form
+  matching the final URL decides) and its `extract`. The row sets no shape
+  of its own: `newShare` makes the extractor's the union of its forms'. A form with no
+  recogniser is a link that only redirects: followed, never recognised.
+  `TestShareFormsNeverReadTheHost` holds the rows to the same no-host rule as
+  `Shape`/`Recognise`. Hosts with state of their own (tokens, quotas,
+  cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps their
+  per-route waits.
+- The `Player` engine (`players.go`, its rows in `playersites.go`): a video site is a `playerSite` row
+  (its forms, recognition, canonical page and a reader returning the
+  candidate renditions, with a per-read referer when the player needs its
+  own), registered with `NewPlayer` at the position where its form order
+  matters. The engine picks the rendition, follows a playlist and re-reads a
+  signed page at transfer time. A row may `peek` (read only the title now
+  and everything at transfer time), take a `listing` of its videos (through
+  `walkListing`, or a walk of its own), refuse playlists still being written
+  (`finished`), and opt into proxy recovery (`proxyFallback`, which
+  `Registry.Extract` reads off the `*Player`; no other extractor opts a
+  source in). Add a new video site as a row, not an extractor.
+- `refreshing` and `signedResult` (`extractor.go`): a file whose link is
+  signed per visit, resolved now and signed again when its transfer starts.
+- `unpackJS` and `jwSource` (`jsdecode.go`): the p,a,c,k,e,d packer reversed,
+  and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
+- `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
+  for DRM and geo refusals in the broadcaster's own words, `expandSeries`
+  for a series resolved while it is listed (capped by a request budget, noted
+  where cut, filed by season, one error when nothing plays) and
+  `listSeries`, which ends a listing with it, beneath it
+  `resolveEach` for a listing's episodes resolved concurrently or one at a
+  time, in order, `walkEpisodes`, which walks a series through `walkPages`
+  up to the request budget and says whether it went on, `readSeasons` for
+  a programme's season lists read at once or in turn, an unreadable season
+  left out and noted, `lazyEpisode` and
+  `refreshing` for files re-read at transfer time, the note helpers above,
+  `joinTitle` with its `titleEqual`, `titlePrefixed` and `titleContains`
+  for naming an episode by its programme, and `writtenTitle` for a
+  page's `<title>` with its spacing kept. A new broadcaster uses these
+  rather than types of its own.
+- `resolveFiles` and `noneRead` (`resolve.go`): a listing whose items each
+  open into files (a band's releases, a board's threads, a channel's
+  videos, a profile's posts, albums or galleries), resolved concurrently
+  with the files kept in order and the refusals and first failure beside
+  them, and the one error, `<site>: none of the <n> <noun> on <where> could
+  be read: <reason>`, for when none could; when some could, the refusals
+  go in the note (`refusedNote`). A listing that needs each item
+  beside what it resolved to uses `resolveOutcomes` and `sortOutcomes`
+  directly; `resolveEach` and `expandSeries` share the same outcome
+  handling. An item whose host states why it holds nothing (a live stream,
+  a video still transcoding) returns a `broadcastRefusal`, so that reason
+  outranks a failure in the error. Where every item costs a request at
+  listing time, the listing is held to `listingLimit` and notes the cut.
+  A listing of items to resolve uses these rather than `FanOut` alone, which
+  drops every error.
+- `linkExt` (`html.go`): the extension a link's file name carries,
+  lowercased, read off the path's last element (so a trailing slash still
+  names it), with a fallback where it names none.
+  `linkExtAsIs` (`links.go`) keeps the link's own spelling, for a host whose
+  downloads are already filed under it.
+- `walkTree` (`tree.go`): a share's nested folders, depth first in the
+  host's order, with the depth, folder and file caps, one folder per child
+  through `sourceFolder` (`treeDir`), and an unreadable subfolder reported
+  as partial. A host supplies only the reader for one folder; one that pages
+  a folder adds its listing's note with `treeWalk.partial` and may stop
+  reading past `treeWalk.room()`.
 - `resolveMediaPlaylist` (`hls.go`): an HLS master with its key, separate
   audio and subtitles ([media.md](media.md)).
-- `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts` and `hostSet`, above.
+- `walkPages` (`pages.go`), above, for any paged listing, and its HTML
+  adapter `walkListing` with `webLink` (`listing.go`): redirect, missing-page
+  and repeated-page checks on top of the engine. A new paged listing supplies
+  only the reader for one page, which also names the next page for a listing
+  paged by number, and sets `badNext` when the pager offers a next page that
+  cannot be followed ("partial — invalid next page"). A `listingLink` is
+  told from its repeats by its URL unless it names a `key`, and
+  `listingURLs` turns the walk's links into the page URLs a caller expands.
+  `webLink` is the one check that a scraped href is a web link worth
+  following; a host's own rule (same site, a file extension) goes on top of
+  it rather than beside a copy of it. Options cover the rest:
+  a first page the caller already read (`root`), a fetch of its own (`fetch`,
+  `fetchAsAsked`), page identity (`key`), redirects judged by the reader
+  (`anyRedirect`), and the engine's `quiet` and `failed`; a `failed` hook
+  that singles out one failure returns `pageFailed` for the rest, leaving
+  their note to the walk. `expansionNote` (`sources.go`) builds the job note
+  of a listing expanded into its sources, and `partialNote` that of a page
+  or search whose sources a cap cut.
+- `expandSources` keeps, beside the files, the refusals and first failure of
+  the sources that did not resolve (`expansion.refusals`, `failed`), so a
+  page none of whose sources resolved says why through `noneRead`; a link no
+  extractor recognised is counted apart (`unrecognised`), never a failure.
+- `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
+  playlist or target as a File, every field carried over.
+- `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,
+  with the caller choosing the value for a name not on it.
+- `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as
+  `File.Size` wants it, -1 for anything that is not a length.
+- `FanOut`, `expandSources`, `Mirrored`/`MirrorHosts`, above.
+- `fixturePage`, `htmlPage`, `expectRecognised` and `expectShape`
+  (`recognise_test.go`): recognition fixtures, checked from an unrelated host
+  as well.
 
 ## Live tests
 
@@ -326,8 +514,8 @@ Two conventions worth keeping to when writing one:
 | Notes | Hosts |
 | --- | --- |
 | [hosts/file-hosts.md](hosts/file-hosts.md) | bunkr, gofile, pixeldrain, mega, emload, filejump, filester, suvobox, pixhost, imagepond |
-| [hosts/keep2share.md](hosts/keep2share.md) | keep2share, fileboom, voyeurking, and the CAPTCHA reader (`internal/captcha`) |
-| [hosts/video-hosts.md](hosts/video-hosts.md) | doodstream, streamtape, mixdrop, lulustream, vids.st, sendvid, knuthing, noodlemagazine, ok.ru, pornone, eporner, yandex, Kernel Video Sharing |
+| [hosts/keep2share.md](hosts/keep2share.md) | keep2share (both hosts), voyeurking, and the CAPTCHA reader (`internal/captcha`) |
+| [hosts/video-hosts.md](hosts/video-hosts.md) | the player rows (pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop, lulustream, vids.st, sendvid, doodstream, knuthing, noodlemagazine, ok.ru, eporner), Kernel Video Sharing; pointer pages (yandex, alohatube); the yt-dlp handoffs (youtube, odysee, dailymotion, bilibili, soundcloud, mixcloud, rumble) |
 | [hosts/broadcasters.md](hosts/broadcasters.md) | vimeo, arte, orf, svtplay, yle, drtv, rtbf, francetv, radio-canada, niconico |
 | [hosts/collections.md](hosts/collections.md) | balbums, coomerfans, celeb.st, cum.st, erome, rajce, bandcamp, bandzoogle |
 

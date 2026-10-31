@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
@@ -26,8 +27,7 @@ func withExtractRetries[T any](ctx context.Context, attempt func() (T, error), a
 	)
 	for n := range config.ExtractRetries {
 		if n > 0 {
-			wait := util.Backoff(n-1, config.RequestRetryBase, config.RequestRetryMax)
-			if err := util.SleepCtx(ctx, wait); err != nil {
+			if err := util.SleepCtx(ctx, httpx.RetryDelay(n-1)); err != nil {
 				var zero T
 				return zero, err
 			}

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // The obfuscation is reproduced here rather than a copy of gofile's script
@@ -183,12 +182,12 @@ func TestGofileFreshUntil(t *testing.T) {
 		{
 			name:   "no-store falls to the floor",
 			header: http.Header{"Cache-Control": {"no-store"}},
-			want:   gofileSecretMinTTL,
+			want:   config.GofileSecretMinTTL,
 		},
 		{
 			name:   "a long max-age is capped",
 			header: http.Header{"Cache-Control": {"max-age=31536000"}},
-			want:   gofileSecretMaxTTL,
+			want:   config.GofileSecretMaxTTL,
 		},
 		{
 			name:   "expires",
@@ -198,7 +197,7 @@ func TestGofileFreshUntil(t *testing.T) {
 		{
 			name:   "nothing said",
 			header: http.Header{},
-			want:   gofileSecretTTL,
+			want:   config.GofileSecretTTL,
 		},
 	}
 
@@ -220,7 +219,7 @@ func TestGofileFreshUntil(t *testing.T) {
 // reordered field or a changed separator fails instead of agreeing with
 // itself — and getting this wrong is what gofile blocks addresses for.
 func TestGofileWebsiteToken(t *testing.T) {
-	g := &Gofile{client: httpx.New("test-agent", "en-US", 0, time.Second), lang: "en-US"}
+	g := &Gofile{client: testClient(), lang: "en-US"}
 	when := time.Unix(1787378460, 0)
 
 	want := sha256.Sum256([]byte(strings.Join([]string{
@@ -238,7 +237,7 @@ func TestGofileWebsiteToken(t *testing.T) {
 // TestGofileWebsiteTokenFollowsTheSlot covers the time window mixed into the
 // signature: stable inside a slot, different across one.
 func TestGofileWebsiteTokenFollowsTheSlot(t *testing.T) {
-	g := &Gofile{client: httpx.New("test-agent", "en-US", 0, time.Second), lang: "en-US"}
+	g := &Gofile{client: testClient(), lang: "en-US"}
 	base := time.Unix(1787378460, 0)
 
 	if a, b := g.websiteToken("t", "s", base), g.websiteToken("t", "s", base.Add(time.Minute)); a != b {
@@ -284,7 +283,7 @@ func scriptServer(t *testing.T, secret string, header map[string]string, status 
 func testGofile(t *testing.T, scriptURL string) *Gofile {
 	t.Helper()
 	return &Gofile{
-		client:    httpx.New("test-agent", "en-US", 0, 5*time.Second),
+		client:    testClient(),
 		fallback:  config.FallbackGofileSecret,
 		lang:      "en-US",
 		scriptURL: scriptURL,
@@ -352,6 +351,25 @@ func TestGofileEnsureSecretFallsBack(t *testing.T) {
 	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("read the failing script %d times, want once until the retry window passes", n)
+	}
+}
+
+// TestGofileRefusesAnOversizedScript: a script cut off at the size limit is
+// not the script, and reading a secret out of part of it would be a guess.
+func TestGofileRefusesAnOversizedScript(t *testing.T) {
+	table := []string{
+		"userAgent", "createElement", "application/json", "X-Website-Token",
+		"9c1de4a70b2f83", "getTime", "toString", "substring", "addEventListener", "innerHTML",
+	}
+	keys := []string{"aaaa", "bbbb", "cccc", "dddd", "eeee", "ffff", "gggg", "hhhh", "iiii", "jjjj"}
+	body := buildScript(table, keys, 4, 0x1de) + strings.Repeat(" ", config.MaxResponseBytes)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	if secret, _, err := testGofile(t, srv.URL).fetchSecret(context.Background()); err == nil {
+		t.Fatalf("read %q out of a truncated script", secret)
 	}
 }
 
@@ -522,9 +540,7 @@ func TestGofileSecretFromSavedScript(t *testing.T) {
 // TestGofileParsesSavedScript covers the extraction step by step, so a break
 // says which part gave way rather than only that the secret did not come out.
 func TestGofileParsesSavedScript(t *testing.T) {
-	script := gofileHexEscape.ReplaceAllStringFunc(loadSavedScript(t), func(esc string) string {
-		return string(rune(hexByte(esc[2], esc[3])))
-	})
+	script := gofileUnescape(loadSavedScript(t))
 
 	alphabet, err := gofileAlphabet(script)
 	if err != nil {

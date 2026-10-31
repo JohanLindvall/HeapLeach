@@ -4,7 +4,6 @@ package download
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -46,14 +45,14 @@ func TestLowOnSpace(t *testing.T) {
 // picks up by itself once room is made, so clearing space is the whole of the
 // remedy and nothing has to be re-added.
 func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", "4")
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer server.Close()
 
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	// A floor the destination cannot satisfy, as if the disk were nearly
 	// full. The sampler would overwrite these on its own schedule, so the
 	// floor is set above the real free space rather than the figures faked.
@@ -69,12 +68,12 @@ func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
 
 	// It must sit still rather than fail.
 	if waitForCond(2*time.Second, func() bool {
-		s := itemStatus(m, jobID, itemID)
+		s := findItem(m, jobID, itemID).Status
 		return s == StatusRunning || s == StatusDone || s == StatusFailed
 	}) {
-		t.Fatalf("item reached %q with no room to write it", itemStatus(m, jobID, itemID))
+		t.Fatalf("item reached %q with no room to write it", findItem(m, jobID, itemID).Status)
 	}
-	if got := itemStatus(m, jobID, itemID); got != StatusQueued {
+	if got := findItem(m, jobID, itemID).Status; got != StatusQueued {
 		t.Errorf("status = %q, want it queued and waiting", got)
 	}
 
@@ -85,17 +84,18 @@ func TestQueueWaitsForSpaceAndResumes(t *testing.T) {
 	m.signal()
 
 	if !waitForCond(20*time.Second, func() bool {
-		return itemStatus(m, jobID, itemID) == StatusDone
+		return findItem(m, jobID, itemID).Status == StatusDone
 	}) {
 		t.Fatalf("the queue did not pick up once there was room (status %q)",
-			itemStatus(m, jobID, itemID))
+			findItem(m, jobID, itemID).Status)
 	}
 }
 
 // The figure has to reach the browser, or a queue sitting still is
 // indistinguishable from one that is merely slow.
 func TestSnapshotCarriesTheFloor(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	m.mu.Lock()
 	m.minFree = 7 << 30
 	m.mu.Unlock()

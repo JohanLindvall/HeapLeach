@@ -11,7 +11,6 @@ import (
 	"path"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -30,7 +29,7 @@ const wetransferNoAccessBody = `{"message":"No download access to this transfer"
 // wetransferServer stands in for the download endpoint. The handler sees the
 // transfer id and the decoded request body, so a test can pin what was asked
 // as well as what came back.
-func wetransferServer(t *testing.T, handle func(id string, body map[string]any) (int, string)) *WeTransfer {
+func wetransferServer(t *testing.T, handle func(id string, body map[string]any) (int, string)) *Share {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		segs := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -50,10 +49,9 @@ func wetransferServer(t *testing.T, handle func(id string, body map[string]any) 
 	}))
 	t.Cleanup(srv.Close)
 
-	return &WeTransfer{
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
-		api:    srv.URL,
-	}
+	w := newShare(testClient(), &wetransferSite)
+	w.api = srv.URL
+	return w
 }
 
 func TestWeTransferParse(t *testing.T) {
@@ -100,30 +98,31 @@ func TestWeTransferParseRejectsEverythingElse(t *testing.T) {
 	}
 }
 
-// The storage host is the trap: it is a subdomain of the site, so matching
-// the domain alone would capture a signed link the user pasted and then fail
-// to find a transfer id in it, when the direct fallback would simply have
-// downloaded it.
-func TestWeTransferMatch(t *testing.T) {
+func TestWeTransferRecognise(t *testing.T) {
 	w := NewWeTransfer(nil)
-	cases := map[string]bool{
-		"https://wetransfer.com/downloads/aaaa1111/hash2222":          true,
-		"https://www.wetransfer.com/downloads/aaaa1111/rcpt/hash2222": true,
-		"https://we.tl/t-abcdef1234":                                  true,
-		"https://download.wetransfer.com/eugv/aaaa1111/hash2222":      false,
-		"https://wetransfer.com/":                                     false,
-		"https://wetransfer.com/help-center":                          false,
-		"https://example.test/downloads/aaaa1111/hash2222":            false,
-	}
-	for raw, want := range cases {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := w.Match(u); got != want {
-			t.Errorf("Match(%q) = %v, want %v", raw, got, want)
-		}
-	}
+	app := `<html><head><title>WeTransfer</title><meta property="og:site_name" content="WeTransfer"></head><body>` +
+		`<div id="__next"></div><script id="__NEXT_DATA__" type="application/json">` +
+		`{"props":{"pageProps":{"initialTransfer":null,"securityHash":"hash2222"}}}</script></body></html>`
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/hash2222", app), true)
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/rcpt3333/hash2222", app), true)
+	// A short link is recognised where its redirect lands.
+	short := htmlPage(t, "https://short.example.test/t-abcdef1234", app)
+	short.Final = mustParse(t, "https://transfer.example.test/downloads/aaaa1111/hash2222")
+	expectRecognised(t, w, short, true)
+	// The form and the name, without the page data.
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/downloads/aaaa1111/hash2222",
+		`<html><head><meta property="og:site_name" content="WeTransfer"></head><body><div id="__next"></div></body></html>`), false)
+	// The app, but not a download page: the help centre, or a short link
+	// whose redirect went nowhere.
+	expectRecognised(t, w, htmlPage(t, "https://transfer.example.test/help-center", app), false)
+	expectRecognised(t, w, htmlPage(t, "https://short.example.test/t-abcdef1234", app), false)
+
+	expectShape(t, w, "https://transfer.example.test/downloads/aaaa1111/hash2222", true)
+	expectShape(t, w, "https://transfer.example.test/downloads/aaaa1111/rcpt/hash2222", true)
+	expectShape(t, w, "https://short.example.test/t-abcdef1234", true)
+	expectShape(t, w, "https://download.example.test/eugv/aaaa1111/hash2222", false)
+	expectShape(t, w, "https://transfer.example.test/downloads", false)
+	expectShape(t, w, "https://transfer.example.test/downloads/aaaa1111/rcpt/hash2222/extra", false)
 }
 
 func TestWeTransferReason(t *testing.T) {
@@ -185,7 +184,7 @@ func TestWeTransferMintAsksForTheWholeTransfer(t *testing.T) {
 		return http.StatusOK, `{"direct_link":"` + direct + `"}`
 	})
 
-	target, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"})
+	target, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -222,7 +221,7 @@ func TestWeTransferMintEchoesTheRecipient(t *testing.T) {
 	})
 
 	link := wetransferLink{id: "aaaa1111", recipient: "rcpt3333", hash: "hash2222"}
-	if _, err := w.mint(context.Background(), link); err != nil {
+	if _, err := wetransferMint(context.Background(), w, link); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	if seen["recipient_id"] != "rcpt3333" {
@@ -234,7 +233,7 @@ func TestWeTransferMintExplainsAnExpiredTransfer(t *testing.T) {
 	w := wetransferServer(t, func(string, map[string]any) (int, string) {
 		return http.StatusNotFound, wetransferGoneBody
 	})
-	_, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"})
+	_, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"})
 	if err == nil {
 		t.Fatal("an expired transfer resolved to a link")
 	}
@@ -247,7 +246,7 @@ func TestWeTransferMintExplainsARecipientsOnlyTransfer(t *testing.T) {
 	w := wetransferServer(t, func(string, map[string]any) (int, string) {
 		return http.StatusForbidden, wetransferNoAccessBody
 	})
-	_, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"})
+	_, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"})
 	if err == nil {
 		t.Fatal("a recipients-only transfer resolved to a link")
 	}
@@ -262,7 +261,7 @@ func TestWeTransferMintRejectsAnAnswerWithoutALink(t *testing.T) {
 	w := wetransferServer(t, func(string, map[string]any) (int, string) {
 		return http.StatusOK, `{"direct_link":""}`
 	})
-	if _, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"}); err == nil {
+	if _, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"}); err == nil {
 		t.Fatal("an answer with no link resolved to something")
 	}
 }
@@ -362,13 +361,14 @@ func TestWeTransferFollowTakesTheRedirectDestination(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &WeTransfer{client: httpx.New("test-agent", "en-US", 0, 5*time.Second), api: srv.URL}
+	w := newShare(testClient(), &wetransferSite)
+	w.api = srv.URL
 	short, err := url.Parse(srv.URL + "/t-abcdef1234")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	landed, err := w.follow(context.Background(), short)
+	landed, err := wetransferFollow(context.Background(), w, short)
 	if err != nil {
 		t.Fatalf("follow: %v", err)
 	}
@@ -394,10 +394,11 @@ func TestWeTransferFollowLandsOnAnErrorPageForADeadCode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &WeTransfer{client: httpx.New("test-agent", "en-US", 0, 5*time.Second), api: srv.URL}
+	w := newShare(testClient(), &wetransferSite)
+	w.api = srv.URL
 	short, _ := url.Parse(srv.URL + "/t-0000000000")
 
-	landed, err := w.follow(context.Background(), short)
+	landed, err := wetransferFollow(context.Background(), w, short)
 	if err != nil {
 		t.Fatalf("follow: %v", err)
 	}

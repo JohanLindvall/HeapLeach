@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,12 +15,11 @@ import (
 )
 
 func TestSameNamedListingEntriesKeepDistinctBytes(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", `attachment; filename="sample.bin"`)
 		_, _ = fmt.Fprint(w, "bytes"+r.URL.Path)
 	}))
-	defer srv.Close()
 	m := progressManager(t, 0)
 	res := &extractor.Result{Title: "Synthetic album", Files: []extractor.File{
 		{Name: "sample.bin", URL: srv.URL + "/1", Size: 7},

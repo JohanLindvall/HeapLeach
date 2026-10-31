@@ -4,7 +4,6 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -70,41 +68,37 @@ func TestCivitaiTargetOf(t *testing.T) {
 		selector string
 		value    string
 	}{
-		{"https://civitai.com/images/12345", civitaiByImage, "12345"},
-		{"https://civitai.com/images/12345?period=AllTime", civitaiByImage, "12345"},
-		{"https://civitai.com/posts/6789", civitaiByPost, "6789"},
-		{"https://civitai.com/posts/6789/a-title-slug", civitaiByPost, "6789"},
-		{"https://civitai.com/user/SomeCreator", civitaiByUser, "SomeCreator"},
-		{"https://civitai.com/user/SomeCreator/images", civitaiByUser, "SomeCreator"},
-		{"https://civitai.com/user/SomeCreator/posts", civitaiByUser, "SomeCreator"},
-		{"https://civitai.com/user/SomeCreator/videos", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/images/12345", civitaiByImage, "12345"},
+		{"https://gallery.example.test/images/12345?period=AllTime", civitaiByImage, "12345"},
+		{"https://gallery.example.test/posts/6789", civitaiByPost, "6789"},
+		{"https://gallery.example.test/posts/6789/a-title-slug", civitaiByPost, "6789"},
+		{"https://gallery.example.test/user/SomeCreator", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/user/SomeCreator/images", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/user/SomeCreator/posts", civitaiByUser, "SomeCreator"},
+		{"https://gallery.example.test/user/SomeCreator/videos", civitaiByUser, "SomeCreator"},
 		// The model endpoint, which is the other route: no selector.
-		{"https://civitai.com/models/4201", "", "4201"},
-		{"https://civitai.com/models/4201/a-model-name", "", "4201"},
+		{"https://gallery.example.test/models/4201", "", "4201"},
+		{"https://gallery.example.test/models/4201/a-model-name", "", "4201"},
 		// Claimed by nobody here.
-		{"https://civitai.com/collections/99", "", ""},
-		{"https://civitai.com/api/download/models/555", "", ""},
-		{"https://civitai.com/user/SomeCreator/models", "", ""},
-		{"https://civitai.com/models/train", "", ""},
-		{"https://civitai.com/images", "", ""},
-		{"https://civitai.com/", "", ""},
+		{"https://gallery.example.test/collections/99", "", ""},
+		{"https://gallery.example.test/api/download/models/555", "", ""},
+		{"https://gallery.example.test/user/SomeCreator/models", "", ""},
+		{"https://gallery.example.test/models/train", "", ""},
+		{"https://gallery.example.test/images", "", ""},
+		{"https://gallery.example.test/", "", ""},
 		{"https://image.civitai.example/keyaaaa/uuid/original=true/x.jpeg", "", ""},
-		{"https://not-civitai.example.test/images/12345", "", ""},
 	}
 
 	c := NewCivitai(nil)
 	for _, tt := range tests {
-		u, err := url.Parse(tt.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tt.raw)
 		got := civitaiTargetOf(u)
 		if tt.value == "" {
 			if got != nil {
 				t.Errorf("%s was claimed as %+v, want no match", tt.raw, got)
 			}
-			if c.Match(u) {
-				t.Errorf("Match(%s) = true, want false", tt.raw)
+			if c.Shape(u) {
+				t.Errorf("Shape(%s) = true, want false", tt.raw)
 			}
 			continue
 		}
@@ -115,9 +109,75 @@ func TestCivitaiTargetOf(t *testing.T) {
 		if got.selector != tt.selector || got.value != tt.value {
 			t.Errorf("%s -> %q=%q, want %q=%q", tt.raw, got.selector, got.value, tt.selector, tt.value)
 		}
-		if !c.Match(u) {
-			t.Errorf("Match(%s) = false", tt.raw)
+		// A post is read when submitted, but is no shape: /posts/<n> is everywhere.
+		if c.Shape(u) != (tt.selector != civitaiByPost) {
+			t.Errorf("Shape(%s) = %v", tt.raw, c.Shape(u))
 		}
+	}
+}
+
+// TestCivitaiRecognise asks the API the extraction reads, on the page's own
+// origin, and only for a page of the right form that names the site or could
+// not be read at all.
+func TestCivitaiRecognise(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/images" && r.URL.Query().Get("imageId") == "12345":
+			_, _ = io.WriteString(w, `{"items":[{"id":12345,"url":"https://media.example.test/a.jpeg"}],"metadata":{}}`)
+		case r.URL.Path == "/api/v1/models/4201":
+			_, _ = io.WriteString(w, `{"id":4201,"name":"A Model","modelVersions":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := NewCivitai(testClient())
+	challenged := func(raw string) *Page {
+		p := fixturePage(t, raw, 0, "", "")
+		p.Challenged = true
+		return p
+	}
+	named := `<html><head><title>An Image | Civitai</title></head><body></body></html>`
+
+	image := challenged(srv.URL + "/images/12345")
+	for range 2 {
+		if !c.Recognise(t.Context(), image) {
+			t.Fatal("a challenged image page the API knows was not recognised")
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("asked the API %d times for one page, want once", hits.Load())
+	}
+	if !c.Recognise(t.Context(), htmlPage(t, srv.URL+"/models/4201", named)) {
+		t.Error("a named model page the API knows was not recognised")
+	}
+	// The right form and the name, but the API knows nothing of it.
+	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/999", named)) {
+		t.Error("an image the API does not know was recognised")
+	}
+	// An ordinary page of the right form costs no request at all.
+	before := hits.Load()
+	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345", `<html><title>A photo blog</title></html>`)) || hits.Load() != before {
+		t.Error("an ordinary page of the right form was recognised or cost a request")
+	}
+	// An item page titled after the item and its uploader alone: the app's
+	// data island and bundles are what lead to the API, which then decides.
+	app := `<html><head><title>Image posted by Someone</title><script src="/_next/static/chunks/a.js"></script></head>` +
+		`<body><script id="__NEXT_DATA__" type="application/json">{}</script></body></html>`
+	if !c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345", app)) {
+		t.Error("an unnamed app page the API knows was not recognised")
+	}
+	before = hits.Load()
+	if c.Recognise(t.Context(), htmlPage(t, srv.URL+"/images/12345",
+		`<html><head><script src="/_next/static/chunks/a.js"></script></head><body></body></html>`)) || hits.Load() != before {
+		t.Error("another Next.js page of the right form was recognised or cost a request")
+	}
+	// The API answering, for a page of another form.
+	if c.Recognise(t.Context(), challenged(srv.URL+"/collections/12345")) {
+		t.Error("a collection was recognised")
 	}
 }
 
@@ -126,12 +186,9 @@ func TestCivitaiTargetOf(t *testing.T) {
 // ever sent.
 func TestCivitaiQueryLiftsMatureFiltering(t *testing.T) {
 	raw := civitaiQuery("https://civitai.example/api/v1/images",
-		&civitaiTarget{selector: civitaiByUser, value: "Some Creator"})
+		&civitaiTarget{selector: civitaiByUser, value: "Some Creator"}, civitaiPageSize)
 
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("built an unparsable query %q: %v", raw, err)
-	}
+	u := mustParse(t, raw)
 	query := u.Query()
 	if query.Get("nsfw") != civitaiNSFW {
 		t.Errorf("nsfw = %q, want %q — without it the listing silently hides mature items",
@@ -203,7 +260,7 @@ type civitaiResponse struct {
 // extractor's own handling of an overloaded search rather than the shared
 // client's.
 func civitaiTestClient() *Civitai {
-	return &Civitai{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return NewCivitai(testClient())
 }
 
 // civitaiCursorPage is a page that points at the next one, carrying the cursor and
@@ -233,10 +290,10 @@ func TestCivitaiWalkFollowsTheCursorAndDropsTheRepeat(t *testing.T) {
 		{body: civitaiCursorPage([]int{3, 4}, "")},
 	})
 
-	items, err := civitaiTestClient().walk(context.Background(),
-		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator")
-	if err != nil {
-		t.Fatalf("walk: %v", err)
+	items, note, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{})
+	if err != nil || note != "" {
+		t.Fatalf("walk: %v, note %q", err, note)
 	}
 
 	var got []int64
@@ -267,36 +324,40 @@ func TestCivitaiWalkWaitsOutTheOverload(t *testing.T) {
 		{body: civitaiCursorPage([]int{3, 4}, "")},
 	})
 
-	items, err := civitaiTestClient().walk(context.Background(),
-		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator")
-	if err != nil {
-		t.Fatalf("walk: %v", err)
+	items, note, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{})
+	if err != nil || note != "" {
+		t.Fatalf("walk: %v, note %q", err, note)
 	}
 	if len(items) != 4 {
 		t.Errorf("collected %d items, want all 4 — the overload is transient, not the end", len(items))
 	}
 }
 
-// TestCivitaiWalkFailsRatherThanTruncate is the other half of the same
+// TestCivitaiWalkSaysAnOverloadCutItShort is the other half of the same
 // behaviour, and the more important one: a search that stays overloaded must
 // not look like a listing that ended. Half a gallery reported as a whole one
-// is a failure nobody can see.
-func TestCivitaiWalkFailsRatherThanTruncate(t *testing.T) {
+// is a failure nobody can see, so it is marked partial; an overloaded first
+// page has nothing to show and fails.
+func TestCivitaiWalkSaysAnOverloadCutItShort(t *testing.T) {
 	cs := newCivitaiServer(t, []civitaiResponse{
 		{body: civitaiCursorPage([]int{1, 2}, "2|999")},
 		{status: http.StatusServiceUnavailable},
 	})
 
-	items, err := civitaiTestClient().walk(context.Background(),
-		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator")
-	if err == nil {
-		t.Fatalf("a listing cut short by an overload returned %d items and no error", len(items))
-	}
-	if items != nil {
-		t.Errorf("returned %d items alongside the error, want nothing partial", len(items))
+	items, note, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{})
+	if err != nil || len(items) != 2 || note != "partial — the image search stayed overloaded" {
+		t.Fatalf("a listing cut short by an overload returned %d items, note %q, err %v", len(items), note, err)
 	}
 	if n := cs.requests.Load(); n < 3 {
 		t.Errorf("gave up after %d requests, want the overload retried", n)
+	}
+
+	cs = newCivitaiServer(t, []civitaiResponse{{status: http.StatusServiceUnavailable}})
+	if items, _, err := civitaiTestClient().walk(context.Background(),
+		cs.srv.URL+"/api/v1/images?limit=100&nsfw=X&username=SomeCreator", Options{}); err == nil {
+		t.Fatalf("an overloaded first page returned %d items and no error", len(items))
 	}
 }
 
@@ -319,10 +380,7 @@ func TestCivitaiNextPageStaysOnTheHost(t *testing.T) {
 // becomes: the id names the file, the URL is untouched, and nothing about
 // this host needs the machinery the awkward ones do.
 func TestCivitaiFilesAreNamedByIDAndFetchedAtFullSize(t *testing.T) {
-	var page civitaiListing
-	if err := json.Unmarshal([]byte(civitaiListingPage), &page); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	page := decode[civitaiListing](t, civitaiListingPage)
 
 	want := []struct {
 		name string
@@ -413,10 +471,7 @@ const civitaiModelPayload = `{
 // TestCivitaiModelFilesGroupByVersion covers the endpoint the image listing
 // cannot stand in for, and the naming that has to work without an id field.
 func TestCivitaiModelFilesGroupByVersion(t *testing.T) {
-	var model civitaiModel
-	if err := json.Unmarshal([]byte(civitaiModelPayload), &model); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	model := decode[civitaiModel](t, civitaiModelPayload)
 
 	files := civitaiModelFiles(&model)
 	if len(files) != 3 {

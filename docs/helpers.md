@@ -65,9 +65,9 @@ keeps its place in the queue when a route fails it, so it gets the next
 working route before files that have not started. With proxies enabled (the default), the one-file limit
 applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
-`-concurrency` across both services. Each address may carry one K2S transfer
-and one FileBoom transfer simultaneously. The hosts' speed limits and
-cooldowns still apply per address and service. A proxy port that has never
+`-concurrency`. Each address may carry one Keep2Share transfer at a time,
+FileBoom's included, since the two hosts are one service. The hosts' speed
+limits and cooldowns still apply per address and host. A proxy port that has never
 been tried counts as free whatever the other ports on its address are
 doing, since gateway ports often leave through addresses of their own;
 once tried, it shares its address's limits. Two downloads never leave through
@@ -107,7 +107,7 @@ ones use the new mode, preserving the per-address limit and download tickets.
 
 The proxy list shows the selection score, measured average and current
 throughput, recent success rate, request count, active transfers, cooldowns,
-and last successful request. Choose Keep2Share, FileBoom, EMLOAD, MEGA or **WAF recovery**
+and last successful request. Choose Keep2Share (FileBoom included), EMLOAD, MEGA or **WAF recovery**
 to view the corresponding scores. The WAF view also shows challenge success
 separately from ordinary request success. Search, status filters and sorting work across
 the entire inventory, with 50 rows per page. Scores are estimated useful
@@ -131,7 +131,7 @@ the normal connection. Explicit proxies take precedence over `NO_PROXY`.
 
 The routes can be held to one protocol: **SOCKS only** or **HTTP only**
 (HTTP and HTTPS proxies), for every service at once or for Keep2Share,
-FileBoom, EMLOAD, MEGA or WAF recovery alone, under **Proxy protocol** in Settings or with
+EMLOAD, MEGA or WAF recovery alone, under **Proxy protocol** in Settings or with
 `HEAPLEACH_PROXY_TYPE` and `HEAPLEACH_PROXY_TYPES`. Either one leaves the
 normal connection out, and a service with no route of its protocol waits
 for one rather than using another. Each service's list then shows only the
@@ -187,7 +187,7 @@ WAF refusals affect only the WAF success score and cooldown. They do not
 reduce ordinary service scores, erase speed measurements or mark a proxy
 broken. WAF selection still uses ordinary reliability and measured transfer
 speed, excluding user-throttled samples and free-host caps when estimating
-unrestricted capacity. Keep2Share, FileBoom, EMLOAD and MEGA retain their per-service
+unrestricted capacity. Keep2Share, EMLOAD and MEGA retain their per-service
 address limits even when WAF recovery is needed.
 
 This tries other addresses; it does not solve interactive challenges.
@@ -245,7 +245,7 @@ small, noisy speed changes from spending time on repeated route switches.
 
 Saved inventory is available immediately after restart. Feed requests,
 including GitHub, are normally 24 hours apart. An earlier top-up requires
-runnable K2S, FileBoom, EMLOAD, MEGA or WAF recovery work and too few distinct usable addresses for its current concurrency, with
+runnable Keep2Share, EMLOAD, MEGA or WAF recovery work and too few distinct usable addresses for its current concurrency, with
 at least five minutes between attempts. New active transfers count while
 their first speed sample is pending; measured and standby routes must have
 succeeded and score at least as well as an untried route's learned prior.

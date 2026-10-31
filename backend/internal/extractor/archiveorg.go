@@ -3,8 +3,8 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"path"
@@ -54,6 +54,7 @@ import (
 // labels, and the archive coins new ones whenever it adds a derivation.
 // HEAPLEACH_ARCHIVE_FORMATS is the escape for when it coins one that matters.
 type ArchiveOrg struct {
+	about
 	client *httpx.Client
 	// formats, when set, replaces the per-mediatype policy entirely.
 	formats []string
@@ -100,29 +101,50 @@ var archiveReaderPositions = map[string]bool{
 
 // NewArchiveOrg builds the archive.org extractor.
 func NewArchiveOrg(cfg *config.Config, client *httpx.Client) *ArchiveOrg {
-	a := &ArchiveOrg{client: client}
+	a := &ArchiveOrg{client: client, about: about{name: "archive.org", shape: archiveShape,
+		recognises: "items (`/details/<identifier>`, `/download/<identifier>[/<file>]` and the other item routes) " +
+			"whose page is the archive's item page or file listing, or whose metadata API answers for the identifier"}}
 	if cfg != nil {
 		a.formats = cfg.ArchiveFormats
 	}
 	return a
 }
 
-func (a *ArchiveOrg) Name() string { return "archive.org" }
-
-// Match claims item URLs on the site itself and nothing else.
-//
-// Deliberately not a subdomain match. web.archive.org is the Wayback Machine,
-// where a URL is a snapshot of somebody else's page and has no identifier to
-// look up, and the ia*.us / dn*.ca storage nodes serve one plain file each.
-// Both belong to the direct-link fallback, which handles them correctly
-// already.
-func (a *ArchiveOrg) Match(u *url.URL) bool {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host != "archive.org" && host != "www.archive.org" {
-		return false
-	}
+// archiveShape is an item route.
+func archiveShape(u *url.URL) bool {
 	_, _, ok := archiveParse(u)
 	return ok
+}
+
+// Recognise takes an item route whose page is the archive's own: the
+// item page (item-details-metadata) or the download listing
+// (download-directory-listing), both under the archive's ia-topnav. Anything
+// else of the right form — a file inside an item, which redirects to a
+// storage node and is media rather than a page, a metadata document, a
+// challenge — is settled by asking the metadata API this extractor reads,
+// on the submitted URL's own origin, whether the identifier is an item.
+//
+// The Wayback Machine is not an item route, and a storage node's paths are
+// not either, so both stay with the fallback.
+func (a *ArchiveOrg) Recognise(ctx context.Context, p *Page) bool {
+	id, _, ok := archiveParse(p.URL)
+	if !ok {
+		return false
+	}
+	if p.Has("<ia-topnav") && p.HasAny(`item-details-metadata`, `download-directory-listing`) {
+		return true
+	}
+	if a.client == nil || p.IsHTML() && p.OK() {
+		// An ordinary page of the right form that is not the archive's.
+		return false
+	}
+	var doc archiveDoc
+	return pageJSON(ctx, p, a.client, archiveMetadataOn(p.URL, id), nil, &doc) && doc.Metadata.Identifier != ""
+}
+
+// archiveMetadataOn is the metadata endpoint for an item on u's origin.
+func archiveMetadataOn(u *url.URL, id string) string {
+	return util.Origin(u) + "/metadata/" + url.PathEscape(id)
 }
 
 // Extract resolves an item, or one named file within it.
@@ -133,10 +155,15 @@ func (a *ArchiveOrg) Extract(ctx context.Context, u *url.URL, opts Options) (*Re
 			"(expected /details/<identifier>)", u.Redacted())
 	}
 
-	link := archiveMetadataAPI + url.PathEscape(id)
+	// The recogniser may have asked the metadata API already, for the page
+	// it probed; that answer is the one to read.
 	var doc archiveDoc
-	if err := a.client.GetJSON(ctx, link, nil, &doc); err != nil {
-		return nil, fmt.Errorf("archive.org: fetch %s: %w", link, err)
+	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, a.client, archiveMetadataOn(p.URL, id), &doc) {
+		doc = archiveDoc{}
+		link := archiveMetadataAPI + url.PathEscape(id)
+		if err := a.client.GetJSON(ctx, link, nil, &doc); err != nil {
+			return nil, fmt.Errorf("archive.org: fetch %s: %w", link, err)
+		}
 	}
 	return archiveResult(&doc, id, selector, a.formats, opts.maxFiles())
 }
@@ -189,7 +216,7 @@ func archiveResult(doc *archiveDoc, id, selector string, formats []string, limit
 			"Submit the items inside it instead", id)
 	}
 
-	title := util.FirstNonEmpty(strings.TrimSpace(string(doc.Metadata.Title)), id)
+	title := cmp.Or(strings.TrimSpace(string(doc.Metadata.Title)), id)
 
 	if selector != "" {
 		return archiveSelected(doc, id, title, selector)
@@ -372,7 +399,9 @@ func archiveTracks(files []archiveFile) []archiveFile {
 		if r < 0 {
 			continue
 		}
-		stem := archiveStem(f.Name)
+		// The name without its extension identifies a track across its
+		// renditions. The directory is kept: two may hold the same name.
+		stem := util.Stem(f.Name)
 		if _, seen := best[stem]; !seen {
 			order = append(order, stem)
 			best[stem], rank[stem] = f, r
@@ -503,11 +532,11 @@ var archiveGeneratedSuffixes = []string{
 	"_itemimage.jpg",
 }
 
-func archiveIsVideo(format archiveText) bool { return archiveVideoFormats[archiveLabel(format)] }
+func archiveIsVideo(format flexValue) bool { return archiveVideoFormats[archiveLabel(format)] }
 
-func archiveIsMPEG4(format archiveText) bool { return archiveMPEG4Formats[archiveLabel(format)] }
+func archiveIsMPEG4(format flexValue) bool { return archiveMPEG4Formats[archiveLabel(format)] }
 
-func archiveIsSubtitle(format archiveText) bool { return archiveSubtitleFormats[archiveLabel(format)] }
+func archiveIsSubtitle(format flexValue) bool { return archiveSubtitleFormats[archiveLabel(format)] }
 
 // archiveEncrypted recognises a DRM-wrapped rendition.
 //
@@ -517,7 +546,7 @@ func archiveIsSubtitle(format archiveText) bool { return archiveSubtitleFormats[
 // server. Matching the word rather than the four current labels is deliberate
 // — a scheme this cannot recognise is one that produces an unopenable file
 // that looks like a finished download.
-func archiveEncrypted(format archiveText) bool {
+func archiveEncrypted(format flexValue) bool {
 	return strings.Contains(archiveLabel(format), "encrypted")
 }
 
@@ -540,34 +569,20 @@ func archiveHousekeeping(f archiveFile) bool {
 	return strings.HasPrefix(strings.ToLower(f.Name), "logs/")
 }
 
-func archiveAudioRank(format archiveText) int { return archiveRankIn(archiveAudioRanking, format) }
+func archiveAudioRank(format flexValue) int { return archiveRankIn(archiveAudioRanking, format) }
 
-func archiveBookRank(format archiveText) int { return archiveRankIn(archiveBookRanking, format) }
+func archiveBookRank(format flexValue) int { return archiveRankIn(archiveBookRanking, format) }
 
 // archiveRankIn returns a format's position in a ranking, or -1 when it is
 // absent — which, for an allow-list, means "not this kind of file".
-func archiveRankIn(ranking []string, format archiveText) int {
-	label := archiveLabel(format)
-	for i, known := range ranking {
-		if label == known {
-			return i
-		}
-	}
-	return -1
+func archiveRankIn(ranking []string, format flexValue) int {
+	return rankIn(ranking, archiveLabel(format), -1)
 }
 
 // archiveLabel normalises a format label for comparison. The archive writes
 // them for people to read, so they carry capitals and spaces.
-func archiveLabel(format archiveText) string {
+func archiveLabel(format flexValue) string {
 	return strings.ToLower(strings.TrimSpace(string(format)))
-}
-
-// archiveStem is a name with its extension removed, which is what identifies
-// a track across its renditions. The directory is kept, because a name may
-// legitimately contain a slash and two directories may hold the same track
-// name.
-func archiveStem(name string) string {
-	return strings.TrimSuffix(name, path.Ext(name))
 }
 
 // ------------------------------------------------------------ file layout
@@ -609,6 +624,13 @@ func archiveDownloadURL(id, name string) string {
 // ------------------------------------------------------------- the wire
 
 // archiveDoc is the part of the metadata response this reads.
+//
+// The archive's metadata is a schemaless document store where every field may
+// repeat: an item edited twice can carry two titles where its neighbour
+// carries one, and sizes are written as strings by one deriver and as numbers
+// by another. Decoding any of that into a plain Go string fails the whole
+// document and loses the item, so every field read here is a flexValue and
+// keeps the first value it finds.
 type archiveDoc struct {
 	Files    []archiveFile `json:"files"`
 	Metadata archiveItem   `json:"metadata"`
@@ -624,23 +646,23 @@ type archiveDoc struct {
 
 // archiveItem is the item's own metadata.
 type archiveItem struct {
-	Identifier string      `json:"identifier"`
-	Title      archiveText `json:"title"`
-	MediaType  archiveText `json:"mediatype"`
+	Identifier string    `json:"identifier"`
+	Title      flexValue `json:"title"`
+	MediaType  flexValue `json:"mediatype"`
 }
 
 // archiveFile is one entry in the item's file list.
 type archiveFile struct {
-	Name   string      `json:"name"`
-	Source archiveText `json:"source"`
-	Format archiveText `json:"format"`
+	Name   string    `json:"name"`
+	Source flexValue `json:"source"`
+	Format flexValue `json:"format"`
 	// Size is a decimal string, and absent altogether on some entries.
-	Size archiveText `json:"size"`
+	Size flexValue `json:"size"`
 	// Private marks a file that is listed but not served: the download
 	// redirect is issued as normal and the node behind it answers 401. It is
 	// filtered on rather than discovered, because discovering it costs a
 	// failed transfer per file on an item that can hold thirty of them.
-	Private archiveText `json:"private"`
+	Private flexValue `json:"private"`
 }
 
 func (f archiveFile) isOriginal() bool {
@@ -651,49 +673,12 @@ func (f archiveFile) restricted() bool {
 	return strings.EqualFold(strings.TrimSpace(string(f.Private)), "true")
 }
 
-// size is the exact length, or -1 when the entry carried none.
+// size is the exact length, or -1 when the entry carried none. Not
+// parsedSize: the archive lists empty files, and 0 is their exact length.
 func (f archiveFile) size() int64 {
 	n, err := strconv.ParseInt(strings.TrimSpace(string(f.Size)), 10, 64)
 	if err != nil || n < 0 {
 		return -1
 	}
 	return n
-}
-
-// archiveText is a metadata value that may arrive as a string, a number, a
-// boolean, or an array of any of those.
-//
-// The archive's metadata is a schemaless document store where every field may
-// repeat: an item edited twice can carry two titles where its neighbour
-// carries one, and sizes are written as strings by one deriver and as numbers
-// by another. Decoding any of that into a plain Go string fails the whole
-// document and loses the item, so every field read here goes through this and
-// keeps the first value it finds.
-type archiveText string
-
-func (t *archiveText) UnmarshalJSON(b []byte) error {
-	var v any
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	*t = archiveText(archiveScalar(v))
-	return nil
-}
-
-func archiveScalar(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case bool:
-		return strconv.FormatBool(x)
-	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64)
-	case []any:
-		for _, e := range x {
-			if s := archiveScalar(e); s != "" {
-				return s
-			}
-		}
-	}
-	return ""
 }

@@ -7,8 +7,11 @@ package config
 
 import (
 	"bufio"
+	"cmp"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -55,19 +58,9 @@ type Config struct {
 	UserAgent       string
 	Language        string
 	GofileSecret    string
-	// ExtraHosts extends the built-in install list of each platform family,
-	// keyed by family name ("kvs", "peertube", "chevereto", ...).
-	//
-	// Every family this program covers is software sold or given to many
-	// operators, so a list compiled into a binary can only ever trail the
-	// sites running it. One setting rather than one per family, because
-	// there is nothing family-specific about the reasoning and six
-	// near-identical environment variables would be worse than one.
-	ExtraHosts map[string][]string
 	// ArchiveFormats overrides which archive.org renditions are taken. An
 	// item there routinely offers the same film six times, so the extractor
-	// picks per media type; this is the escape for when its taste is wrong,
-	// and exists for the same reason the host lists above do.
+	// picks per media type; this is the escape for when its taste is wrong.
 	ArchiveFormats []string
 	MaxRetries     int
 	Streams        int
@@ -160,7 +153,6 @@ func FromEnv() (*Config, error) {
 		UserAgent:       env("USER_AGENT", DefaultUserAgent),
 		Language:        env("LANGUAGE", DefaultLanguage),
 		GofileSecret:    env("GOFILE_SECRET", FallbackGofileSecret),
-		ExtraHosts:      extraHosts(),
 		ArchiveFormats:  envList("IA_FORMATS"),
 		MaxRetries:      DefaultMaxRetries,
 		Streams:         DefaultStreams,
@@ -179,20 +171,18 @@ func FromEnv() (*Config, error) {
 		ProxyRetries:    DefaultProxyRetries,
 		ProxyExitProbes: []string{ProxyExitProbeURL, ProxyExitProbeFallbackURL},
 	}
-	if enabled, set := EnvBool("PROXIES"); set {
-		c.Proxies = enabled
-	}
-	if _, set := os.LookupEnv(envPrefix + "PROXY_ENDPOINTS"); !set {
+	warnRetiredSettings()
+	if _, set := envSet("PROXY_ENDPOINTS"); !set {
 		c.ProxyEndpoints = []string{"direct"}
 	}
-	if _, set := os.LookupEnv(envPrefix + "PROXY_FEEDS"); set {
+	if _, set := envSet("PROXY_FEEDS"); set {
 		c.ProxyFeeds = envList("PROXY_FEEDS")
 	}
 
 	// An explicitly empty state path disables persistence; env's usual
 	// empty-means-default rule cannot represent that choice.
-	if value, set := os.LookupEnv(envPrefix + "STATE"); set {
-		c.StateFile = strings.TrimSpace(value)
+	if value, set := envSet("STATE"); set {
+		c.StateFile = value
 	} else if c.StateFile != "" {
 		c.LegacyStateFile = strings.TrimSuffix(c.StateFile, ".zst")
 	}
@@ -204,53 +194,29 @@ func FromEnv() (*Config, error) {
 	if c.ProxyTypes, err = ParseProxyTypes(LookupEnv("PROXY_TYPES")); err != nil {
 		return nil, fmt.Errorf("%sPROXY_TYPES: %w", envPrefix, err)
 	}
-	if c.ProxyRetries, err = envInt("PROXY_RETRIES", c.ProxyRetries); err != nil {
-		return nil, err
-	}
-	if c.Concurrency, err = envInt("CONCURRENCY", c.Concurrency); err != nil {
-		return nil, err
-	}
-	if c.MaxRetries, err = envInt("MAX_RETRIES", c.MaxRetries); err != nil {
-		return nil, err
-	}
-	if c.Streams, err = envInt("STREAMS", c.Streams); err != nil {
-		return nil, err
-	}
-	if c.MaxConcurrency, err = envInt("MAX_CONCURRENCY", c.MaxConcurrency); err != nil {
-		return nil, err
-	}
-	if c.CaptchaConcurrency, err = envInt("CAPTCHA_CONCURRENCY", c.CaptchaConcurrency); err != nil {
-		return nil, err
-	}
-	if c.MaxSources, err = envInt("MAX_SOURCES", c.MaxSources); err != nil {
-		return nil, err
-	}
-	if c.MaxFiles, err = envInt("MAX_FILES", c.MaxFiles); err != nil {
-		return nil, err
-	}
-	if c.SlowSpeed, err = envSize("SLOW_SPEED", c.SlowSpeed); err != nil {
-		return nil, err
-	}
-	if c.SpeedLimit, err = envSize("MAX_SPEED", c.SpeedLimit); err != nil {
-		return nil, err
-	}
-	if c.MinFreeDisk, err = envSize("MIN_FREE", c.MinFreeDisk); err != nil {
-		return nil, err
-	}
-
-	if v := env("STALL_TIMEOUT", ""); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("%sSTALL_TIMEOUT: %w", envPrefix, err)
+	// Each read keeps the default when the setting is absent.
+	for _, read := range []func() error{
+		envInto("PROXY_RETRIES", &c.ProxyRetries, strconv.Atoi),
+		envInto("CONCURRENCY", &c.Concurrency, strconv.Atoi),
+		envInto("MAX_RETRIES", &c.MaxRetries, strconv.Atoi),
+		envInto("STREAMS", &c.Streams, strconv.Atoi),
+		envInto("MAX_CONCURRENCY", &c.MaxConcurrency, strconv.Atoi),
+		envInto("CAPTCHA_CONCURRENCY", &c.CaptchaConcurrency, strconv.Atoi),
+		envInto("MAX_SOURCES", &c.MaxSources, strconv.Atoi),
+		envInto("MAX_FILES", &c.MaxFiles, strconv.Atoi),
+		envInto("SLOW_SPEED", &c.SlowSpeed, ParseSize),
+		envInto("MAX_SPEED", &c.SpeedLimit, ParseSize),
+		envInto("MIN_FREE", &c.MinFreeDisk, ParseSize),
+		envInto("STALL_TIMEOUT", &c.StallTimeout, time.ParseDuration),
+		envInto("PROXIES", &c.Proxies, parseBool),
+		envInto("DEBUG", &c.Debug, parseBool),
+		envInto("OPEN", &c.OpenBrowser, parseBool),
+		envInto("RESUME", &c.ResumeRestored, parseBool),
+	} {
+		if err := read(); err != nil {
+			return nil, err
 		}
-		c.StallTimeout = d
 	}
-
-	if enabled, set := EnvBool("DEBUG"); set {
-		c.Debug = enabled
-	}
-	c.OpenBrowser, _ = EnvBool("OPEN")
-	c.ResumeRestored, _ = EnvBool("RESUME")
 	c.ProfileAddr = env("PPROF", "")
 	return c, nil
 }
@@ -348,14 +314,18 @@ func FormatSize(n int64) string {
 // no desktop — needs a way to say so, and setting the variable to anything
 // would otherwise turn it further on.
 func EnvBool(name string) (value, set bool) {
-	switch strings.ToLower(LookupEnv(name)) {
-	case "":
-		return false, false
-	case "0", "false", "no", "off":
-		return false, true
-	default:
-		return true, true
+	raw := LookupEnv(name)
+	value, _ = parseBool(raw)
+	return value, raw != ""
+}
+
+// parseBool reads a switch's value: off when it says so, on otherwise.
+func parseBool(raw string) (bool, error) {
+	switch strings.ToLower(raw) {
+	case "", "0", "false", "no", "off":
+		return false, nil
 	}
+	return true, nil
 }
 
 // PrepareDir expands, resolves and creates a download directory, and proves
@@ -405,14 +375,14 @@ func (c *Config) Prepare() error {
 	if c.ProxyType == "" {
 		c.ProxyType = ProxyTypeAny
 	}
-	if !ValidProxyType(c.ProxyType) {
-		return fmt.Errorf("proxy type must be any, socks or http, got %q", c.ProxyType)
+	if err := CheckProxyType(c.ProxyType); err != nil {
+		return err
 	}
-	for group, kind := range c.ProxyTypes {
-		if !slices.Contains(ProxyGroups, group) || !ValidProxyType(kind) {
-			return fmt.Errorf("proxy types: %q=%q is not a proxy group and a protocol", group, kind)
-		}
+	types, err := CheckProxyTypes(c.ProxyTypes)
+	if err != nil {
+		return fmt.Errorf("proxy types: %w", err)
 	}
+	c.ProxyTypes = types
 	if c.ProxyDB != "" {
 		// A disabled pool can be enabled through the live settings later.
 		var err error
@@ -428,52 +398,35 @@ func (c *Config) Prepare() error {
 		c.StateFile = ""
 		c.LegacyStateFile = ""
 	}
-	if c.MaxConcurrency < 0 {
-		return fmt.Errorf("max-concurrency cannot be negative, got %d", c.MaxConcurrency)
+	for _, n := range []struct {
+		setting string
+		value   int64
+	}{
+		{"max-concurrency", int64(c.MaxConcurrency)}, {"retries", int64(c.MaxRetries)},
+		{"slow-speed", c.SlowSpeed}, {"max-speed", c.SpeedLimit}, {"min-free", c.MinFreeDisk},
+		{"max-sources", int64(c.MaxSources)}, {"max-files", int64(c.MaxFiles)},
+	} {
+		if n.value < 0 {
+			return fmt.Errorf("%s cannot be negative, got %d", n.setting, n.value)
+		}
 	}
-	if c.MaxConcurrency == 0 {
-		c.MaxConcurrency = DefaultMaxConcurrency
-	}
+	// Zero is the default rather than nothing at all, as it is wherever the
+	// caps are read; a config written as a literal leaves them unset.
+	c.MaxConcurrency = cmp.Or(c.MaxConcurrency, DefaultMaxConcurrency)
+	c.CaptchaConcurrency = cmp.Or(c.CaptchaConcurrency, DefaultCaptchaConcurrency)
+	c.MaxSources = cmp.Or(c.MaxSources, MaxExpandedSources)
+	c.MaxFiles = cmp.Or(c.MaxFiles, MaxListingFiles)
 	if c.Concurrency < 1 || c.Concurrency > c.MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 1 and %d, got %d", c.MaxConcurrency, c.Concurrency)
-	}
-	if c.CaptchaConcurrency == 0 {
-		c.CaptchaConcurrency = DefaultCaptchaConcurrency
 	}
 	if c.CaptchaConcurrency < 1 || c.CaptchaConcurrency > MaxCaptchaConcurrency {
 		return fmt.Errorf("captcha-concurrency must be between 1 and %d, got %d", MaxCaptchaConcurrency, c.CaptchaConcurrency)
 	}
-	if c.MaxRetries < 0 {
-		return fmt.Errorf("retries cannot be negative, got %d", c.MaxRetries)
-	}
 	if c.Streams < 1 || c.Streams > MaxStreams {
 		return fmt.Errorf("streams must be between 1 and %d, got %d", MaxStreams, c.Streams)
 	}
-	if c.SlowSpeed < 0 {
-		return fmt.Errorf("slow-speed cannot be negative, got %d", c.SlowSpeed)
-	}
-	if c.SpeedLimit < 0 {
-		return fmt.Errorf("max-speed cannot be negative, got %d", c.SpeedLimit)
-	}
 	if c.StallTimeout <= 0 {
 		return fmt.Errorf("stall-timeout must be positive, got %s", c.StallTimeout)
-	}
-	if c.MinFreeDisk < 0 {
-		return fmt.Errorf("min-free cannot be negative, got %d", c.MinFreeDisk)
-	}
-	// Zero is the default rather than nothing at all, as it is wherever the
-	// caps are read; a config written as a literal leaves them unset.
-	if c.MaxSources < 0 {
-		return fmt.Errorf("max-sources cannot be negative, got %d", c.MaxSources)
-	}
-	if c.MaxSources == 0 {
-		c.MaxSources = MaxExpandedSources
-	}
-	if c.MaxFiles < 0 {
-		return fmt.Errorf("max-files cannot be negative, got %d", c.MaxFiles)
-	}
-	if c.MaxFiles == 0 {
-		c.MaxFiles = MaxListingFiles
 	}
 	dir, err := PrepareDir(c.DownloadDir)
 	if err != nil {
@@ -649,6 +602,13 @@ func LookupEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(envPrefix + name))
 }
 
+// envSet returns a setting's value, trimmed, and whether it is set at all,
+// for settings where set but empty means something of its own.
+func envSet(name string) (string, bool) {
+	value, set := os.LookupEnv(envPrefix + name)
+	return strings.TrimSpace(value), set
+}
+
 func env(name, def string) string {
 	if v := LookupEnv(name); v != "" {
 		return v
@@ -656,55 +616,21 @@ func env(name, def string) string {
 	return def
 }
 
-// extraHosts reads the per-family host additions.
-//
-// HEAPLEACH_EXTRA_HOSTS carries them all, as
-// "family:host,host;family:host" — semicolons between families, commas or
-// spaces within one. HEAPLEACH_KVS_HOSTS is still honoured, because it
-// shipped first and someone is relying on it; it simply folds into the "kvs"
-// family.
-func extraHosts() map[string][]string {
-	out := map[string][]string{}
-	add := func(family string, hosts []string) {
-		family = strings.ToLower(strings.TrimSpace(family))
-		if family == "" || len(hosts) == 0 {
-			return
+// retiredHostSettings named installs of each platform family, back when an
+// extractor was chosen by the URL's host. Pages are now recognised by what
+// they serve, so an install nobody named is found like any other and these
+// have nothing left to do; they are still read, so that someone relying on
+// one learns it no longer applies rather than wondering why nothing changed.
+var retiredHostSettings = []string{"EXTRA_HOSTS", "KVS_HOSTS"}
+
+// warnRetiredSettings logs each retired setting that is still set.
+func warnRetiredSettings() {
+	for _, name := range retiredHostSettings {
+		if LookupEnv(name) != "" {
+			slog.Warn("setting is ignored: sites are recognised by their pages, so no host list is needed",
+				"setting", envPrefix+name)
 		}
-		out[family] = append(out[family], hosts...)
 	}
-
-	add(FamilyKVS, envList("KVS_HOSTS"))
-	for group := range strings.SplitSeq(LookupEnv("EXTRA_HOSTS"), ";") {
-		family, list, ok := strings.Cut(group, ":")
-		if !ok {
-			continue
-		}
-		add(family, splitList(list))
-	}
-	return out
-}
-
-// Family names for ExtraHosts, so the extractors and this file cannot drift
-// apart over a spelling.
-const (
-	FamilyKVS       = "kvs"
-	FamilyPeerTube  = "peertube"
-	FamilyChevereto = "chevereto"
-	FamilyFoolFuuka = "foolfuuka"
-	FamilyFediverse = "fediverse"
-	FamilyMediaWiki = "mediawiki"
-	// FamilyBandzoogle names the band-site platform. It ships with no hosts
-	// of its own: every install answers on the band's own domain, so there
-	// is no list to compile in and the sniff is what finds them.
-	FamilyBandzoogle = "bandzoogle"
-)
-
-// ExtraHostsFor returns the additional hosts configured for one family.
-func (c *Config) ExtraHostsFor(family string) []string {
-	if c == nil {
-		return nil
-	}
-	return c.ExtraHosts[family]
 }
 
 // envList reads a comma- or whitespace-separated list, for settings that
@@ -726,31 +652,23 @@ func splitList(raw string) []string {
 	return out
 }
 
-func envInt(name string, def int) (int, error) {
-	v := LookupEnv(name)
-	if v == "" {
-		return def, nil
+// envInto returns a read of one setting into to, which keeps its value when
+// the setting is absent. A setting that parse refuses is an error naming it.
+// Sizes take a unit (ParseSize), so a rate or a floor need not be a run of
+// zeroes; a bare number is still bytes.
+func envInto[T any](name string, to *T, parse func(string) (T, error)) func() error {
+	return func() error {
+		v := LookupEnv(name)
+		if v == "" {
+			return nil
+		}
+		parsed, err := parse(v)
+		if err != nil {
+			return fmt.Errorf("%s%s: %w", envPrefix, name, err)
+		}
+		*to = parsed
+		return nil
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
-	}
-	return n, nil
-}
-
-// envSize reads a byte count that may carry a unit — 5MB, 10GiB — since a
-// rate or a floor is far easier to state that way than as a run of zeroes.
-// A bare number is still bytes, so what worked before still works.
-func envSize(name string, def int64) (int64, error) {
-	v := LookupEnv(name)
-	if v == "" {
-		return def, nil
-	}
-	n, err := ParseSize(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s%s: %w", envPrefix, name, err)
-	}
-	return n, nil
 }
 
 // The protocols a proxy group can be held to.
@@ -760,10 +678,61 @@ const (
 	ProxyTypeHTTP  = "http"
 )
 
-// ProxyGroups are the groups that draw on the proxy pool, each a scope of
-// its own: services that count free downloads per address, and WAF recovery
-// on any host.
-var ProxyGroups = []string{"keep2share", "fileboom", "emload", "mega", "cloudflare"}
+// The proxy groups: services that count free downloads per address, each a
+// scope of the proxy pool of its own, and GroupWAF, recovery from a web
+// application firewall's challenge on any host. The names are what settings,
+// the API and the proxy database carry, so they stay as they are.
+const (
+	GroupKeep2Share = "keep2share"
+	GroupEmload     = "emload"
+	GroupMega       = "mega"
+	GroupWAF        = "cloudflare"
+)
+
+// ProxyGroups are the groups that draw on the proxy pool, in the order
+// settings list them. Read it, never change it.
+var ProxyGroups = []string{GroupKeep2Share, GroupEmload, GroupMega, GroupWAF}
+
+// IsProxyGroup reports whether name is a proxy group by its present name.
+// It is asked of every queued item, so it does not copy the list.
+func IsProxyGroup(name string) bool { return slices.Contains(ProxyGroups, name) }
+
+// proxyGroupAliases are the names groups were once known by. A setting
+// written before two groups became one still names the old one, and is
+// read as the group it is now part of.
+var proxyGroupAliases = map[string]string{"fileboom": GroupKeep2Share}
+
+// ProxyGroup returns the group a name stands for, its own or a former
+// one's, and whether it is a group at all.
+func ProxyGroup(name string) (string, bool) {
+	if group, ok := proxyGroupAliases[name]; ok {
+		return group, true
+	}
+	return name, IsProxyGroup(name)
+}
+
+// CanonicalProxyTypes returns types with each former group's name read as
+// the group it is now part of, and whether every name was a group. A group
+// named both ways keeps the protocol given under its own name.
+func CanonicalProxyTypes(types map[string]string) (map[string]string, bool) {
+	if types == nil {
+		return nil, true
+	}
+	out, valid := make(map[string]string, len(types)), true
+	for name, kind := range types {
+		group, ok := ProxyGroup(name)
+		if !ok {
+			valid = false
+			out[name] = kind
+			continue
+		}
+		if _, own := types[group]; group != name && own {
+			continue
+		}
+		out[group] = kind
+	}
+	return out, valid
+}
 
 // ValidProxyType reports a protocol a proxy group can be held to.
 func ValidProxyType(kind string) bool {
@@ -777,13 +746,40 @@ func ParseProxyTypes(raw string) (map[string]string, error) {
 	for _, field := range splitList(raw) {
 		group, kind, ok := strings.Cut(field, "=")
 		group, kind = strings.ToLower(strings.TrimSpace(group)), strings.ToLower(strings.TrimSpace(kind))
-		if !ok || !slices.Contains(ProxyGroups, group) || !ValidProxyType(kind) {
+		if !ok || kind == "" {
 			return nil, fmt.Errorf("%q is not a proxy group (%s) and a protocol (any, socks or http)",
 				field, strings.Join(ProxyGroups, ", "))
 		}
 		types[group] = kind
 	}
-	return types, nil
+	return CheckProxyTypes(types)
+}
+
+// CheckProxyType returns an error unless kind is a protocol a proxy group
+// can be held to.
+func CheckProxyType(kind string) error {
+	if !ValidProxyType(kind) {
+		return fmt.Errorf("proxy type must be any, socks or http, got %q", kind)
+	}
+	return nil
+}
+
+// CheckProxyTypes returns types with each former group's name read as the
+// group it is now part of (CanonicalProxyTypes), or an error naming the
+// first entry, in name order, that is not a proxy group with a protocol.
+// An empty protocol passes: the group follows the others, as it would
+// unnamed. The wording is what /api/settings answers with.
+func CheckProxyTypes(types map[string]string) (map[string]string, error) {
+	kinds, _ := CanonicalProxyTypes(types)
+	for _, group := range slices.Sorted(maps.Keys(kinds)) {
+		if !IsProxyGroup(group) {
+			return nil, fmt.Errorf("%q is not a proxy group (%s)", group, strings.Join(ProxyGroups, ", "))
+		}
+		if kind := kinds[group]; kind != "" && !ValidProxyType(kind) {
+			return nil, fmt.Errorf("proxy type for %s must be any, socks or http, got %q", group, kind)
+		}
+	}
+	return kinds, nil
 }
 
 // FormatProxyTypes writes protocols per proxy group as ParseProxyTypes reads

@@ -2,11 +2,25 @@
 
 `backend/internal/httpx`; file names are relative to it. Header names and
 common values live in `headers.go` (`httpx.Header`, `httpx.Referer`,
-`httpx.RefererOrigin`).
+`httpx.RefererOrigin`, and `httpx.SiteOrigin(root)` for the common pair
+sent from a site's front page). `Header.Apply` sets a header map on a request, and
+`httpx.Navigate` is what a browser sends with a page it navigates to (HTML
+asked for, and the `Sec-Fetch-Dest`/`Sec-Fetch-Mode` pair some hosts check);
+it is shared, so apply or `Merge` it, never write to it. The response header
+names the server sets (`HeaderCacheControl`, `HeaderVary` and the like) live
+there too.
 
 ## Retries and rate limits
 
-`httpx.Client.Do` retries with backoff; `DoOnce` does not. One status is
+`httpx.Client.Do` retries with backoff (`httpx.RetryDelay`, which the
+extractors' `withExtractRetries` shares, so a re-asked answer waits as a
+failed request would); `DoOnce` does not, and `StatusOnce`
+is `DoOnce` reduced to the status, for a probe of whether a host serves an
+address at all. Both run one loop (`send`) with the budgets given: `Do` with
+the client's retries and `config.RateLimitRetries`, `DoOnce` with none of
+either, so a single attempt reads every answer exactly as `Do`'s last one
+would. `GetJSON`, `PostJSON`, `Fetch` and `StatusOnce` build their requests
+with `request`, which applies header maps over the defaults in order. One status is
 handled apart from the rest: **429 is waited out, not counted as a failure.**
 A rate limit is the server saying *later*, not *no*, so `Do` honours
 `Retry-After` when the response states one and otherwise backs off from
@@ -25,6 +39,42 @@ Two traps:
 - A test fixture that serves a **permanent** 429 sits out that patience too,
   and burns the whole budget unless it states `Retry-After: 0`. A suite that
   suddenly takes a minute instead of three seconds is this, not a hang.
+
+## Reading a response
+
+`Client.Fetch` is the GET that reads a whole body: the client's defaults with
+the caller's headers over them, `Do`'s retries, and a non-2xx answer returned
+as a `StatusError`. A body over `config.MaxResponseBytes` is an error, never
+cut short, because a truncated script or playlist parses as something it is
+not. It hands back the response with its body read and closed, for its
+headers and for `resp.Request.URL`, the address after redirects that relative
+references resolve against. `GetPage` is `Fetch` with `Navigate` under the
+caller's headers; a playlist or script is fetched with `Fetch` itself, since
+it is not a page being navigated to.
+
+Build a refusal with `NewStatusError(resp)`, not a `StatusError` literal. It
+keeps the code, status, headers and the first `config.ErrorBodySample` bytes
+of the body, which is where hosts say why: the downloader reads a connection
+limit out of it, and mega's quota out of the headers. It names the address the
+caller asked for, without a password, not one a redirect led to, which is
+often a signed link. `Do` builds one from the last retryable answer, so an
+exhausted budget still quotes the host's reason. A body already read whole
+(`Bytes`, `GetPage`) is kept whole, because some extractors decode a JSON
+refusal.
+
+## Response logs
+
+There is one logger key. `httpx.WithLogger` sets it and
+`extractor.WithLogger` is the same call, so a job's extraction log gets a
+debug line for each response that went wrong (an error status or a
+challenge): host, status, type, length, server and Cloudflare markers, with
+no body, cookies or path. Responses that went right are not recorded: a
+listing reads hundreds of pages, and the Logs panel holds a thousand lines
+across every job. `httpx.WithResponseLog` records every response, for a stage
+being diagnosed request by request (the DoodStream player handshake). A
+client from `Streaming()` (the downloader's) logs none of these, because a
+segmented video means thousands of responses and a transfer reports its own
+failures. Keep any new per-request record at debug level.
 
 ## Short certificate chains
 
@@ -49,7 +99,8 @@ These shape how routes are scored; the routes themselves are in
 
 - Proxy connection and response-header timeouts both penalise the route and
   cool its endpoint across services. The dial is bounded by
-  `config.ProxyDialTimeout` (5 seconds, set in `ThroughProxy`): most routes in
+  `config.ProxyDialTimeout` (5 seconds, set in `ThroughProxy`) rather than the
+  `config.DialTimeout` every other path's `dialer` uses: most routes in
   a public feed are dead and most dead ones never answer, so the dial timeout
   is what each costs a file.
 - An unanswered explicit proxy connection returns `httpx.ProxyConnectError`,

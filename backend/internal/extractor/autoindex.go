@@ -62,72 +62,48 @@ import (
 //
 // Two other things were expected to come along for free, and only one does.
 // archive.org's /download/<id> is a genuine autoindex — a table of relative
-// links carrying Apache's own abbreviated sizes — so it is claimed on that
-// path shape. An IPFS gateway is not: kubo's directory template writes its
-// links root-relative to whatever base the gateway rewrites to, and puts the
-// size in a sibling of the link rather than beside it, so a gateway that
-// rewrites yields nothing here. One that does not, and titles the page after
-// the directory it is listing, is picked up by the title rule below. Anything
-// beyond that belongs in an extractor of its own.
+// links carrying Apache's own abbreviated sizes, titled as a directory
+// listing — so it is recognised like any other. An IPFS gateway is not:
+// kubo's directory template writes its links root-relative to whatever base
+// the gateway rewrites to, and puts the size in a sibling of the link rather
+// than beside it, so a gateway that rewrites yields nothing here. One that
+// does not, and titles the page after the directory it is listing, is picked
+// up by the title rule below. Anything beyond that belongs in an extractor
+// of its own.
 type Autoindex struct {
+	about
 	client *httpx.Client
 }
 
 // NewAutoindex builds the open-directory extractor.
-func NewAutoindex(client *httpx.Client) *Autoindex { return &Autoindex{client: client} }
+//
+// It has no shape: a directory's URL looks like any other page's, and only
+// the listing itself says what it is.
+func NewAutoindex(client *httpx.Client) *Autoindex {
+	return &Autoindex{client: client, about: about{name: "autoindex",
+		recognises: "generated directory listings at any path: a page titled as an index of its own " +
+			"directory (`Index of /…`, `Directory listing for /…`) that links at least one entry " +
+			"inside it"}}
+}
 
-func (a *Autoindex) Name() string { return "autoindex" }
-
-// Match claims the URL shapes that are an autoindex by construction. Nothing
-// else can be settled from a URL alone, which is what autoindexSniff is for.
-func (a *Autoindex) Match(u *url.URL) bool { return autoindexArchiveOrg(u) }
+// Recognise takes a page whose title or heading names it a listing of the
+// directory it was served from, and that links an entry inside that
+// directory, which is what the crawl reads.
+func (a *Autoindex) Recognise(_ context.Context, p *Page) bool {
+	root := p.HTML()
+	if !p.OK() || root == nil {
+		return false
+	}
+	base := autoindexBase(p.Final)
+	return autoindexIsListing(root, base) && len(autoindexEntries(root, base)) > 0
+}
 
 // Extract crawls the directory the URL names.
 func (a *Autoindex) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return a.crawl(ctx, u, opts.maxFiles())
-}
-
-// autoindexArchiveOrg reports whether a URL is an archive.org item listing.
-//
-// An item's /download/<id> is served as an ordinary autoindex, with or
-// without a trailing slash. Deeper than that the shape stops being reliable:
-// /download/<id>/<name> is a file inside the item, and claiming it would
-// replace a working download with a page that is not a listing. So a deeper
-// path is only taken when it ends in a slash and therefore says it is a
-// directory.
-func autoindexArchiveOrg(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "archive.org") {
-		return false
+	if p := probed(ctx, u); p != nil && p.OK() && p.Final.String() != u.String() {
+		u = p.Final // a redirect added the slash, or moved the directory
 	}
-	segs := util.PathSegments(u)
-	if len(segs) < 2 || segs[0] != "download" {
-		return false
-	}
-	return len(segs) == 2 || strings.HasSuffix(u.Path, "/")
-}
-
-// autoindexSniff resolves a URL that turns out to be an open directory.
-//
-// It belongs to the fallback for the same reason kvsSniff does: nothing about
-// an open directory says which host it is on, so there is no list to be on
-// and no Match that could recognise one. A page that is not a listing falls
-// straight through to the direct-link handling that would have run anyway, so
-// being wrong costs one GET.
-//
-// Only a path ending in a slash is looked at, and that restraint is
-// deliberate. A trailing slash means a directory everywhere, and a URL
-// without one may well be a signed link that is only good once — spending a
-// speculative GET on it to ask a question the URL already answered would be a
-// poor trade.
-func autoindexSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, bool) {
-	if !strings.HasSuffix(u.Path, "/") && u.Path != "" {
-		return nil, false
-	}
-	res, err := (&Autoindex{client: client}).crawl(ctx, u, opts.maxFiles())
-	if err != nil || res == nil || len(res.Files) == 0 {
-		return nil, false
-	}
-	return res, true
+	return a.crawl(ctx, u, opts)
 }
 
 // ------------------------------------------------------------------ crawl
@@ -164,7 +140,10 @@ type autoindexEntry struct {
 // several at a time; and the budget is then applied between levels, where
 // the counts are settled, so which files a truncated crawl returns does not
 // depend on how the requests happened to interleave.
-func (a *Autoindex) crawl(ctx context.Context, u *url.URL, maxFiles int) (*Result, error) {
+//
+// Where a bound cut the tree, or a subdirectory could not be read, the
+// result says so in the words a folder share's walk uses (treeWalk).
+func (a *Autoindex) crawl(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	root := &autoindexNode{base: autoindexBase(u)}
 	if err := a.read(ctx, root); err != nil {
 		return nil, err
@@ -175,65 +154,80 @@ func (a *Autoindex) crawl(ctx context.Context, u *url.URL, maxFiles int) (*Resul
 	// see is a symlinked loop, whose every traversal has a longer URL than
 	// the last; the depth cap is what ends that one.
 	visited := map[string]bool{root.base.String(): true}
-	budget := autoindexBudget{dirs: 1, files: len(root.files), maxFiles: maxFiles}
+	budget := autoindexBudget{dirs: 1, files: len(root.files), maxFiles: opts.maxFiles(), maxDirs: opts.maxSources()}
+	res := &Result{Title: autoindexTitle(root.base)}
+	w := &treeWalk{res: res}
 
 	level := []*autoindexNode{root}
-	for depth := 1; depth <= config.MaxAutoindexDepth; depth++ {
-		next := autoindexDescend(level, visited, &budget)
+	for depth := 1; ; depth++ {
+		if depth > config.MaxDirectoryDepth {
+			if autoindexPending(level, visited) {
+				w.note("folder limit")
+			}
+			break
+		}
+		next, cut := autoindexDescend(level, visited, &budget)
+		if cut != "" {
+			w.note(cut)
+		}
 		if len(next) == 0 {
 			break
 		}
-		a.readAll(ctx, next)
+		if a.readAll(ctx, next) {
+			w.note("unreadable folders")
+		}
 		for _, node := range next {
 			budget.files += len(node.files)
 		}
 		level = next
 	}
-
-	files := autoindexFlatten(root, nil)
-	if limit := budget.fileCap(); len(files) > limit {
-		files = files[:limit]
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if len(files) == 0 {
+
+	res.Files = autoindexFlatten(root, nil)
+	if len(res.Files) > budget.maxFiles {
+		res.Files = res.Files[:budget.maxFiles]
+		w.note(fileLimit)
+	}
+	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("autoindex: %s lists no files", root.base.Redacted())
 	}
-	return &Result{Title: autoindexTitle(root.base), Files: files}, nil
+	return res, nil
 }
 
-// autoindexBudget is what stops a crawl that would not stop on its own.
+// autoindexBudget is what stops a crawl that would not stop on its own: the
+// user's file limit, and their source limit on the directories read, as on
+// any folder share.
 type autoindexBudget struct {
-	dirs  int
-	files int
-	// maxFiles is the listing cap in force; zero means the default.
-	maxFiles int
+	dirs, maxDirs   int
+	files, maxFiles int
 }
 
-// fileCap is how many files the crawl may return.
-func (b *autoindexBudget) fileCap() int {
-	if b.maxFiles > 0 {
-		return b.maxFiles
+// spent is why the crawl may read no more, or "" while it may.
+func (b *autoindexBudget) spent() string {
+	switch {
+	case b.files >= b.maxFiles:
+		return fileLimit
+	case b.dirs >= b.maxDirs:
+		return "folder limit"
 	}
-	return config.MaxListingFiles
-}
-
-// spent reports whether the crawl has read as much as it is allowed to.
-func (b *autoindexBudget) spent() bool {
-	return b.dirs >= config.MaxAutoindexDirs || b.files >= b.fileCap()
+	return ""
 }
 
 // autoindexDescend turns the subdirectories a level named into the next
 // level, in listing order, and is the only place the budget and the cycle
-// guard are consulted.
-func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *autoindexBudget) []*autoindexNode {
-	var next []*autoindexNode
+// guard are consulted. cut is why it stopped short of a directory the
+// level named, if it did.
+func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *autoindexBudget) (next []*autoindexNode, cut string) {
 	for _, node := range level {
 		for _, entry := range node.pending {
-			if budget.spent() {
-				return next
-			}
 			key := entry.url.String()
 			if visited[key] {
 				continue
+			}
+			if cut = budget.spent(); cut != "" {
+				return next, cut
 			}
 			visited[key] = true
 			budget.dirs++
@@ -244,34 +238,47 @@ func autoindexDescend(level []*autoindexNode, visited map[string]bool, budget *a
 		}
 		node.pending = nil
 	}
-	return next
+	return next, ""
 }
 
-// readAll reads a level's directories several at a time.
+// autoindexPending reports whether a level named a directory not yet read.
+func autoindexPending(level []*autoindexNode, visited map[string]bool) bool {
+	for _, node := range level {
+		for _, entry := range node.pending {
+			if !visited[entry.url.String()] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readAll reads a level's directories several at a time, and reports
+// whether any could not be read.
 //
 // A subdirectory that will not load, or that answers with something that is
 // not a listing, is skipped rather than failing the crawl: on a tree of
 // hundreds the rest is still worth having, and the root — the only page the
 // user actually named — was already read on its own, where its failure is
 // reported.
-func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) {
+func (a *Autoindex) readAll(ctx context.Context, nodes []*autoindexNode) (failed bool) {
 	// The nodes are filled in place; FanOut is used for its bounded, ordered
-	// scheduling and nothing is collected from it.
-	FanOut(ctx, nodes, func(ctx context.Context, node *autoindexNode) ([]struct{}, error) {
-		return nil, a.read(ctx, node)
+	// scheduling, and collects only the failures.
+	failures := FanOut(ctx, nodes, func(ctx context.Context, node *autoindexNode) ([]bool, error) {
+		if err := a.read(ctx, node); err != nil && ctx.Err() == nil {
+			return []bool{true}, nil
+		}
+		return nil, nil
 	})
+	return len(failures) > 0
 }
 
 // read fetches one directory and fills in its files and subdirectories.
 func (a *Autoindex) read(ctx context.Context, node *autoindexNode) error {
 	page := node.base.String()
-	doc, err := a.client.GetString(ctx, page, httpx.Referer(util.Origin(node.base)+"/"))
+	root, _, err := fetchRoot(ctx, a.client, node.base, httpx.Referer(util.Origin(node.base)+"/"))
 	if err != nil {
 		return fmt.Errorf("autoindex: fetch %s: %w", node.base.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return fmt.Errorf("autoindex: parse %s: %w", node.base.Redacted(), err)
 	}
 	if !autoindexIsListing(root, node.base) {
 		return fmt.Errorf("autoindex: %s is a web page, not a directory listing", node.base.Redacted())

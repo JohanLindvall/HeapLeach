@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -25,15 +26,28 @@ import (
 // attachment; full posts supply the original variants and their exact sizes.
 // Media is content-addressed and served by the page's advertised edge pool.
 type Cum struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
 func NewCum(client *httpx.Client) *Cum {
-	return &Cum{hostSet: hostSet{"cum.st"}, client: client}
+	return &Cum{client: client, about: about{name: "cum", shape: cumShape,
+		recognises: "creators and posts (`/creators/<service>/<id>[/post/<post>]`) whose page advertises its media " +
+			"servers as `EDGE_BASE_URLS` in the app's configuration"}}
 }
 
-func (c *Cum) Name() string { return "cum" }
+// cumShape is a creator, /creators/<service>/<id>, or one of their posts.
+var cumShape = pathShape(`^/creators/[^/]+/[^/]+(?:/post/[^/]+)?/?$`)
+
+// Recognise takes a creator or post page that advertises the edge pool
+// Extract downloads from, which is read from the page before any API call.
+func (c *Cum) Recognise(_ context.Context, p *Page) bool {
+	if !cumShape(p.Final) || !p.Has("EDGE_BASE_URLS") {
+		return false
+	}
+	edges, err := cumEdges(p.Body)
+	return err == nil && len(edges) > 0
+}
 
 type cumPost struct {
 	ID          string          `json:"id"`
@@ -65,7 +79,7 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	}
 	query.Del("pppage")
 	page.RawQuery = query.Encode()
-	doc, final, err := c.client.GetPage(ctx, page.String(), nil, nil)
+	doc, final, err := fetchDocument(ctx, c.client, &page, nil)
 	if err != nil {
 		return nil, fmt.Errorf("cum: fetch page: %w", err)
 	}
@@ -76,13 +90,13 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	if err != nil {
 		return nil, err
 	}
-	base := util.Origin(final) + "/api/v1/" + url.PathEscape(segs[1]) + "/user/" + url.PathEscape(segs[2])
+	base := creatorAPI(util.Origin(final), segs[1], segs[2])
 	if len(segs) == 5 {
 		post, err := c.post(ctx, base, segs[1], segs[4], final.String())
 		if err != nil {
 			return nil, err
 		}
-		res := &Result{Title: util.FirstNonEmpty(post.Title, post.ID)}
+		res := &Result{Title: cmp.Or(post.Title, post.ID)}
 		seen := make(map[string]bool)
 		for _, att := range post.Attachments {
 			if seen[att.SHA256] {
@@ -90,7 +104,7 @@ func (c *Cum) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 			}
 			seen[att.SHA256] = true
 			if len(res.Files) == opts.maxFiles() {
-				res.Note = "partial — file limit"
+				res.Note = fileLimitNote
 				break
 			}
 			file, err := att.file(edges, final.String())
@@ -122,96 +136,77 @@ func (c *Cum) creator(ctx context.Context, page *url.URL, base, service, creator
 	if profile.ID != creator || profile.Service != service {
 		return nil, fmt.Errorf("cum: creator is missing from the API response")
 	}
-	res := &Result{Title: util.FirstNonEmpty(profile.DisplayName, profile.Name, service+"-"+creator)}
+	res := &Result{Title: cmp.Or(profile.DisplayName, profile.Name, service+"-"+creator)}
 	params := cumPostQuery(query)
-	seen := make(map[string]bool)
-	offset, total := 0, 0
-	for pageNo := 0; pageNo < config.MaxAlbumPages; pageNo++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		ResolveNote(ctx, fmt.Sprintf("Reading creator posts, page %d", pageNo+1))
-		params.Set("o", strconv.Itoa(offset))
-		params.Set("n", strconv.Itoa(min(config.CumPageSize, opts.maxSources()-len(seen))))
-		var batch struct {
-			Total *int      `json:"total"`
-			Posts []cumPost `json:"posts"`
-		}
-		err := c.client.GetJSON(ctx, base+"/posts?"+params.Encode(), headers, &batch)
-		if err == nil && (batch.Total == nil || *batch.Total < 0 || batch.Posts == nil) {
-			err = fmt.Errorf("cum: invalid post listing")
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+	// The listing states its total; offset counts what it has served, the
+	// posts it lists wrongly too.
+	offset, total, invalid := 0, 0, false
+	posts, note, err := walkPages(ctx, pageWalk[cumPost]{
+		key:   func(post cumPost) string { return post.ID },
+		limit: opts.maxSources(), limitNote: sourceLimitNote,
+		failed: func(error) string { return "partial — could not read the next post page" },
+		fetch: func(ctx context.Context, n int) (pageOf[cumPost], error) {
+			ResolveNote(ctx, fmt.Sprintf("Reading creator posts, page %d", n+1))
+			params.Set("o", strconv.Itoa(offset))
+			params.Set("n", strconv.Itoa(config.CumPageSize))
+			var batch struct {
+				Total *int      `json:"total"`
+				Posts []cumPost `json:"posts"`
 			}
-			if pageNo == 0 {
-				return nil, err
+			err := c.client.GetJSON(ctx, base+"/posts?"+params.Encode(), headers, &batch)
+			if err == nil && (batch.Total == nil || *batch.Total < 0 || batch.Posts == nil) {
+				err = fmt.Errorf("cum: invalid post listing")
 			}
-			res.Note = "partial — could not read the next post page"
-			break
-		}
-		total = *batch.Total
-		before := len(seen)
-		for _, post := range batch.Posts {
-			if post.ID == "" || post.Service != service {
-				res.Note = "partial — invalid posts in listing"
+			if err != nil {
+				return pageOf[cumPost]{}, err
+			}
+			total = *batch.Total
+			offset += len(batch.Posts)
+			valid := make([]cumPost, 0, len(batch.Posts))
+			for _, post := range batch.Posts {
+				if post.ID == "" || post.Service != service {
+					invalid = true
+					continue
+				}
+				valid = append(valid, post)
+			}
+			return pageOf[cumPost]{items: valid, next: true, end: offset >= total}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if invalid {
+		note = joinNotes(note, "partial — invalid posts in listing")
+	}
+	if note == "" {
+		note = cappedNote(len(posts), total, "posts")
+	}
+	res.Note = note
+	for _, post := range posts {
+		postURL := util.Origin(page) + "/creators/" + url.PathEscape(service) + "/" + url.PathEscape(creator) + "/post/" + url.PathEscape(post.ID)
+		loader := &cumPostLoader{c: c, base: base, service: service, id: post.ID, referer: postURL, edges: edges}
+		seenAttachments := make(map[string]bool)
+		for _, att := range post.Attachments {
+			if !cumAttachmentKind(att.Kind, params.Get("type")) || seenAttachments[att.SHA256] {
 				continue
 			}
-			if seen[post.ID] {
+			if !cumValidHash(att.SHA256) {
+				res.Note = joinNotes(res.Note, "partial — invalid attachments in listing")
 				continue
 			}
-			if len(seen) == opts.maxSources() {
-				res.Note = "partial — source limit"
+			seenAttachments[att.SHA256] = true
+			if len(res.Files) == opts.maxFiles() {
+				res.Note = joinNotes(res.Note, fileLimitNote)
 				return cumCreatorResult(res)
 			}
-			seen[post.ID] = true
-			postURL := util.Origin(page) + "/creators/" + url.PathEscape(service) + "/" + url.PathEscape(creator) + "/post/" + url.PathEscape(post.ID)
-			loader := &cumPostLoader{c: c, base: base, service: service, id: post.ID, referer: postURL, edges: edges}
-			seenAttachments := make(map[string]bool)
-			for _, att := range post.Attachments {
-				if !cumAttachmentKind(att.Kind, params.Get("type")) || seenAttachments[att.SHA256] {
-					continue
-				}
-				if !cumValidHash(att.SHA256) {
-					res.Note = "partial — invalid attachments in listing"
-					continue
-				}
-				seenAttachments[att.SHA256] = true
-				if len(res.Files) == opts.maxFiles() {
-					res.Note = "partial — file limit"
-					return cumCreatorResult(res)
-				}
-				res.Files = append(res.Files, File{
-					Name: att.name(""), Size: -1,
-					Dir: cumPostFolder(post.Title, post.ID),
-					Resolve: func(ctx context.Context) (*Target, error) {
-						return loader.resolve(ctx, att.SHA256)
-					},
-				})
-			}
-		}
-		offset += len(batch.Posts)
-		if offset >= total {
-			if len(seen) < total && res.Note == "" {
-				res.Note = fmt.Sprintf("partial — %d of %d posts", len(seen), total)
-			}
-			break
-		}
-		if len(seen) == before {
-			res.Note = "partial — repeated or empty post page"
-			break
-		}
-		if len(res.Files) == opts.maxFiles() {
-			res.Note = "partial — file limit"
-			break
-		}
-		if len(seen) == opts.maxSources() {
-			res.Note = "partial — source limit"
-			break
-		}
-		if pageNo == config.MaxAlbumPages-1 {
-			res.Note = "partial — page limit"
+			res.Files = append(res.Files, File{
+				Name: att.name(""), Size: -1,
+				Dir: cumPostFolder(post.Title, post.ID),
+				Resolve: func(ctx context.Context) (*Target, error) {
+					return loader.resolve(ctx, att.SHA256)
+				},
+			})
 		}
 	}
 	return cumCreatorResult(res)
@@ -371,11 +366,11 @@ func (a cumAttachment) name(ext string) string {
 		ext = path.Ext(a.OriginalFilename)
 	}
 	name := strings.TrimSpace(a.OriginalFilename)
-	if name == "" || strings.EqualFold(strings.TrimSuffix(name, path.Ext(name)), "original") {
+	if name == "" || strings.EqualFold(util.Stem(name), "original") {
 		return a.SHA256 + ext
 	}
 	if ext != "" && !strings.EqualFold(path.Ext(name), ext) {
-		name = strings.TrimSuffix(name, path.Ext(name)) + ext
+		name = util.WithExt(name, ext)
 	}
 	return name
 }
@@ -389,8 +384,8 @@ func (a cumAttachment) file(edges []string, referer string) (File, error) {
 			continue
 		}
 		size := int64(-1)
-		if variant.Bytes != nil && *variant.Bytes >= 0 {
-			size = *variant.Bytes
+		if variant.Bytes != nil {
+			size = knownSize(*variant.Bytes)
 		}
 		links := make([]string, 0, len(edges))
 		for _, edge := range edges {

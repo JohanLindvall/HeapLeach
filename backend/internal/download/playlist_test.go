@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -36,8 +35,7 @@ func TestPlaylistJoinsPartsInOrder(t *testing.T) {
 		}
 		_, _ = w.Write(payload[i])
 	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 
 	m := busyManager(t)
 	m.streams = 4
@@ -91,8 +89,7 @@ func TestPlaylistReportsTheFailingPart(t *testing.T) {
 		}
 		_, _ = w.Write([]byte("data"))
 	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "broken.ts", URL: srv.URL, Size: -1,
@@ -117,22 +114,22 @@ func TestPlaylistStateRoundTrip(t *testing.T) {
 	part := filepath.Join(dir, "x.part")
 
 	st := playlistState{Index: 40, Bytes: 123456, Total: 100}
-	if err := savePlaylistState(part, st); err != nil {
+	if err := savePlaylistState(part, st, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
-	got := loadPlaylistState(part, 100)
+	got := loadPlaylistState(part, 100, transferFiles{})
 	if got == nil || *got != st {
 		t.Fatalf("round trip = %+v, want %+v", got, st)
 	}
 
 	// A playlist that changed length is a different stream; resuming into
 	// it would splice two versions together.
-	if loadPlaylistState(part, 101) != nil {
+	if loadPlaylistState(part, 101, transferFiles{}) != nil {
 		t.Error("state for a 100-part stream resumed a 101-part one")
 	}
 
-	clearPlaylistState(part)
-	if loadPlaylistState(part, 100) != nil {
+	clearPlaylistState(part, transferFiles{})
+	if loadPlaylistState(part, 100, transferFiles{}) != nil {
 		t.Error("cleared state was still loadable")
 	}
 }
@@ -141,19 +138,19 @@ func TestLoadPlaylistStateRejectsGarbage(t *testing.T) {
 	dir := t.TempDir()
 	part := filepath.Join(dir, "y.part")
 
-	if loadPlaylistState(part, 10) != nil {
+	if loadPlaylistState(part, 10, transferFiles{}) != nil {
 		t.Error("a missing sidecar should mean starting over, not a value")
 	}
 	if err := os.WriteFile(playlistStatePath(part), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if loadPlaylistState(part, 10) != nil {
+	if loadPlaylistState(part, 10, transferFiles{}) != nil {
 		t.Error("a corrupt sidecar should mean starting over")
 	}
 	if err := os.WriteFile(playlistStatePath(part), []byte(`{"index":-1,"bytes":5,"total":10}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if loadPlaylistState(part, 10) != nil {
+	if loadPlaylistState(part, 10, transferFiles{}) != nil {
 		t.Error("an impossible index should mean starting over")
 	}
 }
@@ -162,10 +159,9 @@ func TestLoadPlaylistStateRejectsGarbage(t *testing.T) {
 // arrives — that counter is what the stall watchdog watches.
 func TestFetchSegmentCountsBytesAsTheyArrive(t *testing.T) {
 	payload := bytes.Repeat([]byte{7}, 300<<10)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(payload)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	var fetched atomic.Int64
@@ -183,11 +179,10 @@ func TestFetchSegmentCountsBytesAsTheyArrive(t *testing.T) {
 
 func TestFetchSegmentRetriesAndGivesUp(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		http.Error(w, "nope", http.StatusNotFound)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	var fetched atomic.Int64
@@ -208,14 +203,12 @@ func TestPlaylistFetchesByteRanges(t *testing.T) {
 	for i := range file {
 		file[i] = byte(i % 251)
 	}
-	honours := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	honours := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeContent(w, r, "clip.mp4", time.Time{}, bytes.NewReader(file))
 	}))
-	defer honours.Close()
-	ignores := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ignores := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(file)
 	}))
-	defer ignores.Close()
 
 	ranges := [][2]int{{0, 699}, {700, 1699}, {1700, 4999}}
 	segments := func(base string) []string {

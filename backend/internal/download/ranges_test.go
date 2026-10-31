@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,13 +16,12 @@ import (
 func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
 	for _, status := range []int{http.StatusAccepted, http.StatusNoContent, http.StatusResetContent} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(status)
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
-			if _, err := m.transferOnce(t.Context(), it, part, "file.bin"); err == nil {
+			if _, err := m.transferOnce(t.Context(), it, part, "file.bin", transferFiles{}); err == nil {
 				t.Fatal("non-file response completed a transfer")
 			}
 			if _, err := os.Stat(part); !os.IsNotExist(err) {
@@ -38,7 +36,7 @@ func TestTransfersRejectNonFileSuccessResponses(t *testing.T) {
 
 func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 	payload := []byte("new123")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Range") == "bytes=3-8" {
 			w.Header().Set("Content-Range", "bytes 3-5/6")
 			w.WriteHeader(http.StatusPartialContent)
@@ -49,7 +47,6 @@ func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write(payload)
 	}))
-	defer srv.Close()
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), URL: srv.URL, Name: "file.bin", Size: -1}
 	part := filepath.Join(m.DownloadDir(), "file.bin."+partSuffix(it.URL)+".part")
@@ -57,7 +54,7 @@ func TestResumeRestartsWhenTheResourceLengthChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := &transferState{Size: 9, Segments: []segmentState{{Start: 0, Pos: 3, End: 9}}}
-	if err := saveTransferState(part, st); err != nil {
+	if err := saveTransferState(part, st, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.transfer(context.Background(), it); err != nil {
@@ -86,11 +83,10 @@ func TestResumeRejectsUnprovenCompletion(t *testing.T) {
 		{name: "complete sequential part", contentRange: "bytes */6", complete: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Range", tc.contentRange)
 				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if err := os.WriteFile(part, []byte("abcdef"), 0o644); err != nil {
@@ -98,11 +94,11 @@ func TestResumeRejectsUnprovenCompletion(t *testing.T) {
 			}
 			if tc.segmented {
 				st := &transferState{Size: 9, Segments: []segmentState{{Start: 0, Pos: 2, End: 3}, {Start: 3, Pos: 6, End: 9}}}
-				if err := saveTransferState(part, st); err != nil {
+				if err := saveTransferState(part, st, transferFiles{}); err != nil {
 					t.Fatal(err)
 				}
 			}
-			_, err := m.transferOnce(context.Background(), it, part, "file.bin")
+			_, err := m.transferOnce(context.Background(), it, part, "file.bin", transferFiles{})
 			if (err == nil) != tc.complete {
 				t.Fatalf("completion = %v, want %v (err: %v)", err == nil, tc.complete, err)
 			}
@@ -117,7 +113,7 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 	for _, mode := range []string{"missing part", "truncated part", "corrupt checkpoint"} {
 		t.Run(mode, func(t *testing.T) {
 			payload := []byte("abcdef")
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if got := r.Header.Get("Range"); got != "bytes=0-" {
 					t.Errorf("resumed unproven bytes with %q", got)
 				}
@@ -125,7 +121,6 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 				w.WriteHeader(http.StatusPartialContent)
 				_, _ = w.Write(payload)
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if mode != "missing part" {
@@ -134,7 +129,7 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 				}
 			}
 			st := &transferState{Size: 6, Segments: []segmentState{{Start: 0, Pos: 6, End: 6}}}
-			if err := saveTransferState(part, st); err != nil {
+			if err := saveTransferState(part, st, transferFiles{}); err != nil {
 				t.Fatal(err)
 			}
 			if mode == "corrupt checkpoint" {
@@ -142,7 +137,7 @@ func TestResumeRestartsWhenTheCheckpointCannotAccountForThePart(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := m.transferOnce(context.Background(), it, part, "file.bin"); err != nil {
+			if _, err := m.transferOnce(context.Background(), it, part, "file.bin", transferFiles{}); err != nil {
 				t.Fatal(err)
 			}
 			got, err := os.ReadFile(part)
@@ -165,18 +160,17 @@ func TestPartialResponsesAreValidatedBeforeWriting(t *testing.T) {
 		{"invalid unit", "items 3-5/6", "def"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Range", tc.contentRange)
 				w.WriteHeader(http.StatusPartialContent)
 				_, _ = w.Write([]byte(tc.body))
 			}))
-			defer srv.Close()
 			m, it := testTransferDeps(t, srv.URL)
 			part := filepath.Join(t.TempDir(), "file.part")
 			if err := os.WriteFile(part, []byte("abc"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := m.transferOnce(context.Background(), it, part, "file.bin"); err == nil {
+			if _, err := m.transferOnce(context.Background(), it, part, "file.bin", transferFiles{}); err == nil {
 				t.Error("primary accepted an invalid partial response")
 			}
 			got, err := os.ReadFile(part)

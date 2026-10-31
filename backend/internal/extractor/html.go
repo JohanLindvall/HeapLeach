@@ -5,13 +5,16 @@ package extractor
 import (
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
@@ -77,15 +80,19 @@ func findAll(root *html.Node, pred func(*html.Node) bool) []*html.Node {
 	return out
 }
 
-// findFirst returns the first node matching pred, or nil.
+// findFirst returns the first node matching pred, or nil. It stops at the
+// first match: recognisers ask this of every unrecognised page, and most of
+// what they look for sits in the head.
 func findFirst(root *html.Node, pred func(*html.Node) bool) *html.Node {
-	var found *html.Node
-	walk(root, func(n *html.Node) {
-		if found == nil && pred(n) {
-			found = n
+	if pred(root) {
+		return root
+	}
+	for c := root.FirstChild; c != nil; c = c.NextSibling {
+		if found := findFirst(c, pred); found != nil {
+			return found
 		}
-	})
-	return found
+	}
+	return nil
 }
 
 // textOf returns the collapsed text content of a subtree.
@@ -151,14 +158,32 @@ func trimSiteSuffix(title string) string {
 	return util.TrimTitleSuffix(title, " | ", " - ")
 }
 
-// folderName trims a title down to a readable directory name. The
-// downloader sanitises every path component anyway; this only keeps a
-// rambling title from becoming a rambling folder.
+// folderName trims a title down to a readable directory name, as one
+// folder: its separators turned as sourceFolder turns them, since a slash
+// in a post's title would otherwise nest it. The downloader sanitises every
+// path component anyway; this keeps a rambling title from becoming a
+// rambling folder. A label that names a folder untruncated — a season, a
+// programme — goes through sourceFolder alone, which keeps the names
+// existing downloads are filed under.
 func folderName(title string) string {
-	if runes := []rune(strings.TrimSpace(title)); len(runes) > 80 {
-		return strings.TrimSpace(string(runes[:80]))
+	title = sourceFolder(title)
+	if runes := []rune(title); len(runes) > config.MaxFolderNameRunes {
+		return strings.TrimSpace(string(runes[:config.MaxFolderNameRunes]))
 	}
-	return strings.TrimSpace(title)
+	return title
+}
+
+// linkExt is the extension the name a link ends in carries, lowercased, or
+// fallback where it names none a container would have — a dot and one to
+// four characters. Many a host's file says what it is in its link and
+// nowhere else, so this reads the link rather than writing the answer down;
+// the fallback is what the host has always served there. The name is the
+// path's last element, so a link ending in a slash still names its file.
+func linkExt(link, fallback string) string {
+	if ext := strings.ToLower(path.Ext(util.NameFromURL(link))); len(ext) > 1 && len(ext) <= 5 {
+		return ext
+	}
+	return fallback
 }
 
 // humanSize matches the "57.80 MB" shape listings print next to a file.
@@ -194,4 +219,38 @@ func firstTitleOf(doc string) string {
 		return ""
 	}
 	return firstText(root, atomTitle)
+}
+
+// matchedIDs is the first group of every match of each pattern in text, in
+// turn, each id kept once where it first appears and empty ones dropped.
+func matchedIDs(text string, res ...*regexp.Regexp) []string {
+	var ids []string
+	for _, re := range res {
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			ids = append(ids, m[1])
+		}
+	}
+	return util.Dedupe(ids)
+}
+
+// hasAnyClass reports whether n carries any of classes.
+func hasAnyClass(n *html.Node, classes ...string) bool {
+	return slices.ContainsFunc(classes, func(class string) bool { return hasClass(n, class) })
+}
+
+// scriptTexts is the text of each script element under root, its spacing
+// kept as written: the JSON a page assigns there may hold names whose
+// spacing is their own.
+func scriptTexts(root *html.Node) []string {
+	var texts []string
+	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
+		var text strings.Builder
+		for node := script.FirstChild; node != nil; node = node.NextSibling {
+			if node.Type == html.TextNode {
+				text.WriteString(node.Data)
+			}
+		}
+		texts = append(texts, text.String())
+	}
+	return texts
 }

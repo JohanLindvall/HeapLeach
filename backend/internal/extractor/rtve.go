@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -58,6 +59,7 @@ import (
 // anyone who asks. Believing any of them would refuse most of the catalogue,
 // and nothing here reads them.
 type RTVE struct {
+	about
 	client *httpx.Client
 }
 
@@ -104,21 +106,20 @@ var rtvePresets = []string{"HD_FULL", "HD_READY", "HQ", "HIGH", "MED"}
 var rtveProgrammeID = regexp.MustCompile(`(?:api/programas|/modulos/[a-z]+)/(\d+)`)
 
 // NewRTVE builds the RTVE Play extractor.
-func NewRTVE(client *httpx.Client) *RTVE { return &RTVE{client: client} }
+func NewRTVE(client *httpx.Client) *RTVE {
+	return &RTVE{client: client, about: about{name: "rtve", shape: rtveShape,
+		recognises: "videos and programmes (`/play/videos/…`, `/v/<id>`) of RTVE Play, whose page names its asset or programme id"}}
+}
 
-func (r *RTVE) Name() string { return "rtve" }
+// rtveShape is a video or programme link.
+func rtveShape(u *url.URL) bool { return rtveTarget(u) != rtveRef{} }
 
-// Match takes the site itself and nothing below it. The catalogue and the
-// media live on subdomains of the same name — api.rtve.es, ztnr.rtve.es, the
-// numbered origins the media lists point at — and a link to one of those is a
-// plain rangeable file that the direct extractor handles better than this
-// would. A path this cannot read is left alone for the same reason.
-func (r *RTVE) Match(u *url.URL) bool {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host != "rtve.es" && host != "www.rtve.es" {
-		return false
-	}
-	return rtveTarget(u) != (rtveRef{})
+// Recognise takes a video or programme page of RTVE Play that names what
+// it plays: the player's asset id (data-idasset), or the programme's id in
+// the catalogue requests it defers, which a programme is read by.
+func (r *RTVE) Recognise(_ context.Context, p *Page) bool {
+	return r.Shape(p.Final) && (p.Has("data-idasset") || rtveProgrammeID.MatchString(p.Body)) &&
+		p.Named("RTVE.es", "RTVE Play", "RTVE")
 }
 
 // Extract handles a single video or a programme, which expands to everything
@@ -154,7 +155,7 @@ func rtveTarget(u *url.URL) rtveRef {
 	segs := util.PathSegments(u)
 
 	// /v/<id> is the share link the site's own buttons produce.
-	if len(segs) == 2 && segs[0] == "v" && rtveIsID(segs[1]) {
+	if len(segs) == 2 && segs[0] == "v" && allDigits(segs[1]) {
 		return rtveRef{video: segs[1]}
 	}
 
@@ -166,22 +167,11 @@ func rtveTarget(u *url.URL) rtveRef {
 	}
 	rest := segs[2:]
 	for _, r := range slices.Backward(rest) {
-		if rtveIsID(r) {
+		if allDigits(r) {
 			return rtveRef{video: r}
 		}
 	}
 	return rtveRef{series: rest[0]}
-}
-
-// rtveIsID reports whether a path segment is an asset id, which is decimal
-// digits and nothing else.
-func rtveIsID(seg string) bool {
-	for i := 0; i < len(seg); i++ {
-		if seg[i] < '0' || seg[i] > '9' {
-			return false
-		}
-	}
-	return seg != ""
 }
 
 // video resolves one asset id into a job of its own.
@@ -204,82 +194,30 @@ func (r *RTVE) series(ctx context.Context, u *url.URL, slug string) (*Result, er
 	if err != nil {
 		return nil, err
 	}
-	episodes, err := r.episodes(ctx, program)
+	// A long-running strand runs to thousands of instalments, which is a
+	// mistake being carried out efficiently rather than a download.
+	episodes, more, walkNote, err := r.episodes(ctx, program, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("rtve: programme %s lists no videos", program)
 	}
-	// A long-running strand runs to thousands of instalments, which is a
-	// mistake being carried out efficiently rather than a download.
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
-	}
 
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep rtveVideo) string { return ep.Season })
-
-	outcomes := FanOut(ctx, episodes, func(ctx context.Context, ep rtveVideo) ([]rtveOutcome, error) {
-		file, err := r.episode(ctx, ep)
-		if err != nil {
-			// Kept rather than dropped: a whole programme refused is refused
-			// for one reason, and reporting it once beats several hundred
-			// identical failures. FanOut discards an entry whose fetch
-			// errored, so the failure travels as a value instead.
-			return []rtveOutcome{{err: err}}, nil
-		}
-		if nest {
-			file.Dir = ep.Season
-		}
-		return []rtveOutcome{{file: file}}, nil
-	})
-
-	result := &Result{Title: util.FirstNonEmpty(episodes[0].Program.Title, slug)}
-	var (
-		refused *rtveRefused
-		first   error
-	)
-	for _, outcome := range outcomes {
-		if outcome.file != nil {
-			result.Files = append(result.Files, *outcome.file)
-			continue
-		}
-		if first == nil {
-			first = outcome.err
-		}
-		if refused == nil {
-			refused, _ = errors.AsType[*rtveRefused](outcome.err)
-		}
-	}
-	if len(result.Files) == 0 {
-		// A territory refusal is preferred over whatever failed first,
-		// because when everything is refused it is refused for that reason
-		// and it is the one the caller can act on.
-		reason := "nothing there offered a file to fetch"
-		switch {
-		case refused != nil:
-			reason = refused.reason()
-		case first != nil:
-			reason = first.Error()
-		}
-		return nil, fmt.Errorf("rtve: none of the %d videos of %s can be downloaded: %s",
-			len(episodes), u.Redacted(), reason)
-	}
-	return result, nil
-}
-
-// rtveOutcome is one video of a programme resolved, or the reason it was not.
-type rtveOutcome struct {
-	file *File
-	err  error
+	return listSeries(ctx, cmp.Or(episodes[0].Program.Title, slug), series[rtveVideo]{
+		site: "rtve", noun: "videos", link: u.Redacted(),
+		items: episodes, more: more,
+		label:      func(ep rtveVideo) string { return ep.Season },
+		resolve:    r.episode,
+		unplayable: "nothing there offered a file to fetch",
+	}, walkNote)
 }
 
 // programme reads a programme's numeric id off its page. Nothing in the URL
 // carries it — the path names the programme by slug, and the catalogue is
 // keyed by number.
 func (r *RTVE) programme(ctx context.Context, u *url.URL) (string, error) {
-	doc, err := r.client.GetString(ctx, u.String(), httpx.Referer(rtveRoot+"/"))
+	doc, _, err := fetchDocument(ctx, r.client, u, httpx.Referer(rtveRoot+"/"))
 	if err != nil {
 		return "", fmt.Errorf("rtve: fetch %s: %w", u.Redacted(), err)
 	}
@@ -297,28 +235,34 @@ func (r *RTVE) programme(ctx context.Context, u *url.URL) (string, error) {
 // to thousands of entries mixing clips and trailers in with the episodes,
 // while a documentary strand has no seasons at all and answers the seasons
 // endpoint with an empty page.
-func (r *RTVE) episodes(ctx context.Context, program string) ([]rtveVideo, error) {
-	seasons, err := r.seasons(ctx, program)
+func (r *RTVE) episodes(ctx context.Context, program string, limit int) (videos []rtveVideo, more bool, note string, err error) {
+	seasons, err := r.seasons(ctx, program, limit)
 	if err != nil || len(seasons) == 0 {
 		// A programme with no seasons answers that endpoint with an empty
 		// page, and one whose seasons cannot be read at all is still
 		// described in full by the flat listing, so both land here.
-		return r.listing(ctx, rtveProgramAPI+url.PathEscape(program)+"/videos")
+		return rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/videos", limit, rtveVideoKey)
 	}
 
 	// Seasons are fetched together and collected in order, so a programme of
 	// twenty-odd seasons does not resolve one request at a time. A season
 	// that will not load is skipped rather than failing the rest.
-	return FanOut(ctx, seasons, func(ctx context.Context, season string) ([]rtveVideo, error) {
-		return r.listing(ctx, rtveProgramAPI+url.PathEscape(program)+
-			"/temporadas/"+url.PathEscape(season)+"/videos")
-	}), nil
+	list, _ := readSeasons(ctx, seasons, false, func(ctx context.Context, season string) (seasonList[rtveVideo], error) {
+		videos, more, note, err := rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+
+			"/temporadas/"+url.PathEscape(season)+"/videos", limit, rtveVideoKey)
+		return seasonList[rtveVideo]{items: videos, more: more, note: note}, err
+	})
+	return list.items, list.more, list.note, nil
 }
+
+// rtveVideoKey names a listed video.
+func rtveVideoKey(v rtveVideo) string { return v.ID }
 
 // seasons lists a programme's season ids, oldest first as the catalogue gives
 // them.
-func (r *RTVE) seasons(ctx context.Context, program string) ([]string, error) {
-	seasons, err := rtveList[rtveSeason](ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/temporadas")
+func (r *RTVE) seasons(ctx context.Context, program string, limit int) ([]string, error) {
+	seasons, _, _, err := rtveList(ctx, r.client, rtveProgramAPI+url.PathEscape(program)+"/temporadas", limit,
+		func(s rtveSeason) string { return strconv.Itoa(s.ID) })
 	if err != nil {
 		return nil, err
 	}
@@ -331,36 +275,36 @@ func (r *RTVE) seasons(ctx context.Context, program string) ([]string, error) {
 	return out, nil
 }
 
-// listing walks one paginated video listing.
-func (r *RTVE) listing(ctx context.Context, endpoint string) ([]rtveVideo, error) {
-	return rtveList[rtveVideo](ctx, r.client, endpoint)
-}
-
-// rtveList walks a paginated catalogue endpoint to its end.
+// rtveList walks a paginated catalogue endpoint to its end, or to limit
+// entries, saying whether it went on past them, and the note for a walk cut
+// short by a page that failed. key names an entry.
 //
 // A page is asked for at the size the catalogue accepts rather than at its
 // default of twenty, which is what a season of thirty-three episodes was
 // being silently truncated to. Paging then stops at the page count the
-// response itself reports, and that bound is the one that matters: asked for
-// a page past the end, this API answers with the whole listing over again
-// rather than with nothing, so counting short pages would never terminate.
-func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string) ([]T, error) {
-	var out []T
-	for page := 1; page <= config.MaxAlbumPages; page++ {
-		var doc rtvePage[T]
-		request := fmt.Sprintf("%s?size=%d&page=%d", endpoint, config.FolderPageSize, page)
-		if err := client.GetJSON(ctx, request, httpx.Referer(rtveRoot+"/"), &doc); err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("rtve: listing %s: %w", endpoint, err)
+// response itself reports, or at a page that adds nothing: asked for a page
+// past the end, this API answers with the whole listing over again rather
+// than with nothing, which is the listing's end and not a cut, so the walk
+// is quiet there; counting short pages would never terminate.
+func rtveList[T any](ctx context.Context, client *httpx.Client, endpoint string, limit int, key func(T) string) ([]T, bool, string, error) {
+	items, more, note, err := walkEpisodes(ctx, limit, pageWalk[T]{
+		fetch: func(ctx context.Context, n int) (pageOf[T], error) {
+			var doc rtvePage[T]
+			request := fmt.Sprintf("%s?size=%d&page=%d", endpoint, config.FolderPageSize, n+1)
+			if err := client.GetJSON(ctx, request, httpx.Referer(rtveRoot+"/"), &doc); err != nil {
+				return pageOf[T]{}, err
 			}
-			break // a later page failing still leaves the earlier ones
-		}
-		out = append(out, doc.Page.Items...)
-		if len(doc.Page.Items) == 0 || page >= doc.Page.TotalPages || len(out) >= config.MaxListingVideos {
-			break
-		}
+			return pageOf[T]{items: doc.Page.Items, next: true, end: len(doc.Page.Items) == 0, pages: max(doc.Page.TotalPages, 1)}, nil
+		},
+		key:   key,
+		quiet: true,
+		// A later page failing still leaves the earlier ones.
+		failed: func(error) string { return couldNotFetchNote },
+	})
+	if err != nil {
+		return nil, false, "", fmt.Errorf("rtve: listing %s: %w", endpoint, err)
 	}
-	return out, nil
+	return items, more, note, nil
 }
 
 // episode resolves one entry of a programme listing.
@@ -398,7 +342,7 @@ func (r *RTVE) metadata(ctx context.Context, id string) (*rtveVideo, error) {
 // file turns a video document into the file to fetch.
 func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if !video.playable() {
-		return nil, &rtveRefused{name: video.name(), country: video.Country}
+		return nil, &broadcastRefusal{"rtve", video.name(), rtveReason(video.Country)}
 	}
 
 	links, err := r.media(ctx, video.ID)
@@ -425,21 +369,13 @@ func (r *RTVE) file(ctx context.Context, video *rtveVideo) (*File, error) {
 	if playlist == "" {
 		return nil, fmt.Errorf("rtve: %s offers neither a file nor a playlist", video.ID)
 	}
-	media, err := resolveMediaPlaylist(ctx, r.client, playlist, headers)
+	media, err := broadcastMedia(ctx, r.client, "rtve", video.ID, playlist, headers)
 	if err != nil {
-		return nil, fmt.Errorf("rtve: %s: %w", video.ID, err)
+		return nil, err
 	}
-	return &File{
-		// Named off the segments, not the variant URL, whose directory naming
-		// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.
-		Name:       video.name() + media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	// Named off the segments, not the variant URL, whose directory naming
+	// puts ".mp4" in the path of MPEG-TS streams. See segmentsExtension.
+	return new(media.file(video.name()+media.extension(), headers)), nil
 }
 
 // rtveByExtension picks the media list entry whose path ends in ext.
@@ -456,27 +392,14 @@ func rtveByExtension(links []string, ext string) string {
 	return ""
 }
 
-// rtveRefused is RTVE declining to serve something to this caller. It is a
-// type rather than a message so that a whole programme refused can be
-// reported as one reason instead of several hundred failures.
-type rtveRefused struct {
-	name    string
-	country string
-}
-
-func (e *rtveRefused) Error() string { return "rtve: " + e.name + ": " + e.reason() }
-
-// reason says what happened in this extractor's own words, since RTVE
-// supplies none: the origin answers a bare 403 with an empty body, and the
-// document that predicts it carries flags rather than a sentence. The country
-// it names is the one RTVE placed the caller in, which is the fact worth
-// having — it is what the licence was tested against.
-func (e *rtveRefused) reason() string {
-	where := "this country"
-	if e.country != "" {
-		where = e.country
-	}
-	return "RTVE licenses it by territory and does not serve it to " + where
+// rtveReason is RTVE declining to serve something to this caller, in this
+// extractor's own words, since RTVE supplies none: the origin answers a bare
+// 403 with an empty body, and the document that predicts it carries flags
+// rather than a sentence. The country it names is the one RTVE placed the
+// caller in, which is the fact worth having — it is what the licence was
+// tested against.
+func rtveReason(country string) string {
+	return "RTVE licenses it by territory and does not serve it to " + cmp.Or(country, "this country")
 }
 
 // rtvePage is the envelope every catalogue endpoint answers in.
@@ -547,7 +470,7 @@ func (v rtveVideo) playable() bool { return !v.Restricted || v.Allowed }
 // phrase like "Something": inside a season folder it says nothing about where
 // it belongs, and across a strand that has run for twenty years it collides.
 func (v rtveVideo) name() string {
-	return util.FirstNonEmpty(v.LongTitle, v.Title, v.ShortTitle, "rtve-"+v.ID)
+	return cmp.Or(v.LongTitle, v.Title, v.ShortTitle, "rtve-"+v.ID)
 }
 
 // size is the exact length of the file the media list will point at, or -1.
@@ -561,8 +484,8 @@ func (v rtveVideo) name() string {
 // alreadyOnDisk compares for equality and the response's own length replaces
 // this the moment the headers arrive.
 func (v rtveVideo) size() int64 {
-	if best, ok := v.best(); ok && best.Filesize > 0 {
-		return best.Filesize
+	if best, ok := v.best(); ok {
+		return knownSize(best.Filesize)
 	}
 	return -1
 }

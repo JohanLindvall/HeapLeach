@@ -73,7 +73,6 @@ export interface JobView extends JobLimit {
   status: Status;
   error?: string;
   note?: string;
-  createdAt: string;
   items: ItemView[];
   total: number;
   done: number;
@@ -106,7 +105,7 @@ export interface JobLimit {
 export type ProxyProtocol = 'any' | 'socks' | 'http';
 
 /** What draws on the proxy pool: services that count free downloads per address, and WAF recovery on any host. */
-export type ProxyGroup = 'keep2share' | 'fileboom' | 'emload' | 'mega' | 'cloudflare';
+export type ProxyGroup = 'keep2share' | 'emload' | 'mega' | 'cloudflare';
 
 /** Whole-application state, pushed over server-sent events. */
 export interface Snapshot {

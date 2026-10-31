@@ -4,8 +4,12 @@ package extractor
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -39,14 +43,7 @@ func TestDropboxAsksForTheBytes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			u, err := ParseURL(tc.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
-			res, err := NewDropbox(nil).Extract(context.Background(), u, Options{})
-			if err != nil {
-				t.Fatalf("extract: %v", err)
-			}
+			res := extractOK(t, NewDropbox(nil), tc.raw, Options{})
 			if len(res.Files) != 1 {
 				t.Fatalf("got %d files, want 1", len(res.Files))
 			}
@@ -138,25 +135,133 @@ func TestDriveRefusalMessages(t *testing.T) {
 	}
 }
 
-func TestFileHostMatching(t *testing.T) {
-	tests := []struct {
-		host  string
-		match func(*url.URL) bool
-		want  bool
-	}{
-		{host: "www.dropbox.com", match: NewDropbox(nil).Match, want: true},
-		{host: "dl.dropboxusercontent.com", match: NewDropbox(nil).Match, want: true},
-		{host: "dropbox.example.test", match: NewDropbox(nil).Match, want: false},
-		{host: "www.mediafire.com", match: NewMediafire(nil).Match, want: true},
-		{host: "mediafire.com", match: NewMediafire(nil).Match, want: true},
-		{host: "drive.google.com", match: NewGoogleDrive(nil).Match, want: true},
-		{host: "drive.usercontent.google.com", match: NewGoogleDrive(nil).Match, want: true},
-		{host: "docs.google.com", match: NewGoogleDrive(nil).Match, want: false},
-	}
-	for _, tc := range tests {
-		u := &url.URL{Scheme: "https", Host: tc.host, Path: "/"}
-		if got := tc.match(u); got != tc.want {
-			t.Errorf("%s matched = %v, want %v", tc.host, got, tc.want)
+func TestDropboxRecognise(t *testing.T) {
+	d := NewDropbox(nil)
+	viewer := `<html><head><title>Dropbox</title><meta property="og:site_name" content="Dropbox">` +
+		`<script src="/static/atlas/file_viewer/page_file-vflA1.js"></script></head><body></body></html>`
+	link := "https://share.example.test/scl/fi/abc123/holiday.zip?rlkey=xyz&dl=0"
+	expectRecognised(t, d, htmlPage(t, link, viewer), true)
+	expectRecognised(t, d, htmlPage(t, "https://share.example.test/s/abc123/holiday.zip", viewer), true)
+	expectRecognised(t, d, htmlPage(t, link, `<html><head><title>Dropbox</title></head></html>`), false)
+	expectRecognised(t, d, htmlPage(t, "https://share.example.test/plans", viewer), false)
+	expectShape(t, d, link, true)
+	expectShape(t, d, "https://share.example.test/scl/fo/abc123/xyz?rlkey=k", true)
+	expectShape(t, d, "https://share.example.test/s/abc123", false)
+	expectShape(t, d, "https://share.example.test/", false)
+}
+
+func TestMediafireRecognise(t *testing.T) {
+	m := NewMediafire(nil)
+	file := `<html><head><title>First Archive.zip - MediaFire</title><meta property="og:site_name" content="MediaFire"></head>` +
+		`<body><a id="downloadButton" href="https://download.example.test/key/First+Archive.zip">Download</a></body></html>`
+	folder := `<html><head><title>My Files</title><meta property="og:site_name" content="MediaFire"></head>` +
+		`<body><script type="text/template"><li class="row_container mf_filecontainer file"></li></script></body></html>`
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/file/abc123def45/First_Archive.zip/file", file), true)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/folder/abc123def45/Example", folder), true)
+	// The form and the name, without the button or the folder viewer.
+	named := `<html><head><meta property="og:site_name" content="MediaFire"></head><body></body></html>`
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/file/abc123def45/First_Archive.zip/file", named), false)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/folder/abc123def45", named), false)
+	// The button elsewhere, or under another name.
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/about", file), false)
+	expectRecognised(t, m, htmlPage(t, "https://share.example.test/file/abc123def45",
+		`<html><title>A blog</title><a id="downloadButton" href="/x.zip">Download</a></html>`), false)
+	expectShape(t, m, "https://share.example.test/file/abc123def45/First_Archive.zip/file", true)
+	expectShape(t, m, "https://share.example.test/?abc123def4567", true)
+	expectShape(t, m, "https://share.example.test/folder/abc123def45", true)
+	expectShape(t, m, "https://share.example.test/?utm_source=x", false)
+	expectShape(t, m, "https://share.example.test/upgrade", false)
+}
+
+func TestGoogleDriveRecognise(t *testing.T) {
+	g := NewGoogleDrive(nil)
+	viewer := `<html><head><title>First Report.pdf - Google Drive</title>` +
+		`<script src="/_/apps-fileview/_/js/k=apps-fileview.v.1/m=v"></script></head><body></body></html>`
+	confirm := `<html><body><form id="download-form" action="https://download.example.test/download">` +
+		`<input type="hidden" name="id" value="FILEID123456"><input type="hidden" name="uuid" value="u"></form></body></html>`
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/file/d/FILEID123456/view?usp=sharing", viewer), true)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/uc?export=download&id=FILEID123456", confirm), true)
+	// The form and the name, without the viewer's bundle.
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/file/d/FILEID123456/view",
+		`<html><head><title>First Report.pdf - Google Drive</title></head></html>`), false)
+	expectRecognised(t, g, htmlPage(t, "https://share.example.test/drive/folders/FOLDERID123", viewer), false)
+	expectShape(t, g, "https://share.example.test/file/d/FILEID123456/view", true)
+	expectShape(t, g, "https://share.example.test/open?id=FILEID123456", true)
+	expectShape(t, g, "https://share.example.test/uc?export=download&id=FILEID123456", true)
+	expectShape(t, g, "https://share.example.test/uc", false)
+	expectShape(t, g, "https://share.example.test/drive/folders/FOLDERID123", false)
+}
+
+// mediafireFolderServer serves folder listings by "<key> <kind> <chunk>",
+// each the JSON of one chunk; anything else fails.
+func mediafireFolderServer(t *testing.T, chunks map[string]string) (*Share, *atomic.Int32) {
+	t.Helper()
+	var asked atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/folder/get_content.php" {
+			http.NotFound(w, r)
+			return
 		}
+		asked.Add(1)
+		body, ok := chunks[q.Get("folder_key")+" "+q.Get("content_type")+" "+q.Get("chunk")]
+		if !ok {
+			http.Error(w, "unavailable", http.StatusForbidden)
+			return
+		}
+		fmt.Fprintf(w, `{"response":{"result":"Success","folder_content":%s}}`, body)
+	}))
+	t.Cleanup(srv.Close)
+	share := newShare(testClient(), &mediafireSite)
+	share.api = srv.URL
+	return share, &asked
+}
+
+// TestMediafireFolderPages covers a folder share's chunks: a repeated chunk
+// ends the files with a note, a subfolder whose own subfolders will not list
+// keeps its files and says so, and the file limit stops the reading.
+func TestMediafireFolderPages(t *testing.T) {
+	m, _ := mediafireFolderServer(t, map[string]string{
+		"root files 1":    `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"yes"}`,
+		"root files 2":    `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"yes"}`,
+		"root folders 1":  `{"folders":[{"folderkey":"sub","name":"Sub / Folder"}],"more_chunks":"no"}`,
+		"sub files 1":     `{"files":[{"quickkey":"qb","filename":"b.bin"}],"more_chunks":"no"}`,
+		"nothing files 1": `{"files":[],"more_chunks":"no"}`,
+	})
+	res, err := mediafireShare(context.Background(), m, "root", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(filePaths(res.Files), ","); got != "a.bin,Sub _ Folder/b.bin" {
+		t.Errorf("files = %s", got)
+	}
+	if res.Note != "partial — repeated or empty page; unreadable folders" {
+		t.Errorf("note = %q", res.Note)
+	}
+
+	// An empty last chunk is the end of the listing, nothing to note.
+	leaf, _ := mediafireFolderServer(t, map[string]string{
+		"leaf files 1":   `{"files":[{"quickkey":"qa","filename":"a.bin"}],"more_chunks":"no"}`,
+		"leaf folders 1": `{"folders":[],"more_chunks":"no"}`,
+	})
+	if res, err := mediafireShare(context.Background(), leaf, "leaf", Options{}); err != nil || len(res.Files) != 1 || res.Note != "" {
+		t.Errorf("a folder of one file: %+v, %v", res, err)
+	}
+
+	// A folder whose subfolders will not list and that holds no files of
+	// its own is a folder that could not be read.
+	if _, err := mediafireShare(context.Background(), m, "nothing", Options{}); err == nil {
+		t.Error("an unreadable folder resolved")
+	}
+
+	full, asked := mediafireFolderServer(t, map[string]string{
+		"root files 1": `{"files":[{"quickkey":"qa","filename":"a.bin"},{"quickkey":"qb","filename":"b.bin"}],"more_chunks":"yes"}`,
+	})
+	res, err = mediafireShare(context.Background(), full, "root", Options{limits: Limits{Files: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Note != "partial — file limit" || asked.Load() != 1 {
+		t.Errorf("files = %d, note = %q, asked %d; want 1, the file limit, one chunk", len(res.Files), res.Note, asked.Load())
 	}
 }

@@ -55,12 +55,14 @@ frontend/           React + TypeScript (strict), built by Vite
 
 ## Adding a host
 
-Implement `extractor.Extractor` (`Name`, `Match`, `Extract`) and register it
-in `NewRegistry`. Embed a `hostSet` naming the domains it claims: that one
-declaration supplies `Match` and the [generated inventory](../README.md#every-supported-site) entry both, so the two
-cannot disagree, and a `Match` of your own is only for what a host list
-cannot say. Return a `File` per download; set `Resolve` instead of `URL` when
-the host issues links that expire.
+Implement `extractor.Extractor` (`Name`, `Shape`, `Recognise`, `Recognises`,
+`Extract`) and register it in `NewRegistry`. No extractor claims a domain:
+`Recognise` reads the probed page for the link's form and the markup the
+extractor parses, `Shape` gives the link scanner the form alone, and
+`Recognises` is its row in the [generated inventory](../README.md#every-supported-site).
+See [the extractor guide](agents/extractors.md#the-contract). Return a `File`
+per download; set `Resolve` instead of `URL` when the host issues links that
+expire.
 
 ## Releases
 

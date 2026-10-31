@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,8 +137,7 @@ func TestPlaylistJoinsItsSubtitles(t *testing.T) {
 		})
 	}
 	mux.HandleFunc("/missing.vtt", http.NotFound)
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 	hls := func(name string, input ...string) []string {
 		return cmafRendition(t, ffmpeg, origin, srv.URL, name, input...)
 	}
@@ -296,13 +294,12 @@ func srtCueStart(srt, text string) (float64, bool) {
 // fetched, and the video comes through as it would have without them.
 func TestSubtitlesAreNotFetchedWithoutFFmpeg(t *testing.T) {
 	var asked atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".vtt") {
 			asked.Store(true)
 		}
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer srv.Close()
 	hideFFmpeg(t)
 
 	m := busyManager(t)

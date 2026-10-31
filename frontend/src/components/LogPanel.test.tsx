@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { host, mountEachTest, root } from '../testkit';
 import { ApiError, fetchLogs } from '../api';
 import type { LogEntry, LogPage } from '../types';
 import { LogPanel } from './LogPanel';
@@ -11,24 +11,17 @@ vi.mock('../api', async (original) => ({ ...await original<typeof import('../api
 
 const entry = (id: number, text: string, level = 'INFO'): LogEntry => ({ id, time: '2026-01-01T12:00:00.123Z', text, level });
 const initial: LogPage = { session: 'first', oldest: 1, next: 1, limit: 1000, reset: true, entries: [entry(1, 'Service ready')] };
-let root: Root;
-let host: HTMLDivElement;
+
+mountEachTest();
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   vi.mocked(fetchLogs).mockReset().mockResolvedValue(initial);
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
 });
 
 afterEach(async () => {
-  await act(async () => root.unmount());
-  host.remove();
   vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 const button = (text: string): HTMLButtonElement => [...host.querySelectorAll('button')].find((el) => el.textContent?.includes(text))!;

@@ -10,9 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // raiAkamaiPlaylist is RaiPlay's commonest master playlist, and the reason
@@ -173,10 +170,7 @@ const raiEpisodeSet = `{
 // the same segments. audioElsewhere is what tells the two packagings apart,
 // and it is false here.
 func TestRaiAkamaiPlaylistIsTakenDespiteHavingNoCodecs(t *testing.T) {
-	base, err := ParseURL("https://vod.example.test/podcastcdn/Rai/A/12345_,1800,2400/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://vod.example.test/podcastcdn/Rai/A/12345_,1800,2400/playlist.m3u8")
 
 	variants := parseMasterPlaylist(raiAkamaiPlaylist, base)
 	if len(variants) != 2 {
@@ -206,10 +200,7 @@ func TestRaiAkamaiPlaylistIsTakenDespiteHavingNoCodecs(t *testing.T) {
 // and joined alone download to the end and play silently. They come with the
 // audio renditions, the default first, for the downloader to join to them.
 func TestRaiMultiaudioPlaylistComesWithItsAudio(t *testing.T) {
-	base, err := ParseURL("https://vod.example.test/podcastcdn/raitre/raitre_multiaudio_nogeo/12345_,1800,2400/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://vod.example.test/podcastcdn/raitre/raitre_multiaudio_nogeo/12345_,1800,2400/playlist.m3u8")
 
 	variants := parseMasterPlaylist(raiMultiaudioPlaylist, base)
 	if len(variants) != 2 {
@@ -229,7 +220,7 @@ func TestRaiMultiaudioPlaylistComesWithItsAudio(t *testing.T) {
 		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg-1.ts\n#EXTINF:6,\nseg-2.ts\n#EXT-X-ENDLIST\n")
 	}))
 	defer srv.Close()
-	client := httpx.New("test-agent", "en-US", 0, 5*time.Second)
+	client := testClient()
 	media, err := resolveMediaPlaylist(context.Background(), client, srv.URL+"/12345_,1800,2400/playlist.m3u8", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -267,10 +258,7 @@ func TestRaiPrefersSelfContainedOverBiggerVideoOnly(t *testing.T) {
 // under it contains ".mp4" and playlistExtension calls the joined file an MP4.
 // The segments say otherwise, and they are the ones being joined.
 func TestRaiCsmilPlaylistNamesTheContainerFromItsSegments(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/dom4/podcastcdn/Rai/prod_nogeo/12345_,1800,2400,.mp4.csmil/playlist.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/dom4/podcastcdn/Rai/prod_nogeo/12345_,1800,2400,.mp4.csmil/playlist.m3u8")
 
 	variants := parseMasterPlaylist(raiCsmilPlaylist, base)
 	best, ok := bestVariant(variants)
@@ -314,10 +302,7 @@ func TestRaiExtension(t *testing.T) {
 // finished file — a placeholder clip in the download directory instead of the
 // programme.
 func TestRaiRefusalIsRecognisedBeforeAnythingIsQueued(t *testing.T) {
-	var asset raiAsset
-	if err := json.Unmarshal([]byte(raiRefusedAsset), &asset); err != nil {
-		t.Fatal(err)
-	}
+	asset := decode[raiAsset](t, raiRefusedAsset)
 	if !asset.refused() {
 		t.Fatal("a substituted placeholder clip read as a playable asset")
 	}
@@ -326,22 +311,15 @@ func TestRaiRefusalIsRecognisedBeforeAnythingIsQueued(t *testing.T) {
 		t.Error("the fixture no longer has the empty licence map that makes this a refusal rather than DRM")
 	}
 
-	refusal := &raiRefused{title: "Un Programma", message: asset.Description}
-	if got := refusal.reason(); got[:len("video non disponibile")] != "video non disponibile" {
+	if got := raiReason(asset.Description); !strings.HasPrefix(got, "video non disponibile") {
 		t.Errorf("reason = %q, want Rai's own sentence first", got)
-	}
-	if got := refusal.Error(); got[:len("raiplay: Un Programma: ")] != "raiplay: Un Programma: " {
-		t.Errorf("Error = %q", got)
 	}
 }
 
 // TestRaiPlayableAssetIsNotMistakenForARefusal is the other half: the checks
 // must not fire on the ordinary case.
 func TestRaiPlayableAssetIsNotMistakenForARefusal(t *testing.T) {
-	var asset raiAsset
-	if err := json.Unmarshal([]byte(raiPlayableAsset), &asset); err != nil {
-		t.Fatal(err)
-	}
+	asset := decode[raiAsset](t, raiPlayableAsset)
 	if asset.refused() {
 		t.Error("a playable asset read as refused")
 	}
@@ -405,10 +383,7 @@ func TestRaiEmptyReadsRaiSFilledInBlanks(t *testing.T) {
 // TestRaiVideoDocumentIsReadForWhatDecides pins the fields the extractor acts
 // on, including the empty DRM object that must not read as protection.
 func TestRaiVideoDocumentIsReadForWhatDecides(t *testing.T) {
-	var doc raiVideo
-	if err := json.Unmarshal([]byte(raiVideoDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[raiVideo](t, raiVideoDocument)
 	if !raiEmpty(doc.RightsManagement.Rights.DRM) {
 		t.Error("an empty drm object read as DRM protection")
 	}
@@ -420,7 +395,7 @@ func TestRaiVideoDocumentIsReadForWhatDecides(t *testing.T) {
 	}
 	// The episode's own name already says which programme it belongs to, so
 	// nothing is prefixed to it.
-	if got := raiTitle(doc.ProgramInfo.Name, doc.Name); got != "Un Programma S1E1 - Episodio 1" {
+	if got := joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed); got != "Un Programma S1E1 - Episodio 1" {
 		t.Errorf("title = %q", got)
 	}
 }
@@ -439,8 +414,8 @@ func TestRaiTitle(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := raiTitle(tc.program, tc.name); got != tc.want {
-			t.Errorf("raiTitle(%q, %q) = %q, want %q", tc.program, tc.name, got, tc.want)
+		if got := joinTitle(tc.program, tc.name, titlePrefixed); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titlePrefixed) = %q, want %q", tc.program, tc.name, got, tc.want)
 		}
 	}
 }
@@ -448,11 +423,8 @@ func TestRaiTitle(t *testing.T) {
 // TestRaiNewsDocumentGetsItsBulletinPrefixed is the other naming case, read
 // off a document rather than asserted about two strings.
 func TestRaiNewsDocumentGetsItsBulletinPrefixed(t *testing.T) {
-	var doc raiVideo
-	if err := json.Unmarshal([]byte(raiNewsDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if got := raiTitle(doc.ProgramInfo.Name, doc.Name); got != "Telegiornale - Una notizia del giorno" {
+	doc := decode[raiVideo](t, raiNewsDocument)
+	if got := joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed); got != "Telegiornale - Una notizia del giorno" {
 		t.Errorf("title = %q", got)
 	}
 }
@@ -462,10 +434,7 @@ func TestRaiNewsDocumentGetsItsBulletinPrefixed(t *testing.T) {
 // folder named after either level alone collides: here it would drop two
 // seasons of "Puntate" into one folder and lose which year each belongs to.
 func TestRaiListingsKeepBothNestingLevels(t *testing.T) {
-	var doc raiProgramme
-	if err := json.Unmarshal([]byte(raiProgrammeDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[raiProgramme](t, raiProgrammeDocument)
 	if doc.Name != "Un Programma" {
 		t.Errorf("programme name = %q", doc.Name)
 	}
@@ -509,10 +478,7 @@ func TestRaiLabel(t *testing.T) {
 // its season and again under the programme's clip reel would otherwise be
 // downloaded twice, into two different folders.
 func TestRaiItemsSkipWhatIsAlreadyTaken(t *testing.T) {
-	var listing raiSet
-	if err := json.Unmarshal([]byte(raiEpisodeSet), &listing); err != nil {
-		t.Fatal(err)
-	}
+	listing := decode[raiSet](t, raiEpisodeSet)
 
 	seen := make(map[string]bool)
 	entries := raiItems(listing, "Stagione 2026 - Puntate", seen)
@@ -523,8 +489,8 @@ func TestRaiItemsSkipWhatIsAlreadyTaken(t *testing.T) {
 	if entries[0].name != "Un Programma S1E1 - Episodio 1" {
 		t.Errorf("first entry = %+v", entries[0])
 	}
-	if entries[0].label != "Stagione 2026 - Puntate" {
-		t.Errorf("first entry filed under %q", entries[0].label)
+	if entries[0].season != "Stagione 2026 - Puntate" {
+		t.Errorf("first entry filed under %q", entries[0].season)
 	}
 	if again := raiItems(listing, "Stagione 2026 - Clip", seen); len(again) != 0 {
 		t.Errorf("the same listing yielded %d entries a second time", len(again))
@@ -535,23 +501,23 @@ func TestRaiItemsSkipWhatIsAlreadyTaken(t *testing.T) {
 // both ends: a film, which is a programme with exactly one listing, must land
 // as a bare file rather than inside a folder repeating its own name.
 func TestRaiNestOnlyWhenThereIsSomethingToTellApart(t *testing.T) {
-	var film raiProgramme
-	if err := json.Unmarshal([]byte(raiFilmDocument), &film); err != nil {
-		t.Fatal(err)
-	}
+	film := decode[raiProgramme](t, raiFilmDocument)
 	single := raiListings(film)
 	if len(single) != 1 || single[0].label != "Un Film" {
 		t.Fatalf("film listings = %+v", single)
 	}
-	if raiNest([]raiEntry{{label: "Un Film"}, {label: "Un Film"}}) {
+	raiNest := func(entries []broadcastEpisode) bool {
+		return nestByLabel(entries, broadcastEpisode.seasonOf)
+	}
+	if raiNest([]broadcastEpisode{{season: "Un Film"}, {season: "Un Film"}}) {
 		t.Error("one listing was nested; the folder would only repeat the job's own name")
 	}
 
-	if !raiNest([]raiEntry{{label: "Stagione 2026 - Puntate"}, {label: "Stagione 2025 - Puntate"}}) {
+	if !raiNest([]broadcastEpisode{{season: "Stagione 2026 - Puntate"}, {season: "Stagione 2025 - Puntate"}}) {
 		t.Error("two listings were not nested; their episodes would collide")
 	}
 	// A listing that named nothing is not a listing to tell apart.
-	if raiNest([]raiEntry{{label: ""}, {label: "Speciali"}}) {
+	if raiNest([]broadcastEpisode{{season: ""}, {season: "Speciali"}}) {
 		t.Error("an unnamed listing counted towards nesting")
 	}
 }
@@ -586,27 +552,6 @@ func TestRaiRelinkerAsksForJSON(t *testing.T) {
 	for in, want := range tests {
 		if got := raiRelinker(in); got != want {
 			t.Errorf("raiRelinker(%s) = %s, want %s", in, got, want)
-		}
-	}
-}
-
-// TestRaiMatch keeps the extractor to the pages it resolves. The relinker and
-// the CDNs are hosts of Rai's, but nothing there is a page to paste.
-func TestRaiMatch(t *testing.T) {
-	rai := NewRaiPlay(nil)
-	for raw, want := range map[string]bool{
-		"https://www.raiplay.it/video/2026/08/Un-Programma-ep1-0000.html": true,
-		"https://raiplay.it/programmi/unprogramma":                        true,
-		"https://mediapolisvod.rai.it/relinker/relinkerServlet.htm":       false,
-		"https://www.rai.it/":                  false,
-		"https://raiplay.example.test/video/1": false,
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := rai.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
 		}
 	}
 }

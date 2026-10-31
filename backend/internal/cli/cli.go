@@ -166,22 +166,14 @@ func (t *tracker) events(snap download.Snapshot, r *renderer) []string {
 
 // jobLine announces what a source turned out to contain.
 func (r *renderer) jobLine(job download.JobView) string {
-	title := job.Title
-	if title == "" {
-		title = job.Source
-	}
-	title = terminalText(title)
+	title := jobTitle(job)
 	switch {
 	case job.Status == download.StatusFailed && job.Total == 0:
 		return r.paintColour(red, "✗ ") + title + r.paintColour(dim, "  "+terminalText(job.Error))
 	case job.Total == 0:
 		return r.paintColour(yellow, "· ") + title + r.paintColour(dim, "  no files found")
 	}
-	files := fmt.Sprintf("%d file", job.Total)
-	if job.Total != 1 {
-		files += "s"
-	}
-	detail := files
+	detail := files(job.Total)
 	if job.SizeKnown && job.Size > 0 {
 		detail += ", " + formatBytes(job.Size)
 	}
@@ -369,19 +361,14 @@ func plainLine(snap download.Snapshot, started time.Time) string {
 
 // summary prints the closing report and reports whether it was clean.
 func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Time) error {
-	var done, failed, canceled int
+	var done, canceled int
 	var bytes int64
-	names := map[download.Status][]string{}
-	var failedSources []string
+	var failedNames, failedSources []string
 	for _, job := range snap.Jobs {
 		if len(job.Items) == 0 {
 			switch job.Status {
 			case download.StatusFailed:
-				title := job.Title
-				if title == "" {
-					title = job.Source
-				}
-				failedSources = append(failedSources, terminalText(title))
+				failedSources = append(failedSources, jobTitle(job))
 			case download.StatusCanceled:
 				canceled++
 			}
@@ -392,8 +379,7 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 				done++
 				bytes += it.Downloaded
 			case download.StatusFailed:
-				failed++
-				names[download.StatusFailed] = append(names[download.StatusFailed], terminalText(it.Name))
+				failedNames = append(failedNames, terminalText(it.Name))
 			case download.StatusCanceled:
 				canceled++
 			}
@@ -407,32 +393,45 @@ func summary(snap download.Snapshot, out io.Writer, r *renderer, started time.Ti
 	}
 
 	mark, tint := "✓", green
-	if failed > 0 || len(failedSources) > 0 {
+	if len(failedNames) > 0 || len(failedSources) > 0 {
 		mark, tint = "✗", red
-	}
-	files := fmt.Sprintf("%d file", done)
-	if done != 1 {
-		files += "s"
 	}
 	fmt.Fprintf(out, "%s %s%s\n",
 		r.paintColour(tint, mark),
-		fmt.Sprintf("%s, %s in %s", files, formatBytes(bytes), formatDuration(elapsed)),
+		fmt.Sprintf("%s, %s in %s", files(done), formatBytes(bytes), formatDuration(elapsed)),
 		r.paintColour(dim, rate))
 
-	if failed > 0 {
-		slices.Sort(names[download.StatusFailed])
-		fmt.Fprintf(out, "%s\n", r.paintColour(red,
-			fmt.Sprintf("  %d failed: %s", failed,
-				truncate(strings.Join(names[download.StatusFailed], ", "), 200))))
+	slices.Sort(failedNames)
+	for _, failed := range []struct {
+		what  string
+		names []string
+	}{{"failed", failedNames}, {"sources failed to resolve", failedSources}} {
+		if len(failed.names) > 0 {
+			fmt.Fprintln(out, r.paintColour(red, fmt.Sprintf("  %d %s: %s",
+				len(failed.names), failed.what, truncate(strings.Join(failed.names, ", "), 200))))
+		}
 	}
-	if len(failedSources) > 0 {
-		fmt.Fprintln(out, r.paintColour(red, fmt.Sprintf("  %d sources failed to resolve: %s",
-			len(failedSources), truncate(strings.Join(failedSources, ", "), 200))))
-	}
-	if failed > 0 || len(failedSources) > 0 || canceled > 0 {
+	if len(failedNames) > 0 || len(failedSources) > 0 || canceled > 0 {
 		return ErrIncomplete
 	}
 	return nil
+}
+
+// jobTitle names a job on the terminal: its title, or the URL it came from
+// while it has none.
+func jobTitle(job download.JobView) string {
+	if job.Title == "" {
+		return terminalText(job.Source)
+	}
+	return terminalText(job.Title)
+}
+
+// files counts files in words: "1 file", "3 files".
+func files(n int) string {
+	if n == 1 {
+		return "1 file"
+	}
+	return fmt.Sprintf("%d files", n)
 }
 
 // runningCount totals the files currently moving.

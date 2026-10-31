@@ -3,19 +3,18 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"net/url"
 	"path"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // The Misskey dialect of the fediverse extractor — the POST-only API the
-// whole Misskey family shares. Split from fediverse.go; the shared discovery
-// and URL shapes stay there.
+// whole Misskey family shares. The shared discovery, URL shapes and timeline
+// engine stay in fediverse.go.
 
 // ------------------------------------------------------------------- misskey
 
@@ -50,57 +49,40 @@ type misskeyFile struct {
 // misskeyWebPublic prefixes the filename of an instance's re-encoded copy.
 const misskeyWebPublic = "webpublic-"
 
-// misskey resolves a user's notes, or a single note. Every call is a POST
-// carrying JSON, including the ones that only read.
-func (f *Fediverse) misskey(ctx context.Context, u *url.URL, t *fediTarget) (*Result, error) {
-	if t.kind == fediCommunity {
-		return nil, fmt.Errorf("fediverse: communities are a lemmy thing, and %s does not run "+
-			"it (%s)", u.Hostname(), u.Redacted())
-	}
-	root := util.Origin(u)
-
-	if t.kind == fediPost {
-		var note misskeyNote
-		body := struct {
-			NoteID string `json:"noteId"`
-		}{NoteID: t.id}
-		if err := f.client.PostJSON(ctx, root+"/api/notes/show", fediHeaders(root), body, &note); err != nil {
-			return nil, fmt.Errorf("fediverse: read note %s: %w", t.id, err)
-		}
-		files := misskeyFiles([]misskeyNote{note})
-		if len(files) == 0 {
-			return nil, fmt.Errorf("fediverse: note %s carries no files", t.id)
-		}
-		return &Result{Title: misskeyNoteTitle(&note, u.Hostname()), Files: files}, nil
-	}
-
-	user, err := f.misskeyLookup(ctx, root, t.handle)
-	if err != nil {
-		return nil, err
-	}
-	title := "@" + fediHandle(t.handle, u.Hostname())
-
-	notes, err := f.misskeyTimeline(ctx, root, user.ID)
-	if err != nil {
-		return nil, err
-	}
-	files := misskeyFiles(notes)
-	if len(files) == 0 {
-		return nil, fmt.Errorf("fediverse: %s has attached no files to its most recent %d notes",
-			title, config.MaxTimelinePages*fediMisskeyPageSize)
-	}
-	return &Result{Title: title, Files: files}, nil
+// fediMisskey is the Misskey family's API, which is POST-only: every call
+// carries JSON, including the ones that only read.
+var fediMisskey = fediDialect{
+	stride: fediMisskeyPageSize,
+	post:   misskeySingle, owner: misskeyOwner, page: misskeyTimeline,
+	empty: "%s has attached no files to its most recent %d notes",
 }
 
-// misskeyLookup turns a handle into the user, and above all into their id.
+// misskeySingle reads a single note.
+func misskeySingle(ctx context.Context, s *fediSession) (*Result, error) {
+	var note misskeyNote
+	body := struct {
+		NoteID string `json:"noteId"`
+	}{NoteID: s.t.id}
+	if err := s.client.PostJSON(ctx, s.root+"/api/notes/show", fediHeaders(s.root), body, &note); err != nil {
+		return nil, fmt.Errorf("fediverse: read note %s: %w", s.t.id, err)
+	}
+	files := fediFiles(misskeyEntries([]misskeyNote{note}))
+	if len(files) == 0 {
+		return nil, fmt.Errorf("fediverse: note %s carries no files", s.t.id)
+	}
+	return &Result{Title: misskeyNoteTitle(&note, s.host()), Files: files}, nil
+}
+
+// misskeyOwner turns a handle into the user, and above all into their id.
 //
 // host is null for a local account and the domain for one this instance is
 // merely showing, and it has to be *sent* either way: it is how the API tells
 // "the alice here" from "the alice over there".
-func (f *Fediverse) misskeyLookup(ctx context.Context, root, handle string) (*misskeyUser, error) {
+func misskeyOwner(ctx context.Context, s *fediSession) (string, string, error) {
+	handle := s.t.handle
 	name, host, _ := strings.Cut(handle, "@")
 	if name == "" {
-		return nil, fmt.Errorf("fediverse: the link names no account")
+		return "", "", fmt.Errorf("fediverse: the link names no account")
 	}
 	body := struct {
 		Username string  `json:"username"`
@@ -111,55 +93,34 @@ func (f *Fediverse) misskeyLookup(ctx context.Context, root, handle string) (*mi
 	}
 
 	var user misskeyUser
-	if err := f.client.PostJSON(ctx, root+"/api/users/show", fediHeaders(root), body, &user); err != nil {
-		return nil, fmt.Errorf("fediverse: no account %q on this instance: %w", handle, err)
+	if err := s.client.PostJSON(ctx, s.root+"/api/users/show", fediHeaders(s.root), body, &user); err != nil {
+		return "", "", fmt.Errorf("fediverse: no account %q on this instance: %w", handle, err)
 	}
 	if user.ID == "" {
-		return nil, fmt.Errorf("fediverse: no account %q on this instance", handle)
+		return "", "", fmt.Errorf("fediverse: no account %q on this instance", handle)
 	}
-	return &user, nil
+	return user.ID, "@" + fediHandle(handle, s.host()), nil
 }
 
-// misskeyTimeline pages back through a user's notes that carry files.
-//
-// untilId is this API's max_id: exclusive, newest first, each page asking for
-// what precedes the last id of the one before. The same three stopping
-// conditions apply as to a Mastodon timeline — a short page, a page that
-// makes no progress, and the cap.
-func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([]misskeyNote, error) {
-	var all []misskeyNote
-	until := ""
+// misskeyTimeline reads one page of a user's notes that carry files. untilId is
+// this API's max_id.
+func misskeyTimeline(ctx context.Context, s *fediSession, until string, _ int) ([]fediEntry, error) {
+	body := struct {
+		UserID    string `json:"userId"`
+		Limit     int    `json:"limit"`
+		WithFiles bool   `json:"withFiles"`
+		UntilID   string `json:"untilId,omitempty"`
+	}{UserID: s.owner, Limit: fediMisskeyPageSize, WithFiles: true, UntilID: until}
 
-	for page := range config.MaxTimelinePages {
-		body := struct {
-			UserID    string `json:"userId"`
-			Limit     int    `json:"limit"`
-			WithFiles bool   `json:"withFiles"`
-			UntilID   string `json:"untilId,omitempty"`
-		}{UserID: userID, Limit: fediMisskeyPageSize, WithFiles: true, UntilID: until}
-
-		var batch []misskeyNote
-		if err := f.client.PostJSON(ctx, root+"/api/users/notes", fediHeaders(root), body, &batch); err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("fediverse: read the account's notes: %w", err)
-			}
-			break
-		}
-		if len(batch) == 0 {
-			break
-		}
-		all = append(all, batch...)
-
-		next := batch[len(batch)-1].ID
-		if next == "" || next == until || len(batch) < fediMisskeyPageSize {
-			break
-		}
-		until = next
+	var batch []misskeyNote
+	if err := s.client.PostJSON(ctx, s.root+"/api/users/notes", fediHeaders(s.root), body, &batch); err != nil {
+		return nil, fmt.Errorf("fediverse: read the account's notes: %w", err)
 	}
-	return all, nil
+	return misskeyEntries(batch), nil
 }
 
-// misskeyFiles flattens notes into downloadable attachments.
+// misskeyEntries reads notes as the posts the engine walks, each with its
+// files.
 //
 // A renote needs none of the care a Mastodon boost does: a note's files are
 // always its own, and a plain renote carries none, so asking for notes with
@@ -174,29 +135,23 @@ func (f *Fediverse) misskeyTimeline(ctx context.Context, root, userID string) ([
 // than reported. A length describing a different file is worse than none:
 // this one is exact enough to be believed, and the downloader would use it to
 // conclude that a file already on disk was this one.
-func misskeyFiles(notes []misskeyNote) []File {
-	seen := make(map[string]bool)
-	var files []File
-
+func misskeyEntries(notes []misskeyNote) []fediEntry {
+	entries := make([]fediEntry, 0, len(notes))
 	for _, note := range notes {
+		entry := fediEntry{id: note.ID}
 		for _, file := range note.Files {
-			if file.URL == "" || seen[file.URL] {
+			if file.URL == "" {
 				continue
 			}
-			seen[file.URL] = true
-
-			size := file.Size
-			if size <= 0 || misskeyIsDerived(file.URL) {
+			size := knownSize(file.Size)
+			if misskeyIsDerived(file.URL) {
 				size = -1
 			}
-			files = append(files, File{
-				Name: misskeyName(&file),
-				URL:  file.URL,
-				Size: size,
-			})
+			entry.files = append(entry.files, File{Name: misskeyName(&file), URL: file.URL, Size: size})
 		}
+		entries = append(entries, entry)
 	}
-	return files
+	return entries
 }
 
 // misskeyIsDerived reports whether a URL serves the instance's own re-encoded
@@ -209,10 +164,10 @@ func misskeyIsDerived(link string) bool {
 // what the URL actually serves, so a re-encoded copy is not saved under the
 // format it used to be.
 func misskeyName(file *misskeyFile) string {
-	name := util.FirstNonEmpty(file.Name, util.NameFromURL(file.URL), file.ID)
+	name := cmp.Or(file.Name, util.NameFromURL(file.URL), file.ID)
 	served := fediExt(file.URL)
 	if served != "" && !strings.EqualFold(path.Ext(name), served) {
-		name = strings.TrimSuffix(name, path.Ext(name)) + served
+		name = util.WithExt(name, served)
 	}
 	return name
 }

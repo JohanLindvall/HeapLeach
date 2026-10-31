@@ -3,13 +3,14 @@
 package extractor
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -111,19 +112,13 @@ const peerTubeBothListsVideo = `{
 // alongside the logic that reads them.
 func peerTubeDecodeVideo(t *testing.T, doc string) *peerTubeVideo {
 	t.Helper()
-	var video peerTubeVideo
-	if err := json.Unmarshal([]byte(doc), &video); err != nil {
-		t.Fatalf("decode fixture: %v", err)
-	}
+	video := decode[peerTubeVideo](t, doc)
 	return &video
 }
 
 func peerTubeURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return u
 }
 
@@ -199,10 +194,7 @@ func TestPeerTubeFileForKeepsTheFederatedHostAndExactSize(t *testing.T) {
 	u := peerTubeURL(t, "https://example.test/w/aaaaaaaaaaaaaaaaaaaaaa")
 	file := peerTubeFileFor(u, video.Name, best, "")
 
-	media, err := url.Parse(file.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	media := mustParse(t, file.URL)
 	if media.Host != "media.example.com" {
 		t.Errorf("file host = %q, want the one the API named rather than the instance", media.Host)
 	}
@@ -311,62 +303,59 @@ func TestPeerTubeParseRoute(t *testing.T) {
 	}
 }
 
-// TestPeerTubeLabel pins how an instance is named. Operators put "video" or
-// "tube" in the hostname often enough that taking the first label would give
-// several instances the same name, which the registry cannot allow.
-func TestPeerTubeLabel(t *testing.T) {
-	tests := map[string]string{
-		"framatube.org":            "framatube",
-		"tilvids.com":              "tilvids",
-		"video.blender.org":        "blender",
-		"makertube.net":            "makertube",
-		"tube.tchncs.de":           "tchncs",
-		"kolektiva.media":          "kolektiva",
-		"spectra.video":            "spectra",
-		"videos.pair2jeux.example": "pair2jeux",
-		"www.example.test":         "example",
-		"example.test:8443":        "example",
-		// The site's name is not the leftmost label, so "tube" is skipped.
-		"tube.example.co": "example",
-		// Nothing but generic words: the first label beats no label at all.
-		"peertube.tv":    "peertube",
-		"peertube.co.uk": "peertube",
-		"video.tube":     "video",
-		"":               "peertube",
-	}
-	for host, want := range tests {
-		if got := peerTubeLabel(host); got != want {
-			t.Errorf("peerTubeLabel(%q) = %q, want %q", host, got, want)
-		}
-	}
+// peerTubeClientPage is the shell the web client is served as: its
+// application element and the server configuration handed to it inline.
+const peerTubeClientPage = `<!doctype html><html><head><title>A Video - Example Tube</title>
+<meta property="og:site_name" content="Example Tube"><script type="module" src="main-AAAA.js"></script>
+<script>window.PeerTubeServerConfig = '{"serverVersion":"7.0.0"}'</script></head><body><my-app></my-app></body></html>`
+
+func TestPeerTubeRecognise(t *testing.T) {
+	p := NewPeerTube(nil)
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa", peerTubeClientPage), true)
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/videos/watch/0aa5bf2e-0000-4000-8000-000000000000", peerTubeClientPage), true)
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/c/a_channel/videos", peerTubeClientPage), true)
+	// The client's page on a route that names nothing.
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/about/instance", peerTubeClientPage), false)
+	// The right form and the instance's name, without the client's shell.
+	expectRecognised(t, p, htmlPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa",
+		`<html><head><title>A Video - Example Tube</title><meta property="og:platform" content="PeerTube"></head><body></body></html>`), false)
+	// A challenge with no client to ask the API through says nothing.
+	expectRecognised(t, p, challengedPage(t, "https://tube.example.test/w/aaaaaaaaaaaaaaaaaaaaaa"), false)
+
+	expectShape(t, p, "https://tube.example.test/w/p/aaaaaaaaaaaaaaaaaaaaaa", true)
+	expectShape(t, p, "https://tube.example.test/a/someone", true)
+	expectShape(t, p, "https://tube.example.test/videos/12345/a-clip/", false)
+	expectShape(t, p, "https://tube.example.test/", false)
 }
 
-// TestPeerTubeSitesNameAndMatchTheirHosts guards the compiled-in table: two
-// instances resolving to one label would be indistinguishable in the UI and
-// in every error message.
-func TestPeerTubeSitesNameAndMatchTheirHosts(t *testing.T) {
-	sites := NewPeerTubeSites(nil, nil)
-	if len(sites) != len(peerTubeKnownHosts) {
-		t.Fatalf("got %d extractors for %d hosts", len(sites), len(peerTubeKnownHosts))
+// A challenged instance, or one behind a bot check, is recognised by its API
+// reporting a server version, asked once per page.
+func TestPeerTubeRecogniseAskingTheAPI(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/config" {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"serverVersion":"7.0.0"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPeerTube(testClient())
+	botCheck := htmlPage(t, srv.URL+"/w/aaaaaaaaaaaaaaaaaaaaaa",
+		`<html><head><title>Making sure you are not a bot</title><script src="/.within.website/x/main.mjs"></script></head></html>`)
+	for range 2 {
+		if !p.Recognise(context.Background(), botCheck) {
+			t.Fatal("an instance behind a bot check was not recognised")
+		}
 	}
-
-	seen := make(map[string]string, len(sites))
-	for i, host := range peerTubeKnownHosts {
-		name := sites[i].Name()
-		if name == "" {
-			t.Errorf("%s produced an empty label", host)
-		}
-		if other, dup := seen[name]; dup {
-			t.Errorf("%s and %s are both labelled %q", other, host, name)
-		}
-		seen[name] = host
-
-		if !sites[i].Match(&url.URL{Scheme: "https", Host: host, Path: "/w/x"}) {
-			t.Errorf("%s did not match its own host", host)
-		}
-		if sites[i].Match(&url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
-			t.Errorf("%s matched an unrelated host", host)
-		}
+	if calls != 1 {
+		t.Errorf("the API was asked %d times, want once", calls)
+	}
+	// An ordinary page of the form is not asked about at all.
+	if p.Recognise(context.Background(), htmlPage(t, srv.URL+"/c/a_channel", `<html><title>A channel</title></html>`)) || calls != 1 {
+		t.Errorf("an ordinary page of the form was claimed or cost a request (%d)", calls)
 	}
 }
 
@@ -386,10 +375,7 @@ func TestPeerTubeListingEntriesUnwrapPlaylistPositions(t *testing.T) {
 	  ]
 	}`
 
-	var page peerTubeListing
-	if err := json.Unmarshal([]byte(listing), &page); err != nil {
-		t.Fatalf("decode listing: %v", err)
-	}
+	page := decode[peerTubeListing](t, listing)
 
 	var ids []string
 	for _, entry := range page.Data {
@@ -411,12 +397,36 @@ func TestPeerTubeListingEntriesReadPlainRows(t *testing.T) {
 	  "data": [ { "uuid": "00000000-0000-4000-8000-00000000000d", "shortUUID": "dd", "name": "Only" } ]
 	}`
 
-	var page peerTubeListing
-	if err := json.Unmarshal([]byte(listing), &page); err != nil {
-		t.Fatalf("decode listing: %v", err)
-	}
+	page := decode[peerTubeListing](t, listing)
 	if got := page.Data[0].videoID(); got != "00000000-0000-4000-8000-00000000000d" {
 		t.Errorf("videoID = %q, want the row's own uuid", got)
+	}
+}
+
+// TestPeerTubeListVideosPagesToTheStatedTotal: the listing states its total,
+// which ends the walk however few rows a page carries, and the listing cap
+// bounds it, every id costing a request of its own.
+func TestPeerTubeListVideosPagesToTheStatedTotal(t *testing.T) {
+	var starts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := r.URL.Query().Get("start")
+		starts = append(starts, start)
+		rows := map[string]string{
+			"0": `{"uuid":"a"},{"uuid":"b"}`,
+			"2": `{"uuid":"c"}`,
+		}[start]
+		_, _ = io.WriteString(w, `{"total":3,"data":[`+rows+`]}`)
+	}))
+	defer srv.Close()
+	client := testClient()
+
+	ids, note, err := peerTubeListVideos(context.Background(), client, srv.URL+"/videos", nil, "channel", Options{})
+	if err != nil || strings.Join(ids, ",") != "a,b,c" || note != "" || strings.Join(starts, ",") != "0,2" {
+		t.Fatalf("ids=%v note=%q starts=%v err=%v", ids, note, starts, err)
+	}
+	ids, note, _ = peerTubeListVideos(context.Background(), client, srv.URL+"/videos", nil, "channel", Options{limits: Limits{Sources: 2}})
+	if len(ids) != 2 || note != "partial — source limit" {
+		t.Fatalf("capped: ids=%v note=%q", ids, note)
 	}
 }
 
@@ -455,7 +465,7 @@ func TestPeerTubeExplain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := peerTubeExplain(tc.status, "example", "an-id")
+			err := peerTubeExplain(tc.status, "an-id")
 			if err == nil {
 				t.Fatal("a refusal was turned into no error at all")
 			}
@@ -465,8 +475,8 @@ func TestPeerTubeExplain(t *testing.T) {
 			if tc.wantText != "" && !strings.Contains(err.Error(), tc.wantText) {
 				t.Errorf("error %q does not mention %q", err, tc.wantText)
 			}
-			if !strings.HasPrefix(err.Error(), "example:") {
-				t.Errorf("error %q does not open with the instance's label", err)
+			if !strings.HasPrefix(err.Error(), peerTubeLabel+":") {
+				t.Errorf("error %q does not open with the extractor's label", err)
 			}
 		})
 	}
@@ -500,7 +510,7 @@ func TestPeerTubeNoMedia(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := peerTubeNoMedia(peerTubeDecodeVideo(t, tc.doc), "example")
+			err := peerTubeNoMedia(peerTubeDecodeVideo(t, tc.doc))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error = %v, want it to mention %q", err, tc.want)
 			}
@@ -592,19 +602,18 @@ func TestPeerTubeFileName(t *testing.T) {
 	}
 }
 
-// TestPeerTubeSniffCostsNothingOffTheInstanceRoutes pins the cheap half of
-// the sniff's bargain. A URL shaped like nothing an instance serves must be
-// rejected before any request, which a nil client proves: reaching the
-// network at all would panic here.
-func TestPeerTubeSniffCostsNothingOffTheInstanceRoutes(t *testing.T) {
+// TestPeerTubeRecogniseCostsNothingOffTheInstanceRoutes: a URL shaped like
+// nothing an instance serves is rejected before any request, which a nil
+// client proves.
+func TestPeerTubeRecogniseCostsNothingOffTheInstanceRoutes(t *testing.T) {
+	p := NewPeerTube(nil)
 	for _, raw := range []string{
 		"https://nobody.example.test/files/archive.zip",
 		"https://nobody.example.test/videos/12345/a-clip/",
 		"https://nobody.example.test/",
 	} {
-		res, handled, err := peerTubeSniff(t.Context(), nil, peerTubeURL(t, raw), Options{})
-		if handled || res != nil || err != nil {
-			t.Errorf("%s was taken up by the sniff", raw)
+		if p.Recognise(t.Context(), challengedPage(t, raw)) {
+			t.Errorf("%s was recognised", raw)
 		}
 	}
 }
@@ -622,26 +631,55 @@ func TestPeerTubeFileForSpellsAnAbsentLengthMinusOne(t *testing.T) {
 	}
 }
 
-// TestPeerTubeExtraHosts covers the runtime escape, which exists because
-// seven compiled-in instances stand in for some seventeen hundred.
-func TestPeerTubeExtraHosts(t *testing.T) {
-	cfg := &config.Config{ExtraHosts: map[string][]string{
-		config.FamilyPeerTube: {"tube.example.test", "video.example.test", "third.example.test"},
-	}}
-
-	sites := NewPeerTubeSites(cfg, nil)
-	if len(sites) != len(peerTubeKnownHosts)+3 {
-		t.Fatalf("got %d extractors, want the %d built in plus 3", len(sites), len(peerTubeKnownHosts))
-	}
-	u := &url.URL{Scheme: "https", Host: "tube.example.test", Path: "/w/x"}
-
-	matched := false
-	for _, site := range sites {
-		if site.Match(u) {
-			matched = true
+// TestPeerTubeListingSaysWhyNoVideoCouldBeRead: a channel none of whose
+// videos has a file is refused with the instance's reason, not a bare
+// count.
+func TestPeerTubeListingSaysWhyNoVideoCouldBeRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/video-channels/someone/videos":
+			_, _ = io.WriteString(w, `{"total":2,"data":[{"uuid":"a"},{"uuid":"b"}]}`)
+		case "/api/v1/videos/a", "/api/v1/videos/b":
+			_, _ = io.WriteString(w, `{"name":"Live Now","isLive":true,"state":{"id":4,"label":"Waiting for livestream"}}`)
+		default:
+			http.NotFound(w, r)
 		}
+	}))
+	defer srv.Close()
+	client := testClient()
+	u, _ := url.Parse(srv.URL + "/c/someone")
+
+	_, err := peerTubeListingResult(context.Background(), client, u, "/video-channels/someone", "channel", Options{})
+	if err == nil || !strings.Contains(err.Error(), "none of the 2 videos") ||
+		!strings.Contains(err.Error(), `"Live Now" is a live stream`) {
+		t.Fatalf("err = %v, want the live stream named as the reason", err)
 	}
-	if !matched {
-		t.Error("a host added through HEAPLEACH_EXTRA_HOSTS was not matched")
+}
+
+// TestPeerTubeListingNotesWhatItLeftOut: a channel some of whose videos
+// refuse keeps the rest, and its note says how many were left out and why.
+func TestPeerTubeListingNotesWhatItLeftOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/video-channels/someone/videos":
+			_, _ = io.WriteString(w, `{"total":2,"data":[{"uuid":"a"},{"uuid":"b"}]}`)
+		case "/api/v1/videos/a":
+			_, _ = io.WriteString(w, `{"name":"Live Now","isLive":true,"state":{"id":4,"label":"Waiting for livestream"}}`)
+		case "/api/v1/videos/b":
+			_, _ = io.WriteString(w, peerTubeBothListsVideo)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL + "/c/someone")
+
+	res, err := peerTubeListingResult(context.Background(), testClient(), u, "/video-channels/someone", "channel", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || !strings.HasPrefix(res.Note, "1 left out: ") ||
+		!strings.Contains(res.Note, `"Live Now" is a live stream`) {
+		t.Errorf("%d files, note %q; want the one video and the live stream named as left out", len(res.Files), res.Note)
 	}
 }

@@ -300,7 +300,7 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 		ID:        newID(),
 		Source:    u.String(),
 		Title:     u.Hostname() + u.Path,
-		Host:      m.reg.Find(u).Name(),
+		Host:      m.reg.Guess(u),
 		Password:  password,
 		CreatedAt: time.Now(),
 		limiter:   newThrottle(0),
@@ -314,8 +314,7 @@ func (m *Manager) Add(rawURL, password string) (string, error) {
 	m.jobs[job.ID] = job
 	m.order = append(m.order, job.ID)
 	m.rereadLocked(job)
-	m.mu.Unlock()
-	m.markDirty()
+	m.commitLocked()
 	return job.ID, nil
 }
 
@@ -357,10 +356,7 @@ func (m *Manager) resolve(ctx context.Context, job *Job, generation uint64) {
 	default:
 		m.applyResultLocked(job, ex.Name(), res, present)
 	}
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 }
 
 func (m *Manager) extractSource(ctx context.Context, job *Job) (*extractor.Result, extractor.Extractor, error) {
@@ -412,6 +408,9 @@ func (m *Manager) stillOnDisk(finished map[string]finishedFile) map[string]finis
 // destination. Added to rather than replaced, so a job read again before an
 // earlier reading lands keeps the record. Caller holds mu.
 func finishedLocked(job *Job) {
+	saved := func(it *Item) finishedFile {
+		return finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+	}
 	var renamed []*Item
 	for _, it := range job.Items {
 		if it.Status != StatusDone || it.Path == "" {
@@ -420,7 +419,7 @@ func finishedLocked(job *Job) {
 		if job.finished == nil {
 			job.finished = make(map[string]finishedFile)
 		}
-		job.finished[destinationKey(it.Dir, it.Name)] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+		job.finished[destinationKey(it.Dir, it.Name)] = saved(it)
 		if it.listed != "" && it.listed != it.Name {
 			renamed = append(renamed, it)
 		}
@@ -430,7 +429,7 @@ func finishedLocked(job *Job) {
 	for _, it := range renamed {
 		key := destinationKey(it.Dir, it.listed)
 		if _, taken := job.finished[key]; !taken {
-			job.finished[key] = finishedFile{path: it.Path, size: it.Size, skipped: it.Skipped}
+			job.finished[key] = saved(it)
 		}
 	}
 }
@@ -458,7 +457,7 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 	// filed the next run somewhere new and downloaded every file again.
 	folder := ""
 	if len(res.Files) > 1 {
-		folder = SafeName(util.FirstNonEmpty(res.Title, job.Title))
+		folder = SafeName(cmp.Or(res.Title, job.Title))
 	}
 	items := make([]*Item, 0, len(res.Files))
 	for i, f := range res.Files {
@@ -488,7 +487,7 @@ func (m *Manager) applyResultLocked(job *Job, host string, res *extractor.Result
 func (m *Manager) newItem(job *Job, f extractor.File, folder string, index int) *Item {
 	name := f.Name
 	if name == "" {
-		name = util.FirstNonEmpty(util.NameFromURL(f.URL), fmt.Sprintf("file-%03d", index+1))
+		name = cmp.Or(util.NameFromURL(f.URL), fmt.Sprintf("file-%03d", index+1))
 	}
 	size := f.Size
 	if size == 0 {
@@ -629,15 +628,7 @@ func (m *Manager) dispatch() {
 // one is started instead, so one gentle host cannot idle the whole pool
 // behind it.
 func (m *Manager) nextLocked() *Item {
-	// A paused queue starts nothing new. Transfers already running park
-	// inside their reads instead, so they keep their place in the file.
-	if m.closing || m.throttle.isPaused() || m.running >= m.limit {
-		return nil
-	}
-	// Nor does one with no room to write into. Transfers already running are
-	// left alone: their bytes are on disk either way, and abandoning one
-	// near its end would throw away more room than it recovered.
-	if m.lowOnSpace() {
+	if m.closing || m.capped() {
 		return nil
 	}
 	// The ordinary queue is FIFO. Advancing its head costs nothing; copying
@@ -646,7 +637,7 @@ func (m *Manager) nextLocked() *Item {
 	unavailableRoutes := make(map[routeGroup]bool)
 	for len(m.queue) > 0 {
 		it := m.queue[0]
-		if it.Status == StatusQueued && !it.inFlight && (it.notBefore.After(now) || m.hostFullLocked(it) || m.jobHeldLocked(it) || !m.leaseRouteLocked(it, unavailableRoutes)) {
+		if it.Status == StatusQueued && !it.inFlight && m.waitsLocked(it, now, unavailableRoutes) {
 			break
 		}
 		m.queue[0] = nil
@@ -664,7 +655,7 @@ func (m *Manager) nextLocked() *Item {
 			kept = append(kept, it)
 		case it.Status != StatusQueued || it.inFlight:
 			// Cancelled where it stood, or still owned: forget it.
-		case it.notBefore.After(now), m.hostFullLocked(it), m.jobHeldLocked(it), !m.leaseRouteLocked(it, unavailableRoutes):
+		case m.waitsLocked(it, now, unavailableRoutes):
 			kept = append(kept, it)
 		default:
 			chosen = it
@@ -673,6 +664,33 @@ func (m *Manager) nextLocked() *Item {
 	clear(m.queue[len(kept):])
 	m.queue = kept
 	return chosen
+}
+
+// waitsLocked reports whether a queued item keeps its place rather than
+// starting now: its wait is not over, its host or its job has as many
+// running as it allows, or no route is free for it. Leasing a route comes
+// last because it is the one that takes something. Caller holds mu.
+func (m *Manager) waitsLocked(it *Item, now time.Time, unavailableRoutes map[routeGroup]bool) bool {
+	return it.notBefore.After(now) || m.hostFullLocked(it) || m.jobHeldLocked(it) ||
+		!m.leaseRouteLocked(it, unavailableRoutes)
+}
+
+// capped reports whether the queue starts nothing new: at its concurrency
+// limit, paused, or short of room.
+//
+// A paused queue's running transfers park inside their reads instead, so
+// they keep their place in the file. One short of room leaves those running
+// alone: their bytes are on disk either way, and abandoning one near its end
+// would throw away more room than it recovered. Caller holds mu.
+func (m *Manager) capped() bool {
+	return m.running >= m.limit || m.throttle.isPaused() || m.lowOnSpace()
+}
+
+// throttling reports whether a pause or a speed cap, the queue's or the
+// item's job's, holds the item's transfer back, which makes it look slow
+// without being so.
+func (m *Manager) throttling(it *Item) bool {
+	return m.throttle.isPaused() || m.throttle.currentLimit() > 0 || it.limiter.currentLimit() > 0
 }
 
 // lowOnSpace reports whether the destination has too little room left to
@@ -720,6 +738,9 @@ func (m *Manager) hostFullLocked(it *Item) bool {
 	return m.hostGate.full(hostOf(it.URL))
 }
 
+// groupKey is the host key a pacing group's items are charged against.
+func groupKey(group string) string { return "group:" + group }
+
 // hostKeyLocked names the remote an item will be charged against.
 //
 // An explicit pacing group covers aliases and resolved storage URLs alike.
@@ -729,15 +750,24 @@ func (m *Manager) hostFullLocked(it *Item) bool {
 // picks belongs to it either way. Caller holds mu.
 func (m *Manager) hostKeyLocked(it *Item) string {
 	if it.pace != nil && it.pace.Group != "" {
-		return "group:" + it.pace.Group
+		return groupKey(it.pace.Group)
 	}
 	if it.URL != "" {
 		return hostOf(it.URL)
 	}
-	if job, ok := m.jobs[it.JobID]; ok && job.Source != "" {
-		return hostOf(job.Source)
+	if source := m.jobSourceLocked(it); source != "" {
+		return hostOf(source)
 	}
 	return ""
+}
+
+// jobSourceLocked is the URL the user submitted for an item's job, or the
+// item's own URL where the job has none. Caller holds mu.
+func (m *Manager) jobSourceLocked(it *Item) string {
+	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
+		return job.Source
+	}
+	return it.URL
 }
 
 // itemHostLocked names the host an item is actually talking to, which is
@@ -767,7 +797,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	err := m.transferRouted(ctx, it)
 	// Read here, outside mu, for the one outcome that uses it.
 	var started bool
-	if _, wait := errors.AsType[*extractor.WaitError](err); wait && ctx.Err() == nil {
+	if isErr[*extractor.WaitError](err) && ctx.Err() == nil {
 		started = m.startedOnDisk(it)
 	}
 
@@ -835,10 +865,7 @@ func (m *Manager) runItem(ctx context.Context, cancel context.CancelFunc, it *It
 	if m.jobActive[it.JobID]--; m.jobActive[it.JobID] <= 0 {
 		delete(m.jobActive, it.JobID)
 	}
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 }
 
 // logFinishedLocked records one finished transfer, so a backend log holds a
@@ -861,25 +888,14 @@ func (m *Manager) logFinishedLocked(it *Item, msg string) {
 func (m *Manager) CancelJob(id string) error {
 	// Something the user did, so they see it at once. See nudge.
 	defer m.nudge()
-	m.mu.Lock()
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, false)
+	if err != nil {
+		return err
 	}
-	job.canceled = true
+	cancelJobLocked(job)
 	job.restored = false
-	if job.cancel != nil {
-		job.cancel()
-	}
-	for _, it := range job.Items {
-		cancelItemLocked(it)
-	}
 	m.pruneQueueLocked()
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -898,11 +914,37 @@ func (m *Manager) CancelItem(jobID, itemID string) error {
 		job.restored = false
 	}
 	m.pruneQueueLocked()
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
+}
+
+// jobLocked takes mu and looks up a job, returning with mu still held. On an
+// error — ErrClosed when refuseClosing and the manager is shutting down,
+// ErrNotFound for an unknown id — it releases mu first.
+func (m *Manager) jobLocked(id string, refuseClosing bool) (*Job, error) {
+	m.mu.Lock()
+	if refuseClosing && m.closing {
+		m.mu.Unlock()
+		return nil, ErrClosed
+	}
+	job, ok := m.jobs[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, ErrNotFound
+	}
+	return job, nil
+}
+
+// cancelJobLocked stops a job's source and every file under it. Caller
+// holds mu.
+func cancelJobLocked(job *Job) {
+	job.canceled = true
+	if job.cancel != nil {
+		job.cancel()
+	}
+	for _, it := range job.Items {
+		cancelItemLocked(it)
+	}
 }
 
 // cancelItemLocked marks an item cancelled and interrupts it if running.
@@ -934,15 +976,9 @@ func (m *Manager) RetryJob(id string) error {
 	defer m.nudge()
 	recheckTools()
 
-	m.mu.Lock()
-	if m.closing {
-		m.mu.Unlock()
-		return ErrClosed
-	}
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, true)
+	if err != nil {
+		return err
 	}
 	if job.resolving && !job.canceled {
 		m.mu.Unlock()
@@ -956,9 +992,7 @@ func (m *Manager) RetryJob(id string) error {
 	// with no items at all, where the extractor itself is what failed.
 	if job.restored || job.unfetchable || len(job.Items) == 0 {
 		m.rereadLocked(job)
-		m.mu.Unlock()
-
-		m.markDirty()
+		m.commitLocked()
 		return nil
 	}
 
@@ -968,10 +1002,7 @@ func (m *Manager) RetryJob(id string) error {
 			m.enqueueLocked(it)
 		}
 	}
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -981,25 +1012,21 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	defer m.nudge()
 	recheckTools()
 
-	m.mu.Lock()
-	if m.closing {
-		m.mu.Unlock()
-		return ErrClosed
+	job, err := m.jobLocked(jobID, true)
+	if err != nil {
+		return err
 	}
-	it, ok := m.findItemLocked(jobID, itemID)
+	it, ok := job.item(itemID)
 	if !ok {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
-	job := m.jobs[jobID]
-	unfetchable := job != nil && (job.restored || job.unfetchable)
+	unfetchable := job.restored || job.unfetchable
 	if !unfetchable && (it.Status == StatusRunning || it.Status == StatusQueued) {
 		m.mu.Unlock()
 		return errors.New("item is already in progress")
 	}
-	if job != nil {
-		job.canceled = false
-	}
+	job.canceled = false
 
 	// A restored job's items carry no URL — none is stored, because the
 	// signed links half these hosts hand out would be stale by the next run
@@ -1010,17 +1037,12 @@ func (m *Manager) RetryItem(jobID, itemID string) error {
 	// skipped, so this costs the listing and nothing more.
 	if unfetchable {
 		m.rereadLocked(job)
-		m.mu.Unlock()
-
-		m.markDirty()
+		m.commitLocked()
 		return nil
 	}
 
 	m.enqueueLocked(it)
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -1198,7 +1220,7 @@ func (m *Manager) deferWaitLocked(it *Item, err error, started bool) bool {
 	if it.route == nil && m.usesProxies(it) {
 		// Proxies may have been enabled while this ordinary direct attempt
 		// was still resolving. Its timer belongs to that address alone.
-		wait = &extractor.WaitError{Until: time.Now(), Reason: "Waiting for an available download route"}
+		wait = &extractor.WaitError{Until: time.Now(), Reason: noteWaitingForRoute}
 	}
 	m.enqueueLocked(it) // clears the note along with the rest; say why after
 	if n := len(m.queue); started && n > 0 && m.queue[n-1] == it {
@@ -1270,26 +1292,15 @@ func (m *Manager) deferStalledLocked(it *Item, err error) bool {
 func (m *Manager) RemoveJob(id string) error {
 	// Something the user did, so they see it at once. See nudge.
 	defer m.nudge()
-	m.mu.Lock()
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, false)
+	if err != nil {
+		return err
 	}
-	job.canceled = true
-	if job.cancel != nil {
-		job.cancel()
-	}
-	for _, it := range job.Items {
-		cancelItemLocked(it)
-	}
+	cancelJobLocked(job)
 	delete(m.jobs, id)
 	m.order = util.Remove(m.order, id)
 	m.pruneQueueLocked()
-	m.mu.Unlock()
-
-	m.markDirty()
-	m.signal()
+	m.commitLocked()
 	return nil
 }
 
@@ -1306,13 +1317,7 @@ func (m *Manager) ClearFinished() int {
 			kept = append(kept, id)
 			continue
 		}
-		job.canceled = true
-		if job.cancel != nil {
-			job.cancel()
-		}
-		for _, it := range job.Items {
-			cancelItemLocked(it)
-		}
+		cancelJobLocked(job)
 		delete(m.jobs, id)
 		removed++
 	}
@@ -1327,16 +1332,6 @@ func (m *Manager) ClearFinished() int {
 	return removed
 }
 
-// SetConcurrency resizes the pool without interrupting running transfers.
-func (m *Manager) SetConcurrency(n int) error {
-	return m.ApplySettings(Settings{Concurrency: &n})
-}
-
-// SetStreams changes the connection ceiling for new transfers.
-func (m *Manager) SetStreams(n int) error {
-	return m.ApplySettings(Settings{Streams: &n})
-}
-
 // ErrNotFound is returned for an unknown job or item id.
 var ErrNotFound = errors.New("not found")
 
@@ -1348,29 +1343,6 @@ func (m *Manager) DownloadDir() string {
 	m.dirMu.RLock()
 	defer m.dirMu.RUnlock()
 	return m.dir
-}
-
-// SetDownloadDir moves the destination, creating the directory and proving it
-// writable first — the same checks startup makes, since a directory named
-// from the UI is no more trustworthy than one named on the command line.
-//
-// Transfers already running keep the destination they started with: their
-// path was settled when the worker took the item, and moving a part file
-// mid-flight would break the resume that part file exists for. Everything
-// still queued goes to the new place. That is worth knowing rather than
-// hiding, so the API says it back to the caller.
-func (m *Manager) SetDownloadDir(path string) error {
-	return m.ApplySettings(Settings{DownloadDir: &path})
-}
-
-// SetPaused stops or resumes the whole queue.
-//
-// Pausing holds the connections open rather than dropping them: a running
-// transfer parks inside its read, and the dispatcher stops handing out work.
-// A long pause may still cost a connection to a server that times it out,
-// which the usual retry and resume handle.
-func (m *Manager) SetPaused(paused bool) {
-	_ = m.ApplySettings(Settings{Paused: &paused})
 }
 
 // resumeRestored sets going every job that came back from the state file
@@ -1406,9 +1378,6 @@ func (m *Manager) resumeRestored() {
 	m.markDirty()
 }
 
-// Paused reports whether the queue is held.
-func (m *Manager) Paused() bool { return m.throttle.isPaused() }
-
 // Busy reports whether anything is still going to happen: a transfer
 // running, an item waiting for a slot, or a source still being scraped.
 //
@@ -1429,23 +1398,18 @@ func (m *Manager) Busy() bool {
 	return false
 }
 
-// SetSpeedLimit caps total throughput in bytes per second. Zero is
-// unlimited. The cap is shared: it bounds everything moving at once, not
-// each transfer separately.
-func (m *Manager) SetSpeedLimit(bytesPerSecond int64) error {
-	return m.ApplySettings(Settings{SpeedLimit: &bytesPerSecond})
-}
-
-// SpeedLimit reports the current cap in bytes per second; 0 is unlimited.
-func (m *Manager) SpeedLimit() int64 { return m.throttle.currentLimit() }
-
 // findItemLocked looks up an item within a job. Caller holds mu.
 func (m *Manager) findItemLocked(jobID, itemID string) (*Item, bool) {
 	job, ok := m.jobs[jobID]
 	if !ok {
 		return nil, false
 	}
-	for _, it := range job.Items {
+	return job.item(itemID)
+}
+
+// item looks up one of the job's files. Caller holds mu.
+func (j *Job) item(itemID string) (*Item, bool) {
+	for _, it := range j.Items {
 		if it.ID == itemID {
 			return it, true
 		}
@@ -1459,6 +1423,15 @@ func (m *Manager) signal() {
 	case m.wake <- struct{}{}:
 	default:
 	}
+}
+
+// commitLocked ends a change made under m.mu: it releases the lock, then has
+// the change published and the scheduler look at the queue again. Called
+// with m.mu held; neither step may run under it.
+func (m *Manager) commitLocked() {
+	m.mu.Unlock()
+	m.markDirty()
+	m.signal()
 }
 
 // markDirty asks the broadcaster to publish, for a change no running

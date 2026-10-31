@@ -13,6 +13,15 @@ the environment named, even when an argument overrides it.
 
 Download directory precedence: positional argument → `-dir` → `HEAPLEACH_DIR`.
 
+A setting whose empty value means something of its own (`HEAPLEACH_STATE`
+empty turns persistence off) is read with `envSet`, which tells set from
+unset; the rest treat empty as absent. Numbers, sizes, durations and switches
+are one table in `FromEnv`, each row an `envInto(name, &field, parse)`; a
+new one is a row, and its error names the variable like the rest. Proxy protocols are checked in one
+place, `config.CheckProxyType` and `config.CheckProxyTypes`, for the
+environment, flags and `/api/settings` alike, so all three refuse the same
+values, and say why in the words `/api/settings` answers with.
+
 **The ceiling on parallel transfers is a setting**
 (`HEAPLEACH_MAX_CONCURRENCY`, `-max-concurrency`, default
 `config.DefaultMaxConcurrency`, 256; zero means the default). It bounds the
@@ -27,8 +36,8 @@ GiB of buffers at worst; slow ones keep the 64 KiB they start with
 
 Settings documented with what they govern:
 
-- listing caps (`HEAPLEACH_MAX_SOURCES`, `HEAPLEACH_MAX_FILES`) and
-  `HEAPLEACH_EXTRA_HOSTS`: [extractors.md](extractors.md)
+- listing caps (`HEAPLEACH_MAX_SOURCES`, `HEAPLEACH_MAX_FILES`):
+  [extractors.md](extractors.md)
 - the free-space floor, `HEAPLEACH_RESUME`, `HEAPLEACH_STATE`, and the
   settings and job limits saved with the queue: [download.md](download.md)
 - the proxy pool and its protocols: [proxies.md](proxies.md)

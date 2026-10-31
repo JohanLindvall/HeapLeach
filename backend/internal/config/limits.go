@@ -7,13 +7,10 @@ import "time"
 // Application proxy configuration and scheduling. Pool health and discovery
 // defaults live in github.com/JohanLindvall/proxytron/lease.
 const (
-	DefaultProxyFeed     = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
-	ProxyDispatchTick    = time.Second
-	ProxyFeedTimeout     = 20 * time.Second
-	ProxyMaxPageSize     = 200
-	ProxyUpgradeWarmup   = 20 * time.Second
-	ProxyUpgradeInterval = 10 * time.Second
-	DefaultProxyRetries  = 20
+	DefaultProxyFeed    = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/all/data.txt"
+	ProxyDispatchTick   = time.Second
+	ProxyMaxPageSize    = 200
+	DefaultProxyRetries = 20
 
 	// RouteWantedRecheck is how long the answer to whether a service has a
 	// file due to start is kept before the queue is scanned again.
@@ -31,6 +28,9 @@ const (
 	// the host a CAPTCHA.
 	RouteExtraBackoffMax = 10 * time.Minute
 
+	// DialTimeout bounds opening a connection, and its TLS handshake, on
+	// every path but a proxy route's (ProxyDialTimeout).
+	DialTimeout = 15 * time.Second
 	// ProxyDialTimeout bounds the connection to a proxy itself. Most routes
 	// in a public feed are dead, and most dead ones never answer at all, so
 	// this is what one costs a file to find out. A live proxy answers in
@@ -320,6 +320,17 @@ const (
 	// PlatformProbeTimeout bounds a guessed API endpoint on an unknown host.
 	PlatformProbeTimeout = 5 * time.Second
 
+	// PageCacheTTL is how long a probed page is reused. Long enough for one
+	// submission's identification, extraction and the sources it expands
+	// to share a fetch; short enough that a page re-read later is fetched
+	// again, since a re-read is usually asking because the page changed.
+	PageCacheTTL = time.Minute
+	// PageCacheBytes bounds the bodies of the pages kept, oldest dropped
+	// first. Parsed documents ride along with their pages, at several times
+	// a body's size, which is why this is a fraction of what one job's
+	// listing might otherwise hold.
+	PageCacheBytes = 32 << 20
+
 	// MaxSegmentBytes caps one playlist part, which is assembled in memory
 	// before being appended in order. Set far above any real part — those
 	// are seconds of video — so it never truncates a genuine one; it is a
@@ -440,6 +451,14 @@ const (
 	// Metadata probes must finish even if a helper stops responding.
 	ProbeTimeout    = 2 * time.Minute
 	HelperWaitDelay = 5 * time.Second
+
+	// AIAMaxHops bounds how many missing certificate issuers are fetched
+	// for one chain. One is the ordinary case: the server sent its
+	// certificate and nothing else, and the intermediate it left out leads
+	// straight to a root. AIAMaxBytes bounds one fetched certificate; real
+	// ones are a couple of kilobytes.
+	AIAMaxHops  = 3
+	AIAMaxBytes = 64 << 10
 )
 
 // Server tuning.
@@ -568,6 +587,9 @@ const (
 	// CumPageSize matches the creator site's own post-list request size.
 	CumPageSize = 50
 
+	// MediaWikiInterval spaces out calls to one wiki's API.
+	MediaWikiInterval = time.Second
+
 	// ThrottleMinWait keeps a rate-limited reader from spinning through
 	// sub-millisecond sleeps when the limit is very low.
 	ThrottleMinWait = 5 * time.Millisecond
@@ -629,32 +651,54 @@ const (
 	// HEAPLEACH_MAX_SOURCES (-max-sources) sets it.
 	MaxExpandedSources = 500
 
-	// MaxDirectoryDepth bounds recursion into a directory listing that
-	// links to itself, directly or through a symlink. A visited set catches
-	// the simple loop; this catches the rest.
+	// MaxDirectoryDepth bounds recursion into an open directory listing
+	// that links to itself, directly or through a symlink. A visited set
+	// catches the simple loop; this catches the rest, whose every traversal
+	// has a fresh, longer URL. How many directories and files a walk takes
+	// are the user's source and file limits, as for any folder share.
 	MaxDirectoryDepth = 12
 
-	// MaxAutoindexDepth and MaxAutoindexDirs bound a walk of an open
-	// directory listing. Depth is the same guard as MaxDirectoryDepth; the
-	// directory count is the one that matters in practice, since a shallow
-	// tree can still be very wide.
-	// What a walk may return is the listing cap, whatever it is set to.
-	MaxAutoindexDepth = MaxDirectoryDepth
-	MaxAutoindexDirs  = 500
+	// MaxResolvedEpisodes bounds how many episodes of a broadcaster's
+	// series are resolved while it is listed. Each costs a request or
+	// several to the broadcaster's player before a byte moves, and a daily
+	// strand lists thousands. It is not the user's file cap, which the
+	// registry applies to what resolved: a refused episode yields no file,
+	// so asking only as many as files are wanted could come back empty.
+	MaxResolvedEpisodes = 1000
 
-	// MaxListingPosts bounds how many entries a paginated account or
-	// gallery listing is followed for. Hosts that publish everything a
-	// creator ever posted will happily page for a very long time.
-	MaxListingPosts = 5000
+	// MaxResolvedEpisodesNPO is MaxResolvedEpisodes for a broadcaster
+	// whose edge stops answering at around two hundred requests and then
+	// refuses everything for minutes, each episode costing one. It leaves
+	// room to be asked again: an expansion that spent the whole budget
+	// would leave the next link pasted failing. A longer series is offered
+	// a season at a time, which is how the site divides it too.
+	MaxResolvedEpisodesNPO = 120
 
-	// MaxListingVideos bounds a channel listing, which is the same idea
-	// with a much smaller natural size — a video is a job on its own.
-	MaxListingVideos = 1000
+	// MaxSeasonsNPO bounds how many season listings of that broadcaster one
+	// series URL reads, each a request against the same budget. Seasons
+	// arrive newest first and the episodes behind them are cut to
+	// MaxResolvedEpisodesNPO anyway, so all reading further buys is spending
+	// the requests the episodes need. The longest-running strand looked at
+	// had twenty-three.
+	MaxSeasonsNPO = 30
 
-	// MaxSearchResults bounds a search that pages until it runs out. A
-	// search is an open question rather than a named thing, so unlike an
-	// album it has no natural end and the cap is what supplies one.
-	MaxSearchResults = 1000
+	// GeoProbesDR is how many of a listing's programmes shown in Denmark
+	// alone are asked for before it is taken that this address cannot tell
+	// whether they are refused here.
+	GeoProbesDR = 3
+
+	// VRTTokenLife is how long the Flemish broadcaster's player token is
+	// taken to last when its token service does not say when it expires,
+	// and VRTTokenMargin how long before that moment a fresh one is minted
+	// instead.
+	VRTTokenLife   = 15 * time.Minute
+	VRTTokenMargin = time.Minute
+
+	// MaxResolvedReleases bounds how many releases of a band's discography
+	// are read while it is listed, each a page of its own. A label's
+	// catalogue can run to hundreds; past this the listing says what it
+	// left out.
+	MaxResolvedReleases = 1000
 
 	// MaxTimelinePages bounds how many pages of a social timeline are
 	// walked. Unlike an album, a timeline has no end.
@@ -665,6 +709,31 @@ const (
 	// first line, so this only has to survive a byte-order mark and some
 	// whitespace.
 	ManifestSniffBytes = 1 << 10
+
+	// FeedSniffBytes is how much of a body is examined to decide whether
+	// it is a feed at all. The root element is within the first few hundred
+	// bytes of any real one; anything past this is a document that opens
+	// with something else entirely.
+	FeedSniffBytes = 8 << 10
+
+	// MaxKVSAlternates bounds the numbered alternate renditions a KVS page
+	// is read for. Installs list a handful at most; the bound is against a
+	// malformed page, not against any real one.
+	MaxKVSAlternates = 6
+
+	// MaxFolderNameRunes is how long a folder named after a title may be.
+	// A title is free text, and a rambling one should not become a
+	// rambling folder.
+	MaxFolderNameRunes = 80
+
+	// GofileSecretTTL is how long a recovered gofile signing secret is kept
+	// when its script says nothing useful about it, and GofileSecretMinTTL
+	// and GofileSecretMaxTTL the bounds any answer it does give is held
+	// to. The floor stops a no-store header turning every link into another
+	// fetch; the ceiling stops a year-long max-age outliving a rotation.
+	GofileSecretTTL    = time.Hour
+	GofileSecretMinTTL = 5 * time.Minute
+	GofileSecretMaxTTL = 12 * time.Hour
 )
 
 // Terminal display tuning, for runs that download straight to disk.

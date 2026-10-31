@@ -114,13 +114,6 @@ func (l *hostLimiter) saturated(host string) {
 	l.budgetLocked(host).limit = 0
 }
 
-// limit reports a host's current allowance, for logging.
-func (l *hostLimiter) limit(host string) int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.budgetLocked(host).limit
-}
-
 // hostOf is the key a limit applies to.
 func hostOf(rawURL string) string {
 	u, err := url.Parse(rawURL)

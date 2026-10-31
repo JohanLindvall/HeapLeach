@@ -4,12 +4,12 @@ package download
 
 import (
 	"errors"
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"net/http"
-	"net/url"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -277,13 +277,4 @@ func TestRejectWebPageCatchesBusyHost(t *testing.T) {
 			}
 		})
 	}
-}
-
-func mustURL(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
 }

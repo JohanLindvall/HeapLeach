@@ -8,24 +8,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // The video ids a fake france.tv knows.
 const (
-	ftvWorld    = "00000000-0000-4000-8000-000000000001"
-	ftvFrance   = "00000000-0000-4000-8000-000000000002"
-	ftvDRM      = "00000000-0000-4000-8000-000000000003"
-	ftvGone     = "00000000-0000-4000-8000-000000000004"
-	ftvLive     = "00000000-0000-4000-8000-000000000005"
-	ftvClip     = "00000000-0000-4000-8000-000000000006"
-	ftvSecond   = "00000000-0000-4000-8000-000000000007"
-	ftvLaterOne = "00000000-0000-4000-8000-000000000008"
+	ftvWorld  = "00000000-0000-4000-8000-000000000001"
+	ftvFrance = "00000000-0000-4000-8000-000000000002"
+	ftvDRM    = "00000000-0000-4000-8000-000000000003"
+	ftvGone   = "00000000-0000-4000-8000-000000000004"
+	ftvLive   = "00000000-0000-4000-8000-000000000005"
+	ftvClip   = "00000000-0000-4000-8000-000000000006"
+	ftvSecond = "00000000-0000-4000-8000-000000000007"
 )
 
 // francetvFakeSite stands in for france.tv: pages whose flight data is
@@ -120,15 +115,14 @@ func francetvFakeSite(t *testing.T) *httptest.Server {
 }
 
 func francetvWith(srv *httptest.Server) *FranceTV {
-	f := NewFranceTV(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	f := NewFranceTV(testClient())
 	f.api = srv.URL + "/videos/"
 	return f
 }
 
 func francetvExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
-	u, _ := url.Parse(srv.URL + path)
-	return francetvWith(srv).Extract(context.Background(), u, Options{})
+	return extract(t, francetvWith(srv), srv.URL+path, Options{})
 }
 
 // A video page's player names the video, which the API asked as Safari
@@ -174,10 +168,7 @@ func TestFranceTVListsAProgrammesVideos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	for _, f := range res.Files {
-		names = append(names, f.Name)
-	}
+	names := fileNames(res.Files)
 	if res.Title != "Une émission inventée" || strings.Join(names, "|") != "Émission du lundi.mp4|Émission du mardi.mp4" || res.Note != "1 clip left out" {
 		t.Errorf("%q: %v, note %q", res.Title, names, res.Note)
 	}

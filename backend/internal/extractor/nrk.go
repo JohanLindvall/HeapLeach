@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ import (
 // which names the series and the episode in fields of their own and leaves
 // both empty when there is no series to name.
 type NRK struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -55,9 +56,6 @@ const (
 	nrkManifestAPI = nrkAPI + "/playback/manifest/program/"
 	nrkProgramAPI  = nrkAPI + "/programs/"
 	nrkCatalogAPI  = nrkAPI + "/tv/catalog/series/"
-
-	// nrkMaxEpisodes bounds how many episodes one series URL expands to.
-	nrkMaxEpisodes = 500
 
 	// A series' extra material is a season like any other, except that the
 	// page names it in Norwegian and the API in English.
@@ -74,9 +72,26 @@ var nrkEpisodeLink = regexp.MustCompile(`/episode/([A-Za-z][A-Za-z0-9]{5,})`)
 // NewNRK builds the NRK TV extractor. It takes tv.nrk.no alone: radio and the
 // news site share the same player API but not the catalogue below, and
 // claiming them would promise more than this resolves.
-func NewNRK(client *httpx.Client) *NRK { return &NRK{hostSet: hostSet{"tv.nrk.no"}, client: client} }
+func NewNRK(client *httpx.Client) *NRK {
+	return &NRK{client: client, about: about{name: "nrk", shape: nrkShape,
+		recognises: "programmes and series (`/program/<id>`, `/serie/<slug>`, `/se?v=`) of NRK TV, whose page data names programmes by `prfId`"}}
+}
 
-func (n *NRK) Name() string { return "nrk" }
+// nrkShape is a programme or series link, or a share link: /se?v= or
+// /se?s=.
+var nrkShape = eitherShape(pathShape(`^/(?:program|serie)/[^/]+`), nrkShareShape)
+
+// nrkShareShape is a share link, /se?v=<id> or /se?s=<id>.
+func nrkShareShape(u *url.URL) bool {
+	q := u.Query()
+	return strings.Trim(u.Path, "/") == "se" && (q.Get("v") != "" || q.Get("s") != "")
+}
+
+// Recognise takes a programme or series page of NRK TV, whose page data
+// names programmes by the psapi's own ids (prfId).
+func (n *NRK) Recognise(_ context.Context, p *Page) bool {
+	return n.Shape(p.Final) && p.Has(`"prfId"`) && p.Named("NRK TV")
+}
 
 // Extract handles a single programme, one season, or a whole series.
 func (n *NRK) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -167,9 +182,7 @@ func (n *NRK) programme(ctx context.Context, id string) (*Result, error) {
 	// A lone file is written straight into the download directory, with no
 	// folder to say what it belongs to, so the name carries the series as
 	// well: NRK episode titles are routinely no more than "1. episode".
-	title := util.FirstNonEmpty(n.title(ctx, id), id)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(n.title(ctx, id), id), file), nil
 }
 
 // series expands a series, or one season of it, into one file per episode.
@@ -183,39 +196,25 @@ func (n *NRK) series(ctx context.Context, u *url.URL, ref nrkRef) (*Result, erro
 			return nil, err
 		}
 	}
-	if len(episodes) > nrkMaxEpisodes {
-		episodes = episodes[:nrkMaxEpisodes]
-	}
 
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep nrkEpisodeRef) string { return ep.season })
-
-	result := &Result{Title: util.FirstNonEmpty(title, ref.slug)}
-	var refused string
-	for _, ep := range episodes {
-		file, err := n.episode(ctx, ep.id)
-		if err != nil {
-			// One geo-blocked or expired episode must not sink the rest.
-			// Its reason is kept, though: when every episode is refused it
-			// is refused for the same reason, and NRK's own words for it
-			// are better than anything this could conclude.
-			if refusal, ok := errors.AsType[*nrkRefused](err); ok && refused == "" {
-				refused = refusal.message
+	// One geo-blocked or expired episode must not sink the rest. The reasons
+	// are kept, though: when every episode is refused it is refused for the
+	// same reason, and NRK's own words for it are better than anything this
+	// could conclude. The episodes are asked for one at a time.
+	return listSeries(ctx, cmp.Or(title, ref.slug), series[nrkEpisodeRef]{
+		site: "nrk", noun: "episodes", link: u.Redacted(),
+		items: episodes, inTurn: true,
+		label: func(ep nrkEpisodeRef) string { return ep.season },
+		resolve: func(ctx context.Context, ep nrkEpisodeRef) (*File, error) {
+			file, err := n.episode(ctx, ep.id)
+			if err != nil {
+				return nil, err
 			}
-			continue
-		}
-		file.Name = util.FirstNonEmpty(ep.name, ep.id) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		result.Files = append(result.Files, *file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("nrk: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(),
-			util.FirstNonEmpty(refused, "the catalogue lists them but the player offers no stream"))
-	}
-	return result, nil
+			file.Name = cmp.Or(ep.name, ep.id) + file.Name
+			return file, nil
+		},
+		unplayable: "the catalogue lists them but the player offers no stream",
+	})
 }
 
 // nrkEpisodeRef is one episode of a series, with the season it belongs to.
@@ -270,7 +269,7 @@ func (n *NRK) season(ctx context.Context, slug, name string) (string, []nrkEpiso
 	// There is only one season here, so a folder would say nothing; and
 	// several seasons downloaded separately would otherwise share a folder,
 	// where an episode list that starts again at "1. episode" collides.
-	title := nrkJoin(util.FirstNonEmpty(doc.Links.Series.Title, slug), doc.Titles.Title)
+	title := joinTitle(cmp.Or(doc.Links.Series.Title, slug), doc.Titles.Title, titleEqual)
 	return title, nrkRefs(doc, "", make(map[string]bool)), nil
 }
 
@@ -296,23 +295,12 @@ func (n *NRK) numbered(ctx context.Context, ref nrkRef) (string, error) {
 
 // episodesFromPage recovers programme ids straight from the rendered page.
 func (n *NRK) episodesFromPage(ctx context.Context, u *url.URL) (string, []nrkEpisodeRef, error) {
-	doc, err := n.client.GetString(ctx, u.String(), httpx.Referer(nrkRoot+"/"))
-	if err != nil {
-		return "", nil, fmt.Errorf("nrk: fetch %s: %w", u.Redacted(), err)
-	}
-
+	doc, listed, err := pageIDs(ctx, n.client, u, httpx.Referer(nrkRoot+"/"), "nrk", nrkEpisodeLink)
 	var episodes []nrkEpisodeRef
-	seen := make(map[string]bool)
-	for _, match := range nrkEpisodeLink.FindAllStringSubmatch(doc, -1) {
-		if id := match[1]; !seen[id] {
-			seen[id] = true
-			episodes = append(episodes, nrkEpisodeRef{id: id})
-		}
+	for _, ep := range listed {
+		episodes = append(episodes, nrkEpisodeRef{id: ep.id})
 	}
-	if len(episodes) == 0 {
-		return "", nil, fmt.Errorf("nrk: no episodes listed on %s", u.Redacted())
-	}
-	return nrkPageTitle(doc), episodes, nil
+	return nrkPageTitle(doc), episodes, err
 }
 
 // nrkPageTitle reads the series name out of a page title. The suffix is a
@@ -333,7 +321,7 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 		return nil, fmt.Errorf("nrk: manifest for %s: %w", id, err)
 	}
 	if !strings.EqualFold(doc.Playability, "playable") {
-		return nil, &nrkRefused{id: id, message: doc.refusal()}
+		return nil, &broadcastRefusal{"nrk", id, doc.refusal()}
 	}
 
 	// stream's refusals are written to follow the programme id as a sentence
@@ -344,19 +332,11 @@ func (n *NRK) episode(ctx context.Context, id string) (*File, error) {
 	}
 
 	headers := httpx.Referer(nrkRoot + "/")
-	media, err := resolveMediaPlaylist(ctx, n.client, stream, headers)
+	media, err := broadcastMedia(ctx, n.client, "nrk", id, stream, headers)
 	if err != nil {
-		return nil, fmt.Errorf("nrk: %s: %w", id, err)
+		return nil, err
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // title names a programme, and never fails: a missing title costs a good
@@ -368,31 +348,8 @@ func (n *NRK) title(ctx context.Context, id string) string {
 		httpx.Referer(nrkRoot+"/"), &doc); err != nil {
 		return ""
 	}
-	return nrkJoin(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title))
+	return joinTitle(doc.SeriesTitle, cmp.Or(doc.EpisodeTitle, doc.Title), titleEqual)
 }
-
-// nrkJoin names something by its series and its episode together, and copes
-// with a programme that has only one of the two.
-func nrkJoin(series, episode string) string {
-	switch {
-	case episode == "":
-		return series
-	case series == "" || strings.EqualFold(series, episode):
-		return episode
-	}
-	return series + " - " + episode
-}
-
-// nrkRefused is NRK declining to play something, carrying its own words for
-// why. It is a type rather than a message so that expanding a whole series
-// can report the reason once instead of the same refusal several hundred
-// times.
-type nrkRefused struct {
-	id      string
-	message string
-}
-
-func (e *nrkRefused) Error() string { return "nrk: " + e.id + ": " + e.message }
 
 // nrkManifest is the part of a playback manifest this needs.
 type nrkManifest struct {
@@ -452,7 +409,7 @@ func (m nrkManifest) refusal() string {
 	}
 	// A refusal with nothing to say to a viewer still has a machine-readable
 	// reason, which is better than reporting nothing at all.
-	return util.FirstNonEmpty(m.NonPlayable.Reason, m.Playability, "not playable")
+	return cmp.Or(m.NonPlayable.Reason, m.Playability, "not playable")
 }
 
 // nrkProgram is the part of a programme document this needs. Both title
@@ -484,7 +441,7 @@ type nrkCatalogue struct {
 
 // title is the series name, wherever the document filed it.
 func (c nrkCatalogue) title() string {
-	return util.FirstNonEmpty(c.Sequential.Titles.Title, c.Standard.Titles.Title, c.News.Titles.Title)
+	return cmp.Or(c.Sequential.Titles.Title, c.Standard.Titles.Title, c.News.Titles.Title)
 }
 
 // nrkTitled is anything the catalogue gives a name to.

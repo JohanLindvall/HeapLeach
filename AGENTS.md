@@ -178,8 +178,8 @@ editing either side:
 
 - **Every tunable constant lives in `internal/config/limits.go`**, and HTTP
   header names and common values in `internal/httpx/headers.go`
-  (`httpx.Header`, `httpx.Referer`, `httpx.RefererOrigin`). Add new ones there
-  rather than scattering literals. Shared dependency-free helpers belong in
+  (`httpx.Header`, `httpx.Referer`, `httpx.RefererOrigin`,
+  `httpx.SiteOrigin`). Add new ones there rather than scattering literals. Shared dependency-free helpers belong in
   `internal/util`.
 - **Byte counts are SI and read the same everywhere.** `cli.formatBytes`
   mirrors `frontend/src/format.ts`, and their test tables

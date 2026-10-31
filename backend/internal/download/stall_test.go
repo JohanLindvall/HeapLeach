@@ -5,9 +5,7 @@ package download
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -15,8 +13,6 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // A stalled item goes to the back of the queue rather than failing — with
@@ -25,7 +21,7 @@ import (
 func TestDeferStalledSendsTheItemToTheBack(t *testing.T) {
 	m := &Manager{
 		cfg: &config.Config{MaxRetries: 2},
-		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log: testLogger(),
 	}
 	waiting := &Item{ID: "waiting", Status: StatusQueued}
 	m.queue = []*Item{waiting}
@@ -86,37 +82,23 @@ func TestStalledTransferYieldsTheWorkerSlot(t *testing.T) {
 	// Sends a little and then nothing, holding the connection open — the
 	// shape of a host that throttled this address, which a read deadline
 	// never catches.
-	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	hang := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(1<<20))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(make([]byte, 8<<10))
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	}))
-	t.Cleanup(hang.Close)
 
-	quick := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	quick := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("small and immediate payload"))
 	}))
-	t.Cleanup(quick.Close)
 
-	cfg := &config.Config{
-		DownloadDir:  t.TempDir(),
-		Concurrency:  1,
-		Streams:      1,
-		MaxRetries:   1,
-		SlowSpeed:    1,
-		StallTimeout: 200 * time.Millisecond,
-		UserAgent:    config.DefaultUserAgent,
-		Language:     config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		Timeout:      10 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
+	m := testManager(t, func(c *config.Config) {
+		c.MaxRetries, c.SlowSpeed = 1, 1
+		c.StallTimeout, c.Timeout = 200*time.Millisecond, 10*time.Second
+	})
 	m.Start()
-	t.Cleanup(m.Close)
 
 	// Extensions on the paths, so no sniff spends a request deciding what
 	// these are, and the queue order is add order.
@@ -131,10 +113,8 @@ func TestStalledTransferYieldsTheWorkerSlot(t *testing.T) {
 	}
 
 	status := func(jobID string) Status {
-		for _, job := range m.Snapshot().Jobs {
-			if job.ID == jobID && len(job.Items) == 1 {
-				return job.Items[0].Status
-			}
+		if job := jobView(m, jobID); len(job.Items) == 1 {
+			return job.Items[0].Status
 		}
 		return ""
 	}
@@ -176,7 +156,13 @@ func superviseHarness(t *testing.T, cooldown time.Duration) (*segmentedTransfer,
 	t.Helper()
 	m := &Manager{
 		hosts: newHostLimiter(4),
-		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log:   testLogger(),
+		timings: downloadTimings{
+			poll:     time.Millisecond,
+			probe:    4 * time.Millisecond,
+			cooldown: cooldown,
+			save:     time.Hour, // never; there is no part file behind this transfer
+		}.withDefaults(),
 	}
 	tr := &segmentedTransfer{
 		manager:    m,
@@ -185,11 +171,6 @@ func superviseHarness(t *testing.T, cooldown time.Duration) (*segmentedTransfer,
 		name:       "x",
 		maxStreams: 8,
 		slowBelow:  1 << 30, // everything is "slow", so only the stall guard can refuse
-
-		pollInterval:  time.Millisecond,
-		probeInterval: 4 * time.Millisecond,
-		addCooldown:   cooldown,
-		saveInterval:  time.Hour, // never; there is no part file behind this transfer
 	}
 
 	var spawns atomic.Int32

@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 func TestWordPressExtractionUsesManagerLogLevelAndJob(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		switch r.URL.Path {
 		case "/category/example/":
@@ -26,7 +25,6 @@ func TestWordPressExtractionUsesManagerLogLevelAndJob(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer srv.Close()
 	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo} {
 		t.Run(level.String(), func(t *testing.T) {
 			m := busyManager(t)

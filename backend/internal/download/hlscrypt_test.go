@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -105,8 +104,7 @@ func TestEncryptedFragmentedPlaylistLeavesItsInitialisationSegmentAlone(t *testi
 		}
 		_, _ = w.Write(served[i])
 	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 
 	m := busyManager(t)
 	var segments []string
@@ -156,8 +154,7 @@ func TestEncryptedPlaylistJoinsThePlainStream(t *testing.T) {
 		}
 		_, _ = w.Write(served[i])
 	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	srv := testServer(t, mux)
 
 	m := busyManager(t)
 	m.streams = 3

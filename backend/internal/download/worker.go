@@ -4,6 +4,7 @@ package download
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -83,6 +84,15 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	rel := it.Dir
 	expected := it.Size
 	approx := it.SizeApprox
+	// The part file is keyed on the job's source — the URL the user
+	// submitted — because the item's own URL is often a signed link that
+	// expires between runs, and a key that changes every run cannot resume
+	// anything.
+	source := m.jobSourceLocked(it)
+	isPlaylist := len(it.Segments) > 0
+	withAudio := isPlaylist && len(it.Audio) > 0
+	external := it.External
+	encrypted := it.cipher != nil
 	m.mu.Unlock()
 
 	root, err := os.OpenRoot(m.DownloadDir())
@@ -109,16 +119,6 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	// interrupted transfer is picked up again by the next run. If that
 	// exact path is already being written — the same URL queued twice —
 	// this transfer falls back to a name only it can hold.
-	// Keyed on the job's source — the URL the user submitted — because the
-	// item's own URL is often a signed link that expires between runs, and
-	// a key that changes every run cannot resume anything.
-	m.mu.Lock()
-	source := it.URL
-	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
-		source = job.Source
-	}
-	m.mu.Unlock()
-
 	parts := partNames(name, source, it.ID)
 	part := filepath.Join(dir, parts[0])
 	release, ok := m.claimPart(part)
@@ -129,13 +129,6 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		}
 	}
 	defer release()
-
-	m.mu.Lock()
-	isPlaylist := len(it.Segments) > 0
-	withAudio := isPlaylist && len(it.Audio) > 0
-	external := it.External
-	encrypted := it.cipher != nil
-	m.mu.Unlock()
 
 	// A soundtrack kept apart from the video is joined to it with ffmpeg,
 	// and without ffmpeg the video alone would be silent. Asked before a
@@ -209,10 +202,10 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		if meant := m.refusedByHost(ctx, it, err); meant != nil {
 			return meant
 		}
-		if _, routed := errors.AsType[*httpx.RouteError](err); routed {
+		if isErr[*httpx.RouteError](err) {
 			return &routeTransferError{err: err, moved: m.onDisk(it, part, files) > before}
 		}
-		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged {
+		if isErr[*httpx.ChallengeError](err) {
 			return err
 		}
 		// A link bound to the address that obtained it, refused because
@@ -229,17 +222,12 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			err = &addressRefusedError{err: err}
 		}
-		if it.proxyFallback && httpx.RouteID(ctx) == "" && retryRouteFailure(err) {
-			// Let direct-first hosts recover on another address before
-			// ordinary retries or host backoff repeat the same failed route.
-			m.mu.Lock()
-			canRecover := m.proxyEnabled && m.proxies != nil
-			m.mu.Unlock()
-			if canRecover {
-				return err
-			}
+		// Let direct-first hosts recover on another address before ordinary
+		// retries or host backoff repeat the same failed route.
+		if httpx.RouteID(ctx) == "" && retryRouteFailure(err) && m.proxyRecovers(it) {
+			return err
 		}
-		if _, busy := errors.AsType[*busyHostError](err); busy && httpx.RouteID(ctx) != "" {
+		if isErr[*busyHostError](err) && httpx.RouteID(ctx) != "" {
 			return &routeTransferError{err: &httpx.RouteError{Err: err}, moved: m.onDisk(it, part, files) > before}
 		}
 		if errors.Is(err, errFileChanged) {
@@ -268,19 +256,13 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			busyWaits++
 			wait := util.Backoff(busyWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.note(it, busyNote(rotates, wait, busyWaits))
-			m.log.Info("host busy, waiting", "item", it.ID, "name", name,
-				"attempt", busyWaits, "wait", wait)
-			if err := util.SleepCtx(ctx, wait); err != nil {
+			// A host with several storage servers per file is rotated to
+			// the next one by resolving again, which may not be busy.
+			// This was not a failure, so the attempt is not counted.
+			if attempt, err = m.retryUnspent(ctx, it, attempt-1, wait, busyNote(rotates, wait, busyWaits),
+				"host busy, waiting", "item", it.ID, "name", name, "attempt", busyWaits, "wait", wait); err != nil {
 				return err
 			}
-			m.note(it, "")
-			// Gofile hands out several storage servers per file; resolving
-			// again rotates to the next one, which may not be busy.
-			if err := m.resolveTarget(ctx, it); err != nil {
-				return err
-			}
-			attempt-- // this was not a failure
 			continue
 		}
 
@@ -308,20 +290,15 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 			}
 			limitWaits++
 			wait := util.Backoff(limitWaits-1, m.timings.busyBase, m.timings.busyMax)
-			m.note(it, fmt.Sprintf("%s allows only so many downloads at once — waiting %s "+
+			note := fmt.Sprintf("%s allows only so many downloads at once — waiting %s "+
 				"for one to finish (attempt %d of %d)", host, wait.Round(time.Second),
-				limitWaits, config.ConnectionLimitRetries))
-			m.log.Info("host is at its connection limit, waiting", "item", it.ID, "name", name,
-				"host", host, "attempt", limitWaits, "wait", wait)
-			if err := util.SleepCtx(ctx, wait); err != nil {
+				limitWaits, config.ConnectionLimitRetries)
+			// Being told to queue is not a failed attempt.
+			if attempt, err = m.retryUnspent(ctx, it, attempt-1, wait, note,
+				"host is at its connection limit, waiting", "item", it.ID, "name", name,
+				"host", host, "attempt", limitWaits, "wait", wait); err != nil {
 				return err
 			}
-			m.note(it, "")
-			// Signed links expire while waiting; mint a fresh one.
-			if err := m.resolveTarget(ctx, it); err != nil {
-				return err
-			}
-			attempt-- // being told to queue is not a failed attempt
 			continue
 		}
 
@@ -426,34 +403,47 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 		// an endless one, and the cancel is always there.
 		if moved {
 			wait := m.timings.progressRetry
-			m.note(it, fmt.Sprintf("connection dropped — resuming in %s", wait.Round(time.Second)))
-			m.log.Info("connection dropped after progress; resuming", "item", it.ID, "name", name,
-				"gained", after-before, "wait", wait, "err", err)
-			if err := util.SleepCtx(ctx, wait); err != nil {
+			note := fmt.Sprintf("connection dropped — resuming in %s", wait.Round(time.Second))
+			// -1, so the loop's increment makes the next attempt a first.
+			if attempt, err = m.retryUnspent(ctx, it, -1, wait, note,
+				"connection dropped after progress; resuming", "item", it.ID, "name", name,
+				"gained", after-before, "wait", wait, "err", err); err != nil {
 				return err
 			}
-			m.note(it, "")
-			// Signed links expire; mint a fresh one before resuming.
-			if err := m.resolveTarget(ctx, it); err != nil {
-				return err
-			}
-			attempt = -1 // the loop's increment makes the next one a first
 			continue
 		}
 
-		if attempt >= m.cfg.MaxRetries {
+		if err := m.retryAfter(ctx, attempt, err); err != nil {
 			return err
 		}
 		m.log.Info("retrying download", "item", it.ID, "name", name, "attempt", attempt+1, "err", err)
-		if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
-			return err
-		}
 		// Signed links expire; mint a fresh one before trying again.
 		if err := m.resolveTarget(ctx, it); err != nil {
 			return err
 		}
 	}
+	return m.finishTransfer(ctx, it, files, dir, rel, part, name, isPlaylist)
+}
 
+// retryUnspent logs msg with args, then waits out wait under note and
+// refreshes the item's link before the next attempt: a wait that does not
+// spend the retry budget. It returns next, the attempt counter the loop
+// carries on from (its own increment still applies).
+func (m *Manager) retryUnspent(ctx context.Context, it *Item, next int, wait time.Duration,
+	note, msg string, args ...any) (int, error) {
+	m.log.Info(msg, args...)
+	if err := m.waitThenRefresh(ctx, it, note, wait); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+// finishTransfer puts a whole part file in place under name in dir: joined
+// with its audio and subtitles first where it is a playlist that has them,
+// recognised as a copy already on disk, or else reserved a name, renamed
+// and remuxed.
+func (m *Manager) finishTransfer(ctx context.Context, it *Item, files transferFiles,
+	dir, rel, part, name string, isPlaylist bool) error {
 	// A video whose audio came apart from it is joined to it first, and the
 	// joined file is what is finished. The parts it was made of go only once
 	// it is in place, so a join that fails leaves them for a retry to join
@@ -512,10 +502,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 	if existing, ok := identicalOnDisk(dir, name, finished, files); ok {
 		_ = files.remove(finished)
 		clearParts()
-		m.mu.Lock()
-		it.Skipped = true
-		m.mu.Unlock()
-		m.setPath(it, filepath.Join(rel, existing))
+		m.markSkipped(it, rel, existing, 0)
 		return nil
 	}
 	dest, err := files.reserve(dir, name)
@@ -539,8 +526,7 @@ func (m *Manager) transfer(ctx context.Context, it *Item) error {
 //
 // It returns the filename to save under, which the server may refine via
 // Content-Disposition.
-func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string, scopes ...transferFiles) (string, error) {
-	files := fileScope(scopes)
+func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string, files transferFiles) (string, error) {
 	m.mu.Lock()
 	rawURL := it.URL
 	rel := it.Dir
@@ -604,37 +590,18 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 	defer abort()
 	var stalled atomic.Bool
 
-	req, err := m.client.NewRequest(attemptCtx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return "", err
-	}
-	for header, value := range headers {
-		req.Header.Set(header, value)
-	}
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
-	// Ask for the raw bytes: a transparently compressed body would make the
-	// progress total disagree with what lands on disk.
-	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
 	// Always ask for a range, even from byte zero. The reply is how we
 	// learn whether this server supports ranges at all: 206 means the
 	// transfer can be split later, 200 means it cannot. A multi-route
 	// transfer asks for one range at a time, this first one included
 	// (multiroute.go); a range past the end is served up to the end.
 	askEnd, routeRange := rangeEnd, m.timings.routeRange
-	if routeRange <= 0 {
-		routeRange = config.RouteRangeSize
-	}
 	if routeSource != nil && (askEnd <= 0 || askEnd-offset > routeRange) {
 		askEnd = offset + routeRange
 	}
-	if askEnd > 0 {
-		req.Header.Set(httpx.HeaderRange,
-			"bytes="+strconv.FormatInt(offset, 10)+"-"+strconv.FormatInt(askEnd-1, 10))
-	} else {
-		req.Header.Set(httpx.HeaderRange, "bytes="+strconv.FormatInt(offset, 10)+"-")
-	}
-	if validator != "" {
-		req.Header.Set(httpx.HeaderIfRange, validator)
+	req, err := m.rangedRequest(attemptCtx, rawURL, headers, offset, askEnd, validator)
+	if err != nil {
+		return "", err
 	}
 
 	resp, err := m.client.Do(req)
@@ -664,9 +631,9 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 			m.setProgress(it, offset)
 			return name, nil
 		}
-		return "", statusError(req.URL, resp)
+		return "", httpx.NewStatusError(resp)
 	default:
-		return "", statusError(req.URL, resp)
+		return "", httpx.NewStatusError(resp)
 	}
 
 	if err := rejectWebPage(resp, name); err != nil {
@@ -701,7 +668,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 			name = chooseName(name, SafeName(fromServer))
 		}
 	}
-	if v := util.FirstNonEmpty(resp.Header.Get(httpx.HeaderETag), resp.Header.Get(httpx.HeaderLastModified)); v != "" {
+	if v := cmp.Or(resp.Header.Get(httpx.HeaderETag), resp.Header.Get(httpx.HeaderLastModified)); v != "" {
 		validator = v
 	}
 
@@ -789,14 +756,7 @@ func (m *Manager) transferOnce(ctx context.Context, it *Item, part, name string,
 
 		routeSource: routeSource,
 		group:       group,
-		routeRange:  routeRange,
-
-		pollInterval:  m.timings.poll,
-		probeInterval: m.timings.probe,
-		addCooldown:   m.timings.cooldown,
-		saveInterval:  m.timings.save,
 	}
-	transfer.withDefaults()
 	// Establish the sparse-file checkpoint before any range can write. A
 	// sparse file without a sidecar looks like a contiguous sequential part
 	// on the next run, which could falsely finish with unwritten holes.
@@ -845,7 +805,7 @@ func (m *Manager) streamSequential(ctx context.Context, it *Item, dst io.WriterA
 // that got the file further from one that merely received bytes — a server
 // that restarts from zero on every request does the second without the
 // first, and a retry judged by bytes alone would chase it forever.
-func (m *Manager) onDisk(it *Item, part string, scopes ...transferFiles) int64 {
+func (m *Manager) onDisk(it *Item, part string, files transferFiles) int64 {
 	m.mu.Lock()
 	tracks := playlistTracksLocked(it, part)
 	m.mu.Unlock()
@@ -855,13 +815,13 @@ func (m *Manager) onDisk(it *Item, part string, scopes ...transferFiles) int64 {
 			if t.part == "" {
 				continue
 			}
-			if st := t.state(scopes...); st != nil {
+			if st := t.state(files); st != nil {
 				held += st.Bytes
 			}
 		}
 		return held
 	}
-	st, offset := resumeTransfer(part, scopes...)
+	st, offset := resumeTransfer(part, files)
 	if st != nil {
 		var held int64
 		for _, seg := range st.Segments {
@@ -1035,10 +995,7 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 		if httpx.RouteID(ctx) != "" || !retryableResolve(err) {
 			return err
 		}
-		m.mu.Lock()
-		fallback := it.proxyFallback && m.proxyEnabled && m.proxies != nil
-		m.mu.Unlock()
-		if fallback || m.cfg == nil || attempt >= m.cfg.MaxRetries {
+		if m.cfg == nil || attempt >= m.cfg.MaxRetries || m.proxyRecovers(it) {
 			return err
 		}
 		wait := transferRetryDelay(attempt)
@@ -1083,27 +1040,25 @@ func (m *Manager) resolveTarget(ctx context.Context, it *Item) error {
 // host's refusal are final, while queue waits and route recovery belong to
 // their callers. retryableTransfer is deliberately broader for body I/O.
 func retryableResolve(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) || isErr[*extractor.WaitError](err) ||
+		isErr[*extractor.RefusedError](err) || isErr[*httpx.RouteError](err) || isErr[*httpx.ChallengeError](err) {
 		return false
 	}
-	if _, ok := errors.AsType[*extractor.WaitError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*extractor.RefusedError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*httpx.RouteError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*httpx.ChallengeError](err); ok {
-		return false
-	}
-	if _, ok := errors.AsType[*httpx.StatusError](err); ok {
+	if isErr[*httpx.StatusError](err) {
 		return httpx.HasStatus(err, http.StatusRequestTimeout, http.StatusTooManyRequests,
 			http.StatusInternalServerError, http.StatusBadGateway,
 			http.StatusServiceUnavailable, http.StatusGatewayTimeout)
 	}
 	return transientRouteFailure(err) || errors.Is(err, io.EOF)
+}
+
+// proxyRecovers reports that a failure of the item on the normal connection
+// is for the proxy pool to recover from: the item opted in
+// (File.ProxyFallback), and a pool is open and enabled.
+func (m *Manager) proxyRecovers(it *Item) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return it.proxyFallback && m.proxyEnabled && m.proxies != nil
 }
 
 // note records a short, transient explanation of what an item is waiting
@@ -1380,13 +1335,20 @@ func (m *Manager) discarder(it *Item) func() {
 	return it.discard
 }
 
+// isErr reports whether err's chain holds an error of type T, for the many
+// classifiers here that ask only what kind of failure it was.
+func isErr[T error](err error) bool {
+	_, ok := errors.AsType[T](err)
+	return ok
+}
+
 // retryableTransfer reports whether a failed pass is worth repeating. A
 // definitive client error (404, 403, ...) is not.
 func retryableTransfer(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	if _, ok := errors.AsType[*addressRefusedError](err); ok {
+	if isErr[*addressRefusedError](err) {
 		return true
 	}
 	// The host said the resource is gone, or answers a range with the whole
@@ -1394,7 +1356,7 @@ func retryableTransfer(err error) bool {
 	if errors.Is(err, errDeadResource) || errors.Is(err, errRangeIgnored) {
 		return false
 	}
-	if _, ok := errors.AsType[*busyHostError](err); ok {
+	if isErr[*busyHostError](err) {
 		return true
 	}
 	if se, ok := errors.AsType[*httpx.StatusError](err); ok {
@@ -1414,17 +1376,53 @@ func transferRetryDelay(attempt int) time.Duration {
 	return util.Backoff(attempt, config.TransferRetryBase, config.TransferRetryMax)
 }
 
-// statusError builds an error carrying a short slice of the response body,
-// which is usually where these hosts put the real reason.
-func statusError(u *url.URL, resp *http.Response) error {
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, config.ErrorBodySample))
-	return &httpx.StatusError{
-		Code:   resp.StatusCode,
-		Status: resp.Status,
-		URL:    u.Redacted(),
-		Body:   string(body),
-		Header: resp.Header,
+// rangedRequest builds the request for a file's bytes from first up to end,
+// exclusive, or to the end of the file where end is not positive. It carries
+// the item's headers and the validator the bytes on disk were fetched under,
+// if any, as If-Range. It asks for the raw bytes: a transparently
+// compressed body would make the progress total disagree with what lands on
+// disk.
+func (m *Manager) rangedRequest(ctx context.Context, rawURL string, headers httpx.Header, first, end int64, validator string) (*http.Request, error) {
+	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
 	}
+	headers.Apply(req)
+	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
+	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
+	span := "bytes=" + strconv.FormatInt(first, 10) + "-"
+	if end > 0 {
+		span += strconv.FormatInt(end-1, 10)
+	}
+	req.Header.Set(httpx.HeaderRange, span)
+	if validator != "" {
+		req.Header.Set(httpx.HeaderIfRange, validator)
+	}
+	return req, nil
+}
+
+// retryAfter waits out the backoff before another attempt at a failed
+// transfer. It returns nil when it is time to try again, and otherwise what
+// ends the transfer: err itself, once it is not worth retrying or the retry
+// budget is spent, or the context's error if that ends first.
+func (m *Manager) retryAfter(ctx context.Context, attempt int, err error) error {
+	if attempt >= m.cfg.MaxRetries || !retryableTransfer(err) {
+		return err
+	}
+	return util.SleepCtx(ctx, transferRetryDelay(attempt))
+}
+
+// waitThenRefresh waits out a pause in a transfer that is not a failure,
+// under a note saying why, then clears the note and resolves the item
+// again: a signed link may have expired meanwhile, and a host with several
+// servers may hand out another.
+func (m *Manager) waitThenRefresh(ctx context.Context, it *Item, note string, wait time.Duration) error {
+	m.note(it, note)
+	if err := util.SleepCtx(ctx, wait); err != nil {
+		return err
+	}
+	m.note(it, "")
+	return m.resolveTarget(ctx, it)
 }
 
 // refusedByHost is the host's own reading of a refused transfer
@@ -1451,30 +1449,39 @@ var errAlreadyComplete = errors.New("already downloaded")
 // Length is the whole test. Comparing contents would mean reading the file
 // the transfer is trying to avoid reading, and every host worth skipping
 // for serves the same bytes under the same name at the same length.
-func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64, scopes ...transferFiles) bool {
+func (m *Manager) alreadyOnDisk(it *Item, dir, rel, name string, size int64, files transferFiles) bool {
 	if size <= 0 {
 		return false
 	}
-	found, ok := onDiskAs(dir, name, size, scopes...)
+	found, ok := onDiskAs(dir, name, size, files)
 	if !ok {
 		return false
 	}
-	it.downloaded.Store(size)
+	m.markSkipped(it, rel, found, size)
+	return true
+}
+
+// markSkipped records that it is already in the destination as rel/name,
+// so nothing was transferred, and at size bytes where size is above zero.
+func (m *Manager) markSkipped(it *Item, rel, name string, size int64) {
+	if size > 0 {
+		it.downloaded.Store(size)
+	}
 	m.mu.Lock()
-	it.Size = size
-	it.SizeApprox = false
+	if size > 0 {
+		it.Size = size
+		it.SizeApprox = false
+	}
 	it.Skipped = true
 	m.mu.Unlock()
-	m.setPath(it, filepath.Join(rel, found))
-	return true
+	m.setPath(it, filepath.Join(rel, name))
 }
 
 // identicalOnDisk finds a file already in dir, under name or one of the
 // numbered names beside it, that holds exactly the bytes of the finished
 // part file. Sizes are compared first, so the contents are read only for a
 // file of the same length.
-func identicalOnDisk(dir, name, part string, scopes ...transferFiles) (string, bool) {
-	files := fileScope(scopes)
+func identicalOnDisk(dir, name, part string, files transferFiles) (string, bool) {
 	info, err := files.stat(part)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", false
@@ -1488,33 +1495,7 @@ func identicalOnDisk(dir, name, part string, scopes ...transferFiles) (string, b
 		return err == nil && fi.Mode().IsRegular() && fi.Size() == info.Size() &&
 			sameContent(files, path, part)
 	}
-	if same(name) {
-		return name, true
-	}
-	directory, err := files.open(dir, os.O_RDONLY, 0)
-	if err != nil {
-		return "", false
-	}
-	defer directory.Close()
-	entries, err := directory.ReadDir(-1)
-	if err != nil {
-		return "", false
-	}
-	ext := filepath.Ext(name)
-	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
-	for _, entry := range entries {
-		n := entry.Name()
-		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
-			continue
-		}
-		if _, err := strconv.Atoi(n[len(prefix) : len(n)-len(suffix)]); err != nil {
-			continue
-		}
-		if same(n) {
-			return n, true
-		}
-	}
-	return "", false
+	return numberedSiblings(dir, name, files, same)
 }
 
 // sameContent reports whether two files hold the same bytes.
@@ -1560,39 +1541,9 @@ func sameContent(files transferFiles, a, b string) bool {
 // of the job downloaded those again as (4), (5) and onwards — two more
 // copies of the same files per restart, hundreds of them in all, each new
 // enough to read as freshly downloaded.
-func onDiskAs(dir, name string, size int64, scopes ...transferFiles) (string, bool) {
-	files := fileScope(scopes)
-	matches := func(entry string) bool {
+func onDiskAs(dir, name string, size int64, files transferFiles) (string, bool) {
+	return numberedSiblings(dir, name, files, func(entry string) bool {
 		fi, err := files.stat(filepath.Join(dir, entry))
 		return err == nil && fi.Mode().IsRegular() && fi.Size() == size
-	}
-	if matches(name) {
-		return name, true
-	}
-
-	directory, err := files.open(dir, os.O_RDONLY, 0)
-	if err != nil {
-		return "", false
-	}
-	defer directory.Close()
-	entries, err := directory.ReadDir(-1)
-	if err != nil {
-		return "", false
-	}
-	ext := filepath.Ext(name)
-	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
-	for _, entry := range entries {
-		n := entry.Name()
-		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
-			continue
-		}
-		number := n[len(prefix) : len(n)-len(suffix)]
-		if _, err := strconv.Atoi(number); err != nil {
-			continue
-		}
-		if matches(n) {
-			return n, true
-		}
-	}
-	return "", false
+	})
 }

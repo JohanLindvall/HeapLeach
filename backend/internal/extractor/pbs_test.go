@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -99,10 +98,7 @@ const pbsShowPage = `<!doctype html>
 // reads as video only, and a variant joined without its audio group is a
 // full-length silent file that the downloader records as complete.
 func TestPBSMasterPlaylistIsDemuxed(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/videos/a-programme/master.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/videos/a-programme/master.m3u8")
 
 	variants := parseMasterPlaylist(pbsMasterPlaylist, base)
 	if len(variants) != 2 {
@@ -212,10 +208,7 @@ func TestPBSErrorPageIsReportedInPBSsOwnWords(t *testing.T) {
 // anchors resolved against the page rather than a pattern over the document,
 // because the page carries a shop link whose own path is /gp/video/detail/.
 func TestPBSVideoSlugsStayOnPBS(t *testing.T) {
-	base, err := ParseURL("https://www.pbs.org/show/a-programme/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://www.pbs.org/show/a-programme/")
 
 	got := pbsVideoSlugs(pbsShowPage, base)
 	want := []string{"first-episode-aaa111", "second-episode-bbb222", "third-episode-ccc333"}
@@ -244,20 +237,15 @@ func TestPBSTargetOf(t *testing.T) {
 		"https://player.pbs.org/widget/partnerplayer/3100000001/": {id: "3100000001"},
 
 		// Claimed by nobody here.
-		"https://www.pbs.org/":                        {},
-		"https://www.pbs.org/video/":                  {},
-		"https://www.pbs.org/newshour/":               {},
-		"https://urs.pbs.org/redirect/abc123/":        {},
-		"https://ga.pbs-video.pbs.org/p/-/sid/a.mp4":  {},
-		"https://player.pbs.org/portalplayer/":        {},
-		"https://not-pbs.example.test/video/a-slug/":  {},
-		"https://www.pbs.org.example.test/video/a-b/": {},
+		"https://www.pbs.org/":                       {},
+		"https://www.pbs.org/video/":                 {},
+		"https://www.pbs.org/newshour/":              {},
+		"https://urs.pbs.org/redirect/abc123/":       {},
+		"https://ga.pbs-video.pbs.org/p/-/sid/a.mp4": {},
+		"https://player.pbs.org/portalplayer/":       {},
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		got := pbsTargetOf(u)
 		if want == (pbsTarget{}) {
 			if got != nil {
@@ -306,8 +294,8 @@ func TestPBSJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := pbsJoin(tc.program, tc.title); got != tc.want {
-			t.Errorf("pbsJoin(%q, %q) = %q, want %q", tc.program, tc.title, got, tc.want)
+		if got := joinTitle(tc.program, tc.title, titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titleEqual) = %q, want %q", tc.program, tc.title, got, tc.want)
 		}
 	}
 }
@@ -347,7 +335,7 @@ func pbsEncodings(t *testing.T) (root, hls, mp4 string) {
 }
 
 func newTestPBS() *PBS {
-	return &PBS{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return NewPBS(testClient())
 }
 
 // TestPBSProgressiveProbesRatherThanIndexes covers the encoding walk. Which

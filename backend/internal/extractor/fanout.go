@@ -14,8 +14,8 @@ import (
 // Several hosts list things but keep the media on each thing's own page, so
 // resolving one URL means fetching many. Doing that serially leaves a large
 // profile sitting in "resolving" for minutes before a byte moves, which is
-// why coomerfans fetched concurrently first — and why every listing-shaped
-// host since has wanted the same three properties:
+// why such hosts read those pages concurrently, and why each has wanted the
+// same three properties:
 //
 //   - bounded concurrency, because this is a burst of small requests at one
 //     host rather than a download, and PageFetchConcurrency is deliberately

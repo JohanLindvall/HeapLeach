@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -38,20 +38,15 @@ func overQuota(w http.ResponseWriter, left string) {
 }
 
 var (
-	directFirstPace = &extractor.Pace{Group: "mega", Files: 1, PerRoute: true, DirectFirst: true}
-	routedQuotaPace = &extractor.Pace{Group: "mega", Files: 1, PerRoute: true}
+	directFirstPace = &extractor.Pace{Group: config.GroupMega, Files: 1, PerRoute: true, DirectFirst: true}
+	routedQuotaPace = &extractor.Pace{Group: config.GroupMega, Files: 1, PerRoute: true}
 )
 
 func addQuotaFile(m *Manager, size int64, pace *extractor.Pace, resolve func(context.Context) (*extractor.Target, error)) *Item {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	job := &Job{ID: newID(), Source: "http://quota.example.test/share"}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
-	it := m.newItem(job, extractor.File{Name: "First.bin", Size: size, Resolve: resolve, Refused: quotaRefused, Pace: pace}, "", 0)
-	job.Items = append(job.Items, it)
-	m.queue = append(m.queue, it)
-	return it
+	return m.queueJobLocked(&Job{ID: newID(), Source: "http://quota.example.test/share"},
+		extractor.File{Name: "First.bin", Size: size, Resolve: resolve, Refused: quotaRefused, Pace: pace})[0]
 }
 
 func serveFile(w http.ResponseWriter, _ *http.Request) {
@@ -64,11 +59,10 @@ func serveFile(w http.ResponseWriter, _ *http.Request) {
 func TestAQuotaSpentOnTheNormalConnectionMovesTheFileOntoRoutes(t *testing.T) {
 	m := busyManager(t)
 	var normal, routed atomic.Int32
-	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	direct := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		normal.Add(1)
 		overQuota(w, "3600")
 	}))
-	t.Cleanup(direct.Close)
 	a := proxyServer(t, "127.0.0.2", serveFile)
 	b := proxyServer(t, "127.0.0.3", serveFile)
 	attachPool(t, m, []string{a.URL, b.URL})
@@ -87,7 +81,7 @@ func TestAQuotaSpentOnTheNormalConnectionMovesTheFileOntoRoutes(t *testing.T) {
 	}
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return it.Status == StatusDone })
+	waitLocked(t, m, 5*time.Second, func() bool { return it.Status == StatusDone })
 	if normal.Load() != 1 || routed.Load() != 1 {
 		t.Fatalf("the normal connection was asked %d times and a route resolved %d; want once each",
 			normal.Load(), routed.Load())
@@ -107,19 +101,16 @@ func TestAQuotaSpentOnTheNormalConnectionMovesTheFileOntoRoutes(t *testing.T) {
 func TestWithoutProxiesAQuotaSpentWaitsInTheQueue(t *testing.T) {
 	m := busyManager(t)
 	var asked atomic.Int32
-	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	direct := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		asked.Add(1)
 		overQuota(w, "5400")
 	}))
-	t.Cleanup(direct.Close)
 	it := addQuotaFile(m, 4, directFirstPace, func(context.Context) (*extractor.Target, error) {
 		return &extractor.Target{URL: direct.URL + "/file", Size: 4}, nil
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		return it.Status == StatusQueued && !it.notBefore.IsZero()
 	})
 	m.mu.Lock()
@@ -139,10 +130,9 @@ func TestWithoutProxiesAQuotaSpentWaitsInTheQueue(t *testing.T) {
 // as soon as they are switched on, rather than at the end of the wait.
 func TestEnablingProxiesMovesAFileWaitingForTheQuota(t *testing.T) {
 	m := busyManager(t)
-	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	direct := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		overQuota(w, "5400")
 	}))
-	t.Cleanup(direct.Close)
 	it := addQuotaFile(m, 4, directFirstPace, func(ctx context.Context) (*extractor.Target, error) {
 		if httpx.RouteID(ctx) == "" {
 			return &extractor.Target{URL: direct.URL + "/file", Size: 4}, nil
@@ -151,14 +141,12 @@ func TestEnablingProxiesMovesAFileWaitingForTheQuota(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		return it.Status == StatusQueued && !it.notBefore.IsZero()
 	})
 	a := proxyServer(t, "127.0.0.2", serveFile)
 	attachPool(t, m, []string{a.URL})
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return it.Status == StatusDone })
+	waitLocked(t, m, 5*time.Second, func() bool { return it.Status == StatusDone })
 }
 
 // A route whose quota is used up is held back from the host until the
@@ -181,8 +169,8 @@ func TestARouteWhoseQuotaIsSpentIsHeldBackAndTheFileGoesOn(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 5*time.Second, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return it.Status == StatusDone })
-	cooling := pool.Page("mega", proxy.Query{Status: "cooling"})
+	waitLocked(t, m, 5*time.Second, func() bool { return it.Status == StatusDone })
+	cooling := pool.Page(config.GroupMega, proxy.Query{Status: "cooling"})
 	if cooling.Total != 1 {
 		t.Fatalf("%d routes cooling; want the one whose quota is used up", cooling.Total)
 	}
@@ -203,7 +191,7 @@ func TestAQuotaSpentPartwayIsNotRetriedInPlace(t *testing.T) {
 	const size = 256 << 10
 	payload := bytes.Repeat([]byte("x"), size)
 	var asked atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if asked.Add(1) > 1 {
 			overQuota(w, "5400")
 			return
@@ -216,15 +204,12 @@ func TestAQuotaSpentPartwayIsNotRetriedInPlace(t *testing.T) {
 		w.(http.Flusher).Flush()
 		panic(http.ErrAbortHandler)
 	}))
-	t.Cleanup(srv.Close)
 	it := addQuotaFile(m, size, directFirstPace, func(context.Context) (*extractor.Target, error) {
 		return &extractor.Target{URL: srv.URL + "/file", Size: size}, nil
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 10*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 10*time.Second, func() bool {
 		return it.Status == StatusQueued && !it.notBefore.IsZero()
 	})
 	if asked.Load() != 2 {

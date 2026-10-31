@@ -87,9 +87,7 @@ func TestARoutedAttemptLogsHowItEndedAndWhatComesNext(t *testing.T) {
 	})
 	m.Start()
 	m.signal()
-	waitFor(t, 10*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 10*time.Second, func() bool {
 		return job.Items[0].Status == StatusDone || job.Items[0].Status == StatusFailed
 	})
 	out := logs.String()
@@ -155,9 +153,7 @@ func TestAFilesCheckIsAskedBeforeItsRouteIsUsed(t *testing.T) {
 	m.mu.Unlock()
 	m.Start()
 	m.signal()
-	waitFor(t, 10*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 10*time.Second, func() bool {
 		return job.Items[0].Status.Terminal() && job.Items[1].Status.Terminal()
 	})
 	m.mu.Lock()

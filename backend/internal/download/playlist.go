@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +22,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // Playlist transfers: files that arrive as an ordered list of parts rather
@@ -51,39 +49,21 @@ type playlistState struct {
 
 func playlistStatePath(part string) string { return part + ".playlist" }
 
-func loadPlaylistState(part string, total int, scopes ...transferFiles) *playlistState {
-	raw, err := fileScope(scopes).read(playlistStatePath(part))
-	if err != nil {
-		return nil
-	}
-	var st playlistState
-	if err := json.Unmarshal(raw, &st); err != nil {
-		return nil
-	}
+func loadPlaylistState(part string, total int, files transferFiles) *playlistState {
+	st := readSidecar[playlistState](files, playlistStatePath(part))
 	// A playlist that has changed length is a different stream.
-	if st.Total != total || st.Index < 0 || st.Index > total || st.Bytes < 0 {
+	if st == nil || st.Total != total || st.Index < 0 || st.Index > total || st.Bytes < 0 {
 		return nil
 	}
-	return &st
+	return st
 }
 
-func savePlaylistState(part string, st playlistState, scopes ...transferFiles) error {
-	files := fileScope(scopes)
-	raw, err := json.Marshal(st)
-	if err != nil {
-		return err
-	}
-	tmp := playlistStatePath(part) + ".tmp"
-	if err := files.write(tmp, raw); err != nil {
-		return err
-	}
-	return files.rename(tmp, playlistStatePath(part))
+func savePlaylistState(part string, st playlistState, files transferFiles) error {
+	return writeSidecar(files, playlistStatePath(part), st)
 }
 
-func clearPlaylistState(part string, scopes ...transferFiles) {
-	files := fileScope(scopes)
-	_ = files.remove(playlistStatePath(part))
-	_ = files.remove(playlistStatePath(part) + ".tmp")
+func clearPlaylistState(part string, files transferFiles) {
+	clearSidecar(files, playlistStatePath(part))
 }
 
 // playlistTrack is one list of segments joined into a part file of its own:
@@ -134,8 +114,8 @@ func (t playlistTrack) id() string {
 }
 
 // state is the track's checkpoint, if there is one and it is this track's.
-func (t playlistTrack) state(scopes ...transferFiles) *playlistState {
-	st := loadPlaylistState(t.part, len(t.segments), scopes...)
+func (t playlistTrack) state(files transferFiles) *playlistState {
+	st := loadPlaylistState(t.part, len(t.segments), files)
 	if st == nil || st.Track != t.id() {
 		return nil
 	}
@@ -180,8 +160,7 @@ type fetchedSegment struct {
 // and the segment count the item shows as its progress then moves with the
 // time the transfer takes, where one track after another would race through
 // three of four tracks' segments in the first fifth of it.
-func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name string, scopes ...transferFiles) (string, error) {
-	files := fileScope(scopes)
+func (m *Manager) transferPlaylist(ctx context.Context, it *Item, part, name string, files transferFiles) (string, error) {
 	m.mu.Lock()
 	tracks := playlistTracksLocked(it, part)
 	for i := range tracks {
@@ -401,10 +380,7 @@ func (m *Manager) fetchSegment(ctx context.Context, limiter *throttle, rawURL st
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if attempt >= m.cfg.MaxRetries || !retryableTransfer(err) {
-			return nil, err
-		}
-		if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+		if err := m.retryAfter(ctx, attempt, err); err != nil {
 			return nil, err
 		}
 	}
@@ -424,9 +400,7 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawUR
 	if err != nil {
 		return nil, err
 	}
-	for header, value := range headers {
-		req.Header.Set(header, value)
-	}
+	headers.Apply(req)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
 	if ranged {
 		req.Header.Set(httpx.HeaderRange, fmt.Sprintf("bytes=%d-%d", first, last))
@@ -445,7 +419,7 @@ func (m *Manager) fetchSegmentOnce(ctx context.Context, limiter *throttle, rawUR
 	case ranged && resp.StatusCode == http.StatusOK:
 		return nil, fmt.Errorf("%s: asked for bytes %d-%d: %w", req.URL.Redacted(), first, last, errRangeIgnored)
 	case resp.StatusCode != http.StatusOK:
-		return nil, statusError(req.URL, resp)
+		return nil, httpx.NewStatusError(resp)
 	}
 	if err := rejectWebPage(resp, "segment.ts"); err != nil {
 		return nil, err
@@ -481,16 +455,16 @@ var errRangeIgnored = errors.New("the host answered with the whole file")
 // segmentRangeAnswered checks that a partial answer is the part asked for:
 // a Content-Range starting elsewhere is some other part of the file.
 func segmentRangeAnswered(resp *http.Response, first, last int64) error {
-	header := resp.Header.Get("Content-Range")
+	header := resp.Header.Get(httpx.HeaderContentRange)
 	if header == "" {
 		return nil // the length is checked once the body is read
 	}
-	var start, end int64
-	if _, err := fmt.Sscanf(header, "bytes %d-%d/", &start, &end); err != nil {
+	r, ok := parseContentRange(header)
+	if !ok || r.first < 0 {
 		return fmt.Errorf("unreadable Content-Range %q", header)
 	}
-	if start != first || end != last {
-		return fmt.Errorf("asked for bytes %d-%d, got %d-%d", first, last, start, end)
+	if r.first != first || r.last != last {
+		return fmt.Errorf("asked for bytes %d-%d, got %d-%d", first, last, r.first, r.last)
 	}
 	return nil
 }

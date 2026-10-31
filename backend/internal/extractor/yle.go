@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -51,7 +52,7 @@ import (
 // programme is the page's to say: asked of the preview, a series answers
 // with one of its episodes.
 type Yle struct {
-	hostSet
+	about
 	client *httpx.Client
 	// player and site are where the preview and the pages are, fields so
 	// that tests can stand in for them.
@@ -67,8 +68,6 @@ const (
 	// yleUIVersion is the version of the UI API the site's own client asks
 	// for; a list asked for without one is refused.
 	yleUIVersion = "10"
-	// yleListPage is how many cards a page of a list asks for.
-	yleListPage = 100
 )
 
 // yleUILanguage is how the UI API spells each of the preview's languages.
@@ -77,12 +76,23 @@ var yleUILanguage = map[string]string{"fin": "fi", "swe": "sv"}
 // NewYle builds the Yle Areena extractor.
 func NewYle(client *httpx.Client) *Yle {
 	return &Yle{
-		hostSet: hostSet{"areena.yle.fi", "arenan.yle.fi"}, client: client, player: ylePlayerRoot,
+		client: client, player: ylePlayerRoot,
 		site: map[string]string{"fin": "https://areena.yle.fi", "swe": "https://arenan.yle.fi"},
+		about: about{name: "yle", shape: yleShape,
+			recognises: "programmes and series (`…/1-<id>`) of Yle Areena, whose page carries the Areena web app's configuration"},
 	}
 }
 
-func (y *Yle) Name() string { return "yle" }
+// yleShape is a link ending in an item id: /1-<n>, /podcastit/1-<n>, …
+var yleShape = pathShape(`(?:^|/)1-[0-9]+/?$`)
+
+// Recognise takes an item page of Areena or Arenan: its environment names
+// the Areena web app (areena-web-items) whose APIs this reads. The link as
+// submitted counts as well as where it landed, since an older item id is
+// redirected to an address of the newer kind, which this does not read.
+func (y *Yle) Recognise(_ context.Context, p *Page) bool {
+	return (yleShape(p.Final) || yleShape(p.URL)) && p.Has("areena-web-items") && p.Named("Yle Areena", "Yle Arenan")
+}
 
 var yleItemID = regexp.MustCompile(`^1-[0-9]+$`)
 
@@ -104,7 +114,7 @@ func yleLink(u *url.URL) (lang, id string) {
 
 // Extract reads a programme into its file, or a series or season into one
 // file an episode.
-func (y *Yle) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+func (y *Yle) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	lang, id := yleLink(u)
 	if id == "" {
 		return nil, fmt.Errorf("yle: %s names no programme or series", u.Redacted())
@@ -114,20 +124,16 @@ func (y *Yle) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 		return nil, err
 	}
 	if page.listing() {
-		return y.series(ctx, lang, id, page, opts)
+		return y.series(ctx, lang, id, page)
 	}
 	target, title, err := y.programme(ctx, lang, id)
 	if err != nil {
 		return nil, err
 	}
-	return &Result{Title: title, Files: []File{{
-		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
-		SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			target, _, err := y.programme(ctx, lang, id)
-			return target, err
-		},
-	}}}, nil
+	return &Result{Title: title, Files: []File{refreshing(target, func(ctx context.Context) (*Target, error) {
+		target, _, err := y.programme(ctx, lang, id)
+		return target, err
+	})}}, nil
 }
 
 // yleText is a text Yle gives in each of its languages.
@@ -155,7 +161,7 @@ func (od *yleOndemand) title(lang, id string) string {
 	if od.Series != nil {
 		series = od.Series.Title.in(lang)
 	}
-	return cmp.Or(ardJoin(series, od.Title.in(lang)), id)
+	return cmp.Or(joinTitle(series, od.Title.in(lang), titleContains), id)
 }
 
 // finlandOnly reports a programme Yle shows in Finland alone.
@@ -165,26 +171,16 @@ func (od *yleOndemand) finlandOnly() bool { return strings.EqualFold(od.Region, 
 // master the MPEG-TS that Areena's HLS is.
 func (od *yleOndemand) extension() string {
 	if od.ManifestURL == "" && od.MediaURL != "" {
-		return yleMediaExtension(od.MediaURL)
+		return linkExt(od.MediaURL, ".mp3")
 	}
 	return ".ts"
-}
-
-// yleMediaExtension is an audio file's extension, as its link names it.
-func yleMediaExtension(link string) string {
-	if u, err := url.Parse(link); err == nil {
-		if ext := strings.ToLower(path.Ext(u.Path)); len(ext) > 1 && len(ext) <= 5 {
-			return ext
-		}
-	}
-	return ".mp3"
 }
 
 // yleStates says why a programme in each of the preview's other states is
 // not downloaded. They are the states Yle's player itself knows.
 var yleStates = map[string]string{
 	"gone":                "it is no longer on Areena",
-	"ongoing_event":       "it is a live broadcast, which has no end to download to",
+	"ongoing_event":       refusedLiveBroadcast,
 	"ongoing_channel":     "it is a live channel, which has no end to download to",
 	"pending_event":       "it is a broadcast still to come",
 	"pending_ondemand":    "it is not published yet",
@@ -194,13 +190,6 @@ var yleStates = map[string]string{
 	"identification":      "Areena shows it only to viewers who have identified themselves",
 	"error":               "Areena answers that it cannot be played",
 }
-
-// yleRefused is a programme Areena does not offer for download: gone, live,
-// still to come or otherwise held back. It is a type so that a series can
-// leave such episodes out, saying why once, rather than queue them to fail.
-type yleRefused struct{ title, reason string }
-
-func (e *yleRefused) Error() string { return "yle: " + e.title + ": " + e.reason }
 
 // errYleFinlandOnly is a programme Yle shows in Finland alone, refused here.
 var errYleFinlandOnly = errors.New("shown in Finland only, and its stream is refused anywhere else")
@@ -216,7 +205,7 @@ func (y *Yle) preview(ctx context.Context, lang, id string) (*yleOndemand, error
 	}
 	if err := y.client.GetJSON(ctx, y.player+url.PathEscape(id)+".json?"+query.Encode(), y.headers(lang), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &yleRefused{title: id, reason: "it does not exist"}
+			return nil, &broadcastRefusal{"yle", id, "it does not exist"}
 		}
 		return nil, fmt.Errorf("yle: %s: %w", id, err)
 	}
@@ -233,7 +222,7 @@ func (y *Yle) preview(ctx context.Context, lang, id string) (*yleOndemand, error
 				Title yleText `json:"title"`
 			}
 			_ = json.Unmarshal(raw, &named)
-			return nil, &yleRefused{title: cmp.Or(named.Title.in(lang), id), reason: reason}
+			return nil, &broadcastRefusal{"yle", cmp.Or(named.Title.in(lang), id), reason}
 		}
 	}
 	return nil, fmt.Errorf("yle: %s: the player API names no state it is in", id)
@@ -256,44 +245,22 @@ func (y *Yle) programme(ctx context.Context, lang, id string) (*Target, string, 
 			}
 			return nil, "", fmt.Errorf("yle: %s: %w", title, err)
 		}
-		return &Target{
-			URL: od.ManifestURL, Name: title + media.extension(), Size: -1, Headers: headers,
-			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
-		}, title, nil
+		return media.target(od.ManifestURL, title+media.extension(), headers), title, nil
 	case od.MediaURL != "":
-		if od.finlandOnly() && y.refusedHere(ctx, od.MediaURL, headers) {
+		// A master is asked for anyway when it is resolved; an MP3 is not,
+		// and would otherwise be refused only once its transfer starts, as a
+		// bare 403.
+		if od.finlandOnly() && refusesByte(ctx, y.client, od.MediaURL, headers) {
 			return nil, "", fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 		}
 		return &Target{URL: od.MediaURL, Name: title + od.extension(), Size: -1, Headers: headers}, title, nil
 	}
-	return nil, "", &yleRefused{title: title, reason: "it offers no stream to download"}
-}
-
-// refusedHere asks for a file's first byte, to learn whether its host serves
-// it to this address at all. A master is asked for anyway when it is
-// resolved; an MP3 is not, and would otherwise be refused only once its
-// transfer starts, as a bare 403.
-func (y *Yle) refusedHere(ctx context.Context, link string, headers httpx.Header) bool {
-	req, err := y.client.NewRequest(ctx, http.MethodGet, link, nil)
-	if err != nil {
-		return false
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	req.Header.Set(httpx.HeaderRange, "bytes=0-0")
-	resp, err := y.client.DoOnce(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusForbidden
+	return nil, "", &broadcastRefusal{"yle", title, "it offers no stream to download"}
 }
 
 // headers are what the site's own player sends.
 func (y *Yle) headers(lang string) httpx.Header {
-	site := y.site[lang]
-	return httpx.RefererOrigin(site+"/", site)
+	return httpx.SiteOrigin(y.site[lang])
 }
 
 // host is the site's host, which the player names to the preview.
@@ -430,26 +397,25 @@ func yleOwnSeason(lists []yleList, options []yleOption, id string) []yleList {
 }
 
 var (
-	yleNextData    = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</script>`)
 	yleFrontendID  = regexp.MustCompile(`appIdFrontend\W{1,4}([A-Za-z0-9_-]+)`)
 	yleFrontendKey = regexp.MustCompile(`appKeyFrontend\W{1,4}([A-Za-z0-9_-]+)`)
 )
 
 // page reads an item's page off the site.
 func (y *Yle) page(ctx context.Context, lang, id string) (*ylePage, error) {
-	html, err := y.client.GetString(ctx, y.site[lang]+"/"+url.PathEscape(id), nil)
+	html, err := fetchPage(ctx, y.client, y.site[lang]+"/"+url.PathEscape(id), nil)
 	if err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
 			return nil, fmt.Errorf("yle: %s does not exist", id)
 		}
 		return nil, fmt.Errorf("yle: %s: %w", id, err)
 	}
-	m := yleNextData.FindStringSubmatch(html)
-	if m == nil {
+	island, ok := nextData(html)
+	if !ok {
 		return nil, fmt.Errorf("yle: %s: the page carries no description of what it shows", id)
 	}
 	page := &ylePage{}
-	if err := json.Unmarshal([]byte(m[1]), &page.doc); err != nil {
+	if err := json.Unmarshal([]byte(island), &page.doc); err != nil {
 		return nil, fmt.Errorf("yle: %s: read the page: %w", id, err)
 	}
 	if m := yleFrontendID.FindStringSubmatch(html); m != nil {
@@ -488,7 +454,7 @@ type yleEpisode struct{ id, title, folder string }
 // once; so, once one of them has been refused here, is every episode Yle
 // shows in Finland alone. One whose preview could not be read is kept, for
 // its transfer to try again.
-func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage, opts Options) (*Result, error) {
+func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage) (*Result, error) {
 	props := page.doc.Props.PageProps
 	name := cmp.Or(strings.TrimSpace(props.View.Title), strings.TrimSpace(props.Meta.Title), id)
 	title := name
@@ -497,85 +463,76 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage, opts O
 		return nil, fmt.Errorf("yle: %s lists no episodes", title)
 	}
 	if page.season() {
-		title = ardJoin(name, lists[0].season)
+		title = joinTitle(name, lists[0].season, titleContains)
 	}
 	if page.appID == "" || page.key == "" {
 		return nil, fmt.Errorf("yle: %s: the page names no key for its listings", title)
 	}
-	episodes, listed, walkErr := y.walk(ctx, lang, page, lists, !page.season(), opts.maxFiles())
-
-	type checked struct {
-		episode yleEpisode
-		preview *yleOndemand
-		refusal *yleRefused
-	}
-	results := FanOut(ctx, episodes, func(ctx context.Context, ep yleEpisode) ([]checked, error) {
-		od, err := y.preview(ctx, lang, ep.id)
-		refusal, _ := errors.AsType[*yleRefused](err)
-		return []checked{{episode: ep, preview: od, refusal: refusal}}, nil
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	audio := strings.HasPrefix(props.Meta.Item.Type, "Radio")
-	var (
-		files   []File
-		refused []*yleRefused
-		finland int
-		blocked *bool // whether what Yle shows in Finland alone is refused here, once one has said
-	)
-	for _, r := range results {
-		switch {
-		case r.refusal != nil:
-			refused = append(refused, r.refusal)
-			continue
-		case r.preview != nil && r.preview.finlandOnly():
-			if blocked == nil {
-				_, _, err := y.programme(ctx, lang, r.episode.id)
-				refusedHere := errors.Is(err, errYleFinlandOnly)
-				blocked = &refusedHere
-			}
-			if *blocked {
-				finland++
-				continue
-			}
-		}
-		ext := ".ts"
-		switch {
-		case r.preview != nil:
-			ext = r.preview.extension()
-		case audio:
-			ext = ".mp3"
-		}
-		stem := ardJoin(name, cmp.Or(r.episode.title, r.episode.id))
-		files = append(files, y.lazy(lang, stem, ext, r.episode))
-	}
-	if len(files) == 0 {
-		switch {
-		case finland > 0:
-			return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
-		case len(refused) > 0:
-			return nil, fmt.Errorf("yle: %s: none of its %d episodes can be had: %s", title, len(refused), refused[0].reason)
-		case walkErr != nil:
+	listing, listed, walkNote, walkErr := y.walk(ctx, lang, page, lists, !page.season(), config.MaxResolvedEpisodes)
+	if len(listing) == 0 {
+		if walkErr != nil {
 			return nil, fmt.Errorf("yle: %s: %w", title, walkErr)
 		}
 		return nil, fmt.Errorf("yle: %s lists no episodes", title)
 	}
-	var notes []string
-	if listed > len(episodes) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(episodes), listed))
+	episodes := make([]*yleChecked, len(listing))
+	for i, ep := range listing {
+		episodes[i] = &yleChecked{episode: ep}
 	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
+
+	audio := strings.HasPrefix(props.Meta.Item.Type, "Radio")
+	var refused []string
+	resolved, note, err := expandSeries(ctx, series[*yleChecked]{
+		site: "yle", noun: "episodes", link: title,
+		items: episodes, listed: listed,
+		refused: &refused,
+		resolve: func(ctx context.Context, c *yleChecked) (*File, error) {
+			od, err := y.preview(ctx, lang, c.episode.id)
+			if _, refused := refusalReason(err); refused {
+				return nil, err
+			}
+			c.preview = od
+			ext := ".ts"
+			switch {
+			case od != nil:
+				ext = od.extension()
+			case audio:
+				ext = ".mp3"
+			}
+			file := y.lazy(lang, joinTitle(name, cmp.Or(c.episode.title, c.episode.id), titleContains), ext, c.episode)
+			return &file, nil
+		},
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if finland > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that Yle shows in Finland only", finland))
+	if err != nil {
+		return nil, err
 	}
-	if len(refused) > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out: %s", len(refused), refused[0].reason))
+
+	// Whether what Yle shows in Finland alone is refused here is asked
+	// once, of the first such episode in the listing's order, and holds for
+	// the rest.
+	shown, finland := regionGate(ctx, resolved, func(r listedItem[*yleChecked]) bool {
+		return r.item.preview != nil && r.item.preview.finlandOnly()
+	}, 1, func(ctx context.Context, r listedItem[*yleChecked]) (bool, bool) {
+		_, _, err := y.programme(ctx, lang, r.item.episode.id)
+		return errors.Is(err, errYleFinlandOnly), true
+	})
+	files := listedFiles(shown)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("yle: %s: %w", title, errYleFinlandOnly)
 	}
-	return &Result{Title: title, Files: files, Note: strings.Join(notes, "; ")}, nil
+	note = joinNotes(note, walkNote, brokenNote(walkErr),
+		leftOutNote(finland, " that Yle shows in Finland only"), refusedNote(refused))
+	return &Result{Title: title, Files: files, Note: note}, nil
+}
+
+// yleChecked is a listed episode and what its preview said of it, once
+// asked.
+type yleChecked struct {
+	episode yleEpisode
+	preview *yleOndemand
 }
 
 // walk reads each list a page at a time, keeping its episodes up to limit
@@ -583,52 +540,63 @@ func (y *Yle) series(ctx context.Context, lang, id string, page *ylePage, opts O
 // followed by that count and by what each adds, never by the size asked
 // for, so a page cut shorter than asked does not end the list. The first
 // page that fails ends the walk, and what was read before it comes back
-// with the error.
-func (y *Yle) walk(ctx context.Context, lang string, page *ylePage, lists []yleList, folders bool, limit int) ([]yleEpisode, int, error) {
-	var (
-		episodes []yleEpisode
-		listed   int
-		seen     = make(map[string]bool)
-	)
+// with the error; note is the walk's own, for a list that pages in a
+// circle or past the page cap.
+func (y *Yle) walk(ctx context.Context, lang string, page *ylePage, lists []yleList, folders bool, limit int) (episodes []yleEpisode, listed int, note string, err error) {
+	seen := make(map[string]bool)
 	for _, l := range lists {
+		if len(episodes) >= limit {
+			// Full: the rest is only counted.
+			cards, err := y.cards(ctx, lang, page, l, 0, 1)
+			if err != nil {
+				return episodes, listed, note, err
+			}
+			listed += cards.Meta.Count
+			continue
+		}
 		folder := ""
 		if folders {
 			folder = sourceFolder(l.season)
 		}
-		for offset := 0; ; {
-			if len(episodes) >= limit {
-				// Full: the rest of the list is only counted.
-				cards, err := y.cards(ctx, lang, page, l, offset, 1)
+		var broke error
+		offset, count := 0, 0
+		got, cut, walkNote, err := walkEpisodes(ctx, limit-len(episodes), pageWalk[yleEpisode]{
+			fetch: func(ctx context.Context, _ int) (pageOf[yleEpisode], error) {
+				cards, err := y.cards(ctx, lang, page, l, offset, config.FolderPageSize)
 				if err != nil {
-					return episodes, listed, err
+					return pageOf[yleEpisode]{}, err
 				}
-				listed += max(cards.Meta.Count-offset, 0)
-				break
-			}
-			cards, err := y.cards(ctx, lang, page, l, offset, yleListPage)
-			if err != nil {
-				return episodes, listed, err
-			}
-			added := 0
-			for _, card := range cards.Data {
-				ep := strings.TrimPrefix(card.Pointer.URI, "yleareena://items/")
-				if !yleItemID.MatchString(ep) || seen[ep] || card.Pointer.Type != "program" && card.Pointer.Type != "clip" {
-					continue
+				offset, count = offset+len(cards.Data), cards.Meta.Count
+				// An episode another list named is not listed again, and a
+				// page that names nothing new ends the list.
+				var eps []yleEpisode
+				for _, card := range cards.Data {
+					ep := strings.TrimPrefix(card.Pointer.URI, "yleareena://items/")
+					if yleItemID.MatchString(ep) && !seen[ep] && (card.Pointer.Type == "program" || card.Pointer.Type == "clip") {
+						eps = append(eps, yleEpisode{id: ep, title: strings.TrimSpace(card.Title), folder: folder})
+					}
 				}
-				seen[ep] = true
-				added++
-				listed++
-				if len(episodes) < limit {
-					episodes = append(episodes, yleEpisode{id: ep, title: strings.TrimSpace(card.Title), folder: folder})
-				}
-			}
-			offset += len(cards.Data)
-			if added == 0 || cards.Meta.Count > 0 && offset >= cards.Meta.Count {
-				break
-			}
+				return pageOf[yleEpisode]{items: eps, next: true, end: len(eps) == 0 || count > 0 && offset >= count}, nil
+			},
+			key: func(ep yleEpisode) string { return ep.id },
+			failed: func(err error) string {
+				broke = err
+				return ""
+			},
+		})
+		for _, ep := range got {
+			seen[ep.id] = true
+		}
+		episodes, listed, note = append(episodes, got...), listed+len(got), cmp.Or(note, walkNote)
+		if cut {
+			// The rest of a list the cap cut is counted by what it states.
+			listed += max(count-len(got), 0)
+		}
+		if err := cmp.Or(err, broke); err != nil {
+			return episodes, listed, note, err
 		}
 	}
-	return episodes, listed, nil
+	return episodes, listed, note, nil
 }
 
 // cards reads one page of a list, with the parameters its season adds.
@@ -661,15 +629,12 @@ func (y *Yle) cards(ctx context.Context, lang string, page *ylePage, l yleList, 
 // series shows one, and under which a listing read again finds what was
 // saved; the extension is the stream's own.
 func (y *Yle) lazy(lang, stem, ext string, ep yleEpisode) File {
-	return File{
-		Name: stem + ext, Size: -1, Dir: ep.folder, Headers: y.headers(lang),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			target, _, err := y.programme(ctx, lang, ep.id)
-			if err != nil {
-				return nil, err
-			}
-			target.Name = stem + path.Ext(target.Name)
-			return target, nil
-		},
-	}
+	return lazyEpisode(stem+ext, ep.folder, y.headers(lang), func(ctx context.Context) (*Target, error) {
+		target, _, err := y.programme(ctx, lang, ep.id)
+		if err != nil {
+			return nil, err
+		}
+		target.Name = stem + path.Ext(target.Name)
+		return target, nil
+	})
 }

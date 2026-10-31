@@ -116,7 +116,7 @@ func (m *Manager) routeSourceLocked(it *Item) func(context.Context) (*streamSour
 			if ctx.Err() == nil {
 				if wait, ok := errors.AsType[*extractor.WaitError](err); ok {
 					lease.Cooldown(wait.Until)
-				} else if _, refused := errors.AsType[*extractor.RefusedError](err); refused {
+				} else if isErr[*extractor.RefusedError](err) {
 					lease.Failed(err, time.Since(start), false)
 					lease.Cooldown(time.Now().Add(config.ProxyAddressRefusedWait))
 				}
@@ -151,7 +151,7 @@ func (m *Manager) routeWantedLocked(group string) bool {
 	// route, and the transfer whose end frees the slot gives its route back
 	// with it. Counted, fifty files queued behind the limit kept 254 running
 	// ones on a stream apiece, with routes to spare.
-	if m.running < m.limit && !m.throttle.isPaused() && !m.lowOnSpace() {
+	if !m.capped() {
 		for _, it := range m.queue {
 			// A file its job holds back is not due to start: counted, a job
 			// paused with hundreds of files queued kept every other file of
@@ -193,7 +193,7 @@ func (t *segmentedTransfer) nextSegment() *segment {
 // route reading again whenever a range is left with nobody reading it.
 func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 	spawnPrimary func(*segment, io.ReadCloser), spawnSource func(*segment, *streamSource, chan struct{})) {
-	ticker := time.NewTicker(t.pollInterval)
+	ticker := time.NewTicker(t.manager.timings.poll)
 	defer ticker.Stop()
 
 	type extra struct {
@@ -211,14 +211,14 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 		sinceProbe, sinceSave time.Duration
 		lastAdd               time.Time
 		// Each extra stream costs a CAPTCHA, so ones that get nowhere are
-		// tried less and less often: once per addCooldown, doubling with
+		// tried less and less often: once per cooldown, doubling with
 		// each in a row, up to RouteExtraBackoffMax.
 		failures    int
 		nextAcquire time.Time
 	)
 	backOff := func() {
 		failures++
-		wait := min(t.addCooldown<<min(failures, 20), config.RouteExtraBackoffMax)
+		wait := min(t.manager.timings.cooldown<<min(failures, 20), config.RouteExtraBackoffMax)
 		nextAcquire = time.Now().Add(wait)
 	}
 	defer func() {
@@ -276,11 +276,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			if t.table.complete() {
 				return
 			}
-			sinceSave += t.pollInterval
-			if sinceSave >= t.saveInterval {
-				sinceSave = 0
-				t.saveState()
-			}
+			t.saveDue(&sinceSave)
 			live := extras[:0]
 			for _, e := range extras {
 				select {
@@ -310,15 +306,15 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 				}
 			}
 
-			sinceProbe += t.pollInterval
-			if sinceProbe < t.probeInterval {
+			sinceProbe += t.manager.timings.poll
+			if sinceProbe < t.manager.timings.probe {
 				continue
 			}
 			elapsed := sinceProbe
 			sinceProbe = 0
 			now := time.Now()
 			paused := t.manager.throttle.isPaused()
-			limited := paused || t.manager.throttle.currentLimit() > 0 || t.item.limiter.currentLimit() > 0
+			limited := t.manager.throttling(t.item)
 			for _, e := range extras {
 				n := e.src.bytes.Load()
 				if n != e.counted || paused {
@@ -346,19 +342,15 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			}
 			speed, stable := meter.observe(current, elapsed)
 			if !stable || wanted || pending != nil || 1+len(extras) >= t.maxStreams ||
-				speed >= float64(t.slowBelow) || paused || t.manager.throttle.limiting() || t.item.limiter.limiting() {
+				speed >= float64(t.slowBelow) || t.held() {
 				continue
 			}
-			if !lastAdd.IsZero() && time.Since(lastAdd) < t.addCooldown || now.Before(nextAcquire) {
+			if !lastAdd.IsZero() && time.Since(lastAdd) < t.manager.timings.cooldown || now.Before(nextAcquire) {
 				continue
 			}
 			// The queue sets up only so many at once: each is a hunt and a
 			// CAPTCHA, which the files' own routes need first.
-			most := int32(t.manager.timings.extraAcquisitions)
-			if most <= 0 {
-				most = config.RouteExtraAcquisitions
-			}
-			if t.manager.extraAcquiring.Add(1) > most {
+			if t.manager.extraAcquiring.Add(1) > int32(t.manager.timings.extraAcquisitions) {
 				t.manager.extraAcquiring.Add(-1)
 				continue
 			}
@@ -393,12 +385,10 @@ func (t *segmentedTransfer) pumpSource(seg *segment, src *streamSource) {
 		}
 		if err != nil {
 			// What the failed flush was holding is not on disk.
-			if flushed := seg.flushed.Load(); seg.pos.Load() > flushed {
-				lost := seg.pos.Swap(flushed) - flushed
-				t.item.downloaded.Add(-lost)
-				t.item.extraBytes.Add(-lost)
-				src.bytes.Add(-lost)
-			}
+			lost := seg.rewind()
+			t.item.downloaded.Add(-lost)
+			t.item.extraBytes.Add(-lost)
+			src.bytes.Add(-lost)
 			// The link is bound to an address this route did not present: a
 			// route whose egress moves, which is the route's fault.
 			if refusedForAddress(err) {

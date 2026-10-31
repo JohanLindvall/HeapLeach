@@ -24,10 +24,7 @@ const pixhostGalleryPage = `<html><head><title>A Synthetic Gallery - PiXhost Gal
 </body></html>`
 
 func TestPixhostGallery(t *testing.T) {
-	u, err := ParseURL("https://pixhost.to/gallery/synth1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://pixhost.to/gallery/synth1")
 	res, err := pixhostGallery(mustParseDoc(t, pixhostGalleryPage), u)
 	if err != nil {
 		t.Fatalf("pixhostGallery: %v", err)
@@ -57,11 +54,8 @@ func TestPixhostGallery(t *testing.T) {
 }
 
 func TestPixhostGalleryReportsAnEmptyPage(t *testing.T) {
-	u, err := ParseURL("https://pixhost.to/gallery/gone")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = pixhostGallery(mustParseDoc(t, `<html><body><p>Gallery not found</p></body></html>`), u)
+	u := mustParse(t, "https://pixhost.to/gallery/gone")
+	_, err := pixhostGallery(mustParseDoc(t, `<html><body><p>Gallery not found</p></body></html>`), u)
 	if err == nil {
 		t.Fatal("a gallery with no images was accepted")
 	}
@@ -75,10 +69,7 @@ func TestPixhostImage(t *testing.T) {
 <img id="image" class="image-img" src="https://img2.pixhost.to/images/9999/1000001_first.jpg" alt="first.jpg">
 </body></html>`
 
-	u, err := ParseURL("https://pixhost.to/show/9999/1000001_first.jpg")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://pixhost.to/show/9999/1000001_first.jpg")
 	res, err := pixhostImage(mustParseDoc(t, page), u)
 	if err != nil {
 		t.Fatalf("pixhostImage: %v", err)
@@ -109,4 +100,24 @@ func TestPixhostFullImage(t *testing.T) {
 			t.Errorf("pixhostFullImage(%q) = %q, want %q", thumb, got, want)
 		}
 	}
+}
+
+func TestPixhostRecognise(t *testing.T) {
+	p := NewPixhost(nil)
+	gallery := `<html><head><title>Example Gallery - Images</title></head><body>` +
+		`<a href="/show/1/1_first.jpg"><img src="https://t1.example.test/thumbs/1/1_first.jpg"></a></body></html>`
+	viewer := `<html><head><title>first.jpg - Images</title></head><body>` +
+		`<img id="image" src="https://img1.example.test/images/1/1_first.jpg"></body></html>`
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/gallery/abc12", gallery), true)
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/show/1/1_first.jpg", viewer), true)
+	// The form and a title, without the thumbnails or the image element.
+	plain := `<html><head><title>Example Gallery - Images</title></head><body><img src="/logo.png"></body></html>`
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/gallery/abc12", plain), false)
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/show/1/1_first.jpg", plain), false)
+	// The markers on a page of another form.
+	expectRecognised(t, p, htmlPage(t, "https://images.example.test/", gallery), false)
+	expectShape(t, p, "https://images.example.test/gallery/abc12", true)
+	expectShape(t, p, "https://images.example.test/show/1/1_first.jpg", true)
+	expectShape(t, p, "https://images.example.test/show/1", false)
+	expectShape(t, p, "https://images.example.test/gallery/", false)
 }

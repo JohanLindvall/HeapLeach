@@ -9,11 +9,9 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -43,9 +41,9 @@ func TestCelebGalleryPagesThroughAPI(t *testing.T) {
 		note     string
 	}{
 		{"whole", 0, []string{"101.jpg", "102.png", "103.webp", "104.jpg"}, []string{"first", "2", "3"}, ""},
-		{"cap within page", 1, []string{"101.jpg"}, []string{"first"}, "1 of 4 images"},
-		{"cap on boundary", 2, []string{"101.jpg", "102.png"}, []string{"first"}, "2 of 4 images"},
-		{"cap on later page", 3, []string{"101.jpg", "102.png", "103.webp"}, []string{"first", "2"}, "3 of 4 images"},
+		{"cap within page", 1, []string{"101.jpg"}, []string{"first"}, "partial — file limit; 1 of 4 images"},
+		{"cap on boundary", 2, []string{"101.jpg", "102.png"}, []string{"first"}, "partial — file limit; 2 of 4 images"},
+		{"cap on later page", 3, []string{"101.jpg", "102.png", "103.webp"}, []string{"first", "2"}, "partial — file limit; 3 of 4 images"},
 		{"exact cap", 4, []string{"101.jpg", "102.png", "103.webp", "104.jpg"}, []string{"first", "2", "3"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,8 +82,8 @@ func TestCelebGalleryPagesThroughAPI(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			c := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second))
-			u, _ := url.Parse(srv.URL + "/creator/a-creator-42/images?page=8&sort=popular#gallery")
+			c := NewCeleb(testClient())
+			u := mustParse(t, srv.URL+"/creator/a-creator-42/images?page=8&sort=popular#gallery")
 			res, err := c.Extract(context.Background(), u, Options{limits: Limits{Files: tc.limit}})
 			if err != nil {
 				t.Fatal(err)
@@ -126,8 +124,8 @@ func TestCelebSingleImageIgnoresRecommendations(t *testing.T) {
 			"moreMedia":[{"id":103,"src":"https://cdn.example.test/api/v1/image/third.jpg"}],"nextId":103}`))
 	}))
 	defer srv.Close()
-	u, _ := url.Parse(srv.URL + "/creator/a-creator-42/images/102")
-	res, err := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)).Extract(context.Background(), u, Options{})
+	u := mustParse(t, srv.URL+"/creator/a-creator-42/images/102")
+	res, err := NewCeleb(testClient()).Extract(context.Background(), u, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +134,7 @@ func TestCelebSingleImageIgnoresRecommendations(t *testing.T) {
 	}
 	// A removed image must not quietly become the gallery or a neighbour.
 	u.Path = "/creator/a-creator-42/images/103"
-	if _, err := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)).Extract(context.Background(), u, Options{}); err == nil {
+	if _, err := NewCeleb(testClient()).Extract(context.Background(), u, Options{}); err == nil {
 		t.Error("accepted a different image from the requested one")
 	}
 }
@@ -156,12 +154,8 @@ func TestCelebRepeatedPageStopsAndAdmitsPartialGallery(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	u, _ := url.Parse(srv.URL + "/creator/a-creator-42")
-	res, err := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if requests != 2 || len(res.Files) != 2 || res.Note != "2 of 4 images" {
+	res := extractOK(t, NewCeleb(testClient()), srv.URL+"/creator/a-creator-42", Options{})
+	if requests != 2 || len(res.Files) != 2 || res.Note != "partial — repeated or empty page; 2 of 4 images" {
 		t.Errorf("requests = %d, files = %d, note = %q", requests, len(res.Files), res.Note)
 	}
 }
@@ -177,8 +171,6 @@ func TestCelebBadPagesFailInsteadOfReturningACompleteGallery(t *testing.T) {
 		{"wrong tab", celebFixture("Creator/Media", strings.Replace(celebGalleryProps, `"mediaType":"media"`, `"mediaType":"videos"`, 1)), ""},
 		{"empty gallery", celebFixture("Creator/Media", `{"mediaType":"media","currentPage":1,"pages":1,"media":[]}`), ""},
 		{"invalid image", celebFixture("Creator/Media", strings.Replace(celebGalleryProps, "https://cdn.example.test/api/v1/image/second.png", "broken", 1)), ""},
-		{"malformed API", celebFixture("Creator/Media", celebGalleryProps), `{"error":"unavailable"}`},
-		{"HTTP failure", celebFixture("Creator/Media", celebGalleryProps), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,11 +183,31 @@ func TestCelebBadPagesFailInsteadOfReturningACompleteGallery(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			u, _ := url.Parse(srv.URL + "/creator/a-creator-42/images")
-			if _, err := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)).Extract(context.Background(), u, Options{}); err == nil {
+			u := mustParse(t, srv.URL+"/creator/a-creator-42/images")
+			if _, err := NewCeleb(testClient()).Extract(context.Background(), u, Options{}); err == nil {
 				t.Fatal("accepted a missing, malformed or incomplete gallery")
 			}
 		})
+	}
+}
+
+// A later page that fails ends the gallery with what was read, admitted.
+func TestCelebLaterPageFailureAdmitsPartialGallery(t *testing.T) {
+	for _, next := range []string{`{"error":"unavailable"}`, ""} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/creator/") {
+				fmt.Fprint(w, celebFixture("Creator/Media", celebGalleryProps))
+			} else if next != "" {
+				fmt.Fprint(w, next)
+			} else {
+				http.Error(w, "unavailable", http.StatusForbidden)
+			}
+		}))
+		res := extractOK(t, NewCeleb(testClient()), srv.URL+"/creator/a-creator-42/images", Options{})
+		srv.Close()
+		if len(res.Files) != 2 || res.Note != "partial — could not fetch next page; 2 of 4 images" {
+			t.Errorf("files = %d, note = %q", len(res.Files), res.Note)
+		}
 	}
 }
 
@@ -211,8 +223,8 @@ func TestCelebCancellationPropagates(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	u, _ := url.Parse(srv.URL + "/creator/a-creator-42/images")
-	_, err := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)).Extract(ctx, u, Options{})
+	u := mustParse(t, srv.URL+"/creator/a-creator-42/images")
+	_, err := NewCeleb(testClient()).Extract(ctx, u, Options{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation = %v", err)
 	}
@@ -235,20 +247,16 @@ func TestCelebPageLimit(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	u, _ := url.Parse(srv.URL + "/creator/a-creator-42/images")
-	res, err := NewCeleb(httpx.New("test", "en-US", 0, 5*time.Second)).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewCeleb(testClient()), srv.URL+"/creator/a-creator-42/images", Options{})
 	if requests != config.MaxAlbumPages || len(res.Files) != config.MaxAlbumPages ||
-		res.Note != fmt.Sprintf("%d of %d images", config.MaxAlbumPages, config.MaxAlbumPages+1) {
+		res.Note != fmt.Sprintf("partial — page limit; %d of %d images", config.MaxAlbumPages, config.MaxAlbumPages+1) {
 		t.Errorf("requests = %d, files = %d, note = %q", requests, len(res.Files), res.Note)
 	}
 }
 
 func TestCelebRejectsUnsupportedPaths(t *testing.T) {
 	for _, path := range []string{"/", "/search", "/creator", "/creator/a-creator/videos", "/creator/a-creator/images/no-id", "/creator/a-creator/images/0", "/creator/a-creator/images/1/extra"} {
-		u, _ := url.Parse("https://example.test" + path)
+		u := mustParse(t, "https://example.test"+path)
 		if _, err := NewCeleb(nil).Extract(context.Background(), u, Options{}); err == nil {
 			t.Errorf("accepted %s", path)
 		}
@@ -272,4 +280,29 @@ func TestCelebImageURL(t *testing.T) {
 			t.Errorf("accepted invalid URL %q", raw)
 		}
 	}
+}
+
+func TestCelebRecognise(t *testing.T) {
+	c := NewCeleb(nil)
+	inertia := func(component string) string {
+		data := html.EscapeString(`{"component":"` + component + `","props":{"creator":{"name":"A Creator","slug":"a-creator-1"}}}`)
+		return `<html><head><title>A Creator - Celeb.st</title></head><body><div id="app" data-page="` + data + `"></div></body></html>`
+	}
+	gallery := "https://gallery.example.test/creator/a-creator-1/images"
+	expectRecognised(t, c, htmlPage(t, gallery, inertia("Creator/Media")), true)
+	expectRecognised(t, c, htmlPage(t, gallery+"/42", inertia("Creator/MediaObject")), true)
+	// A creator's own page answers the app's not-found component; the app's
+	// data-page under the site's name is what is checked there.
+	expectRecognised(t, c, htmlPage(t, "https://gallery.example.test/creator/a-creator-1", inertia("404")), true)
+	// The right form and the name, but not the gallery's props.
+	expectRecognised(t, c, htmlPage(t, gallery, inertia("Feed/Hot")), false)
+	expectRecognised(t, c, htmlPage(t, gallery, `<html><head><title>A Creator - Celeb.st</title></head></html>`), false)
+	// The gallery's props on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://gallery.example.test/feed/hot", inertia("Creator/Media")), false)
+
+	expectShape(t, c, gallery, true)
+	expectShape(t, c, gallery+"/42", true)
+	expectShape(t, c, "https://gallery.example.test/creator/a-creator-1", true)
+	expectShape(t, c, "https://gallery.example.test/creator/a-creator-1/videos", false)
+	expectShape(t, c, "https://gallery.example.test/feed/hot", false)
 }

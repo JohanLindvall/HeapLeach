@@ -8,30 +8,67 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-func TestPixeldrainMatch(t *testing.T) {
+// pixeldrainViewerPage is a file page as the software serves it: the viewer
+// bundle, and the API root handed to it inline.
+const pixeldrainViewerPage = `<!DOCTYPE html><html><head><title>sample.bin ~ drive</title>
+<script>window.api_endpoint = '/api'; window.viewer_data = {"type":"file"};</script>
+<script src="/res/svelte/file_viewer.js"></script></head><body></body></html>`
+
+func TestPixeldrainRecognise(t *testing.T) {
 	p := NewPixeldrain(nil)
 	for _, raw := range []string{
-		"https://pixeldrain.com/l/abcd1234",
-		"https://pixeldrain.com/u/abcd1234",
-		"https://nova.storage/d/abcd1234",
-		"https://nova.storage/f/abcd1234",
+		"https://drive.example.test/u/abcd1234",
+		"https://drive.example.test/f/abcd1234",
+		"https://drive.example.test/l/abcd1234",
+		"https://drive.example.test/d/abcd1234/sub/dir",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
+		expectRecognised(t, p, htmlPage(t, raw, pixeldrainViewerPage), true)
+	}
+	expectShape(t, p, "https://drive.example.test/u/abcd1234", true)
+	expectShape(t, p, "https://drive.example.test/l/abcd1234", true)
+	// Other hosts' forms too: recognised once fetched, not followed alone.
+	expectShape(t, p, "https://drive.example.test/f/abcd1234", false)
+	expectShape(t, p, "https://drive.example.test/d/abcd1234", false)
+	expectShape(t, p, "https://drive.example.test/u/a-user-name", false)
+	// The right form and the site's name, without the viewer.
+	expectRecognised(t, p, htmlPage(t, "https://drive.example.test/u/abcd1234",
+		`<html><head><title>sample.bin ~ drive</title><meta property="og:site_name" content="drive"></head></html>`), false)
+	// The viewer on a path of no form of its own.
+	expectRecognised(t, p, htmlPage(t, "https://drive.example.test/home", pixeldrainViewerPage), false)
+	expectShape(t, p, "https://drive.example.test/u/abcd1234/extra", false)
+	expectShape(t, p, "https://drive.example.test/about", false)
+}
+
+// A page that cannot say is settled by the API describing the very file the
+// link names, asked once; an ordinary page of the form costs nothing.
+func TestPixeldrainRecogniseAskingTheAPI(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/file/SampleID/info" {
+			http.NotFound(w, r)
+			return
 		}
-		if !p.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
+		calls++
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `{"id":"SampleID","name":"sample.bin","size":12,"mime_type":"application/octet-stream"}`)
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPixeldrain(testClient())
+	failed := fixturePage(t, srv.URL+"/u/SampleID", http.StatusForbidden, "text/html", "denied")
+	for range 2 {
+		if !p.Recognise(context.Background(), failed) {
+			t.Fatal("a refused page whose API answers was not recognised")
 		}
 	}
-	other, _ := ParseURL("https://pixeldrain.example.test/l/abcd1234")
-	if p.Match(other) {
-		t.Error("matched a lookalike host")
+	if calls != 1 {
+		t.Errorf("the API was asked %d times, want once", calls)
+	}
+	if p.Recognise(context.Background(), htmlPage(t, srv.URL+"/u/SampleID", `<html><title>A user</title></html>`)) || calls != 1 {
+		t.Errorf("an ordinary page of the form was claimed or cost a request (%d)", calls)
 	}
 }
 
@@ -89,17 +126,13 @@ const (
 // rather than parsing a file's contents as JSON.
 func pixeldrainServer(t *testing.T, answers map[string]string) *httptest.Server {
 	t.Helper()
+	site := fakeSiteHandler(sitePages("", answers), &siteHits{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, ok := answers[r.URL.Path]
-		if !ok {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
 		if _, stat := r.URL.Query()["stat"]; !stat {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		_, _ = io.WriteString(w, body)
+		site.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -109,7 +142,7 @@ func testPixeldrain(t *testing.T) *Pixeldrain {
 	t.Helper()
 	// No retries: a subtree that will not answer should be given up on at
 	// once, and the test should not wait out a backoff to see it.
-	return &Pixeldrain{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return NewPixeldrain(testClient())
 }
 
 // This host counts connections rather than files: an anonymous caller is
@@ -121,7 +154,7 @@ func TestPixeldrainAsksForOneConnectionPerFile(t *testing.T) {
 
 	listed := p.toFile("https://pixeldrain.com", pixeldrainFile{ID: "AAAA", Name: "clip.mp4", Size: 10})
 	shared, ok := p.toNodeFile("https://pixeldrain.com", []string{"abcd1234", "clip.mp4"},
-		&pixeldrainNode{Type: pixeldrainFileNode, Name: "clip.mp4", FileSize: 10}, "")
+		&pixeldrainNode{Type: pixeldrainFileNode, Name: "clip.mp4", FileSize: 10})
 	if !ok {
 		t.Fatal("a plain file node was refused")
 	}
@@ -148,14 +181,7 @@ func TestPixeldrainSharedDirectory(t *testing.T) {
 		"/api/filesystem/abcd1234/photos": pixeldrainSharePhotos,
 	})
 
-	u, err := ParseURL(srv.URL + "/d/abcd1234")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/d/abcd1234", Options{})
 
 	if res.Title != "shared drive" {
 		t.Errorf("title = %q, want the shared directory's own name", res.Title)
@@ -163,6 +189,9 @@ func TestPixeldrainSharedDirectory(t *testing.T) {
 	if len(res.Files) != 2 {
 		t.Fatalf("resolved %d files, want 2 (the reported node and the unreadable subtree are not files)",
 			len(res.Files))
+	}
+	if res.Note != "partial — unreadable folders" {
+		t.Errorf("note = %q, want the unreadable subtree admitted", res.Note)
 	}
 
 	first := res.Files[0]
@@ -198,11 +227,7 @@ func TestPixeldrainSharedSubdirectory(t *testing.T) {
 		"/api/filesystem/abcd1234/photos": pixeldrainSharePhotos,
 	})
 
-	u, _ := ParseURL(srv.URL + "/d/abcd1234/photos")
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/d/abcd1234/photos", Options{})
 	if res.Title != "photos" {
 		t.Errorf("title = %q, want the directory that was asked for", res.Title)
 	}
@@ -218,11 +243,7 @@ func TestPixeldrainSharedFile(t *testing.T) {
 		"/api/filesystem/abcd1234": pixeldrainShareFile,
 	})
 
-	u, _ := ParseURL(srv.URL + "/d/abcd1234")
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/d/abcd1234", Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("resolved %d files, want 1", len(res.Files))
 	}
@@ -246,11 +267,7 @@ func TestPixeldrainOriginIsTheLinksOwn(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, _ := ParseURL(srv.URL + "/l/abcd1234")
-	res, err := testPixeldrain(t).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPixeldrain(t), srv.URL+"/l/abcd1234", Options{})
 	if want := "/api/list/abcd1234"; asked != want {
 		t.Errorf("asked for %q, want %q", asked, want)
 	}

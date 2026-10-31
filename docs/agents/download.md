@@ -13,7 +13,9 @@ jobs, the queue and what reaches the disk. How a single transfer runs is in
 counters (`downloaded` and `streams`) is guarded by `Manager.mu`. `downloaded`
 is atomic so the progress ticker can sample a running transfer without
 contending with workers. Workers take `mu` only to publish state transitions,
-never while blocked on I/O.
+never while blocked on I/O. A change that the browser should see and the
+scheduler should act on ends in `commitLocked`, which releases `mu` and only
+then marks the state dirty and wakes the dispatcher.
 
 **Item ownership — do not regress this.** `Item.inFlight` marks an item from
 dispatch until its worker has fully finished. Status alone cannot serve that
@@ -22,13 +24,36 @@ winding down, so gating on status would let cancel-then-retry hand the same
 item — and the same `.part` file — to two goroutines. A retry requested during
 that window sets `retryPending`, and the exiting worker re-queues it.
 `enqueueLocked` is the single entry point for queueing; regression tests live
-in `ownership_test.go`.
+in `ownership_test.go`. Settings change only through `ApplySettings`, which
+validates the whole update before applying any of it; tests read them back
+from `Snapshot()` or `CurrentSettings()`.
+
+The package's tests build managers with `testManager` (`helpers_test.go`),
+whose function argument tunes the configuration before anything is built from
+it, list files on a job with `queueJobLocked`, serve them from `testServer`
+(closed when the test ends) with `randomPayload` for contents, and read the
+queue through `jobView`, `findItem`, `countStatus` and `waitForStatus`; it
+waits with `waitFor`, or `waitLocked` for a condition read under `mu`, not a
+loop of its own. A net/http timeout is `timeoutError` (`tlsHandshakeTimeout`,
+`dialTimeout`). Tests that need the media tools skip without them through
+`requireFFmpeg` and `requireFFprobe`, run a tool with `run`, and read a
+result's streams with `ffprobeStreams`, the tests' own reading of ffprobe kept
+apart from `probeMedia` so a test cannot share the mistake it should catch. A
+test's own differences — retries, timings, whether it calls `Start()` — stay
+at the test. Accessors the code itself never needs, such as
+`hostGate.quiet` or `throttle.take`, live in `testonly_test.go`.
 
 **Clear finished only forgets successful jobs** (`Job.complete`): the source
 has no error and every item is done. Terminal jobs can still have failures,
 and even a done status can include canceled files or a partial listing, so
 neither status alone is enough. Incomplete jobs and their pending retries
 remain available. The UI's `isComplete` predicate mirrors this rule.
+
+**Stopping is allowed during shutdown; starting is not.** The job actions look
+their job up through `jobLocked`, which returns with `mu` held. Retries and
+limit changes pass `refuseClosing` and get `ErrClosed` once `Close` has begun;
+`CancelJob` and `RemoveJob` do not, since cancelling is what shutdown wants
+anyway. Both share `cancelJobLocked`.
 
 ## Part files
 
@@ -44,6 +69,8 @@ choice, and a change in either direction breaks one of them:
 - It is keyed on the **job's source**, not the item's URL, because several
   hosts hand out signed media links that expire between runs. Hashing those
   would change the name every time and resume nothing.
+  `jobSourceLocked` is that lookup, the item's own URL only where the job has
+  no source, for the worker, `startedOnDisk` and the host key alike.
 
 Collisions are handled by `Manager.claimPart`: the same URL queued twice gets
 the deterministic name for whichever transfer claims it first, and the random
@@ -61,9 +88,9 @@ consequences worth keeping in mind:
 - A paused transfer is idle *on purpose*, so `watchForStall` is given the
   pause predicate and does not count that time against it. Otherwise pausing
   would abort exactly the transfers the user asked to keep.
-- The stream supervisor asks `throttle.limiting()` before opening another
-  connection. A capped transfer and a slow one look identical from the outside
-  — bytes are not moving — and splitting a capped one eight ways cannot help,
+- The stream supervisors ask `throttle.limiting()` before opening another
+  connection (`segmentedTransfer.held`, which both share). A capped transfer
+  and a slow one look identical from the outside — bytes are not moving — and splitting a capped one eight ways cannot help,
   because the bucket is shared. `limiting()` measures the bucket's own
   throughput over a rolling window rather than whether anyone *blocked*: the
   bucket hands out whatever it has, so a transfer pinned exactly at the
@@ -196,8 +223,8 @@ Three rules here are easy to break:
   means *held*, and a job whose files were all done or cancelled comes back
   unheld while its items are just as URL-less.
 - **Resolution appends to `job.Items`**, so a restored job's items must be
-  dropped before it is re-read or every file in it doubles. Both `SetPaused`
-  (resuming) and `RetryJob` clear them, and
+  dropped before it is re-read or every file in it doubles. Both resuming
+  (`ApplySettings` with `Paused` false) and `RetryJob` clear them, and
   `TestResumingARestoredJobReplacesItsItemsRatherThanDoublingThem` holds that
   in place.
 - **`Close` persists before `stop()`, not after `wg.Wait()`.** Stopping
@@ -211,7 +238,7 @@ Three rules here are easy to break:
 Restored jobs are held by default, because resuming is the user's word to
 give. A service replaced by a deploy tool has nobody to give it, and every new
 image would stop the queue until noticed, so `HEAPLEACH_RESUME` / `-resume`
-says it at startup instead (`manager.SetPaused(false)` after `Start`), and
+says it at startup instead (`ApplySettings` unpausing after `Start`), and
 `/api/health` reports the build's `version` so the tool can tell the new
 process from the one it replaced.
 
@@ -276,7 +303,11 @@ itself as "(2)", then "(3)". Two things cover it:
   `.mp4` it became, so `remuxToMP4` makes the same check on its output;
   rewrapping is deterministic, so the copies are byte for byte the same.
   `identicalOnDisk` skips the new file itself, which by then already sits
-  under a numbered name.
+  under a numbered name. It and `alreadyOnDisk`'s `onDiskAs` share one scan
+  of the name and its numbered siblings (`numberedSiblings`, beside
+  `numberedName`), and both record the find through `markSkipped`.
+  `finishTransfer` is this end of `Manager.transfer`: join, the identical-file
+  check, `reserve`, rename and remux.
 
 ## Names and paths
 

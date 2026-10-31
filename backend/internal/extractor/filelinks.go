@@ -12,12 +12,12 @@ import (
 )
 
 // pageSniff recognises WordPress categories, then gives an ordinary HTML
-// page's file links precedence over an embedded preview. Named hosts and
-// earlier platform sniffs have already had their turn; remaining platforms
-// identify themselves in the fetched page or through a bounded API probe.
-// Outside a recognised category, only registered extractors are expanded:
-// ordinary HTML navigation cannot recurse through this fallback. A page
-// without supported links keeps the existing media fallback.
+// page's file links precedence over an embedded preview. Every platform has
+// already been offered the probed page by its own recogniser, so what
+// reaches this is a page none of them claimed. Outside a recognised
+// category, only registered extractors are expanded: ordinary HTML
+// navigation cannot recurse through this fallback. A page without supported
+// links keeps the existing media fallback.
 func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	ext := strings.ToLower(path.Ext(u.Path))
 	switch ext {
@@ -25,18 +25,13 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	default:
 		return nil, nil
 	}
-	// Header-gated and bounded: a binary response must never be read as a
-	// page, even when its signed URL has no extension.
-	doc, page, ok := mediaPageFetchURL(ctx, d.client, u)
+	doc, page, ok := d.document(ctx, u)
 	if !ok {
-		return platformAPIs(ctx, d.client, u, opts)
+		return nil, nil
 	}
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, nil
-	}
-	if res, err := platformPage(ctx, d.client, page, root, doc, opts); res != nil || err != nil {
-		return res, err
 	}
 	if d.registry != nil {
 		if wordPressCategory(root, page) {
@@ -44,14 +39,11 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 		}
 	}
 	album, albumErr := darkGramResult(d.client, page, root, opts)
-	if album == nil && albumErr == nil {
-		if res, err := platformAPIs(ctx, d.client, page, opts); res != nil || err != nil {
-			return res, err
-		}
-	}
 	if d.registry != nil {
 		if sources := fileLinkSources(d.registry, linksCandidates(root, u)); len(sources) > 0 {
-			return expandPageLinks(ctx, d.registry, u, root, sources, opts)
+			if res, err := expandPageLinks(ctx, d.registry, u, root, sources, opts); res != nil || err != nil {
+				return res, err
+			}
 		}
 	}
 	if album != nil || albumErr != nil {
@@ -64,11 +56,29 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (*Resu
 	return nil, nil
 }
 
+// document is the page as HTML: the registry's probe when it read one, or
+// else a fetch of its own. Either way it is header-gated and bounded, since
+// a binary response must never be read as a page, even when its signed URL
+// has no extension.
+func (d *Direct) document(ctx context.Context, u *url.URL) (string, *url.URL, bool) {
+	if p := probed(ctx, u); p != nil {
+		if doc, ok := p.Document(); ok {
+			if !mediaPageIsHTMLType(p.MediaType()) {
+				return "", nil, false
+			}
+			return doc, p.Final, true
+		}
+	}
+	return mediaPageFetchURL(ctx, d.client, u)
+}
+
 // fileLinkSources keeps links claimed by registered extractors. The generic
 // Direct fallback is never followed, even if it could discover more links on
 // that page. Other hosts keep their complete URLs (including Mega's key).
-// K2S and FileBoom additionally deduplicate by service and file ID, ignoring
-// aliases, filenames and tracking parameters, and exclude non-file pages.
+// Keep2Share file links additionally deduplicate by file ID, ignoring the
+// domain, filenames and tracking parameters: a link's form cannot say which
+// of the service's hosts it is before its page is probed, and they serve
+// one file store, an ID naming the same file on either.
 func fileLinkSources(registry *Registry, candidates []string) []string {
 	var sources []string
 	seen := make(map[string]bool)
@@ -78,16 +88,13 @@ func fileLinkSources(registry *Registry, candidates []string) []string {
 			continue
 		}
 		ex, known := registry.Known(u)
-		if !known || ex.Name() == "direct" || ex.Name() == linksScheme {
+		if !known || ex.Name() == linksScheme {
 			continue
 		}
 		key := link
-		if ex.Name() == "keep2share" || ex.Name() == "fileboom" {
-			parts := util.PathSegments(u)
-			if len(parts) < 2 || parts[0] != "file" {
-				continue
-			}
-			key = ex.Name() + "/" + parts[1]
+		if _, ok := ex.(*Keep2Share); ok {
+			// Its form is /file/<id>.
+			key = "keep2share-file/" + util.PathSegments(u)[1]
 		}
 		if seen[key] {
 			continue

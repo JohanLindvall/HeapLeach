@@ -3,6 +3,63 @@
 Notes on hosts that store uploaded files. The shared machinery they use is in
 [extractors.md](../extractors.md).
 
+## Share rows
+
+Most of these hosts are one row of a table rather than an extractor of
+their own: `Share` (`shares.go`) is the extractor, and a host is a
+`shareSite` — its name, its inventory line, its link forms and the function
+that reads a recognised link — registered through its `New…` constructor.
+bunkr, cyberdrop, dropbox, emload, filejump, filester, imagepond, mediafire,
+pixhost, suvobox, turbo and wetransfer are rows. A form is a `shape`, which
+is what the link scanner follows, and a `recognise`, which takes a probed
+page whose *final* URL has that shape; the first form the final URL has
+decides, as the switch each host used to carry did. A form without
+`recognise` is a link that only redirects to another form (wetransfer's
+short links, mediafire's oldest `/?<key>`), followed for its form and never
+recognised in its own right. `extract` reads the link as the host always
+has, its own checks and error texts included. A row may cap its requests
+(`timeout`, emload) or name an API base a test serves through `Share.api`
+(mediafire, wetransfer).
+
+Recognition still never reads a host: `TestShareFormsNeverReadTheHost`
+applies `TestRecognitionNeverReadsTheHost`'s rule inside every row's forms.
+What the rows share besides — `Share.root` for a page fetched with the
+host's referer, failing as "<host>: fetch <url>: …", `albumTitle` for a job
+named after an album page, `linkPathID` for a listing's `/<kind>/<id>`
+links and `enabledControl` for a download button a page has not disabled —
+is in `shares.go` too. gofile, mega, keep2share and pixeldrain keep types of
+their own, since they hold state (tokens, quotas, cooldowns) or recognise by
+asking an API, and Google Drive does because it recognises a link by the
+submitted URL as well as the final one.
+
+## Nested folders
+
+gofile, mediafire, pixeldrain and filester folder shares are trees, and each
+walks its tree through `walkTree` (`tree.go`); the host supplies only a
+function that reads one folder into its entries, in the host's own order. The
+walk is what bounds them all alike: folders deeper than
+`config.MaxFolderDepth` are not read, a folder reached twice is read once, no
+more folders are read than the user's source limit and no more files are
+taken than the user's file limit. A subfolder's directory is its label
+through `sourceFolder`, so a label with a slash in it is one folder, falling
+back to the folder's id where the label makes no name. A subfolder that cannot
+be read is left out rather than failing the share, and every cut — a limit or
+an unreadable folder — is a "partial — …" note. An error reading the root, or
+one the reader wraps in `treeStop` (filester's password gate), fails the job.
+
+A folder that is itself paged — gofile's pages, mediafire's chunks,
+filester's folder pages — is read
+through `walkPages`, and a listing that stopped short (the page cap, a later
+page that failed, a page that added nothing) is put on the walk's note with
+`treeWalk.partial`. The reader stops reading once the folder's files exceed
+`treeWalk.room()`: none past it could be taken, and the walk says the file
+limit cut the share. The root of a gofile share is read before the walk,
+against the file limit itself, and its note seeds the result's.
+
+mega builds its tree from one listing and autoindex crawls a server's own
+pages, so neither goes through it; their bounds and notes are their own,
+below.
+
 ## bunkr
 
 bunkr's links are signed for about twenty minutes, so files resolve through
@@ -58,6 +115,11 @@ to rotate to, and a busy server stops at `config.BusyRetryLimit`. A busy
 storage server answers with the site's HTML shell and a `Content-Length` that
 agrees, which `rejectWebPage` catches ([transfers.md](../transfers.md)).
 
+The root folder is read in `Extract`, where a stale account token is renewed;
+subfolders are read by the tree walk ([above](#nested-folders)) with the same
+token and password, so a subfolder that refuses either is noted and left out.
+A folder's pages end where `hasNextPage` says, or at a page without children.
+
 ## pixeldrain
 
 pixeldrain counts connections rather than files. An anonymous caller is
@@ -72,6 +134,12 @@ published, so nothing guesses at it and the downloader learns the rest by
 being refused (connection-count limits in [transfers.md](../transfers.md)).
 nova.storage runs the same software and shares this pacing.
 
+A `/d/<id>` share is a directory of somebody's filesystem. The root's stat
+answers whether it is a file or a directory, and a directory is walked one
+stat per subdirectory ([above](#nested-folders)), each child addressed by
+appending its name to the path just proved to work rather than by the node's
+own path, which is relative to a filesystem the share may not open onto.
+
 ## mega
 
 mega encrypts everything client-side, so `mega.go` cannot ask the API for a
@@ -84,6 +152,14 @@ found — every candidate is tried and the one whose attributes carry the prefix
 is the right one. The per-file MAC is deliberately not verified; see the
 comment on `megaFileKey`. The payload is AES-CTR, set as `File.Cipher` and
 decrypted on the way to disk.
+
+A folder share is listed whole in one request, and `megaDir` files each file
+under its decrypted folder names, each one directory through `treeDir`: a
+slash in a name is no folder of its own, and a name that makes none (empty,
+undecryptable, `.` or `..`) is the folder's handle. A link may select one
+file (`#<key>/file/<node>`) or one subfolder (`#<key>/folder/<sub>`); a
+subfolder is picked out of the listing, its files filed from it down under
+its name, and one the listing does not hold leaves the whole share.
 
 ### Transfer quota
 
@@ -105,8 +181,9 @@ on through another at no cost to its retries. Without proxies the file waits
 in the queue for the quota. Links are asked for over https (`ssl: 2`), so a
 proxy carries the bytes in a tunnel it cannot read or alter.
 
-The waits are kept by route on the `Mega` value (`spent`), with the normal
-connection under `httpx.DirectRoute` as Keep2Share keeps its cooldowns, so a
+The waits are kept by route on the `Mega` value (`spent`, a `routeWaits`),
+with the normal connection under `httpx.DirectRoute`, in the same store
+Keep2Share keeps its cooldowns in, so a
 route known to be spent is answered from memory and the rest of the queue
 learns a wait from the first file that met it. Link requests use a client
 capped at `MegaRequestTimeout`, since they go through public proxies, and the
@@ -122,9 +199,11 @@ folder listing (`f`) asks for no links at all.
 ## emload
 
 emload file shares use `/v2/file/<id>[/<filename>]` or the older
-`/file/<id>[/<filename>]`. Discovery uses the URL's filename as a hint and
-defers all requests to `File.Resolve`, after the worker leases an `emload`
-proxy route. The `.free-downloader` carries a percent-encoded storage origin
+`/file/<id>[/<filename>]`. The registry's probe reads the share page once,
+on the normal connection, to recognise it (a page view spends none of the
+daily allowance); discovery then uses the URL's filename as a hint and
+defers every request of its own to `File.Resolve`, after the worker leases
+an `emload` proxy route. The `.free-downloader` carries a percent-encoded storage origin
 (`data-srv`) and the `data-dl` token for `download.php?accesstoken=...`; read
 them afresh on that route, keeping its cookies and the redirected page URL as
 referer through the transfer. The page supplies the final filename; the
@@ -157,20 +236,30 @@ button and reject unavailable shares.
 filester file shares use `/d/<slug>`. The script POSTs the slug to
 `/v2/api/public/download` and builds the storage link from the answer
 (`server` + `/v2/` + `file` + `?token=`). The token lasts half an hour and
-encodes the requesting address, so it is minted through `Resolve`. The
-`download=true&n=` the page's button adds only sets a disposition name and is
-left off. The site moves between top-level domains, all serving one API, so
-`Match` takes `filester.<any TLD>` with the `/d/` or `/f/` shape rather than a
-`hostSet` that would trail every move.
+encodes the requesting address, so it is minted through `Resolve`, by
+`signedResult` (`extractor.go`), as turbo's is: signed once at extraction so
+a dead link fails the job at once and the queue shows the real name, and
+again when the transfer starts. The `download=true&n=` the page's button adds only sets a disposition name and is
+left off. The site moves between top-level domains, all serving one API; the
+page is recognised by its download script and button, so a move needs
+nothing here.
 
-Folder shares use `/f/<id>`. `filesterfolder.go` reads only `filesGrid` cards:
-their `onclick` names the file page, `data-name` preserves the original name,
-and `data-size` is an exact byte count, unlike the rounded visible size. It
+Folder shares use `/f/<id>`. The folder half of `filester.go` reads only
+`filesGrid` cards: their `onclick` names the file page, `data-name`
+preserves the original name, and `data-size` is an exact byte count, unlike
+the rounded visible size. It
 starts at page one, follows the folder's own next-page links, deduplicates
-files, and walks `subfoldersGrid` links with relative destination directories.
-File, folder, depth and page limits bound the walk; incomplete results add a
-note without changing the folder title. Discovery never signs individual
-files.
+files, and walks `subfoldersGrid` links through the shared tree walk
+([above](#nested-folders)). Each folder's pages go through `walkPages`, keyed
+by file slug, which stops asking once the folder holds as many files as the
+walk has room for and more pages remain. The page budget
+(`config.MaxAlbumPages`) spans the whole walk rather than one folder, so each
+folder is given what earlier folders left. A first page without a next link is
+the whole folder, so one holding only subfolders is no empty page. A first
+page that fails or carries no listing fails the share at the root and is a
+note deeper down; a password refusal on any page fails it outright.
+Incomplete results add a note without changing the folder title. Discovery
+never signs individual files.
 
 The password form requires its nonce and a base64-encoded UTF-8 envelope of
 `password|Unix milliseconds|nonce`. Unlocking sets `folder_access_token`,
@@ -216,3 +305,26 @@ all; for those, `/i/<slug>/direct` redirects to the media host.
 `imagePondDirect`, and both are needed, since pages of both kinds are served.
 The fallback needs one guard: `util.NameFromURL` on a `/direct` URL yields the
 literal "direct", which is not a filename.
+
+## mediafire
+
+A folder is listed through the API, files first and then subfolders, each in
+chunks (`get_content.php`). `more_chunks` is the API saying whether another
+chunk follows, so its absence ends the listing however empty the last chunk
+is: a folder of only subfolders answers an empty file chunk. The files'
+first chunk failing is the folder failing; once some files are read, the
+subfolders failing leaves them standing with "unreadable folders". Past the
+walk's room the subfolders are not asked for, since they come after the
+files and could not fit either.
+
+## Open directories (autoindex)
+
+autoindex crawls a server's generated listings a level at a time, so a
+level's directories are read concurrently and the bounds apply between
+levels, where the counts are settled. It is bounded like a folder share: no
+more directories than the user's source limit, no more files than their file
+limit, and no deeper than `config.MaxDirectoryDepth`, the guard against a
+symlink loop whose every traversal has a longer URL. Its notes are the tree
+walk's words — "partial — folder limit", "file limit", "unreadable folders" —
+for a bound that left a named directory unread, a cut file list, or a
+subdirectory that would not load (which is skipped, not fatal).

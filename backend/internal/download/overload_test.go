@@ -5,12 +5,10 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -225,14 +223,9 @@ func TestHostGateEasesBackUpAndForgetsAMeaninglessCap(t *testing.T) {
 // until there is room — which is what leaves the workers free for the hosts
 // that are coping.
 func TestAFullHostHandsTheItemBackInsteadOfHoldingAWorker(t *testing.T) {
-	payload := make([]byte, 16<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
-	other := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer other.Close()
+	payload := randomPayload(t, 16<<10)
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
+	other := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	m := busyManager(t)
 	busy, err := url.Parse(srv.URL)
@@ -313,14 +306,10 @@ func bucklingServer(payload []byte, refusals int32) (http.Handler, *atomic.Int32
 // struggling host all reading "attempt 5 of 10" — an item that has been
 // refused holds nothing worth keeping.
 func TestARefusedTransferGivesUpItsSlotInsteadOfRetryingInPlace(t *testing.T) {
-	payload := make([]byte, 64<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 64<<10)
 
 	handler, hits := bucklingServer(payload, 1<<30)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	srv := testServer(t, handler)
 
 	m := busyManager(t)
 	host, err := url.Parse(srv.URL)
@@ -359,16 +348,12 @@ func TestARefusedTransferGivesUpItsSlotInsteadOfRetryingInPlace(t *testing.T) {
 // that answered, not the site the job was submitted from. A queue built from
 // an index site is the case that proves it — every file lives elsewhere.
 func TestOverloadThrottlesTheHostThatAnsweredNotTheJobsSource(t *testing.T) {
-	payload := make([]byte, 32<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 32<<10)
 
 	// The fixture disables HTTP retries, so one refusal reaches the queue
 	// branch and the next transfer can recover.
 	handler, _ := bucklingServer(payload, 1)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	srv := testServer(t, handler)
 
 	m := busyManager(t)
 	const indexHost = "index.example.test"
@@ -417,8 +402,7 @@ func TestOverloadThrottlesTheHostThatAnsweredNotTheJobsSource(t *testing.T) {
 // is left alone, but there is no rate of ours to find, so nothing is capped.
 func TestAnUnavailableHostIsLeftAloneButNotThrottled(t *testing.T) {
 	handler, _ := bucklingServer(nil, 1<<30)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	srv := testServer(t, handler)
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/busy/clip.mp4", Size: -1}
@@ -449,8 +433,7 @@ func TestAnUnavailableHostIsLeftAloneButNotThrottled(t *testing.T) {
 // the waiting happens in the queue and each turn is a separate transfer.
 func TestOverloadPatienceIsBounded(t *testing.T) {
 	handler, _ := bucklingServer(nil, 1<<30)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	srv := testServer(t, handler)
 
 	m := busyManager(t)
 	host, err := url.Parse(srv.URL)
@@ -480,12 +463,8 @@ func TestOverloadPatienceIsBounded(t *testing.T) {
 // taking one download at a time for hours. So the turn comes first and the
 // signature second.
 func TestASignedLinkIsMintedAfterTheHostsTurnNotBefore(t *testing.T) {
-	payload := make([]byte, 16<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
+	payload := randomPayload(t, 16<<10)
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	host, err := url.Parse(srv.URL)
 	if err != nil {
@@ -568,8 +547,7 @@ func TestWaitingRowsAgreeAboutWhatTheHostIsTaking(t *testing.T) {
 	late := &Item{ID: "late", Name: "late.mp4", Status: StatusQueued, Size: -1}
 	m.mu.Lock()
 	job := &Job{ID: "j", Source: "https://" + host + "/a/AAAA", Items: []*Item{early, late}}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
+	m.queueJobLocked(job)
 
 	// Turned away when the host was taking two, and again once it was down
 	// to one — which is how a queue collects disagreeing rows.
@@ -608,13 +586,9 @@ func TestWaitingRowsAgreeAboutWhatTheHostIsTaking(t *testing.T) {
 // between this item's turns is working through its queue, and failing the
 // file for having waited behind it would give up on a host that is serving.
 func TestOverloadPatienceStartsOverWhenTheHostServesSomethingElse(t *testing.T) {
-	payload := make([]byte, 16<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 16<<10)
 	handler, _ := bucklingServer(payload, 1<<30)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	srv := testServer(t, handler)
 
 	m := busyManager(t)
 	host, err := url.Parse(srv.URL)
@@ -644,7 +618,8 @@ func TestOverloadPatienceStartsOverWhenTheHostServesSomethingElse(t *testing.T) 
 // A retry starts the patience over. Carried across, a file that had run out
 // of it failed on the first refusal after being retried, without waiting.
 func TestRetryingAnItemStartsItsOverloadPatienceOver(t *testing.T) {
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	it := &Item{ID: newID(), Name: "clip.mp4", Status: StatusFailed, overloadWaits: config.OverloadRetries + 1, refusedAt: time.Now()}
 	m.mu.Lock()
 	m.enqueueLocked(it)

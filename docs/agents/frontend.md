@@ -55,17 +55,23 @@ The header's Settings button opens live concurrency, streams, speed and
 download proxy controls. Proxy settings last for the session; parallel
 downloads, streams and proxy protocols are kept with the queue
 ([download.md](download.md)). The protocol choices (`ProtocolSelect`) show a
-choice as made until a snapshot agrees, or for a few seconds if none does, as
-the proxy switch does, and each sends only its own group.
+choice as made until a snapshot agrees, or for `SETTLE_TIMEOUT_MS` if none
+does, as the proxy switch does (both through `useSettledChoice`, whose
+constant the sliders share), and each sends only its own group. A failed call
+shows the server's message where there is one (`errorMessage` in `api.ts`)
+and the caller's own words otherwise.
 
 Each job card's gauge button opens that job's own limits (`JobLimits`): number
 fields that commit on Enter or blur and are held to the queue's values, a
 speed menu offering only speeds beneath the queue's, and the server's value
 shown otherwise. Tags on the card say which limits hold while it is closed.
 
-`ProxyList` selects Keep2Share, FileBoom, EMLOAD, MEGA or WAF recovery with
+`ProxyList` selects Keep2Share, EMLOAD, MEGA or WAF recovery with
 the `site` query and polls `/api/proxies` only while mounted and the tab is
-visible. The inventory can contain tens of thousands of routes and must not be
+visible, through `usePolling`, which the Logs panel shares: one poll at a
+time, the next an interval after the last ends, at once when the tab is shown
+again, and each poll's signal aborted when its query changes or the component
+goes. The inventory can contain tens of thousands of routes and must not be
 added to SSE snapshots. Filtering, sorting and pagination happen server-side,
 in `proxytron/lease`'s `Pool.Page`, which builds rows only up to the end of
 the requested page and works out each route's ID and shown address once;
@@ -81,6 +87,12 @@ The Logs panel polls `/api/logs` deltas only while it is open, visible and
 unpaused, aborts pending reads on close or pause, and discards expired rows
 even when the byte limit shortens the window. Export uses the current filters.
 Messages render as text, including markup in remote error messages.
+
+## Tests
+
+Component tests run under jsdom. `testkit.ts` gives each test of a file a
+fresh `host` and `root` (`mountEachTest`, called before the file's own
+`beforeEach`) and `deferred<T>()` for a request a test holds open.
 
 ## Styles
 

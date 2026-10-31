@@ -5,11 +5,8 @@ package extractor
 import (
 	"cmp"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,6 +51,7 @@ import (
 // instead of a field. The BBC names a programme in up to three levels, and
 // which of them is the episode's own name depends on how many were filled in.
 type BBCSounds struct {
+	about
 	client *httpx.Client
 }
 
@@ -71,20 +69,22 @@ const (
 )
 
 // NewBBCSounds builds the BBC Sounds extractor.
-func NewBBCSounds(client *httpx.Client) *BBCSounds { return &BBCSounds{client: client} }
+func NewBBCSounds(client *httpx.Client) *BBCSounds {
+	return &BBCSounds{client: client, about: about{name: "bbcsounds", shape: bbcShape,
+		recognises: "episodes, brands and series (`/sounds/play/<pid>`, `/sounds/brand/<pid>`, `/sounds/series/<pid>`) served by the BBC Sounds web app"}}
+}
 
-func (b *BBCSounds) Name() string { return "bbcsounds" }
+// bbcShape is an episode, brand or series: /sounds/<kind>/<pid>.
+var bbcShape = pathShape(`^/sounds/(?:play|brand|series)/[A-Za-z0-9:]+`)
 
-// Match takes the Sounds section of bbc.co.uk and nothing else on it. The
-// rest of the domain is news, iPlayer and a great deal besides that nothing
-// here resolves, and the two API hosts this talks to are never pasted by
-// anyone.
-func (b *BBCSounds) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "bbc.co.uk") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && strings.EqualFold(segs[0], "sounds")
+// bbcSoundsBundle is where the Sounds web app is served from.
+const bbcSoundsBundle = "/sounds/web/sounds-web-spa/"
+
+// Recognise takes an episode, brand or series page served by the Sounds web
+// app (its bundle path): the page is the app's shell, and what it plays is
+// the programmes API's to say, by the pid in the path.
+func (b *BBCSounds) Recognise(_ context.Context, p *Page) bool {
+	return bbcShape(p.Final) && p.Script(bbcSoundsBundle) && p.Named("BBC Sounds")
 }
 
 // Extract handles one episode, or a brand or series expanded into its
@@ -133,14 +133,12 @@ func (b *BBCSounds) episode(ctx context.Context, pid string) (*Result, error) {
 	// A lone file lands straight in the download directory with no folder to
 	// say what it belongs to, so every level of the name is used: a Radio 4
 	// episode title on its own is routinely just a date.
-	title := util.FirstNonEmpty(bbcName(item.Titles.full()), pid)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(bbcName(item.Titles.full()), pid), file), nil
 }
 
 // container expands a brand or a series into one file per episode.
 func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) {
-	items, err := b.listing(ctx, pid)
+	items, total, walkNote, err := b.listing(ctx, pid, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
@@ -150,105 +148,70 @@ func (b *BBCSounds) container(ctx context.Context, pid string) (*Result, error) 
 
 	// Every row names its container, so the job's folder is named without a
 	// request of its own.
-	title := util.FirstNonEmpty(bbcName(items[0].Container.Title), bbcName(items[0].Titles.Primary), pid)
+	title := cmp.Or(bbcName(items[0].Container.Title), bbcName(items[0].Titles.Primary), pid)
 
 	// A listing of downloadable episodes is already complete — each row
 	// carries its own file_url — and one of streamed episodes needs a media
 	// selection and two playlists each. Fetched one after another that is
 	// minutes before a byte moves, so they go out several at a time, in the
 	// listing's order.
-	resolved := FanOut(ctx, items, func(ctx context.Context, item bbcItem) ([]bbcResolved, error) {
-		file, err := b.file(ctx, item)
-		if err != nil {
-			return []bbcResolved{{refusal: err}}, nil
-		}
-		// The folder is named for the container, which is the first level of
-		// every title in it, so the file is named by what lies below it.
-		file.Name = util.FirstNonEmpty(bbcName(item.Titles.within()), item.pid()) + file.Name
-		return []bbcResolved{{file: file}}, nil
-	})
-
-	result := &Result{Title: title}
-	var (
-		refused *bbcRefused
-		failed  error
-	)
-	for _, r := range resolved {
-		if r.file != nil {
-			result.Files = append(result.Files, *r.file)
-			continue
-		}
-		// One refused episode must not sink the rest, but its reason is kept:
-		// when every episode is refused it is refused for the same reason,
-		// and that reason is the only thing the caller can act on. A refusal
-		// outranks an ordinary failure, since it is the one that explains a
-		// container that resolves to nothing at all.
-		if refused == nil {
-			refused, _ = errors.AsType[*bbcRefused](r.refusal)
-		}
-		if failed == nil {
-			failed = r.refusal
-		}
-	}
-	if len(result.Files) == 0 {
-		reason := "the media selector named no stream for any of them"
-		switch {
-		case refused != nil:
-			reason = refused.reason()
-		case failed != nil:
-			// The failure already opens with this extractor's name, and the
-			// sentence it is being folded into does too.
-			reason = strings.TrimPrefix(failed.Error(), "bbcsounds: ")
-		}
-		return nil, fmt.Errorf("bbcsounds: none of the %d episodes of %s are playable: %s",
-			len(items), title, reason)
-	}
-	return result, nil
+	return listSeries(ctx, title, series[bbcItem]{
+		site: "bbcsounds", noun: "episodes", link: title,
+		items: items, listed: total,
+		resolve: func(ctx context.Context, item bbcItem) (*File, error) {
+			file, err := b.file(ctx, item)
+			if err != nil {
+				return nil, err
+			}
+			// The folder is named for the container, which is the first
+			// level of every title in it, so the file is named by what lies
+			// below it.
+			file.Name = cmp.Or(bbcName(item.Titles.within()), item.pid()) + file.Name
+			return file, nil
+		},
+		unplayable: "the media selector named no stream for any of them",
+	}, walkNote)
 }
 
-// bbcResolved is one listing row after resolving: a file, or the reason there
-// is not one. FanOut drops errors, and here the reason is worth keeping — a
-// container refused for one reason should say that reason once rather than a
-// hundred times — so it travels as a value instead.
-type bbcResolved struct {
-	file    *File
-	refusal error
-}
-
-// listing pages a container's episodes.
+// listing pages a container's episodes, up to limit of them, with the
+// count the listing states when it stopped there, and the note for a
+// listing cut short some other way.
 //
 // The endpoint caps a page at a hundred rows: a larger limit is echoed back
 // and then ignored, which is exactly config.FolderPageSize, so paging is by
-// the count actually returned rather than by the limit asked for.
-func (b *BBCSounds) listing(ctx context.Context, container string) ([]bbcItem, error) {
-	var items []bbcItem
-	for offset := 0; ; {
-		query := url.Values{
-			"container": {container},
-			// The order the site itself lists a container in.
-			"sort":   {"sequential"},
-			"type":   {"episode"},
-			"limit":  {strconv.Itoa(config.FolderPageSize)},
-			"offset": {strconv.Itoa(offset)},
-		}
-		var page bbcListing
-		if err := b.client.GetJSON(ctx, bbcListingAPI+"?"+query.Encode(),
-			httpx.Referer(bbcSoundsRoot+"/"), &page); err != nil {
-			return nil, fmt.Errorf("bbcsounds: episodes of %s: %w", container, err)
-		}
-		if len(page.Data) == 0 {
-			return items, nil
-		}
-		items = append(items, page.Data...)
-		offset += len(page.Data)
-		if offset >= page.Total || len(items) >= config.MaxListingVideos {
-			// A strand like Newshour runs to several thousand editions, which
-			// is a mistake being carried out efficiently rather than a
-			// download. An hour of audio each is the same shape as a channel
-			// of videos, so it is bounded the same way.
-			return items[:min(len(items), config.MaxListingVideos)], nil
-		}
+// the count actually returned rather than by the limit asked for. A strand
+// like a daily news programme runs to several thousand editions.
+func (b *BBCSounds) listing(ctx context.Context, container string, limit int) (items []bbcItem, listed int, note string, err error) {
+	offset, total := 0, 0
+	items, more, note, err := walkEpisodes(ctx, limit, pageWalk[bbcItem]{
+		fetch: func(ctx context.Context, _ int) (pageOf[bbcItem], error) {
+			query := url.Values{
+				"container": {container},
+				// The order the site itself lists a container in.
+				"sort":   {"sequential"},
+				"type":   {"episode"},
+				"limit":  {strconv.Itoa(config.FolderPageSize)},
+				"offset": {strconv.Itoa(offset)},
+			}
+			var page bbcListing
+			if err := b.client.GetJSON(ctx, bbcListingAPI+"?"+query.Encode(),
+				httpx.Referer(bbcSoundsRoot+"/"), &page); err != nil {
+				return pageOf[bbcItem]{}, err
+			}
+			offset += len(page.Data)
+			total = page.Total
+			// A listing that states no total is its first page alone.
+			return pageOf[bbcItem]{items: page.Data, next: page.Total > 0, end: len(page.Data) == 0, total: page.Total}, nil
+		},
+		key: func(item bbcItem) string { return item.pid() },
+	})
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("bbcsounds: episodes of %s: %w", container, err)
 	}
+	if more {
+		return items, total, "", nil
+	}
+	return items, 0, note, nil
 }
 
 // file turns one playable item into something to download. The returned File
@@ -263,10 +226,10 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	// one.
 	if variant, ok := item.Download.best(); ok {
 		return &File{
-			Name:       bbcDownloadExtension(variant.FileURL),
+			Name:       linkExt(variant.FileURL, ".mp3"),
 			URL:        variant.FileURL,
-			Size:       variant.size(),
-			SizeApprox: variant.size() > 0,
+			Size:       knownSize(variant.FileSize),
+			SizeApprox: variant.FileSize > 0,
 			Headers:    headers,
 		}, nil
 	}
@@ -280,19 +243,11 @@ func (b *BBCSounds) file(ctx context.Context, item bbcItem) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	media, err := resolveMediaPlaylist(ctx, b.client, stream, headers)
+	media, err := broadcastMedia(ctx, b.client, "bbcsounds", item.pid(), stream, headers)
 	if err != nil {
-		return nil, fmt.Errorf("bbcsounds: %s: %w", item.pid(), err)
+		return nil, err
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // stream asks the media selector for a version's playlist.
@@ -311,7 +266,7 @@ func (b *BBCSounds) stream(ctx context.Context, vpid string) (string, error) {
 		return "", fmt.Errorf("bbcsounds: media selector for %s: %w", vpid, err)
 	}
 	if doc.Result != "" {
-		return "", &bbcRefused{pid: vpid, result: doc.Result}
+		return "", &broadcastRefusal{"bbcsounds", vpid, bbcReason(doc.Result)}
 	}
 	if href := doc.stream(); href != "" {
 		return href, nil
@@ -327,41 +282,28 @@ func (b *BBCSounds) stream(ctx context.Context, vpid string) (string, error) {
 // fact worth having. Neither status is retried by the client, which is what
 // makes the body available here at all.
 func bbcRefusal(pid string, err error) error {
-	status, ok := errors.AsType[*httpx.StatusError](err)
-	if !ok || status.Body == "" {
-		return nil
-	}
-	var doc struct {
+	doc, ok := refusalBody[struct {
 		Result string `json:"result"`
-	}
-	if json.Unmarshal([]byte(status.Body), &doc) != nil || doc.Result == "" {
+	}](err)
+	if !ok || doc.Result == "" {
 		return nil
 	}
-	return &bbcRefused{pid: pid, result: doc.Result}
+	return &broadcastRefusal{"bbcsounds", pid, bbcReason(doc.Result)}
 }
 
-// bbcRefused is the media selector declining to name a stream.
-//
-// It is a type rather than a message so that expanding a container can report
-// the reason once instead of the same refusal several hundred times. Unlike
-// NRK, which refuses in a sentence written for a viewer and worth passing
-// through untouched, the BBC refuses in a token: "selectionunavailable" is
-// not an answer to give anybody, so it is turned into one here.
-type bbcRefused struct {
-	pid    string
-	result string
-}
-
-func (e *bbcRefused) Error() string { return "bbcsounds: " + e.pid + ": " + e.reason() }
-
-func (e *bbcRefused) reason() string {
-	switch strings.ToLower(e.result) {
+// bbcReason is the media selector's refusal to name a stream, in words.
+// Unlike NRK, which refuses in a sentence written for a viewer and worth
+// passing through untouched, the BBC refuses in a token:
+// "selectionunavailable" is not an answer to give anybody, so it is turned
+// into one here.
+func bbcReason(result string) string {
+	switch strings.ToLower(result) {
 	case "geolocation":
 		return "BBC Sounds offers this inside the United Kingdom only"
 	case "selectionunavailable":
 		return "BBC Sounds holds no stream for this any more — its availability window has closed"
 	}
-	return "the media selector refused it: " + e.result
+	return "the media selector refused it: " + result
 }
 
 // bbcListing is one page of a container's episodes.
@@ -396,7 +338,7 @@ func (i bbcItem) pid() string {
 	if idx := strings.LastIndex(i.Urn, ":"); idx >= 0 {
 		return i.Urn[idx+1:]
 	}
-	return util.FirstNonEmpty(i.Urn, i.ID)
+	return cmp.Or(i.Urn, i.ID)
 }
 
 // bbcDownload is the offline copy, where one is offered.
@@ -413,14 +355,6 @@ type bbcVariant struct {
 	Bitrate  int    `json:"bitrate"`
 	FileURL  string `json:"file_url"`
 	FileSize int64  `json:"file_size"`
-}
-
-// size is the declared length, or -1 where none was declared.
-func (v bbcVariant) size() int64 {
-	if v.FileSize <= 0 {
-		return -1
-	}
-	return v.FileSize
 }
 
 // bbcQualityOrder ranks the tiers the BBC keys its variants by. It is only
@@ -457,14 +391,7 @@ func (d bbcDownload) best() (bbcVariant, bool) {
 
 // bbcQualityRank places a tier name. One nobody here has seen ranks last but
 // is still taken, since a URL that was published is a URL that works.
-func bbcQualityRank(name string) int {
-	for i, known := range bbcQualityOrder {
-		if strings.EqualFold(name, known) {
-			return i
-		}
-	}
-	return len(bbcQualityOrder)
-}
+func bbcQualityRank(name string) int { return rankIn(bbcQualityOrder, name, len(bbcQualityOrder)) }
 
 // bbcSelection is the media selector's answer.
 type bbcSelection struct {
@@ -534,7 +461,7 @@ func (t bbcTitles) full() string { return bbcJoin(t.Primary, t.Secondary, t.Tert
 // container is the first level, so that level is dropped — unless it is the
 // only level there is.
 func (t bbcTitles) within() string {
-	return util.FirstNonEmpty(bbcJoin(t.Secondary, t.Tertiary), bbcJoin(t.Primary))
+	return cmp.Or(bbcJoin(t.Secondary, t.Tertiary), bbcJoin(t.Primary))
 }
 
 // bbcJoin names something from the levels that were filled in, outermost
@@ -550,19 +477,6 @@ func bbcJoin(levels ...string) string {
 		out = append(out, level)
 	}
 	return strings.Join(out, " - ")
-}
-
-// bbcDownloadExtension names the container the offline copy arrives in.
-//
-// The URL says so and nothing else in the document does — there is no media
-// type beside it — which is why this reads the URL rather than writing the
-// answer down. MP3 is the only one the BBC has ever served here, and is what
-// a URL carrying no extension is assumed to be.
-func bbcDownloadExtension(fileURL string) string {
-	if ext := path.Ext(util.NameFromURL(fileURL)); ext != "" {
-		return strings.ToLower(ext)
-	}
-	return ".mp3"
 }
 
 // bbcName reduces a title to something that survives as a filename.

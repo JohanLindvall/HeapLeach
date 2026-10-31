@@ -3,10 +3,11 @@
 package download
 
 import (
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // The requested placement: the first extra connection starts halfway
@@ -149,11 +150,11 @@ func TestTransferStateRoundTrip(t *testing.T) {
 	table.snapshot()[0].markFlushed(4096)
 
 	want := &transferState{Size: size, Validator: `"abc"`, Segments: table.state()}
-	if err := saveTransferState(part, want); err != nil {
+	if err := saveTransferState(part, want, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 
-	got := loadTransferState(part)
+	got := loadTransferState(part, transferFiles{})
 	if got == nil {
 		t.Fatal("state did not survive the round trip")
 	}
@@ -164,8 +165,8 @@ func TestTransferStateRoundTrip(t *testing.T) {
 		t.Errorf("progress = %d, want 4096", got.Segments[0].Pos)
 	}
 
-	clearTransferState(part)
-	if loadTransferState(part) != nil {
+	clearTransferState(part, transferFiles{})
+	if loadTransferState(part, transferFiles{}) != nil {
 		t.Error("state survived being cleared")
 	}
 }
@@ -210,10 +211,10 @@ func TestTransferStateRejectsGaps(t *testing.T) {
 		{Size: 100, Segments: []segmentState{{Start: 0, Pos: 0, End: 200}}},                                // beyond size
 	}
 	for i, st := range bad {
-		if err := saveTransferState(part, st); err != nil {
+		if err := saveTransferState(part, st, transferFiles{}); err != nil {
 			t.Fatal(err)
 		}
-		if loadTransferState(part) != nil {
+		if loadTransferState(part, transferFiles{}) != nil {
 			t.Errorf("case %d: accepted a sidecar that does not tile the file: %+v", i, st.Segments)
 		}
 	}
@@ -221,7 +222,7 @@ func TestTransferStateRejectsGaps(t *testing.T) {
 	if err := os.WriteFile(statePath(part), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if loadTransferState(part) != nil {
+	if loadTransferState(part, transferFiles{}) != nil {
 		t.Error("accepted a corrupt sidecar")
 	}
 }

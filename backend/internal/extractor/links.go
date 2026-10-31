@@ -3,9 +3,11 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 
@@ -66,6 +68,7 @@ import (
 // results into plain URLs would break every one of those on a queue long
 // enough to matter, which is the only kind of queue it produces.
 type Links struct {
+	about
 	client   *httpx.Client
 	registry *Registry
 }
@@ -82,15 +85,18 @@ const (
 // rather than building one, because what it resolves links with must be the
 // same set of extractors the user already has.
 func NewLinks(client *httpx.Client, registry *Registry) *Links {
-	return &Links{client: client, registry: registry}
+	return &Links{client: client, registry: registry, about: about{name: linksScheme, shape: linksShape,
+		recognises: "a `links:<url>` prefix — every supported link on the page"}}
 }
 
-func (l *Links) Name() string { return linksScheme }
+// linksShape is the harvest prefix and nothing else. ParseURL turns
+// "links:<page>" into a URL with this scheme, so no page is ever harvested
+// by accident.
+func linksShape(u *url.URL) bool { return u.Scheme == linksScheme }
 
-// Match accepts the harvest prefix and nothing else. ParseURL turns
-// "links:<page>" into a URL with this scheme, so a host is never enough to
-// reach the harvester by accident.
-func (l *Links) Match(u *url.URL) bool { return u.Scheme == linksScheme }
+// Recognise is the prefix too: there is no page to read, since the registry
+// does not probe a URL of this scheme.
+func (l *Links) Recognise(_ context.Context, p *Page) bool { return linksShape(p.URL) }
 
 // Extract harvests the page and merges what its links resolve to.
 func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -128,15 +134,19 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 	}
 
 	e := expandSources(ctx, registry, sources, opts)
+	found -= e.unrecognised
+	if len(e.files) == 0 && e.unrecognised == len(sources) {
+		// Every link only looked like a download: the page has none.
+		return nil, nil
+	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
-			"(they may all have expired)", len(sources), page.Redacted())
+		return nil, noneRead("links", len(sources)-e.unrecognised, "supported links", page.Redacted(), e.refusals, e.failed)
 	}
 
-	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
+	title := cmp.Or(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
 	note := partialNote("links", e, found, len(sources) < found)
-	if note == "" && e.used < found {
-		note = fmt.Sprintf("%d of %d links resolved", e.used, found)
+	if note == "" {
+		note = resolvedNote(e.used, found, "links")
 	}
 	return &Result{
 		Title: title,
@@ -282,4 +292,16 @@ func linksCandidates(root *html.Node, base *url.URL) []string {
 		}
 	})
 	return out
+}
+
+// linkExtAsIs is linkExt for a host whose downloads are already filed
+// under the extension exactly as its links spell it, case and length alone:
+// lowercasing or bounding it would rename them, and the next run would
+// download everything again. The extension a media link's filename carries,
+// or fallback where it carries none.
+func linkExtAsIs(link, fallback string) string {
+	if ext := path.Ext(util.NameFromURL(link)); ext != "" {
+		return ext
+	}
+	return fallback
 }

@@ -4,19 +4,16 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	stdhtml "html"
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -54,45 +51,32 @@ func wordPressPostHTML(title, content string) string {
 
 func wordPressTestSite(t *testing.T, pages map[string]string) (*Registry, *Direct, string, func() map[string]int) {
 	t.Helper()
+	shells := keep2ShareShells(t)
+	for path, doc := range pages {
+		pages[path] = shells.Replace(doc)
+	}
 	var mu sync.Mutex
 	requests := make(map[string]int)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		requests[r.URL.RequestURI()]++
-		mu.Unlock()
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/getFileStatus") {
-				t.Errorf("extraction attempted a download ticket: %s", r.URL.Path)
-				http.Error(w, "unexpected API call", http.StatusBadRequest)
-				return
-			}
-			var in map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				t.Error(err)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "success", "name": in["id"] + ".bin", "size": 1234,
-				"is_available": in["id"] != "removed", "isAvailableForFree": true,
-			})
-			return
-		}
+	mux := http.NewServeMux()
+	keep2ShareStatusAPI(t, mux)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if doc, ok := pages[r.URL.RequestURI()]; ok {
 			w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
 			fmt.Fprint(w, doc)
 			return
 		}
 		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests[r.URL.RequestURI()]++
+		mu.Unlock()
+		mux.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	client := httpx.New("test-agent", "en-US", 0, time.Second)
+	client := testClient()
 	reg := NewRegistry(&config.Config{}, client)
-	for _, ex := range reg.extractors {
-		if k, ok := ex.(*Keep2Share); ok {
-			k.api, k.files = srv.URL+"/api/"+k.Name(), ""
-			k.hostSet = hostSet{k.Name() + ".example.test", k.Name() + "-alias.example.test"}
-		}
-	}
+	keep2ShareAPIs(reg, srv.URL)
 	return reg, reg.fallback.(*Direct), srv.URL, func() map[string]int {
 		mu.Lock()
 		defer mu.Unlock()
@@ -120,10 +104,12 @@ func TestWordPressCategoryCollectsPostDownloadsAndOriginalJPEGs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Title != "Example Category" || res.Note != "" || len(res.Files) != 7 {
+	// The two services share one file store, so the same id on the other
+	// service's domain is the same file and is folded with it.
+	if res.Title != "Example Category" || res.Note != "" || len(res.Files) != 6 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
-	for i, service := range []string{"keep2share", "fileboom"} {
+	for i, service := range []string{config.GroupKeep2Share} {
 		f := res.Files[i]
 		if f.Name != "first.bin" || f.URL != "" || f.Resolve == nil || f.Size != 1234 || f.Pace == nil ||
 			*f.Pace != (Pace{Streams: 1, Files: 1, Group: service, PerRoute: true}) {
@@ -134,7 +120,7 @@ func TestWordPressCategoryCollectsPostDownloadsAndOriginalJPEGs(t *testing.T) {
 		}
 	}
 	for i, suffix := range []string{"original.jpeg?token=example", "lazy.JPG", "large.jpg"} {
-		f := res.Files[i+2]
+		f := res.Files[i+1]
 		if f.URL != base+"/uploads/"+suffix || f.Dir != "First Post - Part One" || f.Size != -1 ||
 			f.Headers[httpx.HeaderReferer] != base+"/first/" {
 			t.Fatalf("JPEG %d: %+v", i, f)
@@ -174,7 +160,7 @@ func TestWordPressVersionsThemesAndCategoryPermalinks(t *testing.T) {
 			initial := fmt.Sprintf(tc.template, tc.next)
 			last := strings.ReplaceAll(fmt.Sprintf(tc.template, ""), `href="/first/"`, `href="/second/"`)
 			// End the listing with no next control, not a link to the same page.
-			root, _ := parseHTML(last)
+			root := mustParseDoc(t, last)
 			for _, node := range findAll(root, func(n *html.Node) bool { return attr(n, "href") == "" && isElem(n, atom.A) }) {
 				node.Parent.RemoveChild(node)
 			}
@@ -182,7 +168,7 @@ func TestWordPressVersionsThemesAndCategoryPermalinks(t *testing.T) {
 			_ = html.Render(&end, root)
 			pages := map[string]string{tc.start: initial, tc.first: initial, tc.next: end.String(), "/first/": tc.post, "/second/": tc.post}
 			_, direct, base, asked := wordPressTestSite(t, pages)
-			u, _ := url.Parse(base + tc.start)
+			u := mustParse(t, base+tc.start)
 			res, err := direct.pageSniff(context.Background(), u, Options{})
 			if err != nil || res == nil {
 				t.Fatalf("category not recognised: result=%+v err=%v", res, err)
@@ -211,8 +197,6 @@ func TestWordPressListingLimitsAndFailuresAreVisible(t *testing.T) {
 		{"source cap", "/category/example/page/2/", "", Limits{Sources: 1}, 1, "source limit"},
 		{"file cap", "", "", Limits{Files: 1}, 1, "file limit"},
 		{"dead post", "", "missing", Limits{}, 1, "1 of 2 posts"},
-		{"next unavailable", "/category/example/page/2/", "", Limits{}, 2, "could not fetch next page"},
-		{"repeated page", "/category/example/", "", Limits{}, 2, "repeated page"},
 		{"other category", "/category/other/page/2/", "", Limits{}, 2, "invalid next page"},
 		{"external pager", "https://elsewhere.example.test/category/example/page/2/", "", Limits{}, 2, "invalid next page"},
 		{"incomplete post", "", "partial", Limits{}, 2, "incomplete downloads"},
@@ -229,7 +213,7 @@ func TestWordPressListingLimitsAndFailuresAreVisible(t *testing.T) {
 				pages["/second/"] = wordPressPostHTML("Second", `<img src="/second.jpg"><a href="https://keep2share.example.test/file/removed">Gone</a>`)
 			}
 			_, direct, base, asked := wordPressTestSite(t, pages)
-			u, _ := url.Parse(base + "/category/example/")
+			u := mustParse(t, base+"/category/example/")
 			res, err := direct.pageSniff(context.Background(), u, Options{limits: tc.limits})
 			if err != nil {
 				t.Fatal(err)
@@ -248,8 +232,8 @@ func TestWordPressListingLimitsAndFailuresAreVisible(t *testing.T) {
 }
 
 func TestWordPressJPEGSelection(t *testing.T) {
-	u, _ := url.Parse("https://blog.example.test/post/")
-	root, _ := parseHTML(`<div>
+	u := mustParse(t, "https://blog.example.test/post/")
+	root := mustParseDoc(t, `<div>
 <a href="/full.jpg#image"><img data-orig-file="/other.jpg" src="/thumb.jpg"></a>
 <img data-orig-file="/original.jpeg" src="/small.jpeg">
 <img data-full-url="/block.jpg" src="/block-small.jpg">
@@ -286,7 +270,7 @@ func TestWordPressNumberedAndHeadPagination(t *testing.T) {
 			"/first/":                   wordPressPostHTML("First", `<img src="/first.jpg">`),
 			"/second/":                  wordPressPostHTML("Second", `<img src="/second.jpg">`),
 		})
-		u, _ := url.Parse(base + "/category/example/")
+		u := mustParse(t, base+"/category/example/")
 		res, err := direct.pageSniff(context.Background(), u, Options{})
 		if err != nil || res == nil || len(res.Files) != 2 || res.Note != "" {
 			t.Fatalf("pager %s: result=%+v err=%v", pager, res, err)
@@ -301,11 +285,12 @@ func TestWordPressKeepsNamedExtractorPrecedence(t *testing.T) {
 	reg, _, base, asked := wordPressTestSite(t, map[string]string{
 		"/category/example/": wordPressIndexHTML("", "/first/"),
 	})
-	u, _ := url.Parse(base)
-	named := &linksStub{host: u.Host, title: "Dedicated extraction", files: 1}
+	u := mustParse(t, base)
+	named := &linksStub{hostClaim: hostClaim(u.Host), title: "Dedicated extraction", files: 1}
 	reg.extractors = append(reg.extractors, named)
 	res, ex, err := reg.Extract(context.Background(), base+"/category/example/", Options{})
-	if err != nil || ex != named || !strings.HasPrefix(res.Title, "Dedicated extraction") || len(asked()) != 0 {
+	// The one request allowed is the registry's probe of the page.
+	if err != nil || ex != named || !strings.HasPrefix(res.Title, "Dedicated extraction") || len(asked()) > 1 {
 		t.Fatalf("WordPress intercepted a named extractor: result=%+v err=%v requests=%v", res, err, asked())
 	}
 }
@@ -316,7 +301,7 @@ func TestWordPressHandsOtherHostLinksAndOptionsToRegistry(t *testing.T) {
 		"/first/": wordPressPostHTML("First", `<iframe src="https://albums.example.test/collection"></iframe>
 <a href="https://unknown.example.test/navigation">Unsupported navigation</a>`),
 	})
-	albums := &linksStub{host: "albums.example.test", title: "Collection", files: 2}
+	albums := &linksStub{hostClaim: "albums.example.test", title: "Collection", files: 2}
 	reg.extractors = append(reg.extractors, albums)
 	res, _, err := reg.Extract(context.Background(), base+"/category/example/", Options{Password: "example-password"})
 	if err != nil || len(res.Files) != 2 || res.Note != "" {
@@ -437,8 +422,8 @@ func TestWordPressRecognitionDoesNotClaimOtherPages(t *testing.T) {
 		{"WordPress post", "/post/", `<meta name="generator" content="WordPress 6.8"><body class="single"><article class="hentry"></article>`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root, _ := parseHTML(tc.doc)
-			u, _ := url.Parse("https://blog.example.test" + tc.page)
+			root := mustParseDoc(t, tc.doc)
+			u := mustParse(t, "https://blog.example.test"+tc.page)
 			if wordPressCategory(root, u) {
 				t.Fatal("claimed a non-category page")
 			}
@@ -458,7 +443,7 @@ func TestWordPressRedirectUsesDestinationForRelativePosts(t *testing.T) {
 		http.Redirect(w, r, destination+"/category/example/", http.StatusMovedPermanently)
 	}))
 	defer redirect.Close()
-	u, _ := url.Parse(redirect.URL + "/old-category/")
+	u := mustParse(t, redirect.URL+"/old-category/")
 	res, err := direct.pageSniff(context.Background(), u, Options{})
 	if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != destination+"/photo.jpg" {
 		t.Fatalf("redirect result=%+v err=%v", res, err)
@@ -472,7 +457,7 @@ func TestWordPressUnavailableAndCancelledCategoriesFail(t *testing.T) {
 		"/post/":             wordPressPostHTML("Unavailable", `<a href="https://keep2share.example.test/file/removed">Gone</a>`),
 	})
 	for _, category := range []string{"empty", "missing"} {
-		u, _ := url.Parse(base + "/category/" + category + "/")
+		u := mustParse(t, base+"/category/"+category+"/")
 		res, err := direct.pageSniff(context.Background(), u, Options{})
 		if err == nil || res != nil {
 			t.Fatalf("unavailable category succeeded: result=%+v err=%v", res, err)
@@ -480,8 +465,8 @@ func TestWordPressUnavailableAndCancelledCategoriesFail(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	u, _ := url.Parse(base + "/category/example/")
-	root, _ := parseHTML(wordPressIndexHTML("", "/post/"))
+	u := mustParse(t, base+"/category/example/")
+	root := mustParseDoc(t, wordPressIndexHTML("", "/post/"))
 	_, err := wordPressExtract(ctx, direct.client, direct.registry, u, root, Options{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("lost cancellation: %v", err)

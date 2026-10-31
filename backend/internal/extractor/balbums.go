@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -34,7 +33,7 @@ import (
 // over the whole index, twenty thousand pages of it, and nobody pasting a
 // bare domain is asking for that.
 type Balbums struct {
-	hostSet
+	about
 	client   *httpx.Client
 	registry *Registry
 }
@@ -60,10 +59,22 @@ var balbumsPages = regexp.MustCompile(`(?i)page\s+\d+\s+of\s+(\d+)`)
 // what it finds through the registry it is part of, so it is handed that
 // registry rather than building one.
 func NewBalbums(client *httpx.Client, registry *Registry) *Balbums {
-	return &Balbums{hostSet: hostSet{"balbums.st"}, client: client, registry: registry}
+	return &Balbums{client: client, registry: registry, about: about{name: "balbums", shape: balbumsShape,
+		recognises: "searches of a Bunkr album index (`/?search=<query>`) whose page carries the index's search form " +
+			"and its \"Page n of m\" result count"}}
 }
 
-func (b *Balbums) Name() string { return "balbums" }
+// balbumsShape is a search of the index: its root with a search query.
+func balbumsShape(u *url.URL) bool {
+	_, _, ok := balbumsSearch(u)
+	return ok && (u.EscapedPath() == "" || u.EscapedPath() == "/")
+}
+
+// Recognise takes a search whose page has the index's own search form and
+// states its page count, which is what walk pages by.
+func (b *Balbums) Recognise(_ context.Context, p *Page) bool {
+	return balbumsShape(p.Final) && p.Has(`id="searchForm"`, `name="search"`) && balbumsPages.MatchString(p.Body)
+}
 
 // Extract walks a search and resolves every album it lists.
 func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -83,9 +94,8 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 	}
 
 	e := expandSources(ctx, b.registry, albums, opts)
-	if len(e.files) == 0 {
-		return nil, fmt.Errorf("balbums: none of the %d albums matching %q could be resolved "+
-			"(they may all have been taken down)", len(albums), query)
+	if err := noneResolved(ctx, e.files, "balbums", len(albums), "albums", fmt.Sprintf("the search for %q", query), e.refusals, e.failed); err != nil {
+		return nil, err
 	}
 	return &Result{
 		Title: query,
@@ -102,52 +112,57 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 // states twenty thousand pages and walking them to throw all but five away
 // would be a lot of requests to reach the same answer.
 func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit int) (albums []string, found int, err error) {
-	seen := make(map[string]bool)
+	headers := httpx.Referer(balbumsRoot + "/")
+	doc, err := b.client.GetString(ctx, balbumsPage(first, 1), headers)
+	if err != nil {
+		return nil, 0, fmt.Errorf("balbums: search for %q: %w", query, err)
+	}
+	root, err := parseHTML(doc)
+	if err != nil {
+		return nil, 0, nil
+	}
 	total := 0
+	if m := balbumsPages.FindStringSubmatch(doc); m != nil {
+		total, _ = strconv.Atoi(m[1])
+	}
 
-	for page := 1; page <= config.MaxAlbumPages; page++ {
-		doc, ferr := b.client.GetString(ctx, balbumsPage(first, page), httpx.Referer(balbumsRoot+"/"))
-		if ferr != nil {
-			if page == 1 {
-				return nil, 0, fmt.Errorf("balbums: search for %q: %w", query, ferr)
+	// The pages are numbered, and the search states how many there are.
+	// The walk ends at the last of them, at a page with nothing new on it
+	// (the end of the results), or at the cap, where found is what the
+	// search has in all: what was left is declared in the job's note
+	// rather than passed over quietly.
+	seen := make(map[string]bool)
+	page, capped := 0, false
+	start, _ := url.Parse(balbumsPage(first, 1))
+	links, _, _, err := walkListing(ctx, b.client, start, listingWalk{
+		name: "balbums", limit: -1, quiet: true, root: root,
+		fetch: fetchAsAsked(b.client, headers),
+		read: func(root *html.Node, _, _ *url.URL) listingPage {
+			page++
+			var p listingPage
+			for _, link := range supportedSources(b.registry, balbumsLinks(root, first), b) {
+				p.links = append(p.links, listingLink{url: link})
+				seen[link] = true
 			}
-			break // a later page failing still leaves the earlier ones
-		}
-		root, perr := parseHTML(doc)
-		if perr != nil {
-			break
-		}
-		if page == 1 {
-			if m := balbumsPages.FindStringSubmatch(doc); m != nil {
-				total, _ = strconv.Atoi(m[1])
+			switch {
+			case len(seen) >= limit:
+				capped, found = true, len(seen)
+				if total > 0 {
+					found = total * len(seen) / page
+				}
+			case total > 0 && page >= total:
+			default:
+				p.next, _ = url.Parse(balbumsPage(first, page+1))
 			}
-		}
-
-		added := 0
-		for _, link := range supportedSources(b.registry, balbumsLinks(root, first), b) {
-			if seen[link] {
-				continue
-			}
-			seen[link] = true
-			albums = append(albums, link)
-			added++
-		}
-		if added == 0 {
-			break // a page with nothing new on it is the end of the results
-		}
-		if len(albums) >= limit {
-			// More than anybody meant by one search. What was left is
-			// declared in the job's title rather than passed over quietly,
-			// which needs the total the search stated.
-			found = len(albums)
-			if total > 0 {
-				found = total * len(albums) / page
-			}
-			return albums[:limit], found, nil
-		}
-		if total > 0 && page >= total {
-			break
-		}
+			return p
+		},
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	albums = listingURLs(links)
+	if capped {
+		return albums[:limit], found, nil
 	}
 	return albums, len(albums), nil
 }

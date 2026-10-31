@@ -3,13 +3,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -28,11 +29,7 @@ import (
 
 // ---------------------------------------------------------------- dropbox
 
-// Dropbox turns a share link into the download it stands for.
-type Dropbox struct {
-	hostSet
-	client *httpx.Client
-}
+// dropbox turns a share link into the download it stands for.
 
 const (
 	dropboxRoot = "https://www.dropbox.com"
@@ -43,19 +40,36 @@ const (
 )
 
 // NewDropbox builds the dropbox extractor.
-func NewDropbox(client *httpx.Client) *Dropbox {
-	return &Dropbox{hostSet: hostSet{"dropbox.com", "dropboxusercontent.com"}, client: client}
+func NewDropbox(client *httpx.Client) *Share { return newShare(client, &dropboxSite) }
+
+// dropboxShape is a share link: /s/<id>/<name> and /sh/<id>/<key>, and the
+// newer /scl/fi/<id>/<name> and /scl/fo/<id>/<key>.
+var dropboxShape = pathShape(`^/(s|sh)/[A-Za-z0-9_-]+/[^/]+`, `^/scl/(fi|fo)/[A-Za-z0-9_-]+/[^/]+`)
+
+// dropboxBundle is where the web app's viewer bundles are served from.
+const dropboxBundle = "/static/atlas/"
+
+// dropboxSite takes a share link whose page is the site's viewer. Nothing on
+// it is read — the download is the same link asking for the bytes — so the
+// viewer is known by the bundle it loads and the name it gives itself.
+var dropboxSite = shareSite{
+	name: "dropbox",
+	recognises: "share links (`/s/…`, `/sh/…`, `/scl/fi/…`, `/scl/fo/…`) whose page is the Dropbox viewer, " +
+		"loading its `/static/atlas/` bundle",
+	forms: []shareForm{{dropboxShape, func(p *Page) bool {
+		return p.Script(dropboxBundle) && p.Named("Dropbox")
+	}}},
+	extract: dropboxExtract,
 }
 
-func (d *Dropbox) Name() string { return "dropbox" }
-
-// Extract rewrites the link to ask for the bytes rather than the viewer.
+// dropboxExtract rewrites the link to ask for the bytes rather than the
+// viewer.
 //
 // A folder link is answered with a zip of the whole folder, which is what
 // dropbox itself offers and the only thing a single request can produce. Its
 // name is left to the server, whose Content-Disposition names the folder;
 // the path carries only an opaque id.
-func (d *Dropbox) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
+func dropboxExtract(_ context.Context, _ *Share, u *url.URL, _ Options) (*Result, error) {
 	direct := *u
 	direct.Fragment = ""
 	q := direct.Query()
@@ -88,15 +102,12 @@ func dropboxIsFolder(u *url.URL) bool {
 
 // -------------------------------------------------------------- mediafire
 
-// Mediafire resolves file pages and folder shares.
-type Mediafire struct {
-	hostSet
-	client *httpx.Client
-}
+// mediafire resolves file pages and folder shares.
 
 const (
 	mediafireRoot = "https://www.mediafire.com"
-	mediafireAPI  = "https://www.mediafire.com/api/1.5"
+	// mediafireAPI is the API's base, which a test serves (Share.api).
+	mediafireAPI = "https://www.mediafire.com/api/1.5"
 
 	// mediafireButtonID marks the anchor holding the real link.
 	mediafireButtonID = "downloadButton"
@@ -106,55 +117,77 @@ const (
 )
 
 // NewMediafire builds the mediafire extractor.
-func NewMediafire(client *httpx.Client) *Mediafire {
-	return &Mediafire{hostSet: hostSet{"mediafire.com"}, client: client}
+func NewMediafire(client *httpx.Client) *Share { return newShare(client, &mediafireSite) }
+
+// mediafireFileShape is a file page, /file/<key>[/<name>[/file]] and its
+// older spellings; mediafireFolderShape is a folder share, /folder/<key>.
+// A key is ten to fifteen lower-case letters and digits, which keeps the
+// forms off the /file/<x> and /download/<x> paths of every other site.
+var (
+	mediafireFileShape   = pathShape(`^/(file|file_premium|view|download)/[a-z0-9]{10,15}(/|$)`)
+	mediafireFolderShape = pathShape(`^/folder/[a-z0-9]{10,15}(/|$)`)
+	// mediafireQueryShape is the oldest link, the key alone as the query.
+	mediafireQueryShape = regexp.MustCompile(`^[a-z0-9]{11,15}$`)
+)
+
+// mediafireFolderMarker is on the file-row template of the folder viewer.
+const mediafireFolderMarker = "mf_filecontainer"
+
+// mediafireSite takes a file page by the download button extract reads its
+// link from, and a folder by the viewer's own file-row template — the folder
+// itself is listed by the API — each named as the site names itself. The
+// old /?<key> link is followed for the file page it redirects to.
+var mediafireSite = shareSite{
+	name: "mediafire",
+	recognises: "file pages (`/file/<key>/…`) carrying the `#downloadButton` link, and folder shares " +
+		"(`/folder/<key>`) whose page is the MediaFire folder viewer",
+	forms: []shareForm{
+		{mediafireFileShape, func(p *Page) bool {
+			return p.Named("MediaFire") && p.hasElement(func(n *html.Node) bool {
+				return isElem(n, atom.A) && attr(n, "id") == mediafireButtonID &&
+					(attr(n, "href") != "" || attr(n, mediafireScrambled) != "")
+			})
+		}},
+		{mediafireFolderShape, func(p *Page) bool { return p.Named("MediaFire") && p.Has(mediafireFolderMarker) }},
+		{shape: func(u *url.URL) bool {
+			return (u.EscapedPath() == "" || u.EscapedPath() == "/") && mediafireQueryShape.MatchString(u.RawQuery)
+		}},
+	},
+	extract: mediafireExtract,
+	api:     mediafireAPI,
 }
 
-func (m *Mediafire) Name() string { return "mediafire" }
-
-// Extract resolves either a single file page or a folder share.
-func (m *Mediafire) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+// mediafireExtract resolves either a single file page or a folder share.
+func mediafireExtract(ctx context.Context, s *Share, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) > 1 && segs[0] == "folder" {
-		return m.extractFolder(ctx, segs[1])
+		return mediafireShare(ctx, s, segs[1], opts)
 	}
-
-	page := u.String()
-	link, name, err := m.filePage(ctx, page)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: name, Files: []File{{
-		Name:    name,
-		URL:     link,
-		Size:    -1,
-		Headers: httpx.Referer(page),
-		Resolve: m.resolver(page, name),
-	}}}, nil
+	return signedResult(ctx, mediafireTarget(s, u.String()))
 }
 
-// resolver re-reads the file page at download time. The link on it is signed
-// per visit, so one taken while an item waited in the queue would be spent.
-func (m *Mediafire) resolver(page, name string) func(context.Context) (*Target, error) {
+// mediafireTarget reads one file page for its download link and filename,
+// again at download time: the link on it is signed per visit, so one taken
+// while an item waited in the queue would be spent.
+func mediafireTarget(s *Share, page string) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
-		link, fresh, err := m.filePage(ctx, page)
+		link, name, err := mediafirePage(ctx, s, page)
 		if err != nil {
 			return nil, err
 		}
-		return &Target{URL: link, Name: util.FirstNonEmpty(fresh, name), Size: -1,
-			Headers: httpx.Referer(page)}, nil
+		return &Target{URL: link, Name: name, Size: -1, Headers: httpx.Referer(page)}, nil
 	}
 }
 
-// filePage reads one file page for its download link and filename.
-func (m *Mediafire) filePage(ctx context.Context, page string) (link, name string, err error) {
-	doc, err := m.client.GetString(ctx, page, httpx.Referer(mediafireRoot+"/"))
+// mediafirePage reads one file page for its download link and filename.
+func mediafirePage(ctx context.Context, s *Share, page string) (link, name string, err error) {
+	pageURL, err := url.Parse(page)
+	if err != nil {
+		return "", "", fmt.Errorf("mediafire: %w", err)
+	}
+	root, _, err := fetchRoot(ctx, s.client, pageURL, httpx.Referer(mediafireRoot+"/"))
 	if err != nil {
 		return "", "", fmt.Errorf("mediafire: fetch %s: %w", page, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", "", fmt.Errorf("mediafire: parse %s: %w", page, err)
 	}
 
 	button := findFirst(root, func(n *html.Node) bool {
@@ -175,7 +208,7 @@ func (m *Mediafire) filePage(ctx context.Context, page string) (link, name strin
 		link = string(decoded)
 	}
 
-	name = util.FirstNonEmpty(
+	name = cmp.Or(
 		strings.TrimSpace(metaContent(root, "og:title")),
 		util.NameFromURL(link),
 		util.NameFromURL(page),
@@ -183,60 +216,51 @@ func (m *Mediafire) filePage(ctx context.Context, page string) (link, name strin
 	return link, name, nil
 }
 
-// extractFolder lists a folder share through mediafire's own API, which
+// mediafireShare lists a folder share through mediafire's own API, which
 // answers with the file names, sizes and page links in one request per
 // chunk — far cheaper than walking the folder's HTML.
-func (m *Mediafire) extractFolder(ctx context.Context, key string) (*Result, error) {
+func mediafireShare(ctx context.Context, s *Share, key string, opts Options) (*Result, error) {
 	res := &Result{Title: key}
-	if info, err := m.folderInfo(ctx, key); err == nil && info != "" {
+	if info, err := mediafireFolderName(ctx, s, key); err == nil && info != "" {
 		res.Title = info
 	}
-	if err := m.collectFolder(ctx, key, "", 0, res); err != nil {
+	list := func(ctx context.Context, w *treeWalk, key string, _ int) ([]treeItem[string], error) {
+		return mediafireList(ctx, s, w, key)
+	}
+	if err := walkTree(ctx, opts, res, key, key, list); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// collectFolder appends one folder's files to res and recurses into its
-// subfolders.
-func (m *Mediafire) collectFolder(ctx context.Context, key, dir string, depth int, res *Result) error {
-	files, folders, err := m.folderContent(ctx, key)
+// mediafireList reads one folder's files and subfolders for walkTree.
+func mediafireList(ctx context.Context, s *Share, w *treeWalk, key string) ([]treeItem[string], error) {
+	files, folders, err := mediafireContent(ctx, s, w, key)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	items := make([]treeItem[string], 0, len(files)+len(folders))
 	for _, f := range files {
-		page := util.FirstNonEmpty(f.Links.NormalDownload,
+		page := cmp.Or(f.Links.NormalDownload,
 			mediafireRoot+"/file/"+url.PathEscape(f.QuickKey))
-		size, convErr := strconv.ParseInt(f.Size, 10, 64)
-		if convErr != nil {
-			size = -1
-		}
-		name := util.FirstNonEmpty(f.Filename, util.NameFromURL(page))
-		res.Files = append(res.Files, File{
+		name := cmp.Or(f.Filename, util.NameFromURL(page))
+		items = append(items, treeItem[string]{File: &File{
 			Name:    name,
-			Dir:     dir,
-			Size:    size,
+			Size:    parsedSize(f.Size),
 			Headers: httpx.Referer(page),
 			// Every file in a folder needs its own page read for a link,
 			// so none of them is resolved until it starts.
-			Resolve: m.resolver(page, name),
-		})
-	}
-	if depth >= config.MaxFolderDepth {
-		return nil
+			Resolve: mediafireTarget(s, page),
+		}})
 	}
 	for _, sub := range folders {
-		if sub.FolderKey == "" {
-			continue
+		if sub.FolderKey != "" {
+			// A subfolder without a name keeps its files in its parent's
+			// directory.
+			items = append(items, treeItem[string]{Folder: sub.FolderKey, Key: sub.FolderKey, Name: sub.Name})
 		}
-		next := dir
-		if sub.Name != "" {
-			next = strings.TrimPrefix(dir+"/"+sub.Name, "/")
-		}
-		// One unreadable subfolder should not sink the whole job.
-		_ = m.collectFolder(ctx, sub.FolderKey, next, depth+1, res)
 	}
-	return nil
+	return items, nil
 }
 
 // mediafireFile and mediafireFolder are the entries a folder listing holds.
@@ -255,51 +279,91 @@ type mediafireFolder struct {
 	Name      string `json:"name"`
 }
 
-// folderContent pages through one folder's files and subfolders.
-func (m *Mediafire) folderContent(ctx context.Context, key string) ([]mediafireFile, []mediafireFolder, error) {
-	var (
-		files   []mediafireFile
-		folders []mediafireFolder
-	)
-	for _, kind := range []string{"files", "folders"} {
-		for chunk := 1; chunk <= config.MaxAlbumPages; chunk++ {
-			q := url.Values{
-				"content_type":    {kind},
-				"folder_key":      {key},
-				"chunk":           {strconv.Itoa(chunk)},
-				"response_format": {"json"},
-			}
-			var env struct {
-				Response struct {
-					Result        string `json:"result"`
-					Message       string `json:"message"`
-					FolderContent struct {
-						Files      []mediafireFile   `json:"files"`
-						Folders    []mediafireFolder `json:"folders"`
-						MoreChunks string            `json:"more_chunks"`
-					} `json:"folder_content"`
-				} `json:"response"`
-			}
-			endpoint := mediafireAPI + "/folder/get_content.php?" + q.Encode()
-			if err := m.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
-				return nil, nil, fmt.Errorf("mediafire: list folder: %w", err)
-			}
-			if env.Response.Result != "" && !strings.EqualFold(env.Response.Result, "Success") {
-				return nil, nil, fmt.Errorf("mediafire: list folder: %s",
-					util.FirstNonEmpty(env.Response.Message, env.Response.Result))
-			}
-			files = append(files, env.Response.FolderContent.Files...)
-			folders = append(folders, env.Response.FolderContent.Folders...)
-			if !strings.EqualFold(env.Response.FolderContent.MoreChunks, "yes") {
-				break
-			}
-		}
+// mediafireContent pages through one folder's files, then its subfolders,
+// noting on the walk a listing that stopped short. Once the files outnumber
+// the walk's room the rest are not read, nor the subfolders, which come
+// after them and could not fit either: the walk says the file limit cut the
+// share. The files' first chunk failing is the folder failing; once some
+// are read, the subfolders failing leaves them standing, said so.
+func mediafireContent(ctx context.Context, s *Share, w *treeWalk, key string) ([]mediafireFile, []mediafireFolder, error) {
+	room := w.room()
+	files, note, err := walkPages(ctx, pageWalk[mediafireFile]{
+		key: func(f mediafireFile) string {
+			return cmp.Or(f.QuickKey, f.Links.NormalDownload, f.Filename)
+		},
+		limit: room + 1,
+		fetch: func(ctx context.Context, n int) (pageOf[mediafireFile], error) {
+			c, err := mediafireChunkOf(ctx, s, key, "files", n+1)
+			return pageOf[mediafireFile]{items: c.Files, next: c.more(), end: !c.more()}, err
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	w.partial(note)
+	if len(files) > room {
+		return files, nil, nil
+	}
+	folders, note, err := walkPages(ctx, pageWalk[mediafireFolder]{
+		key:   func(f mediafireFolder) string { return f.FolderKey },
+		limit: -1,
+		fetch: func(ctx context.Context, n int) (pageOf[mediafireFolder], error) {
+			c, err := mediafireChunkOf(ctx, s, key, "folders", n+1)
+			return pageOf[mediafireFolder]{items: c.Folders, next: c.more(), end: !c.more()}, err
+		},
+	})
+	switch {
+	case err == nil:
+		w.partial(note)
+	case ctx.Err() != nil || len(files) == 0:
+		return nil, nil, err
+	default:
+		w.note("unreadable folders")
 	}
 	return files, folders, nil
 }
 
-// folderInfo reads a folder's own name, for the job title.
-func (m *Mediafire) folderInfo(ctx context.Context, key string) (string, error) {
+// mediafireChunk is one chunk of a folder's content.
+type mediafireChunk struct {
+	Files      []mediafireFile   `json:"files"`
+	Folders    []mediafireFolder `json:"folders"`
+	MoreChunks string            `json:"more_chunks"`
+}
+
+// more says another chunk follows. Its absence is the API saying this chunk
+// is the last, so an empty one — a folder of only subfolders, or none — is
+// the end, not a page that added nothing.
+func (c mediafireChunk) more() bool { return strings.EqualFold(c.MoreChunks, "yes") }
+
+// mediafireChunkOf reads one chunk, counted from 1, of a folder's files or
+// subfolders (kind).
+func mediafireChunkOf(ctx context.Context, s *Share, key, kind string, chunk int) (mediafireChunk, error) {
+	q := url.Values{
+		"content_type":    {kind},
+		"folder_key":      {key},
+		"chunk":           {strconv.Itoa(chunk)},
+		"response_format": {"json"},
+	}
+	var env struct {
+		Response struct {
+			Result        string         `json:"result"`
+			Message       string         `json:"message"`
+			FolderContent mediafireChunk `json:"folder_content"`
+		} `json:"response"`
+	}
+	endpoint := s.api + "/folder/get_content.php?" + q.Encode()
+	if err := s.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
+		return mediafireChunk{}, fmt.Errorf("mediafire: list folder: %w", err)
+	}
+	if env.Response.Result != "" && !strings.EqualFold(env.Response.Result, "Success") {
+		return mediafireChunk{}, fmt.Errorf("mediafire: list folder: %s",
+			cmp.Or(env.Response.Message, env.Response.Result))
+	}
+	return env.Response.FolderContent, nil
+}
+
+// mediafireFolderName reads a folder's own name, for the job title.
+func mediafireFolderName(ctx context.Context, s *Share, key string) (string, error) {
 	q := url.Values{"folder_key": {key}, "response_format": {"json"}}
 	var env struct {
 		Response struct {
@@ -308,8 +372,8 @@ func (m *Mediafire) folderInfo(ctx context.Context, key string) (string, error) 
 			} `json:"folder_info"`
 		} `json:"response"`
 	}
-	endpoint := mediafireAPI + "/folder/get_info.php?" + q.Encode()
-	if err := m.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
+	endpoint := s.api + "/folder/get_info.php?" + q.Encode()
+	if err := s.client.GetJSON(ctx, endpoint, httpx.Referer(mediafireRoot+"/"), &env); err != nil {
 		return "", err
 	}
 	return env.Response.FolderInfo.Name, nil
@@ -321,7 +385,10 @@ func (m *Mediafire) folderInfo(ctx context.Context, key string) (string, error) 
 //
 // Folders are deliberately left out: listing one needs an API key, which
 // this program has no way to ask for and no business holding.
-type GoogleDrive struct{ client *httpx.Client }
+type GoogleDrive struct {
+	about
+	client *httpx.Client
+}
 
 const (
 	driveRoot = "https://drive.google.com"
@@ -334,16 +401,41 @@ const (
 )
 
 // NewGoogleDrive builds the drive extractor.
-func NewGoogleDrive(client *httpx.Client) *GoogleDrive { return &GoogleDrive{client: client} }
+func NewGoogleDrive(client *httpx.Client) *GoogleDrive {
+	return &GoogleDrive{client: client, about: about{name: "drive", shape: driveShape,
+		recognises: "file links (`/file/d/<id>`, `/open?id=`, `/uc?id=`) whose page is the Google Drive file viewer " +
+			"(its `apps-fileview` bundle), or the download confirmation form"}}
+}
 
-func (g *GoogleDrive) Name() string { return "drive" }
+// driveFileShape is a file's viewer, /file/d/<id>[/view]; driveQueryShape
+// the endpoints that take the id as a query, /open, /uc and /download.
+var (
+	driveFileShape  = pathShape(`^/file/d/[A-Za-z0-9_-]{10,}(/[a-z]*)?/?$`)
+	driveQueryShape = pathShape(`^/(open|uc|download)/?$`)
+)
 
-func (g *GoogleDrive) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, "drive.google.com") || util.HostMatches(u.Host, "drive.usercontent.google.com") {
+// driveViewerBundle is the file viewer's script bundle.
+const driveViewerBundle = "/_/apps-fileview/"
+
+// driveShape is a file link: its viewer, or an endpoint given its id.
+func driveShape(u *url.URL) bool {
+	return driveFileShape(u) || driveQueryShape(u) && u.Query().Get("id") != ""
+}
+
+// Recognise takes a file link answered by the viewer — known by its bundle
+// and its name, since the file itself is fetched from the download endpoint
+// rather than read off the page — or by the confirmation form that endpoint
+// puts in front of a large file, which is what Extract walks past.
+func (g *GoogleDrive) Recognise(_ context.Context, p *Page) bool {
+	if !driveShape(p.URL) && !driveShape(p.Final) {
+		return false
+	}
+	if p.Script(driveViewerBundle) && p.Named("Google Drive") {
 		return true
 	}
-	// docs.google.com serves the same /uc endpoint for drive files.
-	return util.HostMatches(u.Host, "docs.google.com") && strings.Contains(u.Path, "/uc")
+	return p.hasElement(func(n *html.Node) bool {
+		return isElem(n, atom.Form) && attr(n, "id") == driveFormID
+	})
 }
 
 // Extract resolves a share link to the download endpoint.
@@ -354,27 +446,23 @@ func (g *GoogleDrive) Extract(ctx context.Context, u *url.URL, _ Options) (*Resu
 			"(folder links are not supported: listing one needs an API key)", u.Redacted())
 	}
 
-	link, name, err := g.confirm(ctx, id)
+	res, err := signedResult(ctx, func(ctx context.Context) (*Target, error) {
+		link, name, err := g.confirm(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return &Target{URL: link, Name: name, Size: -1, Headers: httpx.Referer(driveRoot + "/")}, nil
+	})
 	if err != nil {
 		return nil, err
 	}
 	// The name is usually only in the Content-Disposition the transfer
 	// itself sees; an extensionless placeholder lets the server's win.
-	title := util.FirstNonEmpty(name, "drive-"+id)
-	return &Result{Title: title, Files: []File{{
-		Name:    title,
-		URL:     link,
-		Size:    -1,
-		Headers: httpx.Referer(driveRoot + "/"),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			fresh, freshName, err := g.confirm(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{URL: fresh, Name: util.FirstNonEmpty(freshName, title), Size: -1,
-				Headers: httpx.Referer(driveRoot + "/")}, nil
-		},
-	}}}, nil
+	if res.Title == "" {
+		res.Title = "drive-" + id
+		res.Files[0].Name = res.Title
+	}
+	return res, nil
 }
 
 // confirm walks past the interstitial google shows for large files.
@@ -406,14 +494,14 @@ func (g *GoogleDrive) confirm(ctx context.Context, id string) (link, name string
 		return direct, driveName(root), nil
 	}
 
-	action := util.FirstNonEmpty(attr(form, "action"), driveDownload)
+	action := cmp.Or(attr(form, "action"), driveDownload)
 	values := url.Values{}
 	for _, input := range findAll(form, func(n *html.Node) bool { return isElem(n, atom.Input) }) {
 		if key := attr(input, "name"); key != "" {
 			values.Set(key, attr(input, "value"))
 		}
 	}
-	values.Set("confirm", util.FirstNonEmpty(values.Get("confirm"), "t"))
+	values.Set("confirm", cmp.Or(values.Get("confirm"), "t"))
 	if values.Get("id") == "" {
 		values.Set("id", id)
 	}

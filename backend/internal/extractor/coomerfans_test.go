@@ -3,7 +3,11 @@
 package extractor
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -32,10 +36,7 @@ const coomerFansPostPage = `<html><head><title>a-creator / A post with two thing
 </body></html>`
 
 func TestCoomerFansPostSeparatesVideoFromImage(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/p/1/2/onlyfans")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://coomerfans.com/p/1/2/onlyfans")
 	title, media, err := coomerFansPost(coomerFansPostPage, base)
 	if err != nil {
 		t.Fatalf("coomerFansPost: %v", err)
@@ -65,10 +66,7 @@ func TestCoomerFansPostSeparatesVideoFromImage(t *testing.T) {
 // a whole gallery of other creators below the post: only what is inside the
 // post body belongs to this job.
 func TestCoomerFansPostIgnoresTheRestOfThePage(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/p/1/2/onlyfans")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://coomerfans.com/p/1/2/onlyfans")
 	_, media, err := coomerFansPost(coomerFansPostPage, base)
 	if err != nil {
 		t.Fatal(err)
@@ -81,10 +79,7 @@ func TestCoomerFansPostIgnoresTheRestOfThePage(t *testing.T) {
 }
 
 func TestCoomerFansPostReportsAMissingBody(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/p/1/2/onlyfans")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://coomerfans.com/p/1/2/onlyfans")
 	if _, _, err := coomerFansPost("<html><body>Not found</body></html>", base); err == nil {
 		t.Fatal("a page with no post body was accepted")
 	}
@@ -121,28 +116,87 @@ func TestCoomerFansIsPost(t *testing.T) {
 }
 
 func TestCoomerFansNextPage(t *testing.T) {
-	base, err := ParseURL("https://coomerfans.com/u/onlyfans/212948/a-creator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := parseHTML(`<div class="pagination">
+	base := mustParse(t, "https://coomerfans.com/u/onlyfans/212948/a-creator")
+	root := mustParseDoc(t, `<div class="pagination">
 		<a href="/u/onlyfans/212948/a-creator?page=1">1</a>
 		<a class="next" href="/u/onlyfans/212948/a-creator?page=2">next</a>
 	</div>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	const want = "https://coomerfans.com/u/onlyfans/212948/a-creator?page=2"
 	if got := coomerFansNextPage(root, base); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	last, err := parseHTML(`<div class="pagination"><a href="?page=5">5</a></div>`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	last := mustParseDoc(t, `<div class="pagination"><a href="?page=5">5</a></div>`)
 	if got := coomerFansNextPage(last, base); got != "" {
 		t.Errorf("the last page offered %q, want nothing to follow", got)
+	}
+}
+
+// A creator's pages are walked through their next links, and the listing
+// ends quietly where it does, at a page that is not there.
+func TestCoomerFansPostLinksWalksToTheEnd(t *testing.T) {
+	page := func(next string, posts ...string) string {
+		var b strings.Builder
+		b.WriteString(`<h1>a-creator</h1><a href="/u/onlyfans/1/someone-else">Other</a>`)
+		for _, post := range posts {
+			b.WriteString(`<a href="https://coomerfans.com/p/` + post + `/1/onlyfans">` + post + `</a>`)
+		}
+		if next != "" {
+			b.WriteString(`<a class="next" href="` + next + `">next</a>`)
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		name  string
+		pages map[string]string
+		want  []string
+		never string
+		opts  Options
+		note  string
+	}{
+		{"missing page", map[string]string{
+			"":  page("?page=2", "11", "12"),
+			"2": page("?page=3", "12", "13"),
+		}, []string{"11", "12", "13"}, "", Options{}, ""},
+		// Every post is a page to read, so the listing cap stops the walk,
+		// and says so.
+		{"capped", map[string]string{
+			"":  page("?page=2", "11", "12"),
+			"2": page("?page=3", "13", "14"),
+			"3": page("", "15"),
+		}, []string{"11", "12", "13"}, "3", Options{limits: Limits{Sources: 3}}, "partial — source limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			asked := map[string]int{}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := r.URL.Query().Get("page")
+				mu.Lock()
+				asked[n]++
+				mu.Unlock()
+				if doc, ok := tc.pages[n]; ok {
+					_, _ = w.Write([]byte(doc))
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer srv.Close()
+			c := NewCoomerFans(testClient())
+			links, title, note, err := c.postLinks(context.Background(), mustParse(t, srv.URL+"/u/onlyfans/1/a-creator"), tc.opts)
+			if err != nil || title != "a-creator" || len(links) != len(tc.want) || note != tc.note {
+				t.Fatalf("links=%v title=%q note=%q err=%v", links, title, note, err)
+			}
+			for i, post := range tc.want {
+				if links[i] != "https://coomerfans.com/p/"+post+"/1/onlyfans" {
+					t.Errorf("link %d = %s, want post %s", i, links[i], post)
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if tc.never != "" && asked[tc.never] != 0 {
+				t.Errorf("asked past the end: %v", asked)
+			}
+		})
 	}
 }
 
@@ -160,4 +214,23 @@ func TestCoomerFansTitle(t *testing.T) {
 			t.Errorf("coomerFansTitle(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+func TestCoomerFansRecognise(t *testing.T) {
+	c := NewCoomerFans(nil)
+	post := `<html><head><title>a-creator / A post</title></head><body><div class="post-body"><img src="/i/1.jpg"></div></body></html>`
+	profile := `<html><head><title>a-creator posts</title></head><body>` +
+		`<a href="/p/101/212948/onlyfans">A post</a><a class="next" href="?page=2">Next</a></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/p/101/212948/onlyfans", post), true)
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/u/onlyfans/212948/a-creator", profile), true)
+	// The right form, but no post body, or posts of another creator only.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/p/101/212948/onlyfans", profile), false)
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/u/onlyfans/999/someone-else", profile), false)
+	// A post body on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/random-post", post), false)
+
+	expectShape(t, c, "https://fans.example.test/p/101/212948/onlyfans", true)
+	expectShape(t, c, "https://fans.example.test/u/onlyfans/212948/a-creator", true)
+	expectShape(t, c, "https://fans.example.test/u/a-creator", false)
+	expectShape(t, c, "https://fans.example.test/p/101", false)
 }

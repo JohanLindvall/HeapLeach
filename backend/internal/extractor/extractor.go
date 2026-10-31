@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,6 +127,28 @@ type File struct {
 	Refused func(ctx context.Context, status int, header http.Header) error
 }
 
+// knownSize is the first stated length that is a length at all, as
+// File.Size wants it: -1 when none is positive. A host that states no length
+// is not stating a zero-length file, and 0 would read as a finished download.
+func knownSize(stated ...int64) int64 {
+	for _, n := range stated {
+		if n > 0 {
+			return n
+		}
+	}
+	return -1
+}
+
+// parsedSize reads a byte count written out in decimal, as knownSize: -1 when
+// it is absent, malformed or not positive.
+func parsedSize(text string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return knownSize(n)
+}
+
 // Pace is how an extractor says "fetch this gently".
 //
 // Most hosts want nothing of the sort, and the queue's own concurrency and
@@ -216,6 +241,37 @@ type Target struct {
 	// present several, since a new connection may leave by the other
 	// address family or by another of a provider's exits.
 	Discard func()
+}
+
+// file is the File a resolved Target describes, in the directory dir: what
+// an extractor that resolves eagerly lists, where one deferring resolution
+// would return the Target from Resolve.
+func (t *Target) file(dir string) File {
+	return File{
+		Name: t.Name, URL: t.URL, Size: t.Size, Dir: dir, Headers: t.Headers,
+		Segments: t.Segments, SegmentKey: t.SegmentKey, Audio: t.Audio, Subtitles: t.Subtitles,
+	}
+}
+
+// refreshing is a resolved target as its file, read again by resolve when
+// its transfer starts, for a link signed for less time than a queue can
+// take.
+func refreshing(target *Target, resolve func(context.Context) (*Target, error)) File {
+	file := target.file("")
+	file.Resolve = resolve
+	return file
+}
+
+// signedResult is the one-file result of a host that signs its link on
+// request: signed now, so that a dead link fails the job at once and the
+// queue shows the real name, and signed again by the same call when the
+// transfer starts. The job is named after the file.
+func signedResult(ctx context.Context, sign func(context.Context) (*Target, error)) (*Result, error) {
+	target, err := sign(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: target.Name, Files: []File{refreshing(target, sign)}}, nil
 }
 
 // WaitError is a resolver's way of saying a file cannot be fetched yet,
@@ -316,21 +372,40 @@ func (r *Result) Label() string {
 	return r.Title + " (" + r.Note + ")"
 }
 
-// Extractor resolves one family of URLs.
+// Extractor resolves one family of pages: it recognises them (Recogniser),
+// says which for the inventory (Describer), and extracts them.
 type Extractor interface {
-	// Name is the short host label shown in the UI.
+	Recogniser
+	Describer
+	// Name is the short label shown in the UI.
 	Name() string
-	// Match reports whether this extractor handles the URL.
-	Match(u *url.URL) bool
 	// Extract resolves the URL into downloadable files. opts may be zero.
 	Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error)
 }
 
-// ProxyFallback opts a source into the manager's temporary-failure recovery.
-// It still starts on the normal connection; the manager owns error
-// classification, proxy availability and the shared route retry policy.
-type ProxyFallback interface {
-	ProxyFallback() bool
+// Recogniser is how an extractor claims a URL without naming its host.
+//
+// Nothing in either method may depend on the URL's host. The registry
+// fetches the page first (probePage) and gives it to each extractor's
+// Recognise in turn; the first to claim it extracts it. So an extractor is
+// chosen by what the site serves — its name, its player, its bundle, its API
+// answering — and a site that moves domain, or an install nobody listed,
+// still reaches the right code.
+type Recogniser interface {
+	// Shape reports whether the URL has a form this extractor reads, by its
+	// path, query and fragment. It is all the link scanner has to go on
+	// before fetching, so it decides which links on a page are worth a
+	// probe; a link of the right form that turns out to be someone else's
+	// page is dropped after its probe. Report false for forms too common to
+	// single out — the site root, a bare slug — rather than turn every
+	// navigation link into a request.
+	Shape(u *url.URL) bool
+	// Recognise reports whether the probed page is one this extractor
+	// reads. It may make a bounded request of its own (platformJSON) when
+	// the page cannot say — a challenge stood in for it, say — but only once
+	// the URL's form has made the answer likely: every unrecognised page is
+	// offered to every extractor.
+	Recognise(ctx context.Context, p *Page) bool
 }
 
 // Options carries per-request extras supplied by the caller.
@@ -347,6 +422,11 @@ type Options struct {
 	// ancestors is local to one expansion path, so independent sources can
 	// resolve concurrently without sharing a mutable visited set.
 	ancestors []string
+	// strict marks a source followed for the form of its link: a page that
+	// no extractor recognises is navigation, and is reported as
+	// errUnrecognised rather than handed to the fallback. It applies to that
+	// one URL, never to what its extractor goes on to resolve.
+	strict bool
 }
 
 // Limits bound what one submitted URL may expand to. Zero in either means
@@ -378,10 +458,13 @@ func (o Options) maxFiles() int {
 // ErrPasswordRequired signals that the content is gated behind a password.
 var ErrPasswordRequired = errors.New("this link is password protected: supply the password and retry")
 
-// Registry dispatches a URL to the first extractor that matches.
+// Registry dispatches a URL to the first extractor that recognises its page.
 type Registry struct {
 	extractors []Extractor
 	fallback   Extractor
+	// client probes pages for identification, and pages keeps what it got.
+	client *httpx.Client
+	pages  pageCache
 	// limits is what every extraction through this registry is bounded by.
 	limits Limits
 }
@@ -396,7 +479,6 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewRajce(client),
 		NewPixeldrain(client),
 		NewKeep2Share(client),
-		NewFileBoom(client),
 		NewFileJump(client),
 		NewEmload(client),
 		NewTurbo(client),
@@ -429,20 +511,19 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewNPR(client),
 		NewABCListen(client),
 		NewBBCSounds(client),
-		NewYouTube(),
 		NewVimeo(client),
 		NewNiconico(client),
-		NewYandex(client),
+		NewPointer(client, "yandex"),
 		NewBooru(client),
 		NewFourChan(client),
 		NewRedGifs(client),
 		NewKemono(client),
-		NewPornHub(client),
-		NewXHamster(client),
-		NewTNAFlix(client),
-		NewDrTuber(client),
-		NewPornOne(client),
-		NewEporner(client),
+		NewPlayer(client, &pornhubPlayer),
+		NewPlayer(client, &xhamsterPlayer),
+		NewPlayer(client, &tnaflixPlayer),
+		NewPlayer(client, &drtuberPlayer),
+		NewPlayer(client, &pornonePlayer),
+		NewPlayer(client, &epornerPlayer),
 		NewPixhost(client),
 		NewImagePond(client),
 		NewSuvobox(client),
@@ -454,7 +535,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewBitChute(client),
 		NewStreamable(client),
 		NewWeTransfer(client),
-		NewVidmoly(client),
+		NewPlayer(client, &vidmolyPlayer),
 		NewNRK(client),
 		NewPornPics(client),
 		NewArchiveOrg(cfg, client),
@@ -464,27 +545,27 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewCoomerFans(client),
 		NewCeleb(client),
 		NewCum(client),
-		NewOKru(client),
-		NewStreamtape(client),
-		NewDoodStream(client),
-		NewMixDrop(client),
-		NewLuluStream(client),
-		NewVidsSt(client),
-		NewSendvid(client),
-		NewKnuthing(client),
-		NewNoodleMagazine(client),
+		NewPlayer(client, &okruPlayer),
+		NewPlayer(client, &streamtapePlayer),
+		NewPlayer(client, &doodPlayer),
+		NewPlayer(client, &mixdropPlayer),
+		NewPlayer(client, &luluPlayer),
+		NewPlayer(client, &vidsPlayer),
+		NewPlayer(client, &sendvidPlayer),
+		NewPlayer(client, &knuthingPlayer),
+		NewPlayer(client, &noodlePlayer),
 	}
 	// Platform families: one extractor covering every install of a piece of
 	// software, named and matched per install where a list is worth having
 	// and sniffed by shape where it is not. Registered after the
 	// hand-written hosts, since a named host is always the better answer.
-	extractors = append(extractors, NewMediaWiki(cfg, client))
+	extractors = append(extractors, NewMediaWiki(client))
 	extractors = append(extractors, NewHandoffs(client)...)
-	extractors = append(extractors, NewPeerTubeSites(cfg, client)...)
-	extractors = append(extractors, NewCheveretoSites(cfg, client)...)
-	extractors = append(extractors, NewBandzoogleSites(cfg, client)...)
-	extractors = append(extractors, NewFoolFuukaSites(cfg, client)...)
-	extractors = append(extractors, NewKVSSites(cfg, client)...)
+	extractors = append(extractors, NewPeerTube(client))
+	extractors = append(extractors, NewChevereto(client))
+	extractors = append(extractors, NewBandzoogle(client))
+	extractors = append(extractors, NewFoolFuuka(client))
+	extractors = append(extractors, NewKVS(client))
 	// The fediverse is matched by path alone, on any host, and its /c/<name>
 	// is also Rumble's and PeerTube's channel shape. So it comes after every
 	// family that claims hosts by name, or it takes their URLs from them.
@@ -497,6 +578,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 
 	direct := NewDirect(client)
 	reg := &Registry{
+		client:   client,
 		fallback: direct,
 		limits:   Limits{Sources: cfg.MaxSources, Files: cfg.MaxFiles},
 	}
@@ -510,11 +592,11 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// otherwise be routed to that host's extractor, which would try to
 	// fetch "links://..." and fail on the scheme.
 	reg.extractors = append([]Extractor{NewLinks(client, reg)}, extractors...)
-	// The aggregator hosts nothing either, and resolves the frame it finds
-	// through the registry for the same reason, so it is wired the same way
-	// once the registry exists. It claims one host, so its position among
-	// the rest does not matter.
-	reg.extractors = append(reg.extractors, NewAlohaTube(client, reg))
+	// The pages that only point at a video elsewhere host nothing either,
+	// and resolve what they point at through the registry for the same
+	// reason, so they are handed it once it exists.
+	reg.extractors = append(reg.extractors, NewPointer(client, "alohatube"))
+	wirePointers(reg)
 	// The album index hosts nothing either, and resolves each result the
 	// same way, so it is wired once the registry exists for the same reason.
 	reg.extractors = append(reg.extractors, NewBalbums(client, reg))
@@ -522,7 +604,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	return reg
 }
 
-// Hosts lists the supported host labels, for the startup log.
+// Hosts lists the supported labels, for the startup log.
 func (r *Registry) Hosts() []string {
 	names := make([]string, 0, len(r.extractors))
 	for _, e := range r.extractors {
@@ -531,28 +613,99 @@ func (r *Registry) Hosts() []string {
 	return names
 }
 
-// Find returns the extractor for a URL. It never returns nil: unrecognised
-// hosts get the direct-link extractor.
-func (r *Registry) Find(u *url.URL) Extractor {
-	ex, _ := r.Known(u)
-	return ex
+// Guess names the extractor a URL's form points to, before anything is
+// fetched: a label for a job not yet read. Extraction decides for real.
+func (r *Registry) Guess(u *url.URL) string {
+	if ex, ok := r.Known(u); ok {
+		return ex.Name()
+	}
+	return r.fallback.Name()
 }
 
-// Known returns the extractor for a URL and whether a host actually claimed
-// it, as opposed to the fallback matching it the way it matches everything.
+// Known returns the first extractor whose URL form the link has, and
+// whether there was one, as opposed to the fallback that takes everything.
 //
-// Find cannot answer that, and the link harvester needs it answered: it reads
-// a page full of links of which a handful are downloads and the rest are
-// navigation, and "is this a host we support" is the only thing separating
-// the two.
+// The link harvester and the page scanner need that answered without a
+// fetch: a page full of links of which a handful are downloads and the rest
+// navigation, and the form of the link is all there is to separate them.
+// The answer is a candidate, not a verdict; Extract probes the page and may
+// find it is no extractor's.
 func (r *Registry) Known(u *url.URL) (Extractor, bool) {
 	for _, e := range r.extractors {
-		if e.Match(u) {
+		if e.Shape(u) {
 			return e, true
 		}
 	}
 	return r.fallback, false
 }
+
+// identify probes the URL and returns the first extractor that recognises
+// the page, or the fallback.
+func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) {
+	if !probeWorthy(u) && !r.claims(u) {
+		return r.fallback, &Page{URL: u, Final: u}
+	}
+	var p *Page
+	if r.client != nil {
+		p = r.pages.get(ctx, r.client, u)
+	} else {
+		p = &Page{URL: u, Final: u, Err: errNoProbe}
+	}
+	for _, e := range r.extractors {
+		if e.Recognise(ctx, p) {
+			return e, p
+		}
+	}
+	return r.fallback, p
+}
+
+// claims reports whether any extractor's form claims the URL.
+func (r *Registry) claims(u *url.URL) bool {
+	_, ok := r.Known(u)
+	return ok
+}
+
+// errNoProbe is the page of a registry built without a client, as tests
+// build one.
+var errNoProbe = errors.New("no client to probe with")
+
+// probeWorthy reports whether a URL could be a page, by the extension its
+// path ends in: none, or one a page is served under. A link that names a
+// file of some other kind, and that no extractor's form claims, is the
+// fallback's without a fetch; the probe would only download the start of
+// the very file the fallback is about to download.
+func probeWorthy(u *url.URL) bool {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return true
+	}
+	if strings.Trim(u.Path, "/") == "" || strings.HasSuffix(u.Path, "/") {
+		return true
+	}
+	ext := strings.ToLower(path.Ext(u.Path))
+	switch ext {
+	case "", ".html", ".htm", ".shtml", ".xhtml", ".php", ".asp", ".aspx", ".jsp", ".cgi", ".pl":
+		return true
+	}
+	// Only something that reads as a file type counts: a slug such as
+	// "part-2.0" or "v1.5" names a page whose title has a dot in it.
+	return !fileExtension.MatchString(ext)
+}
+
+// fileExtension is an extension that names a file type.
+var fileExtension = regexp.MustCompile(`^\.[a-z][a-z0-9]{0,4}$`)
+
+// follow extracts a link chosen for the form of its link — a source on a
+// page, a frame, a file a listing names — strictly: a page that turns out to
+// be no extractor's is errUnrecognised, never handed to the fallback to be
+// saved as a page.
+func (r *Registry) follow(ctx context.Context, link string, opts Options) (*Result, Extractor, error) {
+	opts.strict = true
+	return r.Extract(ctx, link, opts)
+}
+
+// errUnrecognised reports a source that had a supported form but whose page
+// no extractor recognised: navigation that merely looked like a download.
+var errUnrecognised = errors.New("no extractor recognises this page")
 
 // Extract parses rawURL and resolves it.
 func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*Result, Extractor, error) {
@@ -563,32 +716,67 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	if err != nil {
 		return nil, nil, err
 	}
-	ex := r.Find(u)
+	label := r.Guess(u)
 	if slices.Contains(opts.ancestors, u.String()) {
-		return nil, ex, fmt.Errorf("%s: recursive source link", ex.Name())
+		return nil, nil, fmt.Errorf("%s: recursive source link", label)
 	}
 	if len(opts.ancestors) >= config.MaxExtractionDepth {
-		return nil, ex, fmt.Errorf("%s: source nesting exceeds %d levels", ex.Name(), config.MaxExtractionDepth)
+		return nil, nil, fmt.Errorf("%s: source nesting exceeds %d levels", label, config.MaxExtractionDepth)
 	}
+	// A source followed from another page is never the submitted URL, even
+	// when the page it was found on was read without the registry.
+	submitted := len(opts.ancestors) == 0 && !opts.strict
 	opts.ancestors = append(slices.Clone(opts.ancestors), u.String())
 	if opts.limits == (Limits{}) {
 		opts.limits = r.limits
 	}
-	read := func(ctx context.Context) (*Result, error) {
-		ctx, challenge := httpx.CaptureChallenges(ctx)
-		res, err := ex.Extract(ctx, u, opts)
-		if ctx.Err() == nil && challenge() != nil {
-			return nil, challenge()
+	strict := opts.strict
+	opts.strict = false
+	// The page is identified afresh on every read, so that a read recovered
+	// through another route, or a file refreshed at transfer time, is judged
+	// by what that route was served rather than by the challenge the first
+	// one met.
+	read := func(ctx context.Context) (Extractor, *Result, error) {
+		// The probe's own challenge is not the extraction's: a recogniser
+		// may claim a challenged page by its form and an open API, and the
+		// extractor it chose then goes on without the page. Only what that
+		// extractor meets counts. A challenged page nobody claimed is the
+		// read's answer as it stands, rather than one for the fallback to
+		// fetch into again.
+		ex, page := r.identify(ctx, u)
+		if ex == r.fallback && page.Challenged {
+			return ex, nil, page.Err
 		}
+		if strict && ex == r.fallback {
+			return ex, nil, fmt.Errorf("%s: %w", u.Redacted(), errUnrecognised)
+		}
+		ctx, challenge := httpx.CaptureChallenges(ctx)
+		res, err := ex.Extract(withPage(ctx, page), u, opts)
+		if ctx.Err() == nil && challenge() != nil {
+			return ex, nil, challenge()
+		}
+		return ex, res, err
+	}
+	reread := func(ctx context.Context) (*Result, error) {
+		_, res, err := read(ctx)
 		return res, err
 	}
-	res, err := read(ctx)
+	ex, res, err := read(ctx)
 	recovered := false
 	_, challenged := errors.AsType[*httpx.ChallengeError](err)
-	fallback, optedIn := ex.(ProxyFallback)
-	if err != nil && httpx.RouteID(ctx) == "" && (challenged || (optedIn && fallback.ProxyFallback())) {
+	// A player row may opt its sources into the manager's temporary-failure
+	// recovery. It still starts on the normal connection; the manager owns
+	// error classification, proxy availability and the route retry policy.
+	player, isPlayer := ex.(*Player)
+	if err != nil && httpx.RouteID(ctx) == "" && (challenged || (isPlayer && player.ProxyFallback())) {
 		if recover, ok := ctx.Value(challengeRecoveryKey{}).(ChallengeRecovery); ok {
-			res, err = recover(ctx, read, err)
+			res, err = recover(ctx, func(ctx context.Context) (*Result, error) {
+				got, res, err := read(ctx)
+				if err == nil {
+					ex = got
+				}
+				return res, err
+			}, err)
 			recovered = err == nil
 		}
 	}
@@ -598,6 +786,14 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 	if res == nil || len(res.Files) == 0 {
 		return nil, ex, fmt.Errorf("%s: no downloadable files found at %s", ex.Name(), u.Redacted())
 	}
+	// The file cap holds whatever an extractor did about it: a submitted
+	// URL that listed more than the setting allows is cut here, and says
+	// so. A nested source is left whole for the expansion holding it, which
+	// applies the cap a source at a time and counts what it cut.
+	if limit := opts.maxFiles(); submitted && len(res.Files) > limit {
+		res.Files = res.Files[:limit]
+		res.Note = joinNotes(res.Note, fileLimitNote)
+	}
 	// The title names the job and, for a source expanded into folders, the
 	// folder too; see util.Unescape for why it may still carry entities.
 	res.Title = util.TitleName(util.Unescape(res.Title))
@@ -606,7 +802,7 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 		res.Files[i].Name = util.TitleName(util.Unescape(res.Files[i].Name))
 		res.Files[i].Dir = util.Unescape(res.Files[i].Dir)
 		if res.Files[i].Refresh == nil {
-			res.Files[i].Refresh = refreshFile(read, res.Files[i], len(res.Files) == 1)
+			res.Files[i].Refresh = refreshFile(reread, res.Files[i], len(res.Files) == 1)
 		}
 		if recovered {
 			res.Files[i].Resolve = res.Files[i].Refresh
@@ -644,4 +840,42 @@ func ParseURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid URL %q: no host", raw)
 	}
 	return u, nil
+}
+
+// about is what an extractor says of itself to the registry and the
+// inventory: its name, the forms of link worth a probe, and the
+// inventory's description of what it recognises. An extractor embeds it
+// rather than spelling out the three methods, so that its constructor
+// reads as its row.
+type about struct {
+	name string
+	// shape is the forms Shape reports; none when nil.
+	shape      func(*url.URL) bool
+	recognises string
+}
+
+func (a about) Name() string { return a.name }
+
+// Recognises is the inventory's description.
+func (a about) Recognises() string { return a.recognises }
+
+// Shape reports the forms of link worth a probe.
+func (a about) Shape(u *url.URL) bool { return a.shape != nil && a.shape(u) }
+
+// eitherShape is a shape matching what any of shapes match.
+func eitherShape(shapes ...func(*url.URL) bool) func(*url.URL) bool {
+	return func(u *url.URL) bool {
+		for _, shape := range shapes {
+			if shape(u) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// linkFile is the file at link, named as the link names it, its length
+// left to the response, fetched with headers.
+func linkFile(link string, headers httpx.Header) File {
+	return File{Name: util.NameFromURL(link), URL: link, Size: -1, Headers: headers}
 }

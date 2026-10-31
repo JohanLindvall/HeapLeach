@@ -13,9 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestORFLink(t *testing.T) {
@@ -111,7 +108,7 @@ func orfFakeSite(t *testing.T) (*httptest.Server, *atomic.Int32) {
 }
 
 func orfWith(srv *httptest.Server) *ORF {
-	o := NewORF(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	o := NewORF(testClient())
 	o.site = srv.URL + "/"
 	return o
 }
@@ -120,11 +117,7 @@ func orfWith(srv *httptest.Server) *ORF {
 // when the API stops taking them, and comes with its audio and subtitles.
 func TestORFReadsAnEpisodeWithTheSitesCredentials(t *testing.T) {
 	srv, reads := orfFakeSite(t)
-	u, _ := url.Parse("https://on.orf.at/video/1001/an-invented-title")
-	res, err := orfWith(srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, orfWith(srv), "https://on.orf.at/video/1001/an-invented-title", Options{})
 	if reads.Load() != 2 {
 		t.Errorf("the site was read %d times; want the rotated credentials read once more", reads.Load())
 	}
@@ -149,8 +142,7 @@ func TestORFRefusesWhatItCannotFetch(t *testing.T) {
 		"1003": "is DRM-protected",
 		"9999": "does not exist",
 	} {
-		u, _ := url.Parse("https://on.orf.at/video/" + id)
-		_, err := orfWith(srv).Extract(context.Background(), u, Options{})
+		_, err := extract(t, orfWith(srv), "https://on.orf.at/video/"+id, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v; want it to say %q", id, err, want)
 		}
@@ -162,11 +154,7 @@ func TestORFRefusesWhatItCannotFetch(t *testing.T) {
 // once one has shown it refused here, is what ORF shows in Austria alone.
 func TestORFListsASeries(t *testing.T) {
 	srv, _ := orfFakeSite(t)
-	u, _ := url.Parse("https://on.orf.at/sendereihe/3003/an-invented-series")
-	res, err := orfWith(srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, orfWith(srv), "https://on.orf.at/sendereihe/3003/an-invented-series", Options{})
 	if res.Title != "An Invented Series" || len(res.Files) != 1 || res.Files[0].Name != "An Invented Series (1/3).mp4" {
 		t.Fatalf("%q: %+v", res.Title, res.Files)
 	}

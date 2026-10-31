@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -44,7 +43,7 @@ func TestTurboExtractSignsAndDefersResolution(t *testing.T) {
 			`"original_filename":"a clip.mp4","filename":"abc123.mp4"}`
 	})
 
-	turbo := NewTurbo(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	turbo := NewTurbo(testClient())
 	u, _ := ParseURL(srv.URL + "/e/abc123")
 	res, err := turbo.Extract(context.Background(), u, Options{})
 	if err != nil {
@@ -80,10 +79,32 @@ func TestTurboExtractReportsARefusal(t *testing.T) {
 		return http.StatusOK, `{"success":false,"message":"file deleted"}`
 	})
 
-	turbo := NewTurbo(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	turbo := NewTurbo(testClient())
 	u, _ := ParseURL(srv.URL + "/d/gone99")
 	_, err := turbo.Extract(context.Background(), u, Options{})
 	if err == nil || !strings.Contains(err.Error(), "file deleted") {
 		t.Errorf("err = %v, want the endpoint's own message", err)
 	}
+}
+
+func TestTurboRecognise(t *testing.T) {
+	tu := NewTurbo(nil)
+	player := `<html><head><title>abc123.mp4</title></head><body><video id="player"></video>
+		<script>fetch('/api/sign?v=' + vvid).then(r => r.json())</script></body></html>`
+	watch := `<html><head><title>a clip.mp4 - Videos</title></head><body>
+		<iframe class="player-frame" src="/embed/abc123" allow="fullscreen"></iframe></body></html>`
+	expectRecognised(t, tu, htmlPage(t, "https://video.example.test/embed/abc123", player), true)
+	expectRecognised(t, tu, htmlPage(t, "https://video.example.test/d/abc123", player), true)
+	expectRecognised(t, tu, htmlPage(t, "https://video.example.test/v/abc123", watch), true)
+	// The form and a title, without the signing call or the player's frame.
+	expectRecognised(t, tu, htmlPage(t, "https://video.example.test/v/abc123", `<html><title>a clip.mp4 - Videos</title></html>`), false)
+	expectRecognised(t, tu, htmlPage(t, "https://video.example.test/v/other", watch), false)
+	// The signing call on a page of another form.
+	expectRecognised(t, tu, htmlPage(t, "https://video.example.test/library", player), false)
+
+	expectShape(t, tu, "https://video.example.test/embed/abc123", true)
+	expectShape(t, tu, "https://video.example.test/d/abc123", true)
+	expectShape(t, tu, "https://video.example.test/a/abc123", false)
+	expectShape(t, tu, "https://video.example.test/e/abc123", false)
+	expectShape(t, tu, "https://video.example.test/abc123", false)
 }

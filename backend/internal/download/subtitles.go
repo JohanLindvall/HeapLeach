@@ -85,17 +85,6 @@ func (m *Manager) fetchSubtitles(ctx context.Context, it *Item, part string, tra
 	return out
 }
 
-// writeFile writes a whole file under a temporary name and renames it into
-// place, so that a file found there is always a whole one.
-func writeFile(files transferFiles, path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := files.write(tmp, data); err != nil {
-		_ = files.remove(tmp)
-		return err
-	}
-	return files.rename(tmp, path)
-}
-
 // fetchWebVTT fetches one track's WebVTT files, several at a time, and
 // merges them.
 func (m *Manager) fetchWebVTT(ctx context.Context, it *Item, track extractor.Track, headers httpx.Header) (webVTT, error) {

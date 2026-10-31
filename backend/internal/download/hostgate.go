@@ -59,9 +59,6 @@ type hostAdmission struct {
 	// item takes the freed slot the instant it is given back, so the host
 	// is asked again as fast as the dispatcher can turn round.
 	until time.Time
-	// wake is closed when a slot frees or the limit rises, and replaced.
-	// Waiters select on it alongside their own cancellation.
-	wake chan struct{}
 }
 
 func newHostGate() *hostGate {
@@ -72,7 +69,7 @@ func newHostGate() *hostGate {
 func (g *hostGate) stateLocked(host string) *hostAdmission {
 	st, ok := g.hosts[host]
 	if !ok {
-		st = &hostAdmission{wake: make(chan struct{})}
+		st = &hostAdmission{}
 		g.hosts[host] = st
 	}
 	return st
@@ -132,7 +129,7 @@ func (g *hostGate) waiting(host string) (limit, active int) {
 	return 0, 0
 }
 
-// release gives a slot back and wakes whoever is queued for it.
+// release gives a slot back.
 func (g *hostGate) release(host string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -143,7 +140,6 @@ func (g *hostGate) release(host string) {
 	if st.active > 0 {
 		st.active--
 	}
-	g.wakeLocked(st)
 }
 
 // serving records that a transfer to this host got going: a response
@@ -223,21 +219,6 @@ func (g *hostGate) lastServed(host string) time.Time {
 	return time.Time{}
 }
 
-// quiet reports how long a host is to be left alone, for a note that would
-// otherwise have nothing to say about when anything will happen.
-func (g *hostGate) quiet(host string) time.Duration {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	st, ok := g.hosts[host]
-	if !ok {
-		return 0
-	}
-	if wait := time.Until(st.until); wait > 0 {
-		return wait
-	}
-	return 0
-}
-
 // eased gives a throttled host one slot back, having just served a transfer
 // to the end.
 //
@@ -263,12 +244,4 @@ func (g *hostGate) eased(host string, ceiling int) {
 	} else {
 		st.limit++
 	}
-	g.wakeLocked(st)
-}
-
-// wakeLocked releases everyone queued for a host so they can re-check.
-// Caller holds mu.
-func (g *hostGate) wakeLocked(st *hostAdmission) {
-	close(st.wake)
-	st.wake = make(chan struct{})
 }

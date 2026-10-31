@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -62,10 +61,7 @@ func TestEpornerVideoID(t *testing.T) {
 		{"/profile/Someone/uploaded-videos/", ""},
 	}
 	for _, c := range cases {
-		u, err := url.Parse("https://www.eporner.com" + c.path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, "https://www.eporner.com"+c.path)
 		if got := epornerVideoID(util.PathSegments(u)); got != c.want {
 			t.Errorf("epornerVideoID(%q) = %q, want %q", c.path, got, c.want)
 		}
@@ -89,10 +85,7 @@ func TestEpornerProfileOf(t *testing.T) {
 		{"/video-Aa1Bb2Cc3/slug/", "", "", false},
 	}
 	for _, c := range cases {
-		u, err := url.Parse("https://www.eporner.com" + c.path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, "https://www.eporner.com"+c.path)
 		user, tab, ok := epornerProfileOf(util.PathSegments(u))
 		if ok != c.ok || user != c.user || tab != c.tab {
 			t.Errorf("epornerProfileOf(%q) = (%q,%q,%t), want (%q,%q,%t)",
@@ -104,10 +97,7 @@ func TestEpornerProfileOf(t *testing.T) {
 // The tab lives in the path, so it has to be carried onto every page: a walk
 // that drops it lists a different tab at a plausible-looking count.
 func TestEpornerProfilePage(t *testing.T) {
-	u, err := url.Parse("https://de.eporner.com/profile/Someone/uploaded-videos/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://de.eporner.com/profile/Someone/uploaded-videos/")
 	if got, want := epornerProfilePage(u, "Someone", "uploaded-videos", 1),
 		"https://de.eporner.com/profile/Someone/uploaded-videos/"; got != want {
 		t.Errorf("page 1 = %q, want %q", got, want)
@@ -201,15 +191,12 @@ const epornerProfileMarkup = `<!DOCTYPE html><html><head><title>Someone's upload
 </div></div></div></div></body></html>`
 
 func TestEpornerListingIgnoresWhatTheTabDoesNotOwn(t *testing.T) {
-	root, err := parseHTML(epornerProfileMarkup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, epornerProfileMarkup)
 	got := epornerListing(root, "https://www.eporner.com/profile/Someone/uploaded-videos/", map[string]bool{})
-	want := []epornerVideo{
-		{Page: "https://www.eporner.com/video-Sidebar001/first-clip/", Title: "First Clip"},
-		{Page: "https://www.eporner.com/video-Second002/second-clip/", Title: "Second Clip"},
-		{Page: "https://www.eporner.com/video-Third003/third-clip/", Title: "Third Clip"},
+	want := []listingLink{
+		{url: "https://www.eporner.com/video-Sidebar001/first-clip/", title: "First Clip"},
+		{url: "https://www.eporner.com/video-Second002/second-clip/", title: "Second Clip"},
+		{url: "https://www.eporner.com/video-Third003/third-clip/", title: "Third Clip"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("collected %d videos, want %d — the sidebar's Foreign999 must not be among them: %+v", len(got), len(want), got)
@@ -220,21 +207,18 @@ func TestEpornerListingIgnoresWhatTheTabDoesNotOwn(t *testing.T) {
 		}
 	}
 	for _, v := range got {
-		if strings.Contains(v.Page, "Foreign999") {
-			t.Errorf("a video from outside the tab was collected: %q", v.Page)
+		if strings.Contains(v.url, "Foreign999") {
+			t.Errorf("a video from outside the tab was collected: %q", v.url)
 		}
 	}
 }
 
 // A video already collected on an earlier page is not collected again.
 func TestEpornerListingSkipsWhatWasAlreadySeen(t *testing.T) {
-	root, err := parseHTML(epornerProfileMarkup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, epornerProfileMarkup)
 	seen := map[string]bool{"Sidebar001": true, "Second002": true}
 	got := epornerListing(root, "https://www.eporner.com/profile/Someone/uploaded-videos/", seen)
-	if len(got) != 1 || got[0].Title != "Third Clip" {
+	if len(got) != 1 || got[0].title != "Third Clip" {
 		t.Fatalf("got %+v, want only the unseen third clip", got)
 	}
 }
@@ -242,10 +226,7 @@ func TestEpornerListingSkipsWhatWasAlreadySeen(t *testing.T) {
 // The count is what stops a short walk passing for a whole one, so it has to
 // come from the tab's own heading — a profile also states somebody else's.
 func TestEpornerDeclaredCount(t *testing.T) {
-	root, err := parseHTML(epornerProfileMarkup)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, epornerProfileMarkup)
 	if got := epornerDeclaredCount(root, "uploaded-videos"); got != 5 {
 		t.Errorf("uploaded-videos count = %d, want 5", got)
 	}
@@ -255,20 +236,9 @@ func TestEpornerDeclaredCount(t *testing.T) {
 	}
 }
 
-func TestEpornerProfileTitleAndNote(t *testing.T) {
+func TestEpornerProfileTitle(t *testing.T) {
 	if got, want := epornerProfileTitle("Someone", "uploaded-videos"), "Someone (uploaded videos)"; got != want {
 		t.Errorf("title = %q, want %q", got, want)
-	}
-	if got := epornerProfileNote(5, 5); got != "" {
-		t.Errorf("complete walk noted %q", got)
-	}
-	if got, want := epornerProfileNote(3, 5), "partial — 3 of 5"; got != want {
-		t.Errorf("short = %q, want %q", got, want)
-	}
-	// With no declared total there is nothing to compare against, so the
-	// job must not be accused of being short.
-	if got := epornerProfileNote(3, 0); got != "" {
-		t.Errorf("no declared total noted %q", got)
 	}
 }
 
@@ -333,9 +303,9 @@ func epornerServer(t *testing.T, declared int) (*httptest.Server, *int32) {
 	return srv, &pageHits
 }
 
-func epornerUnderTest(t *testing.T) *Eporner {
+func epornerUnderTest(t *testing.T) *Player {
 	t.Helper()
-	return NewEporner(httpx.New("test-agent", "en-US,en;q=0.9", 1, 10*time.Second))
+	return NewPlayer(httpx.New("test-agent", "en-US,en;q=0.9", 1, 10*time.Second), &epornerPlayer)
 }
 
 // One video, end to end: the page is read, the hash folded, the endpoint
@@ -344,14 +314,7 @@ func TestEpornerVideoEndToEnd(t *testing.T) {
 	srv, pageHits := epornerServer(t, 5)
 	e := epornerUnderTest(t)
 
-	u, err := url.Parse(srv.URL + "/video-Made0001Up/a-made-up-clip/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, e, srv.URL+"/video-Made0001Up/a-made-up-clip/", Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -390,14 +353,7 @@ func TestEpornerProfileEndToEnd(t *testing.T) {
 	srv, pageHits := epornerServer(t, 4)
 	e := epornerUnderTest(t)
 
-	u, err := url.Parse(srv.URL + "/profile/Someone/uploaded-videos/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, e, srv.URL+"/profile/Someone/uploaded-videos/", Options{})
 	want := []string{"First Clip.mp4", "Second Clip.mp4", "Third Clip.mp4", "Fourth Clip.mp4"}
 	if len(res.Files) != len(want) {
 		t.Fatalf("got %d files, want %d: %+v", len(res.Files), len(want), res.Files)
@@ -436,17 +392,10 @@ func TestEpornerProfileEndToEnd(t *testing.T) {
 func TestEpornerProfileSaysWhenItCameBackShort(t *testing.T) {
 	srv, _ := epornerServer(t, 9)
 	e := epornerUnderTest(t)
-	u, err := url.Parse(srv.URL + "/profile/Someone/uploaded-videos/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, e, srv.URL+"/profile/Someone/uploaded-videos/", Options{})
 	// The shortfall is the job's note, and the title — which names the
 	// folder — stays the profile's, so a later complete run files alongside.
-	if want := "Someone (uploaded videos) (partial — 4 of 9)"; res.Label() != want {
+	if want := "Someone (uploaded videos) (4 of 9)"; res.Label() != want {
 		t.Errorf("label = %q, want %q", res.Label(), want)
 	}
 	if want := "Someone (uploaded videos)"; res.Title != want {
@@ -467,11 +416,8 @@ func TestEpornerUnavailableVideo(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/video-Made0001Up/gone/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = epornerUnderTest(t).Extract(context.Background(), u, Options{})
+	u := mustParse(t, srv.URL+"/video-Made0001Up/gone/")
+	_, err := epornerUnderTest(t).Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("an unavailable video resolved without error")
 	}
@@ -487,11 +433,8 @@ func TestEpornerPageWithoutAPlayer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	u, err := url.Parse(srv.URL + "/video-Made0001Up/gone/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = epornerUnderTest(t).Extract(context.Background(), u, Options{})
+	u := mustParse(t, srv.URL+"/video-Made0001Up/gone/")
+	_, err := epornerUnderTest(t).Extract(context.Background(), u, Options{})
 	if err == nil || !strings.Contains(err.Error(), "player configuration") {
 		t.Errorf("error = %v, want it to name the missing player configuration", err)
 	}
@@ -548,5 +491,16 @@ func TestEpornerTitlesInASeriesStayDistinct(t *testing.T) {
 	}
 	if len(seen) != 5 {
 		t.Errorf("got %d distinct titles, want 5", len(seen))
+	}
+}
+
+// A profile is walked only as far as the listing cap, and says so in place
+// of the shortfall against the tab's own count.
+func TestEpornerProfileStopsAtTheListingCap(t *testing.T) {
+	srv, _ := epornerServer(t, 4)
+	e := epornerUnderTest(t)
+	res := extractOK(t, e, srv.URL+"/profile/Someone/uploaded-videos/", Options{limits: Limits{Sources: 2}})
+	if len(res.Files) != 2 || res.Note != "partial — source limit" {
+		t.Errorf("got %d files with note %q, want 2 and the source cap's", len(res.Files), res.Note)
 	}
 }

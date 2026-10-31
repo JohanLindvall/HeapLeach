@@ -3,15 +3,10 @@
 package download
 
 import (
-	"io"
-	"log/slog"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // runManager starts a manager configured for concurrency and streams that
@@ -19,13 +14,9 @@ import (
 // then Start.
 func runManager(t *testing.T, file string, concurrency, streams, most int) *Manager {
 	t.Helper()
-	cfg := &config.Config{
-		DownloadDir: t.TempDir(), Concurrency: concurrency, Streams: streams, MaxConcurrency: most,
-		StateFile: file, UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret, Timeout: 30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, cfg.Timeout)
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m := testManager(t, func(c *config.Config) {
+		c.Concurrency, c.Streams, c.MaxConcurrency, c.StateFile = concurrency, streams, most, file
+	})
 	if _, err := m.Restore(); err != nil {
 		t.Fatal(err)
 	}

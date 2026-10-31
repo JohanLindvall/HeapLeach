@@ -16,9 +16,19 @@ discovery, scoring, leases, exit probing and claims, and their defaults.
 Application scope policy, the health epoch, the cached probe-outage policy and
 HTTP identity stay here.
 
-The pool's scopes are `config.ProxyGroups`: `keep2share`, `fileboom`,
-`emload`, `mega` and `cloudflare` (WAF recovery). An extractor marks a
-per-address service with `Pace.PerRoute` and names it in `Pace.Group`.
+The pool's scopes are `config.ProxyGroups`: `keep2share` (both of that
+service's hosts), `emload`, `mega` and `cloudflare` (WAF recovery), named in
+code by `config.GroupKeep2Share`, `GroupEmload`, `GroupMega` and `GroupWAF`;
+the strings are what settings, the API and the proxy database carry, so they
+do not change. `config.IsProxyGroup` asks whether a name is one without
+copying the list, which matters because the dispatcher asks it of every
+queued item. An extractor marks a per-address service with `Pace.PerRoute`
+and names it in `Pace.Group`. A group's former name (`fileboom`, merged into `keep2share`)
+is read as the group it joined wherever a group is named: the environment,
+flags, saved settings and the API, through `config.ProxyGroup` and
+`config.CanonicalProxyTypes`. Settings written before the merge keep working
+rather than being refused or silently dropped; the alias is never written
+back.
 
 The inventory lives beside the queue file wherever that is put
 (`defaultProxyDB`), and in the default state directory when no queue is kept,

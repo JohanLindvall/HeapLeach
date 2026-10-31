@@ -13,9 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestVimeoVideoID(t *testing.T) {
@@ -39,10 +36,7 @@ func TestVimeoVideoID(t *testing.T) {
 		{raw: "https://vimeo.com/"},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		id, hash := vimeoVideoID(u)
 		if id != tc.wantID || hash != tc.wantHash {
 			t.Errorf("vimeoVideoID(%s) = %q, %q; want %q, %q", tc.raw, id, hash, tc.wantID, tc.wantHash)
@@ -53,24 +47,12 @@ func TestVimeoVideoID(t *testing.T) {
 // TestVimeoPlayerURL pins the one thing that makes this host work at all:
 // the request goes to the embed player, not to the watch page.
 func TestVimeoPlayerURL(t *testing.T) {
-	if got, want := vimeoPlayerURL("123456789", ""), "https://player.vimeo.com/video/123456789"; got != want {
+	if got, want := vimeoPlayerURL(vimeoPlayerRoot, "123456789", ""), "https://player.vimeo.com/video/123456789"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if got, want := vimeoPlayerURL("123456789", "abcdef1234"),
+	if got, want := vimeoPlayerURL(vimeoPlayerRoot, "123456789", "abcdef1234"),
 		"https://player.vimeo.com/video/123456789?h=abcdef1234"; got != want {
 		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func TestVimeoMatch(t *testing.T) {
-	v := NewVimeo(nil)
-	for _, host := range []string{"vimeo.com", "www.vimeo.com", "player.vimeo.com"} {
-		if !v.Match(&url.URL{Scheme: "https", Host: host, Path: "/1"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if v.Match(&url.URL{Scheme: "https", Host: "notvimeo.com"}) {
-		t.Error("a lookalike host was matched")
 	}
 }
 
@@ -127,7 +109,7 @@ func vimeoPage(view int, title, request string) string {
 }
 
 func vimeoWith(srv *httptest.Server) *Vimeo {
-	v := NewVimeo(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	v := NewVimeo(testClient())
 	v.player = srv.URL + "/video/"
 	return v
 }
@@ -144,11 +126,7 @@ func TestVimeoReadsThePlayersConfiguration(t *testing.T) {
 				"second": {"url": "{{base}}/elsewhere/master.m3u8", "avc_url": "{{base}}/hls/master.m3u8"}}},
 			"progressive": [{"url": "{{base}}/file-360.mp4", "height": 360}]}}`),
 	})
-	u, _ := url.Parse("https://vimeo.com/111")
-	res, err := vimeoWith(srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, vimeoWith(srv), "https://vimeo.com/111", Options{})
 	f := res.Files[0]
 	if res.Title != "An Invented Film" || f.Name != "An Invented Film.mp4" || f.URL != srv.URL+"/hls/master.m3u8" {
 		t.Fatalf("result %q, file %+v", res.Title, f)
@@ -175,11 +153,7 @@ func TestVimeoFallsBackToAProgressiveFile(t *testing.T) {
 			"hls": {"default_cdn": "first", "cdns": {"first": {"url": "{{base}}/gone/master.m3u8"}}},
 			"progressive": [{"url": "{{base}}/file-360.mp4", "height": 360}, {"url": "{{base}}/file-720.mp4", "height": 720}]}}`),
 	})
-	u, _ := url.Parse("https://player.vimeo.com/video/222")
-	res, err := vimeoWith(srv).Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, vimeoWith(srv), "https://player.vimeo.com/video/222", Options{})
 	f := res.Files[0]
 	if f.URL != srv.URL+"/file-720.mp4" || len(f.Segments) != 0 || f.Name != "Another Invented Film.mp4" {
 		t.Fatalf("file = %+v; want the 720p progressive file", f)

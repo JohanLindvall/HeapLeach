@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
@@ -186,10 +185,7 @@ const vrtMediaDocument = `{
 // on: VRT's variants carry their own audio, so concatenating one yields
 // something that plays.
 func TestVRTMaxMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/vod/show.ism/.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/vod/show.ism/.m3u8")
 
 	variants := parseMasterPlaylist(vrtMasterPlaylist, base)
 	if len(variants) != 3 {
@@ -225,10 +221,7 @@ func TestVRTMaxMasterPlaylistIsSelfContained(t *testing.T) {
 // without sound. The extractor joins the audio renditions to it, and refuses
 // it only when there are none to join.
 func TestVRTMaxKnowsAVariantCarryingNoAudio(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/vod/show.ism/.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/vod/show.ism/.m3u8")
 
 	variants := parseMasterPlaylist(vrtDemuxedPlaylist, base)
 	if len(variants) != 1 {
@@ -250,10 +243,7 @@ func TestVRTMaxKnowsAVariantCarryingNoAudio(t *testing.T) {
 // Dutch prose that differs from one programme to the next, so the shape of
 // the tree is what decides, and seasons have to come out before the extras.
 func TestVRTMaxListsWalkEveryTab(t *testing.T) {
-	var page vrtPage
-	if err := json.Unmarshal([]byte(vrtProgramDocument), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[vrtPage](t, vrtProgramDocument)
 
 	lists := vrtLists(&page)
 	want := []vrtList{
@@ -288,22 +278,16 @@ func TestVRTMaxListsWalkEveryTab(t *testing.T) {
 // is for. A "today" tab repeats what the season already listed, and a podcast
 // tab holds tiles that lead to something this cannot download at all.
 func TestVRTMaxRefsDropDuplicatesAndNonEpisodes(t *testing.T) {
-	var page vrtPage
-	if err := json.Unmarshal([]byte(vrtProgramDocument), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[vrtPage](t, vrtProgramDocument)
 
 	// Stand in for the fetch of the lazy season, which is the only part of
 	// the walk that needs the network.
 	lists := vrtLists(&page)
-	var lazy vrtResponse
-	if err := json.Unmarshal([]byte(vrtLazySeasonDocument), &lazy); err != nil {
-		t.Fatal(err)
-	}
+	lazy := decode[vrtResponse](t, vrtLazySeasonDocument)
 	lists[1].tiles = lazy.Data.List.Items
 
 	refs := vrtRefs(lists)
-	want := []vrtEpisodeRef{
+	want := []broadcastEpisode{
 		{id: "/vrtmax/a-z/a-programme/2026/ep-260821/", name: "The newest one", season: "Seizoen 2026"},
 		{id: "/vrtmax/a-z/a-programme/2026/ep-260820/", name: "The one before", season: "Seizoen 2026"},
 		{id: "/vrtmax/a-z/a-programme/2025/ep-251231/", name: "Last year's finale", season: "Seizoen 2025"},
@@ -344,10 +328,7 @@ func TestVRTMaxSeasonLabelDropsTheCount(t *testing.T) {
 // route it does not offer. Reading modes[0] would hand the media service an
 // empty id.
 func TestVRTMaxStreamIDSkipsEmptyModes(t *testing.T) {
-	var page vrtPage
-	if err := json.Unmarshal([]byte(vrtEpisodeDocument), &page); err != nil {
-		t.Fatal(err)
-	}
+	page := decode[vrtPage](t, vrtEpisodeDocument)
 	if page.TypeName != vrtEpisodePage {
 		t.Fatalf("page read as %q", page.TypeName)
 	}
@@ -356,10 +337,7 @@ func TestVRTMaxStreamIDSkipsEmptyModes(t *testing.T) {
 		t.Errorf("streamID = %q, want %q", got, want)
 	}
 
-	var none vrtPage
-	if err := json.Unmarshal([]byte(`{"__typename":"EpisodePage","player":{"modes":[]}}`), &none); err != nil {
-		t.Fatal(err)
-	}
+	none := decode[vrtPage](t, `{"__typename":"EpisodePage","player":{"modes":[]}}`)
 	if got := none.streamID(); got != "" {
 		t.Errorf("a player with no modes named %q", got)
 	}
@@ -370,10 +348,7 @@ func TestVRTMaxStreamIDSkipsEmptyModes(t *testing.T) {
 // query on the HLS one tells the packager which audio codecs to include, so
 // rebuilding the URL without it would change what comes back.
 func TestVRTMaxMediaPicksTheHLSLocatorWhole(t *testing.T) {
-	var media vrtMedia
-	if err := json.Unmarshal([]byte(vrtMediaDocument), &media); err != nil {
-		t.Fatal(err)
-	}
+	media := decode[vrtMedia](t, vrtMediaDocument)
 	want := "https://cdn.example.test/vod/show.ism/.m3u8?filter=%28%21%28type%3D%3D%22audio%22%26%26FourCC%21%3D%22AACL%22%29%29"
 	if got := media.hls(); got != want {
 		t.Errorf("hls() = %q, want %q", got, want)
@@ -382,10 +357,7 @@ func TestVRTMaxMediaPicksTheHLSLocatorWhole(t *testing.T) {
 		t.Errorf("title = %q", media.Title)
 	}
 
-	var noHLS vrtMedia
-	if err := json.Unmarshal([]byte(`{"targetUrls":[{"type":"mpeg_dash","url":"https://cdn.example.test/a.mpd"}]}`), &noHLS); err != nil {
-		t.Fatal(err)
-	}
+	noHLS := decode[vrtMedia](t, `{"targetUrls":[{"type":"mpeg_dash","url":"https://cdn.example.test/a.mpd"}]}`)
 	if got := noHLS.hls(); got != "" {
 		t.Errorf("a DASH-only document offered %q", got)
 	}
@@ -405,10 +377,7 @@ func TestVRTMaxProtectedReadsTheFieldNotTheName(t *testing.T) {
 		`{"drm":{"widevine":{"licenseUrl":"https://drm.example.test/wv"}}}`: true,
 	}
 	for body, want := range tests {
-		var media vrtMedia
-		if err := json.Unmarshal([]byte(body), &media); err != nil {
-			t.Fatal(err)
-		}
+		media := decode[vrtMedia](t, body)
 		if got := media.protected(); got != want {
 			t.Errorf("protected() of %s = %v, want %v", body, got, want)
 		}
@@ -485,10 +454,9 @@ func TestVRTMaxReasonKeepsTheCode(t *testing.T) {
 			t.Errorf("vrtReason(%s) said nothing beyond the code itself", code)
 		}
 	}
-	refusal := &vrtRefused{code: "CONTENT_IS_AGE_RESTRICTED"}
-	want := "vrtmax: VRT serves this only to a signed-in account old enough for it (CONTENT_IS_AGE_RESTRICTED)"
-	if got := refusal.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
+	want := "VRT serves this only to a signed-in account old enough for it (CONTENT_IS_AGE_RESTRICTED)"
+	if got := vrtReason("CONTENT_IS_AGE_RESTRICTED"); got != want {
+		t.Errorf("vrtReason = %q, want %q", got, want)
 	}
 }
 
@@ -515,53 +483,9 @@ func TestVRTMaxPageID(t *testing.T) {
 		"https://sporza.be/nl/matches/":                    "",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := vrtPageID(u); got != want {
 			t.Errorf("vrtPageID(%s) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-// TestVRTMaxMatch guards the narrowness of the claim. vrt.be is also the news
-// site, the radio and the broadcaster's own pages; claiming the domain whole
-// would have the link harvester treat every navigation link on a VRT page as
-// something to download.
-func TestVRTMaxMatch(t *testing.T) {
-	v := NewVRTMax(nil)
-	matched := []string{
-		"https://www.vrt.be/vrtmax/a-z/a-programme/",
-		"https://WWW.VRT.BE/vrtmax/a-z/a-programme/",
-		"https://www.vrt.be/vrtnu/a-z/a-programme/",
-		"https://www.vrtmax.be/a-z/a-programme/",
-		"https://vrtmax.be/",
-	}
-	for _, raw := range matched {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !v.Match(u) {
-			t.Errorf("%s was not matched", raw)
-		}
-	}
-
-	unmatched := []string{
-		"https://www.vrt.be/vrtnws/nl/2026/01/01/a-story/",
-		"https://www.vrt.be/",
-		"https://radio1.be/",
-		"https://sporza.be/nl/",
-		"https://notvrt.be.example.test/vrtmax/a-z/a-programme/",
-	}
-	for _, raw := range unmatched {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if v.Match(u) {
-			t.Errorf("%s was matched", raw)
 		}
 	}
 }

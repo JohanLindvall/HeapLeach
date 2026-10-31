@@ -3,11 +3,10 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -69,6 +68,7 @@ import (
 // episodeComposition endpoint returns all three seasons of the same show in
 // one request, numbered, so that is what is asked.
 type SRF struct {
+	about
 	client *httpx.Client
 	// il is the Integration Layer's base, a field only so a test can point
 	// it at a fixture server.
@@ -117,20 +117,18 @@ var srfURNPattern = regexp.MustCompile(`^urn:[a-z]+:[a-z]+:(?:[a-z]+:)?[A-Za-z0-
 var srfUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // NewSRF builds the Play SRF extractor.
-func NewSRF(client *httpx.Client) *SRF { return &SRF{client: client, il: srfIL} }
+func NewSRF(client *httpx.Client) *SRF {
+	return &SRF{client: client, il: srfIL, about: about{name: "srf", shape: srfShape,
+		recognises: "programmes and shows of Play SRF (a `urn=` or a show's `id=` in the query) whose page names its `urn:srf:` media"}}
+}
 
-func (s *SRF) Name() string { return "srf" }
+// srfShape is a link naming a media urn, or a Play show page by its id.
+func srfShape(u *url.URL) bool { return srfTarget(u).urn != "" }
 
-// Match claims the Play section of srf.ch, and any srf.ch URL that names a
-// media urn outright. The rest of srf.ch is a news site whose articles embed
-// a player this does not read, and claiming those would promise more than it
-// resolves.
-func (s *SRF) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "srf.ch") {
-		return false
-	}
-	return srfURN(u.Query().Get("urn")) != "" ||
-		strings.HasPrefix(strings.ToLower(u.Path), "/play/")
+// Recognise takes a page of Play SRF naming what it plays: its media are
+// addressed by urn:srf: urns, which the Integration Layer resolves.
+func (s *SRF) Recognise(_ context.Context, p *Page) bool {
+	return s.Shape(p.Final) && p.Has("urn:srf:") && p.Named("Play SRF")
 }
 
 // Extract handles a single programme or a whole show.
@@ -198,129 +196,62 @@ func (s *SRF) programme(ctx context.Context, urn string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A lone file lands straight in the download directory with no folder to
-	// say what it belongs to, so the name carries the show as well.
-	title = util.FirstNonEmpty(title, urn)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(title, urn), file), nil
 }
 
 // series expands a show into one file per episode, filed by season when the
 // show has more than one.
 func (s *SRF) series(ctx context.Context, u *url.URL, showURN string) (*Result, error) {
-	title, episodes, err := s.episodes(ctx, showURN)
+	title, episodes, more, walkNote, err := s.episodes(ctx, showURN, config.MaxResolvedEpisodes)
 	if err != nil {
 		return nil, err
 	}
 
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep srfEpisodeRef) string { return ep.season })
-
 	// Every episode needs a mediaComposition of its own, and a show with
 	// several hundred of them would otherwise sit in "resolving" for minutes
 	// before a byte moved.
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep srfEpisodeRef) ([]srfResolved, error) {
-		file, name, err := s.chapter(ctx, ep.urn)
-		if err != nil {
-			// A refusal comes back as a *result* rather than an error,
-			// because FanOut drops what fails and the reason is the one
-			// thing worth keeping when a whole show is refused for it.
-			if blocked, ok := errors.AsType[*srfBlocked](err); ok {
-				return []srfResolved{{blocked: blocked.reason}}, nil
-			}
-			return nil, err
-		}
-		file.Name = util.FirstNonEmpty(ep.name, name, ep.urn) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return []srfResolved{{file: *file}}, nil
-	})
-
-	result := &Result{Title: util.FirstNonEmpty(title, showURN)}
-	var blocked string
-	for _, got := range resolved {
-		if got.blocked != "" {
-			blocked = util.FirstNonEmpty(blocked, got.blocked)
-			continue
-		}
-		result.Files = append(result.Files, got.file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("srf: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(blocked,
-				"the catalogue lists them but the Integration Layer offers no stream for any of them"))
-	}
-	return result, nil
+	return listSeries(ctx, cmp.Or(title, showURN), series[broadcastEpisode]{
+		site: "srf", noun: "episodes", link: u.Redacted(),
+		items: episodes, more: more,
+		label:      broadcastEpisode.seasonOf,
+		resolve:    listedAs(s.chapter, nil),
+		unplayable: "the catalogue lists them but the Integration Layer offers no stream for any of them",
+	}, walkNote)
 }
 
-// srfResolved is one episode after its composition was read: a file, or the
-// reason there is none.
-type srfResolved struct {
-	file    File
-	blocked string
-}
-
-// srfEpisodeRef is one episode of a show, with the season it belongs to.
-type srfEpisodeRef struct {
-	urn    string
-	name   string
-	season string
-}
-
-// episodes reads a show's episodes, following the listing's own paging.
-func (s *SRF) episodes(ctx context.Context, showURN string) (string, []srfEpisodeRef, error) {
+// episodes reads a show's episodes, following the listing's own paging up
+// to limit of them, and says whether the listing went on past that. A daily
+// strand has thousands of instalments and reaches it every time. A page that
+// will not load part-way down a long show still leaves everything above it
+// worth downloading, and the note says the listing was cut there.
+func (s *SRF) episodes(ctx context.Context, showURN string, limit int) (title string, episodes []broadcastEpisode, more bool, note string, err error) {
 	next := s.il + srfEpisodesPath + url.PathEscape(showURN) + ".json?" +
 		"pageSize=" + strconv.Itoa(config.FolderPageSize) + "&" + srfVector
-
-	var (
-		title    string
-		episodes []srfEpisodeRef
-		seen     = make(map[string]bool)
-	)
-	for next != "" && len(episodes) < config.MaxListingVideos {
-		var doc srfEpisodeList
-		if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
-			if len(episodes) > 0 {
-				// A page that will not load part-way down a long show still
-				// leaves everything above it worth downloading.
-				break
+	episodes, more, note, err = walkEpisodes(ctx, limit, pageWalk[broadcastEpisode]{
+		fetch: func(ctx context.Context, _ int) (pageOf[broadcastEpisode], error) {
+			var doc srfEpisodeList
+			if err := s.client.GetJSON(ctx, next, httpx.Referer(srfPlay), &doc); err != nil {
+				return pageOf[broadcastEpisode]{}, err
 			}
-			return "", nil, fmt.Errorf("srf: episodes of %s: %w", showURN, err)
-		}
-		title = util.FirstNonEmpty(title, doc.Show.Title)
-
-		added := 0
-		for _, ep := range doc.EpisodeList {
-			urn := ep.urn()
-			if urn == "" || seen[urn] {
-				continue
+			title = cmp.Or(title, doc.Show.Title)
+			var refs []broadcastEpisode
+			for _, ep := range doc.EpisodeList {
+				if urn := ep.urn(); urn != "" {
+					refs = append(refs, broadcastEpisode{id: urn, name: ep.Title, season: ep.season()})
+				}
 			}
-			seen[urn] = true
-			added++
-			episodes = append(episodes, srfEpisodeRef{
-				urn:    urn,
-				name:   ep.Title,
-				season: ep.season(),
-			})
-		}
-		if added == 0 {
-			// A listing that keeps answering with what has already been
-			// taken is not paging any more.
-			break
-		}
-		next = doc.Next
+			next = doc.Next
+			return pageOf[broadcastEpisode]{items: refs, next: next != "", end: len(refs) == 0}, nil
+		},
+		key: func(ep broadcastEpisode) string { return ep.id },
+	})
+	if err != nil {
+		return "", nil, false, "", fmt.Errorf("srf: episodes of %s: %w", showURN, err)
 	}
-
 	if len(episodes) == 0 {
-		return "", nil, fmt.Errorf("srf: %s lists no episodes", showURN)
+		return "", nil, false, "", fmt.Errorf("srf: %s lists no episodes", showURN)
 	}
-	// The cap is checked between pages, so the last one may carry it past.
-	// A daily strand has thousands of instalments and reaches this every time.
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
-	}
-	return title, episodes, nil
+	return title, episodes, more, note, nil
 }
 
 // chapter resolves one video urn to something downloadable. The returned File
@@ -338,10 +269,10 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", fmt.Errorf("srf: %s names nothing the Integration Layer knows about", urn)
 	}
 	if chapter.BlockReason != "" {
-		return nil, "", &srfBlocked{urn: urn, reason: srfBlockMessage(chapter.BlockReason)}
+		return nil, "", &broadcastRefusal{"srf", urn, srfBlockMessage(chapter.BlockReason)}
 	}
 
-	title := srfJoin(doc.Show.Title, util.FirstNonEmpty(chapter.Title, doc.Episode.Title))
+	title := joinTitle(doc.Show.Title, cmp.Or(chapter.Title, doc.Episode.Title), titlePrefixed)
 	headers := httpx.Referer(srfPlay)
 
 	// A plain file first, and by a wide margin: it ranges, so it resumes and
@@ -349,12 +280,7 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 	// disk. The API publishes no byte count of its own, so Size stays unknown
 	// and the response's own Content-Length settles it.
 	if best, ok := chapter.pick(srfProtocolHTTP); ok {
-		return &File{
-			Name:    srfExtension(best.URL),
-			URL:     srfSecure(best.URL),
-			Size:    -1,
-			Headers: headers,
-		}, title, nil
+		return progressiveFile(srfSecure(best.URL), linkExt(best.URL, ".mp4"), headers), title, nil
 	}
 
 	best, ok := chapter.pick(srfProtocolHLS)
@@ -362,9 +288,9 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 		return nil, "", fmt.Errorf("srf: %s %s", urn, chapter.refusal())
 	}
 
-	media, err := resolveMediaPlaylist(ctx, s.client, best.URL, headers)
+	media, err := broadcastMedia(ctx, s.client, "srf", urn, best.URL, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("srf: %s: %w", urn, err)
+		return nil, "", err
 	}
 	variant := media.Variant
 	// bestVariant only *prefers* a self-contained rendition; when a master
@@ -385,35 +311,10 @@ func (s *SRF) chapter(ctx context.Context, urn string) (*File, string, error) {
 			"audio, in the video or beside it: joining it would save video with no sound", urn)
 	}
 
-	return &File{
-		// Named off the segments, not the variant URL: Akamai packages these
-		// out of a stored MP4 and names the path after it — ".mp4.csmil/"
-		// over MPEG-TS parts. See segmentsExtension.
-		Name:       media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, title, nil
-}
-
-// srfJoin names a programme by its show and its own title.
-//
-// SRF names each instalment of a daily strand after the strand — "10 vor 10
-// vom 21.08.2026" — so prefixing the show again would say it twice. The
-// prefix is added only when the title does not already open with it.
-func srfJoin(show, title string) string {
-	switch {
-	case title == "":
-		return show
-	case show == "":
-		return title
-	case strings.HasPrefix(strings.ToLower(title), strings.ToLower(show)):
-		return title
-	}
-	return show + " - " + title
+	// Named off the segments, not the variant URL: Akamai packages these out
+	// of a stored MP4 and names the path after it — ".mp4.csmil/" over
+	// MPEG-TS parts. See segmentsExtension.
+	return new(media.file(media.extension(), headers)), title, nil
 }
 
 // srfSecure upgrades a progressive link to https. The Integration Layer hands
@@ -425,26 +326,6 @@ func srfSecure(raw string) string {
 	}
 	return raw
 }
-
-// srfExtension names the container a progressive resource arrives in. SRF
-// serves MP4 and says so in the path; the default exists only so a host that
-// changes its naming still produces a usable filename.
-func srfExtension(raw string) string {
-	if ext := strings.ToLower(path.Ext(util.NameFromURL(raw))); ext != "" {
-		return ext
-	}
-	return ".mp4"
-}
-
-// srfBlocked is the Integration Layer declining to serve a chapter, carrying
-// the reason it gave. It is a type rather than a message so that expanding a
-// whole show can report the reason once instead of several hundred times.
-type srfBlocked struct {
-	urn    string
-	reason string
-}
-
-func (e *srfBlocked) Error() string { return "srf: " + e.urn + ": " + e.reason }
 
 // srfBlockReasons turns the Integration Layer's block tokens into a sentence.
 //
@@ -560,14 +441,7 @@ func (r srfResource) usable() bool {
 var srfQualities = []string{"HD", "SD"}
 
 // srfRank orders a rendition by its label.
-func srfRank(quality string) int {
-	for i, known := range srfQualities {
-		if strings.EqualFold(quality, known) {
-			return i
-		}
-	}
-	return len(srfQualities)
-}
+func srfRank(quality string) int { return rankIn(srfQualities, quality, len(srfQualities)) }
 
 // pick returns the best usable resource speaking one protocol.
 func (c srfChapter) pick(protocol string) (srfResource, bool) {

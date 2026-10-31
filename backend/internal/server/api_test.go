@@ -133,7 +133,7 @@ func TestSettingsValidatesAndApplies(t *testing.T) {
 	if snap.Concurrency != 8 || snap.Streams != 2 || snap.SpeedLimit != 1000000 || !snap.Paused {
 		t.Errorf("settings did not apply: %+v", snap)
 	}
-	if !manager.Paused() {
+	if !manager.Snapshot().Paused {
 		t.Error("the manager itself is not paused")
 	}
 
@@ -316,8 +316,8 @@ func TestOversizedBodiesReturn413WithoutChangingSettings(t *testing.T) {
 		`{"paused":true}` + strings.Repeat(" ", config.MaxRequestBytes),
 	} {
 		rec := postJSON(t, handler, "/api/settings", body)
-		if rec.Code != http.StatusRequestEntityTooLarge || m.Paused() {
-			t.Fatalf("oversized update: status %d, paused %v", rec.Code, m.Paused())
+		if rec.Code != http.StatusRequestEntityTooLarge || m.Snapshot().Paused {
+			t.Fatalf("oversized update: status %d, paused %v", rec.Code, m.Snapshot().Paused)
 		}
 	}
 }
@@ -395,7 +395,7 @@ func TestProxyProtocolsOverTheAPI(t *testing.T) {
 	if body := get(t, handler, "/api/settings").Body.String(); !strings.Contains(body, `"proxyType":"socks"`) || !strings.Contains(body, `"proxyTypes":{"cloudflare":"any"}`) {
 		t.Fatalf("settings read back as %s", body)
 	}
-	for site, want := range map[string]int{"keep2share": 1, "fileboom": 1, "emload": 1, "mega": 1, "cloudflare": 3} {
+	for site, want := range map[string]int{"keep2share": 1, "fileboom": 1 /* the group it joined */, "emload": 1, "mega": 1, "cloudflare": 3} {
 		var page struct{ Total int }
 		if err := json.Unmarshal(get(t, handler, "/api/proxies?site="+site).Body.Bytes(), &page); err != nil || page.Total != want {
 			t.Errorf("%s inventory lists %d routes (%v); want %d", site, page.Total, err, want)
@@ -406,8 +406,10 @@ func TestProxyProtocolsOverTheAPI(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
 	}
-	if kinds := m.Snapshot().ProxyTypes; len(kinds) != 1 || kinds["fileboom"] != "http" {
-		t.Errorf("groups hold %v; want fileboom's own alone", kinds)
+	// A former group's name, as a page loaded before the merge sends it,
+	// sets the group it joined.
+	if kinds := m.Snapshot().ProxyTypes; len(kinds) != 1 || kinds["keep2share"] != "http" {
+		t.Errorf("groups hold %v; want keep2share's own alone", kinds)
 	}
 	if rec := postJSON(t, handler, "/api/settings", `{"proxyType":"tor"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "proxy type") {
 		t.Errorf("unknown protocol = %d: %s", rec.Code, rec.Body)

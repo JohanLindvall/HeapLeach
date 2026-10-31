@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,6 +56,7 @@ import (
 // out at 720p where the stream carries 1080p. Closing that gap needs a muxer,
 // which is the whole trade this program declines to make.
 type PBS struct {
+	about
 	client *httpx.Client
 }
 
@@ -74,9 +76,6 @@ const (
 
 	// pbsErrorClass marks the paragraph an error page explains itself in.
 	pbsErrorClass = "error-message"
-
-	// pbsMaxEpisodes bounds how many videos one show URL expands to.
-	pbsMaxEpisodes = 500
 )
 
 // pbsPlayerID finds the numeric id a video page embeds its player with. The
@@ -89,16 +88,47 @@ var pbsPlayerID = regexp.MustCompile(`player\.pbs\.org/(?:widget/)?(?:viral|port
 var pbsSeasonInfo = regexp.MustCompile(`(?i)^season\s+(\d+)`)
 
 // NewPBS builds the PBS extractor.
-func NewPBS(client *httpx.Client) *PBS { return &PBS{client: client} }
+func NewPBS(client *httpx.Client) *PBS {
+	return &PBS{client: client, about: about{name: "pbs", shape: pbsShape,
+		recognises: "videos (`/video/<slug>/`), shows (`/show/<slug>/`) and player links of PBS, by the player a video page embeds or the videos a show page lists"}}
+}
 
-func (p *PBS) Name() string { return "pbs" }
+// pbsPlayerPaths are the player's three names for itself, the first path
+// segment of a player link (/widget/partnerplayer/ for the last).
+var pbsPlayerPaths = []string{"viralplayer", "portalplayer", "partnerplayer"}
 
-// Match claims the page shapes rather than the domain. Several hosts under
-// pbs.org serve bytes instead of pages — the signed-link redirector and the
-// CDN behind it — and what they hand back is a plain rangeable file, which is
-// precisely what the direct extractor already downloads. Claiming those here
-// could only refuse them.
-func (p *PBS) Match(u *url.URL) bool { return pbsTargetOf(u) != nil }
+// pbsPlayerRef is a video page's player, named by its id. Only the path is
+// read; the site's three names for the player are interchangeable.
+var pbsPlayerRef = regexp.MustCompile(`/(?:widget/)?(?:viral|portal|partner)player/[0-9]+`)
+
+// pbsVideoHref is a video link as a show page lists them.
+var pbsVideoHref = regexp.MustCompile(`href="[^"]*/video/[a-z0-9-]+/?"`)
+
+// pbsSlug is a video slug as PBS writes them: words, then a short id.
+// Another site's /video/<number> is not one.
+var pbsSlug = regexp.MustCompile(`^[a-z0-9-]*[a-z][a-z0-9-]*-[a-z0-9]+$`)
+
+// pbsShape is a video, show or player link.
+func pbsShape(u *url.URL) bool {
+	target := pbsTargetOf(u)
+	return target != nil && (target.slug == "" || pbsSlug.MatchString(target.slug))
+}
+
+// Recognise takes what each form is read by: a player link that is the
+// player's own state (window.videoBridge), a video page embedding the
+// player by id, or a show page listing video links.
+func (p *PBS) Recognise(_ context.Context, page *Page) bool {
+	target := pbsTargetOf(page.Final)
+	switch {
+	case target == nil:
+		return false
+	case target.id != "":
+		return page.Has(pbsBridgeVar)
+	case target.show != "":
+		return page.Named("PBS") && pbsVideoHref.MatchString(page.Body)
+	}
+	return page.Named("PBS") && pbsPlayerRef.MatchString(page.Body)
+}
 
 // Extract handles one video or a whole show.
 func (p *PBS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -126,7 +156,7 @@ func (p *PBS) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 	// say what it belongs to, so its name carries the programme as well. PBS
 	// numbers the episodes of its long-running strands and calls them nothing
 	// else, and "Episode 4" on its own names nothing.
-	title := util.FirstNonEmpty(pbsJoin(episode.program, episode.title), id)
+	title := cmp.Or(joinTitle(episode.program, episode.title, titleEqual), id)
 	episode.file.Name = title + ".mp4"
 	return &Result{Title: title, Files: []File{episode.file}}, nil
 }
@@ -145,24 +175,22 @@ type pbsTarget struct {
 // shape on the site — a signed media link deliberately among them, so it
 // still reaches the direct extractor that can fetch it.
 func pbsTargetOf(u *url.URL) *pbsTarget {
-	if !util.HostMatches(u.Host, "pbs.org") {
-		return nil
-	}
 	segs := util.PathSegments(u)
 
 	// The player is served under three paths that answer identically, so its
 	// id is taken as the last numeric segment rather than by a pattern per
 	// path.
-	if util.HostMatches(u.Host, "player.pbs.org") {
+	if len(segs) > 0 && (slices.Contains(pbsPlayerPaths, segs[0]) ||
+		len(segs) > 1 && segs[0] == "widget" && slices.Contains(pbsPlayerPaths, segs[1])) {
 		for _, seg := range slices.Backward(segs) {
-			if pbsIsID(seg) {
+			if allDigits(seg) {
 				return &pbsTarget{id: seg}
 			}
 		}
 		return nil
 	}
 
-	if len(segs) >= 2 {
+	if len(segs) == 2 {
 		switch segs[0] {
 		case "video":
 			return &pbsTarget{slug: segs[1]}
@@ -171,14 +199,6 @@ func pbsTargetOf(u *url.URL) *pbsTarget {
 		}
 	}
 	return nil
-}
-
-// pbsIsID reports whether a path segment is a player id.
-func pbsIsID(seg string) bool {
-	if seg == "" {
-		return false
-	}
-	return strings.IndexFunc(seg, func(r rune) bool { return r < '0' || r > '9' }) < 0
 }
 
 // pbsEpisode is one resolved video, with what the caller needs to name and
@@ -201,7 +221,9 @@ type pbsEpisode struct {
 // whatever specials sit beside it — rather than the full catalogue.
 func (p *PBS) show(ctx context.Context, u *url.URL, slug string) (*Result, error) {
 	page := pbsRoot + "/show/" + url.PathEscape(slug) + "/"
-	doc, err := p.client.GetString(ctx, page, nil)
+	// The page probed to recognise the show is this one when the link was
+	// the show's own; anything longer is read at the show's address.
+	doc, err := fetchPage(ctx, p.client, page, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pbs: fetch %s: %w", u.Redacted(), err)
 	}
@@ -214,48 +236,47 @@ func (p *PBS) show(ctx context.Context, u *url.URL, slug string) (*Result, error
 	if len(slugs) == 0 {
 		return nil, fmt.Errorf("pbs: no videos listed on %s", u.Redacted())
 	}
-	if len(slugs) > pbsMaxEpisodes {
-		slugs = slugs[:pbsMaxEpisodes]
+	episodes := make([]*pbsEpisode, len(slugs))
+	for i, slug := range slugs {
+		episodes[i] = &pbsEpisode{slug: slug}
 	}
 
 	// Two requests per video, and a show page lists a couple of dozen. Doing
 	// those one after another leaves the job resolving for a minute before a
 	// byte moves; one that will not resolve is skipped, which on this host is
-	// routine rather than exceptional.
-	episodes := FanOut(ctx, slugs, func(ctx context.Context, slug string) ([]pbsEpisode, error) {
-		id, err := p.playerID(ctx, slug)
-		if err != nil {
-			return nil, err
-		}
-		episode, err := p.episode(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		episode.slug = slug
-		return []pbsEpisode{*episode}, nil
+	// routine rather than exceptional. Only a resolved video names its
+	// season, and a show whose page is all specials has none anywhere.
+	resolved, note, err := expandSeries(ctx, series[*pbsEpisode]{
+		site: "pbs", noun: "videos", link: u.Redacted(),
+		items: episodes,
+		label: func(ep *pbsEpisode) string { return ep.season },
+		resolve: func(ctx context.Context, ep *pbsEpisode) (*File, error) {
+			id, err := p.playerID(ctx, ep.slug)
+			if err != nil {
+				return nil, err
+			}
+			episode, err := p.episode(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			episode.slug = ep.slug
+			*ep = *episode
+			file := episode.file
+			file.Name = cmp.Or(episode.title, episode.slug) + ".mp4"
+			return &file, nil
+		},
+		unplayable: "PBS answers a title past its availability window with a page saying so, " +
+			"and a show's back catalogue is mostly those",
 	})
-	if len(episodes) == 0 {
-		return nil, fmt.Errorf("pbs: none of the %d videos listed on %s are playable "+
-			"(PBS answers a title past its availability window with a page saying so, "+
-			"and a show's back catalogue is mostly those)", len(slugs), u.Redacted())
+	if err != nil {
+		return nil, err
 	}
 
-	// Only nest by season when there is more than one to tell apart. A show
-	// whose page is all specials has no season anywhere, and a folder named
-	// after nothing helps nobody.
-	nest := nestByLabel(episodes, func(ep pbsEpisode) string { return ep.season })
-
-	result := &Result{Title: slug}
-	for _, episode := range episodes {
-		if result.Title == slug && episode.program != "" {
-			result.Title = episode.program
+	result := &Result{Title: slug, Files: listedFiles(resolved), Note: note}
+	for _, r := range resolved {
+		if result.Title == slug && r.item.program != "" {
+			result.Title = r.item.program
 		}
-		file := episode.file
-		file.Name = util.FirstNonEmpty(episode.title, episode.slug) + ".mp4"
-		if nest {
-			file.Dir = episode.season
-		}
-		result.Files = append(result.Files, file)
 	}
 	return result, nil
 }
@@ -294,7 +315,7 @@ func pbsVideoSlugs(doc string, base *url.URL) []string {
 // catalogue that maps a slug to one is the endpoint that wants credentials.
 func (p *PBS) playerID(ctx context.Context, slug string) (string, error) {
 	page := pbsRoot + "/video/" + url.PathEscape(slug) + "/"
-	doc, err := p.client.GetString(ctx, page, nil)
+	doc, err := fetchPage(ctx, p.client, page, nil)
 	if err != nil {
 		return "", fmt.Errorf("pbs: fetch %s: %w", page, err)
 	}
@@ -380,13 +401,10 @@ func (p *PBS) probe(ctx context.Context, link string) (final *url.URL, mediaType
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", 0, &httpx.StatusError{Code: resp.StatusCode, Status: resp.Status, URL: link}
+		return nil, "", 0, httpx.NewStatusError(resp)
 	}
 
-	size = resp.ContentLength
-	if size <= 0 {
-		size = -1
-	}
+	size = knownSize(resp.ContentLength)
 	return resp.Request.URL, resp.Header.Get(httpx.HeaderContentType), size, nil
 }
 
@@ -453,18 +471,6 @@ func pbsSeasonOf(info string) string {
 		return ""
 	}
 	return "Season " + match[1]
-}
-
-// pbsJoin names a video by its programme and its own title together, and
-// copes with one that has only the second.
-func pbsJoin(program, title string) string {
-	switch {
-	case title == "":
-		return program
-	case program == "" || strings.EqualFold(program, title):
-		return title
-	}
-	return program + " - " + title
 }
 
 // pbsBridge is the part of the player state this needs. These fields are why

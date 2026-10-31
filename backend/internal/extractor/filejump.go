@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -14,21 +15,38 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// FileJump serves public file shares. The download button is a stable
+// filejump serves public file shares. The download button is a stable
 // redirector that signs the storage URL on every request, so keep the button
 // URL itself: saving its redirect target would expire while queued.
-type FileJump struct {
-	hostSet
-	client *httpx.Client
+
+// NewFileJump builds the filejump extractor.
+func NewFileJump(client *httpx.Client) *Share { return newShare(client, &fileJumpSite) }
+
+// fileJumpShape is a public share, /s/<id>, or its /download and /content
+// routes.
+var fileJumpShape = pathShape(`^/s/[A-Za-z0-9_-]+(/(download|content))?/?$`)
+
+// fileJumpSite takes a share page carrying what extract keeps: an enabled
+// link to the share's own download route, beside it on the same site.
+var fileJumpSite = shareSite{
+	name:       "filejump",
+	recognises: "public shares (`/s/<id>`) whose page offers the share's own `/s/<id>/download` button",
+	forms: []shareForm{{fileJumpShape, func(p *Page) bool {
+		want := "/s/" + p.Segments()[1] + "/download"
+		return p.hasElement(func(a *html.Node) bool {
+			if !isElem(a, atom.A) || !enabledControl(a) {
+				return false
+			}
+			// The link resolved against the page: its path is compared, and
+			// its origin only with the page's own.
+			link, err := p.Final.Parse(strings.TrimSpace(attr(a, "href")))
+			return err == nil && link.Path == want && util.Origin(link) == util.Origin(p.Final)
+		})
+	}}},
+	extract: fileJumpExtract,
 }
 
-func NewFileJump(client *httpx.Client) *FileJump {
-	return &FileJump{hostSet: hostSet{"filejump.com"}, client: client}
-}
-
-func (f *FileJump) Name() string { return "filejump" }
-
-func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func fileJumpExtract(ctx context.Context, s *Share, u *url.URL, _ Options) (*Result, error) {
 	parts := util.PathSegments(u)
 	if len(parts) < 2 || parts[0] != "s" || len(parts) > 3 ||
 		(len(parts) == 3 && parts[2] != "download" && parts[2] != "content") {
@@ -36,17 +54,13 @@ func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 	}
 	page := *u
 	page.Path, page.RawPath, page.Fragment = "/s/"+parts[1], "", ""
-	doc, err := f.client.GetString(ctx, page.String(), httpx.Referer(util.Origin(&page)+"/"))
+	root, _, err := fetchRoot(ctx, s.client, &page, httpx.Referer(util.Origin(&page)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("filejump: fetch share: %w", err)
 	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, err
-	}
 	var download string
 	for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
-		if hasAttr(a, "disabled") || attr(a, "aria-disabled") == "true" {
+		if !enabledControl(a) {
 			continue
 		}
 		link, err := page.Parse(strings.TrimSpace(attr(a, "href")))
@@ -61,7 +75,7 @@ func (f *FileJump) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 	if download == "" {
 		return nil, fmt.Errorf("filejump: no public download link (the share may be restricted, expired or password protected)")
 	}
-	name := util.FirstNonEmpty(textOfFirst(root, func(n *html.Node) bool { return hasClass(n, "title") }),
+	name := cmp.Or(textOfFirst(root, func(n *html.Node) bool { return hasClass(n, "title") }),
 		trimSiteSuffix(firstText(root, atom.Title)), parts[1])
 	meta := textOfFirst(root, func(n *html.Node) bool { return hasClass(n, "meta") })
 	size := parseHumanSize(strings.ReplaceAll(meta, ",", ""))

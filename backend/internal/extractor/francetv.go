@@ -48,7 +48,7 @@ import (
 // whole programmes are listed beside them. Anything else on france.tv,
 // such as a live channel's page, is still handed to yt-dlp.
 type FranceTV struct {
-	hostSet
+	about
 	client *httpx.Client
 	// api is the player API's base, a field so that tests can stand in for
 	// it.
@@ -60,20 +60,31 @@ const francetvAPIRoot = "https://k7.ftven.fr/videos/"
 
 // francetvRest is the part of france.tv still handed to yt-dlp.
 var francetvRest = handoffSite{
-	name:    "francetv",
-	domains: []string{"france.tv"},
-	why:     "only france.tv's programmes and their listings are read natively, not a page like this one",
+	name: "francetv",
+	why:  "only france.tv's programmes and their listings are read natively, not a page like this one",
 }
 
 // NewFranceTV builds the france.tv extractor.
 func NewFranceTV(client *httpx.Client) *FranceTV {
 	return &FranceTV{
-		hostSet: francetvRest.domains, client: client, api: francetvAPIRoot,
-		handoff: &Handoff{hostSet: francetvRest.domains, client: client, site: francetvRest},
+		client: client, api: francetvAPIRoot,
+		handoff: newHandoff(client, francetvRest),
+		about: about{name: "francetv", shape: francetvShape,
+			recognises: "video pages (`/…/<id>-<slug>.html`) and programme listings of France TV whose flight data names `video_factory_id`s"},
 	}
 }
 
-func (f *FranceTV) Name() string { return "francetv" }
+// francetvShape is a video page (/…/<id>-<slug>.html) or a programme's
+// every video (/…/toutes-les-videos/).
+var francetvShape = pathShape(`/[0-9]{6,}-[^/]+\.html$`, `/toutes-les-videos/?$`)
+
+// Recognise takes a page whose flight data names the player's video ids
+// (video_factory_id), which is what this resolves: a video page, known by
+// its form when its title names only the video, or a programme's page.
+func (f *FranceTV) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.Has("video_factory_id") &&
+		(p.Named("France TV") || francetvContentID.MatchString(p.Final.Path))
+}
 
 var (
 	francetvContentID = regexp.MustCompile(`/([0-9]+)-[^/]*\.html$`)
@@ -86,7 +97,7 @@ var (
 // Extract reads a video page into its file, a programme's page into one
 // file a programme, and hands anything else on france.tv to yt-dlp.
 func (f *FranceTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	page, err := f.client.GetString(ctx, u.String(), nil)
+	page, _, err := fetchDocument(ctx, f.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("francetv: %s: %w", u.Redacted(), err)
 	}
@@ -100,14 +111,10 @@ func (f *FranceTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Resu
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Title: title, Files: []File{{
-			Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
-			SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-			Resolve: func(ctx context.Context) (*Target, error) {
-				target, _, err := f.video(ctx, id, "", label)
-				return target, err
-			},
-		}}}, nil
+		return &Result{Title: title, Files: []File{refreshing(target, func(ctx context.Context) (*Target, error) {
+			target, _, err := f.video(ctx, id, "", label)
+			return target, err
+		})}}, nil
 	}
 	if strings.Contains(flight, `"video_factory_id"`) {
 		return f.programme(ctx, u, cmp.Or(pageTitle, u.Redacted()), flight, opts)
@@ -184,7 +191,7 @@ func (a *francetvAnswer) name() string {
 			episode = append(episode, part)
 		}
 	}
-	return ardJoin(strings.TrimSpace(a.Meta.Title), strings.Join(episode, " - "))
+	return joinTitle(strings.TrimSpace(a.Meta.Title), strings.Join(episode, " - "), titleContains)
 }
 
 // protected reports an answer that declares DRM: false, absent, or an
@@ -208,12 +215,6 @@ func francetvPlain(message string) string {
 	return strings.Join(strings.Fields(francetvTag.ReplaceAllString(message, " ")), " ")
 }
 
-// francetvRefused is a video france.tv does not play here: gone, live,
-// DRM-protected, or shown in France alone.
-type francetvRefused struct{ title, reason string }
-
-func (e *francetvRefused) Error() string { return "francetv: " + e.title + ": " + e.reason }
-
 // errFranceTVFranceOnly is a video shown in France alone, refused here.
 var errFranceTVFranceOnly = errors.New("shown in France only, and its stream is refused anywhere else")
 
@@ -229,24 +230,21 @@ func (f *FranceTV) answer(ctx context.Context, id, title string) (*francetvAnswe
 		return &answer, nil
 	}
 	title = cmp.Or(title, id)
-	if se, ok := errors.AsType[*httpx.StatusError](err); ok {
-		var refusal struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal([]byte(se.Body), &refusal) == nil && refusal.Code != 0 {
-			switch refusal.Code {
-			case 2019:
-				return nil, &francetvRefused{title: title, reason: "it is DRM-protected"}
-			case 2003, 2012:
-				return nil, &francetvRefused{title: title, reason: francetvGone}
-			case 2009:
-				return nil, fmt.Errorf("francetv: %s: %w", title, errFranceTVFranceOnly)
-			}
-			return nil, &francetvRefused{title: title, reason: "france.tv refuses it: " + francetvPlain(refusal.Message)}
-		}
+	refusal, ok := refusalBody[struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}](err)
+	switch {
+	case !ok || refusal.Code == 0:
+		return nil, fmt.Errorf("francetv: %s: %w", title, err)
+	case refusal.Code == 2019:
+		return nil, &broadcastRefusal{"francetv", title, refusedDRM}
+	case refusal.Code == 2003, refusal.Code == 2012:
+		return nil, &broadcastRefusal{"francetv", title, francetvGone}
+	case refusal.Code == 2009:
+		return nil, fmt.Errorf("francetv: %s: %w", title, errFranceTVFranceOnly)
 	}
-	return nil, fmt.Errorf("francetv: %s: %w", title, err)
+	return nil, &broadcastRefusal{"francetv", title, "france.tv refuses it: " + francetvPlain(refusal.Message)}
 }
 
 // video asks for a video and resolves its stream, named stem where a
@@ -260,32 +258,29 @@ func (f *FranceTV) video(ctx context.Context, id, stem, label string) (*Target, 
 	title := cmp.Or(stem, answer.name(), id)
 	switch {
 	case answer.Video.IsLive:
-		return nil, "", &francetvRefused{title: title, reason: "it is a live broadcast, which has no end to download to"}
+		return nil, "", &broadcastRefusal{"francetv", title, refusedLiveBroadcast}
 	case answer.protected():
-		return nil, "", &francetvRefused{title: title, reason: "it is DRM-protected"}
+		return nil, "", &broadcastRefusal{"francetv", title, refusedDRM}
 	case answer.Video.Format != "hls" || answer.Video.URL == "":
-		return nil, "", &francetvRefused{title: title, reason: "france.tv offers no stream of it to download"}
+		return nil, "", &broadcastRefusal{"francetv", title, "france.tv offers no stream of it to download"}
 	}
 	master, err := f.sign(ctx, answer)
 	if err != nil {
 		return nil, "", fmt.Errorf("francetv: %s: %w", title, err)
 	}
 	headers := francetvHeaders()
-	media, err := resolveMediaPlaylist(ctx, f.client, master, headers)
+	media, err := broadcastMedia(ctx, f.client, "francetv", title, master, headers)
 	if err != nil {
 		if francetvFranceOnly(answer.Video.URL) && httpx.HasStatus(err, http.StatusForbidden) {
 			return nil, "", fmt.Errorf("francetv: %s: %w", title, errFranceTVFranceOnly)
 		}
-		return nil, "", fmt.Errorf("francetv: %s: %w", title, err)
+		return nil, "", err
 	}
-	subtitles := media.Subtitles
+	target := media.target(master, title+media.extension(), headers)
 	if whole := francetvSubtitles(answer); len(whole) > 0 {
-		subtitles = whole
+		target.Subtitles = whole
 	}
-	return &Target{
-		URL: master, Name: title + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: subtitles,
-	}, title, nil
+	return target, title, nil
 }
 
 // francetvFranceOnly reports an asset France TV shows in France alone, as
@@ -337,10 +332,11 @@ func francetvSubtitles(answer *francetvAnswer) []Track {
 	return tracks
 }
 
+// francetvRoot is the site the player is served from.
+const francetvRoot = "https://www.france.tv"
+
 // francetvHeaders are what the site's own player sends.
-func francetvHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://www.france.tv/", "https://www.france.tv")
-}
+func francetvHeaders() httpx.Header { return httpx.SiteOrigin(francetvRoot) }
 
 // francetvCardDoc is one card of a programme's listing.
 type francetvCardDoc struct {
@@ -373,22 +369,44 @@ func francetvCards(flight string) []francetvCardDoc {
 // where whole programmes are listed beside them.
 func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight string, opts Options) (*Result, error) {
 	cards := francetvCards(flight)
+	walkNote := ""
 	if strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "toutes-les-videos") {
-		seen := len(cards)
-		for page := 2; len(cards) < opts.maxFiles(); page++ {
-			next := *u
-			q := next.Query()
-			q.Set("page", strconv.Itoa(page))
-			next.RawQuery = q.Encode()
-			html, err := f.client.GetString(ctx, next.String(), nil)
-			if err != nil {
-				break
-			}
-			cards = francetvMerge(cards, francetvCards(strings.ReplaceAll(html, `\"`, `"`)))
-			if len(cards) == seen {
-				break
-			}
-			seen = len(cards)
+		// The page in hand is the first. Pages are read until they hold as
+		// many cards as the file cap, the cap and the clips left out being
+		// counted once the cards are in.
+		var err error
+		seen := make(map[string]bool)
+		cards, walkNote, err = walkPages(ctx, pageWalk[francetvCardDoc]{
+			fetch: func(ctx context.Context, n int) (pageOf[francetvCardDoc], error) {
+				page := cards
+				if n > 0 {
+					if len(seen) >= opts.maxFiles() {
+						return pageOf[francetvCardDoc]{end: true}, nil
+					}
+					next := *u
+					q := next.Query()
+					q.Set("page", strconv.Itoa(n+1))
+					next.RawQuery = q.Encode()
+					html, err := f.client.GetString(ctx, next.String(), nil)
+					if err != nil {
+						return pageOf[francetvCardDoc]{}, err
+					}
+					page = francetvCards(strings.ReplaceAll(html, `\"`, `"`))
+				}
+				for _, c := range page {
+					seen[c.id] = true
+				}
+				return pageOf[francetvCardDoc]{items: page, next: true}, nil
+			},
+			key:   func(c francetvCardDoc) string { return c.id },
+			limit: -1,
+			// A page past the end lists nothing new, which ends the walk
+			// quietly; a page that fails is a cut, and noted.
+			quiet:  true,
+			failed: func(error) string { return couldNotFetchNote },
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 	whole := 0
@@ -412,32 +430,11 @@ func (f *FranceTV) programme(ctx context.Context, u *url.URL, title, flight stri
 	if len(files) == 0 {
 		return nil, fmt.Errorf("francetv: %s lists no videos", title)
 	}
-	var notes []string
-	if shown := len(cards) - clips; shown > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d videos", len(files), shown))
+	clipNote := countNote(clips, "clips left out")
+	if clips == 1 {
+		clipNote = "1 clip left out"
 	}
-	switch {
-	case clips == 1:
-		notes = append(notes, "1 clip left out")
-	case clips > 1:
-		notes = append(notes, fmt.Sprintf("%d clips left out", clips))
-	}
-	return &Result{Title: title, Files: files, Note: strings.Join(notes, "; ")}, nil
-}
-
-// francetvMerge is cards with more's new ones after them.
-func francetvMerge(cards, more []francetvCardDoc) []francetvCardDoc {
-	seen := make(map[string]bool, len(cards))
-	for _, c := range cards {
-		seen[c.id] = true
-	}
-	for _, c := range more {
-		if !seen[c.id] {
-			seen[c.id] = true
-			cards = append(cards, c)
-		}
-	}
-	return cards
+	return &Result{Title: title, Files: files, Note: joinNotes(cappedNote(len(files), len(cards)-clips, "videos"), clipNote, walkNote)}, nil
 }
 
 // lazy is a listed video, asked for and resolved when its transfer starts.
@@ -445,11 +442,8 @@ func francetvMerge(cards, more []francetvCardDoc) []francetvCardDoc {
 // what was saved under it.
 func (f *FranceTV) lazy(c francetvCardDoc) File {
 	stem := cmp.Or(c.title, c.id)
-	return File{
-		Name: stem + ".mp4", Size: -1, Headers: francetvHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			target, _, err := f.video(ctx, c.id, stem, stem)
-			return target, err
-		},
-	}
+	return lazyEpisode(stem+".mp4", "", francetvHeaders(), func(ctx context.Context) (*Target, error) {
+		target, _, err := f.video(ctx, c.id, stem, stem)
+		return target, err
+	})
 }

@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -42,40 +42,18 @@ import (
 //     the item is an image. og:video is therefore read first — the same
 //     ordering, for the same reason, that imagepond needed.
 //
-// The host list has the two problems the Kernel Video Sharing one has, and the
-// same two answers: the "chevereto" family of HEAPLEACH_EXTRA_HOSTS extends it at runtime, and the
-// direct-link fallback sniffs a Chevereto-shaped URL for the software's own
-// fingerprint, which covers the self-hosted tail without naming a host.
+// An install is recognised by the software's own structure rather than by
+// its host: the platform's JavaScript namespace, which its pages cannot work
+// without, or its generator or credit beside the item viewer or the listing
+// metadata this reads. That covers the self-hosted tail without naming a
+// host, and the best-known installs the same way.
 type Chevereto struct {
-	hostSet
+	about
 	client *httpx.Client
-	name   string
 }
 
-// cheveretoSite is one install this build ships knowing about.
-type cheveretoSite struct {
-	name    string
-	domains []string
-}
-
-// cheveretoKnownHosts are the installs that answer a plain client.
-//
-// Several of the best-known ones do not, and are left out rather than shipped
-// as something that looks supported and is not: pixl.li and lensdump.com both
-// sit behind Cloudflare and answer 403 without a browser challenge being
-// solved, and img.kiwi gates every page behind a fingerprinting interstitial.
-// The same judgement booru.go makes about gelbooru.com. They still resolve if
-// a user names them in HEAPLEACH_EXTRA_HOSTS behind a proxy that can pass.
-//
-// Note that imagepond.net is *not* here despite having been a Chevereto
-// install: it has since been rewritten onto software of its own and keeps its
-// own extractor. A host that leaves the platform has to leave this list, since
-// nothing about these pages would parse.
-var cheveretoKnownHosts = []cheveretoSite{
-	{name: "imgbb", domains: []string{"imgbb.com", "ibb.co"}},
-	{name: "freeimage", domains: []string{"freeimage.host"}},
-	{name: "gifyu", domains: []string{"gifyu.com"}},
-}
+// cheveretoLabel names every install: the software.
+const cheveretoLabel = "chevereto"
 
 // Markers on the pages this reads. Each is emitted by the platform's own
 // templates rather than by a theme, which is what makes them portable across
@@ -104,42 +82,32 @@ const (
 	// The password gate's two fields.
 	cheveretoPasswordField = "content-password"
 	cheveretoTokenField    = "auth_token"
+	// cheveretoNamespace is the platform's JavaScript namespace.
+	cheveretoNamespace = "CHV.obj."
 )
 
 // cheveretoThumbInfixes are the size markers the platform inserts before the
 // extension: medium, thumbnail, and the frame it takes off a video.
 var cheveretoThumbInfixes = []string{"md", "th", "fr"}
 
-// NewCheveretoSites builds one extractor per known install, so each is matched
-// on its host alone and named for itself in the UI, exactly as a hand-written
-// host would be.
-//
-// The environment is read here rather than through config.Config because this
-// setting names hosts rather than tuning behaviour: the list rots faster than
-// releases do, and nothing else in the process has an opinion about it.
-func NewCheveretoSites(cfg *config.Config, client *httpx.Client) []Extractor {
-	sites := append([]cheveretoSite(nil), cheveretoKnownHosts...)
-	for _, host := range util.Dedupe(cfg.ExtraHostsFor(config.FamilyChevereto)) {
-		name, _, _ := strings.Cut(host, ".")
-		sites = append(sites, cheveretoSite{name: name, domains: []string{host}})
-	}
-
-	out := make([]Extractor, 0, len(sites))
-	for _, site := range sites {
-		domains := make([]string, 0, len(site.domains))
-		for _, domain := range site.domains {
-			domains = append(domains, strings.ToLower(domain))
-		}
-		out = append(out, &Chevereto{hostSet: domains, client: client, name: site.name})
-	}
-	return out
+// NewChevereto builds the extractor covering every Chevereto install.
+func NewChevereto(client *httpx.Client) *Chevereto {
+	return &Chevereto{client: client, about: about{name: cheveretoLabel, shape: cheveretoPagePath,
+		recognises: "Chevereto items, albums and user listings: pages below the site root carrying the " +
+			"platform's `CHV.obj` script namespace, or its generator or credit beside the item viewer, " +
+			"the `data-object` listing metadata or the password gate"}}
 }
 
-func (c *Chevereto) Name() string { return c.name }
+// Recognise takes a page below the root that carries the platform's own
+// structure. The routes are renameable, so the path beyond that is not
+// asked; the front page names nothing to download.
+func (c *Chevereto) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.HTML() != nil && cheveretoFingerprint(p)
+}
 
 // Extract resolves an album, a user's listing, or a single item.
 func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	return cheveretoExtract(ctx, c.client, u, c.name, opts, false)
+	return cheveretoExtract(ctx, c.client, u, opts)
 }
 
 // cheveretoExtract resolves one page, whatever kind it turns out to be.
@@ -148,12 +116,7 @@ func (c *Chevereto) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 // because the routes are renameable — an operator can serve items from /i/,
 // /image/ or /photo/, and the short-link domains use no route segment at all.
 // Reading the page settles it in the fetch that had to happen anyway.
-//
-// requireFingerprint is set only for the sniff, where the host is unknown: a
-// named install is parsed on its own say-so, since an install that has dropped
-// the platform's credit still serves the platform's markup.
-func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
-	label string, opts Options, requireFingerprint bool) (*Result, error) {
+func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
 
 	// A bare domain is the site's front page, which carries a cover image in
 	// its metadata and would otherwise resolve to the operator's own artwork.
@@ -161,30 +124,31 @@ func cheveretoExtract(ctx context.Context, client *httpx.Client, u *url.URL,
 	// booru.go makes about a board's root.
 	if len(util.PathSegments(u)) == 0 {
 		return nil, fmt.Errorf("%s: %s names no item, album or user — "+
-			"paste a link to one rather than to the site", label, u.Redacted())
+			"paste a link to one rather than to the site", cheveretoLabel, u.Redacted())
 	}
 
-	doc, root, err := cheveretoFetch(ctx, client, u, opts)
+	_, root, err := cheveretoFetch(ctx, client, u, opts)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", label, err)
-	}
-	if requireFingerprint && !cheveretoFingerprint(root, doc) {
-		return nil, fmt.Errorf("%s: %s is not a Chevereto page", label, u.Redacted())
+		return nil, fmt.Errorf("%s: %w", cheveretoLabel, err)
 	}
 
 	listing := cheveretoWalk(ctx, client, u, root, opts)
 	switch {
 	case len(listing.files) > 0:
-		return &Result{Title: listing.title, Files: listing.files}, nil
+		return &Result{Title: listing.title, Files: listing.files, Note: listing.note}, nil
 	case len(listing.albums) > 0:
-		files := cheveretoExpand(ctx, client, listing.albums, opts)
-		if len(files) == 0 {
-			return nil, fmt.Errorf("%s: none of the %d albums on %s could be read",
-				label, len(listing.albums), u.Redacted())
+		// Every album is a page to read, so the listing cap bounds them.
+		albums, note := listing.albums, listing.note
+		if limit, limitNote := listingLimit(opts); len(albums) > limit {
+			albums, note = albums[:limit], joinNotes(note, limitNote)
 		}
-		return &Result{Title: listing.title, Files: files}, nil
+		e := cheveretoExpand(ctx, client, albums, opts)
+		if err := noneResolved(ctx, e.files, cheveretoLabel, len(albums), "albums", u.Redacted(), e.refusals, e.failed); err != nil {
+			return nil, err
+		}
+		return &Result{Title: listing.title, Files: e.files, Note: joinNotes(note, e.limitNote(), refusedNote(e.refusals))}, nil
 	}
-	return cheveretoSingle(root, u, label, listing.title)
+	return cheveretoSingle(root, u, listing.title)
 }
 
 // ---------------------------------------------------------------- listings
@@ -196,6 +160,14 @@ type cheveretoListing struct {
 	// files, which is what a user's album tab is.
 	albums []cheveretoAlbum
 	title  string
+	// note is the walk's, for a listing it did not read to the end.
+	note string
+}
+
+// cheveretoEntry is one entry of a listing page: a file, or an album.
+type cheveretoEntry struct {
+	file  File
+	album cheveretoAlbum
 }
 
 // cheveretoAlbum is one album a listing pointed at.
@@ -206,63 +178,65 @@ type cheveretoAlbum struct {
 
 // cheveretoWalk follows a listing's own pagination, collecting items.
 //
-// It stops at a page that adds nothing new as well as at the end of the
-// pagination, because a listing asked for a page past its last tends to answer
-// with the last one again rather than with nothing.
+// The pagination anchor is printed on every page and only carries an href
+// while a next page exists, so its absence is usually the end. A theme that
+// omits the anchor still prints the "page was full" marker, and that is when
+// a page number is worth guessing — and a guessed page asked for past the
+// last tends to answer with the last one again rather than with nothing,
+// which ends the listing.
 func cheveretoWalk(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node,
 	opts Options) *cheveretoListing {
 
 	out := &cheveretoListing{title: cheveretoTitle(root, u)}
-	seen := make(map[string]bool)
 	page := u
-
-	for i := range config.MaxAlbumPages {
-		if i > 0 {
-			var err error
-			if _, root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
-				break // a later page failing still leaves the earlier ones
+	listed := make(map[string]bool)
+	guessed := false
+	entries, note, _ := walkPages(ctx, pageWalk[cheveretoEntry]{
+		key:   func(e cheveretoEntry) string { return cmp.Or(e.file.URL, e.album.URL) },
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
+		fetch: func(ctx context.Context, n int) (pageOf[cheveretoEntry], error) {
+			if n > 0 {
+				var err error
+				if _, root, err = cheveretoFetch(ctx, client, page, opts); err != nil {
+					return pageOf[cheveretoEntry]{}, err
+				}
 			}
-		}
-
-		added := 0
-		for _, file := range cheveretoItems(root, page) {
-			if seen[file.URL] {
-				continue
+			var entries []cheveretoEntry
+			for _, file := range cheveretoItems(root, page) {
+				entries = append(entries, cheveretoEntry{file: file})
 			}
-			seen[file.URL] = true
-			out.files = append(out.files, file)
-			added++
-		}
-		for _, album := range cheveretoAlbumLinks(root, page) {
-			if seen[album.URL] {
-				continue
+			for _, album := range cheveretoAlbumLinks(root, page) {
+				entries = append(entries, cheveretoEntry{album: album})
 			}
-			seen[album.URL] = true
-			out.albums = append(out.albums, album)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-
-		next := cheveretoNextPage(root, page)
-		if next == "" {
-			// The pagination anchor is printed on every page and only carries
-			// an href while a next page exists, so its absence is usually the
-			// end. A theme that omits the anchor still prints the "page was
-			// full" marker, and that is when a page number is worth guessing.
-			if !cheveretoHasMore(root) {
-				break
+			fresh := false
+			for _, e := range entries {
+				key := cmp.Or(e.file.URL, e.album.URL)
+				fresh = fresh || !listed[key]
+				listed[key] = true
 			}
-			next = cheveretoPageAt(page, i+2)
+			if guessed && !fresh {
+				return pageOf[cheveretoEntry]{end: true}, nil
+			}
+			next := cheveretoNextPage(root, page)
+			if guessed = next == "" && cheveretoHasMore(root); guessed {
+				next = cheveretoPageAt(page, n+2)
+			}
+			parsed, err := ParseURL(next)
+			if next == "" || err != nil {
+				return pageOf[cheveretoEntry]{items: entries}, nil
+			}
+			page = parsed
+			return pageOf[cheveretoEntry]{items: entries, next: true}, nil
+		},
+	})
+	for _, e := range entries {
+		if e.file.URL != "" {
+			out.files = append(out.files, e.file)
+		} else {
+			out.albums = append(out.albums, e.album)
 		}
-		parsed, err := ParseURL(next)
-		if err != nil {
-			break
-		}
-		page = parsed
 	}
-
+	out.note = note
 	return out
 }
 
@@ -282,7 +256,7 @@ func cheveretoItems(root *html.Node, base *url.URL) []File {
 		if !ok {
 			continue
 		}
-		link := cheveretoOriginal(resolveRef(base, util.FirstNonEmpty(obj.URL, obj.Image.URL)))
+		link := cheveretoOriginal(resolveRef(base, cmp.Or(obj.URL, obj.Image.URL)))
 		if link == "" {
 			continue
 		}
@@ -291,7 +265,7 @@ func cheveretoItems(root *html.Node, base *url.URL) []File {
 			// in one album routinely share an original name, and this one is
 			// minted from the item's id, so it is unique and keeps its
 			// extension. Same reasoning as pixhost's id prefix.
-			Name:    util.FirstNonEmpty(obj.Filename, obj.Image.Filename, util.NameFromURL(link)),
+			Name:    cmp.Or(obj.Filename, obj.Image.Filename, util.NameFromURL(link)),
 			URL:     link,
 			Size:    obj.size(link, attr(n, cheveretoSizeAttr)),
 			Headers: headers,
@@ -340,27 +314,11 @@ type cheveretoObject struct {
 // the length as a JSON string and others as a number, which is what flexValue
 // is for.
 func (o *cheveretoObject) size(link, attrSize string) int64 {
-	if n := cheveretoBytes(o.Size.String()); n > 0 {
-		return n
-	}
+	nested := int64(-1)
 	if o.Image.URL != "" && cheveretoOriginal(o.Image.URL) == link {
-		if n := cheveretoBytes(o.Image.Size.String()); n > 0 {
-			return n
-		}
+		nested = parsedSize(o.Image.Size.String())
 	}
-	if n := cheveretoBytes(attrSize); n > 0 {
-		return n
-	}
-	return -1
-}
-
-// cheveretoBytes parses an exact byte count, or reports 0.
-func cheveretoBytes(text string) int64 {
-	n, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
+	return knownSize(parsedSize(o.Size.String()), nested, parsedSize(attrSize))
 }
 
 // cheveretoAlbumLinks reads the albums a page lists.
@@ -401,21 +359,28 @@ func cheveretoAlbumLinks(root *html.Node, base *url.URL) []cheveretoAlbum {
 	return out
 }
 
-// cheveretoExpand reads every album a listing pointed at, several at a time.
+// cheveretoExpand reads every album a listing pointed at, several at a time,
+// up to the file cap (expandSourcesWith).
 //
-// Results are collected by index rather than appended as they arrive, so the
-// job lists its files in the order the page did however the requests
+// The job lists its files in the order the page did however the requests
 // interleave; an album that will not load is skipped rather than failing a
-// profile of dozens. Each album's files go in a folder of their own, since two
-// albums by one uploader may well hold the same filenames.
+// profile of dozens, and why comes back for when none could be read. Each
+// album's files go in a folder of their own, named after the album, since
+// two albums by one uploader may well hold the same filenames.
 //
 // Nesting is followed one level only. An album inside an album is rare, and
 // recursion here would be unbounded in a way nothing on the page bounds.
 func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []cheveretoAlbum,
-	opts Options) []File {
+	opts Options) expansion {
 
-	return FanOut(ctx, albums, func(ctx context.Context, album cheveretoAlbum) ([]File, error) {
-		u, err := ParseURL(album.URL)
+	names := make(map[string]string, len(albums))
+	links := make([]string, 0, len(albums))
+	for _, album := range albums {
+		names[album.URL] = album.Name
+		links = append(links, album.URL)
+	}
+	return expandSourcesWith(ctx, links, opts, func(ctx context.Context, link string) (*Result, error) {
+		u, err := ParseURL(link)
 		if err != nil {
 			return nil, err
 		}
@@ -424,11 +389,7 @@ func cheveretoExpand(ctx context.Context, client *httpx.Client, albums []chevere
 			return nil, err
 		}
 		listing := cheveretoWalk(ctx, client, u, root, opts)
-		dir := util.FirstNonEmpty(album.Name, listing.title)
-		for j := range listing.files {
-			listing.files[j].Dir = dir
-		}
-		return listing.files, nil
+		return &Result{Title: cmp.Or(names[link], listing.title), Files: listing.files}, nil
 	})
 }
 
@@ -483,24 +444,24 @@ func cheveretoPageAt(base *url.URL, page int) string {
 // first establishing that the page is showing an item would queue those as
 // downloads. The element is safe to require because the platform's own
 // scripts fetch it by that id, so a theme cannot rename it and still work.
-func cheveretoSingle(root *html.Node, u *url.URL, label, title string) (*Result, error) {
+func cheveretoSingle(root *html.Node, u *url.URL, title string) (*Result, error) {
 	viewer := findFirst(root, func(n *html.Node) bool {
 		return attr(n, "id") == cheveretoViewerID
 	})
 	if viewer == nil {
 		return nil, fmt.Errorf("%s: %s shows no item and lists no files "+
 			"(it may have been removed, or be a page this does not handle)",
-			label, u.Redacted())
+			cheveretoLabel, u.Redacted())
 	}
 
 	link := cheveretoMedia(root, viewer, u)
 	if link == "" {
 		return nil, fmt.Errorf("%s: nothing to download on %s "+
 			"(the item may have been removed, or the page layout changed)",
-			label, u.Redacted())
+			cheveretoLabel, u.Redacted())
 	}
-	name := util.FirstNonEmpty(util.NameFromURL(link), title)
-	return &Result{Title: util.FirstNonEmpty(title, name), Files: []File{{
+	name := cmp.Or(util.NameFromURL(link), title)
+	return &Result{Title: cmp.Or(title, name), Files: []File{{
 		Name:    name,
 		URL:     link,
 		Size:    cheveretoViewerSize(viewer),
@@ -545,10 +506,7 @@ func cheveretoViewerSize(viewer *html.Node) int64 {
 	if loader == nil {
 		return -1
 	}
-	if n := cheveretoBytes(attr(loader, cheveretoSizeAttr)); n > 0 {
-		return n
-	}
-	return -1
+	return parsedSize(attr(loader, cheveretoSizeAttr))
 }
 
 // cheveretoOriginal turns a rendition link into the stored file it stands for.
@@ -591,7 +549,7 @@ func cheveretoOriginal(link string) string {
 // The metadata carries it in full; the page's own heading is truncated to fit
 // its box on several themes, which is why it is not read first.
 func cheveretoTitle(root *html.Node, u *url.URL) string {
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		strings.TrimSpace(metaContent(root, "og:title")),
 		trimSiteSuffix(firstText(root, atomTitle)),
 		strings.Trim(u.Path, "/"),
@@ -605,8 +563,7 @@ func cheveretoTitle(root *html.Node, u *url.URL) string {
 // parse together: the gate check has to parse it anyway, and every caller
 // goes on to read the tree.
 func cheveretoFetch(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (string, *html.Node, error) {
-	page := u.String()
-	doc, err := client.GetString(ctx, page, httpx.Referer(util.Origin(u)+"/"))
+	doc, _, err := fetchDocument(ctx, client, u, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return "", nil, fmt.Errorf("fetch %s: %w", u.Redacted(), err)
 	}
@@ -646,8 +603,7 @@ func cheveretoUnlock(ctx context.Context, client *httpx.Client, u *url.URL,
 	}
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeForm)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
-	req.Header.Set(httpx.HeaderReferer, u.String())
-	req.Header.Set(httpx.HeaderOrigin, util.Origin(u))
+	httpx.RefererOrigin(u.String(), util.Origin(u)).Apply(req)
 
 	body, err := client.Bytes(req)
 	if err != nil {
@@ -684,48 +640,27 @@ func cheveretoAuthToken(root *html.Node) string {
 	return strings.TrimSpace(attr(n, "value"))
 }
 
-// ------------------------------------------------------------------- sniff
-
-// cheveretoSniff resolves a URL that is shaped like a Chevereto page but whose
-// host nobody registered.
+// cheveretoFingerprint reports whether a page came off a Chevereto install,
+// by structure this extractor reads.
 //
-// The platform is sold rather than run, so the hosts serving it outnumber any
-// list by orders of magnitude, and the routes it lays them out with are
-// distinctive enough to be worth one GET: an item, an album or a user's
-// albums. The page then has to identify itself as Chevereto before anything is
-// read out of it, which is what keeps the guess cheap to be wrong about — a
-// page that is not one falls straight through to the direct-link handling that
-// would have run anyway.
-func cheveretoSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, bool) {
-	if !cheveretoPagePath(u) {
-		return nil, false
-	}
-	res, err := cheveretoExtract(ctx, client, u, "chevereto", opts, true)
-	if err != nil || res == nil || len(res.Files) == 0 {
-		return nil, false
-	}
-	return res, true
-}
-
-// cheveretoFingerprint reports whether a page came off a Chevereto install.
-//
-// Three signals, because no single one survives every install. Version 3
-// prints a generator meta and version 4 does not; version 4 leaves a footer
-// credit, which a paid licence may remove; and an install that has done both
-// still ships the platform's own JavaScript namespace, which its pages cannot
-// work without.
-func cheveretoFingerprint(root *html.Node, doc string) bool {
-	if strings.Contains(strings.ToLower(metaContent(root, "generator")), "chevereto") {
+// The platform's own JavaScript namespace is enough alone: its pages cannot
+// work without it, and nothing else prints it. Otherwise the software has to
+// name itself — version 3 prints a generator meta, version 4 a footer credit,
+// and a paid licence may remove either — and the page must also carry what
+// is parsed here: the item viewer, the listing metadata, or the password
+// gate.
+func cheveretoFingerprint(p *Page) bool {
+	if p.Has(cheveretoNamespace) {
 		return true
 	}
-	credit := findFirst(root, func(n *html.Node) bool {
-		return isElem(n, atom.A) && attr(n, "rel") == "generator" &&
-			strings.Contains(strings.ToLower(attr(n, "href")), "chevereto.com")
-	})
-	if credit != nil {
-		return true
-	}
-	return strings.Contains(doc, "CHV.obj.")
+	named := strings.Contains(p.Generator(), "chevereto") ||
+		p.hasElement(func(n *html.Node) bool {
+			return isElem(n, atom.A) && attr(n, "rel") == "generator" &&
+				strings.Contains(strings.ToLower(attr(n, "href")), "chevereto")
+		})
+	return named && (cheveretoGated(p.HTML()) || p.hasElement(func(n *html.Node) bool {
+		return n.Type == html.ElementNode && (attr(n, "id") == cheveretoViewerID || attr(n, cheveretoObjectAttr) != "")
+	}))
 }
 
 // cheveretoRoutes are the path segments the platform's own routes are named
@@ -749,7 +684,9 @@ var cheveretoMediaExts = map[string]bool{
 	".m4v": true, ".html": true, ".htm": true, ".php": true,
 }
 
-// cheveretoPagePath reports whether a path looks like a Chevereto page.
+// cheveretoPagePath reports whether a path looks like a Chevereto page, the
+// routes worth a probe: an item, an album, or a user's albums. The short
+// single-segment links are every site's form.
 func cheveretoPagePath(u *url.URL) bool {
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {

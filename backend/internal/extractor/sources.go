@@ -4,7 +4,7 @@ package extractor
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/url"
 	"path"
 	"strings"
@@ -67,6 +67,15 @@ type expansion struct {
 	// fit, when a single source alone held more than the cap. Zero
 	// otherwise: every other source is taken whole or not at all.
 	cut, of int
+	// unrecognised counts links that had a supported form but whose page
+	// no extractor recognised. They were never sources, so they count
+	// neither as resolved nor as failed.
+	unrecognised int
+	// refusals and failed are why sources did not resolve: the reasons of
+	// those refused, in order, and the first other failure, for a caller
+	// whose sources all failed to say why (noneRead).
+	refusals []string
+	failed   error
 }
 
 // expandSources resolves the sources in order, several at a time, until
@@ -90,8 +99,10 @@ type expansion struct {
 // job: every thread of any age has dead links in it, and the live ones are
 // still worth having.
 func expandSources(ctx context.Context, registry *Registry, sources []string, opts Options) expansion {
+	// Each source was chosen for the form of its link, so a page that turns
+	// out to be no extractor's is navigation and is dropped.
 	return expandSourcesWith(ctx, sources, opts, func(ctx context.Context, link string) (*Result, error) {
-		res, _, err := registry.Extract(ctx, link, opts)
+		res, _, err := registry.follow(ctx, link, opts)
 		return res, err
 	})
 }
@@ -99,14 +110,16 @@ func expandSources(ctx context.Context, registry *Registry, sources []string, op
 // expandSourcesWith also lets a recognised platform read its own posts,
 // without registering every page on that host as a supported source.
 func expandSourcesWith(ctx context.Context, sources []string, opts Options, extract func(context.Context, string) (*Result, error)) expansion {
+	return expandSourcesNamed(ctx, sources, opts, extract, sourceFolders)
+}
+
+// expandSourcesNamed is expandSourcesWith for a host whose sources were
+// filed under names of its own before they came here: folders names the
+// folder of each source resolved, in order, so that everything already
+// downloaded under those names stays where it is.
+func expandSourcesNamed(ctx context.Context, sources []string, opts Options,
+	extract func(context.Context, string) (*Result, error), folders func([]sourceResult) []string) expansion {
 	limit := opts.maxFiles()
-	fetch := func(ctx context.Context, link string) ([]sourceResult, error) {
-		res, err := extract(ctx, link)
-		if err != nil {
-			return nil, err
-		}
-		return []sourceResult{{link: link, res: res}}, nil
-	}
 
 	// A few rounds of slots at a time: enough that a slow source holds up
 	// little, few enough that the cap overshoots by a handful of requests.
@@ -115,10 +128,24 @@ func expandSourcesWith(ctx context.Context, sources []string, opts Options, extr
 		resolved []sourceResult
 		e        expansion
 		total    int
+		// failures are the sources that did not resolve, less those no
+		// extractor recognised, which were never sources.
+		failures []outcome[string, *Result]
 	)
 walk:
 	for start := 0; start < len(sources); start += batch {
-		for _, r := range FanOut(ctx, sources[start:min(start+batch, len(sources))], fetch) {
+		var batchResolved []sourceResult
+		for _, out := range resolveOutcomes(ctx, sources[start:min(start+batch, len(sources))], false, extract) {
+			switch {
+			case errors.Is(out.err, errUnrecognised):
+				e.unrecognised++
+			case out.err != nil:
+				failures = append(failures, out)
+			case out.got != nil:
+				batchResolved = append(batchResolved, sourceResult{link: out.item, res: out.got})
+			}
+		}
+		for _, r := range batchResolved {
 			n := len(r.res.Files)
 			if total+n > limit {
 				e.full = true
@@ -137,30 +164,41 @@ walk:
 		}
 	}
 
-	// Folders are named after titles, and titles are not unique: a search
-	// on an album index turned up 356 albums under 345 titles, and each pair
-	// sharing one was poured into the same folder. Two different files of
-	// the same name then sat side by side as "(2)" and "(3)", and nothing
-	// said which album either came from. So a title that repeats carries the
-	// source's own id; one that does not keeps its plain name, which is what
-	// every existing download under it is filed as. Compared case-blind,
-	// because the destination may be a filesystem that is.
+	names := folders(resolved)
+	for i, r := range resolved {
+		if r.res.Note != "" {
+			e.partial++
+		}
+		e.files = append(e.files, sourceFiles(r.res, names[i])...)
+	}
+	e.used = len(resolved)
+	e.refusals, e.failed = sortOutcomes(failures)
+	return e
+}
+
+// sourceFolders names each source's folder after its title.
+//
+// Titles are not unique: a search on an album index turned up 356 albums
+// under 345 titles, and each pair sharing one was poured into the same
+// folder. Two different files of the same name then sat side by side as
+// "(2)" and "(3)", and nothing said which album either came from. So a
+// title that repeats carries the source's own id; one that does not keeps
+// its plain name, which is what every existing download under it is filed
+// as. Compared case-blind, because the destination may be a filesystem that
+// is.
+func sourceFolders(resolved []sourceResult) []string {
 	uses := make(map[string]int, len(resolved))
 	for _, r := range resolved {
 		uses[strings.ToLower(sourceFolder(r.res.Title))]++
 	}
-	for _, r := range resolved {
-		if r.res.Note != "" {
-			e.partial++
+	names := make([]string, len(resolved))
+	for i, r := range resolved {
+		names[i] = sourceFolder(r.res.Title)
+		if uses[strings.ToLower(names[i])] > 1 {
+			names[i] = strings.TrimSpace(names[i] + " [" + sourceTag(r.link) + "]")
 		}
-		folder := sourceFolder(r.res.Title)
-		if uses[strings.ToLower(folder)] > 1 {
-			folder = strings.TrimSpace(folder + " [" + sourceTag(r.link) + "]")
-		}
-		e.files = append(e.files, sourceFiles(r.res, folder)...)
 	}
-	e.used = len(resolved)
-	return e
+	return names
 }
 
 // sourceResult is one source resolved, kept whole until every source is in
@@ -243,12 +281,37 @@ func partialNote(noun string, e expansion, found int, capped bool) string {
 	if !capped && !e.full {
 		return ""
 	}
-	var notes []string
-	if e.used < found {
-		notes = append(notes, fmt.Sprintf("%d of %d %s", e.used, found, noun))
+	return joinNotes(cappedNote(e.used, found, noun), cappedNote(e.cut, e.of, "files"))
+}
+
+// expansionNote is a walked listing's note once its entries are expanded:
+// the walk's own, the file cap when it cut the expansion short, and how
+// many of the listed entries resolved when some did not, in the caller's
+// noun.
+func expansionNote(walk string, e expansion, listed int, noun string) string {
+	limit := ""
+	if e.full {
+		limit = fileLimitNote
 	}
-	if e.cut > 0 {
-		notes = append(notes, fmt.Sprintf("%d of %d files", e.cut, e.of))
+	return joinNotes(walk, limit, resolvedNote(e.used, listed, noun))
+}
+
+// opening is an expansion's extract for a host reading the pages its own
+// listing links: each link parsed and handed to open.
+func opening(open func(context.Context, *url.URL) (*Result, error)) func(context.Context, string) (*Result, error) {
+	return func(ctx context.Context, link string) (*Result, error) {
+		u, err := ParseURL(link)
+		if err != nil {
+			return nil, err
+		}
+		return open(ctx, u)
 	}
-	return strings.Join(notes, ", ")
+}
+
+// limitNote is fileLimitNote when the file cap ended the expansion.
+func (e expansion) limitNote() string {
+	if e.full {
+		return fileLimitNote
+	}
+	return ""
 }

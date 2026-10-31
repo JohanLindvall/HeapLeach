@@ -33,7 +33,7 @@ func (b *wordPressLogBuffer) String() string {
 }
 
 type wordPressLogSource struct {
-	hostSet
+	hostClaim
 	release <-chan struct{}
 	err     error
 }
@@ -85,11 +85,13 @@ func TestWordPressDebugLogsWhileLinkedSourceIsWaiting(t *testing.T) {
 				"/second/":                  wordPressPostHTML("Second", `<img src="/photo.jpg">`),
 			})
 			release := make(chan struct{})
-			source := &wordPressLogSource{hostSet: hostSet{"player.example.test"}, release: release}
+			source := &wordPressLogSource{hostClaim: "player.example.test", release: release}
 			if fail {
 				source.err = errors.New("synthetic player failure")
 			}
-			reg.extractors = append(reg.extractors, source)
+			// First, so the link's label is its own: other extractors read
+			// the same /e/<id> form.
+			reg.extractors = append([]Extractor{source}, reg.extractors...)
 			var output wordPressLogBuffer
 			log := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})).With("job", "offline-job")
 			ctx, cancel := context.WithTimeout(WithLogger(context.Background(), log), 5*time.Second)

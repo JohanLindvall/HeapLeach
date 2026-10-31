@@ -9,15 +9,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func testBooru(t *testing.T) *Booru {
 	t.Helper()
-	return &Booru{client: httpx.New("test-agent", "en-US", 0, 5*time.Second)}
+	return NewBooru(testClient())
 }
 
 // ------------------------------------------------------------- szurubooru
@@ -74,8 +74,8 @@ func TestSzurubooruFetch(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	site := &booruSite{name: "szuru", root: srv.URL, api: apiSzurubooru, domains: []string{"example.test"}}
-	files, err := testBooru(t).fetch(context.Background(), site, "a_tag", "")
+	site := &booruSite{name: "szuru", root: srv.URL, api: apiSzurubooru}
+	files, _, err := testBooru(t).fetch(context.Background(), site, "a_tag", "", Options{})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -119,8 +119,8 @@ func TestSzurubooruSinglePostDoesNotPage(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	site := &booruSite{name: "szuru", root: srv.URL, api: apiSzurubooru, domains: []string{"example.test"}}
-	if _, err := testBooru(t).fetch(context.Background(), site, "id:93155", "93155"); err != nil {
+	site := &booruSite{name: "szuru", root: srv.URL, api: apiSzurubooru}
+	if _, _, err := testBooru(t).fetch(context.Background(), site, "id:93155", "93155", Options{}); err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	if calls != 1 {
@@ -156,21 +156,27 @@ const gelbooru01PostPage = `<!DOCTYPE html><html><head><title>A Board</title></h
 <div id="similar"><span class="thumb"><a id="p159000" href="index.php?page=post&amp;s=view&amp;id=159000"><img src="https://thumbs.example.test/aboard/thumbnails//158/thumbnail_ffffffffffffffffffffffffffffffffffffffff.jpg"/></a></span></div>
 </div></body></html>`
 
+// A board's listing pages until a page holds no posts: a page holding fewer
+// than twenty is not the end on its own.
 func TestGelbooru01Listing(t *testing.T) {
-	var asked string
+	var asked []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked = r.URL.RequestURI()
+		asked = append(asked, r.URL.RequestURI())
+		if r.URL.Query().Get("pid") != "0" {
+			_, _ = io.WriteString(w, `<html><body><div class="content"></div></body></html>`)
+			return
+		}
 		_, _ = io.WriteString(w, gelbooru01ListPage)
 	}))
 	t.Cleanup(srv.Close)
 
-	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01, domains: []string{"example.test"}}
-	files, err := testBooru(t).fetch(context.Background(), site, "dress", "")
+	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
+	files, _, err := testBooru(t).fetch(context.Background(), site, "dress", "", Options{})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 
-	if want := "/index.php?page=post&pid=0&s=list&tags=dress"; asked != want {
+	if want := "/index.php?page=post&pid=0&s=list&tags=dress,/index.php?page=post&pid=20&s=list&tags=dress"; strings.Join(asked, ",") != want {
 		t.Errorf("asked for %q, want %q", asked, want)
 	}
 	if len(files) != 3 {
@@ -190,26 +196,6 @@ func TestGelbooru01Listing(t *testing.T) {
 	// A listing states no size, and a guess would be worse than none.
 	if files[0].Size != -1 {
 		t.Errorf("size = %d, want -1 for a length the board never stated", files[0].Size)
-	}
-}
-
-// TestGelbooru01ListingStopsAtAShortPage guards the paging arithmetic: a
-// board's page holds twenty, so a page holding fewer is the last one. Getting
-// this wrong against the API families' hundred would page forever.
-func TestGelbooru01ListingStopsAtAShortPage(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		_, _ = io.WriteString(w, gelbooru01ListPage)
-	}))
-	t.Cleanup(srv.Close)
-
-	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01, domains: []string{"example.test"}}
-	if _, err := testBooru(t).fetch(context.Background(), site, "dress", ""); err != nil {
-		t.Fatalf("fetch: %v", err)
-	}
-	if calls != 1 {
-		t.Errorf("made %d requests for a page of 3 posts, want 1", calls)
 	}
 }
 
@@ -239,10 +225,13 @@ func TestGelbooru01KeepsWhatItGot(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01, domains: []string{"example.test"}}
-	files, err := testBooru(t).fetch(context.Background(), site, "dress", "")
+	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
+	files, note, err := testBooru(t).fetch(context.Background(), site, "dress", "", Options{})
 	if err != nil {
 		t.Fatalf("a refused second page threw away the first: %v", err)
+	}
+	if note != "partial — could not fetch next page" {
+		t.Errorf("note = %q, want the walk cut short said so", note)
 	}
 	if len(files) != gelbooru01PageSize {
 		t.Errorf("kept %d files, want the %d the board did answer with", len(files), gelbooru01PageSize)
@@ -261,8 +250,8 @@ func TestBooruFirstPageFailureIsAnError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01, domains: []string{"example.test"}}
-	if _, err := testBooru(t).fetch(context.Background(), site, "dress", ""); err == nil {
+	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
+	if _, _, err := testBooru(t).fetch(context.Background(), site, "dress", "", Options{}); err == nil {
 		t.Fatal("a board that answered nothing resolved to something")
 	}
 }
@@ -275,8 +264,8 @@ func TestGelbooru01SinglePost(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01, domains: []string{"example.test"}}
-	files, err := testBooru(t).fetch(context.Background(), site, "id:159110", "159110")
+	site := &booruSite{name: "aboard", root: srv.URL, api: apiGelbooru01}
+	files, _, err := testBooru(t).fetch(context.Background(), site, "id:159110", "159110", Options{})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -312,28 +301,18 @@ func TestGelbooru01Image(t *testing.T) {
 	}
 }
 
-// TestBooruMultiTenantSite covers the one entry that stands for hundreds of
-// boards: everything it needs comes from the link.
-func TestBooruMultiTenantSite(t *testing.T) {
-	u, err := ParseURL("https://example.booru.org/index.php?page=post&s=list&tags=dress")
-	if err != nil {
-		t.Fatal(err)
-	}
-	site := siteFor(u)
-	if site == nil {
-		t.Fatal("a booru.org board was not matched")
-	}
-	board := site.forURL(u)
-	if board.root != "https://example.booru.org" {
-		t.Errorf("root = %q, want the board the link named", board.root)
-	}
-	if board.name != "example" {
-		t.Errorf("name = %q, want the board's own label", board.name)
-	}
-	// The table entry itself must be left alone, or the next board inherits
-	// this one's root.
-	if site.root != "" {
-		t.Errorf("the shared entry was modified: root = %q", site.root)
+// An install's label comes from its host, so a booru.org board is named for
+// its own subdomain.
+func TestHostLabel(t *testing.T) {
+	for host, want := range map[string]string{
+		"example.booru.org":    "example",
+		"www.aboard.example":   "aboard",
+		"aboard.example.test":  "aboard",
+		"AnotherBoard.Example": "anotherboard",
+	} {
+		if got := hostLabel(host); got != want {
+			t.Errorf("hostLabel(%q) = %q, want %q", host, got, want)
+		}
 	}
 }
 
@@ -358,10 +337,7 @@ func TestBooruParseTargetNewFamilies(t *testing.T) {
 		{raw: "https://example.test/index.php", api: apiGelbooru01},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		site := &booruSite{name: "test", root: "https://example.test", api: tc.api}
 		tags, post, listing := site.parseTarget(u)
 		if tags != tc.wantTags || post != tc.wantPost || listing != tc.wantListing {
@@ -371,24 +347,99 @@ func TestBooruParseTargetNewFamilies(t *testing.T) {
 	}
 }
 
-func TestBooruMatchCoversTheNewBoards(t *testing.T) {
+// booruRailsPost is a post page as the Rails boards render one: the posts
+// controller on the body and the request-forgery token in the head.
+const booruRailsPost = `<html><head><title>Board</title><meta name="csrf-param" content="authenticity_token"></head>
+<body class="c-posts a-show" data-controller="posts" data-action="show"><section id="image-container"></section></body></html>`
+
+func TestBooruShape(t *testing.T) {
 	b := NewBooru(nil)
-	for _, raw := range []string{
-		"https://snootbooru.com/posts?query=a_tag",
-		"https://booru.foalcon.com/post/1",
-		"https://example.booru.org/index.php?page=post&s=list",
-		"https://second.booru.org/index.php?page=post&s=view&id=1",
+	for raw, want := range map[string]bool{
+		"https://board.example.test/posts?tags=a_tag":                     true,
+		"https://board.example.test/posts/42":                             true,
+		"https://board.example.test/post":                                 true,
+		"https://board.example.test/post/show/42":                         true,
+		"https://board.example.test/post/42":                              true,
+		"https://board.example.test/index.php?page=post&s=list&tags=cat":  true,
+		"https://board.example.test/index.php?page=post&s=view&id=42":     true,
+		"https://board.example.test/images/42":                            true,
+		"https://board.example.test/search?q=a_tag":                       true,
+		"https://board.example.test/?tags=a_tag":                          true,
+		"https://board.example.test/":                                     false,
+		"https://board.example.test/blog/2024/a-post":                     false,
+		"https://board.example.test/index.php?page=forum":                 false,
+		"https://board.example.test/posts/2024/05/a-blog-post-about-cats": false,
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
+		expectShape(t, b, raw, want)
+	}
+}
+
+// Recognition needs the board's own markup and then its API answering for
+// the same post; a page of the right form with neither is an ordinary page.
+func TestBooruRecognise(t *testing.T) {
+	var apiCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/posts.json" {
+			http.NotFound(w, r)
+			return
 		}
-		if !b.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
+		apiCalls.Add(1)
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		_, _ = io.WriteString(w, `[{"id":42,"file_url":"/original/sample.jpg","file_size":12}]`)
+	}))
+	t.Cleanup(srv.Close)
+	b := testBooru(t)
+
+	marked := htmlPage(t, srv.URL+"/posts/42", booruRailsPost)
+	for range 2 {
+		if !b.Recognise(context.Background(), marked) {
+			t.Fatal("a marked post whose API answers was not recognised")
 		}
 	}
-	other, _ := ParseURL("https://booru.org.example.test/index.php")
-	if b.Match(other) {
-		t.Error("matched a lookalike host")
+	if n := apiCalls.Load(); n != 1 {
+		t.Errorf("the API was asked %d times for one page, want once", n)
+	}
+	// The right form and the board's name, without its markup: the API is
+	// not even asked.
+	apiCalls.Store(0)
+	named := htmlPage(t, srv.URL+"/posts/42", `<html><head><title>Board</title><meta property="og:site_name" content="Board"></head></html>`)
+	if b.Recognise(context.Background(), named) {
+		t.Error("an unmarked page of the right form was recognised")
+	}
+	if n := apiCalls.Load(); n != 0 {
+		t.Errorf("an unmarked page cost %d API requests", n)
+	}
+	// The markup on a path that is no board's form.
+	if b.Recognise(context.Background(), htmlPage(t, srv.URL+"/about", booruRailsPost)) {
+		t.Error("a marked page of the wrong form was recognised")
+	}
+	// A challenge in front of the page: the API alone decides.
+	if !b.Recognise(context.Background(), challengedPage(t, srv.URL+"/posts/42")) {
+		t.Error("a challenged post whose API answers was not recognised")
+	}
+	// Without a client nothing is asked, and a marked page alone is not
+	// enough for an API family.
+	expectRecognised(t, NewBooru(nil), htmlPage(t, "https://board.example.test/posts/42", booruRailsPost), false)
+}
+
+// A Gelbooru 0.1 board publishes no API, so its listing markup decides.
+func TestBooruRecognisesAScrapedBoard(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "dapi" {
+			http.Redirect(w, r, "/index.php", http.StatusFound)
+			return
+		}
+		w.Header().Set(httpx.HeaderContentType, "text/html")
+		_, _ = io.WriteString(w, gelbooru01ListPage)
+	}))
+	t.Cleanup(srv.Close)
+	p := htmlPage(t, srv.URL+"/index.php?page=post&s=list&tags=dress", gelbooru01ListPage)
+	site := booruDetect(context.Background(), p, testBooru(t).client, p.Final)
+	if site == nil || site.api != apiGelbooru01 {
+		t.Fatalf("detected %+v, want a scraped board", site)
+	}
+	unmarked := htmlPage(t, srv.URL+"/index.php?page=post&s=list&tags=dress", `<html><title>A page</title></html>`)
+	if testBooru(t).Recognise(context.Background(), unmarked) {
+		t.Error("an unmarked page of the form was recognised")
 	}
 }

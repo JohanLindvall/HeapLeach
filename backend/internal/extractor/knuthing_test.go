@@ -6,12 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -64,13 +65,10 @@ func TestKnuthingRefreshesPlayerPlaylistAndKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	origin = srv.URL
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	defer client.CloseIdleConnections()
-	k := NewKnuthing(client)
-	res, err := k.Extract(context.Background(), mustParse(t, origin+"/watch/start.html"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	k := NewPlayer(client, &knuthingPlayer)
+	res := extractOK(t, k, origin+"/watch/start.html", Options{})
 	if res.Title != "First Clip - Part 2 & Friends" || len(res.Files) != 1 {
 		t.Fatalf("metadata: %+v", res)
 	}
@@ -133,8 +131,8 @@ func TestKnuthingUnavailablePlayersFail(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
-			res, err := k.Extract(context.Background(), mustParse(t, srv.URL+"/watch/test.html"), Options{})
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			res, err := extract(t, k, srv.URL+"/watch/test.html", Options{})
 			if err == nil {
 				_, err = res.Files[0].Resolve(context.Background())
 			}
@@ -157,10 +155,126 @@ func TestKnuthingPreservesChallenges(t *testing.T) {
 				w.WriteHeader(http.StatusForbidden)
 			}))
 			defer srv.Close()
-			k := NewKnuthing(httpx.New("test", "en", 0, time.Second))
-			_, err := k.resolve(context.Background(), srv.URL+"/watch/test.html")
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			_, _, err := k.resolve(context.Background(), srv.URL+"/watch/test.html")
 			if _, ok := errors.AsType[*httpx.ChallengeError](err); !ok {
 				t.Fatalf("challenge lost: %v", err)
+			}
+		})
+	}
+}
+
+func knuthingCard(id, title, link string) string {
+	return fmt.Sprintf(`<div class="video-latest-list video-wrapper" data-id="%s"><a href="%s">thumbnail</a><a href="%s"><h4>%s</h4></a></div>`, id, html.EscapeString(link), html.EscapeString(link), html.EscapeString(title))
+}
+
+func knuthingListingPage(cards, pager string) string {
+	return `<aside><div class="videos-latest-list">` + knuthingCard("99", "Sidebar", "/watch/sidebar.html") + `</div></aside>
+	<div id="container_content"><h4 class="page_head">Test Collection</h4>
+	<div class="videos-latest-list row">` + cards + `</div><ul class="pagination">` + pager + `</ul></div>`
+}
+
+func TestKnuthingListingWalksOnlyItsCardsAndPages(t *testing.T) {
+	for _, section := range []string{"/videos/free", "/videos/latest", "/videos/category/synthetic"} {
+		t.Run(section, func(t *testing.T) {
+			var pages, videos atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == section {
+					pages.Add(1)
+					if r.URL.Query().Get("sort") != "top" || r.URL.Query().Get("last_page") != "" {
+						t.Errorf("lost filter or kept last-page shortcut: %s", r.URL)
+					}
+					var cards, pager string
+					switch r.URL.Query().Get("page_id") {
+					case "1":
+						cards = knuthingCard("1", "First - Part 2", "/watch/first.html") + knuthingCard("2", "Second & Friends", "/watch/second.html?keep=yes") +
+							knuthingCard("77", "Foreign", "https://other.example.test/watch/foreign.html")
+						pager = `<a title="Next Page" href="?page_id=2">Next</a><a title="Last Page" href="?page_id=99&amp;last_page=1">Last</a>`
+					case "2":
+						cards = knuthingCard("2", "Duplicate", "/watch/renamed.html") + knuthingCard("3", "Third", "/watch/third.html")
+						pager = `<a href="?page_id=1">1</a><a href="?page_id=3">3</a>`
+					case "3":
+						cards = knuthingCard("4", "Fourth", "/watch/fourth.html")
+						pager = `<a title="First Page" href="?page_id=1">First</a>`
+					default:
+						t.Errorf("unexpected listing page: %s", r.URL)
+					}
+					fmt.Fprint(w, knuthingListingPage(cards, pager))
+					return
+				}
+				switch r.URL.Path {
+				case "/watch/second.html":
+					videos.Add(1)
+					if r.URL.Query().Get("keep") != "yes" {
+						t.Error("lost video's own query")
+					}
+					fmt.Fprint(w, `<title>Second &amp; Friends</title><iframe class="bunnyframe" src="/player"></iframe>`)
+				case "/player":
+					fmt.Fprint(w, `<bunny-stream-video content-src="/playlist.m3u8"></bunny-stream-video>`)
+				case "/playlist.m3u8":
+					fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\npart.ts\n#EXT-X-ENDLIST\n")
+				default:
+					t.Errorf("unexpected request: %s", r.URL)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			res := extractOK(t, k, srv.URL+section+"?page_id=8&last_page=1&sort=top", Options{})
+			var names []string
+			for _, f := range res.Files {
+				names = append(names, f.Name)
+				if f.URL != "" || f.Resolve == nil || f.Refresh == nil {
+					t.Fatalf("listing did not defer video resolution: %+v", f)
+				}
+			}
+			want := []string{"First - Part 2.ts", "Second & Friends.ts", "Third.ts", "Fourth.ts"}
+			if !reflect.DeepEqual(names, want) || res.Title != "Test Collection" || res.Note != "" || pages.Load() != 3 || videos.Load() != 0 {
+				t.Fatalf("listing: %+v, names=%v, pages=%d, videos=%d", res, names, pages.Load(), videos.Load())
+			}
+			if _, err := res.Files[1].Refresh(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if pages.Load() != 3 || videos.Load() != 1 {
+				t.Fatal("recovery reopened the listing instead of its video")
+			}
+		})
+	}
+}
+
+// The walk itself is the shared walker's; what is the site's own is the
+// listing cap it is held to and which next pages it will follow.
+func TestKnuthingListingCapsAndInvalidNextPages(t *testing.T) {
+	for _, tc := range []struct {
+		name, next, note string
+		limits           Limits
+		files, pages     int
+	}{
+		{name: "source-cap", limits: Limits{Sources: 1}, files: 1, pages: 1, note: "source limit"},
+		{name: "other-section", next: "/videos/latest?page_id=2", files: 2, pages: 1, note: "invalid next page"},
+		{name: "other-origin", next: "https://other.example.test/videos/free?page_id=2", files: 2, pages: 1, note: "invalid next page"},
+		{name: "other-filter", next: "?page_id=2&sort=oldest", files: 2, pages: 1, note: "invalid next page"},
+		{name: "backwards", next: "?page_id=1", files: 2, pages: 1, note: "invalid next page"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) > 1 || r.URL.Path != "/videos/free" {
+					t.Errorf("walk escaped its listing or did not stop: %s", r.URL)
+					http.NotFound(w, r)
+					return
+				}
+				next := tc.next
+				if next == "" {
+					next = "?page_id=2"
+				}
+				fmt.Fprint(w, knuthingListingPage(knuthingCard("1", "First", "/watch/first.html")+knuthingCard("2", "Second", "/watch/second.html"), `<a title="Next Page" href="`+html.EscapeString(next)+`">Next</a>`))
+			}))
+			defer srv.Close()
+			k := NewPlayer(testClient(), &knuthingPlayer)
+			res := extractOK(t, k, srv.URL+"/videos/free?sort=top", Options{limits: tc.limits})
+			if len(res.Files) != tc.files || int(calls.Load()) != tc.pages || !strings.Contains(res.Note, tc.note) || res.Title != "Test Collection" {
+				t.Fatalf("result=%+v, pages=%d", res, calls.Load())
 			}
 		})
 	}

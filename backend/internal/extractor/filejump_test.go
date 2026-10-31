@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -33,13 +32,9 @@ func TestFileJumpKeepsStableDownloadEndpointAndRoundedSize(t *testing.T) {
 		<a class="btn" href="/s/test-share/download">Download</a>`)
 	}))
 	defer srv.Close()
-	f := NewFileJump(httpx.New("test-agent", "en-US", 0, time.Second))
+	f := NewFileJump(testClient())
 	for _, suffix := range []string{"", "/", "/download", "/content"} {
-		u, _ := url.Parse(srv.URL + "/s/test-share" + suffix + "?access=download#preview")
-		res, err := f.Extract(context.Background(), u, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		res := extractOK(t, f, srv.URL+"/s/test-share"+suffix+"?access=download#preview", Options{})
 		if res.Title != "First & Second.mp4" || len(res.Files) != 1 {
 			t.Fatalf("lost share metadata: %+v", res)
 		}
@@ -60,7 +55,7 @@ func TestFileJumpRejectsUnavailableDownloads(t *testing.T) {
 		`<a href="https://unrelated.example.test/s/test-share/download">Download</a>`,
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, doc) }))
-		f := NewFileJump(httpx.New("test-agent", "en-US", 0, time.Second))
+		f := NewFileJump(testClient())
 		u, _ := url.Parse(srv.URL + "/s/test-share")
 		_, err := f.Extract(context.Background(), u, Options{})
 		srv.Close()
@@ -87,12 +82,7 @@ func TestPlainPageFindsRegisteredFileJumpShares(t *testing.T) {
 		fmt.Fprintf(w, `<a href="%s/s/test-share?access=download">FileJump share</a>`, files.URL)
 	}))
 	defer page.Close()
-	reg := NewRegistry(&config.Config{}, httpx.New("test-agent", "en-US", 0, time.Second))
-	for _, ex := range reg.extractors {
-		if f, ok := ex.(*FileJump); ok {
-			f.hostSet = hostSet{"127.0.0.1"}
-		}
-	}
+	reg := NewRegistry(&config.Config{}, testClient())
 	res, _, err := reg.Extract(context.Background(), strings.Replace(page.URL, "127.0.0.1", "localhost", 1)+"/post.html", Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -100,4 +90,28 @@ func TestPlainPageFindsRegisteredFileJumpShares(t *testing.T) {
 	if len(res.Files) != 1 || res.Files[0].Name != "First Document.pdf" || res.Files[0].URL != files.URL+"/s/test-share/download" || res.Files[0].Size != -1 {
 		t.Fatalf("plain-page FileJump handoff: %+v", res)
 	}
+}
+
+func TestFileJumpRecognise(t *testing.T) {
+	f := NewFileJump(nil)
+	share := `<html><head><title>First Document.pdf - Shared file</title></head><body>
+		<div class="title">First Document.pdf</div><a class="btn" href="/s/test-share/download">Download</a></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/s/test-share", share), true)
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/s/test-share?access=download", share), true)
+	// The form, without the share's own download button: disabled, another
+	// share's, or on another site.
+	for _, body := range []string{
+		`<html><title>First Document.pdf - Shared file</title><a href="/s/test-share/download" disabled>Download</a></html>`,
+		`<html><title>First Document.pdf - Shared file</title><a href="/s/other-share/download">Download</a></html>`,
+		`<html><title>First Document.pdf - Shared file</title><a href="https://unrelated.example.test/s/test-share/download">Download</a></html>`,
+	} {
+		expectRecognised(t, f, htmlPage(t, "https://share.example.test/s/test-share", body), false)
+	}
+	// The button, on a page of another form.
+	expectRecognised(t, f, htmlPage(t, "https://share.example.test/files/test-share", share), false)
+
+	expectShape(t, f, "https://share.example.test/s/test-share", true)
+	expectShape(t, f, "https://share.example.test/s/test-share/download", true)
+	expectShape(t, f, "https://share.example.test/s/test-share/other", false)
+	expectShape(t, f, "https://share.example.test/s", false)
 }

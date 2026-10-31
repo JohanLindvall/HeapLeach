@@ -5,11 +5,7 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,28 +15,20 @@ import (
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // busyManager is a full manager with the busy backoff shrunk to test speed.
 // The dispatcher is not started: these tests drive transfer directly.
 func busyManager(t *testing.T) *Manager {
 	t.Helper()
-	cfg := &config.Config{
-		DownloadDir: t.TempDir(), Concurrency: 1, Streams: 1,
-		UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   1, Timeout: 30 * time.Second,
-	}
 	// These tests count the manager's transfer/queue attempts. HTTP retries
 	// have their own tests; repeating each synthetic refusal here only adds
-	// the real HTTP backoff to a deliberately accelerated queue cooldown.
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
+	// the real HTTP backoff to a deliberately accelerated queue cooldown. So
+	// the client is built with none, and the manager given its one after.
+	m := testManager(t, nil)
+	m.cfg.MaxRetries = 1
 	m.timings.busyBase = time.Millisecond
 	m.timings.busyMax = 5 * time.Millisecond
-	t.Cleanup(m.Close)
 	return m
 }
 
@@ -56,11 +44,10 @@ func alwaysHTML() http.Handler {
 // "host busy" after the cap and say that instead.
 func TestBusyCapStopsResolverlessItems(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		alwaysHTML().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -81,21 +68,17 @@ func TestBusyCapStopsResolverlessItems(t *testing.T) {
 // An item that can re-resolve — a mirror set, a re-signed link — is the case
 // the patience exists for, and must ride out more busy answers than the cap.
 func TestBusyCapDoesNotBindItemsThatCanReResolve(t *testing.T) {
-	payload := make([]byte, 64<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 64<<10)
 
 	busyAnswers := int32(config.BusyRetryLimit) + 3
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits.Add(1) <= busyAnswers {
 			alwaysHTML().ServeHTTP(w, r)
 			return
 		}
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	var resolves atomic.Int32

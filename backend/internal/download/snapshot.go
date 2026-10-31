@@ -277,7 +277,6 @@ func (m *Manager) sampleDisk(now time.Time) {
 // there is nothing worth sending twice a second about the second one.
 func (m *Manager) sampleLocked(now time.Time) bool {
 	moved := false
-	limited := m.throttle.isPaused() || m.throttle.currentLimit() > 0
 	for _, job := range m.jobs {
 		for _, it := range job.Items {
 			if it.Status != StatusRunning {
@@ -305,7 +304,7 @@ func (m *Manager) sampleLocked(now time.Time) bool {
 			}
 			extra := it.extraBytes.Load()
 			m.sampleProxyLocked(it, now, current-it.lastBytes-(extra-it.lastExtraBytes), now.Sub(it.lastSample),
-				limited || it.limiter.currentLimit() > 0)
+				m.throttling(it))
 			it.lastBytes, it.lastExtraBytes, it.lastSample = current, extra, now
 		}
 	}

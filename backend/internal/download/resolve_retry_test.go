@@ -9,10 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -27,14 +25,6 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// net/http's TLS handshake timeout is an unexported net.Error that does
-// not wrap context.DeadlineExceeded. Keep that distinction in the fixture.
-type resolveHandshakeTimeout struct{}
-
-func (resolveHandshakeTimeout) Error() string   { return "net/http: TLS handshake timeout" }
-func (resolveHandshakeTimeout) Timeout() bool   { return true }
-func (resolveHandshakeTimeout) Temporary() bool { return true }
-
 func resolveRequestError(err error) error {
 	return fmt.Errorf("sign download link: %w", &url.Error{
 		Op: "Get", URL: "https://api.example.test/sign?path=%2Fsample.jpg", Err: err,
@@ -44,13 +34,13 @@ func resolveRequestError(err error) error {
 func resolveRetryManager(retries int) *Manager {
 	return &Manager{
 		cfg: &config.Config{MaxRetries: retries},
-		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log: testLogger(),
 	}
 }
 
 func TestResolveRetriesTemporaryFailures(t *testing.T) {
 	for name, failure := range map[string]error{
-		"TLS handshake":       resolveRequestError(resolveHandshakeTimeout{}),
+		"TLS handshake":       resolveRequestError(tlsHandshakeTimeout),
 		"dial":                resolveRequestError(&net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}),
 		"client deadline":     resolveRequestError(context.DeadlineExceeded),
 		"connection reset":    resolveRequestError(syscall.ECONNRESET),
@@ -211,15 +201,14 @@ func TestResolveRetryCancellation(t *testing.T) {
 func TestResolveRetriesBeforeDownloadAndWhileResuming(t *testing.T) {
 	payload := randomPayload(t, 100_000)
 	origin := &droppingServer{payload: payload, chunks: []int{30_000, len(payload)}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 	m := progressManager(t, 1)
 	var calls int
 	it := &Item{ID: newID(), Name: "sample.bin", Size: -1,
 		resolve: func(context.Context) (*extractor.Target, error) {
 			calls++
 			if calls == 1 || calls == 3 {
-				return nil, resolveRequestError(resolveHandshakeTimeout{})
+				return nil, resolveRequestError(tlsHandshakeTimeout)
 			}
 			return &extractor.Target{URL: srv.URL + "/sample.bin"}, nil
 		},

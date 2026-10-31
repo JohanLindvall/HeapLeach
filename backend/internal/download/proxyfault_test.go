@@ -178,8 +178,8 @@ func TestAFileMovesOnFromAProxyThatCannotCarryIt(t *testing.T) {
 		return nil, errors.New("test service: unexpected answer")
 	})
 	it := job.Items[0]
-	row := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]
-	if it.route = pool.Acquire("keep2share", row.ID, 1); it.route == nil {
+	row := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0]
+	if it.route = pool.Acquire(config.GroupKeep2Share, row.ID, 1); it.route == nil {
 		t.Fatal("no route")
 	}
 	retries := it.proxyRetries
@@ -190,7 +190,7 @@ func TestAFileMovesOnFromAProxyThatCannotCarryIt(t *testing.T) {
 	if it.proxyRetries != retries {
 		t.Fatalf("retries %d -> %d; a proxy that cannot carry the file must cost it nothing", retries, it.proxyRetries)
 	}
-	if row = pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" {
+	if row = pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" {
 		t.Fatalf("route status %q, want it held back", row.Status)
 	}
 }
@@ -206,7 +206,7 @@ func TestARouteKeepsOneBrowserUserAgent(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}).URL
 	pool := attachPool(t, m, []string{route})
-	id := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].ID
+	id := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0].ID
 	ask := func(lease *proxy.Lease) string {
 		t.Helper()
 		if _, err := m.client.WithTimeout(5*time.Second).GetString(lease.Context(t.Context()), "http://service.example.test/api", nil); err != nil {
@@ -214,7 +214,7 @@ func TestARouteKeepsOneBrowserUserAgent(t *testing.T) {
 		}
 		return <-agents
 	}
-	lease := pool.Acquire("keep2share", id, 1)
+	lease := pool.Acquire(config.GroupKeep2Share, id, 1)
 	if lease == nil {
 		t.Fatal("no route")
 	}
@@ -223,7 +223,7 @@ func TestARouteKeepsOneBrowserUserAgent(t *testing.T) {
 	if first != second || !slices.Contains(config.BrowserUserAgents, first) {
 		t.Fatalf("the route sent %q, then %q; want one browser from the list", first, second)
 	}
-	waf := pool.Acquire("cloudflare", id, 1)
+	waf := pool.Acquire(config.GroupWAF, id, 1)
 	if waf == nil {
 		t.Fatal("no route for WAF recovery")
 	}
@@ -241,8 +241,8 @@ func TestATunnelRefusedAtTheProxyHoldsTheRouteBackForThatServiceAlone(t *testing
 	m := busyManager(t)
 	route := "http://" + fakeProxy(t, "127.0.0.2", answerConnect("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n", nil))
 	pool := attachPool(t, m, []string{route})
-	id := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].ID
-	lease := pool.Acquire("keep2share", id, 1)
+	id := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0].ID
+	lease := pool.Acquire(config.GroupKeep2Share, id, 1)
 	if lease == nil {
 		t.Fatal("no route")
 	}
@@ -251,10 +251,10 @@ func TestATunnelRefusedAtTheProxyHoldsTheRouteBackForThatServiceAlone(t *testing
 	if refused, ok := errors.AsType[*httpx.ProxyRefusedError](err); !ok || refused.Code != 502 {
 		t.Fatalf("error = %v; want the proxy's 502", err)
 	}
-	if row := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" || time.Until(row.CooldownUntil) > 5*time.Minute {
+	if row := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" || time.Until(row.CooldownUntil) > 5*time.Minute {
 		t.Fatalf("for the service asking: %+v; want it held back briefly, as a refusal", row)
 	}
-	if row := pool.Page("fileboom", proxy.Query{Search: route}).Rows[0]; row.Status == "cooling" {
+	if row := pool.Page(config.GroupEmload, proxy.Query{Search: route}).Rows[0]; row.Status == "cooling" {
 		t.Fatalf("for another service: %+v; want the route still on offer", row)
 	}
 }
@@ -275,8 +275,8 @@ func TestAProxyThatCannotTunnelIsSetAsideForEveryService(t *testing.T) {
 			m := busyManager(t)
 			route := "http://" + fakeProxy(t, "127.0.0.2", answerConnect(answer, nil))
 			pool := attachPool(t, m, []string{route})
-			id := pool.Page("keep2share", proxy.Query{Search: route}).Rows[0].ID
-			lease := pool.Acquire("keep2share", id, 1)
+			id := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route}).Rows[0].ID
+			lease := pool.Acquire(config.GroupKeep2Share, id, 1)
 			if lease == nil {
 				t.Fatal("no route")
 			}
@@ -285,7 +285,7 @@ func TestAProxyThatCannotTunnelIsSetAsideForEveryService(t *testing.T) {
 			if _, ok := errors.AsType[*httpx.ProxyRefusedError](err); !ok {
 				t.Fatalf("error = %v; want the proxy's refusal", err)
 			}
-			for _, service := range []string{"keep2share", "fileboom"} {
+			for _, service := range []string{config.GroupKeep2Share, config.GroupEmload} {
 				if row := pool.Page(service, proxy.Query{Search: route}).Rows[0]; row.Status != "cooling" {
 					t.Errorf("for %s: %+v; want it set aside", service, row)
 				}

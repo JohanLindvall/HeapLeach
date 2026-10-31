@@ -90,15 +90,9 @@ func (m *Manager) SetJobLimit(id string, limit JobLimit) error {
 		return err
 	}
 	limit = limit.clone()
-	m.mu.Lock()
-	if m.closing {
-		m.mu.Unlock()
-		return ErrClosed
-	}
-	job, ok := m.jobs[id]
-	if !ok {
-		m.mu.Unlock()
-		return ErrNotFound
+	job, err := m.jobLocked(id, true)
+	if err != nil {
+		return err
 	}
 	if job.Limit.same(limit) {
 		m.mu.Unlock()

@@ -5,18 +5,13 @@ package extractor
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // platformJSON is an optional identification request, not an extraction.
@@ -32,9 +27,7 @@ func platformJSON(ctx context.Context, client *httpx.Client, endpoint string, he
 		return false
 	}
 	req.Header.Set(httpx.HeaderAccept, httpx.ContentTypeJSON)
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
+	headers.Apply(req)
 	resp, err := client.DoOnce(req)
 	if err != nil {
 		return false
@@ -52,87 +45,43 @@ func platformJSON(ctx context.Context, client *httpx.Client, endpoint string, he
 	return err == nil && len(body) <= config.MaxResponseBytes && json.Unmarshal(body, out) == nil
 }
 
-// Paths select plausible APIs only after the page's own recognised content
-// has had its turn. In particular /post is common on ordinary blogs, and a
-// working embedded album there needs no guessed booru or archive requests.
-// These paths never enter Registry.Known: doing so would turn navigation
-// links into recursive extraction.
-func platformAPIs(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
-	for _, sniff := range []directSniff{pixeldrainSniff, kemonoSniff, foolFuukaSniff, booruSniff, mediaWikiSniff} {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if res, err := sniff(ctx, client, u, opts); res != nil || err != nil {
-			return res, err
-		}
-	}
-	return nil, ctx.Err()
+// hostLabel names an install by its host's first label, the part that
+// distinguishes one install of a platform from another, whether the host is
+// a bare domain or a subdomain of a shared one.
+func hostLabel(host string) string {
+	label, _, _ := strings.Cut(strings.TrimPrefix(strings.ToLower(host), "www."), ".")
+	return label
 }
 
-// platformPage identifies software in the document already fetched by the
-// fallback. This covers arbitrary article and listing paths without claiming
-// those paths in the registry or fetching a guessed listing on another site.
-func platformPage(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node, doc string, opts Options) (*Result, error) {
-	generator := strings.ToLower(metaContent(root, "generator"))
-	if kvsFingerprint(root, doc, generator) {
-		k := &KVS{client: client, host: u.Hostname()}
-		return k.extract(ctx, u, opts, doc)
+// pageJSON is platformJSON asked once per probed page: every recogniser,
+// and the extractor after it, that puts the same question to the same
+// endpoint shares one answer, keyed by the endpoint. The raw answer is kept
+// rather than a decoded one, so each caller may read it into its own shape.
+// It reports false when the endpoint gave no JSON.
+func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header, out any) bool {
+	if client == nil || p == nil {
+		return false
 	}
-	if strings.HasPrefix(generator, "mediawiki") {
-		var api string
-		// EditURI advertises api.php even when the article URL gives no
-		// indication of the script directory. Keep the probe on this site.
-		if link := findFirst(root, func(n *html.Node) bool {
-			return n.DataAtom == atom.Link && strings.EqualFold(attr(n, "rel"), "EditURI")
-		}); link != nil {
-			if ref, err := url.Parse(attr(link, "href")); err == nil {
-				ref = u.ResolveReference(ref)
-				if util.Origin(ref) == util.Origin(u) {
-					ref.RawQuery, ref.Fragment = "", ""
-					api = ref.String()
-				}
-			}
+	raw := memo(p, "json "+endpoint, func() json.RawMessage {
+		var raw json.RawMessage
+		if !platformJSON(ctx, client, endpoint, headers, &raw) {
+			return nil
 		}
-		res, err := mediaWikiDetect(ctx, client, u, opts, api)
-		if res == nil && err == nil {
-			err = fmt.Errorf("mediawiki: %s identifies as MediaWiki but no API answered", u.Hostname())
-		}
-		return res, err
-	}
-	if strings.HasPrefix(generator, "foolfuuka") {
-		f := &FoolFuuka{client: client, site: foolFuukaSite{root: util.Origin(u), name: foolFuukaLabel(u.Hostname())}}
-		return f.Extract(ctx, u, opts)
-	}
-	for _, family := range []struct {
-		name string
-		api  booruAPI
-	}{
-		{"danbooru", apiDanbooru}, {"e621", apiE621}, {"moebooru", apiMoebooru},
-		{"gelbooru 0.1", apiGelbooru01}, {"gelbooru", apiGelbooru},
-		{"philomena", apiPhilomena}, {"twibooru", apiTwibooru}, {"szurubooru", apiSzurubooru},
-	} {
-		if strings.HasPrefix(generator, family.name) {
-			return NewBooru(client).extract(ctx, u, &booruSite{name: u.Hostname(), root: util.Origin(u), api: family.api})
-		}
-	}
-	return nil, nil
+		return raw
+	})
+	return len(raw) > 0 && json.Unmarshal(raw, out) == nil
 }
 
-// A generic flashvars object or a videos container is insufficient. KVS
-// identifies itself through the licensed player or its asynchronous block
-// controls, which carry both the block id and the platform's parameters.
-func kvsFingerprint(root *html.Node, doc, generator string) bool {
-	if generator == "kvs" || strings.HasPrefix(generator, "kernel video sharing") {
-		return true
+// askedJSON is pageJSON for an extractor: the answer a recogniser already
+// had from the endpoint, when one asked. When none did it asks nothing and
+// reports false, so the extractor makes its own request, with its own
+// retries, rather than a bounded probe ahead of it.
+func askedJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, out any) bool {
+	if p == nil {
+		return false
 	}
-	if vars, err := parseFlashvars(doc); err == nil && vars["license_code"] != "" {
-		return true
-	}
-	return findFirst(root, func(n *html.Node) bool {
-		if n.DataAtom == atom.Script {
-			return strings.Contains(attr(n, "src"), "/kt_player.") || strings.Contains(textOf(n), "kt_player(")
-		}
-		return attr(n, "data-action") == "ajax" &&
-			strings.HasPrefix(attr(n, "data-block-id"), "list_videos") && attr(n, "data-parameters") != ""
-	}) != nil
+	p.memoMu.Lock()
+	_, asked := p.memo["json "+endpoint]
+	p.memoMu.Unlock()
+	return asked && pageJSON(ctx, p, client, endpoint, nil, out)
 }

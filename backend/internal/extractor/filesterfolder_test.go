@@ -62,11 +62,8 @@ func TestFilesterFolderPaginationAndDeferredSigning(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	f := NewFilester(httpx.New("test", "en", 0, time.Second))
-	res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/example?page=9"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := NewFilester(testClient())
+	res := extractOK(t, f, srv.URL+"/f/example?page=9", Options{})
 	var names []string
 	var sizes []int64
 	for _, file := range res.Files {
@@ -151,15 +148,15 @@ func TestFilesterProtectedFolderSessionsAndExpiry(t *testing.T) {
 		fmt.Fprint(w, filesterTestListing(filesterTestCard(id, "Example.mp4", "100"), ""))
 	}))
 	defer srv.Close()
-	f := NewFilester(httpx.New("test", "en", 0, time.Second))
+	f := NewFilester(testClient())
 	for _, pass := range []string{"", "wrong"} {
-		if _, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/first"), Options{Password: pass}); !errors.Is(err, ErrPasswordRequired) {
+		if _, err := extract(t, f, srv.URL+"/f/first", Options{Password: pass}); !errors.Is(err, ErrPasswordRequired) {
 			t.Fatalf("missing/wrong password: %v", err)
 		}
 	}
 	var files []File
 	for _, id := range []string{"first", "second"} {
-		res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/"+id), Options{Password: password})
+		res, err := extract(t, f, srv.URL+"/f/"+id, Options{Password: password})
 		if err != nil || len(res.Files) != 1 {
 			t.Fatalf("Extract = %+v, %v", res, err)
 		}
@@ -228,11 +225,8 @@ func TestFilesterFolderLimitsAndPartialPages(t *testing.T) {
 				fmt.Fprint(w, filesterTestListing(filesterTestCard("first", "First.mp4", "100")+filesterTestCard("second", "Second.mp4", "200"), pager))
 			}))
 			defer srv.Close()
-			f := NewFilester(httpx.New("test", "en", 0, time.Second))
-			res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/example"), Options{limits: Limits{Files: tc.limit}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			f := NewFilester(testClient())
+			res := extractOK(t, f, srv.URL+"/f/example", Options{limits: Limits{Files: tc.limit}})
 			if len(res.Files) != tc.files || pages.Load() != int32(tc.pages) || !strings.Contains(res.Note, tc.note) || (tc.note == "" && res.Note != "") || res.Title != "Example & Friends" {
 				t.Fatalf("result=%+v pages=%d", res, pages.Load())
 			}
@@ -259,10 +253,32 @@ func TestFilesterSubfoldersKeepDirectoriesAndStopCycles(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	f := NewFilester(httpx.New("test", "en", 0, time.Second))
-	res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/root"), Options{limits: Limits{Files: 2}})
+	f := NewFilester(testClient())
+	res, err := extract(t, f, srv.URL+"/f/root", Options{limits: Limits{Files: 2}})
 	if err != nil || len(res.Files) != 2 || res.Files[0].Dir != "" || res.Files[1].Dir != "Second Folder (1_2)" || pages.Load() != 2 || res.Note != "" {
 		t.Fatalf("result=%+v pages=%d err=%v", res, pages.Load(), err)
+	}
+}
+
+func TestFilesterFolderOfOnlySubfoldersIsWhole(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/f/root":
+			fmt.Fprint(w, `<h1>Example &amp; Friends</h1><div id="filesGrid"></div><div id="subfoldersGrid">`+
+				`<a class="subfolder-item" href="/f/child"><span class="subfolder-name">Child</span></a>`+
+				`<a class="subfolder-item" href="/f/gone"><span class="subfolder-name">Gone</span></a></div>`)
+		case "/f/child":
+			fmt.Fprint(w, filesterTestListing(filesterTestCard("first", "First.mp4", "100"), ""))
+		case "/f/gone":
+			fmt.Fprint(w, `<h1>Unavailable</h1>`)
+		default:
+			t.Errorf("unexpected page: %s", r.URL)
+		}
+	}))
+	defer srv.Close()
+	res := extractOK(t, NewFilester(testClient()), srv.URL+"/f/root", Options{})
+	if len(res.Files) != 1 || res.Files[0].Dir != "Child" || res.Note != "partial — folder listing missing from a page" {
+		t.Fatalf("result=%+v", res)
 	}
 }
 
@@ -273,8 +289,8 @@ func TestFilesterFolderRejectsMissingAndMalformedPages(t *testing.T) {
 		filesterTestListing("", ""),
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, doc) }))
-		f := NewFilester(httpx.New("test", "en", 0, time.Second))
-		_, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/f/example"), Options{Password: "test"})
+		f := NewFilester(testClient())
+		_, err := extract(t, f, srv.URL+"/f/example", Options{Password: "test"})
 		srv.Close()
 		if err == nil {
 			t.Errorf("accepted a missing or malformed folder: %s", doc)

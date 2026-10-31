@@ -3,11 +3,8 @@
 package extractor
 
 import (
-	"encoding/json"
-	"net/url"
+	"cmp"
 	"testing"
-
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // nrkSequentialCatalogue is a drama series in the shape the catalogue serves
@@ -138,10 +135,7 @@ sc-abcdef/m21_index.m3u8?adap=small
 // declared, every variant is usable on its own and the segments join into
 // something that plays.
 func TestNRKMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/open/a/muxed.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/open/a/muxed.m3u8")
 
 	variants := parseMasterPlaylist(nrkMasterPlaylist, base)
 	if len(variants) != 3 {
@@ -172,10 +166,7 @@ func TestNRKMasterPlaylistIsSelfContained(t *testing.T) {
 // withholding them, so taking the first URL on offer downloads a file that
 // finishes and then plays as noise.
 func TestNRKStreamSkipsEncryptedAssets(t *testing.T) {
-	var doc nrkManifest
-	if err := json.Unmarshal([]byte(nrkPlayable), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[nrkManifest](t, nrkPlayable)
 
 	stream, err := doc.stream()
 	if err != nil {
@@ -196,10 +187,7 @@ func TestNRKStreamRejectsWhatCannotBePlayed(t *testing.T) {
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			var doc nrkManifest
-			if err := json.Unmarshal([]byte(body), &doc); err != nil {
-				t.Fatal(err)
-			}
+			doc := decode[nrkManifest](t, body)
 			if stream, err := doc.stream(); err == nil {
 				t.Errorf("accepted %q", stream)
 			}
@@ -210,12 +198,9 @@ func TestNRKStreamRejectsWhatCannotBePlayed(t *testing.T) {
 // TestNRKStreamAcceptsAPlaylistByItsMimeType covers a manifest that labels
 // its format some other way. The media type is unambiguous either way.
 func TestNRKStreamAcceptsAPlaylistByItsMimeType(t *testing.T) {
-	var doc nrkManifest
 	body := `{"playability":"playable","playable":{"assets":[
 		{"url":"https://cdn.example.test/a/muxed.m3u8","format":"hls_ts","mimeType":"application/vnd.apple.mpegurl","encrypted":false}]}}`
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[nrkManifest](t, body)
 	if _, err := doc.stream(); err != nil {
 		t.Errorf("stream: %v", err)
 	}
@@ -226,10 +211,7 @@ func TestNRKStreamAcceptsAPlaylistByItsMimeType(t *testing.T) {
 // replacing that with a guess of our own would lose the only fact the caller
 // can act on.
 func TestNRKRefusalIsPassedThroughVerbatim(t *testing.T) {
-	var doc nrkManifest
-	if err := json.Unmarshal([]byte(nrkGeoBlocked), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[nrkManifest](t, nrkGeoBlocked)
 	if doc.Playability == "playable" {
 		t.Fatal("a refused manifest read as playable")
 	}
@@ -248,33 +230,17 @@ func TestNRKRefusalForms(t *testing.T) {
 		`{"playability":""}`:                              "not playable",
 	}
 	for body, want := range tests {
-		var doc nrkManifest
-		if err := json.Unmarshal([]byte(body), &doc); err != nil {
-			t.Fatal(err)
-		}
+		doc := decode[nrkManifest](t, body)
 		if got := doc.refusal(); got != want {
 			t.Errorf("refusal of %s = %q, want %q", body, got, want)
 		}
 	}
 }
 
-// TestNRKRefusedErrorCarriesTheMessage covers what the series expansion
-// leans on: hundreds of episodes refused for one reason should be reported
-// as that one reason, not as hundreds of failures.
-func TestNRKRefusedErrorCarriesTheMessage(t *testing.T) {
-	err := &nrkRefused{id: "ABCD10000101", message: "Ikke tilgjengelig utenfor Norge"}
-	if got := err.Error(); got != "nrk: ABCD10000101: Ikke tilgjengelig utenfor Norge" {
-		t.Errorf("Error() = %q", got)
-	}
-}
-
 // TestNRKSequentialCatalogueListsEverySeason pins the one-request case, and
 // with it the awkward placement of the series name.
 func TestNRKSequentialCatalogueListsEverySeason(t *testing.T) {
-	var doc nrkCatalogue
-	if err := json.Unmarshal([]byte(nrkSequentialCatalogue), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[nrkCatalogue](t, nrkSequentialCatalogue)
 	if got := doc.title(); got != "A Drama" {
 		t.Errorf("title = %q, want the name filed under the series type", got)
 	}
@@ -303,10 +269,7 @@ func TestNRKSequentialCatalogueListsEverySeason(t *testing.T) {
 // shape, where the seasons are stubs and the entries hang off a wrapper
 // object under a different name.
 func TestNRKStandardCatalogueFallsBackToTheDisplayedSeason(t *testing.T) {
-	var doc nrkCatalogue
-	if err := json.Unmarshal([]byte(nrkStandardCatalogue), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[nrkCatalogue](t, nrkStandardCatalogue)
 	if got := doc.title(); got != "A Magazine" {
 		t.Errorf("title = %q", got)
 	}
@@ -342,11 +305,8 @@ func TestNRKStandardCatalogueFallsBackToTheDisplayedSeason(t *testing.T) {
 // TestNRKSeasonDocumentNamesItsSeries covers the season endpoint, whose
 // series name lives in a link rather than in the body.
 func TestNRKSeasonDocumentNamesItsSeries(t *testing.T) {
-	var doc nrkSeason
-	if err := json.Unmarshal([]byte(nrkSeasonDocument), &doc); err != nil {
-		t.Fatal(err)
-	}
-	if got := nrkJoin(doc.Links.Series.Title, doc.Titles.Title); got != "A Drama - Sesong 2" {
+	doc := decode[nrkSeason](t, nrkSeasonDocument)
+	if got := joinTitle(doc.Links.Series.Title, doc.Titles.Title, titleEqual); got != "A Drama - Sesong 2" {
 		t.Errorf("title = %q, want the season named in it", got)
 	}
 	if got := len(nrkRefs(doc, "", make(map[string]bool))); got != 2 {
@@ -357,10 +317,7 @@ func TestNRKSeasonDocumentNamesItsSeries(t *testing.T) {
 // TestNRKRefsSkipWhatIsAlreadyTaken guards against a series that lists one
 // episode in two places, which would otherwise be downloaded twice.
 func TestNRKRefsSkipWhatIsAlreadyTaken(t *testing.T) {
-	var doc nrkCatalogue
-	if err := json.Unmarshal([]byte(nrkSequentialCatalogue), &doc); err != nil {
-		t.Fatal(err)
-	}
+	doc := decode[nrkCatalogue](t, nrkSequentialCatalogue)
 	seen := make(map[string]bool)
 	first := nrkRefs(doc.Embedded.Seasons[0], "Sesong 1", seen)
 	again := nrkRefs(doc.Embedded.Seasons[0], "Sesong 1", seen)
@@ -373,13 +330,10 @@ func TestNRKRefsSkipWhatIsAlreadyTaken(t *testing.T) {
 // id, which identifies the row rather than the programme and is no use to
 // the player API.
 func TestNRKRefsIgnoreEntriesWithNoProgrammeID(t *testing.T) {
-	var season nrkSeason
 	body := `{"_embedded":{"episodes":[
 		{"id":"ffff","titles":{"title":"A trailer with no programme behind it"}},
 		{"id":"gggg","prfId":"ABCD10000101","titles":{"title":"1. episode"},"sequenceNumber":1}]}}`
-	if err := json.Unmarshal([]byte(body), &season); err != nil {
-		t.Fatal(err)
-	}
+	season := decode[nrkSeason](t, body)
 	refs := nrkRefs(season, "", make(map[string]bool))
 	if len(refs) != 1 || refs[0].id != "ABCD10000101" {
 		t.Errorf("got %+v, want only the entry with a programme id", refs)
@@ -400,8 +354,8 @@ func TestNRKJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := nrkJoin(tc.series, tc.episode); got != tc.want {
-			t.Errorf("nrkJoin(%q, %q) = %q, want %q", tc.series, tc.episode, got, tc.want)
+		if got := joinTitle(tc.series, tc.episode, titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q, titleEqual) = %q, want %q", tc.series, tc.episode, got, tc.want)
 		}
 	}
 }
@@ -433,11 +387,8 @@ func TestNRKProgramTitles(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var doc nrkProgram
-			if err := json.Unmarshal([]byte(tc.body), &doc); err != nil {
-				t.Fatal(err)
-			}
-			got := nrkJoin(doc.SeriesTitle, util.FirstNonEmpty(doc.EpisodeTitle, doc.Title))
+			doc := decode[nrkProgram](t, tc.body)
+			got := joinTitle(doc.SeriesTitle, cmp.Or(doc.EpisodeTitle, doc.Title), titleEqual)
 			if got != tc.want {
 				t.Errorf("title = %q, want %q", got, tc.want)
 			}
@@ -469,10 +420,7 @@ func TestNRKTarget(t *testing.T) {
 		"https://tv.nrk.no/direkte/nrk1":                      {},
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := nrkTarget(u); got != want {
 			t.Errorf("nrkTarget(%s) = %+v, want %+v", raw, got, want)
 		}
@@ -512,21 +460,5 @@ func TestNRKEpisodeLinkIgnoresPositions(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] != "ABCD10000101" || ids[1] != "ABCD10000201" {
 		t.Errorf("found %v, want the two programme ids and nothing else", ids)
-	}
-}
-
-func TestNRKMatch(t *testing.T) {
-	n := NewNRK(nil)
-	for _, host := range []string{"tv.nrk.no", "TV.NRK.NO"} {
-		if !n.Match(&url.URL{Scheme: "https", Host: host, Path: "/serie/a-series"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	// Radio and the news site run on the same player API but have a
-	// catalogue of their own, which nothing here reads.
-	for _, host := range []string{"radio.nrk.no", "www.nrk.no", "nrk.no", "nottv.nrk.no.example.test"} {
-		if n.Match(&url.URL{Scheme: "https", Host: host, Path: "/serie/a-series"}) {
-			t.Errorf("%s was matched", host)
-		}
 	}
 }

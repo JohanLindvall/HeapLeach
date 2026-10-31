@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -158,15 +157,17 @@ func TestCumCreatorCapsFiltersAndPartialPages(t *testing.T) {
 		limits                    Limits
 		files, pages              int
 	}{
-		{name: "file cap", limits: Limits{Files: 1}, files: 1, pages: 1, note: "file limit"},
-		{name: "file boundary", limits: Limits{Files: 3}, files: 3, pages: 1, note: "file limit"},
+		// The file cap is held to the posts the listing gave, which the
+		// source cap bounds, so both pages are read.
+		{name: "file cap", limits: Limits{Files: 1}, files: 1, pages: 2, note: "file limit"},
+		{name: "file boundary", limits: Limits{Files: 3}, files: 3, pages: 2, note: "file limit"},
 		{name: "source cap", limits: Limits{Sources: 1}, files: 2, pages: 1, note: "source limit"},
 		{name: "source boundary", limits: Limits{Sources: 2}, files: 3, pages: 1, note: "source limit"},
 		{name: "videos", filter: "videos", files: 2, pages: 2},
 		{name: "photos", filter: "photos", files: 2, pages: 2},
 		{name: "all", files: 4, pages: 2},
 		{name: "exact file cap", limits: Limits{Files: 4}, files: 4, pages: 2},
-		{name: "repeat", later: "repeat", files: 3, pages: 2, note: "partial"},
+		{name: "repeat", later: "repeat", files: 3, pages: 2, note: "2 of 3 posts"},
 		{name: "empty", later: "empty", files: 3, pages: 2, note: "repeated or empty"},
 		{name: "failed", later: "fail", files: 3, pages: 2, note: "could not read"},
 		{name: "malformed", later: "malformed", files: 3, pages: 2, note: "could not read"},
@@ -299,10 +300,26 @@ func TestCumRejectsUnsupportedPages(t *testing.T) {
 			t.Errorf("accepted %s", route)
 		}
 	}
-	for raw, want := range map[string]bool{"https://cum.st": true, "https://www.cum.st": true, "https://cum.st.example": false} {
-		u, _ := url.Parse(raw)
-		if got := NewCum(nil).Match(u); got != want {
-			t.Errorf("Match(%s)=%t want=%t", raw, got, want)
-		}
+}
+
+func TestCumRecognise(t *testing.T) {
+	c := NewCum(nil)
+	page := `<html><head><title>Creator "Someone" on a site | OnlyHaven</title></head><body>` +
+		`<script>var env={EDGE_BASE_URLS:"https://edge.example.test"};</script></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42", page), true)
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42/post/7", page), true)
+	// The right form and the name, but no media servers advertised.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42",
+		`<html><head><title>Creator | OnlyHaven</title></head><body></body></html>`), false)
+	// Advertised media servers on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://fans.example.test/creators/patreon/42/comments", page), false)
+	for raw, want := range map[string]bool{
+		"https://fans.example.test/creators/patreon/42":        true,
+		"https://fans.example.test/creators/patreon/42/post/7": true,
+		"https://fans.example.test/creators/patreon":           false,
+		"https://fans.example.test/creators":                   false,
+		"https://fans.example.test/patreon/user/42":            false,
+	} {
+		expectShape(t, c, raw, want)
 	}
 }

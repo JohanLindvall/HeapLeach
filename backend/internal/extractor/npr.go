@@ -3,17 +3,17 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/html"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // NPR resolves npr.org pages into the audio they publish.
@@ -61,18 +61,11 @@ import (
 // the part file goes on naming the same transfer between runs: nothing about
 // the URL the page published expires.
 type NPR struct {
+	about
 	client *httpx.Client
 }
 
 const (
-	// nprHost is the site, and the match is against it exactly rather than
-	// through util.HostMatches. The subdomains are not pages and are each
-	// already somebody else's job: ondemand.npr.org is a plain MP3 the
-	// fallback extractor downloads as it stands, and feeds.npr.org serves the
-	// open podcast archive as RSS, which the feed extractor reads better than
-	// this could.
-	nprHost = "npr.org"
-
 	// nprAudioAttr holds one piece of audio's metadata, as JSON in an
 	// attribute. It is read with the HTML tokeniser rather than matched out
 	// of the page text, and the ampersands are the reason: NPR writes its
@@ -100,20 +93,26 @@ const (
 )
 
 // NewNPR builds the NPR extractor.
-func NewNPR(client *httpx.Client) *NPR { return &NPR{client: client} }
+func NewNPR(client *httpx.Client) *NPR {
+	return &NPR{client: client, about: about{name: "npr", shape: nprShape,
+		recognises: "NPR pages carrying audio players (`data-audio`): stories, programmes, podcasts and sections"}}
+}
 
-func (n *NPR) Name() string { return "npr" }
+// nprShape is a story (/<yyyy>/<mm>/<dd>/<id>/<slug>), a programme
+// (/programs/<slug>/) or a podcast (/podcasts/<id>/<slug>).
+var nprShape = pathShape(`^/[0-9]{4}/[0-9]{2}/[0-9]{2}/(?:[0-9]{6,}|nx-s[0-9]+-[0-9]+)/[^/]+`, `^/programs/[^/]+`, `^/podcasts/[0-9]+/[^/]+`)
 
-// Match takes the site itself and nothing under it — see nprHost.
-func (n *NPR) Match(u *url.URL) bool {
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	return host == nprHost || host == "www."+nprHost
+// Recognise takes an NPR page carrying audio, in the player blocks
+// (data-audio) this lists: any page of the site that has them, a section
+// front as much as a story.
+func (n *NPR) Recognise(_ context.Context, p *Page) bool {
+	return len(p.Segments()) > 0 && p.Has(nprAudioAttr+"=") && p.Named("NPR")
 }
 
 // Extract reads a page and lists every piece of audio on it.
 func (n *NPR) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
 	// No headers: the pages need none, and neither does the audio they name.
-	doc, err := n.client.GetString(ctx, u.String(), nil)
+	doc, _, err := fetchDocument(ctx, n.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("npr: fetch %s: %w", u.Redacted(), err)
 	}
@@ -136,22 +135,23 @@ func nprResult(doc string, u *url.URL) (*Result, error) {
 			"(/programs/<slug>/) and a podcast (/podcasts/<id>/<slug>)", u.Redacted())
 	}
 
-	var refused nprRefusals
+	var refused []nprRefusal
 	playable := make([]nprAudio, 0, len(listed))
 	for _, entry := range listed {
 		if reason := entry.refusal(); reason != nprPlayable {
-			refused.add(reason)
+			refused = append(refused, reason)
 			continue
 		}
 		playable = append(playable, entry)
 	}
+	reasons := nprReasons(refused)
 	if len(playable) == 0 {
 		return nil, fmt.Errorf("npr: none of the %d pieces of audio on %s can be fetched: %s",
-			len(listed), u.Redacted(), refused)
+			len(listed), u.Redacted(), nprTally(reasons))
 	}
 
-	title := util.FirstNonEmpty(nprPageTitle(root), strings.Trim(u.Path, "/"))
-	return &Result{Title: title, Files: nprFiles(playable)}, nil
+	title := cmp.Or(nprPageTitle(root), strings.Trim(u.Path, "/"))
+	return &Result{Title: title, Files: nprFiles(playable), Note: refusedNote(reasons)}, nil
 }
 
 // nprAudioFrom pulls every audio block out of a parsed page, in document
@@ -218,7 +218,7 @@ func nprFiles(entries []nprAudio) []File {
 			// read nothing but the user agent, which the client already sends.
 		}
 		if nest {
-			file.Dir = entry.program()
+			file.Dir = sourceFolder(entry.program())
 		}
 		files = append(files, file)
 	}
@@ -235,11 +235,7 @@ func nprSize(rawURL string) int64 {
 	if err != nil || !strings.EqualFold(u.Hostname(), nprStore) {
 		return -1
 	}
-	n, err := strconv.ParseInt(u.Query().Get(nprSizeParam), 10, 64)
-	if err != nil || n <= 0 {
-		return -1
-	}
-	return n
+	return parsedSize(u.Query().Get(nprSizeParam))
 }
 
 // nprPageTitle names the job after the page. The social metadata carries the
@@ -284,16 +280,29 @@ type nprAudio struct {
 func (a nprAudio) program() string { return strings.TrimSpace(a.Program) }
 
 // nprRefusal is why a listed block cannot be fetched, or nprPlayable when it
-// can be.
+// can be. The refusals are in the order a page's are reported in.
 type nprRefusal int
 
 const (
 	nprPlayable nprRefusal = iota
-	nprUnavailable
 	nprSubscriberOnly
+	nprUnavailable
 	nprLiveStream
 	nprNoAudio
 )
+
+// String reads a refusal back in NPR's terms rather than in ours.
+func (r nprRefusal) String() string {
+	switch r {
+	case nprSubscriberOnly:
+		return "behind an NPR+ subscription"
+	case nprUnavailable:
+		return "marked unavailable"
+	case nprLiveStream:
+		return "listed as a live stream, which has no end to download to"
+	}
+	return "listed with no audio at all"
+}
 
 // refusal reports whether this block is worth queueing, and why not when it
 // is not.
@@ -317,45 +326,24 @@ func (a nprAudio) refusal() nprRefusal {
 	return nprNoAudio
 }
 
-// nprRefusals counts why a page's audio was passed over, so a page that
-// yields nothing says which of NPR's reasons applied instead of reporting
-// itself as empty.
-type nprRefusals struct {
-	unavailable int
-	subscriber  int
-	live        int
-	silent      int
-}
-
-func (r *nprRefusals) add(reason nprRefusal) {
-	switch reason {
-	case nprUnavailable:
-		r.unavailable++
-	case nprSubscriberOnly:
-		r.subscriber++
-	case nprLiveStream:
-		r.live++
-	default:
-		r.silent++
+// nprReasons are why a page's audio was passed over, in the order a page's
+// refusals are reported in, so the note and the error read alike.
+func nprReasons(refused []nprRefusal) []string {
+	slices.Sort(refused)
+	reasons := make([]string, len(refused))
+	for i, r := range refused {
+		reasons[i] = r.String()
 	}
+	return reasons
 }
 
-// String reads back as the tail of a sentence about a page, in NPR's terms
-// rather than in ours.
-func (r nprRefusals) String() string {
+// nprTally reads back as the tail of a sentence about a page that yields
+// nothing, saying which of NPR's reasons applied instead of reporting the
+// page as empty.
+func nprTally(reasons []string) string {
 	var parts []string
-	for _, part := range []struct {
-		count int
-		text  string
-	}{
-		{r.subscriber, "behind an NPR+ subscription"},
-		{r.unavailable, "marked unavailable"},
-		{r.live, "listed as a live stream, which has no end to download to"},
-		{r.silent, "listed with no audio at all"},
-	} {
-		if part.count > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", part.count, part.text))
-		}
+	for _, c := range tally(reasons) {
+		parts = append(parts, fmt.Sprintf("%d %s", c.n, c.reason))
 	}
 	if len(parts) == 0 {
 		return "the page lists them but names nothing to fetch"

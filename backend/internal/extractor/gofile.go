@@ -3,15 +3,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,7 +37,7 @@ import (
 // expires the next link is refused here rather than sent — one wrong secret
 // costs one request, not one per link in the queue.
 type Gofile struct {
-	hostSet
+	about
 	client   *httpx.Client
 	fallback string
 	lang     string
@@ -47,6 +46,8 @@ type Gofile struct {
 	// which matters here, since the way to test a secret against gofile is
 	// to sign badly with it.
 	scriptURL string
+	// api is the content API's base, a field so a test can serve it.
+	api string
 
 	mu       sync.Mutex
 	token    string
@@ -88,15 +89,27 @@ const (
 // NewGofile builds the gofile extractor.
 func NewGofile(cfg *config.Config, client *httpx.Client) *Gofile {
 	return &Gofile{
-		hostSet:   hostSet{"gofile.io"},
+		about: about{name: "gofile", shape: gofileShape,
+			recognises: "share links (`/d/<code>`) whose page is the Gofile app shell, loading its signing script"},
 		client:    client,
 		fallback:  cfg.GofileSecret,
 		lang:      cfg.Language,
 		scriptURL: gofileRoot + gofileScriptPath,
+		api:       gofileAPI,
 	}
 }
 
-func (g *Gofile) Name() string { return "gofile" }
+// gofileShape is a share link: /d/<code>.
+var gofileShape = pathShape(`^/d/[A-Za-z0-9]+/?$`)
+
+// Recognise takes a share link served by the site's app shell. The folder
+// is fetched by the app afterwards, so the shell is all a share link ever
+// answers with, deleted or not — and the shell is checked for what this
+// extractor depends on, not only for the form of the link: it loads the
+// script the request signature is read from (gofilewt.go), and names itself.
+func (g *Gofile) Recognise(_ context.Context, p *Page) bool {
+	return gofileShape(p.Final) && p.Script(gofileScriptPath) && p.Named("Gofile")
+}
 
 // Extract resolves a share code into its files, walking nested folders.
 func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -115,150 +128,170 @@ func (g *Gofile) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		return nil, err
 	}
 
-	root, err := g.fetchContent(ctx, code, token, opts.Password)
+	root, note, err := g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	if errors.Is(err, errGofileStaleToken) {
 		if token, err = g.ensureToken(ctx, true); err != nil {
 			return nil, err
 		}
-		root, err = g.fetchContent(ctx, code, token, opts.Password)
+		root, note, err = g.fetchContent(ctx, code, token, opts.Password, opts.maxFiles())
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	res := &Result{Title: root.Name}
-	if err := g.collect(ctx, root, token, opts.Password, "", 0, opts.maxFiles(), res); err != nil {
+	// A root listing cut short is noted before the walk adds its own.
+	res := &Result{Title: root.Name, Note: note}
+	if err := walkTree(ctx, opts, res, root.ID, root, g.lister(token, opts.Password)); err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// collect appends c's files to res, recursing into subfolders.
-func (g *Gofile) collect(ctx context.Context, c *gofileContent, token, password, dir string, depth, limit int, res *Result) error {
-	// The shared listing ceiling, for a share that is really somebody's whole
-	// drive: past it the queue has stopped being something anyone meant.
-	if len(res.Files) >= limit {
-		return nil
-	}
-	if c.Type == "file" {
-		if c.Link == "" {
-			return nil
-		}
-		file := File{
-			Name:    util.FirstNonEmpty(c.Name, util.NameFromURL(c.Link)),
-			URL:     c.Link,
-			Size:    c.Size,
-			Dir:     dir,
-			Headers: g.downloadHeaders(token),
-		}
-		// A gofile file often lives on several storage servers, and a busy
-		// one answers with a redirect to the web page instead of bytes.
-		// Rotating on each attempt gives a retry a real chance of landing
-		// somewhere that will serve it.
-		if len(c.Servers) > 1 {
-			hosts := make([]string, 0, len(c.Servers))
-			for _, server := range c.Servers {
-				hosts = append(hosts, server+"."+gofileStorageDomain)
+// lister reads one folder for walkTree. The root arrives already fetched,
+// since reading it is where a stale token shows; a subfolder arrives as its
+// listing entry and is fetched here.
+func (g *Gofile) lister(token, password string) treeList[*gofileContent] {
+	return func(ctx context.Context, w *treeWalk, c *gofileContent, depth int) ([]treeItem[*gofileContent], error) {
+		if depth > 0 {
+			var (
+				note string
+				err  error
+			)
+			if c, note, err = g.fetchContent(ctx, c.ID, token, password, w.room()); err != nil {
+				return nil, err
 			}
-			file = Mirrored(file, MirrorHosts(c.Link, hosts))
+			w.partial(note)
 		}
-		res.Files = append(res.Files, file)
-		return nil
-	}
-	if depth >= config.MaxFolderDepth {
-		return nil
-	}
-
-	// Children arrive keyed by id; sort by the order gofile listed them so
-	// the UI matches the website.
-	for _, child := range c.orderedChildren() {
-		switch child.Type {
-		case "file":
-			if err := g.collect(ctx, child, token, password, dir, depth+1, limit, res); err != nil {
-				return err
+		var items []treeItem[*gofileContent]
+		if c.Type == "file" { // a share of one file
+			if c.Link != "" {
+				items = append(items, treeItem[*gofileContent]{File: g.file(c, token)})
 			}
-		case "folder":
-			sub, err := g.fetchContent(ctx, child.ID, token, password)
-			if err != nil {
-				// One unreadable subfolder should not sink the whole job.
-				continue
-			}
-			next := path.Join(dir, util.FirstNonEmpty(child.Name, child.ID))
-			if err := g.collect(ctx, sub, token, password, next, depth+1, limit, res); err != nil {
-				return err
+			return items, nil
+		}
+		// Children arrive keyed by id; they are taken in the order gofile
+		// listed them, so the queue matches the website.
+		for _, child := range c.orderedChildren() {
+			switch child.Type {
+			case "file":
+				if child.Link != "" {
+					items = append(items, treeItem[*gofileContent]{File: g.file(child, token)})
+				}
+			case "folder":
+				items = append(items, treeItem[*gofileContent]{
+					Folder: child, Key: child.ID, Name: child.Name, Fallback: child.ID,
+				})
 			}
 		}
+		return items, nil
 	}
-	return nil
 }
 
-// downloadHeaders are what the CDN needs to serve the file to us.
-func (g *Gofile) downloadHeaders(token string) httpx.Header {
-	return httpx.Header{
-		httpx.HeaderCookie:  gofileCookie + "=" + token,
-		httpx.HeaderReferer: gofileRoot + "/",
+// file is one listed file as a download.
+func (g *Gofile) file(c *gofileContent, token string) *File {
+	file := File{
+		Name: cmp.Or(c.Name, util.NameFromURL(c.Link)),
+		URL:  c.Link,
+		Size: c.Size,
+		// What the CDN needs to serve the file to us.
+		Headers: httpx.Header{
+			httpx.HeaderCookie:  gofileCookie + "=" + token,
+			httpx.HeaderReferer: gofileRoot + "/",
+		},
 	}
+	// A gofile file often lives on several storage servers, and a busy
+	// one answers with a redirect to the web page instead of bytes.
+	// Rotating on each attempt gives a retry a real chance of landing
+	// somewhere that will serve it.
+	if len(c.Servers) > 1 {
+		hosts := make([]string, 0, len(c.Servers))
+		for _, server := range c.Servers {
+			hosts = append(hosts, server+"."+gofileStorageDomain)
+		}
+		file = Mirrored(file, MirrorHosts(c.Link, hosts))
+	}
+	return &file
 }
 
 var errGofileStaleToken = errors.New("gofile: account token rejected")
 
-// fetchContent GETs one content id, following pagination and merging pages.
-func (g *Gofile) fetchContent(ctx context.Context, id, token, password string) (*gofileContent, error) {
+// fetchContent GETs one content id, following its pages and merging them,
+// with the note for a listing that stopped short of its end. room is how
+// many files the caller can still take: once a page brings the folder's
+// files past it the rest are not read, since none of them would fit, and
+// the tree walk says the file limit cut the share.
+func (g *Gofile) fetchContent(ctx context.Context, id, token, password string, room int) (*gofileContent, string, error) {
 	secret, err := g.ensureSecret(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	var merged *gofileContent
+	var (
+		head  *gofileContent
+		files = make(map[string]bool)
+	)
+	children, note, err := walkPages(ctx, pageWalk[*gofileContent]{
+		key:   func(c *gofileContent) string { return c.ID },
+		limit: -1,
+		fetch: func(ctx context.Context, n int) (pageOf[*gofileContent], error) {
+			q := url.Values{
+				"page":          {strconv.Itoa(n + 1)},
+				"pageSize":      {strconv.Itoa(config.FolderPageSize)},
+				"sortField":     {"createTime"},
+				"sortDirection": {"-1"},
+			}
+			if password != "" {
+				sum := sha256.Sum256([]byte(password))
+				q.Set("password", hex.EncodeToString(sum[:]))
+			}
+			endpoint := g.api + "/contents/" + url.PathEscape(id) + "?" + q.Encode()
 
-	// Bounded the way every paginated listing here is: the API says when the
-	// pages end, and the cap is the backstop against one that keeps saying
-	// there is more. MaxAlbumPages of FolderPageSize children per folder sits
-	// at the same order as MaxListingFiles, which bounds the job as a whole.
-	for page := 1; page <= config.MaxAlbumPages; page++ {
-		q := url.Values{
-			"page":          {strconv.Itoa(page)},
-			"pageSize":      {strconv.Itoa(config.FolderPageSize)},
-			"sortField":     {"createTime"},
-			"sortDirection": {"-1"},
-		}
-		if password != "" {
-			sum := sha256.Sum256([]byte(password))
-			q.Set("password", hex.EncodeToString(sum[:]))
-		}
-		endpoint := gofileAPI + "/contents/" + url.PathEscape(id) + "?" + q.Encode()
-
-		var env gofileEnvelope
-		err = g.client.GetJSON(ctx, endpoint, httpx.Header{
-			httpx.HeaderAuthorization: "Bearer " + token,
-			gofileHeaderWebsiteToken:  g.websiteToken(token, secret, time.Now()),
-			gofileHeaderLanguage:      g.lang,
-			httpx.HeaderOrigin:        gofileRoot,
-			httpx.HeaderReferer:       gofileRoot + "/",
-		}, &env)
-		if err != nil {
-			return nil, g.explain(err)
-		}
-		if env.Status != "ok" {
-			return nil, g.statusError(env.Status)
-		}
-		if env.Data.CanAccess != nil && !*env.Data.CanAccess {
-			return nil, env.Data.accessError()
-		}
-
-		if merged == nil {
-			merged = &env.Data
-		} else {
-			maps.Copy(merged.Children, env.Data.Children)
-			merged.ChildrenIDs = append(merged.ChildrenIDs, env.Data.ChildrenIDs...)
-		}
-		if !env.Metadata.HasNextPage || len(env.Data.Children) == 0 {
-			return merged, nil
-		}
+			var env gofileEnvelope
+			err := g.client.GetJSON(ctx, endpoint, httpx.Header{
+				httpx.HeaderAuthorization: "Bearer " + token,
+				gofileHeaderWebsiteToken:  g.websiteToken(token, secret, time.Now()),
+				gofileHeaderLanguage:      g.lang,
+				httpx.HeaderOrigin:        gofileRoot,
+				httpx.HeaderReferer:       gofileRoot + "/",
+			}, &env)
+			if err != nil {
+				return pageOf[*gofileContent]{}, g.explain(err)
+			}
+			if env.Status != "ok" {
+				return pageOf[*gofileContent]{}, g.statusError(env.Status)
+			}
+			if env.Data.CanAccess != nil && !*env.Data.CanAccess {
+				return pageOf[*gofileContent]{}, env.Data.accessError()
+			}
+			if head == nil {
+				head = &env.Data
+			}
+			// The API says which page is the last; a page without
+			// children ends the listing too, whatever its metadata says.
+			p := pageOf[*gofileContent]{items: env.Data.orderedChildren(), next: env.Metadata.HasNextPage}
+			p.end = !p.next || len(p.items) == 0
+			for _, c := range p.items {
+				if c.Type == "file" && c.Link != "" {
+					files[c.ID] = true
+				}
+			}
+			if len(files) > room {
+				p.end = true
+			}
+			return p, nil
+		},
+	})
+	if err != nil {
+		return nil, "", err
 	}
-	// The cap bit before the API said it was done; what is in hand is a
-	// truncated listing, which is still worth more than an error.
-	return merged, nil
+	merged := *head
+	merged.Children = make(map[string]gofileContent, len(children))
+	merged.ChildrenIDs = make([]string, 0, len(children))
+	for _, c := range children {
+		merged.Children[c.ID] = *c
+		merged.ChildrenIDs = append(merged.ChildrenIDs, c.ID)
+	}
+	return &merged, note, nil
 }
 
 // websiteToken reproduces gofile's client-side request signature.
@@ -284,11 +317,10 @@ func (g *Gofile) ensureToken(ctx context.Context, force bool) (string, error) {
 		Status string `json:"status"`
 		Data   struct {
 			Token string `json:"token"`
-			Tier  string `json:"tier"`
 		} `json:"data"`
 	}
 	err := g.client.PostJSON(ctx, gofileAPI+"/accounts",
-		httpx.RefererOrigin(gofileRoot+"/", gofileRoot), nil, &env)
+		httpx.SiteOrigin(gofileRoot), nil, &env)
 	if err != nil {
 		return "", fmt.Errorf("gofile: create guest account: %w", err)
 	}
@@ -335,10 +367,6 @@ type gofileEnvelope struct {
 	Status   string        `json:"status"`
 	Data     gofileContent `json:"data"`
 	Metadata struct {
-		TotalCount  int  `json:"totalCount"`
-		TotalPages  int  `json:"totalPages"`
-		Page        int  `json:"page"`
-		PageSize    int  `json:"pageSize"`
 		HasNextPage bool `json:"hasNextPage"`
 	} `json:"metadata"`
 }
@@ -353,9 +381,7 @@ type gofileContent struct {
 	Size           int64                    `json:"size"`
 	Link           string                   `json:"link"`
 	MimeType       string                   `json:"mimetype"`
-	ChildrenCount  int                      `json:"childrenCount"`
 	Servers        []string                 `json:"servers"`
-	ServerSelected string                   `json:"serverSelected"`
 	ChildrenIDs    []string                 `json:"childrenIds"`
 	Children       map[string]gofileContent `json:"children"`
 	Password       json.RawMessage          `json:"password"`

@@ -3,25 +3,39 @@
 package extractor
 
 import (
-	"net/url"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-func TestKemonoRootCoversBothServices(t *testing.T) {
-	cases := map[string]string{
-		"https://kemono.cr/patreon/user/1":  "https://kemono.cr",
-		"https://coomer.st/onlyfans/user/2": "https://coomer.st",
-		"https://example.test/x/user/3":     "",
-	}
-	for raw, want := range cases {
-		u, _ := url.Parse(raw)
-		if got := kemonoRoot(u); got != want {
-			t.Errorf("kemonoRoot(%s) = %q, want %q", raw, got, want)
-		}
-	}
+// kemonoShellPage is the sites' app shell: nothing but its loader, an empty
+// application root and the site's name.
+const kemonoShellPage = `<!doctype html><html><head><title>Kemono</title>
+<script src="/static/js/lazy-styles.js"></script><meta name="og:site_name" content="Kemono">
+<script type="module" src="/assets/index-AAAA.js"></script></head><body><div id="root"></div></body></html>`
+
+func TestKemonoRecognise(t *testing.T) {
+	k := NewKemono(nil)
+	expectRecognised(t, k, htmlPage(t, "https://archive.example.test/sample/user/creator", kemonoShellPage), true)
+	expectRecognised(t, k, htmlPage(t, "https://archive.example.test/sample/user/creator/post/42", kemonoShellPage), true)
+	// The right form and the name, without the shell's loader.
+	expectRecognised(t, k, htmlPage(t, "https://archive.example.test/sample/user/creator",
+		`<html><head><title>Kemono</title></head><body><div id="root"></div></body></html>`), false)
+	// The shell on a path that names no creator.
+	expectRecognised(t, k, htmlPage(t, "https://archive.example.test/artists", kemonoShellPage), false)
+	// A page that cannot say, with no client to ask the API through.
+	expectRecognised(t, k, fixturePage(t, "https://archive.example.test/sample/user/creator", http.StatusForbidden, "text/html", ""), false)
+
+	expectShape(t, k, "https://archive.example.test/sample/user/creator", true)
+	expectShape(t, k, "https://archive.example.test/sample/user/creator/post/42", true)
+	expectShape(t, k, "https://archive.example.test/sample/user", false)
+	expectShape(t, k, "https://archive.example.test/user/creator", false)
 }
 
 func TestKemonoFilesOf(t *testing.T) {
@@ -79,6 +93,54 @@ func TestKemonoFilesOf(t *testing.T) {
 		if f.Dir != "" {
 			t.Errorf("%s filed under %q, want no folder for a single post", f.Name, f.Dir)
 		}
+	}
+}
+
+// A creator's posts are paged by offset to the count its profile states, or,
+// where it states none, to the 400 the API answers an offset past the end
+// with, which is no failure.
+func TestKemonoCreatorPagesToTheStatedEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		asked string
+	}{
+		{name: "stated count", count: 3, asked: "0,2"},
+		{name: "past the end", asked: "0,2,3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var asked []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sample/user/creator/profile":
+					fmt.Fprintf(w, `{"id":"creator","service":"sample","name":"A Creator","post_count":%d}`, tc.count)
+				case "/api/v1/sample/user/creator/posts":
+					o := r.URL.Query().Get("o")
+					asked = append(asked, o)
+					var posts []kemonoPost
+					switch o {
+					case "0":
+						posts = []kemonoPost{{ID: "1", File: kemonoAttachment{Path: "/a/one.jpg"}}, {ID: "2", File: kemonoAttachment{Path: "/a/two.jpg"}}}
+					case "2":
+						posts = []kemonoPost{{ID: "3", File: kemonoAttachment{Path: "/a/three.jpg"}}}
+					default:
+						http.Error(w, `{"error":"Offset is bigger than total count."}`, http.StatusBadRequest)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(posts)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			res := extractOK(t, NewKemono(httpx.New("test", "en", 0, time.Second)), srv.URL+"/sample/user/creator", Options{})
+			if len(res.Files) != 3 || res.Title != "A Creator" || res.Note != "" || strings.Join(asked, ",") != tc.asked {
+				t.Fatalf("files=%d title=%q note=%q asked=%v", len(res.Files), res.Title, res.Note, asked)
+			}
+			if got := strings.Join(filePaths(res.Files), ","); got != "1/one.jpg,2/two.jpg,3/three.jpg" {
+				t.Fatalf("files %s", got)
+			}
+		})
 	}
 }
 

@@ -120,6 +120,12 @@ func TestFormatETARefusesToProjectPastTheHorizon(t *testing.T) {
 	}
 }
 
+// bar renders both parts uncoloured, which is what the tests measure.
+func bar(fraction float64, width int) string {
+	fill, track := barParts(fraction, width)
+	return fill + track
+}
+
 func TestBar(t *testing.T) {
 	if got := bar(0.5, 10); got != strings.Repeat(fillRune, 5)+strings.Repeat(trackRune, 5) {
 		t.Errorf("half bar = %q", got)

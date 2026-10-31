@@ -5,10 +5,8 @@ package download
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +37,7 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 		mu        sync.Mutex
 		requested = map[string]int{}
 	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		track, index, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 		i, err := strconv.Atoi(index)
 		if err != nil {
@@ -51,7 +49,6 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 		mu.Unlock()
 		_, _ = w.Write(body(track, i))
 	}))
-	defer srv.Close()
 	list := func(track string) []string {
 		var segments []string
 		for i := range parts {
@@ -76,17 +73,17 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 	if err := os.WriteFile(first, start, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := savePlaylistState(first, playlistState{Index: 2, Bytes: int64(len(start)), Total: parts, Track: "sv/Svenska"}); err != nil {
+	if err := savePlaylistState(first, playlistState{Index: 2, Bytes: int64(len(start)), Total: parts, Track: "sv/Svenska"}, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(second, []byte("another track's bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := savePlaylistState(second, playlistState{Index: 3, Bytes: 10, Total: parts, Track: "en/English"}); err != nil {
+	if err := savePlaylistState(second, playlistState{Index: 3, Bytes: 10, Total: parts, Track: "en/English"}, transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := m.transferPlaylist(context.Background(), it, part, "show.mp4"); err != nil {
+	if _, err := m.transferPlaylist(context.Background(), it, part, "show.mp4", transferFiles{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +109,7 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 		}
 	}
 	clear := playlistTrack{part: second, segments: it.Audio[1].Segments, audio: &it.Audio[1]}
-	if st := clear.state(); st == nil || st.Index != parts {
+	if st := clear.state(transferFiles{}); st == nil || st.Index != parts {
 		t.Errorf("checkpoint = %+v; want the track's own, complete", st)
 	}
 	m.mu.Lock()
@@ -130,14 +127,10 @@ func TestPlaylistJoinsEachTrackIntoItsOwnPart(t *testing.T) {
 // own or, named with no URI, carried in the video's own segments.
 func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 	ffmpeg := requireFFmpeg(t)
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	requireFFprobe(t)
 
 	origin := t.TempDir()
-	srv := httptest.NewServer(http.FileServer(http.Dir(origin)))
-	defer srv.Close()
+	srv := testServer(t, http.FileServer(http.Dir(origin)))
 	hls := func(name string, input ...string) []string {
 		return cmafRendition(t, ffmpeg, origin, srv.URL, name, input...)
 	}
@@ -212,29 +205,8 @@ func TestPlaylistJoinsAudioKeptApart(t *testing.T) {
 				t.Errorf("recorded path = %q", path)
 			}
 
-			out, err := exec.Command(ffprobe, "-v", "error", "-show_streams", "-print_format", "json",
-				filepath.Join(m.cfg.DownloadDir, "Show.mp4")).Output()
-			if err != nil {
-				t.Fatal(err)
-			}
-			var probe struct {
-				Streams []struct {
-					CodecType   string  `json:"codec_type"`
-					StartTime   float64 `json:"start_time,string"`
-					Disposition struct {
-						Default int `json:"default"`
-					} `json:"disposition"`
-					Tags struct {
-						Language    string `json:"language"`
-						HandlerName string `json:"handler_name"`
-					} `json:"tags"`
-				} `json:"streams"`
-			}
-			if err := json.Unmarshal(out, &probe); err != nil {
-				t.Fatal(err)
-			}
 			var got []string
-			for _, s := range probe.Streams {
+			for _, s := range ffprobeStreams(t, filepath.Join(m.cfg.DownloadDir, "Show.mp4")) {
 				got = append(got, fmt.Sprintf("%s %s %q default=%d", s.CodecType, s.Tags.Language,
 					s.Tags.HandlerName, s.Disposition.Default))
 				// Every input starts at zero here, so all of the output should.
@@ -294,10 +266,7 @@ func cmafRendition(t *testing.T, ffmpeg, origin, base, name string, input ...str
 // it; the joined file keeps it, and starts at zero as a whole.
 func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 	ffmpeg := requireFFmpeg(t)
-	ffprobe, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	requireFFprobe(t)
 	dir := t.TempDir()
 	video, audio := filepath.Join(dir, "clip.part"), filepath.Join(dir, "clip.audio1.part")
 	run(t, ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
@@ -307,18 +276,9 @@ func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=2",
 		"-c:a", "aac", "-output_ts_offset", "10.5", "-f", "mpegts", audio)
 	starts := func(path string) []float64 {
-		out, err := exec.Command(ffprobe, "-v", "error", "-show_entries", "stream=start_time",
-			"-of", "csv=p=0", path).Output()
-		if err != nil {
-			t.Fatal(err)
-		}
 		var times []float64
-		for field := range strings.FieldsSeq(string(out)) {
-			value, err := strconv.ParseFloat(strings.TrimSuffix(field, ","), 64)
-			if err != nil {
-				t.Fatalf("start time %q: %v", field, err)
-			}
-			times = append(times, value)
+		for _, s := range ffprobeStreams(t, path) {
+			times = append(times, s.StartTime)
 		}
 		return times
 	}
@@ -351,11 +311,10 @@ func TestJoiningKeepsTheOffsetBetweenTracks(t *testing.T) {
 // fetches a byte, rather than once the whole video has arrived.
 func TestPlaylistWithAudioKeptApartNeedsFFmpegFirst(t *testing.T) {
 	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		_, _ = w.Write([]byte("data"))
 	}))
-	defer srv.Close()
 
 	hideFFmpeg(t)
 
