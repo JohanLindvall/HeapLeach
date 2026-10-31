@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
-
 )
 
 // ChallengeError distinguishes a Cloudflare challenge from a missing or
