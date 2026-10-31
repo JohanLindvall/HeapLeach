@@ -85,8 +85,15 @@ func TestResolveOutcomesStopsAtCancellation(t *testing.T) {
 			calls.Store(0)
 			got = resolveOutcomes(ctx, items, inTurn, func(ctx context.Context, i int) (int, error) {
 				calls.Add(1)
-				if i == 2 {
+				switch {
+				case i == 2:
 					cancel()
+				case !inTurn:
+					// Held until the cancellation, so that the workers
+					// cannot race through the listing before item 2's
+					// worker is scheduled: what is measured is what
+					// starts after the context ends.
+					<-ctx.Done()
 				}
 				return i * 10, nil
 			})
