@@ -44,6 +44,7 @@ import (
 // and covers the one real flake seen under parallel load — a transient nginx
 // 404 that succeeded on immediate retry.
 type BitChute struct {
+	about
 	client *httpx.Client
 	// api and site are the two roots this reads, kept as fields rather than
 	// used as constants so the paging, the fan-out and the embed fallback
@@ -93,10 +94,10 @@ var bitchuteSeedHosts = []string{
 
 // NewBitChute builds the bitchute extractor.
 func NewBitChute(client *httpx.Client) *BitChute {
-	return &BitChute{client: client, api: bitchuteAPI, site: bitchuteRoot}
+	return &BitChute{client: client, api: bitchuteAPI, site: bitchuteRoot, about: about{name: "bitchute",
+		shape: bitchuteShape, recognises: "videos and channels (`/video/<id>/`, `/embed/<id>/`, `/channel/<id>/`) " +
+			"served by the BitChute web app, a video naming its embed player"}}
 }
-
-func (b *BitChute) Name() string { return "bitchute" }
 
 var (
 	// bitchuteShape is a video, its embed, or a channel.
@@ -107,15 +108,6 @@ var (
 
 // bitchuteBundle is the web app's own script bundle.
 const bitchuteBundle = "/js/app."
-
-// Recognises is the inventory's description.
-func (b *BitChute) Recognises() string {
-	return "videos and channels (`/video/<id>/`, `/embed/<id>/`, `/channel/<id>/`) served by the " +
-		"BitChute web app, a video naming its embed player"
-}
-
-// Shape reports a video, an embed or a channel.
-func (b *BitChute) Shape(u *url.URL) bool { return bitchuteShape(u) }
 
 // Recognise takes a page of the web app: its bundle and name, and for a
 // video page the embed player it names, the id Extract asks the API about.

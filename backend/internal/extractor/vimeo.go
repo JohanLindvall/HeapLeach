@@ -45,6 +45,7 @@ import (
 // decrypt: yt-dlp fails on them too. The configuration says so (request.drm),
 // and those are refused in so many words.
 type Vimeo struct {
+	about
 	client *httpx.Client
 	// player is where the player pages are, a field so that tests can stand
 	// in for it.
@@ -59,10 +60,12 @@ const vimeoConfigMarker = "window.playerConfig = "
 
 // NewVimeo builds the vimeo extractor.
 func NewVimeo(client *httpx.Client) *Vimeo {
-	return &Vimeo{client: client, player: vimeoPlayerRoot}
+	return &Vimeo{client: client, player: vimeoPlayerRoot, about: about{name: "vimeo",
+		shape: eitherShape(vimeoWatchShape, vimeoPlayerShape),
+		recognises: "player pages (`/video/<id>`) carrying `window.playerConfig`, and watch pages " +
+			"(`/<id>`, `/<id>/<hash>`, channel, group and album videos) of a site named Vimeo " +
+			"that offer that player for embedding"}}
 }
-
-func (v *Vimeo) Name() string { return "vimeo" }
 
 var (
 	// vimeoWatchShape is a video's own page in each of the places it is
@@ -78,16 +81,6 @@ var (
 	// vimeoPlayerMeta is the player a watch page offers for embedding.
 	vimeoPlayerMeta = pathShape(`^/video/[0-9]+`)
 )
-
-// Recognises is the inventory's description.
-func (v *Vimeo) Recognises() string {
-	return "player pages (`/video/<id>`) carrying `window.playerConfig`, and watch pages " +
-		"(`/<id>`, `/<id>/<hash>`, channel, group and album videos) of a site named Vimeo " +
-		"that offer that player for embedding"
-}
-
-// Shape reports a watch page or a player page.
-func (v *Vimeo) Shape(u *url.URL) bool { return vimeoWatchShape(u) || vimeoPlayerShape(u) }
 
 // Recognise takes the player page by the configuration this extractor
 // reads, and a watch page by the player it names in its meta tags — the

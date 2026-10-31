@@ -45,6 +45,7 @@ import (
 // rather than one a video. Anything else on the site is still handed to
 // yt-dlp, as all of it was.
 type Niconico struct {
+	about
 	client *httpx.Client
 	// watch and api are where the watch pages and the API are, fields so
 	// that tests can stand in for them.
@@ -69,12 +70,14 @@ var niconicoRest = handoffSite{
 // NewNiconico builds the niconico extractor.
 func NewNiconico(client *httpx.Client) *Niconico {
 	return &Niconico{
+		about: about{name: "niconico", shape: eitherShape(niconicoWatchShape, niconicoListShape),
+			recognises: "watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, " +
+				"and mylists, series and users' uploads rendered by the niconico web client's bundle; " +
+				"its other pages are handed to yt-dlp"},
 		client: client, watch: niconicoWatchRoot, api: niconicoAPIRoot,
-		handoff: &Handoff{client: client, site: niconicoRest},
+		handoff: newHandoff(client, niconicoRest),
 	}
 }
-
-func (n *Niconico) Name() string { return "niconico" }
 
 var (
 	// niconicoWatchShape is a watch page, and the short link to one.
@@ -98,16 +101,6 @@ const niconicoResponseMeta = `name="server-response"`
 // pages that carry no description of their own: a user's, a mylist.
 const niconicoBundle = "/web/scripts/bundle/"
 
-// Recognises is the inventory's description.
-func (n *Niconico) Recognises() string {
-	return "watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, " +
-		"and mylists, series and users' uploads rendered by the niconico web client's bundle; " +
-		"its other pages are handed to yt-dlp"
-}
-
-// Shape reports a watch page or a listing.
-func (n *Niconico) Shape(u *url.URL) bool { return niconicoWatchShape(u) || niconicoListShape(u) }
-
 // Recognise takes a page of the site by what this extractor reads on it: a
 // watch page by its server-response description, which a short link
 // redirects to, and a listing by the web client that renders it. Any other
@@ -128,10 +121,9 @@ const (
 	niconicoUploads
 )
 
-var (
-	niconicoVideoID = regexp.MustCompile(`^(?:[a-z]{2})?[0-9]+$`)
-	niconicoNumber  = regexp.MustCompile(`^[0-9]+$`)
-)
+// niconicoVideoID is a video's id: digits, after a two-letter prefix where
+// the id has one.
+var niconicoVideoID = regexp.MustCompile(`^(?:[a-z]{2})?[0-9]+$`)
 
 // niconicoLink tells what a link names: a video, a mylist, a series, a
 // user's uploads, or none of those (0).
@@ -143,7 +135,7 @@ func niconicoLink(u *url.URL) (kind int, id string) {
 		}
 		return 0, ""
 	}
-	if len(segs) >= 2 && segs[0] == "user" && niconicoNumber.MatchString(segs[1]) {
+	if len(segs) >= 2 && segs[0] == "user" && allDigits(segs[1]) {
 		switch {
 		case len(segs) == 2, len(segs) == 3 && segs[2] == "video":
 			return niconicoUploads, segs[1]
@@ -157,9 +149,9 @@ func niconicoLink(u *url.URL) (kind int, id string) {
 		switch {
 		case segs[0] == "watch" && niconicoVideoID.MatchString(segs[1]):
 			return niconicoVideo, segs[1]
-		case segs[0] == "mylist" && niconicoNumber.MatchString(segs[1]):
+		case segs[0] == "mylist" && allDigits(segs[1]):
 			return niconicoMylist, segs[1]
-		case segs[0] == "series" && niconicoNumber.MatchString(segs[1]):
+		case segs[0] == "series" && allDigits(segs[1]):
 			return niconicoSeries, segs[1]
 		}
 	}

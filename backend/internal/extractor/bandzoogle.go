@@ -34,6 +34,7 @@ import (
 // leave a queue failing partway down. The same judgement imagepond's /direct
 // route gets, for the same reason.
 type Bandzoogle struct {
+	about
 	client *httpx.Client
 }
 
@@ -54,19 +55,14 @@ const bandzoogleDestAttr = "data-dest"
 const bandzoogleDefaultExt = ".mp3"
 
 // NewBandzoogle builds the extractor covering every Bandzoogle site.
-func NewBandzoogle(client *httpx.Client) *Bandzoogle { return &Bandzoogle{client: client} }
-
-func (b *Bandzoogle) Name() string { return "bandzoogle" }
-
-// Recognises is the inventory's description.
-func (b *Bandzoogle) Recognises() string {
-	return "pages of Bandzoogle band sites, at any path, whose player lists tracks as " +
-		"`data-zoogle-track` anchors"
-}
-
-// Shape is false: a band's pages are laid out like any site's, so there is
+//
+// It has no shape: a band's pages are laid out like any site's, so there is
 // no form to single a link out by.
-func (b *Bandzoogle) Shape(*url.URL) bool { return false }
+func NewBandzoogle(client *httpx.Client) *Bandzoogle {
+	return &Bandzoogle{client: client, about: about{name: "bandzoogle",
+		recognises: "pages of Bandzoogle band sites, at any path, whose player lists tracks as " +
+			"`data-zoogle-track` anchors"}}
+}
 
 // Recognise takes a page whose player lists at least one track anchor, the
 // element this reads. One with no audio behind it is still the platform's,

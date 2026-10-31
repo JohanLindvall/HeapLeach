@@ -227,6 +227,7 @@ func abs64(v int64) int64 {
 // listing controls every listing renders. A site that moves domain, or one
 // nobody ever listed, is recognised the same way.
 type KVS struct {
+	about
 	client *httpx.Client
 }
 
@@ -235,21 +236,17 @@ type KVS struct {
 const kvsLabel = "kvs"
 
 // NewKVS builds the Kernel Video Sharing extractor.
-func NewKVS(client *httpx.Client) *KVS { return &KVS{client: client} }
-
-func (k *KVS) Name() string { return kvsLabel }
-
-// Recognises is the inventory's description.
-func (k *KVS) Recognises() string {
-	return "Kernel Video Sharing pages — videos, member profiles, searches and listings — carrying " +
-		"the licensed player's configuration or script, or its `list_videos` blocks (asynchronous " +
-		"controls, or a container and its `_items` list)"
+func NewKVS(client *httpx.Client) *KVS {
+	return &KVS{client: client, about: about{name: kvsLabel, shape: kvsShape,
+		recognises: "Kernel Video Sharing pages — videos, member profiles, searches and listings — carrying " +
+			"the licensed player's configuration or script, or its `list_videos` blocks (asynchronous " +
+			"controls, or a container and its `_items` list)"}}
 }
 
-// Shape reports the URL forms worth a probe: a video page under a /videos/
+// kvsShape is the URL forms worth a probe: a video page under a /videos/
 // or /video/ segment, and a member profile. Listings and searches are
 // recognised once fetched, but their paths are every site's.
-func (k *KVS) Shape(u *url.URL) bool {
+func kvsShape(u *url.URL) bool {
 	if kvsVideoPath(u) {
 		return true
 	}

@@ -51,6 +51,7 @@ import (
 // mega until it lifts. The waits are kept by route, so the rest of the queue
 // learns one without asking.
 type Mega struct {
+	about
 	client *httpx.Client
 	// links asks for download links, which go through proxy routes once the
 	// normal connection's quota is used up. It is capped like the other
@@ -88,11 +89,11 @@ var megaPace = Pace{Group: config.GroupMega, Files: 1, PerRoute: true, DirectFir
 
 // NewMega builds the mega extractor.
 func NewMega(client *httpx.Client) *Mega {
-	return &Mega{client: client,
-		links: client.WithTimeout(config.MegaRequestTimeout), endpoint: megaAPI}
+	return &Mega{about: about{name: "mega", shape: megaShape,
+		recognises: "file and folder links (`/file/<handle>#<key>`, `/folder/<handle>#<key>`, `/embed/…`, `#!…!…`) " +
+			"whose page is the MEGA web client's boot shell (`secureboot.js`, `#fmholder`)"},
+		client: client, links: client.WithTimeout(config.MegaRequestTimeout), endpoint: megaAPI}
 }
-
-func (m *Mega) Name() string { return "mega" }
 
 // megaPathShape is a link with the handle in the path: /file/<handle>,
 // /embed/<handle> or /folder/<handle>, the key following in the fragment.
@@ -102,16 +103,10 @@ var megaPathShape = pathShape(`^/(file|embed|folder)/[A-Za-z0-9_-]{8}/?$`)
 // #!<handle>!<key> or #F!<handle>!<key>.
 var megaFragmentShape = regexp.MustCompile(`^F?![A-Za-z0-9_-]{8}!`)
 
-// Recognises is the inventory's description.
-func (m *Mega) Recognises() string {
-	return "file and folder links (`/file/<handle>#<key>`, `/folder/<handle>#<key>`, `/embed/…`, `#!…!…`) " +
-		"whose page is the MEGA web client's boot shell (`secureboot.js`, `#fmholder`)"
-}
-
-// Shape reports a file, folder or embed link in either form. A link without
+// megaShape is a file, folder or embed link in either form. A link without
 // its key still has the shape: it is mega's to explain that the key is
 // missing, which nobody else can.
-func (m *Mega) Shape(u *url.URL) bool {
+func megaShape(u *url.URL) bool {
 	if megaPathShape(u) {
 		return true
 	}

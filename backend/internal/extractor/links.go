@@ -68,6 +68,7 @@ import (
 // results into plain URLs would break every one of those on a queue long
 // enough to matter, which is the only kind of queue it produces.
 type Links struct {
+	about
 	client   *httpx.Client
 	registry *Registry
 }
@@ -84,24 +85,18 @@ const (
 // rather than building one, because what it resolves links with must be the
 // same set of extractors the user already has.
 func NewLinks(client *httpx.Client, registry *Registry) *Links {
-	return &Links{client: client, registry: registry}
+	return &Links{client: client, registry: registry, about: about{name: linksScheme, shape: linksShape,
+		recognises: "a `links:<url>` prefix — every supported link on the page"}}
 }
 
-func (l *Links) Name() string { return linksScheme }
-
-// Shape accepts the harvest prefix and nothing else. ParseURL turns
+// linksShape is the harvest prefix and nothing else. ParseURL turns
 // "links:<page>" into a URL with this scheme, so no page is ever harvested
 // by accident.
-func (l *Links) Shape(u *url.URL) bool { return u.Scheme == linksScheme }
+func linksShape(u *url.URL) bool { return u.Scheme == linksScheme }
 
 // Recognise is the prefix too: there is no page to read, since the registry
 // does not probe a URL of this scheme.
-func (l *Links) Recognise(_ context.Context, p *Page) bool { return l.Shape(p.URL) }
-
-// Recognises is the inventory's description.
-func (l *Links) Recognises() string {
-	return "a `links:<url>` prefix — every supported link on the page"
-}
+func (l *Links) Recognise(_ context.Context, p *Page) bool { return linksShape(p.URL) }
 
 // Extract harvests the page and merges what its links resolve to.
 func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {

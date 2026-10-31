@@ -62,7 +62,7 @@ func TestGofileAccessError(t *testing.T) {
 }
 
 func TestGofileStatusError(t *testing.T) {
-	g := &Gofile{}
+	g := NewGofile(&config.Config{}, nil)
 	if err := g.statusError("error-passwordRequired"); !errors.Is(err, ErrPasswordRequired) {
 		t.Errorf("passwordRequired mapped to %v", err)
 	}
@@ -79,7 +79,7 @@ func TestGofileStatusError(t *testing.T) {
 // an address that keeps signing badly — and a stale account token, which the
 // caller retries with a fresh one.
 func TestGofileExplain(t *testing.T) {
-	g := &Gofile{}
+	g := NewGofile(&config.Config{}, nil)
 	rejected := g.explain(&httpx.StatusError{Code: 401, Body: `{"status":"error-notPremium"}`})
 	if rejected == nil || !strings.Contains(rejected.Error(), "HEAPLEACH_GOFILE_SECRET") {
 		t.Errorf("a rejected signature explained itself as %v", rejected)
@@ -88,13 +88,13 @@ func TestGofileExplain(t *testing.T) {
 		t.Error("a rejected signature did not start the cooldown")
 	}
 
-	if err := (&Gofile{}).explain(&httpx.StatusError{Code: 401, Body: `{"status":"error-wrongToken"}`}); !errors.Is(err, errGofileStaleToken) {
+	if err := NewGofile(&config.Config{}, nil).explain(&httpx.StatusError{Code: 401, Body: `{"status":"error-wrongToken"}`}); !errors.Is(err, errGofileStaleToken) {
 		t.Errorf("a stale token explained itself as %v", err)
 	}
 }
 
 func TestGofileRecognise(t *testing.T) {
-	g := &Gofile{}
+	g := NewGofile(&config.Config{}, nil)
 	shell := `<html><head><title>Gofile — Cloud Storage</title><meta property="og:site_name" content="Gofile">` +
 		`<script src="/js/wt.obf.js"></script><script src="/js/app.js"></script></head><body></body></html>`
 	// Named, but not the app: the share link's form and the name alone are

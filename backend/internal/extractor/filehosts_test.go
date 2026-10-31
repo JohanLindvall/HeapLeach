@@ -212,7 +212,9 @@ func mediafireFolderServer(t *testing.T, chunks map[string]string) (*Share, *ato
 		fmt.Fprintf(w, `{"response":{"result":"Success","folder_content":%s}}`, body)
 	}))
 	t.Cleanup(srv.Close)
-	return &Share{client: testClient(), site: &mediafireSite, api: srv.URL}, &asked
+	share := newShare(testClient(), &mediafireSite)
+	share.api = srv.URL
+	return share, &asked
 }
 
 // TestMediafireFolderPages covers a folder share's chunks: a repeated chunk

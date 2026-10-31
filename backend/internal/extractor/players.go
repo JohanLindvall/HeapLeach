@@ -38,19 +38,16 @@ import (
 // substring offset, the packer's parameters) from the page rather than
 // hard-coding what they were on the day it was written.
 type Player struct {
+	about
 	client *httpx.Client
 	site   *playerSite
 }
 
 // playerSite is one site's row.
 type playerSite struct {
-	name string
-	// shape is the URL forms worth a probe, for the link scanner; recognise
-	// takes a probed page by the player configuration read reads;
-	// recognises describes them for the inventory.
-	shape      func(u *url.URL) bool
-	recognise  func(p *Page) bool
-	recognises string
+	about
+	// recognise takes a probed page by the player configuration read reads.
+	recognise func(p *Page) bool
 	// page is the URL read for a pasted link: the one form of the video's
 	// page that serves its player. Nil reads the link as it is. An error
 	// says the link names no video.
@@ -114,16 +111,8 @@ type playerVideo struct {
 
 // NewPlayer builds the extractor for one row.
 func NewPlayer(client *httpx.Client, site *playerSite) *Player {
-	return &Player{client: client, site: site}
+	return &Player{about: site.about, client: client, site: site}
 }
-
-func (p *Player) Name() string { return p.site.name }
-
-// Recognises is the inventory's description.
-func (p *Player) Recognises() string { return p.site.recognises }
-
-// Shape reports the site's URL forms worth a probe.
-func (p *Player) Shape(u *url.URL) bool { return p.site.shape(u) }
 
 // Recognise reports whether the probed page is the site's player.
 func (p *Player) Recognise(_ context.Context, page *Page) bool { return p.site.recognise(page) }
@@ -140,7 +129,7 @@ func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 	if p.site.page != nil {
 		var err error
 		if page, err = p.site.page(u); err != nil {
-			return nil, fmt.Errorf("%s: %w", p.site.name, err)
+			return nil, fmt.Errorf("%s: %w", p.name, err)
 		}
 	}
 	if p.site.peek != nil {
@@ -148,7 +137,7 @@ func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 		if err != nil {
 			return nil, p.readError(page, err)
 		}
-		title = cmp.Or(title, p.site.name)
+		title = cmp.Or(title, p.name)
 		return &Result{Title: title, Files: []File{p.deferred(page, title)}}, nil
 	}
 	first, title, err := p.resolve(ctx, page)
@@ -187,11 +176,11 @@ func (p *Player) list(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	if read := p.site.listing.links; read != nil {
 		var err error
 		if links, title, note, err = read(ctx, p.client, u, opts); err != nil {
-			return nil, fmt.Errorf("%s: %w", p.site.name, err)
+			return nil, fmt.Errorf("%s: %w", p.name, err)
 		}
 	} else {
 		first, walk := p.site.listing.walk(u)
-		walk.name = p.site.name
+		walk.name = p.name
 		walk.limit, walk.limitNote = listingLimit(opts)
 		var err error
 		if links, title, note, err = walkListing(ctx, p.client, first, walk); err != nil {
@@ -207,7 +196,7 @@ func (p *Player) list(ctx context.Context, u *url.URL, opts Options) (*Result, e
 
 // resolve reads the page once and turns its best rendition into a Target.
 func (p *Player) resolve(ctx context.Context, page string) (*Target, string, error) {
-	name := p.site.name
+	name := p.name
 	video, err := p.site.read(ctx, p.client, page)
 	if err != nil {
 		return nil, "", p.readError(page, err)
@@ -246,9 +235,9 @@ func (p *Player) resolve(ctx context.Context, page string) (*Target, string, err
 func (p *Player) readError(page string, err error) error {
 	if httpx.HasStatus(err, http.StatusNotFound) {
 		return &playerGone{fmt.Sprintf("%s: %s is not there — the site says it was not found or has been removed",
-			p.site.name, page), err}
+			p.name, page), err}
 	}
-	return fmt.Errorf("%s: %w", p.site.name, err)
+	return fmt.Errorf("%s: %w", p.name, err)
 }
 
 // playerGone says a video is gone in words, keeping the reply that said so.

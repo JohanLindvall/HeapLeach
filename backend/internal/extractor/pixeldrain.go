@@ -30,6 +30,7 @@ import (
 // served by an error that says which program is talking than by one that
 // repeats the domain back at them.
 type Pixeldrain struct {
+	about
 	client *httpx.Client
 }
 
@@ -65,9 +66,12 @@ const (
 var pixeldrainPace = Pace{Streams: 1}
 
 // NewPixeldrain builds the pixeldrain extractor.
-func NewPixeldrain(client *httpx.Client) *Pixeldrain { return &Pixeldrain{client: client} }
-
-func (p *Pixeldrain) Name() string { return "pixeldrain" }
+func NewPixeldrain(client *httpx.Client) *Pixeldrain {
+	return &Pixeldrain{client: client, about: about{name: "pixeldrain", shape: pixeldrainLinkShape,
+		recognises: "pixeldrain files, lists and shared directories (`/u/<id>`, `/l/<id>`, `/d/<id>`) " +
+			"served by the software's viewer, which is handed its API root inline, or whose origin's " +
+			"API describes exactly that file, list or directory"}}
+}
 
 // pixeldrainShape is a file (/u/<id>, /f/<id>), a list (/l/<id>) or a
 // shared filesystem path (/d/<id>[/...]).
@@ -84,16 +88,6 @@ const (
 	pixeldrainViewerPath = "/res/svelte/"
 	pixeldrainAPIGlobal  = "window.api_endpoint"
 )
-
-// Recognises is the inventory's description.
-func (p *Pixeldrain) Recognises() string {
-	return "pixeldrain files, lists and shared directories (`/u/<id>`, `/l/<id>`, `/d/<id>`) " +
-		"served by the software's viewer, which is handed its API root inline, or whose origin's " +
-		"API describes exactly that file, list or directory"
-}
-
-// Shape reports a file or list link by the software's own id form.
-func (p *Pixeldrain) Shape(u *url.URL) bool { return pixeldrainLinkShape(u) }
 
 // Recognise takes a link of those forms served by the software's viewer. A
 // page that cannot say is settled by the metadata the API publishes for the

@@ -41,6 +41,7 @@ import (
 // server's — together with the server's nodeinfo naming its software, and
 // nodeinfo again decides how to ask.
 type Fediverse struct {
+	about
 	client *httpx.Client
 
 	// software remembers what each host answered nodeinfo with. Discovery
@@ -144,20 +145,14 @@ func (s *fediSession) host() string { return s.u.Hostname() }
 
 // NewFediverse builds the fediverse extractor.
 func NewFediverse(client *httpx.Client) *Fediverse {
-	return &Fediverse{client: client}
+	return &Fediverse{client: client, about: about{name: "fediverse", shape: fediShape,
+		recognises: "fediverse accounts, communities and posts (`/@name`, `/users/<name>`, `/u/<name>`, " +
+			"`/c/<name>`, `/notes/<id>`, `/notice/<id>`, `/post/<n>`, `/p/<user>/<id>`) on any server " +
+			"whose nodeinfo names its software"}}
 }
 
-func (f *Fediverse) Name() string { return "fediverse" }
-
-// Recognises is the inventory's description.
-func (f *Fediverse) Recognises() string {
-	return "fediverse accounts, communities and posts (`/@name`, `/users/<name>`, `/u/<name>`, " +
-		"`/c/<name>`, `/notes/<id>`, `/notice/<id>`, `/post/<n>`, `/p/<user>/<id>`) on any server " +
-		"whose nodeinfo names its software"
-}
-
-// Shape reports the fediverse's own path conventions.
-func (f *Fediverse) Shape(u *url.URL) bool { return fediTargetOf(u) != nil }
+// fediShape is the fediverse's own path conventions.
+func fediShape(u *url.URL) bool { return fediTargetOf(u) != nil }
 
 // Recognise takes a page of one of those forms on a server whose nodeinfo
 // names the software it runs, which is the document this extractor's
@@ -455,7 +450,7 @@ func fediTargetOf(u *url.URL) *fediTarget {
 	// notes: misskey. notice: pleroma. post: lemmy, whose ids are numeric.
 	case len(segs) == 2 && (segs[0] == "notes" || segs[0] == "notice") && fediIsID(segs[1]):
 		return &fediTarget{kind: fediPost, id: segs[1]}
-	case len(segs) == 2 && segs[0] == "post" && fediIsNumber(segs[1]):
+	case len(segs) == 2 && segs[0] == "post" && len(segs[1]) <= 20 && allDigits(segs[1]):
 		return &fediTarget{kind: fediPost, id: segs[1]}
 
 	// Pixelfed writes a post as /p/<user>/<id>, and the user is needed: see
@@ -498,13 +493,7 @@ func fediIsName(name string) bool { return fediToken(name, 64, fediAlnum+"_-.") 
 // pleroma and misskey use short alphanumeric ones.
 func fediIsID(id string) bool { return fediToken(id, 64, fediAlnum) }
 
-// fediIsNumber reports whether a segment is all digits.
-func fediIsNumber(id string) bool { return fediToken(id, 20, fediDigits) }
-
-const (
-	fediDigits = "0123456789"
-	fediAlnum  = fediDigits + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-)
+const fediAlnum = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 // fediToken reports whether seg is one to most bytes of the characters in
 // set and nothing else.

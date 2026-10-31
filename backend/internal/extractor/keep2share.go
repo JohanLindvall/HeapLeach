@@ -30,6 +30,7 @@ import (
 // a server-specified wait. Both happen at transfer time so a queued file
 // does not spend its download ticket before it can use it.
 type Keep2Share struct {
+	about
 	client *httpx.Client
 	// services are the hosts the app is served from, told apart by the name
 	// their pages give.
@@ -80,15 +81,17 @@ func (s *keep2ShareService) waiting(ctx context.Context) error {
 }
 
 func NewKeep2Share(client *httpx.Client) *Keep2Share {
-	k := &Keep2Share{client: client.WithTimeout(config.Keep2ShareRequestTimeout)}
+	k := &Keep2Share{about: about{name: keep2SharePace.Group, shape: keep2ShareShape,
+		recognises: "file links (`/file/<id>`) whose page is the Keep2Share or FileBoom web app shell " +
+			"(its `entry-index` bundle and `chunk-client` preload on `#root`), named Keep2Share or FileBoom; " +
+			"the name chooses the service's own API"},
+		client: client.WithTimeout(config.Keep2ShareRequestTimeout)}
 	k.services = []*keep2ShareService{
 		{ex: k, label: "Keep2Share", api: "https://k2s.cc/api/v2", files: "https://api.k2s.cc/v1/files"},
 		{ex: k, label: "FileBoom", api: "https://fboom.me/api/v2", files: "https://api.fboom.me/v1/files"},
 	}
 	return k
 }
-
-func (k *Keep2Share) Name() string { return keep2SharePace.Group }
 
 // keep2ShareShape is a file link, /file/<id>, with or without the filename
 // the site appends.
@@ -100,16 +103,6 @@ const (
 	keep2ShareEntryScript = "/static/js/entry-index-"
 	keep2ShareClientChunk = "/static/js/chunk-client-"
 )
-
-// Recognises is the inventory's description.
-func (k *Keep2Share) Recognises() string {
-	return "file links (`/file/<id>`) whose page is the Keep2Share or FileBoom web app shell " +
-		"(its `entry-index` bundle and `chunk-client` preload on `#root`), named Keep2Share or FileBoom; " +
-		"the name chooses the service's own API"
-}
-
-// Shape reports a file link.
-func (k *Keep2Share) Shape(u *url.URL) bool { return keep2ShareShape(u) }
 
 // Recognise takes a file link served by the app shell. The file is
 // described by the API and nothing of it is in the page, deleted or not, so

@@ -90,13 +90,11 @@ func (s *bitchuteStub) start(t *testing.T) *BitChute {
 	t.Cleanup(srv.Close)
 	s.root = srv.URL
 
-	return &BitChute{
-		// No retries: a 404 from this stub is an answer, not a hiccup, and
-		// a test should not wait out a backoff to see it.
-		client: testClient(),
-		api:    srv.URL + "/api/beta",
-		site:   srv.URL,
-	}
+	// No retries: a 404 from this stub is an answer, not a hiccup, and a
+	// test should not wait out a backoff to see it.
+	b := NewBitChute(testClient())
+	b.api, b.site = srv.URL+"/api/beta", srv.URL
+	return b
 }
 
 func (s *bitchuteStub) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
