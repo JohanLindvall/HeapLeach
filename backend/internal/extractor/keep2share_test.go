@@ -669,9 +669,9 @@ func TestKeep2ShareSendsALongTicketWaitBackToTheQueue(t *testing.T) {
 
 	// When it comes round again, the ticket is redeemed: no second CAPTCHA.
 	d.free(httpx.DirectRoute).ready = time.Now()
-	k.mu.Lock()
-	clear(k.cooldowns)
-	k.mu.Unlock()
+	k.cooldowns.mu.Lock()
+	clear(k.cooldowns.until)
+	k.cooldowns.mu.Unlock()
 	if target, err := d.resolve(context.Background()); err != nil || target.URL != "https://cdn.example.test/first-clip" {
 		t.Fatalf("target=%+v error=%v", target, err)
 	}
@@ -762,9 +762,9 @@ func TestKeep2ShareSendsTheWaitBetweenFreeDownloadsBackToTheQueue(t *testing.T) 
 	}
 
 	// Once it is over, the next turn goes ahead.
-	k.mu.Lock()
-	k.cooldowns[httpx.DirectRoute] = time.Now().Add(-time.Second)
-	k.mu.Unlock()
+	k.cooldowns.mu.Lock()
+	k.cooldowns.until[httpx.DirectRoute] = time.Now().Add(-time.Second)
+	k.cooldowns.mu.Unlock()
 	cooling.Store(false)
 	target, err := next.Resolve(context.Background())
 	if err != nil || target.URL != "https://cdn.example.test/first-clip" {

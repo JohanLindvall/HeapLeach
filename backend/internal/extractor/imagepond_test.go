@@ -203,7 +203,7 @@ func TestImagePondName(t *testing.T) {
 
 // imagePondServer serves one page as the viewer would, so Extract can be
 // exercised end to end without the site.
-func imagePondServer(t *testing.T, page string) (*ImagePond, string) {
+func imagePondServer(t *testing.T, page string) (*Share, string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(page))
@@ -414,7 +414,7 @@ func TestImagePondCardLinkReadsTheAlpineExpression(t *testing.T) {
 			if a == nil {
 				t.Fatal("no anchor in the fixture")
 			}
-			if got := imagePondCardLink(a, base); got != tc.want {
+			if got := imagePondCardLink(a, base, imagePondItemPage); got != tc.want {
 				t.Errorf("imagePondCardLink = %q, want %q", got, tc.want)
 			}
 		})

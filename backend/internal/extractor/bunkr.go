@@ -16,7 +16,7 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// Bunkr resolves bunkr file and album pages across its rotating domains
+// bunkr resolves file and album pages across its rotating domains
 // (bunkr.cr, bunkr.si, bunkrr.su, ...).
 //
 // A direct link takes three hops: the file page carries a numeric file id,
@@ -24,9 +24,6 @@ import (
 // signing service issues the token/expiry pair the CDN demands. The signed
 // URL lives about 20 minutes, so album entries resolve lazily at download
 // time rather than up front.
-type Bunkr struct {
-	client *httpx.Client
-}
 
 const (
 	// bunkrSignService issues the token/expiry pair the CDN demands.
@@ -38,9 +35,7 @@ const (
 )
 
 // NewBunkr builds the bunkr extractor.
-func NewBunkr(client *httpx.Client) *Bunkr { return &Bunkr{client: client} }
-
-func (b *Bunkr) Name() string { return "bunkr" }
+func NewBunkr(client *httpx.Client) *Share { return newShare(client, &bunkrSite) }
 
 // bunkrFileShape is a file page: /f/<slug>, and the /v/ viewer older links
 // use. bunkrAlbumShape is an album, /a/<slug>.
@@ -49,69 +44,66 @@ var (
 	bunkrAlbumShape = pathShape(`^/a/[^/]+/?$`)
 )
 
-// Recognises is the inventory's description.
-func (b *Bunkr) Recognises() string {
-	return "file pages (`/f/<slug>`) carrying a numeric `data-file-id`, and albums (`/a/<slug>`) " +
-		"listing `theItem` cards that link to file pages"
-}
-
-// Shape reports a file page or an album.
-func (b *Bunkr) Shape(u *url.URL) bool { return bunkrFileShape(u) || bunkrAlbumShape(u) }
-
-// Recognise reads what Extract goes on to read. A file page must carry the
+// bunkrSite reads what Extract goes on to read. A file page must carry the
 // numeric file id the metadata endpoint is asked about; an album must list
 // at least one card linking to a file page. The site moves between domains
 // often enough that these, rather than any name, are what identify it.
-func (b *Bunkr) Recognise(_ context.Context, p *Page) bool {
-	switch {
-	case bunkrFileShape(p.Final):
-		return p.hasElement(func(n *html.Node) bool {
-			return n.Type == html.ElementNode && attr(n, "data-file-id") != ""
-		})
-	case bunkrAlbumShape(p.Final):
-		return p.hasElement(func(n *html.Node) bool {
-			return hasClass(n, "theItem") && findFirst(n, func(a *html.Node) bool {
-				return isElem(a, atom.A) && isBunkrFilePage(resolveRef(p.Final, attr(a, "href")))
-			}) != nil
-		})
-	}
-	return false
+var bunkrSite = shareSite{
+	name: "bunkr",
+	recognises: "file pages (`/f/<slug>`) carrying a numeric `data-file-id`, and albums (`/a/<slug>`) " +
+		"listing `theItem` cards that link to file pages",
+	forms: []shareForm{
+		{bunkrFileShape, func(p *Page) bool {
+			return p.hasElement(func(n *html.Node) bool {
+				return n.Type == html.ElementNode && attr(n, "data-file-id") != ""
+			})
+		}},
+		{bunkrAlbumShape, func(p *Page) bool {
+			return p.hasElement(func(n *html.Node) bool {
+				return hasClass(n, "theItem") && findFirst(n, func(a *html.Node) bool {
+					return isElem(a, atom.A) && bunkrFilePage(resolveRef(p.Final, attr(a, "href")))
+				}) != nil
+			})
+		}},
+	},
+	extract: bunkrExtract,
 }
 
-// Extract handles both /f/<slug> (one file) and /a/<slug> (an album).
-func (b *Bunkr) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+// bunkrExtract handles both /f/<slug> (one file) and /a/<slug> (an album).
+func bunkrExtract(ctx context.Context, s *Share, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) >= 2 && segs[0] == "a" {
-		return b.album(ctx, u, opts)
+		return bunkrAlbum(ctx, s, u, opts)
 	}
-	name, err := b.pageName(ctx, u)
+	_, name, _, err := bunkrPageInfo(ctx, s, u)
 	if err != nil {
 		return nil, err
 	}
+	name = cmp.Or(name, strings.Join(segs, "-"))
 	return &Result{
 		Title: name,
 		Files: []File{{
 			Name:    name,
 			Size:    -1,
-			Resolve: b.resolver(u.String()),
+			Resolve: bunkrResolver(s, u.String()),
 		}},
 	}, nil
 }
 
-// album lists the file pages an album links to, following its pagination.
+// bunkrAlbum lists the file pages an album links to, following its pagination.
 // Each entry resolves later.
 //
 // Large albums are split across ?page=N, and the nav only ever links a
 // window of them, so the last page number is re-read from every page rather
 // than trusted from the first. Asking for a page past the end serves the
 // last page again, which adds nothing and so ends the walk too.
-func (b *Bunkr) album(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+func bunkrAlbum(ctx context.Context, s *Share, u *url.URL, opts Options) (*Result, error) {
 	title, last := "", 1
 	entries, note, err := walkPages(ctx, pageWalk[bunkrEntry]{
 		key:   func(e bunkrEntry) string { return e.href },
 		limit: opts.maxFiles(), limitNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[bunkrEntry], error) {
-			root, err := b.albumPage(ctx, u, n+1)
+			root, err := bunkrListingPage(ctx, s, u, n+1)
 			if err != nil {
 				return pageOf[bunkrEntry]{}, err
 			}
@@ -120,7 +112,7 @@ func (b *Bunkr) album(ctx context.Context, u *url.URL, opts Options) (*Result, e
 					trimSiteSuffix(firstText(root, atom.Title)))
 			}
 			last = max(last, lastAlbumPage(root))
-			return pageOf[bunkrEntry]{items: b.albumEntries(root, u), next: true, pages: last}, nil
+			return pageOf[bunkrEntry]{items: bunkrAlbumEntries(s, root, u), next: true, pages: last}, nil
 		},
 	})
 	if err != nil {
@@ -142,20 +134,20 @@ type bunkrEntry struct {
 	file File
 }
 
-// albumEntries reads one listing page.
+// bunkrAlbumEntries reads one listing page.
 //
 // The name and size sit on the card, not on the link: the anchor covering
 // each tile is empty and carries only an aria-label. Reading the card means
 // the queue shows real names and sizes straight away instead of a wall of
 // blank rows waiting on 300 separate resolves. Listings that do not use
 // cards fall back to a plain scan for file links.
-func (b *Bunkr) albumEntries(root *html.Node, base *url.URL) []bunkrEntry {
+func bunkrAlbumEntries(s *Share, root *html.Node, base *url.URL) []bunkrEntry {
 	var entries []bunkrEntry
 	seen := make(map[string]bool)
 
 	for _, card := range findAll(root, func(n *html.Node) bool { return hasClass(n, "theItem") }) {
 		link := findFirst(card, func(n *html.Node) bool {
-			return isElem(n, atom.A) && isBunkrFilePage(resolveRef(base, attr(n, "href")))
+			return isElem(n, atom.A) && bunkrFilePage(resolveRef(base, attr(n, "href")))
 		})
 		if link == nil {
 			continue
@@ -182,7 +174,7 @@ func (b *Bunkr) albumEntries(root *html.Node, base *url.URL) []bunkrEntry {
 			// Listings round these, so they are a display hint only.
 			Size:       size,
 			SizeApprox: size > 0,
-			Resolve:    b.resolver(href),
+			Resolve:    bunkrResolver(s, href),
 		}})
 	}
 	if len(entries) > 0 {
@@ -191,21 +183,21 @@ func (b *Bunkr) albumEntries(root *html.Node, base *url.URL) []bunkrEntry {
 
 	for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
 		href := resolveRef(base, attr(a, "href"))
-		if href == "" || !isBunkrFilePage(href) || seen[href] {
+		if href == "" || !bunkrFilePage(href) || seen[href] {
 			continue
 		}
 		seen[href] = true
 		entries = append(entries, bunkrEntry{href: href, file: File{
 			Name:    cmp.Or(strings.TrimSpace(attr(a, "title")), linkLabel(a)),
 			Size:    -1,
-			Resolve: b.resolver(href),
+			Resolve: bunkrResolver(s, href),
 		}})
 	}
 	return entries
 }
 
-// albumPage fetches one page of an album listing.
-func (b *Bunkr) albumPage(ctx context.Context, u *url.URL, page int) (*html.Node, error) {
+// bunkrListingPage fetches one page of an album listing.
+func bunkrListingPage(ctx context.Context, s *Share, u *url.URL, page int) (*html.Node, error) {
 	target := *u
 	query := target.Query()
 	if page > 1 {
@@ -216,7 +208,7 @@ func (b *Bunkr) albumPage(ctx context.Context, u *url.URL, page int) (*html.Node
 	}
 	target.RawQuery = query.Encode()
 
-	root, _, err := fetchRoot(ctx, b.client, &target, httpx.Referer(util.Origin(u)+"/"))
+	root, _, err := fetchRoot(ctx, s.client, &target, httpx.Referer(util.Origin(u)+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("bunkr: fetch album page %d: %w", page, err)
 	}
@@ -243,14 +235,14 @@ func lastAlbumPage(root *html.Node) int {
 	return last
 }
 
-// resolver returns a closure that signs a fresh direct link for a file page.
-func (b *Bunkr) resolver(pageURL string) func(context.Context) (*Target, error) {
+// bunkrResolver returns a closure that signs a fresh direct link for a file page.
+func bunkrResolver(s *Share, pageURL string) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
 		u, err := ParseURL(pageURL)
 		if err != nil {
 			return nil, err
 		}
-		id, name, dlHost, err := b.pageInfo(ctx, u)
+		id, name, dlHost, err := bunkrPageInfo(ctx, s, u)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +253,7 @@ func (b *Bunkr) resolver(pageURL string) func(context.Context) (*Target, error) 
 			Path       string `json:"path"`
 			Original   string `json:"original"`
 		}
-		err = b.client.PostJSON(ctx, dlHost+bunkrMetaPath,
+		err = s.client.PostJSON(ctx, dlHost+bunkrMetaPath,
 			httpx.RefererOrigin(dlHost+"/file/"+id, dlHost),
 			map[string]string{"id": id}, &meta)
 		if err != nil {
@@ -278,7 +270,7 @@ func (b *Bunkr) resolver(pageURL string) func(context.Context) (*Target, error) 
 		filename := cmp.Or(meta.Original, name, util.NameFromURL(raw.Path))
 
 		// Hop 3: the CDN only serves paths carrying a current signature.
-		token, expiry, err := b.sign(ctx, raw.Path)
+		token, expiry, err := bunkrSign(ctx, s, raw.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -299,8 +291,8 @@ func (b *Bunkr) resolver(pageURL string) func(context.Context) (*Target, error) 
 	}
 }
 
-// sign asks the signing service for a token/expiry pair for a storage path.
-func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry string, err error) {
+// bunkrSign asks the signing service for a token/expiry pair for a storage path.
+func bunkrSign(ctx context.Context, s *Share, storagePath string) (token, expiry string, err error) {
 	// The site decodes the pathname before signing, so a path with escaped
 	// characters is signed in its decoded form.
 	decoded, err := url.PathUnescape(storagePath)
@@ -312,7 +304,7 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 		Ex    flexValue `json:"ex"`
 	}
 	endpoint := bunkrSignService + "?path=" + url.QueryEscape(decoded)
-	if err := b.client.GetJSON(ctx, endpoint,
+	if err := s.client.GetJSON(ctx, endpoint,
 		httpx.SiteOrigin(bunkrSignReferer), &out); err != nil {
 		return "", "", fmt.Errorf("bunkr: sign %s: %w", decoded, err)
 	}
@@ -322,12 +314,12 @@ func (b *Bunkr) sign(ctx context.Context, storagePath string) (token, expiry str
 	return out.Token, out.Ex.String(), nil
 }
 
-// pageInfo scrapes a file page for its numeric id, display name and the
+// bunkrPageInfo scrapes a file page for its numeric id, display name and the
 // download host that serves it.
-func (b *Bunkr) pageInfo(ctx context.Context, u *url.URL) (id, name, dlHost string, err error) {
-	root, _, err := fetchRoot(ctx, b.client, u, httpx.Referer(util.Origin(u)+"/"))
+func bunkrPageInfo(ctx context.Context, s *Share, u *url.URL) (id, name, dlHost string, err error) {
+	root, err := s.root(ctx, u, util.Origin(u)+"/")
 	if err != nil {
-		return "", "", "", fmt.Errorf("bunkr: fetch %s: %w", u.Redacted(), err)
+		return "", "", "", err
 	}
 
 	// Asked before anything is read off the page, because everything else on
@@ -372,18 +364,6 @@ func (b *Bunkr) pageInfo(ctx context.Context, u *url.URL) (id, name, dlHost stri
 	return id, name, dlHost, nil
 }
 
-// pageName fetches just the display name of a file page.
-func (b *Bunkr) pageName(ctx context.Context, u *url.URL) (string, error) {
-	_, name, _, err := b.pageInfo(ctx, u)
-	if err != nil {
-		return "", err
-	}
-	if name == "" {
-		name = strings.Join(util.PathSegments(u), "-")
-	}
-	return name, nil
-}
-
 // bunkrUnavailable is bunkr declining to serve a file, in its own words, or
 // "" when the page offers a download.
 //
@@ -393,7 +373,7 @@ func (b *Bunkr) pageName(ctx context.Context, u *url.URL) (string, error) {
 //
 // What is read is the download control being present and disabled, not any
 // particular sentence. On a page bunkr will serve, that control is a link to
-// the download host, which is what pageInfo reads the host out of; on one it
+// the download host, which bunkrPageInfo reads the host out of; on one it
 // will not, the link is replaced by a button carrying `disabled` and a title
 // saying why. Keying on the disabled state leaves the wording free to change,
 // and the wording is then passed through untouched rather than replaced,
@@ -460,15 +440,8 @@ func parseBunkrDownloadHref(href string) (host, id string, ok bool) {
 	return u.Scheme + "://" + u.Host, segs[1], true
 }
 
-// isBunkrFilePage reports whether a link points at a /f/<slug> page.
-func isBunkrFilePage(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) == 2 && segs[0] == "f"
-}
+// bunkrFilePage reports whether a link points at a /f/<slug> page.
+func bunkrFilePage(raw string) bool { return linkPathID(raw, "f") != "" }
 
 // linkLabel picks a readable label out of an anchor.
 func linkLabel(a *html.Node) string {

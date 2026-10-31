@@ -73,21 +73,6 @@ func TestSuvoboxAlbumWithoutTilesIsAnError(t *testing.T) {
 	}
 }
 
-func TestSuvoboxFileID(t *testing.T) {
-	cases := map[string]string{
-		"https://www.suvobox.com/f/aaaa1111?album=abcd": "aaaa1111",
-		"https://www.suvobox.com/f/aaaa1111":            "aaaa1111",
-		"https://www.suvobox.com/a/abcd":                "",
-		"https://www.suvobox.com/takedowns":             "",
-		"://not a url":                                  "",
-	}
-	for link, want := range cases {
-		if got := suvoboxFileID(link); got != want {
-			t.Errorf("suvoboxFileID(%q) = %q, want %q", link, got, want)
-		}
-	}
-}
-
 func TestSuvoboxRecognise(t *testing.T) {
 	s := NewSuvobox(nil)
 	file := `<html><head><meta property="og:title" content="first.jpg"><meta property="og:site_name" content="suvobox"></head>` +

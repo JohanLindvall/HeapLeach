@@ -540,9 +540,7 @@ func TestGofileSecretFromSavedScript(t *testing.T) {
 // TestGofileParsesSavedScript covers the extraction step by step, so a break
 // says which part gave way rather than only that the secret did not come out.
 func TestGofileParsesSavedScript(t *testing.T) {
-	script := gofileHexEscape.ReplaceAllStringFunc(loadSavedScript(t), func(esc string) string {
-		return string(rune(hexByte(esc[2], esc[3])))
-	})
+	script := gofileUnescape(loadSavedScript(t))
 
 	alphabet, err := gofileAlphabet(script)
 	if err != nil {

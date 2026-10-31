@@ -29,7 +29,7 @@ const wetransferNoAccessBody = `{"message":"No download access to this transfer"
 // wetransferServer stands in for the download endpoint. The handler sees the
 // transfer id and the decoded request body, so a test can pin what was asked
 // as well as what came back.
-func wetransferServer(t *testing.T, handle func(id string, body map[string]any) (int, string)) *WeTransfer {
+func wetransferServer(t *testing.T, handle func(id string, body map[string]any) (int, string)) *Share {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		segs := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -49,10 +49,7 @@ func wetransferServer(t *testing.T, handle func(id string, body map[string]any) 
 	}))
 	t.Cleanup(srv.Close)
 
-	return &WeTransfer{
-		client: testClient(),
-		api:    srv.URL,
-	}
+	return &Share{client: testClient(), site: &wetransferSite, api: srv.URL}
 }
 
 func TestWeTransferParse(t *testing.T) {
@@ -185,7 +182,7 @@ func TestWeTransferMintAsksForTheWholeTransfer(t *testing.T) {
 		return http.StatusOK, `{"direct_link":"` + direct + `"}`
 	})
 
-	target, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"})
+	target, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
@@ -222,7 +219,7 @@ func TestWeTransferMintEchoesTheRecipient(t *testing.T) {
 	})
 
 	link := wetransferLink{id: "aaaa1111", recipient: "rcpt3333", hash: "hash2222"}
-	if _, err := w.mint(context.Background(), link); err != nil {
+	if _, err := wetransferMint(context.Background(), w, link); err != nil {
 		t.Fatalf("mint: %v", err)
 	}
 	if seen["recipient_id"] != "rcpt3333" {
@@ -234,7 +231,7 @@ func TestWeTransferMintExplainsAnExpiredTransfer(t *testing.T) {
 	w := wetransferServer(t, func(string, map[string]any) (int, string) {
 		return http.StatusNotFound, wetransferGoneBody
 	})
-	_, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"})
+	_, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"})
 	if err == nil {
 		t.Fatal("an expired transfer resolved to a link")
 	}
@@ -247,7 +244,7 @@ func TestWeTransferMintExplainsARecipientsOnlyTransfer(t *testing.T) {
 	w := wetransferServer(t, func(string, map[string]any) (int, string) {
 		return http.StatusForbidden, wetransferNoAccessBody
 	})
-	_, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"})
+	_, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"})
 	if err == nil {
 		t.Fatal("a recipients-only transfer resolved to a link")
 	}
@@ -262,7 +259,7 @@ func TestWeTransferMintRejectsAnAnswerWithoutALink(t *testing.T) {
 	w := wetransferServer(t, func(string, map[string]any) (int, string) {
 		return http.StatusOK, `{"direct_link":""}`
 	})
-	if _, err := w.mint(context.Background(), wetransferLink{id: "aaaa1111", hash: "hash2222"}); err == nil {
+	if _, err := wetransferMint(context.Background(), w, wetransferLink{id: "aaaa1111", hash: "hash2222"}); err == nil {
 		t.Fatal("an answer with no link resolved to something")
 	}
 }
@@ -362,13 +359,13 @@ func TestWeTransferFollowTakesTheRedirectDestination(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &WeTransfer{client: testClient(), api: srv.URL}
+	w := &Share{client: testClient(), site: &wetransferSite, api: srv.URL}
 	short, err := url.Parse(srv.URL + "/t-abcdef1234")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	landed, err := w.follow(context.Background(), short)
+	landed, err := wetransferFollow(context.Background(), w, short)
 	if err != nil {
 		t.Fatalf("follow: %v", err)
 	}
@@ -394,10 +391,10 @@ func TestWeTransferFollowLandsOnAnErrorPageForADeadCode(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := &WeTransfer{client: testClient(), api: srv.URL}
+	w := &Share{client: testClient(), site: &wetransferSite, api: srv.URL}
 	short, _ := url.Parse(srv.URL + "/t-0000000000")
 
-	landed, err := w.follow(context.Background(), short)
+	landed, err := wetransferFollow(context.Background(), w, short)
 	if err != nil {
 		t.Fatalf("follow: %v", err)
 	}

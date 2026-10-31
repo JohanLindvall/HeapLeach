@@ -124,8 +124,9 @@ of the host its probed page names (probing the page itself when called
 without one, and refusing a page that names neither). A link's form cannot
 tell the hosts apart; only the page can.
 
-Each host keeps its own address cooldowns (one host's wait between free
-downloads says nothing of the other's), notes and log lines carry its label,
+Each host keeps its own address cooldowns, by route in a `routeWaits` as
+mega keeps its quota waits (one host's wait between free downloads says
+nothing of the other's), notes and log lines carry its label,
 and API errors are prefixed with its name in lower case. Pacing is one
 `Pace.Group`, `keep2share`: one free download per address across both hosts,
 one proxy group, one set of proxy statistics. A setting that still names the

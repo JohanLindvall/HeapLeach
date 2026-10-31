@@ -51,7 +51,7 @@ func TestParseBunkrDownloadHref(t *testing.T) {
 }
 
 func TestIsBunkrFilePage(t *testing.T) {
-	if !isBunkrFilePage("https://bunkr.example/f/AAAA") {
+	if !bunkrFilePage("https://bunkr.example/f/AAAA") {
 		t.Error("a /f/<slug> link was not recognised")
 	}
 	for _, raw := range []string{
@@ -59,7 +59,7 @@ func TestIsBunkrFilePage(t *testing.T) {
 		"https://bunkr.example/f/AAAA/extra",
 		"https://bunkr.example/",
 	} {
-		if isBunkrFilePage(raw) {
+		if bunkrFilePage(raw) {
 			t.Errorf("%q was taken for a file page", raw)
 		}
 	}
@@ -90,7 +90,7 @@ func TestBunkrAlbumEntries(t *testing.T) {
 
 	b := NewBunkr(nil)
 	var files []File
-	for _, e := range b.albumEntries(root, base) {
+	for _, e := range bunkrAlbumEntries(b, root, base) {
 		files = append(files, e.file)
 	}
 	if len(files) != 2 {
@@ -135,7 +135,7 @@ const bunkrMaintenancePage = `<html><body>
 </body></html>`
 
 // A healthy page offers the download as a link to the download host, which is
-// what pageInfo reads that host out of.
+// what bunkrPageInfo reads that host out of.
 const bunkrServingPage = `<html><body>
   <div data-file-id="12345"></div>
   <h1>a-clip.mp4</h1>

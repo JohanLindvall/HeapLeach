@@ -3,6 +3,35 @@
 Notes on hosts that store uploaded files. The shared machinery they use is in
 [extractors.md](../extractors.md).
 
+## Share rows
+
+Most of these hosts are one row of a table rather than an extractor of
+their own: `Share` (`shares.go`) is the extractor, and a host is a
+`shareSite` — its name, its inventory line, its link forms and the function
+that reads a recognised link — registered through its `New…` constructor.
+bunkr, cyberdrop, dropbox, emload, filejump, filester, imagepond, mediafire,
+pixhost, suvobox, turbo and wetransfer are rows. A form is a `shape`, which
+is what the link scanner follows, and a `recognise`, which takes a probed
+page whose *final* URL has that shape; the first form the final URL has
+decides, as the switch each host used to carry did. A form without
+`recognise` is a link that only redirects to another form (wetransfer's
+short links, mediafire's oldest `/?<key>`), followed for its form and never
+recognised in its own right. `extract` reads the link as the host always
+has, its own checks and error texts included. A row may cap its requests
+(`timeout`, emload) or name an API base a test serves through `Share.api`
+(mediafire, wetransfer).
+
+Recognition still never reads a host: `TestShareFormsNeverReadTheHost`
+applies `TestRecognitionNeverReadsTheHost`'s rule inside every row's forms.
+What the rows share besides — `Share.root` for a page fetched with the
+host's referer, failing as "<host>: fetch <url>: …", `albumTitle` for a job
+named after an album page, `linkPathID` for a listing's `/<kind>/<id>`
+links and `enabledControl` for a download button a page has not disabled —
+is in `shares.go` too. gofile, mega, keep2share and pixeldrain keep types of
+their own, since they hold state (tokens, quotas, cooldowns) or recognise by
+asking an API, and Google Drive does because it recognises a link by the
+submitted URL as well as the final one.
+
 ## Nested folders
 
 gofile, mediafire, pixeldrain and filester folder shares are trees, and each
@@ -152,8 +181,9 @@ on through another at no cost to its retries. Without proxies the file waits
 in the queue for the quota. Links are asked for over https (`ssl: 2`), so a
 proxy carries the bytes in a tunnel it cannot read or alter.
 
-The waits are kept by route on the `Mega` value (`spent`), with the normal
-connection under `httpx.DirectRoute` as Keep2Share keeps its cooldowns, so a
+The waits are kept by route on the `Mega` value (`spent`, a `routeWaits`),
+with the normal connection under `httpx.DirectRoute`, in the same store
+Keep2Share keeps its cooldowns in, so a
 route known to be spent is answered from memory and the rest of the queue
 learns a wait from the first file that met it. Link requests use a client
 capped at `MegaRequestTimeout`, since they go through public proxies, and the
@@ -214,9 +244,10 @@ left off. The site moves between top-level domains, all serving one API; the
 page is recognised by its download script and button, so a move needs
 nothing here.
 
-Folder shares use `/f/<id>`. `filesterfolder.go` reads only `filesGrid` cards:
-their `onclick` names the file page, `data-name` preserves the original name,
-and `data-size` is an exact byte count, unlike the rounded visible size. It
+Folder shares use `/f/<id>`. The folder half of `filester.go` reads only
+`filesGrid` cards: their `onclick` names the file page, `data-name`
+preserves the original name, and `data-size` is an exact byte count, unlike
+the rounded visible size. It
 starts at page one, follows the folder's own next-page links, deduplicates
 files, and walks `subfoldersGrid` links through the shared tree walk
 ([above](#nested-folders)). Each folder's pages go through `walkPages`, keyed

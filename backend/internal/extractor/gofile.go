@@ -197,10 +197,14 @@ func (g *Gofile) lister(token, password string) treeList[*gofileContent] {
 // file is one listed file as a download.
 func (g *Gofile) file(c *gofileContent, token string) *File {
 	file := File{
-		Name:    cmp.Or(c.Name, util.NameFromURL(c.Link)),
-		URL:     c.Link,
-		Size:    c.Size,
-		Headers: g.downloadHeaders(token),
+		Name: cmp.Or(c.Name, util.NameFromURL(c.Link)),
+		URL:  c.Link,
+		Size: c.Size,
+		// What the CDN needs to serve the file to us.
+		Headers: httpx.Header{
+			httpx.HeaderCookie:  gofileCookie + "=" + token,
+			httpx.HeaderReferer: gofileRoot + "/",
+		},
 	}
 	// A gofile file often lives on several storage servers, and a busy
 	// one answers with a redirect to the web page instead of bytes.
@@ -214,14 +218,6 @@ func (g *Gofile) file(c *gofileContent, token string) *File {
 		file = Mirrored(file, MirrorHosts(c.Link, hosts))
 	}
 	return &file
-}
-
-// downloadHeaders are what the CDN needs to serve the file to us.
-func (g *Gofile) downloadHeaders(token string) httpx.Header {
-	return httpx.Header{
-		httpx.HeaderCookie:  gofileCookie + "=" + token,
-		httpx.HeaderReferer: gofileRoot + "/",
-	}
 }
 
 var errGofileStaleToken = errors.New("gofile: account token rejected")

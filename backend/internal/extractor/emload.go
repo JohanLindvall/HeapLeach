@@ -15,46 +15,35 @@ import (
 	"golang.org/x/net/html"
 )
 
-// Emload reads the free download control on a file share. The page carries
+// emload reads the free download control on a file share. The page carries
 // a storage server and a per-visit token; read both on the worker's route.
 // Restricted pages can carry those attributes too, so the token alone does
 // not establish that the site offers a free download.
-type Emload struct {
-	client *httpx.Client
-}
 
-func NewEmload(client *httpx.Client) *Emload {
-	return &Emload{client: client.WithTimeout(config.EmloadRequestTimeout)}
-}
-
-func (e *Emload) Name() string { return "emload" }
+// NewEmload builds the emload extractor.
+func NewEmload(client *httpx.Client) *Share { return newShare(client, &emloadSite) }
 
 // emloadShape is a file share, /v2/file/<id>[/<name>] or the older
 // /file/<id>[/<name>].
 var emloadShape = pathShape(`^(/v2)?/file/[A-Za-z0-9_=+%-]+(/[^/]*)?/?$`)
 
-// Recognises is the inventory's description.
-func (e *Emload) Recognises() string {
-	return "file shares (`/v2/file/<id>/<name>`) whose page carries the `dl-file` download panel, " +
-		"or its removed-file or password notice"
-}
-
-// Shape reports a file share.
-func (e *Emload) Shape(u *url.URL) bool { return emloadShape(u) }
-
-// Recognise takes a share page by the panel the resolver reads, the
+// emloadSite takes a share page by the panel the resolver reads, the
 // dl-file block holding the name and the free-download control, or by the
 // notices the resolver reports in its place.
-func (e *Emload) Recognise(_ context.Context, p *Page) bool {
-	if !emloadShape(p.Final) {
-		return false
-	}
-	return p.hasElement(func(n *html.Node) bool {
-		return hasClass(n, "dl-file") || hasClass(n, "nofile") || hasClass(n, "_filepassw")
-	})
+var emloadSite = shareSite{
+	name: "emload",
+	recognises: "file shares (`/v2/file/<id>/<name>`) whose page carries the `dl-file` download panel, " +
+		"or its removed-file or password notice",
+	forms: []shareForm{{emloadShape, func(p *Page) bool {
+		return p.hasElement(func(n *html.Node) bool {
+			return hasClass(n, "dl-file") || hasClass(n, "nofile") || hasClass(n, "_filepassw")
+		})
+	}}},
+	extract: emloadExtract,
+	timeout: config.EmloadRequestTimeout,
 }
 
-func (e *Emload) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
+func emloadExtract(_ context.Context, s *Share, u *url.URL, _ Options) (*Result, error) {
 	parts := util.PathSegments(u)
 	if len(parts) > 0 && parts[0] == "v2" {
 		parts = parts[1:]
@@ -75,7 +64,7 @@ func (e *Emload) Extract(_ context.Context, u *url.URL, _ Options) (*Result, err
 		Name: name, Size: -1,
 		Pace: &Pace{Group: config.GroupEmload, Files: 1, Streams: 1, PerRoute: true},
 		Resolve: func(ctx context.Context) (*Target, error) {
-			fresh, err := e.page(ctx, page.String())
+			fresh, err := emloadRead(ctx, s, page.String())
 			if err != nil {
 				return nil, err
 			}
@@ -93,8 +82,9 @@ type emloadPage struct {
 	limited             bool
 }
 
-func (e *Emload) page(ctx context.Context, raw string) (*emloadPage, error) {
-	doc, final, err := e.client.GetPage(ctx, raw, nil, nil)
+// emloadRead reads a share page afresh, on the route of the request in ctx.
+func emloadRead(ctx context.Context, s *Share, raw string) (*emloadPage, error) {
+	doc, final, err := s.client.GetPage(ctx, raw, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("emload: fetch share: %w", err)
 	}
@@ -147,7 +137,7 @@ func (e *Emload) page(ctx context.Context, raw string) (*emloadPage, error) {
 		return nil, fmt.Errorf("emload: download server is down for maintenance")
 	}
 	button := findFirst(file, func(n *html.Node) bool {
-		return hasClass(n, "init-free-download") && !hasAttr(n, "disabled") && attr(n, "aria-disabled") != "true"
+		return hasClass(n, "init-free-download") && enabledControl(n)
 	})
 	if button == nil {
 		message := strings.ToLower(textOf(file))

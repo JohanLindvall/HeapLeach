@@ -69,9 +69,9 @@ func TestCyberdropAlbumListsEveryFileOnce(t *testing.T) {
 	}
 	root := mustParseDoc(t, cyberdropAlbumPage)
 
-	res, err := NewCyberdrop(nil).albumFrom(root, u)
+	res, err := cyberdropAlbum(NewCyberdrop(nil), root, u)
 	if err != nil {
-		t.Fatalf("albumFrom: %v", err)
+		t.Fatalf("cyberdropAlbum: %v", err)
 	}
 	// The heading's text is padded; its attribute is the name verbatim.
 	if res.Title != "a holiday album" {
@@ -135,7 +135,7 @@ func TestCyberdropAlbumWithoutEntriesIsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewCyberdrop(nil).albumFrom(root, u); err == nil {
+	if _, err := cyberdropAlbum(NewCyberdrop(nil), root, u); err == nil {
 		t.Fatal("an album naming no files resolved to something")
 	}
 }
@@ -176,8 +176,8 @@ func TestCyberdropSlug(t *testing.T) {
 		"://not a url":                        "",
 	}
 	for link, want := range cases {
-		if got := cyberdropSlug(link); got != want {
-			t.Errorf("cyberdropSlug(%q) = %q, want %q", link, got, want)
+		if got := linkPathID(link, "f", "e"); got != want {
+			t.Errorf("linkPathID(%q) = %q, want %q", link, got, want)
 		}
 	}
 }
