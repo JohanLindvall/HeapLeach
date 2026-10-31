@@ -8,14 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -373,7 +371,8 @@ func (n *Niconico) grant(ctx context.Context, id string, watch *niconicoWatch) (
 		return "", "", fmt.Errorf("niconico: %s: ask for the stream: %w", id, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
+	// Read whole or not at all: a grant cut at the limit could still parse.
+	raw, err := httpx.ReadBody(resp.Body)
 	if err != nil {
 		return "", "", fmt.Errorf("niconico: %s: ask for the stream: %w", id, err)
 	}

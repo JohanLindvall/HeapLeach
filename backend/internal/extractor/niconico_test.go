@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -280,5 +281,51 @@ func TestNiconicoListsMylistsSeriesAndUploads(t *testing.T) {
 	u, _ := url.Parse("https://www.nicovideo.jp/mylist/9999")
 	if _, err := n.Extract(context.Background(), u, Options{}); err == nil || !strings.Contains(err.Error(), "private, or does not exist") {
 		t.Errorf("a missing mylist: %v", err)
+	}
+}
+
+// The grant is a complete buffered body, held to the same bound as every
+// other: an answer exactly at the limit is read whole and granted, with
+// its cookie; one a byte longer is refused as too large rather than read
+// as its first MaxResponseBytes, even when that prefix is a valid grant;
+// a refusal keeps quoting the answer it got.
+func TestNiconicoGrantIsReadWholeOrRefused(t *testing.T) {
+	grant := `{"meta": {"status": 201}, "data": {"contentUrl": "https://stream.example.test/master.m3u8"}}`
+	padded := func(n int) string { return grant + strings.Repeat(" ", n-len(grant)) }
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		want       string
+		tooLarge   bool
+	}{
+		{"exactly at the limit", padded(config.MaxResponseBytes), http.StatusCreated, "https://stream.example.test/master.m3u8", false},
+		{"one byte past it", padded(config.MaxResponseBytes + 1), http.StatusCreated, "", true},
+		{"a refusal", `{"meta": {"status": 403, "errorCode": "AN_INVENTED_REFUSAL"}}`, http.StatusForbidden, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.SetCookie(w, &http.Cookie{Name: "domand_bid", Value: "an-invented-cookie", Path: "/"})
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(srv.Close)
+			n := niconicoWith(srv)
+			master, cookie, err := n.grant(t.Context(), "sm1001", &niconicoWatch{video: "v", audio: "a", key: "k", track: "t"})
+			switch {
+			case tc.want != "":
+				if err != nil || master != tc.want || cookie != "an-invented-cookie" {
+					t.Errorf("master %q cookie %q err %v", master, cookie, err)
+				}
+			case tc.tooLarge:
+				if err == nil || !httpx.IsTooLarge(err) {
+					t.Errorf("master %q err %v, want the answer refused as too large", master, err)
+				}
+			default:
+				if err == nil || !strings.Contains(err.Error(), "the stream was not granted (403 Forbidden: ") ||
+					!strings.Contains(err.Error(), "AN_INVENTED_REFUSAL") {
+					t.Errorf("err %v, want the refusal quoted", err)
+				}
+			}
+		})
 	}
 }

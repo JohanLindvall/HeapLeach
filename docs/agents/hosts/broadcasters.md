@@ -451,7 +451,9 @@ video in the JSON of a `<meta name="server-response">`: the qualities on offer
 (`media.domand`, video and audio apart, each marked available or not without
 an account), a key to ask with (`accessRightKey`), and the player's track id.
 POSTed one video and one audio quality, the access-rights API mints an HLS
-master for the pair and sets a `domand_bid` cookie. The segments sit on signed
+master for the pair and sets a `domand_bid` cookie. The grant is POSTed with
+`NewRequest`/`Do` for that cookie and read whole with `httpx.ReadBody`, so an
+answer past the limit is refused rather than read as its prefix. The segments sit on signed
 links anyone can fetch, but the AES-128 key answers 403 without that cookie,
 so it rides in the transfer's headers rather than being left to the jar. The
 audio is a rendition of its own, and the parts are fragmented MP4 under
