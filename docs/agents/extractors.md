@@ -361,6 +361,17 @@ intact. `sources.go` holds what they share:
   **first**: a listing cut short and returned as a success would be saved
   as if it were the whole listing. `FanOut` remains for callers that only
   fill values and need no outcomes (`Autoindex.readAll`).
+- The `PageFetchConcurrency` bound is per map, not per extraction: a
+  listing whose items are listings (source expansion through the registry,
+  a WordPress category's posts) multiplies it, and every top-level job the
+  manager resolves at once multiplies it again.
+  `TestNestedListingsMultiplyTheirBound` measures that baseline (36 leaves
+  in flight for one nested job, 72 for two). An extraction-wide request
+  admission is a separate change: it belongs around the metadata I/O
+  itself, not a parent waiting on its children (which would deadlock), and
+  must leave transfers and deferred resolvers to their own policies.
+  `config.SourceBatchRounds` sizes source expansion's batches, not the
+  bound.
 
 ### Caps
 

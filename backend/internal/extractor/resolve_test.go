@@ -296,3 +296,52 @@ func TestSummariseCountsItems(t *testing.T) {
 		t.Errorf("summary = %+v (not started %d)", s, s.notStarted())
 	}
 }
+
+// TestNestedListingsMultiplyTheirBound measures what nested expansion asks
+// at once today: the bound holds per map, not per extraction, so a listing
+// whose items are listings reaches PageFetchConcurrency² leaves in flight,
+// and each concurrent root job multiplies that again. It is the baseline an
+// extraction-wide request admission is to be measured against (see C in
+// docs/scraper-reuse-investigation.md); when one lands, this test is where
+// its bound is pinned instead.
+func TestNestedListingsMultiplyTheirBound(t *testing.T) {
+	c := config.PageFetchConcurrency
+	for _, roots := range []int{1, 2} {
+		t.Run(fmt.Sprint(roots, " roots"), func(t *testing.T) {
+			want := int32(roots * c * c)
+			var active, peak, total atomic.Int32
+			reached := make(chan struct{})
+			var once atomic.Bool
+			leaf := func(context.Context, int) (int, error) {
+				total.Add(1)
+				n := active.Add(1)
+				for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+				}
+				if n == want && once.CompareAndSwap(false, true) {
+					close(reached)
+				}
+				// Held until every leaf the bounds allow is in flight, or a
+				// second has passed: the peak is then exactly what the
+				// bounds permit rather than what the scheduler managed.
+				select {
+				case <-reached:
+				case <-time.After(time.Second):
+				}
+				active.Add(-1)
+				return 0, nil
+			}
+			listing := func(ctx context.Context, _ int) (int, error) {
+				resolveOutcomes(ctx, make([]int, c), false, leaf)
+				return 0, nil
+			}
+			resolveOutcomes(context.Background(), make([]int, roots), false, func(ctx context.Context, _ int) (int, error) {
+				resolveOutcomes(ctx, make([]int, c), false, listing)
+				return 0, nil
+			})
+			t.Logf("%d root jobs: peak %d leaves in flight, %d leaves in all", roots, peak.Load(), total.Load())
+			if peak.Load() != want || total.Load() != want {
+				t.Errorf("peak %d of %d leaves, want %d", peak.Load(), total.Load(), want)
+			}
+		})
+	}
+}

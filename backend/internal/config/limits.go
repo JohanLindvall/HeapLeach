@@ -622,6 +622,13 @@ const (
 	// a burst of small requests at a single host, not a download.
 	PageFetchConcurrency = 6
 
+	// SourceBatchRounds is how many rounds of PageFetchConcurrency slots a
+	// source expansion resolves before it checks the file cap: enough that a
+	// slow source holds up little, few enough that the cap overshoots by a
+	// handful of requests. The bound on requests in flight is still
+	// PageFetchConcurrency per map; this sizes only the batch.
+	SourceBatchRounds = 4
+
 	// MaxAlbumPages bounds how far a paginated album listing is followed.
 	// Listings also stop early once a page adds nothing new, so this is a
 	// backstop against a site that keeps answering with the last page.
