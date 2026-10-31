@@ -482,8 +482,14 @@ line in the saved queue.
   the sources that did not resolve (`expansion.refusals`, `failed`), so a
   page none of whose sources resolved says why through `noneRead`; a link no
   extractor recognised is counted apart (`unrecognised`), never a failure.
-- `hlsMedia.file`/`hlsMedia.target` (`hls.go`) and `Target.file`: a resolved
-  playlist or target as a File, every field carried over.
+- `hlsMedia.file`/`hlsMedia.target` (`hls.go`), `Target.file` and
+  `File.target`: a resolved playlist or target as a File and back, every
+  media field carried over — segments, key, audio and subtitles. Build a
+  Target from a File only through `File.target`: the downloader replaces an
+  item's key and tracks whenever a target has segments, so a hand-built
+  conversion that drops a field clears it. Control fields (`Resolve`,
+  `Check`, `Cipher`, `Pace`, `Reject`, `Discard`, the directory) are not
+  media and stay with their owners.
 - `rankIn` (`renditions.go`, with the rendition model `bestCandidate` ranks): a name's place in a quality ladder, ignoring case,
   with the caller choosing the value for a name not on it.
 - `knownSize` and `parsedSize` (`extractor.go`): a stated byte count as

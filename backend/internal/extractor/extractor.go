@@ -253,6 +253,33 @@ func (t *Target) file(dir string) File {
 	}
 }
 
+// target is the Target a file's media describes, for a caller holding a File
+// that must answer as a resolver: a source read again, or an attachment an
+// eager listing already described. It carries the address, headers, name
+// and every media field the two share — segments, key, audio and subtitles —
+// so a playlist read again replaces all of them downstream rather than
+// keeping stale tracks or dropping fresh ones. A size the listing only
+// approximated becomes unknown, and a playlist without a URL answers with
+// its first segment, which the downloader requires of a resolved target.
+//
+// The control fields stay with their owners: Resolve, Refresh, Check,
+// Cipher, Pace, Reject and the directory belong to the File, and Discard to
+// a resolver whose links are bound to an address. Callers that must invoke
+// an existing Resolve or refuse an External handoff do so before this.
+func (f *File) target() *Target {
+	link, size := f.URL, f.Size
+	if link == "" && len(f.Segments) > 0 {
+		link = f.Segments[0]
+	}
+	if f.SizeApprox {
+		size = -1
+	}
+	return &Target{
+		URL: link, Name: f.Name, Size: size, Headers: f.Headers,
+		Segments: f.Segments, SegmentKey: f.SegmentKey, Audio: f.Audio, Subtitles: f.Subtitles,
+	}
+}
+
 // refreshing is a resolved target as its file, read again by resolve when
 // its transfer starts, for a link signed for less time than a queue can
 // take.

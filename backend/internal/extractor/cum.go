@@ -321,7 +321,7 @@ func (l *cumPostLoader) resolve(ctx context.Context, hash string) (*Target, erro
 	if file.Resolve != nil {
 		return file.Resolve(ctx)
 	}
-	return &Target{URL: file.URL, Name: file.Name, Size: file.Size, Headers: file.Headers}, nil
+	return file.target(), nil
 }
 
 var cumEdgesRE = regexp.MustCompile(`\bEDGE_BASE_URLS\s*:\s*("(?:[^"\\]|\\.)*")`)

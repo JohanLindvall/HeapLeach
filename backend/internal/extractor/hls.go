@@ -505,10 +505,9 @@ func (m *hlsMedia) file(name string, headers httpx.Header) File {
 // target is the playlist as a freshly resolved Target, for a resolver that
 // reads a signed playlist again at transfer time.
 func (m *hlsMedia) target(link, name string, headers httpx.Header) *Target {
-	return &Target{
-		URL: link, Name: name, Size: -1, Headers: headers,
-		Segments: m.Segments, SegmentKey: m.Key, Audio: m.Audio, Subtitles: m.Subtitles,
-	}
+	file := m.file(name, headers)
+	file.URL = link
+	return file.target()
 }
 
 // extension names the container the downloaded file will be in: an MP4 when
