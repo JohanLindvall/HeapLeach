@@ -502,18 +502,25 @@ func peerTubeListingResult(ctx context.Context, client *httpx.Client, u *url.URL
 		title = strings.Trim(u.Path, "/")
 	}
 
-	files, refusals, failed := peerTubeExpand(ctx, client, u, ids, opts)
-	// Expansion skips a video it cannot read, which is right for one bad
-	// entry and wrong for a cancelled run: every remaining video would be
-	// "skipped" and the job would look like a complete, much shorter
-	// channel. A cancellation is reported as one.
-	if err := ctx.Err(); err != nil {
+	// Each video's own record is read, several at a time. One that will
+	// not load is skipped rather than failing the job: on a channel of
+	// hundreds — where a single entry may be a live stream, or still
+	// transcoding — the rest are still worth having.
+	files, refused, err := readListing(ctx, peerTubeLabel, "videos", u.Redacted(), ids,
+		func(ctx context.Context, id string) ([]File, error) {
+			files, _, err := peerTubeVideoFiles(ctx, client, u, id, opts)
+			return files, err
+		})
+	// Skipping is right for one bad entry and wrong for a cancelled run:
+	// every remaining video would be "skipped" and the job would look like
+	// a complete, much shorter channel. A cancellation is reported as one.
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
-		return nil, noneRead(peerTubeLabel, len(ids), "videos", u.Redacted(), refusals, failed)
-	}
-	return &Result{Title: title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refused)}, nil
 }
 
 // peerTubeOwnerName reads the display name of the channel, account or
@@ -568,21 +575,6 @@ func peerTubeListVideos(ctx context.Context, client *httpx.Client, endpoint stri
 			}
 			return pageOf[string]{items: ids, next: true, end: len(page.Data) == 0, total: page.Total}, nil
 		},
-	})
-}
-
-// peerTubeExpand reads every listed video's own record, several at a time.
-//
-// One video that will not load is skipped rather than failing the job: on a
-// channel of hundreds — where a single entry may be a live stream, or still
-// transcoding — the rest are still worth having. Why each was skipped comes
-// back beside the files, for when none could be read.
-func peerTubeExpand(ctx context.Context, client *httpx.Client, u *url.URL,
-	ids []string, opts Options) (files []File, refusals []string, failed error) {
-
-	return resolveFiles(ctx, ids, func(ctx context.Context, id string) ([]File, error) {
-		files, _, err := peerTubeVideoFiles(ctx, client, u, id, opts)
-		return files, err
 	})
 }
 

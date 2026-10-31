@@ -173,8 +173,8 @@ func TestMediaPageOpenGraph(t *testing.T) {
 		if found.Quality != 720 {
 			t.Errorf("quality = %d, want the height the page states", found.Quality)
 		}
-		if found.Size != -1 {
-			t.Errorf("size = %d, want -1: the page stated no length", found.Size)
+		if found.Size > 0 {
+			t.Errorf("size = %d, want none: the page stated no length", found.Size)
 		}
 	})
 

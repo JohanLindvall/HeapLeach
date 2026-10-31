@@ -113,17 +113,13 @@ func (v *Vimeo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 	if err != nil {
 		return nil, err
 	}
-	file := video.file
-	kind := video.kind
-	file.Resolve = func(ctx context.Context) (*Target, error) {
-		fresh, err := v.read(ctx, player, kind)
+	file := refreshing(video.target, func(ctx context.Context) (*Target, error) {
+		fresh, err := v.read(ctx, player, video.kind)
 		if err != nil {
 			return nil, err
 		}
-		f := fresh.file
-		return &Target{URL: f.URL, Name: f.Name, Size: -1, Headers: f.Headers,
-			Segments: f.Segments, SegmentKey: f.SegmentKey, Audio: f.Audio, Subtitles: f.Subtitles}, nil
-	}
+		return fresh.target, nil
+	})
 	return &Result{Title: video.title, Files: []File{file}}, nil
 }
 
@@ -154,12 +150,11 @@ type vimeoConfig struct {
 	} `json:"video"`
 }
 
-// vimeoVideo is one reading of a player page: the file it plays, which of
-// the two kinds of stream that file is, and the video's title.
+// vimeoVideo is one reading of a player page: what it plays, which of the
+// two kinds of stream that is, and the video's title.
 type vimeoVideo struct {
-	file  File
-	kind  string
-	title string
+	target      *Target
+	kind, title string
 }
 
 // The two kinds of stream a video is fetched as.
@@ -186,17 +181,17 @@ func (v *Vimeo) read(ctx context.Context, player, kind string) (*vimeoVideo, err
 
 	var hlsErr error
 	if kind != vimeoProgressive {
-		file, err := v.hls(ctx, cfg, title, headers)
+		target, err := v.hls(ctx, cfg, title, headers)
 		if err == nil {
-			return &vimeoVideo{file: *file, kind: vimeoHLS, title: title}, nil
+			return &vimeoVideo{target: target, kind: vimeoHLS, title: title}, nil
 		}
 		if kind == vimeoHLS || ctx.Err() != nil {
 			return nil, fmt.Errorf("vimeo: %s: %w", player, err)
 		}
 		hlsErr = err
 	}
-	if file, ok := vimeoProgressiveFile(cfg, title, headers); ok {
-		return &vimeoVideo{file: file, kind: vimeoProgressive, title: title}, nil
+	if target := vimeoProgressiveTarget(cfg, title, headers); target != nil {
+		return &vimeoVideo{target: target, kind: vimeoProgressive, title: title}, nil
 	}
 	if vimeoDRM(cfg) {
 		return nil, fmt.Errorf("vimeo: %s is DRM-protected in every form it is offered in, "+
@@ -233,10 +228,10 @@ func (v *Vimeo) config(ctx context.Context, player string) (*vimeoConfig, error)
 	return &cfg, nil
 }
 
-// hls resolves the configuration's HLS master into the file: its video, and
+// hls resolves the configuration's HLS master: its video, and
 // every audio and subtitle track beside it. The AVC master is preferred, the
 // one every player decodes.
-func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers httpx.Header) (*File, error) {
+func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers httpx.Header) (*Target, error) {
 	if vimeoLive(cfg) {
 		return nil, errors.New("this is a live event, which has no end to download to")
 	}
@@ -265,13 +260,12 @@ func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers
 	if err != nil {
 		return nil, err
 	}
-	file := media.target(master, title+media.extension(), headers).file("")
-	return &file, nil
+	return media.target(master, title+media.extension(), headers), nil
 }
 
-// vimeoProgressiveFile is the tallest progressive MP4 the configuration
-// offers, one file carrying audio and video together.
-func vimeoProgressiveFile(cfg *vimeoConfig, title string, headers httpx.Header) (File, bool) {
+// vimeoProgressiveTarget is the tallest progressive MP4 the configuration
+// offers, one file carrying audio and video together, or nil.
+func vimeoProgressiveTarget(cfg *vimeoConfig, title string, headers httpx.Header) *Target {
 	files := cfg.Request.Files.Progressive
 	best := -1
 	for i, f := range files {
@@ -280,9 +274,9 @@ func vimeoProgressiveFile(cfg *vimeoConfig, title string, headers httpx.Header) 
 		}
 	}
 	if best < 0 {
-		return File{}, false
+		return nil
 	}
-	return File{Name: title + ".mp4", URL: files[best].URL, Size: -1, Headers: headers}, true
+	return &Target{Name: title + ".mp4", URL: files[best].URL, Size: -1, Headers: headers}
 }
 
 // vimeoDRM reports a configuration that names DRM for the video.

@@ -193,10 +193,10 @@ const epornerProfileMarkup = `<!DOCTYPE html><html><head><title>Someone's upload
 func TestEpornerListingIgnoresWhatTheTabDoesNotOwn(t *testing.T) {
 	root := mustParseDoc(t, epornerProfileMarkup)
 	got := epornerListing(root, "https://www.eporner.com/profile/Someone/uploaded-videos/", map[string]bool{})
-	want := []epornerVideo{
-		{Page: "https://www.eporner.com/video-Sidebar001/first-clip/", Title: "First Clip"},
-		{Page: "https://www.eporner.com/video-Second002/second-clip/", Title: "Second Clip"},
-		{Page: "https://www.eporner.com/video-Third003/third-clip/", Title: "Third Clip"},
+	want := []listingLink{
+		{url: "https://www.eporner.com/video-Sidebar001/first-clip/", title: "First Clip"},
+		{url: "https://www.eporner.com/video-Second002/second-clip/", title: "Second Clip"},
+		{url: "https://www.eporner.com/video-Third003/third-clip/", title: "Third Clip"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("collected %d videos, want %d — the sidebar's Foreign999 must not be among them: %+v", len(got), len(want), got)
@@ -207,8 +207,8 @@ func TestEpornerListingIgnoresWhatTheTabDoesNotOwn(t *testing.T) {
 		}
 	}
 	for _, v := range got {
-		if strings.Contains(v.Page, "Foreign999") {
-			t.Errorf("a video from outside the tab was collected: %q", v.Page)
+		if strings.Contains(v.url, "Foreign999") {
+			t.Errorf("a video from outside the tab was collected: %q", v.url)
 		}
 	}
 }
@@ -218,7 +218,7 @@ func TestEpornerListingSkipsWhatWasAlreadySeen(t *testing.T) {
 	root := mustParseDoc(t, epornerProfileMarkup)
 	seen := map[string]bool{"Sidebar001": true, "Second002": true}
 	got := epornerListing(root, "https://www.eporner.com/profile/Someone/uploaded-videos/", seen)
-	if len(got) != 1 || got[0].Title != "Third Clip" {
+	if len(got) != 1 || got[0].title != "Third Clip" {
 		t.Fatalf("got %+v, want only the unseen third clip", got)
 	}
 }

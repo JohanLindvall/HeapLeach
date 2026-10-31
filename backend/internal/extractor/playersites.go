@@ -28,7 +28,7 @@ import (
 // The player sites, in the order NewRegistry registers them.
 var playerSites = []*playerSite{
 	&pornhubPlayer, &xhamsterPlayer, &tnaflixPlayer, &drtuberPlayer, &pornonePlayer, &epornerPlayer,
-	&vidmolyPlayer, &okruPlayer, &streamtapePlayer, &doodPlayer, &mixdropPlayer, &luluPlayer, &vidsPlayer,
+	&streamablePlayer, &vidmolyPlayer, &okruPlayer, &streamtapePlayer, &doodPlayer, &mixdropPlayer, &luluPlayer, &vidsPlayer,
 	&sendvidPlayer, &knuthingPlayer, &noodlePlayer,
 }
 

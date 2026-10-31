@@ -90,7 +90,7 @@ func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (
 	if len(pages) == 0 {
 		return nil, kvsEmpty(l.empty)
 	}
-	files, refusals, failed := resolveFiles(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
+	files, refused, err := readListing(ctx, kvsLabel, "videos", l.url, pages, func(ctx context.Context, page string) ([]File, error) {
 		u, err := ParseURL(page)
 		if err != nil {
 			return nil, err
@@ -101,13 +101,10 @@ func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (
 		}
 		return res.Files, nil
 	})
-	if len(files) == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, noneRead(kvsLabel, len(pages), "videos", l.url, refusals, failed)
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: title, Files: files, Note: joinNotes(note, refusedNote(refusals))}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refused)}, nil
 }
 
 // kvsEmpty is the error for a listing with no videos on it, saying why in
