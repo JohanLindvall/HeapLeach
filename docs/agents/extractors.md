@@ -649,6 +649,15 @@ cd backend && go test -tags live ./internal/extractor/ -run 'TestLiveExtract/gof
 Run these after touching anything under `internal/extractor/`. They are the
 fastest way to find out which host broke.
 
+Record what they were answered. Every live test, investigation or fix
+against live data — direct or through a proxy or leased route — saves its
+responses in `hl-priv` (the standing rule in [AGENTS.md](../../AGENTS.md)),
+so that the result can be replayed and verified later without the site:
+pages, API answers, redirects and helper output, with the request identity
+and the route kind that answered, but no cookies, credentials, account
+tokens, proxy addresses or media bodies. Use the audit runner's recording
+modes (`hl-priv/README.md`) rather than a copy kept by hand.
+
 Two conventions worth keeping to when writing one:
 
 - A check that only calls `Extract` proves the API answered, not that the file
