@@ -18,14 +18,15 @@ import (
 
 // Rajce reads an album's embedded settings, which contain its entire media
 // list. Images and videos have separate URLs; a video's image is its poster.
-type Rajce struct {
-	about
-	client *httpx.Client
-}
+// It is a Share row: one discoverable form, recognised by the page alone,
+// with no state of its own between jobs.
+func NewRajce(client *httpx.Client) *Share { return newShare(client, &rajceSite) }
 
-func NewRajce(client *httpx.Client) *Rajce {
-	return &Rajce{client: client, about: about{name: "rajce", shape: rajceShape,
-		recognises: "albums (`/<user>/album/<slug>`) whose page assigns the album's settings, media list included, in a script"}}
+var rajceSite = shareSite{
+	name:       "rajce",
+	recognises: "albums (`/<user>/album/<slug>`) whose page assigns the album's settings, media list included, in a script",
+	forms:      []shareForm{{rajceShape, rajceRecognise}},
+	extract:    rajceExtract,
 }
 
 var rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
@@ -34,10 +35,10 @@ var rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
 // items after it.
 var rajceShape = pathShape(`^/[^/]+/album/[^/]+(?:/\d+)?/?$`)
 
-// Recognise takes an album page whose script assigns the settings object
-// rajceAlbumData decodes, with its legacy_media list.
-func (r *Rajce) Recognise(_ context.Context, p *Page) bool {
-	return rajceShape(p.Final) && rajceSettings.MatchString(p.Body) && p.Has(`"legacy_media"`)
+// rajceRecognise takes an album page whose script assigns the settings
+// object rajceAlbumData decodes, with its legacy_media list.
+func rajceRecognise(p *Page) bool {
+	return rajceSettings.MatchString(p.Body) && p.Has(`"legacy_media"`)
 }
 
 type rajceAlbum struct {
@@ -56,8 +57,10 @@ type rajceMedium struct {
 	Version  int       `json:"version"`
 }
 
-func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	doc, page, err := fetchDocument(ctx, r.client, u, nil)
+// rajceExtract reads an album. The referer its files carry is the album's
+// address after redirects, without a fragment.
+func rajceExtract(ctx context.Context, s *Share, u *url.URL, opts Options) (*Result, error) {
+	doc, page, err := fetchDocument(ctx, s.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rajce: fetch album: %w", err)
 	}

@@ -410,9 +410,17 @@ line in the saved queue.
   of its own: `newShare` makes the extractor's the union of its forms'. A form with no
   recogniser is a link that only redirects: followed, never recognised.
   `TestShareFormsNeverReadTheHost` holds the rows to the same no-host rule as
-  `Shape`/`Recognise`. Hosts with state of their own (tokens, quotas,
-  cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps their
-  per-route waits.
+  `Shape`/`Recognise`, and `TestShareRowsAreCompleteAndRegisteredOnce`
+  checks that every registered row has its callbacks, a recognising form and
+  one stable place in the registry. Hosts with state of their own (tokens,
+  quotas, cooldowns) stay extractors; `routeWaits` (`routewaits.go`) keeps
+  their per-route waits. Do not convert a stateless extractor whose
+  `Recognise` accepts pages its `Shape` does not advertise (Erome's profile
+  pages, PornPics' listings without a discoverable form): `Share` builds
+  `Shape` from its forms and recognises only a matching form, so such a
+  conversion either loses those pages or widens link harvesting to
+  navigation. Rajce is the reference conversion: one form, page-only
+  recognition, its parser and notes kept as they were.
 - The `Player` engine (`players.go`, its rows in `playersites.go`): a video site is a `playerSite` row
   (its forms, recognition, canonical page and a reader returning the
   candidate renditions, with a per-read referer when the player needs its
@@ -428,6 +436,13 @@ line in the saved queue.
   signed per visit, resolved now and signed again when its transfer starts.
 - `unpackJS` and `jwSource` (`jsdecode.go`): the p,a,c,k,e,d packer reversed,
   and a JW Player setup's `sources:[{file:…}]` list read; both host-neutral.
+  `jwSource` takes the **first** non-DASH link of a JavaScript setup and
+  reads nothing else about it, while `jwPlayerBest` (`mediapage.go`) ranks a
+  JSON feed's typed renditions, video before audio, with exact sizes. They
+  stay separate readers: a shared candidate step would either change the
+  first-source behaviour the player rows rely on or need the JS reader to
+  parse fields it does not have. Revisit only with fixtures that pin the
+  intended ordering, the sprite exclusion and each caller's preference.
 - `broadcast.go`: what the public broadcasters share — `broadcastRefusal`
   for DRM and geo refusals in the broadcaster's own words, `expandSeries`
   for a series resolved while it is listed (capped by a request budget, noted

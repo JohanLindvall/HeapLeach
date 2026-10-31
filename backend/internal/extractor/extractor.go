@@ -496,7 +496,9 @@ type Registry struct {
 	limits Limits
 }
 
-// NewRegistry wires up every supported host.
+// NewRegistry wires up every supported extractor, in the order a probed page
+// is offered to them: the first whose Recognise takes the page extracts it.
+// Several link forms overlap, so the order is part of the behaviour.
 func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	extractors := []Extractor{
 		NewGofile(cfg, client),
@@ -583,9 +585,10 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPlayer(client, &noodlePlayer),
 	}
 	// Platform families: one extractor covering every install of a piece of
-	// software, named and matched per install where a list is worth having
-	// and sniffed by shape where it is not. Registered after the
-	// hand-written hosts, since a named host is always the better answer.
+	// software, recognised by what the install serves — its API, its
+	// bundle, its markup — rather than by a list of hosts. Registered after
+	// the single-site extractors, whose recognisers are narrower and the
+	// better answer for a page both would take.
 	extractors = append(extractors, NewMediaWiki(client))
 	extractors = append(extractors, NewHandoffs(client)...)
 	extractors = append(extractors, NewPeerTube(client))
@@ -593,14 +596,15 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	extractors = append(extractors, NewBandzoogle(client))
 	extractors = append(extractors, NewFoolFuuka(client))
 	extractors = append(extractors, NewKVS(client))
-	// The fediverse is matched by path alone, on any host, and its /c/<name>
-	// is also Rumble's and PeerTube's channel shape. So it comes after every
-	// family that claims hosts by name, or it takes their URLs from them.
+	// The fediverse's paths are its conventions rather than any one
+	// server's, and its /c/<name> is also Rumble's and PeerTube's channel
+	// shape. So it comes after every family whose recogniser is narrower,
+	// or a page both would take goes to it.
 	extractors = append(extractors, NewFediverse(client))
 
 	// Last of all, the generic capabilities: a bare HLS manifest is a
-	// manifest whatever host serves it, and these must never take a URL a
-	// named host would have claimed.
+	// manifest whatever serves it, and these must never take a page a more
+	// specific extractor would have recognised.
 	extractors = append(extractors, NewHLSDirect(client))
 
 	direct := NewDirect(client)
@@ -614,10 +618,10 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 	// part of, so it is handed that registry rather than building one. It
 	// claims no host: only an explicit "links:" prefix reaches it.
 	//
-	// It leads the list because every other Match looks at the host alone.
-	// A harvest of a page that happens to live on a supported host would
-	// otherwise be routed to that host's extractor, which would try to
-	// fetch "links://..." and fail on the scheme.
+	// It leads the list because the prefix, not the page, decides: a
+	// harvest of a page another extractor recognises would otherwise be
+	// routed there, which would try to fetch "links://..." and fail on the
+	// scheme.
 	reg.extractors = append([]Extractor{NewLinks(client, reg)}, extractors...)
 	// The pages that only point at a video elsewhere host nothing either,
 	// and resolve what they point at through the registry for the same
