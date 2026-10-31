@@ -379,7 +379,22 @@ func (c *Client) send(req *http.Request, retries, limits int) (*http.Response, e
 			return nil, err
 		}
 
+		// Each attempt is admitted on its own: a slot is held while the
+		// request is out and its answer unread, and given back before any
+		// wait, so a backoff or a Retry-After holds none (Admission).
+		release, err := admit(req.Context())
+		if err != nil {
+			return nil, err
+		}
 		resp, err := c.do(attemptReq)
+		if err != nil {
+			release()
+		} else {
+			// The body carries the slot: a retryable answer gives it back
+			// when drained, below, before the wait; the caller's when it
+			// reads the body to its end or closes it.
+			resp.Body = &admittedBody{ReadCloser: resp.Body, release: release}
+		}
 		switch {
 		case err != nil:
 			// A cancelled context is the user's decision, never a retry.

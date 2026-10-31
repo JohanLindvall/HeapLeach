@@ -286,7 +286,9 @@ func (f *File) target() *Target {
 // job was listed is where the expired link came from.
 func refreshing(target *Target, resolve func(context.Context) (*Target, error)) File {
 	file := target.file("")
-	file.Resolve = func(ctx context.Context) (*Target, error) { return resolve(freshRead(ctx)) }
+	file.Resolve = func(ctx context.Context) (*Target, error) {
+		return resolve(httpx.WithoutAdmission(freshRead(ctx)))
+	}
 	return file
 }
 
@@ -743,6 +745,12 @@ var errUnrecognised = errors.New("no extractor recognises this page")
 func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*Result, Extractor, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+	// One admission per top-level extraction, shared by every nested one
+	// through ctx, so nested listings are held to one request bound
+	// between them rather than multiplying their own (httpx.Admission).
+	if httpx.AdmissionOf(ctx) == nil {
+		ctx = httpx.WithAdmission(ctx, httpx.NewAdmission(config.DiscoveryRequests))
 	}
 	u, err := ParseURL(rawURL)
 	if err != nil {

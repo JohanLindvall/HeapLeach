@@ -629,6 +629,16 @@ const (
 	// PageFetchConcurrency per map; this sizes only the batch.
 	SourceBatchRounds = 4
 
+	// DiscoveryRequests bounds the HTTP requests one top-level extraction
+	// has open at once, however its listings nest (httpx.Admission). Each
+	// map is bounded by PageFetchConcurrency, but a listing whose sources
+	// are listings multiplies that bound — measured at 36 requests in
+	// flight for one nested root — so this is the extraction's own ceiling:
+	// twice one map, so two levels still overlap, rather than its square.
+	// Independent jobs each have their own; transfers and transfer-time
+	// resolvers are not counted.
+	DiscoveryRequests = 2 * PageFetchConcurrency
+
 	// MaxAlbumPages bounds how far a paginated album listing is followed.
 	// Listings also stop early once a page adds nothing new, so this is a
 	// backstop against a site that keeps answering with the last page.

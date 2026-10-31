@@ -30,6 +30,19 @@ attempt counter so waiting never spends the retry budget. It gives up after
 where reading a 429 as the end of the results silently truncates a job instead
 of failing it.
 
+**Admission.** A context may carry an `httpx.Admission`
+(`WithAdmission`), which `send` admits every attempt through: it waits,
+cancellably, for a slot before the attempt, gives it back when the attempt
+fails, and otherwise hands the slot to the response body, which gives it
+back once read to its end or closed — exactly once. A retryable answer or a
+429 is drained, so its slot is back before the backoff or `Retry-After`
+wait; a redirect is followed inside one attempt and holds one slot. The
+route path (`requestRoute.do`) does not re-enter `send`, so a routed request
+is admitted once. A caller that keeps a body open holds its slot, which is
+why every `Do` caller closes its body as soon as it has read it. The
+extractor registry gives each top-level extraction one
+([extractors.md](extractors.md)); without one, requests are not held back.
+
 Two traps:
 
 - `retryAfter` returns `(time.Duration, bool)`. It has to separate

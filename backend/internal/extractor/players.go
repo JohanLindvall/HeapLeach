@@ -226,7 +226,7 @@ func (p *Player) Extract(ctx context.Context, u *url.URL, opts Options) (*Result
 // transfer starts, and again on recovery rather than whatever listed it.
 func (p *Player) deferred(page, title string) File {
 	resolve := func(ctx context.Context) (*Target, error) {
-		target, _, err := p.resolve(freshRead(ctx), page)
+		target, _, err := p.resolve(httpx.WithoutAdmission(freshRead(ctx)), page)
 		return target, err
 	}
 	return File{Name: title + cmp.Or(p.site.ext, ".mp4"), Size: -1,

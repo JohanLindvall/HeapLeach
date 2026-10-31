@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,14 +133,14 @@ func nestedRegistry(site *nestedSite) (*Registry, *httpx.Client) {
 	return reg, client
 }
 
-// runRoots extracts roots root jobs at once and checks each found every leaf,
-// in the listing's order.
-func runRoots(t *testing.T, site *nestedSite, reg *Registry, roots int) {
+// runRoots extracts roots root jobs at once, each in a context from ctx,
+// and checks each found every leaf, in the listing's order.
+func runRoots(t *testing.T, ctx func() context.Context, site *nestedSite, reg *Registry, roots int) {
 	t.Helper()
 	var wg sync.WaitGroup
 	for r := range roots {
 		wg.Go(func() {
-			res, _, err := reg.Extract(context.Background(), fmt.Sprintf("%s/root/r%d", site.srv.URL, r), Options{})
+			res, _, err := reg.Extract(ctx(), fmt.Sprintf("%s/root/r%d", site.srv.URL, r), Options{})
 			if err != nil {
 				t.Errorf("root %d: %v", r, err)
 				return
@@ -156,13 +157,14 @@ func runRoots(t *testing.T, site *nestedSite, reg *Registry, roots int) {
 	wg.Wait()
 }
 
-// TestNestedDiscoveryRequestsInFlight measures, at the HTTP boundary, how
-// many discovery requests a nested extraction has open at once: each map is
-// bounded by config.PageFetchConcurrency, and nesting multiplies the bound,
-// so one root reaches PageFetchConcurrency² leaf requests in flight and two
-// roots twice that. This is the baseline an extraction-wide admission is
-// measured against.
-func TestNestedDiscoveryRequestsInFlight(t *testing.T) {
+// TestNestedDiscoveryRequestsUnbounded measures, at the HTTP boundary, how
+// many discovery requests a nested extraction would have open at once
+// without an extraction-wide admission: each map is bounded by
+// config.PageFetchConcurrency, and nesting multiplies the bound, so one root
+// reaches PageFetchConcurrency² leaf requests in flight and two roots twice
+// that. It is the baseline TestNestedDiscoveryRequestsAreAdmitted is
+// measured against; an admission too large to bind stands in for none.
+func TestNestedDiscoveryRequestsUnbounded(t *testing.T) {
 	c := config.PageFetchConcurrency
 	for _, roots := range []int{1, 2} {
 		t.Run(fmt.Sprint(roots, " roots"), func(t *testing.T) {
@@ -170,7 +172,10 @@ func TestNestedDiscoveryRequestsInFlight(t *testing.T) {
 			site := newNestedSite(t, c, want, time.Second)
 			reg, client := nestedRegistry(site)
 			defer client.CloseIdleConnections()
-			runRoots(t, site, reg, roots)
+			unbound := func() context.Context {
+				return httpx.WithAdmission(context.Background(), httpx.NewAdmission(1<<20))
+			}
+			runRoots(t, unbound, site, reg, roots)
 			// A root probe, c listing probes and c² leaves, per root.
 			if total := site.total.Load(); total != int32(roots*(1+c+c*c)) {
 				t.Errorf("%d requests, want %d", total, roots*(1+c+c*c))
@@ -180,5 +185,78 @@ func TestNestedDiscoveryRequestsInFlight(t *testing.T) {
 				t.Errorf("peak %d leaf requests in flight, want %d", site.peak.Load(), want)
 			}
 		})
+	}
+}
+
+// TestNestedDiscoveryRequestsAreAdmitted holds a nested extraction to one
+// request bound however its listings nest: every root gets its own
+// admission (config.DiscoveryRequests), shared by the listings it expands,
+// and the result — files, order, request count — is the unbounded one's.
+// A slow body holds its slot until it is read; a budget smaller than one
+// map's fan-out still completes, since nothing waiting holds a slot.
+func TestNestedDiscoveryRequestsAreAdmitted(t *testing.T) {
+	c := config.PageFetchConcurrency
+	background := func() context.Context { return context.Background() }
+	for _, tc := range []struct {
+		name     string
+		roots    int
+		budget   int
+		slowBody bool
+	}{
+		{"one root", 1, config.DiscoveryRequests, false},
+		{"two roots", 2, config.DiscoveryRequests, false},
+		{"slow bodies", 1, config.DiscoveryRequests, true},
+		{"budget below one map", 1, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := int32(tc.roots * tc.budget)
+			site := newNestedSite(t, c, want, 50*time.Millisecond)
+			site.slowBody = tc.slowBody
+			reg, client := nestedRegistry(site)
+			defer client.CloseIdleConnections()
+			ctx := background
+			if tc.budget != config.DiscoveryRequests {
+				ctx = func() context.Context {
+					return httpx.WithAdmission(context.Background(), httpx.NewAdmission(tc.budget))
+				}
+			}
+			start := time.Now()
+			runRoots(t, ctx, site, reg, tc.roots)
+			if total := site.total.Load(); total != int32(tc.roots*(1+c+c*c)) {
+				t.Errorf("%d requests, want %d", total, tc.roots*(1+c+c*c))
+			}
+			t.Logf("%s: peak %d leaf requests in flight, %v", tc.name, site.peak.Load(), time.Since(start).Round(time.Millisecond))
+			if site.peak.Load() > want {
+				t.Errorf("peak %d leaf requests in flight, want at most %d", site.peak.Load(), want)
+			}
+		})
+	}
+}
+
+// An extraction cancelled while its requests wait for slots ends promptly
+// with the cancellation, and leaves no slot held.
+func TestNestedDiscoveryCancelledWhileWaiting(t *testing.T) {
+	c := config.PageFetchConcurrency
+	site := newNestedSite(t, c, 1<<20, 2*time.Second)
+	reg, client := nestedRegistry(site)
+	defer client.CloseIdleConnections()
+	a := httpx.NewAdmission(2)
+	ctx, cancel := context.WithCancel(httpx.WithAdmission(context.Background(), a))
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	_, _, err := reg.Extract(ctx, site.srv.URL+"/root/r0", Options{})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want the cancellation", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %v to stop", d)
+	}
+	// Every slot comes back once the requests in flight have ended.
+	deadline := time.Now().Add(time.Second)
+	for site.active.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !a.Idle() {
+		t.Error("slots still held after the cancelled extraction ended")
 	}
 }

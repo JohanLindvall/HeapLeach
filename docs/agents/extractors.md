@@ -428,15 +428,26 @@ intact. `sources.go` holds what they share:
   fill values and need no outcomes (`Autoindex.readAll`).
 - The `PageFetchConcurrency` bound is per map, not per extraction: a
   listing whose items are listings (source expansion through the registry,
-  a WordPress category's posts) multiplies it, and every top-level job the
-  manager resolves at once multiplies it again.
-  `TestNestedListingsMultiplyTheirBound` measures that baseline (36 leaves
-  in flight for one nested job, 72 for two). An extraction-wide request
-  admission is a separate change: it belongs around the metadata I/O
-  itself, not a parent waiting on its children (which would deadlock), and
-  must leave transfers and deferred resolvers to their own policies.
-  `config.SourceBatchRounds` sizes source expansion's batches, not the
-  bound.
+  a WordPress category's posts) multiplies it. What bounds the extraction is
+  its request admission: the outermost `Registry.Extract` puts one
+  `httpx.Admission` of `config.DiscoveryRequests` slots in the context, and
+  every nested registry call, probe, memoised question and credential fetch
+  made in it is admitted through that one (`httpx.Client.send`). A slot is
+  held only while a request is out and its body unread, never by a parent
+  waiting on its children, a caller waiting on another's coalesced fetch or
+  a retry waiting out its backoff, so nesting deeper than the slots cannot
+  deadlock. Each top-level job has its own admission; a process-wide or
+  per-origin bound would be another decision. Transfer-time resolvers read
+  without it (`refreshing` and the player engine's deferred resolvers drop
+  it with `httpx.WithoutAdmission`), as do media transfers, which never
+  carry it, and metadata-helper processes are not counted.
+  `TestNestedDiscoveryRequestsUnbounded` measures the multiplied baseline at
+  the HTTP boundary (36 leaf requests in flight for one nested root, 72 for
+  two) and `TestNestedDiscoveryRequestsAreAdmitted` pins the bound (12 and
+  24), the same files, order and request count, slow bodies and a budget
+  below one map's fan-out; the cost is latency, about three waves where
+  there was one for that fixture. `config.SourceBatchRounds` sizes source
+  expansion's batches, not the bound.
 
 ### Caps
 

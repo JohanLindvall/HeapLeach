@@ -316,29 +316,29 @@ need the same permits. Share admission at the actual request boundary.
 
 **Implementation steps:**
 
-- [ ] Instrument a synthetic nested registry extraction at the transport:
+- [x] Instrument a synthetic nested registry extraction at the transport:
   request starts, active responses, peak active reads and attempts. Separate
   page probes, API metadata, discovery manifests and helper processes.
-- [ ] Create an extraction-scoped admission object once at the outer registry
+- [x] Create an extraction-scoped admission object once at the outer registry
   call and pass it through nested calls. Preserve it when context values are
   copied for route recovery; define its lifecycle for coalesced work.
-- [ ] Implement the low-level admission mechanism in `httpx`, with extraction
+- [x] Implement the low-level admission mechanism in `httpx`, with extraction
   opting in through context. Cover requests made by `GetPage`, `GetJSON`,
   `PostJSON`, `Do` and `DoOnce`, including manually built metadata requests.
   Review [client.go](../backend/internal/httpx/client.go)'s `send`/`do`
   boundary and the route path before selecting the exact hook.
-- [ ] Hold a permit until the response body is consumed or closed, or until
+- [x] Hold a permit until the response body is consumed or closed, or until
   the request fails. Release exactly once, including error-status draining,
   redirects, body-read failures and cancellation. A permit released when
   headers arrive would leave simultaneous body reads unbounded.
-- [ ] Release before retry backoff or `Retry-After` waits. Each new attempt
+- [x] Release before retry backoff or `Retry-After` waits. Each new attempt
   acquires again; waiting for a slot must be cancellable.
-- [ ] Acquire only for the actual fetch in coalesced page/memo/credential work.
+- [x] Acquire only for the actual fetch in coalesced page/memo/credential work.
   Other waiters and parents waiting for children must not hold permits.
-- [ ] Start with a measured per-extraction limit. Treat a process-wide ceiling
+- [x] Start with a measured per-extraction limit. Treat a process-wide ceiling
   or per-origin fairness as a separate decision: a per-root bound still
   multiplies across top-level jobs. Add tunables in `config/limits.go`.
-- [ ] Keep media transfers and deferred file resolvers under their existing
+- [x] Keep media transfers and deferred file resolvers under their existing
   transfer/route policies. An extraction's admission object must not be
   captured accidentally by a resolver that runs much later. Metadata-helper
   processes need an explicit separate bound if measurements justify it.
@@ -589,7 +589,7 @@ interchangeable, or that the proposed abstractions already improve performance.
   duplicate implementation; fresh transfer-time reads remain fresh.
 - [x] Migrated listings distinguish expected ends from incomplete work using
   typed state, with reviewed user-visible notes.
-- [ ] Nested discovery has a measured HTTP bound and no parent/child deadlock.
+- [x] Nested discovery has a measured HTTP bound and no parent/child deadlock.
 - [ ] Selected media-finalization adopters preserve every file and track field.
 - [ ] Existing paths, recognition, ordering, caps and route behavior remain
   stable except for explicitly tested changes.
