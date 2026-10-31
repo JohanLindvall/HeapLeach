@@ -841,3 +841,41 @@ func ParseURL(raw string) (*url.URL, error) {
 	}
 	return u, nil
 }
+
+// about is what an extractor says of itself to the registry and the
+// inventory: its name, the forms of link worth a probe, and the
+// inventory's description of what it recognises. An extractor embeds it
+// rather than spelling out the three methods, so that its constructor
+// reads as its row.
+type about struct {
+	name string
+	// shape is the forms Shape reports; none when nil.
+	shape      func(*url.URL) bool
+	recognises string
+}
+
+func (a about) Name() string { return a.name }
+
+// Recognises is the inventory's description.
+func (a about) Recognises() string { return a.recognises }
+
+// Shape reports the forms of link worth a probe.
+func (a about) Shape(u *url.URL) bool { return a.shape != nil && a.shape(u) }
+
+// eitherShape is a shape matching what any of shapes match.
+func eitherShape(shapes ...func(*url.URL) bool) func(*url.URL) bool {
+	return func(u *url.URL) bool {
+		for _, shape := range shapes {
+			if shape(u) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// linkFile is the file at link, named as the link names it, its length
+// left to the response, fetched with headers.
+func linkFile(link string, headers httpx.Header) File {
+	return File{Name: util.NameFromURL(link), URL: link, Size: -1, Headers: headers}
+}

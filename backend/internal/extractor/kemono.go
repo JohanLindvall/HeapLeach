@@ -240,3 +240,10 @@ type kemonoAttachment struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 }
+
+// creatorAPI is where the API on origin keeps a creator's records — their
+// /profile, /posts and each /post/<id> — on the creator-archive software
+// kemono runs and on the API cum.st modelled on it.
+func creatorAPI(origin, service, creator string) string {
+	return origin + "/api/v1/" + url.PathEscape(service) + "/user/" + url.PathEscape(creator)
+}

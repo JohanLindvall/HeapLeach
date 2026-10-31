@@ -364,6 +364,11 @@ line in the saved queue.
 
 ## Helpers worth reusing
 
+- `about` (`extractor.go`): an extractor's name, inventory text and shape
+  as one embedded row, so its constructor reads as data rather than three
+  hand-written methods. A shape handed to it is a plain function named
+  `…Shape`; `TestRecognitionNeverReadsTheHost` checks those too.
+  `eitherShape` combines shapes.
 - The `Share` engine (`shares.go`): a file host whose share or album page
   is read by its own code is a `shareSite` row — its name, inventory line,
   forms (a shape plus what a page of that shape must carry; the first form

@@ -237,3 +237,20 @@ func matchedIDs(text string, res ...*regexp.Regexp) []string {
 func hasAnyClass(n *html.Node, classes ...string) bool {
 	return slices.ContainsFunc(classes, func(class string) bool { return hasClass(n, class) })
 }
+
+// scriptTexts is the text of each script element under root, its spacing
+// kept as written: the JSON a page assigns there may hold names whose
+// spacing is their own.
+func scriptTexts(root *html.Node) []string {
+	var texts []string
+	for _, script := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
+		var text strings.Builder
+		for node := script.FirstChild; node != nil; node = node.NextSibling {
+			if node.Type == html.TextNode {
+				text.WriteString(node.Data)
+			}
+		}
+		texts = append(texts, text.String())
+	}
+	return texts
+}

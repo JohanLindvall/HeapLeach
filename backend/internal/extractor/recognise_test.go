@@ -153,7 +153,7 @@ func TestRecognitionNeverReadsTheHost(t *testing.T) {
 		}
 		for _, decl := range f.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv == nil || fn.Body == nil || (fn.Name.Name != "Shape" && fn.Name.Name != "Recognise") {
+			if !ok || fn.Body == nil || !recognition(fn) {
 				continue
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -172,6 +172,15 @@ func TestRecognitionNeverReadsTheHost(t *testing.T) {
 			})
 		}
 	}
+}
+
+// recognition reports whether fn decides recognition: a Shape or Recognise
+// method, or a plain function named for a shape, as rows hand to about.
+func recognition(fn *ast.FuncDecl) bool {
+	if fn.Recv != nil {
+		return fn.Name.Name == "Shape" || fn.Name.Name == "Recognise"
+	}
+	return strings.HasSuffix(fn.Name.Name, "Shape")
 }
 
 // TestPageCacheFetchesAPageOnce: however many recognisers, extractors and

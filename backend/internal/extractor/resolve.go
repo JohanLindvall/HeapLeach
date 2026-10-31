@@ -107,3 +107,16 @@ func readListing[T any](ctx context.Context, site, noun, where string, items []T
 	}
 	return files, refusedNote(refusals), nil
 }
+
+// noneResolved is the error for a listing of n items on where none of
+// which yielded files — noneRead's, or the cancellation that cut it short —
+// and nil when files holds any.
+func noneResolved(ctx context.Context, files []File, site string, n int, noun, where string, refusals []string, failed error) error {
+	if len(files) > 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return noneRead(site, n, noun, where, refusals, failed)
+}

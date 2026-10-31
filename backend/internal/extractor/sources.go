@@ -295,3 +295,23 @@ func expansionNote(walk string, e expansion, listed int, noun string) string {
 	}
 	return joinNotes(walk, limit, resolvedNote(e.used, listed, noun))
 }
+
+// opening is an expansion's extract for a host reading the pages its own
+// listing links: each link parsed and handed to open.
+func opening(open func(context.Context, *url.URL) (*Result, error)) func(context.Context, string) (*Result, error) {
+	return func(ctx context.Context, link string) (*Result, error) {
+		u, err := ParseURL(link)
+		if err != nil {
+			return nil, err
+		}
+		return open(ctx, u)
+	}
+}
+
+// limitNote is fileLimitNote when the file cap ended the expansion.
+func (e expansion) limitNote() string {
+	if e.full {
+		return fileLimitNote
+	}
+	return ""
+}
