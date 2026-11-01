@@ -30,6 +30,7 @@ Start with [CONTRIBUTING.md](../CONTRIBUTING.md) for prerequisites, setup,
 checks and suggested first contributions. [AGENTS.md](../AGENTS.md) links the
 area guides with the invariants for each part of the code.
 
-The [service audit](audit-2026-10-03.md) records a dated review; use the current
-guides for present behavior.
+The [service audit](audit-2026-10-03.md) and
+[baseline-to-main regression audit](regression-audit-2026-11-01.md) record dated
+reviews; use the current guides for present behavior.
 Vulnerabilities follow the [security policy](../SECURITY.md).
