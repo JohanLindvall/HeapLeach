@@ -4,7 +4,6 @@ package download
 
 import (
 	"bytes"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +19,7 @@ func TestSetDownloadDirCreatesAndAdopts(t *testing.T) {
 	m := busyManager(t)
 	target := filepath.Join(t.TempDir(), "made", "on", "demand")
 
-	if err := m.SetDownloadDir(target); err != nil {
+	if err := m.ApplySettings(Settings{DownloadDir: new(target)}); err != nil {
 		t.Fatalf("SetDownloadDir: %v", err)
 	}
 	if got := m.DownloadDir(); got != target {
@@ -47,7 +46,7 @@ func TestSetDownloadDirRefusesTheUnusable(t *testing.T) {
 		{"a file in the way", occupied, "not a directory"},
 		{"nothing at all", "   ", "no download directory"},
 	} {
-		err := m.SetDownloadDir(tc.path)
+		err := m.ApplySettings(Settings{DownloadDir: new(tc.path)})
 		if err == nil || !strings.Contains(err.Error(), tc.hint) {
 			t.Errorf("%s: err = %v, want mention of %q", tc.name, err, tc.hint)
 		}
@@ -68,7 +67,7 @@ func TestSetDownloadDirExpandsHome(t *testing.T) {
 
 	// A directory under the real home would litter it, so only the
 	// resolution is checked, against a path that already exists.
-	if err := m.SetDownloadDir("~"); err != nil {
+	if err := m.ApplySettings(Settings{DownloadDir: new("~")}); err != nil {
 		t.Fatalf("SetDownloadDir(~): %v", err)
 	}
 	if got := m.DownloadDir(); got != home {
@@ -79,12 +78,11 @@ func TestSetDownloadDirExpandsHome(t *testing.T) {
 // The point of the feature: what is queued follows the new destination.
 func TestQueuedTransfersFollowTheNewDirectory(t *testing.T) {
 	payload := bytes.Repeat([]byte{4}, 2048)
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	m := busyManager(t)
 	moved := filepath.Join(t.TempDir(), "elsewhere")
-	if err := m.SetDownloadDir(moved); err != nil {
+	if err := m.ApplySettings(Settings{DownloadDir: new(moved)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,16 +91,13 @@ func TestQueuedTransfersFollowTheNewDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(filepath.Join(moved, "file.bin")); err == nil {
-			got, err := os.ReadFile(filepath.Join(moved, "file.bin"))
-			if err != nil || !bytes.Equal(got, payload) {
-				t.Fatalf("file at the new destination is wrong: %v", err)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	target := filepath.Join(moved, "file.bin")
+	waitFor(t, 20*time.Second, func() bool {
+		_, err := os.Stat(target)
+		return err == nil
+	})
+	got, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("file at the new destination is wrong: %v", err)
 	}
-	t.Fatalf("nothing arrived in %s", moved)
 }

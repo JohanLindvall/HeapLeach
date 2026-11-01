@@ -7,13 +7,11 @@ import (
 	"cmp"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"slices"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -27,18 +25,13 @@ type Pool = lease.Pool
 type Lease = lease.Lease
 type Configuration = lease.Configuration
 type Query = lease.Query
-type Row = lease.Row
 type Page = lease.Page
-type Summary = lease.Summary
-type SourceView = lease.SourceView
 type ExitProber = lease.ExitProber
 
 var (
 	ErrExitInUse       = lease.ErrExitInUse
 	ErrExitProbeFailed = lease.ErrExitProbeFailed
 )
-
-func Services() []string { return slices.Clone(config.ProxyGroups) }
 
 // protocols maps a protocol a group can be held to onto proxytron's.
 var protocols = map[string]proxytron.ProxyType{
@@ -55,7 +48,7 @@ func SetTypes(p *Pool, all string, groups map[string]string) error {
 		kind := cmp.Or(groups[group], all)
 		t, ok := protocols[kind]
 		if !ok {
-			return fmt.Errorf("proxy type must be any, socks or http, got %q", kind)
+			return config.CheckProxyType(kind)
 		}
 		if err := p.SetScopeProxyType(group, t); err != nil {
 			return err
@@ -73,14 +66,18 @@ func ParseConfiguration(endpoints, feeds []string) (Configuration, error) {
 		if raw == Direct {
 			continue
 		}
-		u, _ := url.Parse(raw)
-		switch u.Scheme {
-		case "http", "https", "socks5h":
-		default:
+		if !supported(raw) {
 			return c, errors.New("unsupported proxy protocol")
 		}
 	}
 	return c, nil
+}
+
+// supported reports an endpoint of a protocol the pool takes, whether
+// configured or found in a feed.
+func supported(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5h")
 }
 
 func EmptyPage(q Query) Page { return lease.EmptyPage(q) }
@@ -92,11 +89,8 @@ func Open(path string, endpoints, feeds []string, client *httpx.Client, log *slo
 	}
 	return lease.Open(path, c.Endpoints, c.Feeds, clientAdapter{Client: client}, log,
 		lease.WithHealthEpoch(config.ProxyHealthEpoch), lease.WithExitTTL(config.ProxyExitTTL),
-		lease.WithFeedFilter(func(endpoint string) bool {
-			u, err := url.Parse(endpoint)
-			return err == nil && (u.Scheme == "http" || u.Scheme == "https" || u.Scheme == "socks5h")
-		}),
-		lease.WithPolicy(lease.Policy{RecoveryScopes: []string{"cloudflare"}, CappedScopes: []string{"keep2share", "fileboom", "emload"}}),
+		lease.WithFeedFilter(supported),
+		lease.WithPolicy(lease.Policy{RecoveryScopes: []string{config.GroupWAF}, CappedScopes: []string{config.GroupKeep2Share, config.GroupFileBoom, config.GroupEmload}}),
 		lease.WithChallengeClassifier(func(err error) bool { var challenge *httpx.ChallengeError; return errors.As(err, &challenge) }))
 }
 
@@ -114,7 +108,7 @@ func (c clientAdapter) ThroughProxy(endpoint string) (lease.Client, error) {
 }
 func (c clientAdapter) WithRoute(ctx context.Context, id, scope string, observe func(lease.Observation)) context.Context {
 	agent := c.agent
-	if scope == "cloudflare" {
+	if scope == config.GroupWAF {
 		agent = ""
 	}
 	return httpx.WithRouteAgent(ctx, id, c.Client, func(o httpx.RouteObservation) {

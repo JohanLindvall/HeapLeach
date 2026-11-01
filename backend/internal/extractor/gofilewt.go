@@ -5,7 +5,6 @@ package extractor
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -58,16 +57,6 @@ var (
 	gofileSecretShape = regexp.MustCompile(`^[0-9a-f]{10,40}$`)
 )
 
-// How long a recovered secret is kept when the script says nothing useful
-// about it, and the bounds any answer it does give is held to. The floor
-// stops a no-store header turning every link into another fetch; the ceiling
-// stops a year-long max-age outliving a rotation.
-const (
-	gofileSecretTTL    = time.Hour
-	gofileSecretMinTTL = 5 * time.Minute
-	gofileSecretMaxTTL = 12 * time.Hour
-)
-
 // ensureSecret returns the secret to sign with, recovering it from gofile's
 // own script when what is held has expired.
 //
@@ -80,11 +69,11 @@ func (g *Gofile) ensureSecret(ctx context.Context) (string, error) {
 
 	// A refused signature means what we hold is wrong, and gofile blocks an
 	// address that keeps proving it. Nothing is sent until that has aged out.
-	if since := time.Since(g.rejectedAt); !g.rejectedAt.IsZero() && since < gofileRejectionCooldown {
+	if since := time.Since(g.rejectedAt); !g.rejectedAt.IsZero() && since < config.GofileRejectionCooldown {
 		return "", fmt.Errorf("gofile: the last request was refused as wrongly signed, and "+
 			"repeating that gets this address blocked — waiting %s before trying again; "+
 			"set HEAPLEACH_GOFILE_SECRET if you know the current secret",
-			(gofileRejectionCooldown - since).Round(time.Second))
+			(config.GofileRejectionCooldown - since).Round(time.Second))
 	}
 
 	// A secret the user configured is their answer, not a guess to improve.
@@ -101,7 +90,7 @@ func (g *Gofile) ensureSecret(ctx context.Context) (string, error) {
 	if err != nil {
 		// Falling back is what the pinned copy is for. Holding it briefly
 		// keeps a failing script from being re-read once per link.
-		g.secret, g.secretUntil = g.fallback, now.Add(gofileSecretMinTTL)
+		g.secret, g.secretUntil = g.fallback, now.Add(config.GofileSecretMinTTL)
 		return g.secret, nil
 	}
 	g.secret, g.secretUntil = secret, until
@@ -126,28 +115,10 @@ func (g *Gofile) signatureRejected() error {
 // fetchSecret reads the signing secret out of gofile's own script, and says
 // how long the answer may be reused.
 func (g *Gofile) fetchSecret(ctx context.Context) (string, time.Time, error) {
-	req, err := g.client.NewRequest(ctx, http.MethodGet, g.scriptURL, nil)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	for header, value := range httpx.Referer(gofileRoot + "/") {
-		req.Header.Set(header, value)
-	}
-
-	resp, err := g.client.Do(req)
+	body, resp, err := g.client.Fetch(ctx, g.scriptURL, httpx.Referer(gofileRoot+"/"))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("fetch signing script: %w", err)
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("read signing script: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", time.Time{}, fmt.Errorf("fetch signing script: %s", resp.Status)
-	}
-
 	secret, err := gofileSecretFrom(string(body))
 	if err != nil {
 		return "", time.Time{}, err
@@ -164,10 +135,10 @@ func (g *Gofile) fetchSecret(ctx context.Context) (string, time.Time, error) {
 // there because a served answer is advice, not a promise.
 func gofileFreshUntil(header http.Header, now time.Time) time.Time {
 	clamp := func(d time.Duration) time.Time {
-		return now.Add(min(max(d, gofileSecretMinTTL), gofileSecretMaxTTL))
+		return now.Add(min(max(d, config.GofileSecretMinTTL), config.GofileSecretMaxTTL))
 	}
 
-	control := strings.ToLower(header.Get("Cache-Control"))
+	control := strings.ToLower(header.Get(httpx.HeaderCacheControl))
 	if strings.Contains(control, "no-store") || strings.Contains(control, "no-cache") {
 		return clamp(0) // as short as this is willing to go
 	}
@@ -183,7 +154,7 @@ func gofileFreshUntil(header http.Header, now time.Time) time.Time {
 			return clamp(when.Sub(now))
 		}
 	}
-	return clamp(gofileSecretTTL)
+	return clamp(config.GofileSecretTTL)
 }
 
 // gofileMaxAge reads the max-age a Cache-Control header states.
@@ -211,9 +182,7 @@ func gofileSecretFrom(script string) (string, error) {
 	// The file writes most of its characters as \xNN escapes. Undoing that
 	// first means every pattern below can look for what the string says
 	// rather than for how it was spelled.
-	script = gofileHexEscape.ReplaceAllStringFunc(script, func(esc string) string {
-		return string(rune(hexByte(esc[2], esc[3])))
-	})
+	script = gofileUnescape(script)
 
 	alphabet, err := gofileAlphabet(script)
 	if err != nil {
@@ -433,16 +402,11 @@ func printableASCII(text string) bool {
 	return true
 }
 
-func hexByte(hi, lo byte) byte { return hexDigit(hi)<<4 | hexDigit(lo) }
-
-func hexDigit(c byte) byte {
-	switch {
-	case c >= '0' && c <= '9':
-		return c - '0'
-	case c >= 'a' && c <= 'f':
-		return c - 'a' + 10
-	case c >= 'A' && c <= 'F':
-		return c - 'A' + 10
-	}
-	return 0
+// gofileUnescape undoes the script's \xNN escapes.
+func gofileUnescape(script string) string {
+	return gofileHexEscape.ReplaceAllStringFunc(script, func(esc string) string {
+		// The pattern admits two hexadecimal digits only, so this cannot fail.
+		b, _ := strconv.ParseUint(esc[2:], 16, 8)
+		return string(rune(b))
+	})
 }

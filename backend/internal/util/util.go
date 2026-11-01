@@ -12,21 +12,13 @@ import (
 	"html"
 	"math/rand/v2"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
-
-// FirstNonEmpty returns the first non-empty string, or "" when all are empty.
-func FirstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
 
 // Dedupe returns values with empties and duplicates removed, order preserved.
 func Dedupe(values []string) []string {
@@ -87,6 +79,18 @@ func NameFromURL(raw string) string {
 	return strings.TrimSpace(base)
 }
 
+// Stem is a name or path with its extension (path.Ext) removed; any
+// directory is kept.
+func Stem(name string) string {
+	return strings.TrimSuffix(name, path.Ext(name))
+}
+
+// WithExt is name with its extension, if any, replaced by ext, which carries
+// its own dot.
+func WithExt(name, ext string) string {
+	return Stem(name) + ext
+}
+
 // Origin renders scheme://host for a URL.
 func Origin(u *url.URL) string { return u.Scheme + "://" + u.Host }
 
@@ -126,6 +130,19 @@ func TrimTitleSuffix(title string, separators ...string) string {
 		}
 	}
 	return title
+}
+
+// ExecutableDir is the directory holding the running binary, symlinks
+// resolved, where its helpers and data are installed beside it.
+func ExecutableDir() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return filepath.Dir(exe), nil
 }
 
 // Backoff returns an exponentially growing delay with +/-25% jitter, capped

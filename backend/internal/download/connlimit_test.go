@@ -5,11 +5,9 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,14 +47,10 @@ func refusingServer(payload []byte, refusals int32, body string) (http.Handler, 
 // open is describing a queue we are filling ourselves, and it clears when one
 // of our own transfers finishes. Waiting is the whole answer.
 func TestConnectionLimitIsWaitedOutRatherThanFailed(t *testing.T) {
-	payload := make([]byte, 64<<10)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 64<<10)
 
 	handler, hits := refusingServer(payload, 3, pixeldrainRefusal)
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
+	srv := testServer(t, handler)
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/api/file/AAAA?download", Size: -1}
@@ -82,13 +76,12 @@ func TestConnectionLimitIsWaitedOutRatherThanFailed(t *testing.T) {
 // bounded and a headless run still terminates.
 func TestConnectionLimitStopsAtItsBudget(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.Header().Set(httpx.HeaderContentType, "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, pixeldrainRefusal)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/api/file/AAAA?download", Size: -1}
@@ -111,11 +104,10 @@ func TestConnectionLimitStopsAtItsBudget(t *testing.T) {
 // times over before reporting what was wrong with it.
 func TestAPlainForbiddenStillFailsAtOnce(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		http.Error(w, "this file is private", http.StatusForbidden)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/f/AAAA", Size: -1}
@@ -133,13 +125,12 @@ func TestAPlainForbiddenStillFailsAtOnce(t *testing.T) {
 // certainly no room for the speculative extras splitting would add.
 func TestARefusedConnectionClosesTheHostsExtraBudget(t *testing.T) {
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.Header().Set(httpx.HeaderContentType, "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, pixeldrainRefusal)
 	}))
-	defer srv.Close()
 
 	m := busyManager(t)
 	host := hostOf(srv.URL)

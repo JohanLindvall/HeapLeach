@@ -3,9 +3,11 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 
@@ -39,14 +41,19 @@ import (
 // its avatars and its stylesheets alongside the files. That is what
 // Registry.Known answers and Registry.Find cannot.
 //
-// Links on the page's own host are kept along with the rest. When the page is
-// an ordinary forum its own links are unsupported and vanish in that filter
-// anyway, and when it is not — the index page of a supported tube, say — its
-// own links are exactly what was being asked for. The price of the second case
-// is that the site's navigation is supported too, and gets tried: harvesting
-// one tube's front page found a hundred and fifty video pages and a dozen
-// sign-in and sort-order pages, which fail, are skipped, and cost a request
-// each. A failed request is the cheapest thing here.
+// Links on the page's own site are held to a stricter test than links to
+// other sites (Registry.Follows). On its own pages a site's links are
+// followed only where its extractor's Shape claims them as items: a bare
+// path there is as often an account, genre or sort-order page as an item,
+// and a form named only by its host (linkForm.follow) is followed only from
+// another site's page. A platform's same-site forms are also suppressed
+// during automatic scanning (linkForm.local). Explicit links: accepts its
+// established item routes (linkForm.harvest) on known installs, excluding
+// profiles and listings. So a harvest of a supported site's index finds its
+// item pages, and not every short path it links to; a site whose items
+// have no form of their own is read through its own extractor instead. A
+// followed link whose page no extractor recognises is left out and
+// counted in the note as unrecognised, beside how many links resolved.
 //
 // Be plain about the reach: this reads whatever a page serves an anonymous
 // fetch, and nothing else. That is a great many pages, the big aggregator
@@ -66,6 +73,7 @@ import (
 // results into plain URLs would break every one of those on a queue long
 // enough to matter, which is the only kind of queue it produces.
 type Links struct {
+	about
 	client   *httpx.Client
 	registry *Registry
 }
@@ -82,15 +90,18 @@ const (
 // rather than building one, because what it resolves links with must be the
 // same set of extractors the user already has.
 func NewLinks(client *httpx.Client, registry *Registry) *Links {
-	return &Links{client: client, registry: registry}
+	return &Links{client: client, registry: registry, about: about{name: linksScheme, shape: linksShape,
+		recognises: "a `links:<url>` prefix — every supported link on the page"}}
 }
 
-func (l *Links) Name() string { return linksScheme }
+// linksShape is the harvest prefix and nothing else. ParseURL turns
+// "links:<page>" into a URL with this scheme, so no page is ever harvested
+// by accident.
+func linksShape(u *url.URL) bool { return u.Scheme == linksScheme }
 
-// Match accepts the harvest prefix and nothing else. ParseURL turns
-// "links:<page>" into a URL with this scheme, so a host is never enough to
-// reach the harvester by accident.
-func (l *Links) Match(u *url.URL) bool { return u.Scheme == linksScheme }
+// Recognise is the prefix too: there is no page to read, since the registry
+// does not probe a URL of this scheme.
+func (l *Links) Recognise(_ context.Context, p *Page) bool { return linksShape(p.URL) }
 
 // Extract harvests the page and merges what its links resolve to.
 func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -102,7 +113,7 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("links: %s stacks the prefix; one is all it takes", u.Redacted())
 	}
 
-	doc, err := l.client.GetString(ctx, page.String(), httpx.Referer(util.Origin(page)+"/"))
+	doc, final, err := l.client.GetPage(ctx, page.String(), httpx.Referer(util.Origin(page)+"/"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("links: fetch %s: %w", page.Redacted(), err)
 	}
@@ -111,14 +122,14 @@ func (l *Links) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("links: parse %s: %w", page.Redacted(), err)
 	}
 
-	candidates := linksCandidates(root, page)
-	sources := supportedSources(l.registry, candidates, l)
+	candidates := linksCandidates(root, final, page)
+	sources := supportedSources(l.registry, candidates, l, final)
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("links: none of the %d links on %s point at a host this build "+
 			"knows (the page may be showing a login rather than its content)",
 			len(candidates), page.Redacted())
 	}
-	return expandPageLinks(ctx, l.registry, page, root, sources, opts)
+	return expandPageLinks(ctx, l.registry, final, root, sources, opts)
 }
 
 func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, root *html.Node, sources []string, opts Options) (*Result, error) {
@@ -128,19 +139,32 @@ func expandPageLinks(ctx context.Context, registry *Registry, page *url.URL, roo
 	}
 
 	e := expandSources(ctx, registry, sources, opts)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(e.files) == 0 && e.unrecognised == len(sources) {
+		// Every link had a supported form, and every page it led to was
+		// read and is no extractor's: navigation that looked like
+		// downloads, or items removed or redesigned. Which, the page
+		// cannot say, so the error says what was found rather than that
+		// nothing supported was linked. The fallback still tries the
+		// page's own media first.
+		have, pages := "have", "their pages"
+		if len(sources) == 1 {
+			have, pages = "has", "its page"
+		}
+		return nil, fmt.Errorf("links: %d of the links on %s %s a supported form, but no extractor recognised %s "+
+			"(the items may have been removed, sit behind a login, or the site may have changed)",
+			len(sources), page.Redacted(), have, pages)
+	}
 	if len(e.files) == 0 {
-		return nil, fmt.Errorf("links: none of the %d supported links on %s resolved to a file "+
-			"(they may all have expired)", len(sources), page.Redacted())
+		return nil, noneRead("links", len(sources)-e.unrecognised, "supported links", page.Redacted(), e.refusals, e.failed)
 	}
 
-	title := util.FirstNonEmpty(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
-	note := partialNote("links", e, found, len(sources) < found)
-	if note == "" && e.used < found {
-		note = fmt.Sprintf("%d of %d links resolved", e.used, found)
-	}
+	title := cmp.Or(trimSiteSuffix(firstText(root, atomTitle)), page.Hostname()+page.Path)
 	return &Result{
 		Title: title,
-		Note:  note,
+		Note:  e.note("", sourceWords{noun: "links", found: found, counted: true}),
 		Files: e.files,
 	}, nil
 }
@@ -218,8 +242,10 @@ func linksTargetOf(u *url.URL) string {
 // contains a bracket and saves every link that is merely followed by one.
 var bareLink = regexp.MustCompile(`(?i)https?://[^\s"'<>()\[\]{}|^]+`)
 
-// linksTrailing is the punctuation a sentence leaves stuck to a pasted URL.
-const linksTrailing = `.,;:!?"'`
+// linksTrailing is the punctuation a sentence leaves stuck to a pasted URL,
+// and the backslash a script's escaped quote leaves behind (`\"` closing a
+// JSON string inside a <script>).
+const linksTrailing = `.,;:!?"'\`
 
 // linksCandidates collects the URLs a page offers as links, in the order the
 // page gives them and without repeats.
@@ -249,13 +275,20 @@ const linksTrailing = `.,;:!?"'`
 //
 // Fragments are kept. It is tempting to read "#..." as a page anchor and strip
 // it for a tidier dedupe, but mega puts the decryption key there: a mega link
-// without its fragment is a file nobody can open.
-func linksCandidates(root *html.Node, base *url.URL) []string {
+// without its fragment is a file nobody can open. Links to the page itself,
+// including its fragment anchors and pre-redirect aliases, are navigation.
+func linksCandidates(root *html.Node, base *url.URL, aliases ...*url.URL) []string {
 	var out []string
 	seen := make(map[string]bool)
+	self := make(map[string]bool)
+	for _, page := range append([]*url.URL{base}, aliases...) {
+		key, _, _ := strings.Cut(page.String(), "#")
+		self[key] = true
+	}
 	add := func(ref string) {
 		link := resolveRef(base, ref)
-		if link == "" || seen[link] {
+		key, _, _ := strings.Cut(link, "#")
+		if link == "" || self[key] || seen[link] {
 			return
 		}
 		// resolveRef resolves anything, including the mailto: and javascript:
@@ -282,4 +315,16 @@ func linksCandidates(root *html.Node, base *url.URL) []string {
 		}
 	})
 	return out
+}
+
+// linkExtAsIs is linkExt for a host whose downloads are already filed
+// under the extension exactly as its links spell it, case and length alone:
+// lowercasing or bounding it would rename them, and the next run would
+// download everything again. The extension a media link's filename carries,
+// or fallback where it carries none.
+func linkExtAsIs(link, fallback string) string {
+	if ext := path.Ext(util.NameFromURL(link)); ext != "" {
+		return ext
+	}
+	return fallback
 }

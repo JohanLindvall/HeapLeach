@@ -11,10 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // The fixtures below are written by hand in the shape each server emits,
@@ -100,10 +98,7 @@ func autoindexParse(t *testing.T, doc, base string) ([]autoindexEntry, *url.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, doc)
 	b := autoindexBase(u)
 	if !autoindexIsListing(root, b) {
 		t.Fatalf("%s was not recognised as a directory listing", base)
@@ -254,10 +249,7 @@ func TestAutoindexRecognisesAListing(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			root, err := parseHTML(tc.doc)
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := mustParseDoc(t, tc.doc)
 			if got := autoindexIsListing(root, autoindexBase(u)); got != tc.want {
 				t.Errorf("autoindexIsListing = %v, want %v", got, tc.want)
 			}
@@ -354,52 +346,35 @@ func TestAutoindexSizeSeparatesExactFromRounded(t *testing.T) {
 	}
 }
 
-// TestAutoindexMatchesArchiveOrgItems pins the one host shape claimed by URL
-// alone. A file inside an item must stay with the direct downloader.
-func TestAutoindexMatchesArchiveOrgItems(t *testing.T) {
+// TestAutoindexRecognise: a listing is recognised by what it says it is and
+// by linking inside its own directory, at any path and on any host.
+func TestAutoindexRecognise(t *testing.T) {
 	a := NewAutoindex(nil)
-	tests := map[string]bool{
-		"https://archive.org/download/an-item":          true,
-		"https://archive.org/download/an-item/":         true,
-		"https://archive.org/download/an-item/raw/":     true,
-		"https://archive.org/download/an-item/file.mp4": false,
-		"https://archive.org/details/an-item":           false,
-		"https://archive.org/download":                  false,
-		"https://files.example.test/pub/":               false,
-	}
-	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := a.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
+	listing := autoindexListing("/pub/", autoindexEntryRow("a.bin", "1024"))
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/pub/", listing), true)
+	// Titled as a listing of somewhere else.
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/other/",
+		autoindexListing("/other/", `<a href="/elsewhere/x.bin">x.bin</a>`)), false)
+	// The right title, and no entry inside the directory.
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/pub/",
+		`<html><head><title>Index of /pub/</title></head><body><a href="/">Home</a></body></html>`), false)
+	// An ordinary page of links.
+	expectRecognised(t, a, htmlPage(t, "https://files.example.test/notes/", autoindexNotAListing), false)
+	expectShape(t, a, "https://files.example.test/pub/", false)
 }
 
 // ------------------------------------------------------------- crawling
 
 // autoindexServer serves a fixed set of listings, and 404s anything else.
+// It counts every request.
 func autoindexServer(t *testing.T, pages map[string]string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		doc, ok := pages[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, doc)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &hits
+	srv, hits := fakeSite(t, sitePages("text/html", pages))
+	return srv, &hits.asked
 }
 
 func autoindexTestExtractor() *Autoindex {
-	return NewAutoindex(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	return NewAutoindex(testClient())
 }
 
 // autoindexListing renders a listing in the nginx shape from a list of raw
@@ -419,7 +394,7 @@ func autoindexCrawl(t *testing.T, base string) (*Result, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return autoindexTestExtractor().crawl(context.Background(), u, 0)
+	return autoindexTestExtractor().crawl(context.Background(), u, Options{})
 }
 
 // TestAutoindexCrawlsSubdirectoriesInOrder pins both the recursion and the
@@ -497,9 +472,12 @@ func TestAutoindexStopsAtTheDepthCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("crawl: %v", err)
 	}
-	want := config.MaxAutoindexDepth + 1 // the directory asked for, plus each level below it
+	want := config.MaxDirectoryDepth + 1 // the directory asked for, plus each level below it
 	if len(res.Files) != want {
 		t.Errorf("found %d files, want %d — one per level down to the depth cap", len(res.Files), want)
+	}
+	if res.Note != "partial — folder limit" {
+		t.Errorf("note = %q, want the folder limit said", res.Note)
 	}
 	if n := int(hits.Load()); n != want {
 		t.Errorf("made %d requests, want %d", n, want)
@@ -527,14 +505,40 @@ func TestAutoindexStopsAtTheFileCap(t *testing.T) {
 	if res.Files[0].Name != "file-00000.bin" {
 		t.Errorf("first file = %q, want the listing's first entry", res.Files[0].Name)
 	}
+	if res.Note != "partial — file limit" {
+		t.Errorf("note = %q, want the file limit said", res.Note)
+	}
 	// And the cap is the one configured, not a constant: a lower one is
 	// what the crawl stops at.
-	res, err = autoindexTestExtractor().crawl(context.Background(), mustParse(t, srv.URL+"/pub/"), 50)
+	res, err = autoindexTestExtractor().crawl(context.Background(), mustParse(t, srv.URL+"/pub/"), Options{limits: Limits{Files: 50}})
 	if err != nil {
 		t.Fatalf("crawl with a cap of 50: %v", err)
 	}
 	if len(res.Files) != 50 {
 		t.Errorf("found %d files under a cap of 50", len(res.Files))
+	}
+}
+
+// TestAutoindexStopsAtTheSourceCap reads no more directories than the
+// user's source limit, and says so.
+func TestAutoindexStopsAtTheSourceCap(t *testing.T) {
+	srv, hits := autoindexServer(t, map[string]string{
+		"/pub/":   autoindexListing("/pub/", autoindexEntryRow("a/", "-"), autoindexEntryRow("b/", "-")),
+		"/pub/a/": autoindexListing("/pub/a/", autoindexEntryRow("one.bin", "1024")),
+		"/pub/b/": autoindexListing("/pub/b/", autoindexEntryRow("two.bin", "1024")),
+	})
+	res, err := autoindexTestExtractor().crawl(context.Background(), mustParse(t, srv.URL+"/pub/"), Options{limits: Limits{Sources: 2}})
+	if err != nil {
+		t.Fatalf("crawl: %v", err)
+	}
+	if got := filePaths(res.Files); len(got) != 1 || got[0] != "a/one.bin" {
+		t.Errorf("files = %v, want only the first directory's", got)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("made %d requests, want 2", n)
+	}
+	if res.Note != "partial — folder limit" {
+		t.Errorf("note = %q, want the folder limit said", res.Note)
 	}
 }
 
@@ -551,21 +555,21 @@ func TestAutoindexDescendVisitsADirectoryOnce(t *testing.T) {
 		pending: []autoindexEntry{{name: "clips", url: base, dir: true}},
 	}
 	visited := map[string]bool{}
-	budget := autoindexBudget{}
+	budget := autoindexBudget{maxDirs: 10, maxFiles: 10}
 
-	if next := autoindexDescend([]*autoindexNode{node}, visited, &budget); len(next) != 1 {
+	if next, _ := autoindexDescend([]*autoindexNode{node}, visited, &budget); len(next) != 1 {
 		t.Fatalf("first descent produced %d directories, want 1", len(next))
 	}
 	node.pending = []autoindexEntry{{name: "clips", url: base, dir: true}}
-	if next := autoindexDescend([]*autoindexNode{node}, visited, &budget); len(next) != 0 {
-		t.Errorf("a directory already read was descended into again")
+	if next, cut := autoindexDescend([]*autoindexNode{node}, visited, &budget); len(next) != 0 || cut != "" {
+		t.Errorf("a directory already read was descended into again, or cut %q", cut)
 	}
 
 	// And a spent budget stops the descent whatever the listing named.
-	budget = autoindexBudget{dirs: config.MaxAutoindexDirs}
+	budget = autoindexBudget{dirs: 10, maxDirs: 10, maxFiles: 10}
 	node.pending = []autoindexEntry{{name: "other", url: base, dir: true}}
-	if next := autoindexDescend([]*autoindexNode{node}, map[string]bool{}, &budget); len(next) != 0 {
-		t.Errorf("the descent continued past the directory cap")
+	if next, cut := autoindexDescend([]*autoindexNode{node}, map[string]bool{}, &budget); len(next) != 0 || cut != "folder limit" {
+		t.Errorf("the descent continued past the directory cap, or cut %q", cut)
 	}
 }
 
@@ -586,6 +590,9 @@ func TestAutoindexSkipsASubdirectoryThatWillNotLoad(t *testing.T) {
 	if len(res.Files) != 1 || res.Files[0].Name != "kept.bin" {
 		t.Errorf("got %+v, want the one file the readable directory listed", res.Files)
 	}
+	if res.Note != "partial — unreadable folders" {
+		t.Errorf("note = %q, want the unreadable directory said", res.Note)
+	}
 }
 
 // TestAutoindexRefusesAPageThatIsNotAListing is the failure that matters: a
@@ -598,50 +605,45 @@ func TestAutoindexRefusesAPageThatIsNotAListing(t *testing.T) {
 		t.Fatal("an ordinary page of links resolved as a directory")
 	}
 
-	u, err := ParseURL(srv.URL + "/notes/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{}); ok {
-		t.Error("the sniff claimed a page that is not a listing")
+	reg := NewRegistry(&config.Config{}, testClient())
+	if _, ex, _ := reg.Extract(context.Background(), srv.URL+"/notes/", Options{}); ex != nil && ex.Name() == "autoindex" {
+		t.Error("a page that is not a listing was recognised as one")
 	}
 }
 
-// TestAutoindexSniffLeavesFileURLsAlone: the fallback downloads files, and a
-// URL with no trailing slash is not a directory. Spending a speculative GET
-// on one would be a poor trade — some are only good once.
-func TestAutoindexSniffLeavesFileURLsAlone(t *testing.T) {
+// TestAutoindexLeavesFileURLsAlone: the fallback downloads files, and a URL
+// naming one is not a directory. Spending a speculative GET on it would be a
+// poor trade — some are only good once.
+func TestAutoindexLeavesFileURLsAlone(t *testing.T) {
 	srv, hits := autoindexServer(t, map[string]string{"/pub/": autoindexListing("/pub/", autoindexEntryRow("a.bin", "1024"))})
 
-	u, err := ParseURL(srv.URL + "/pub/a.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{}); ok {
-		t.Error("the sniff claimed a URL that is not a directory")
+	reg := NewRegistry(&config.Config{}, testClient())
+	if _, ex, _ := reg.Extract(context.Background(), srv.URL+"/pub/a.bin", Options{}); ex == nil || ex.Name() == "autoindex" {
+		t.Errorf("a file URL went to %v", ex)
 	}
 	if n := hits.Load(); n != 0 {
-		t.Errorf("the sniff made %d requests for a file URL, want none", n)
+		t.Errorf("made %d requests for a file URL, want none", n)
 	}
 }
 
-// TestAutoindexSniffResolvesAnOpenDirectory is the shape the whole extractor
-// exists for: a directory on a host nobody has heard of.
-func TestAutoindexSniffResolvesAnOpenDirectory(t *testing.T) {
-	srv, _ := autoindexServer(t, map[string]string{
+// TestAutoindexResolvesAnOpenDirectory is the shape the whole extractor
+// exists for: a directory on a host nobody has heard of, recognised by its
+// listing and then read with the directory reader's Referer.
+func TestAutoindexResolvesAnOpenDirectory(t *testing.T) {
+	srv, hits := autoindexServer(t, map[string]string{
 		"/pub/": autoindexListing("/pub/", autoindexEntryRow("a.bin", "1024"), autoindexEntryRow("b.bin", "2048")),
 	})
 
-	u, err := ParseURL(srv.URL + "/pub/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, ok := autoindexSniff(context.Background(), httpx.New("test-agent", "en-US", 0, 5*time.Second), u, Options{})
-	if !ok {
-		t.Fatal("an open directory was not recognised")
+	reg := NewRegistry(&config.Config{}, testClient())
+	res, ex, err := reg.Extract(context.Background(), srv.URL+"/pub/", Options{})
+	if err != nil || ex.Name() != "autoindex" {
+		t.Fatalf("an open directory went to %v: %v", ex, err)
 	}
 	if len(res.Files) != 2 {
 		t.Errorf("found %d files, want 2: %+v", len(res.Files), res.Files)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("made %d requests, want the probe and the Referer-bearing listing read", n)
 	}
 }
 
@@ -659,5 +661,32 @@ func TestAutoindexResolvesAgainstTheDirectory(t *testing.T) {
 	}
 	if want := srv.URL + "/pub/a.bin"; res.Files[0].URL != want {
 		t.Errorf("url = %q, want %q", res.Files[0].URL, want)
+	}
+}
+
+// A directory whose read is cut short by the crawl's own cancellation is
+// not reported as unreadable: readAll says nothing failed, and the
+// cancellation is left for the caller to report.
+func TestAutoindexDoesNotCountACancelledReadAsUnreadable(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	a := NewAutoindex(testClient())
+	nodes := []*autoindexNode{{base: mustParse(t, srv.URL+"/pub/a/")}, {base: mustParse(t, srv.URL+"/pub/b/")}}
+	if a.readAll(ctx, nodes) {
+		t.Error("a read the cancellation cut short was counted as an unreadable directory")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the fixture did not cancel")
+	}
+	// The same directories failing on their own are counted.
+	gone := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(gone.Close)
+	if !a.readAll(t.Context(), []*autoindexNode{{base: mustParse(t, gone.URL+"/pub/a/")}}) {
+		t.Error("a directory that will not load was not counted")
 	}
 }

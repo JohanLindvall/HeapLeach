@@ -3,9 +3,9 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
-	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -57,40 +56,23 @@ import (
 // nothing: what the page's own player is pointed at outranks what its sharing
 // metadata advertises, so a real player is never outvoted by a share card.
 //
-// Failure is silent throughout, exactly as kvsSniff's is. Every step that
+// Failure is silent throughout. Every step that
 // cannot answer returns false and the caller carries on to the handling that
 // would have run anyway, so a page this cannot read is no worse off than
 // before.
 
-// mediaPageSniff resolves a URL that is shaped like a page rather than a
-// file, when the page turns out to carry media. The bool reports whether it
-// found anything; there is no error, because an error here means only "not
-// this, then".
-func mediaPageSniff(ctx context.Context, client *httpx.Client, u *url.URL) (*Result, bool) {
-	if path.Ext(u.Path) != "" {
-		return nil, false // a URL that names a file is a file
-	}
-
-	doc, ok := mediaPageFetch(ctx, client, u)
-	if !ok {
-		return nil, false
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, false
-	}
-	return mediaPageResult(ctx, client, u, root, doc)
-}
-
-// mediaPageResult also serves the generic fallback after it has checked the
-// same document for file-host links, avoiding another page fetch.
+// mediaPageResult resolves a URL that is shaped like a page rather than a
+// file, when its document turns out to carry media. The bool reports whether it found
+// anything; there is no error, because an error here means only "not this,
+// then". The generic fallback calls it after it has checked the same
+// document for file-host links, avoiding another page fetch.
 func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root *html.Node, doc string) (*Result, bool) {
 	found, ok := mediaPageFind(ctx, client, root, doc, u)
 	if !ok {
 		return nil, false
 	}
 
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		mediaPageTitle(root),
 		found.Title,
 		strings.Trim(u.Path, "/"),
@@ -106,13 +88,10 @@ func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root
 		if err != nil || len(media.Segments) == 0 {
 			return nil, false
 		}
-		return &Result{Title: title, Files: []File{{
-			Name: title + media.extensionOr(path.Ext(name)), Size: -1, Headers: headers,
-			Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
-		}}}, true
+		return &Result{Title: title, Files: []File{media.file(title+media.extensionOr(path.Ext(name)), headers)}}, true
 	}
 	return &Result{Title: title, Files: []File{{
-		Name: name, URL: found.URL, Size: found.Size, Headers: headers,
+		Name: name, URL: found.URL, Size: knownSize(found.Size), Headers: headers,
 	}}}, true
 }
 
@@ -125,12 +104,9 @@ type mediaFinding struct {
 	Title string
 	// Type is the MIME type the page or the host declared for this link, or
 	// "" when nothing declared one. It names the extension for a link whose
-	// path carries none.
+	// path carries none. Its Size is never a rounded listing figure, so
+	// never SizeApprox.
 	Type string
-	// Size is an exact byte length when the source stated one, else -1.
-	// Nothing here is ever a rounded listing figure, so nothing here is ever
-	// SizeApprox.
-	Size int64
 }
 
 // mediaPageFind runs the steps in confidence order and takes the first that
@@ -139,7 +115,7 @@ type mediaFinding struct {
 // mixing them would let a share card outrank a rendition list.
 func mediaPageFind(ctx context.Context, client *httpx.Client, root *html.Node, doc string, u *url.URL) (mediaFinding, bool) {
 	if best, ok := bestCandidate(mediaPageElements(root, u)); ok {
-		return mediaFinding{mediaCandidate: best, Size: -1}, true
+		return mediaFinding{mediaCandidate: best}, true
 	}
 	// JW Player before the metadata, and not after it. A page built on that
 	// player either advertises the player's own embed page in og:video — an
@@ -159,53 +135,80 @@ func mediaPageFind(ctx context.Context, client *httpx.Client, root *html.Node, d
 	return mediaPageLinkedData(root, u)
 }
 
-// mediaPageFetch reads the page, and only once the host has agreed it is one.
+// mediaPageFetchURL reads the page, and only once the host has agreed it is
+// one. It retains the final URL, so a redirected site resolves relative post
+// links and pagination against the page actually received.
 //
 // The content type is taken from the response headers and the body is read
 // only afterwards. That ordering is the whole point: an extensionless URL is
 // as likely to be a signed media link as a page, and one that answers
 // video/mp4 costs an aborted request here rather than a download.
-func mediaPageFetch(ctx context.Context, client *httpx.Client, u *url.URL) (string, bool) {
-	doc, _, ok := mediaPageFetchURL(ctx, client, u)
-	return doc, ok
+//
+// It is a sniff: a page longer than config.MaxResponseBytes answers with
+// its first config.MaxResponseBytes, which its callers search for media or
+// links and never keep as the page.
+func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (string, *url.URL, bool) {
+	read, ok := mediaPageFetch(ctx, client, u)
+	if !ok || !read.html {
+		return "", nil, false
+	}
+	return read.body, read.final, true
 }
 
-// mediaPageFetchURL retains the final URL, so a redirected site resolves
-// relative post links and pagination against the page actually received.
-func mediaPageFetchURL(ctx context.Context, client *httpx.Client, u *url.URL) (string, *url.URL, bool) {
+// mediaPageRead distinguishes an HTML document from a successful file
+// response. The latter's body is never read. headers records only the
+// request overrides, leaving cookies and route identity with the client.
+type mediaPageRead struct {
+	body    string
+	final   *url.URL
+	headers httpx.Header
+	html    bool
+	file    bool
+}
+
+// mediaPageFetch keeps the response classification for the fallback's
+// Referer retry. HTML-only readers use mediaPageFetchURL, so a file response
+// cannot stand in for a page or terminate its pagination as an empty page.
+func mediaPageFetch(ctx context.Context, client *httpx.Client, u *url.URL) (mediaPageRead, bool) {
 	req, err := client.NewRequest(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", nil, false
+		return mediaPageRead{}, false
 	}
 	// Asking as a browser navigating to the page, which is what the sniff is
 	// pretending to be and what some hosts serve their real markup to.
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
-	req.Header.Set(httpx.HeaderSecFetchDest, "document")
-	req.Header.Set(httpx.HeaderSecFetchMode, "navigate")
-	req.Header.Set(httpx.HeaderReferer, util.Origin(u)+"/")
+	headers := httpx.Navigate.Merge(httpx.Referer(util.Origin(u) + "/"))
+	headers.Apply(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, false
+		return mediaPageRead{}, false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", nil, false
+		return mediaPageRead{}, false
 	}
-	// A host that will not say what it sent is treated as not having sent a
-	// page. That is at worst today's behaviour, which is the whole bargain
-	// this sniff makes.
-	kind, _, _ := mime.ParseMediaType(resp.Header.Get(httpx.HeaderContentType))
-	if !mediaPageIsHTMLType(kind) {
-		return "", nil, false
+	kind, _, typeErr := mime.ParseMediaType(resp.Header.Get(httpx.HeaderContentType))
+	read := mediaPageRead{final: resp.Request.URL, headers: headers, html: mediaPageIsHTMLType(kind)}
+	if !read.html {
+		// Only an explicit binary type overturns an earlier HTML gate.
+		// Unknown/plain-text answers, structured errors and manifests
+		// remain refusals; a playlist must never be queued as media bytes.
+		read.file = typeErr == nil && strings.Contains(kind, "/") &&
+			!probeReadsType(kind) && !probeSniffsType(kind) &&
+			resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusResetContent
+		return read, true
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
-	if err != nil {
-		return "", nil, false
+	// A page past the bound is sniffed by its prefix, as the probe's is
+	// (Direct.document): the player, og:video and linked data sit near the
+	// top, and refusing the page would find nothing on one that holds them.
+	body, err := httpx.ReadBody(resp.Body)
+	if err != nil && !(httpx.IsTooLarge(err) && len(body) > 0) {
+		return mediaPageRead{}, false
 	}
-	return string(body), resp.Request.URL, true
+	read.body = string(body)
+	return read, true
 }
 
 // ------------------------------------------------------- the page's player
@@ -404,11 +407,11 @@ func jwPlayerBest(feed *jwPlayerFeed) (mediaFinding, bool) {
 		}
 	}
 	source := stated[best.URL]
+	best.Size = source.Filesize
 	return mediaFinding{
 		mediaCandidate: best,
-		Title:          util.FirstNonEmpty(item.Title, feed.Title),
+		Title:          cmp.Or(item.Title, feed.Title),
 		Type:           mediaPageMediaType(source.Type),
-		Size:           mediaPageSize(source.Filesize),
 	}, true
 }
 
@@ -446,7 +449,6 @@ func mediaPageOpenGraph(root *html.Node, base *url.URL) (mediaFinding, bool) {
 			Quality: quality,
 			IsHLS:   mediaPageIsHLS(link, declared),
 			Type:    declared,
-			Size:    -1,
 		}, true
 	}
 	return mediaFinding{}, false
@@ -471,7 +473,6 @@ func mediaPageTwitterStream(root *html.Node, base *url.URL) (mediaFinding, bool)
 		Quality: qualityOf(link),
 		IsHLS:   mediaPageIsHLS(link, declared),
 		Type:    declared,
-		Size:    -1,
 	}, true
 }
 
@@ -489,11 +490,9 @@ func mediaPageTwitterStream(root *html.Node, base *url.URL) (mediaFinding, bool)
 // contentUrl would resolve half the web to a JPEG. Only VideoObject,
 // AudioObject and the bare MediaObject are accepted.
 func mediaPageLinkedData(root *html.Node, base *url.URL) (mediaFinding, bool) {
-	for _, script := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && strings.Contains(strings.ToLower(attr(n, "type")), "ld+json")
-	}) {
+	for _, payload := range linkedData(root) {
 		var doc any
-		if err := json.Unmarshal([]byte(textOf(script)), &doc); err != nil {
+		if err := json.Unmarshal([]byte(payload), &doc); err != nil {
 			continue
 		}
 		if found, ok := linkedDataMedia(doc, base); ok {
@@ -557,7 +556,6 @@ func linkedDataObject(obj map[string]any, base *url.URL) (mediaFinding, bool) {
 		IsHLS:   mediaPageIsHLS(link, declared),
 		Title:   linkedDataString(obj["name"]),
 		Type:    declared,
-		Size:    -1,
 	}, true
 }
 
@@ -622,7 +620,7 @@ func linkedDataInt(value any) int {
 // is a title whose own dash is meaningful losing what follows it, which is a
 // name on disk, not a wrong download.
 func mediaPageTitle(root *html.Node) string {
-	return trimSiteSuffix(util.FirstNonEmpty(
+	return trimSiteSuffix(cmp.Or(
 		metaContent(root, "og:title"),
 		firstText(root, atomTitle),
 	))
@@ -735,13 +733,4 @@ func mediaPageIsMediaType(kind string) bool {
 // or by what the page declared it to be.
 func mediaPageIsHLS(link, declared string) bool {
 	return strings.Contains(link, ".m3u8") || mediaPageIsHLSType(declared)
-}
-
-// mediaPageSize normalises a stated byte count to the File convention, where
-// an unknown length is -1 rather than 0.
-func mediaPageSize(stated int64) int64 {
-	if stated > 0 {
-		return stated
-	}
-	return -1
 }

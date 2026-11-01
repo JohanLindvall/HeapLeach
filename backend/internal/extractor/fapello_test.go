@@ -3,13 +3,10 @@
 package extractor
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestFapelloFullSize(t *testing.T) {
@@ -45,22 +42,39 @@ func TestFapelloExtractWalksAndDeduplicates(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	f := NewFapello(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, _ := ParseURL(srv.URL + "/model-one/")
-	res, err := f.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewFapello(testClient()), srv.URL+"/model-one/", Options{})
 	if res.Title != "model-one" {
 		t.Errorf("title = %q, want the model's name", res.Title)
 	}
 	if len(res.Files) != 2 {
 		t.Fatalf("got %d files, want the model's own 2 (the other model's dropped)", len(res.Files))
 	}
-	if res.Files[0].Name != "model-one_0300.jpg" {
+	if res.Files[0].Name != "model-one_0300.jpg" || res.Note != "" {
 		t.Errorf("name = %q, want the thumbnail suffix stripped", res.Files[0].Name)
 	}
 	if pagesServed != 2 {
 		t.Errorf("served %d pages, want 2: the repeat page ends the walk", pagesServed)
 	}
+}
+
+func TestFapelloRecognise(t *testing.T) {
+	f := NewFapello(nil)
+	page := `<html><head><title>A Model Nude - Fapello</title></head><body>` +
+		`<img src="https://cdn.example.test/content/a/-/a-model/1000/a-model_0001_300px.jpg"></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/", page), true)
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/12/", page), true)
+	// A post linked without its trailing slash, served as it was asked.
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/12", page), true)
+	// The right form and the name, but only another model's media.
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/b-model/", page), false)
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/",
+		`<html><head><title>A Model - Fapello</title></head><body></body></html>`), false)
+	// The model's media on a page of another form, and without the name.
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/videos/x/", page), false)
+	expectRecognised(t, f, htmlPage(t, "https://models.example.test/a-model/",
+		strings.Replace(page, "Fapello", "A blog", 1)), false)
+
+	expectShape(t, f, "https://models.example.test/a-model/12/", true)
+	expectShape(t, f, "https://models.example.test/a-model/", false)
+	expectShape(t, f, "https://models.example.test/a-model/12", false)
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"slices"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -48,15 +47,16 @@ func (m *Manager) Restore() (unfinished int, err error) {
 
 	for _, sj := range st.Jobs {
 		job := &Job{
-			ID:        sj.ID,
-			Source:    sj.Source,
-			Title:     sj.Title,
-			Host:      sj.Host,
-			Password:  sj.Password,
-			Err:       sj.Err,
-			CreatedAt: sj.CreatedAt,
-			canceled:  sj.Canceled,
-			Limit:     restoredJobLimit(sj.Limit, m.maxConcurrency()),
+			ID:         sj.ID,
+			Source:     sj.Source,
+			Title:      sj.Title,
+			Host:       sj.Host,
+			Password:   sj.Password,
+			Err:        sj.Err,
+			CreatedAt:  sj.CreatedAt,
+			canceled:   sj.Canceled,
+			incomplete: sj.Incomplete,
+			Limit:      restoredJobLimit(sj.Limit, m.maxConcurrency()),
 			// Nothing restored can be fetched as it stands; see unfetchable.
 			unfetchable: true,
 		}
@@ -128,7 +128,7 @@ func (m *Manager) restoreSettingsLocked(s *savedSettings) {
 	if s.ProxyTypes != nil && maps.Equal(s.ConfiguredProxyTypes, m.cfg.ProxyTypes) {
 		kinds := make(map[string]string)
 		for group, kind := range s.ProxyTypes {
-			if slices.Contains(config.ProxyGroups, group) && config.ValidProxyType(kind) {
+			if config.IsProxyGroup(group) && config.ValidProxyType(kind) {
 				kinds[group] = kind
 			}
 		}
@@ -174,16 +174,17 @@ func (m *Manager) stateLocked() *savedState {
 			continue
 		}
 		sj := savedJob{
-			ID:        job.ID,
-			Source:    job.Source,
-			Title:     job.Title,
-			Host:      job.Host,
-			Password:  job.Password,
-			Err:       job.Err,
-			CreatedAt: job.CreatedAt,
-			Canceled:  job.canceled,
-			Limit:     job.Limit,
-			Items:     make([]savedItem, 0, len(job.Items)),
+			ID:         job.ID,
+			Source:     job.Source,
+			Title:      job.Title,
+			Host:       job.Host,
+			Password:   job.Password,
+			Err:        job.Err,
+			CreatedAt:  job.CreatedAt,
+			Canceled:   job.canceled,
+			Incomplete: job.incomplete,
+			Limit:      job.Limit,
+			Items:      make([]savedItem, 0, len(job.Items)),
 		}
 		for _, it := range job.Items {
 			status := it.Status

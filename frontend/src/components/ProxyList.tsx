@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useState } from 'react';
-import { ApiError, fetchProxies, type ProxyQuery } from '../api';
+import { errorMessage, fetchProxies, type ProxyQuery } from '../api';
 import { formatDuration, formatSpeed } from '../format';
 import type { ProxyPage, ProxyRow } from '../types';
+import { usePolling } from '../usePolling';
 
 const REFRESH_MS = 5000;
 const SEARCH_DELAY_MS = 250;
@@ -17,37 +18,15 @@ export function ProxyList({ enabled, revision }: { readonly enabled: boolean; re
     return () => window.clearTimeout(timer);
   }, [search]);
 
+  // A new query starts from nothing rather than under the last one's rows.
   useEffect(() => {
-    const controller = new AbortController();
-    let timer: number | undefined;
-    let pending = false;
     setPage(null);
     setError('');
-    const refresh = async (): Promise<void> => {
-      if (pending || controller.signal.aborted) return;
-      window.clearTimeout(timer);
-      if (!document.hidden) {
-        pending = true;
-        try {
-          const result = await fetchProxies(query, controller.signal);
-          if (!controller.signal.aborted) { setPage(result); setError(''); }
-        } catch (e) {
-          if (!controller.signal.aborted) setError(e instanceof ApiError ? e.message : 'Could not refresh the proxy list.');
-        } finally {
-          pending = false;
-        }
-      }
-      if (!controller.signal.aborted) timer = window.setTimeout(() => { void refresh(); }, REFRESH_MS);
-    };
-    const visible = (): void => { if (!document.hidden) void refresh(); };
-    void refresh();
-    document.addEventListener('visibilitychange', visible);
-    return () => {
-      controller.abort();
-      window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', visible);
-    };
   }, [query, revision, enabled]);
+  usePolling({ intervalMs: REFRESH_MS }, async (signal) => {
+    const result = await fetchProxies(query, signal);
+    if (!signal.aborted) { setPage(result); setError(''); }
+  }, (e) => setError(errorMessage(e, 'Could not refresh the proxy list.')), [query, revision, enabled]);
 
   return (
     <div className="proxy-list" aria-label="Download proxy inventory">

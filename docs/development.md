@@ -30,8 +30,9 @@ toolchain pinned in `backend/go.mod` automatically. `make dev` needs both
 Go and Node locally.
 
 The checked-in tests use synthetic fixtures and local HTTP servers.
-Live extractor tests belong in gitignored `*live_test.go` files behind the
-`live` build tag and take their source URLs and passwords from environment
+Live extractor tests are `*live_test.go` files behind the `live` build tag.
+They are kept in a separate private repository and symlinked into the
+checkout, where they are gitignored; they take passwords from environment
 variables. A fresh clone has no live-site fixtures.
 
 ## Layout
@@ -54,12 +55,14 @@ frontend/           React + TypeScript (strict), built by Vite
 
 ## Adding a host
 
-Implement `extractor.Extractor` (`Name`, `Match`, `Extract`) and register it
-in `NewRegistry`. Embed a `hostSet` naming the domains it claims: that one
-declaration supplies `Match` and the [generated inventory](../README.md#every-supported-site) entry both, so the two
-cannot disagree, and a `Match` of your own is only for what a host list
-cannot say. Return a `File` per download; set `Resolve` instead of `URL` when
-the host issues links that expire.
+Implement `extractor.Extractor` (`Name`, `Shape`, `Recognise`, `Recognises`,
+`Extract`) and register it in `NewRegistry`. No extractor claims a domain:
+`Recognise` reads the probed page for the link's form and the markup the
+extractor parses, `Shape` gives the link scanner the form alone, and
+`Recognises` is its row in the [generated inventory](../README.md#every-supported-site).
+See [the extractor guide](agents/extractors.md#the-contract). Return a `File`
+per download; set `Resolve` instead of `URL` when the host issues links that
+expire.
 
 ## Releases
 

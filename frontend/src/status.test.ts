@@ -11,6 +11,7 @@ import {
   matchesFilter,
   matchesFileQuery,
   matchesQuery,
+  offersRetry,
   phaseOf,
 } from './status';
 import type { JobView, Status } from './types';
@@ -24,7 +25,6 @@ function job(status: Status, extra: Partial<JobView> = {}): JobView {
     title: 'Album ' + status,
     host: 'example',
     status,
-    createdAt: '2026-01-01T00:00:00Z',
     items: [],
     total: 0,
     done: 0,
@@ -62,13 +62,31 @@ describe('isComplete', () => {
     expect(isComplete(job('done', { total: 1, done: 1, error: 'Listing incomplete' }))).toBe(false);
   });
 
+  it('keeps a done job whose listing a failure cut short', () => {
+    expect(isComplete(job('done', { total: 1, done: 1, incomplete: true }))).toBe(false);
+  });
+
   it('keeps empty jobs', () => {
     expect(isComplete(job('queued'))).toBe(false);
     expect(isComplete(job('done'))).toBe(false);
   });
 });
 
+describe('offersRetry', () => {
+  it('offers a retry of a job cut short once nothing of it is moving', () => {
+    expect(ALL.filter((s) => offersRetry(job(s, { incomplete: true })))).toEqual(['done', 'failed', 'canceled']);
+    expect(ALL.filter((s) => offersRetry(job(s)))).toEqual(['failed', 'canceled']);
+  });
+});
+
 describe('matchesFilter', () => {
+  it('files a done job whose listing was cut short under "failed", where its retry is', () => {
+    const cut = job('done', { total: 1, done: 1, incomplete: true });
+    expect(matchesFilter(cut, 'failed')).toBe(true);
+    expect(matchesFilter(cut, 'done')).toBe(false);
+    expect(countByFilter([cut])).toEqual({ all: 1, active: 0, done: 0, failed: 1 });
+  });
+
   it('shows everything under "all"', () => {
     for (const status of ALL) expect(matchesFilter(job(status), 'all')).toBe(true);
   });

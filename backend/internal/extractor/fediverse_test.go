@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -57,10 +56,7 @@ func TestFediverseTargetShapes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.raw, func(t *testing.T) {
-			u, err := ParseURL(tc.raw)
-			if err != nil {
-				t.Fatal(err)
-			}
+			u := mustParse(t, tc.raw)
 			got := fediTargetOf(u)
 			if got == nil {
 				t.Fatal("not recognised as a fediverse link")
@@ -89,10 +85,7 @@ func TestFediverseTargetRefusesOtherShapes(t *testing.T) {
 		"https://example.test/@alice@nodot",
 		"https://example.test/users/alice/statuses/1",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := fediTargetOf(u); got != nil {
 			t.Errorf("%s was taken as a %d for %q", raw, got.kind, got.handle)
 		}
@@ -106,10 +99,7 @@ func TestFediverseTargetRefusesOtherShapes(t *testing.T) {
 // pixelfed-shaped entry here is the evidence — so it has to be read, and read
 // from the right link.
 func TestFediverseNodeInfoHref(t *testing.T) {
-	instance, err := ParseURL("https://example.test/@alice")
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := mustParse(t, "https://example.test/@alice")
 
 	tests := []struct {
 		name  string
@@ -235,12 +225,9 @@ const mastodonFixture = `[
 ]`
 
 func TestMastodonFiles(t *testing.T) {
-	var statuses []mastodonStatus
-	if err := json.Unmarshal([]byte(mastodonFixture), &statuses); err != nil {
-		t.Fatal(err)
-	}
+	statuses := decode[[]mastodonStatus](t, mastodonFixture)
 
-	files := mastodonFiles(statuses)
+	files := fediFiles(mastodonEntries(statuses))
 	want := []struct{ name, link string }{
 		{"115000000000000001_1.jpg", "https://files.example.test/media/000/001/original/first.jpg"},
 		{"115000000000000001_2.mp4", "https://files.example.test/media/000/002/original/second.mp4"},
@@ -304,12 +291,13 @@ func TestFediverseExtractsAMastodonAccount(t *testing.T) {
 	if res.Title != "@alice@127.0.0.1" {
 		t.Errorf("title = %q, want the account's canonical handle", res.Title)
 	}
-	// A full page, then a short one that ends the walk.
-	if len(res.Files) != fediMastodonPageSize+2 {
-		t.Fatalf("found %d files, want %d", len(res.Files), fediMastodonPageSize+2)
+	// A full page, then a short one, which is the timeline's end: no empty
+	// page is asked for after it.
+	if len(res.Files) != fediMastodonPageSize+2 || res.Note != "" {
+		t.Fatalf("found %d files, note %q, want %d", len(res.Files), res.Note, fediMastodonPageSize+2)
 	}
-	if len(asked) != 2 || asked[0] != "" || asked[1] == "" {
-		t.Fatalf("paged with max_id %q, want an unqualified first page then an older one", asked)
+	if len(asked) != 2 || asked[0] != "" || asked[1] != "1001" {
+		t.Fatalf("paged with max_id %q, want an unqualified first page then older ones", asked)
 	}
 	if res.Files[0].Name != "1040_1.jpg" {
 		t.Errorf("first file is %q, want the newest status's attachment", res.Files[0].Name)
@@ -317,12 +305,16 @@ func TestFediverseExtractsAMastodonAccount(t *testing.T) {
 }
 
 // mastodonPage answers one page of the timeline above: a full page of
-// statuses with one attachment each, and then a short one whose ids carry on
-// below where the first left off.
+// statuses with one attachment each, then a short one whose ids carry on
+// below where the first left off, then nothing.
 func mastodonPage(maxID string) string {
 	high, count := 1040, fediMastodonPageSize
-	if maxID != "" {
+	switch maxID {
+	case "":
+	case "1001":
 		high, count = 1000, 2
+	default:
+		count = 0
 	}
 	items := make([]string, 0, count)
 	for i := range count {
@@ -394,6 +386,36 @@ func TestFediverseRefusesAHostThatIsNotAnInstance(t *testing.T) {
 	if !strings.Contains(err.Error(), "nodeinfo") {
 		t.Errorf("error %q does not say what was missing", err)
 	}
+}
+
+// TestFediverseRecognise: a page of the fediverse's forms on a server whose
+// nodeinfo names its software, and nothing else.
+func TestFediverseRecognise(t *testing.T) {
+	srv := fediServer(t, "mastodon", nil)
+	f := NewFediverse(testClient())
+
+	page := htmlPage(t, srv.URL+"/@alice", `<html><head><title>Alice</title></head></html>`)
+	for range 2 {
+		if !f.Recognise(context.Background(), page) {
+			t.Fatal("an instance's profile was not recognised")
+		}
+	}
+	// The same form on a server that publishes no nodeinfo, even one that
+	// calls itself by a fediverse name.
+	plain := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(plain.Close)
+	named := htmlPage(t, plain.URL+"/@alice", `<html><head><meta property="og:site_name" content="Mastodon"></head></html>`)
+	if f.Recognise(context.Background(), named) {
+		t.Error("a server with no nodeinfo was recognised")
+	}
+	// An instance's page of another form.
+	if f.Recognise(context.Background(), htmlPage(t, srv.URL+"/about/more", "<html></html>")) {
+		t.Error("a page of no fediverse form was recognised")
+	}
+
+	expectShape(t, f, "https://social.example.test/@alice", true)
+	expectShape(t, f, "https://social.example.test/c/pics", true)
+	expectShape(t, f, "https://social.example.test/about", false)
 }
 
 // ---------------------------------------------------------------- pixelfed
@@ -491,14 +513,11 @@ const lemmyFixture = `{"posts": [
 ]}`
 
 func TestLemmyFiles(t *testing.T) {
-	var payload struct {
+	payload := decode[struct {
 		Posts []lemmyPostView `json:"posts"`
-	}
-	if err := json.Unmarshal([]byte(lemmyFixture), &payload); err != nil {
-		t.Fatal(err)
-	}
+	}](t, lemmyFixture)
 
-	files := lemmyFiles(payload.Posts)
+	files := fediFiles(lemmyEntries(payload.Posts))
 	want := []struct{ name, link string }{
 		{"101 A photograph.jpeg", "https://example.test/pictrs/image/aaaa-bbbb.jpeg"},
 		{"105 From an older instance.webp", "https://other.test/pictrs/image/eeee-ffff.webp"},
@@ -543,6 +562,10 @@ func TestFediverseExtractsALemmyCommunity(t *testing.T) {
 					t.Errorf("asked for community %q, want pics", got)
 				}
 				pages = append(pages, query.Get("page"))
+				if query.Get("page") != "1" {
+					writeJSON(w, `{"posts":[]}`)
+					return true
+				}
 				writeJSON(w, lemmyFixture)
 				return true
 			})
@@ -554,10 +577,10 @@ func TestFediverseExtractsALemmyCommunity(t *testing.T) {
 			if len(res.Files) != 4 {
 				t.Fatalf("found %d files, want the 4 media submissions", len(res.Files))
 			}
-			// The fixture is shorter than a page, so one request is the whole
-			// listing.
-			if len(pages) != 1 || pages[0] != "1" {
-				t.Errorf("asked for pages %q, want just the first", pages)
+			// The fixture is shorter than the page size asked for, which
+			// is the timeline's end: no empty page is asked for after it.
+			if len(pages) != 1 || pages[0] != "1" || res.Note != "" {
+				t.Errorf("asked for pages %q, note %q, want the first alone", pages, res.Note)
 			}
 		})
 	}
@@ -584,6 +607,10 @@ func TestFediverseStopsOnALemmyPageThatRepeats(t *testing.T) {
 	if requests != 2 {
 		t.Errorf("made %d requests, want 2: one page, then the one that proved it repeats",
 			requests)
+	}
+	// The repeat is the community's end, not a cut.
+	if res.Note != "" {
+		t.Errorf("note %q, want none", res.Note)
 	}
 }
 
@@ -625,12 +652,9 @@ const misskeyFixture = `[
 ]`
 
 func TestMisskeyFiles(t *testing.T) {
-	var notes []misskeyNote
-	if err := json.Unmarshal([]byte(misskeyFixture), &notes); err != nil {
-		t.Fatal(err)
-	}
+	notes := decode[[]misskeyNote](t, misskeyFixture)
 
-	files := misskeyFiles(notes)
+	files := fediFiles(misskeyEntries(notes))
 	if len(files) != 2 {
 		t.Fatalf("found %d files, want 2: %+v", len(files), files)
 	}
@@ -716,8 +740,9 @@ func TestFediverseExtractsMisskeyNotes(t *testing.T) {
 	if len(res.Files) != fediMisskeyPageSize+1 {
 		t.Fatalf("found %d files, want %d", len(res.Files), fediMisskeyPageSize+1)
 	}
-	if len(untils) != 2 || untils[0] != "" || untils[1] == "" {
-		t.Errorf("paged with untilId %q, want a first page then an older one", untils)
+	// The second page is short, so it is the last asked for.
+	if len(untils) != 2 || untils[0] != "" || untils[1] != "note900" {
+		t.Errorf("paged with untilId %q, want a first page then older ones", untils)
 	}
 }
 
@@ -725,8 +750,12 @@ func TestFediverseExtractsMisskeyNotes(t *testing.T) {
 // page carrying on below where the first left off.
 func misskeyPage(until string) string {
 	high, count := 999, fediMisskeyPageSize
-	if until != "" {
+	switch until {
+	case "":
+	case "note900":
 		high, count = 899, 1
+	default:
+		count = 0
 	}
 	items := make([]string, 0, count)
 	for i := range count {
@@ -789,13 +818,10 @@ func readBody(r *http.Request) []byte {
 // fediExtract runs the extractor against a synthetic instance.
 func fediExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
-	f := NewFediverse(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, err := url.Parse(srv.URL + path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !f.Match(u) {
-		t.Fatalf("%s is not matched by the fediverse extractor", u)
+	f := NewFediverse(testClient())
+	u := mustParse(t, srv.URL+path)
+	if !f.Shape(u) {
+		t.Fatalf("%s is not of a fediverse form", u)
 	}
 	return f.Extract(context.Background(), u, Options{})
 }
@@ -848,4 +874,31 @@ func endlessMastodonPage(page int) string {
 			  "url":"https://files.example.test/media/%s/original/pic.jpg"}]}`, id, id))
 	}
 	return "[" + strings.Join(items, ",") + "]"
+}
+
+// TestFediverseTimelineStopsAtTheFileCap: a timeline is walked only as far
+// as the files it carries pass the user's file cap, and says it was cut.
+func TestFediverseTimelineStopsAtTheFileCap(t *testing.T) {
+	var requests int
+	srv := fediServer(t, "mastodon", func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.URL.Path {
+		case "/api/v1/accounts/lookup":
+			writeJSON(w, `{"id":"42","username":"alice","acct":"alice"}`)
+		case "/api/v1/accounts/42/statuses":
+			requests++
+			writeJSON(w, endlessMastodonPage(requests))
+		default:
+			return false
+		}
+		return true
+	})
+	f := NewFediverse(testClient())
+	opts := Options{limits: Limits{Files: fediMastodonPageSize + 10}}
+	res, err := f.Extract(context.Background(), mustParse(t, srv.URL+"/@alice"), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || res.Note != "partial — file limit" {
+		t.Errorf("made %d requests with note %q, want 2 and the file cap's", requests, res.Note)
+	}
 }

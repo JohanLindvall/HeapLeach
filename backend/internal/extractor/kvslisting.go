@@ -5,6 +5,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -56,9 +57,10 @@ type kvsListing struct {
 	title func(root *html.Node) string
 	// empty explains a listing with no videos on it.
 	empty string
-	// first is the first page's document when the caller has already
-	// fetched it, so that it is not fetched twice.
-	first string
+	// first is the first page when the caller has already read it, so
+	// that it is neither fetched nor parsed twice: its text for the stated
+	// total, its tree for the walk.
+	first *document
 	// limit is the listing cap in force; zero means the default.
 	limit int
 }
@@ -75,119 +77,125 @@ func (l kvsListing) fileCap() int {
 // a listing states how far it goes when it states it at all.
 var kvsShowingTotal = regexp.MustCompile(`Showing\s+\d+\s*-\s*\d+\s+of\s+(\d+)`)
 
-// kvsListingResult resolves a listing into one file per video.
-func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing, label string) (*Result, error) {
-	pages, title, err := kvsListingPages(ctx, client, l, label)
+// kvsListingResult resolves a listing into one file per video, with the
+// note for a listing the cap cut short and for videos that refused.
+//
+// Every video needs its own page read for a media URL, so they are fetched
+// several at a time and a video that will not load is skipped rather than
+// failing a listing of hundreds; when none loads, the first reason says why.
+// A listing with no videos at all is a kvsEmpty.
+func kvsListingResult(ctx context.Context, client *httpx.Client, l kvsListing) (*Result, error) {
+	pages, title, note, err := kvsListingWalk(ctx, client, l)
 	if err != nil {
 		return nil, err
 	}
 	if len(pages) == 0 {
-		return nil, fmt.Errorf("%s: %s", label, l.empty)
+		return nil, kvsEmpty{name: kvsNameOf(l.url), why: l.empty}
 	}
-	return kvsResolvePages(ctx, client, l, pages, title, label)
-}
-
-// kvsResolvePages turns the video pages a walk collected into files.
-//
-// Every video needs its own page read for a media URL, so they are fetched
-// several at a time and a video that will not load is skipped rather than
-// failing a listing of hundreds.
-func kvsResolvePages(ctx context.Context, client *httpx.Client, l kvsListing, pages []string, title, label string) (*Result, error) {
-	files := FanOut(ctx, pages, func(ctx context.Context, page string) ([]File, error) {
+	files, refused, err := readListing(ctx, kvsNameOf(l.url), "videos", l.url, pages, func(ctx context.Context, page string) ([]File, error) {
 		u, err := ParseURL(page)
 		if err != nil {
 			return nil, err
 		}
-		res, err := kvsExtract(ctx, client, u, label)
+		res, err := kvsExtract(ctx, client, u)
 		if err != nil {
 			return nil, err
 		}
 		return res.Files, nil
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("%s: none of the %d videos on %s could be resolved",
-			label, len(pages), l.url)
+	if err != nil {
+		return nil, err
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refused)}, nil
 }
 
-// kvsListingPages walks the listing and collects every video page it names.
-func kvsListingPages(ctx context.Context, client *httpx.Client, l kvsListing, label string) ([]string, string, error) {
-	var (
-		pages   []string
-		title   string
-		total   int
-		seen    = make(map[string]bool)
-		visited = make(map[string]bool)
-		target  = l.url
-		block   string
-	)
+// kvsEmpty is the error for a listing with no videos on it, saying why in
+// the listing's own words.
+type kvsEmpty struct{ name, why string }
 
-	for page := 1; page <= config.MaxAlbumPages && target != ""; page++ {
-		if visited[target] {
-			break // the listing pointed back at a page already walked
-		}
-		visited[target] = true
+func (e kvsEmpty) Error() string { return e.name + ": " + e.why }
 
-		doc := l.first
-		if page > 1 || doc == "" {
-			var err error
-			doc, err = client.GetString(ctx, target, httpx.Referer(l.url))
-			if err != nil {
-				if page == 1 {
-					return nil, "", fmt.Errorf("%s: fetch %s: %w", label, l.url, err)
-				}
-				break // a later page failing still leaves the earlier ones
-			}
-		}
-		root, err := parseHTML(doc)
+// kvsListingWalk walks the listing and collects every video page it names,
+// up to the cap, each being a page to read, with the note for a walk the cap
+// cut short.
+//
+// The listing's own end is the walk's: a page that adds nothing, one asked
+// for twice, a later page that will not load or parse. The stated total
+// ends it as well, ahead of the cap.
+func kvsListingWalk(ctx context.Context, client *httpx.Client, l kvsListing) ([]string, string, string, error) {
+	headers := httpx.Referer(l.url)
+	first := l.first
+	if first == nil {
+		doc, err := client.GetString(ctx, l.url, headers)
 		if err != nil {
-			break
+			return nil, "", "", fmt.Errorf("%s: fetch %s: %w", kvsNameOf(l.url), l.url, err)
 		}
-		if page == 1 {
-			title = l.title(root)
-			if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
-				total, _ = strconv.Atoi(m[1])
-			}
-		}
-
-		added := 0
-		for _, link := range kvsListingVideos(root, l.url) {
-			if seen[link] {
-				continue
-			}
-			seen[link] = true
-			pages = append(pages, link)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-		if total > 0 && len(pages) >= total {
-			break
-		}
-		if len(pages) >= l.fileCap() {
-			pages = pages[:l.fileCap()]
-			break
-		}
-		// The listing says where the next page is, and on the last one says
-		// that there is none. That is the stop condition; everything above
-		// is a guard against a listing that misreports itself.
-		if kvsListingEnds(root) {
-			break
-		}
-		target = kvsNextPage(root, l.url)
-		if target == "" {
-			target = kvsAsyncNext(root, l.url)
-		}
-		if target == "" {
-			if page == 1 {
-				block = kvsListingBlock(root)
-			}
-			target = kvsAsyncPage(l.url, block, page+1)
-		}
+		first = &document{body: doc}
 	}
-	return pages, title, nil
+	doc := first.body
+	root, err := first.parse()
+	if err != nil {
+		return nil, "", "", nil
+	}
+	start, err := url.Parse(l.url)
+	if err != nil {
+		return nil, "", "", nil
+	}
+	total := 0
+	if m := kvsShowingTotal.FindStringSubmatch(doc); m != nil {
+		total, _ = strconv.Atoi(m[1])
+	}
+
+	var (
+		seen  = make(map[string]bool)
+		page  = 0
+		block string
+	)
+	links, title, note, err := walkListing(ctx, client, start, listingWalk{
+		name: kvsNameOf(l.url), title: l.title(root), root: root,
+		// The stated total, a page adding nothing, one without the
+		// listing, or the 404 an async page request past the end answers
+		// is where it ends; a page that fails otherwise is a cut.
+		ends:  walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound}},
+		limit: l.fileCap(), limitNote: fileLimitNote,
+		fetch: fetchAsAsked(client, headers),
+		read: func(root *html.Node, _, _ *url.URL) listingPage {
+			page++
+			var p listingPage
+			for _, link := range kvsListingVideos(root, l.url) {
+				p.links = append(p.links, listingLink{url: link})
+				seen[link] = true
+			}
+			switch {
+			case total > 0 && len(seen) >= total:
+				return p
+			case kvsListingEnds(root):
+				// The listing says where the next page is, and on the last
+				// one says that there is none. That is the stop condition;
+				// everything above is a guard against a listing that
+				// misreports itself.
+				return p
+			}
+			target := kvsNextPage(root, l.url)
+			if target == "" {
+				target = kvsAsyncNext(root, l.url)
+			}
+			if target == "" {
+				if page == 1 {
+					block = kvsListingBlock(root)
+				}
+				target = kvsAsyncPage(l.url, block, page+1)
+			}
+			if target != "" {
+				p.next, _ = url.Parse(target)
+			}
+			return p
+		},
+	})
+	if err != nil {
+		return nil, "", "", err
+	}
+	return listingURLs(links), title, note, nil
 }
 
 // kvsAsyncNext builds the request the site's own script would send for the

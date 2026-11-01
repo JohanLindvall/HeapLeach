@@ -9,14 +9,12 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // segmentedTransfer fetches one file over one or more connections, writing
@@ -45,23 +43,16 @@ type segmentedTransfer struct {
 	routeSource   func(context.Context) (*streamSource, error)
 	group         string
 	primaryActive atomic.Bool
-	// routeRange is the most one of its requests asks for.
-	routeRange int64
 
 	// crowded records that opening a connection measurably slowed this
 	// transfer down, so no more are opened. Touched only by the supervisor
 	// goroutine.
 	crowded bool
-
-	// Timings, overridable so tests need not wait out the real intervals.
-	pollInterval  time.Duration
-	probeInterval time.Duration
-	addCooldown   time.Duration
-	saveInterval  time.Duration
 }
 
 // downloadTimings groups the intervals the download loop waits out, kept in
-// one place so tests need not sit through the production values.
+// one place so tests need not sit through the production values. A transfer
+// reads them from its manager as it goes.
 type downloadTimings struct {
 	poll     time.Duration
 	probe    time.Duration
@@ -83,40 +74,27 @@ type downloadTimings struct {
 	extraAcquisitions int
 }
 
-func defaultDownloadTimings() downloadTimings {
-	return downloadTimings{
-		poll:          config.SegmentPollInterval,
-		probe:         config.StreamProbeInterval,
-		cooldown:      config.StreamAddCooldown,
-		save:          config.SegmentStateInterval,
-		busyBase:      config.BusyRetryBase,
-		busyMax:       config.BusyRetryMax,
-		progressRetry: config.ProgressRetryDelay,
-		routeRange:    config.RouteRangeSize,
-		wantedRecheck: config.RouteWantedRecheck,
+func defaultDownloadTimings() downloadTimings { return downloadTimings{}.withDefaults() }
 
-		extraAcquisitions: config.RouteExtraAcquisitions,
-	}
+// withDefaults fills in any timing left unset with its production value.
+func (d downloadTimings) withDefaults() downloadTimings {
+	orDefault(&d.poll, config.SegmentPollInterval)
+	orDefault(&d.probe, config.StreamProbeInterval)
+	orDefault(&d.cooldown, config.StreamAddCooldown)
+	orDefault(&d.save, config.SegmentStateInterval)
+	orDefault(&d.busyBase, config.BusyRetryBase)
+	orDefault(&d.busyMax, config.BusyRetryMax)
+	orDefault(&d.progressRetry, config.ProgressRetryDelay)
+	orDefault(&d.routeRange, config.RouteRangeSize)
+	orDefault(&d.wantedRecheck, config.RouteWantedRecheck)
+	orDefault(&d.extraAcquisitions, config.RouteExtraAcquisitions)
+	return d
 }
 
-// withDefaults fills in any timing left unset.
-func (t *segmentedTransfer) withDefaults() *segmentedTransfer {
-	if t.pollInterval <= 0 {
-		t.pollInterval = config.SegmentPollInterval
+func orDefault[T time.Duration | int64 | int](v *T, def T) {
+	if *v <= 0 {
+		*v = def
 	}
-	if t.probeInterval <= 0 {
-		t.probeInterval = config.StreamProbeInterval
-	}
-	if t.addCooldown <= 0 {
-		t.addCooldown = config.StreamAddCooldown
-	}
-	if t.saveInterval <= 0 {
-		t.saveInterval = config.SegmentStateInterval
-	}
-	if t.routeRange <= 0 {
-		t.routeRange = config.RouteRangeSize
-	}
-	return t
 }
 
 // run drives the transfer to completion. primary is the already-open body
@@ -218,7 +196,7 @@ func (t *segmentedTransfer) run(ctx context.Context, primarySeg *segment, primar
 // supervise watches throughput and opens another connection while the
 // transfer is slow, up to the configured ceiling.
 func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, string)) {
-	ticker := time.NewTicker(t.pollInterval)
+	ticker := time.NewTicker(t.manager.timings.poll)
 	defer ticker.Stop()
 
 	var (
@@ -248,14 +226,10 @@ func (t *segmentedTransfer) supervise(ctx context.Context, spawn func(*segment, 
 				return
 			}
 
-			sinceSave += t.pollInterval
-			if sinceSave >= t.saveInterval {
-				sinceSave = 0
-				t.saveState()
-			}
+			t.saveDue(&sinceSave)
 
-			sinceProbe += t.pollInterval
-			if sinceProbe < t.probeInterval {
+			sinceProbe += t.manager.timings.poll
+			if sinceProbe < t.manager.timings.probe {
 				continue
 			}
 
@@ -352,14 +326,18 @@ func (t *segmentedTransfer) shouldAddStream(speed float64, lastAdd time.Time) bo
 	// that cannot help, because the ceiling is shared across all of them —
 	// and with several files running, every one of them would fan out at
 	// once for the same wrong reason.
-	if t.manager.throttle.isPaused() || t.manager.throttle.limiting() || t.item.limiter.limiting() {
-		return false
-	}
-	if speed >= float64(t.slowBelow) {
+	if t.held() || speed >= float64(t.slowBelow) {
 		return false
 	}
 	// Let the previous addition settle before judging the rate again.
-	return lastAdd.IsZero() || time.Since(lastAdd) >= t.addCooldown
+	return lastAdd.IsZero() || time.Since(lastAdd) >= t.manager.timings.cooldown
+}
+
+// held reports a pause or a speed cap, the queue's or the job's, holding the
+// transfer back: slow without being slow, and no faster for another
+// connection, since every connection draws on the same ceiling.
+func (t *segmentedTransfer) held() bool {
+	return t.manager.throttle.isPaused() || t.manager.throttle.limiting() || t.item.limiter.limiting()
 }
 
 // pump fetches one segment, retrying it on its own so a single dropped
@@ -391,10 +369,10 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 						"item", t.item.ID, "host", reserved, "limit", limit, "err", err)
 					return nil
 				}
-				if meant || attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
+				if meant {
 					return err
 				}
-				if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+				if err := t.manager.retryAfter(ctx, attempt, err); err != nil {
 					return err
 				}
 				// An expired signed link is the usual cause; refresh it.
@@ -424,18 +402,12 @@ func (t *segmentedTransfer) pump(ctx context.Context, seg *segment, body io.Read
 			return nil
 		}
 		// A failed flush drops whatever the connection was holding, and pos
-		// had already moved past it. Retrying from pos would skip that run
-		// and leave a hole, so go back to what the file actually holds.
-		if flushed := seg.flushed.Load(); seg.pos.Load() > flushed {
-			t.item.downloaded.Add(flushed - seg.pos.Swap(flushed))
-		}
+		// had already moved past it.
+		t.item.downloaded.Add(-seg.rewind())
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if attempt >= t.manager.cfg.MaxRetries || !retryableTransfer(err) {
-			return err
-		}
-		if err := util.SleepCtx(ctx, transferRetryDelay(attempt)); err != nil {
+		if err := t.manager.retryAfter(ctx, attempt, err); err != nil {
 			return err
 		}
 		_ = t.manager.resolveTarget(ctx, t.item)
@@ -550,28 +522,21 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool, 
 	if rawURL == "" {
 		return nil, errors.New("no download URL")
 	}
-	req, err := m.client.NewRequest(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	req.Header.Set(httpx.HeaderAccept, httpx.AcceptAny)
-	req.Header.Set(httpx.HeaderAcceptEncoding, httpx.EncodingIdentity)
-
 	pos, end := seg.pos.Load(), seg.end.Load()
 	if t.routeSource != nil {
-		pos, end = t.table.request(seg, t.routeRange)
+		pos, end = t.table.request(seg, t.manager.timings.routeRange)
 	}
-	req.Header.Set(httpx.HeaderRange,
-		"bytes="+strconv.FormatInt(pos, 10)+"-"+strconv.FormatInt(end-1, 10))
 	// Another route's link may be on another of the host's storage servers,
 	// whose validator need not match: there, If-Range would read as the file
 	// having changed and throw away what is on disk. The total in its
 	// Content-Range is checked instead (validatePartial).
-	if t.validator != "" && src == nil {
-		req.Header.Set(httpx.HeaderIfRange, t.validator)
+	validator := t.validator
+	if src != nil {
+		validator = ""
+	}
+	req, err := m.rangedRequest(ctx, rawURL, headers, pos, end, validator)
+	if err != nil {
+		return nil, err
 	}
 
 	do := m.client.Do
@@ -605,7 +570,7 @@ func (t *segmentedTransfer) open(ctx context.Context, seg *segment, extra bool, 
 		return nil, errFileChanged
 	default:
 		defer resp.Body.Close()
-		return nil, statusError(req.URL, resp)
+		return nil, httpx.NewStatusError(resp)
 	}
 }
 
@@ -614,6 +579,16 @@ func (t *segmentedTransfer) host() string {
 	t.manager.mu.Lock()
 	defer t.manager.mu.Unlock()
 	return hostOf(t.item.URL)
+}
+
+// saveDue counts one supervisor tick into since, the time since the last
+// save, and saves once that reaches the save interval.
+func (t *segmentedTransfer) saveDue(since *time.Duration) {
+	*since += t.manager.timings.poll
+	if *since >= t.manager.timings.save {
+		*since = 0
+		t.saveState()
+	}
 }
 
 // saveState records segment progress so an interrupted transfer resumes

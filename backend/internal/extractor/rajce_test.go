@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -42,7 +41,7 @@ var settings = {
 }; var domain = "example.test";
 </script><img src="https://media.example.test/logo.jpg"></body></html>`
 
-func rajceTestServer(t *testing.T, handler http.HandlerFunc) (*Rajce, *url.URL) {
+func rajceTestServer(t *testing.T, handler http.HandlerFunc) (*Share, *url.URL) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -50,7 +49,7 @@ func rajceTestServer(t *testing.T, handler http.HandlerFunc) (*Rajce, *url.URL) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewRajce(httpx.New("test-agent", "en-US", 0, 5*time.Second)), u
+	return NewRajce(testClient()), u
 }
 
 func TestRajceAlbumPhotosAndVideos(t *testing.T) {
@@ -189,32 +188,30 @@ func TestRajceMediaURLs(t *testing.T) {
 	}
 }
 
-func TestRajceRegistryAndStorage(t *testing.T) {
-	reg := testRegistry(t, nil)
-	for _, host := range []string{"rajce.idnes.cz", "www.rajce.idnes.cz", "rajce.net", "photographer.rajce.net"} {
-		u := &url.URL{Scheme: "https", Host: host, Path: "/"}
-		if got := reg.Find(u).Name(); got != "rajce" {
-			t.Errorf("%s routes to %q", host, got)
-		}
-	}
-	for _, host := range []string{"idnes.cz", "www.idnes.cz", "rajce.idnes.cz.example.test", "notrajce.net"} {
-		if NewRajce(nil).Match(&url.URL{Scheme: "https", Host: host}) {
-			t.Errorf("claimed unrelated host %s", host)
-		}
-	}
-	for _, tc := range []struct{ path, name string }{
-		{"/storage/images/First.jpg", "First.jpg"},
-		{"/storage/video/123", "123.mp4"},
+// An album is recognised by the settings its script assigns. A media link
+// on the storage servers is a file and no form of the row's: one naming its
+// type is the direct fallback's, and a pasted video, which names none, is
+// the host claim's (TestRajceStorageVideoIsTheHostClaims).
+func TestRajceRecognise(t *testing.T) {
+	r := NewRajce(nil)
+	album := "https://photos.example.test/photographer/album/field-notes"
+	expectRecognised(t, r, htmlPage(t, album, rajceAlbumPage), true)
+	expectRecognised(t, r, htmlPage(t, album+"/1700000000", rajceAlbumPage), true)
+	// The right form and the site's name, but no album settings.
+	expectRecognised(t, r, htmlPage(t, album,
+		`<html><head><title>Field notes - photographer - album on Rajče</title></head><body></body></html>`), false)
+	// Album settings on a page of another form.
+	expectRecognised(t, r, htmlPage(t, "https://photos.example.test/field-notes", rajceAlbumPage), false)
+
+	for raw, want := range map[string]bool{
+		album:                 true,
+		album + "/":           true,
+		album + "/1700000000": true,
+		"https://photos.example.test/photographer":             false,
+		"https://photos.example.test/photographer/album":       false,
+		"https://photos.example.test/storage/images/First.jpg": false,
+		"https://photos.example.test/photographer/album/a/b/c": false,
 	} {
-		// Build synthetic media URLs at runtime; no live filename or content
-		// URL belongs in the tracked fixtures.
-		u := &url.URL{Scheme: "https", Host: "img1.rajce.idnes.cz", Path: tc.path}
-		res, err := NewRajce(nil).Extract(context.Background(), u, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(res.Files) != 1 || res.Files[0].Name != tc.name || res.Files[0].URL != u.String() {
-			t.Errorf("storage file = %+v, want %q at the original URL", res.Files, tc.name)
-		}
+		expectShape(t, r, raw, want)
 	}
 }

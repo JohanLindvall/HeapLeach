@@ -251,6 +251,11 @@ type Job struct {
 	// back unheld, and re-queueing a cancelled one on its own failed with
 	// "no download URL".
 	unfetchable bool
+	// incomplete marks a job whose listing came back cut short by a
+	// failure (extractor.Result.Incomplete): a later page or folder that
+	// could not be read. Its files are what was read, kept rather than
+	// failing the job, so a retry reads the source again for the rest.
+	incomplete bool
 }
 
 // finishedFile is where a job saved one file, and at what length.
@@ -290,7 +295,9 @@ type ItemView struct {
 }
 
 // JobView is the JSON shape of a job, with its aggregates precomputed so the
-// browser renders straight from the payload.
+// browser renders straight from the payload. CreatedAt is when the job was
+// first queued, kept across a restart, for an API client that sorts or ages
+// jobs.
 type JobView struct {
 	ID         string     `json:"id"`
 	Source     string     `json:"source"`
@@ -321,6 +328,10 @@ type JobView struct {
 	// go. Its items read "queued", which alone says something is about to
 	// start; without this the UI had nothing to offer that would start it.
 	Held bool `json:"held,omitempty"`
+	// Incomplete marks a job whose listing a failure cut short, which the
+	// UI offers to retry once its files are done: the retry reads the
+	// source again for what was left out.
+	Incomplete bool `json:"incomplete,omitempty"`
 	// The job's own limits, as flat fields (fileLimit, streamLimit,
 	// speedLimit): an object would be a new one in every frame, and the
 	// browser's cards compare a job's fields to skip rendering it again.
@@ -372,10 +383,6 @@ type Snapshot struct {
 	Version string `json:"version,omitempty"`
 }
 
-// storedNote is the note an item carries, for callers with nothing better.
-// The manager has something better — see Manager.itemNoteLocked.
-func storedNote(it *Item) string { return it.Note }
-
 // view renders an item for the wire.
 //
 // The note is supplied rather than read off the item because one kind of
@@ -417,17 +424,18 @@ func (it *Item) view(note func(*Item) string) ItemView {
 // view renders a job and its aggregates for the wire.
 func (j *Job) view(note func(*Item) string) JobView {
 	v := JobView{
-		ID:        j.ID,
-		Source:    j.Source,
-		Title:     j.Title,
-		Host:      j.Host,
-		Error:     j.Err,
-		CreatedAt: j.CreatedAt,
-		Items:     make([]ItemView, 0, len(j.Items)),
-		Total:     len(j.Items),
-		SizeKnown: true,
-		Held:      j.restored,
-		JobLimit:  j.Limit,
+		ID:         j.ID,
+		Source:     j.Source,
+		Title:      j.Title,
+		Host:       j.Host,
+		Error:      j.Err,
+		CreatedAt:  j.CreatedAt,
+		Items:      make([]ItemView, 0, len(j.Items)),
+		Total:      len(j.Items),
+		SizeKnown:  true,
+		Held:       j.restored,
+		Incomplete: j.incomplete && !j.resolving,
+		JobLimit:   j.Limit,
 	}
 	if j.resolving && !j.canceled {
 		v.Note = j.resolveNote
@@ -481,14 +489,24 @@ func (j *Job) tally() itemTally {
 	return t
 }
 
-// status derives the job state from its phase and its items.
-func (j *Job) status() Status { return j.statusFrom(j.tally()) }
-
-// complete requires every file to be done and the source to have no error.
-// A done status alone can also include canceled files or a partial listing.
+// complete requires every file to be done, the source to have no error and
+// its listing not to have been cut short by a failure: a done status alone
+// can also include canceled files or a partial listing, and an incomplete
+// one still offers its retry.
 func (j *Job) complete() bool {
 	t := j.tally()
-	return j.statusFrom(t) == StatusDone && j.Err == "" && t.done == len(j.Items)
+	return j.statusFrom(t) == StatusDone && j.Err == "" && !j.incomplete && t.done == len(j.Items)
+}
+
+// liveLocked reports whether any of the job's items is still queued or owned
+// by a worker. Caller holds mu.
+func (j *Job) liveLocked() bool {
+	for _, it := range j.Items {
+		if it.inFlight || it.Status == StatusQueued || it.Status == StatusRunning {
+			return true
+		}
+	}
+	return false
 }
 
 // statusFrom derives the job state from its phase and an already counted

@@ -133,7 +133,7 @@ func TestSettingsValidatesAndApplies(t *testing.T) {
 	if snap.Concurrency != 8 || snap.Streams != 2 || snap.SpeedLimit != 1000000 || !snap.Paused {
 		t.Errorf("settings did not apply: %+v", snap)
 	}
-	if !manager.Paused() {
+	if !manager.Snapshot().Paused {
 		t.Error("the manager itself is not paused")
 	}
 
@@ -316,8 +316,8 @@ func TestOversizedBodiesReturn413WithoutChangingSettings(t *testing.T) {
 		`{"paused":true}` + strings.Repeat(" ", config.MaxRequestBytes),
 	} {
 		rec := postJSON(t, handler, "/api/settings", body)
-		if rec.Code != http.StatusRequestEntityTooLarge || m.Paused() {
-			t.Fatalf("oversized update: status %d, paused %v", rec.Code, m.Paused())
+		if rec.Code != http.StatusRequestEntityTooLarge || m.Snapshot().Paused {
+			t.Fatalf("oversized update: status %d, paused %v", rec.Code, m.Snapshot().Paused)
 		}
 	}
 }
@@ -406,6 +406,7 @@ func TestProxyProtocolsOverTheAPI(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings = %d: %s", rec.Code, rec.Body)
 	}
+	// Each service of the one file store is a group of its own.
 	if kinds := m.Snapshot().ProxyTypes; len(kinds) != 1 || kinds["fileboom"] != "http" {
 		t.Errorf("groups hold %v; want fileboom's own alone", kinds)
 	}

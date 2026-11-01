@@ -8,12 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -42,7 +40,7 @@ func balbumsPageHTML(albumHost string, page, pages int, albums ...string) string
 
 // balbumsIndex serves pages and returns an extractor wired to a registry
 // holding only itself and stub, so nothing in the test reaches a real host.
-// The index claims the test server's own host, which is what lets the test
+// The index's own search links have its form, which is what lets the test
 // prove the site's navigation is not followed.
 func balbumsIndex(t *testing.T, stub Extractor, pages map[int]string) (*Balbums, string, func() []string) {
 	t.Helper()
@@ -66,16 +64,8 @@ func balbumsIndex(t *testing.T, stub Extractor, pages map[int]string) (*Balbums,
 	}))
 	t.Cleanup(srv.Close)
 
-	base, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
 	reg := &Registry{fallback: NewDirect(nil)}
-	index := &Balbums{
-		hostSet:  hostSet{base.Hostname()},
-		client:   httpx.New("test-agent", "en-US", 0, 5*time.Second),
-		registry: reg,
-	}
+	index := NewBalbums(testClient(), reg)
 	reg.extractors = []Extractor{index, stub}
 	return index, srv.URL, func() []string {
 		mu.Lock()
@@ -91,10 +81,7 @@ func balbumsExtract(t *testing.T, index *Balbums, raw string) (*Result, error) {
 
 func balbumsExtractWith(t *testing.T, index *Balbums, raw string, opts Options) (*Result, error) {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return index.Extract(context.Background(), u, opts)
 }
 
@@ -120,10 +107,7 @@ func TestBalbumsSearchKeepsTheNarrowingAndDropsThePaging(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		u, err := url.Parse(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		query, first, ok := balbumsSearch(u)
 		if !ok {
 			t.Errorf("balbumsSearch(%q) found no search", tc.raw)
@@ -148,10 +132,7 @@ func TestBalbumsSearchRejectsEverythingElse(t *testing.T) {
 		"https://balbums.st/topalbums",
 		"https://balbums.st/live",
 	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if _, _, ok := balbumsSearch(u); ok {
 			t.Errorf("balbumsSearch(%q) claimed a search", raw)
 		}
@@ -159,10 +140,7 @@ func TestBalbumsSearchRejectsEverythingElse(t *testing.T) {
 }
 
 func TestBalbumsPageNamesOnePageOfTheResults(t *testing.T) {
-	u, err := url.Parse("https://balbums.st/?search=Driftwood&mode=broad")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://balbums.st/?search=Driftwood&mode=broad")
 	_, first, ok := balbumsSearch(u)
 	if !ok {
 		t.Fatal("no search")
@@ -178,7 +156,7 @@ func TestBalbumsPageNamesOnePageOfTheResults(t *testing.T) {
 // left alone.
 func TestBalbumsWalksEveryPageAndFoldersEachAlbum(t *testing.T) {
 	const albumHost = "albums.example.test"
-	stub := &linksStub{host: albumHost, files: 2, title: "Album"}
+	stub := &linksStub{hostClaim: albumHost, files: 2, title: "Album"}
 	index, root, asked := balbumsIndex(t, stub, map[int]string{
 		1: balbumsPageHTML(albumHost, 1, 2, "AAAA", "BBBB"),
 		2: balbumsPageHTML(albumHost, 2, 2, "CCCC"),
@@ -226,11 +204,12 @@ func TestBalbumsWalksEveryPageAndFoldersEachAlbum(t *testing.T) {
 	}
 }
 
-// A search wider than anybody meant stops at the cap, and says so where the
-// job is named rather than quietly returning a prefix.
+// A search wider than anybody meant stops at the album cap configured, and
+// says so where the job is named rather than quietly returning a prefix; the
+// walk stops at the cap rather than reading every page to throw most away.
 func TestBalbumsCapsTheAlbumsItFollows(t *testing.T) {
 	const albumHost = "albums.example.test"
-	stub := &linksStub{host: albumHost, files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
 
 	pages := make(map[int]string)
 	for page := 1; page <= 8; page++ {
@@ -240,32 +219,33 @@ func TestBalbumsCapsTheAlbumsItFollows(t *testing.T) {
 		}
 		pages[page] = balbumsPageHTML(albumHost, page, 8, albums...)
 	}
-	index, root, asked := balbumsIndex(t, stub, pages)
-
-	res, err := balbumsExtract(t, index, root+"/?search=Driftwood")
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	if len(res.Files) != config.MaxExpandedSources {
-		t.Errorf("got %d files, want the cap of %d", len(res.Files), config.MaxExpandedSources)
-	}
-	// Admitted in the note, not the title: the title names the folder, and
-	// a folder that changed with the cap would re-download everything.
-	if res.Title != "Driftwood" {
-		t.Errorf("title = %q, want the plain query", res.Title)
-	}
-	if want := fmt.Sprintf("%d of 800 albums", config.MaxExpandedSources); res.Note != want {
-		t.Errorf("note = %q, want %q", res.Note, want)
-	}
-	// The walk stops at the cap rather than reading eight pages to throw
-	// three away.
-	if got := asked(); len(got) != 5 {
-		t.Errorf("asked for %d pages, want 5 (the cap reached on the fifth): %v", len(got), got)
+	for _, tc := range []struct {
+		sources, files, asked int
+		note                  string
+	}{
+		{0, config.MaxExpandedSources, 5, fmt.Sprintf("%d of 800 albums", config.MaxExpandedSources)},
+		{150, 150, 2, "150 of 800 albums"},
+		{5000, 800, 8, ""},
+	} {
+		index, root, asked := balbumsIndex(t, stub, pages)
+		res, err := balbumsExtractWith(t, index, root+"/?search=Driftwood", Options{limits: Limits{Sources: tc.sources}})
+		if err != nil {
+			t.Fatalf("Extract: %v", err)
+		}
+		// Admitted in the note, not the title: the title names the folder,
+		// and a folder that changed with the cap would re-download
+		// everything.
+		if len(res.Files) != tc.files || res.Note != tc.note || res.Title != "Driftwood" {
+			t.Errorf("cap %d: got %d files, title %q, note %q", tc.sources, len(res.Files), res.Title, res.Note)
+		}
+		if got := asked(); len(got) != tc.asked {
+			t.Errorf("cap %d: asked for %d pages, want %d", tc.sources, len(got), tc.asked)
+		}
 	}
 }
 
 func TestBalbumsReportsASearchWithNothingInIt(t *testing.T) {
-	stub := &linksStub{host: "albums.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "albums.example.test", files: 1, title: "Album"}
 	index, root, _ := balbumsIndex(t, stub, map[int]string{
 		1: `<html><body><div>results for <span>nothing</span></div>
 			<div>Page 1 of 0</div></body></html>`,
@@ -280,8 +260,24 @@ func TestBalbumsReportsASearchWithNothingInIt(t *testing.T) {
 	}
 }
 
+func TestBalbumsRecognise(t *testing.T) {
+	b := NewBalbums(nil, nil)
+	page := strings.Replace(balbumsPageHTML("albums.example.test", 1, 3, "AAAA"), "<nav>",
+		`<form id="searchForm" method="get" action="/"><input name="search"></form><nav>`, 1)
+	expectRecognised(t, b, htmlPage(t, "https://index.example.test/?search=Driftwood", page), true)
+	// The right form and the index's name, but no search form or page count.
+	expectRecognised(t, b, htmlPage(t, "https://index.example.test/?search=Driftwood",
+		`<html><head><title>Bunkr Albums</title></head><body><p>Nothing here.</p></body></html>`), false)
+	// The index's markup on a page that is not a search.
+	expectRecognised(t, b, htmlPage(t, "https://index.example.test/topalbums", page), false)
+	expectShape(t, b, "https://index.example.test/?search=Driftwood&page=2", true)
+	expectShape(t, b, "https://index.example.test/?search=", false)
+	expectShape(t, b, "https://index.example.test/blog?search=Driftwood", false)
+	expectShape(t, b, "https://index.example.test/", false)
+}
+
 func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {
-	stub := &linksStub{host: "albums.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "albums.example.test", files: 1, title: "Album"}
 	index, root, asked := balbumsIndex(t, stub, map[int]string{1: "<html></html>"})
 
 	_, err := balbumsExtract(t, index, root+"/topalbums")
@@ -296,26 +292,17 @@ func TestBalbumsRefusesAPageThatIsNotASearch(t *testing.T) {
 	}
 }
 
-// sameTitleStub answers every link with the same title, the way two albums
-// on an index can both be called "Clapper 10".
-type sameTitleStub struct{ host, title string }
-
-func (s *sameTitleStub) Name() string          { return "same" }
-func (s *sameTitleStub) Match(u *url.URL) bool { return u.Host == s.host }
-func (s *sameTitleStub) Extract(_ context.Context, u *url.URL, _ Options) (*Result, error) {
-	return &Result{Title: s.title, Files: []File{{Name: "clip.mov", URL: u.String(), Size: -1}}}, nil
-}
-
 // Titles are not unique, and two albums sharing one were poured into one
 // folder, where two different files of the same name ended up as "(2)" and
 // "(3)" with nothing to say which album either came from. A repeated title
 // carries the album's id; a title that stands alone keeps its plain name,
-// which is what everything already downloaded under it is filed as.
+// which is what everything already downloaded under it is filed as. The
+// stub answers every link of a host with the same title.
 func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
 	reg := &Registry{fallback: NewDirect(nil)}
 	reg.extractors = []Extractor{
-		&sameTitleStub{host: "a.example.test", title: "Clapper 10"},
-		&sameTitleStub{host: "b.example.test", title: "Alone"},
+		stubExtractor{hostClaim: "a.example.test", title: "Clapper 10"},
+		stubExtractor{hostClaim: "b.example.test", title: "Alone"},
 	}
 	files := expandSources(context.Background(), reg, []string{
 		"https://a.example.test/a/AAAA",
@@ -334,39 +321,52 @@ func TestSourcesSharingATitleGetFoldersOfTheirOwn(t *testing.T) {
 	}
 }
 
-// The album cap is the one configured: a search asked to follow fewer stops
-// sooner, and one asked for more reads further.
-func TestBalbumsFollowsAsManyAlbumsAsConfigured(t *testing.T) {
+// A search ends where its results do, with nothing to admit: at the last
+// page the search states, however short that page is.
+func TestBalbumsEndsWhereTheResultsDo(t *testing.T) {
 	const albumHost = "albums.example.test"
-	stub := &linksStub{host: albumHost, files: 1, title: "Album"}
-
-	pages := make(map[int]string)
-	for page := 1; page <= 8; page++ {
-		albums := make([]string, 0, 100)
-		for i := range 100 {
-			albums = append(albums, fmt.Sprintf("p%02dn%02d", page, i))
-		}
-		pages[page] = balbumsPageHTML(albumHost, page, 8, albums...)
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
+	for _, tc := range []struct {
+		name  string
+		pages map[int]string
+		want  int
+		asked int
+	}{
+		{"short last page", map[int]string{
+			1: balbumsPageHTML(albumHost, 1, 2, "AAAA", "BBBB"),
+			2: balbumsPageHTML(albumHost, 2, 2, "CCCC"),
+			3: balbumsPageHTML(albumHost, 3, 2, "DDDD"),
+		}, 3, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index, root, asked := balbumsIndex(t, stub, tc.pages)
+			res, err := balbumsExtract(t, index, root+"/?search=Driftwood")
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if len(res.Files) != tc.want || res.Note != "" || res.Title != "Driftwood" {
+				t.Errorf("got %d files, title %q, note %q; want %d and no note", len(res.Files), res.Title, res.Note, tc.want)
+			}
+			if got := asked(); len(got) != tc.asked {
+				t.Errorf("asked for %d pages, want %d: %v", len(got), tc.asked, got)
+			}
+		})
 	}
+}
 
-	index, root, asked := balbumsIndex(t, stub, pages)
-	res, err := balbumsExtractWith(t, index, root+"/?search=Driftwood", Options{limits: Limits{Sources: 150}})
+// An album that will not open beside others that did leaves their files
+// standing and is said in the note, beside nothing a cap left out.
+func TestBalbumsNotesAnAlbumThatWouldNotOpen(t *testing.T) {
+	const albumHost = "albums.example.test"
+	stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album", fail: "/a/BBBB"}
+	index, root, _ := balbumsIndex(t, stub, map[int]string{
+		1: balbumsPageHTML(albumHost, 1, 1, "AAAA", "BBBB", "CCCC"),
+	})
+	res, err := balbumsExtract(t, index, root+"/?search=Driftwood")
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(res.Files) != 150 || res.Note != "150 of 800 albums" {
-		t.Errorf("got %d files, note %q; want 150 and the note saying so", len(res.Files), res.Note)
-	}
-	if got := asked(); len(got) != 2 {
-		t.Errorf("asked for %d pages, want 2: %v", len(got), got)
-	}
-
-	index, root, _ = balbumsIndex(t, stub, pages)
-	res, err = balbumsExtractWith(t, index, root+"/?search=Driftwood", Options{limits: Limits{Sources: 5000}})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-	if len(res.Files) != 800 || res.Note != "" {
-		t.Errorf("got %d files, note %q; want all 800 and nothing to admit", len(res.Files), res.Note)
+	if len(res.Files) != 2 || res.Note != "1 left out: could not be read" {
+		t.Errorf("got %d files, note %q; want 2 and the dead album counted", len(res.Files), res.Note)
 	}
 }

@@ -65,9 +65,10 @@ keeps its place in the queue when a route fails it, so it gets the next
 working route before files that have not started. With proxies enabled (the default), the one-file limit
 applies to each proxy address,
 allowing several free downloads at once without a subscription, up to
-`-concurrency` across both services. Each address may carry one K2S transfer
-and one FileBoom transfer simultaneously. The hosts' speed limits and
-cooldowns still apply per address and service. A proxy port that has never
+`-concurrency`. Each address may carry one Keep2Share transfer and one
+FileBoom transfer at a time: the two services count free downloads apart.
+The hosts' speed
+limits and cooldowns still apply per address and host. A proxy port that has never
 been tried counts as free whatever the other ports on its address are
 doing, since gateway ports often leave through addresses of their own;
 once tried, it shares its address's limits. Two downloads never leave through
@@ -179,7 +180,8 @@ retry another route, within the configured retry budget. User cancellation
 does not penalise a route. An address the host refuses the player to (a bare
 "removed or temporarily unavailable" sentence where the player should be,
 which other addresses are not shown) is skipped the same way, and the file
-tries another. Missing videos and parser errors remain final.
+tries another. This also applies when a file discovered in a folder is
+refreshed through a new proxy. Missing videos and parser errors remain final.
 Progress messages show the player/token stage and connection attempt in the
 browser and terminal, including while the source is still being resolved.
 
@@ -245,7 +247,7 @@ small, noisy speed changes from spending time on repeated route switches.
 
 Saved inventory is available immediately after restart. Feed requests,
 including GitHub, are normally 24 hours apart. An earlier top-up requires
-runnable K2S, FileBoom, EMLOAD, MEGA or WAF recovery work and too few distinct usable addresses for its current concurrency, with
+runnable Keep2Share, FileBoom, EMLOAD, MEGA or WAF recovery work and too few distinct usable addresses for its current concurrency, with
 at least five minutes between attempts. New active transfers count while
 their first speed sample is pending; measured and standby routes must have
 succeeded and score at least as well as an untried route's learned prior.

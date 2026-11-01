@@ -3,16 +3,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -23,7 +21,7 @@ import (
 // records from the creator API. src is the full-size image, while thumbnail
 // and the creator's avatar are separate fields that must not be collected.
 type Celeb struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -33,10 +31,36 @@ type Celeb struct {
 const celebURLKey = "ilovemyself"
 
 func NewCeleb(client *httpx.Client) *Celeb {
-	return &Celeb{hostSet: hostSet{"celeb.st"}, client: client}
+	return &Celeb{client: client, about: about{name: "celeb", shape: eitherShape(celebGalleryShape, celebCreatorShape),
+		recognises: "creator galleries and images (`/creator/<name>/images[/<id>]`, `/creator/<name>`) whose page is the " +
+			"site's Inertia app carrying the gallery's `Creator/Media` props in `data-page`"}}
 }
 
-func (c *Celeb) Name() string { return "celeb" }
+var (
+	// celebGalleryShape is a creator's gallery or one image in it.
+	celebGalleryShape = pathShape(`^/creator/[^/]+/images(?:/\d+)?/?$`)
+	// celebCreatorShape is the creator's own page, which Extract reads as
+	// their gallery.
+	celebCreatorShape = pathShape(`^/creator/[^/]+/?$`)
+)
+
+// Recognise takes a gallery or image page whose data-page props are the
+// Creator/Media component celebPageData decodes. A bare creator page is
+// not served as a gallery — Extract reads its /images instead — so there the
+// app's data-page shell under the site's own name is what is required.
+func (c *Celeb) Recognise(_ context.Context, p *Page) bool {
+	if !c.Shape(p.Final) || !p.Has("data-page=") {
+		return false
+	}
+	data, err := celebProbedData(p)
+	if err != nil {
+		return false
+	}
+	if celebGalleryShape(p.Final) {
+		return strings.HasPrefix(data.Component, "Creator/Media")
+	}
+	return p.Named("Celeb.st")
+}
 
 type celebImage struct {
 	ID  int64  `json:"id"`
@@ -86,16 +110,12 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	query.Del("page")
 	pageURL.RawQuery = query.Encode()
 	page := pageURL.String()
-	doc, err := c.client.GetString(ctx, page, nil)
-	if err != nil {
-		return nil, fmt.Errorf("celeb: fetch gallery: %w", err)
-	}
-	data, err := celebPageData(doc)
+	data, err := c.gallery(ctx, &pageURL)
 	if err != nil {
 		return nil, err
 	}
 	p := data.Props
-	res := &Result{Title: util.FirstNonEmpty(p.Creator.Name, segs[1])}
+	res := &Result{Title: cmp.Or(p.Creator.Name, segs[1])}
 	if imageID != 0 {
 		if data.Component != "Creator/MediaObject" || p.MediaID != imageID {
 			return nil, fmt.Errorf("celeb: image is missing from the page")
@@ -111,81 +131,102 @@ func (c *Celeb) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 		return nil, fmt.Errorf("celeb: page does not contain an image gallery")
 	}
 
-	seen := make(map[int64]bool)
-	items := p.Media
+	// The page states how many pages the gallery has; the first is the
+	// page itself, the rest come from the API.
+	api := util.Origin(&pageURL) + "/api/v1/creator/" +
+		url.PathEscape(cmp.Or(p.Creator.Slug, segs[1])) + "/media"
 	pages := max(1, p.Pages)
-	limit := opts.maxFiles()
-	for pageNo := 1; pageNo <= pages; pageNo++ {
-		if err := ctx.Err(); err != nil {
+	images, note, err := walkPages(ctx, pageWalk[celebImage]{
+		key:   func(m celebImage) string { return strconv.FormatInt(m.ID, 10) },
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
+		fetch: func(ctx context.Context, n int) (pageOf[celebImage], error) {
+			items := p.Media
+			if n > 0 {
+				params := url.Values{"page": {strconv.Itoa(n + 1)}, "mediaType": {"media"}}
+				if sort := query.Get("sort"); sort != "" {
+					params.Set("sort", sort)
+				}
+				items = nil
+				if err := c.client.GetJSON(ctx, api+"?"+params.Encode(), httpx.Referer(page), &items); err != nil {
+					return pageOf[celebImage]{}, fmt.Errorf("celeb: fetch image page %d: %w", n+1, err)
+				}
+			}
+			return pageOf[celebImage]{items: items, next: true, pages: pages}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, image := range images {
+		file, err := image.file(page)
+		if err != nil {
 			return nil, err
 		}
-		before := len(res.Files)
-		for _, item := range items {
-			if seen[item.ID] {
-				continue
-			}
-			if len(res.Files) == limit {
-				res.Note = "partial — file limit"
-				break
-			}
-			file, err := item.file(page)
-			if err != nil {
-				return nil, err
-			}
-			seen[item.ID] = true
-			res.Files = append(res.Files, file)
-		}
-		if res.Note != "" {
-			break
-		}
-		// A repeated or unexpectedly empty page must not loop or pass for
-		// a complete gallery. The count below makes the shortfall visible.
-		if len(res.Files) == before {
-			res.Note = "partial — pagination stopped"
-			break
-		}
-		if pageNo == pages {
-			break
-		}
-		if len(res.Files) == limit {
-			res.Note = "partial — file limit"
-			break
-		}
-		if pageNo == config.MaxAlbumPages {
-			res.Note = "partial — page limit"
-			break
-		}
-		api := util.Origin(&pageURL) + "/api/v1/creator/" +
-			url.PathEscape(util.FirstNonEmpty(p.Creator.Slug, segs[1])) + "/media"
-		params := url.Values{"page": {strconv.Itoa(pageNo + 1)}, "mediaType": {"media"}}
-		if sort := query.Get("sort"); sort != "" {
-			params.Set("sort", sort)
-		}
-		items = nil
-		if err := c.client.GetJSON(ctx, api+"?"+params.Encode(), httpx.Referer(page), &items); err != nil {
-			return nil, fmt.Errorf("celeb: fetch image page %d: %w", pageNo+1, err)
-		}
+		res.Files = append(res.Files, file)
 	}
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("celeb: no images found")
 	}
-	if p.Creator.ImageCount > len(res.Files) {
-		res.Note = fmt.Sprintf("%d of %d images", len(res.Files), p.Creator.ImageCount)
-	}
+	// A gallery that came up short says by how much, beside what stopped it.
+	res.Note = joinNotes(note, cappedNote(len(res.Files), p.Creator.ImageCount, "images"))
 	return res, nil
 }
 
+// gallery is the gallery page's props. When the page is the one the
+// registry probed — the submitted gallery, unchanged — the props the
+// recogniser already decoded from its tree are reused; a creator page or a
+// later page pasted is canonicalised to another URL, and reads its own.
+func (c *Celeb) gallery(ctx context.Context, pageURL *url.URL) (*celebPage, error) {
+	if p := probed(ctx, pageURL); p != nil {
+		if _, ok := p.Document(); ok {
+			return celebProbedData(p)
+		}
+	}
+	root, _, err := fetchRoot(ctx, c.client, pageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("celeb: fetch gallery: %w", err)
+	}
+	return celebPageDataOf(root)
+}
+
+// celebProbedData is a probed page's props, decoded once per page from its
+// own tree and shared by recognition and extraction. The value is shared:
+// callers read it and never modify it.
+func celebProbedData(p *Page) (*celebPage, error) {
+	type decoded struct {
+		data *celebPage
+		err  error
+	}
+	got := memo(p, "celeb.data", func() decoded {
+		root := p.HTML()
+		if root == nil {
+			var err error
+			if root, err = parseHTML(p.Body); err != nil {
+				return decoded{err: err}
+			}
+		}
+		data, err := celebPageDataOf(root)
+		return decoded{data, err}
+	})
+	return got.data, got.err
+}
+
+// celebPageData decodes the props of a gallery page's markup.
 func celebPageData(doc string) (*celebPage, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, err
 	}
-	node := findFirst(root, func(n *html.Node) bool { return hasAttr(n, "data-page") })
-	if node == nil {
-		return nil, fmt.Errorf("celeb: no gallery data on the page")
-	}
+	return celebPageDataOf(root)
+}
+
+// celebPageDataOf decodes the props an already parsed page carries.
+func celebPageDataOf(root *html.Node) (*celebPage, error) {
 	var data celebPage
-	if err := json.Unmarshal([]byte(attr(node, "data-page")), &data); err != nil {
+	switch found, err := jsonAttr(root, "data-page", &data); {
+	case !found:
+		return nil, fmt.Errorf("celeb: no gallery data on the page")
+	case err != nil:
 		return nil, fmt.Errorf("celeb: decode gallery data: %w", err)
 	}
 	return &data, nil
@@ -199,14 +240,10 @@ func (m celebImage) file(referer string) (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("celeb: image %d: %w", m.ID, err)
 	}
-	ext := path.Ext(link.Path)
-	if ext == "" {
-		ext = ".jpg"
-	}
 	return File{
 		// The URL's basename is an opaque token. The image's own id is
 		// shorter, unique and stable across gallery sorts and revisits.
-		Name:    strconv.FormatInt(m.ID, 10) + ext,
+		Name:    strconv.FormatInt(m.ID, 10) + linkExtAsIs(link.String(), ".jpg"),
 		URL:     link.String(),
 		Size:    -1,
 		Headers: httpx.Referer(referer),

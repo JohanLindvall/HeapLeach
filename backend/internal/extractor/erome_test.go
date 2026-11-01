@@ -6,10 +6,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -38,12 +36,8 @@ func TestEromeAlbum(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, _ := ParseURL(srv.URL + "/a/AAAA")
-	res, err := e.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	e := NewErome(testClient())
+	res := extractOK(t, e, srv.URL+"/a/AAAA", Options{})
 	if res.Title != "An Album" {
 		t.Errorf("title = %q, want the page's own heading", res.Title)
 	}
@@ -101,10 +95,7 @@ const eromeProfilePageTwo = `<html><body>
 // reposted, so it has to survive being paged — otherwise page two onward
 // silently walks a different listing.
 func TestEromeProfilePageKeepsTheTab(t *testing.T) {
-	u, err := url.Parse("https://www.erome.com/creator?t=reposts")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.erome.com/creator?t=reposts")
 
 	// The first page is asked for exactly as the user gave it.
 	if got := eromeProfilePage(u, 1); got.String() != u.String() {
@@ -121,7 +112,7 @@ func TestEromeProfilePageKeepsTheTab(t *testing.T) {
 	}
 
 	// A profile with no tab stays that way rather than gaining one.
-	plain, _ := url.Parse("https://www.erome.com/creator")
+	plain := mustParse(t, "https://www.erome.com/creator")
 	third := eromeProfilePage(plain, 3)
 	if got := third.Query(); got.Get("page") != "3" || got.Has("t") {
 		t.Errorf("query = %v, want only a page number", got)
@@ -129,14 +120,8 @@ func TestEromeProfilePageKeepsTheTab(t *testing.T) {
 }
 
 func TestEromeAlbumLinks(t *testing.T) {
-	base, err := url.Parse("https://www.erome.com/creator?t=posts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := parseHTML(eromeProfilePageOne)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://www.erome.com/creator?t=posts")
+	root := mustParseDoc(t, eromeProfilePageOne)
 
 	seen := map[string]bool{}
 	got := eromeAlbumLinks(root, base, seen)
@@ -156,10 +141,7 @@ func TestEromeAlbumLinks(t *testing.T) {
 
 	// The second page contributes only what the first did not, which is what
 	// tells the walk it has reached the end.
-	next, err := parseHTML(eromeProfilePageTwo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	next := mustParseDoc(t, eromeProfilePageTwo)
 	second := eromeAlbumLinks(next, base, seen)
 	if len(second) != 1 || second[0] != "https://www.erome.com/a/DDDD4444" {
 		t.Errorf("page two contributed %v, want only the album page one lacked", second)
@@ -176,12 +158,14 @@ func TestEromeAlbumLinks(t *testing.T) {
 // holds. Only the repeats are qualified, so every other album keeps the
 // folder it has always had and a re-run skips rather than re-fetches it.
 func TestEromeFoldersDisambiguateRepeatedTitles(t *testing.T) {
-	albums := []eromeAlbum{
-		{title: "A Day Out", id: "AAAA1111"},
-		{title: "Summer Series", id: "BBBB2222"},
-		{title: "A Day Out", id: "CCCC3333"},
-		{title: "", id: "DDDD4444"},
-		{title: "A Day Out", id: "EEEE5555"},
+	albums := []sourceResult{
+		eromeResolved("A Day Out", "AAAA1111"),
+		eromeResolved("Summer Series", "BBBB2222"),
+		eromeResolved("A Day Out", "CCCC3333"),
+		eromeResolved("", "DDDD4444"),
+		eromeResolved("A Day Out", "EEEE5555"),
+		// Titles are told apart by case, as they always have been here.
+		eromeResolved("a day out", "FFFF6666"),
 	}
 	got := eromeFolders(albums)
 	want := []string{
@@ -190,6 +174,7 @@ func TestEromeFoldersDisambiguateRepeatedTitles(t *testing.T) {
 		"A Day Out CCCC3333",
 		"DDDD4444",
 		"A Day Out EEEE5555",
+		"a day out",
 	}
 	for i := range want {
 		if got[i] != want[i] {
@@ -213,32 +198,20 @@ func TestEromeFoldersDisambiguateRepeatedTitles(t *testing.T) {
 // The ordinary case has to stay ordinary: a profile whose titles are all its
 // own is filed under exactly those titles.
 func TestEromeFoldersLeaveUniqueTitlesAlone(t *testing.T) {
-	albums := []eromeAlbum{
-		{title: "A Day Out", id: "AAAA1111"},
-		{title: "Summer Series", id: "BBBB2222"},
+	albums := []sourceResult{
+		eromeResolved("A Day Out", "AAAA1111"),
+		eromeResolved("Summer Series", "BBBB2222"),
 	}
 	for i, got := range eromeFolders(albums) {
-		if got != albums[i].title {
-			t.Errorf("[%d] folder = %q, want the album's own title %q", i, got, albums[i].title)
+		if got != albums[i].res.Title {
+			t.Errorf("[%d] folder = %q, want the album's own title %q", i, got, albums[i].res.Title)
 		}
 	}
 }
 
-// A listing the host cut short must not pass for a complete one. Asking past
-// the last page is how the walk finds its end, so a page that will not load
-// is ordinarily just that — but a rate limit means the opposite, and the
-// job's note says so.
-func TestEromeProfileNoteAdmitsARateLimit(t *testing.T) {
-	if got := eromeProfileNote(false); got != "" {
-		t.Errorf("note = %q, want nothing for a whole profile", got)
-	}
-	got := eromeProfileNote(true)
-	if got == "" {
-		t.Fatal("a listing cut short by the host was reported as a whole profile")
-	}
-	if !strings.Contains(got, "rate limited") {
-		t.Errorf("title = %q, want it to say why it is partial", got)
-	}
+// eromeResolved is an album as the expansion hands it to eromeFolders.
+func eromeResolved(title, id string) sourceResult {
+	return sourceResult{link: "https://www.erome.com/a/" + id, res: &Result{Title: title}}
 }
 
 // A profile page for the walk tests, whose album links name the site
@@ -261,62 +234,36 @@ func eromeWalkServer(t *testing.T, handler http.HandlerFunc) (*Erome, string) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL
+	return NewErome(testClient()), srv.URL
 }
 
-// A later page that will not load is ordinarily the end of the listing, and
-// the walk is right to stop there and keep what it has.
-func TestEromeProfileAlbumsStopsAtTheEnd(t *testing.T) {
-	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "2" {
-			http.NotFound(w, r)
-			return
+// Asking past the last page is how the walk finds the end of a profile, so
+// a later page answering 404 or 410 ends it quietly — but a rate limit or a
+// server error means the opposite, and the walk says so.
+func TestEromeProfileAlbumsEndsAtAMissingPageButAdmitsARateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		note   string
+	}{
+		{http.StatusNotFound, ""},
+		{http.StatusGone, ""},
+		{http.StatusTooManyRequests, "partial — rate limited"},
+		{http.StatusBadGateway, "partial — could not fetch next page"},
+	} {
+		e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "2" {
+				// The host naming its own interval is believed, so this
+				// keeps the test to the behaviour rather than to the waiting.
+				w.Header().Set(httpx.HeaderRetryAfter, "0")
+				w.WriteHeader(tc.status)
+				return
+			}
+			_, _ = w.Write([]byte(eromeWalkPage))
+		})
+		albums, title, note, err := e.profileAlbums(context.Background(), mustParse(t, base+"/creator?t=posts"), Options{}, nil)
+		if err != nil || len(albums) != 3 || title != "creator" || note != tc.note {
+			t.Errorf("%d: albums=%d title=%q note=%q err=%v", tc.status, len(albums), title, note, err)
 		}
-		_, _ = w.Write([]byte(eromeWalkPage))
-	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	albums, title, limited, err := e.profileAlbums(context.Background(), u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(albums) != 3 {
-		t.Errorf("collected %d albums, want the 3 page one lists", len(albums))
-	}
-	if title != "creator" {
-		t.Errorf("title = %q, want the profile's own heading", title)
-	}
-	if limited {
-		t.Error("an ordinary end of listing was reported as a rate limit")
-	}
-}
-
-// A rate limit is the opposite: the host has said come back, the client has
-// already waited it out as far as it goes, and what came back is part of a
-// profile rather than the whole of it. The walk has to say so, or the caller
-// cannot tell a short profile from a truncated one.
-func TestEromeProfileAlbumsReportsARateLimit(t *testing.T) {
-	e, base := eromeWalkServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "2" {
-			// The host naming its own interval is believed, so this keeps
-			// the test to the behaviour rather than to the waiting.
-			w.Header().Set(httpx.HeaderRetryAfter, "0")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write([]byte(eromeWalkPage))
-	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	albums, _, limited, err := e.profileAlbums(context.Background(), u)
-	if err != nil {
-		t.Fatalf("a rate limit on page two lost the pages already walked: %v", err)
-	}
-	if len(albums) != 3 {
-		t.Errorf("collected %d albums, want page one's 3 kept", len(albums))
-	}
-	if !limited {
-		t.Fatal("a rate limit was read as the end of the listing")
 	}
 }
 
@@ -327,9 +274,7 @@ func TestEromeProfileAlbumsFailsOnTheFirstPage(t *testing.T) {
 		w.Header().Set(httpx.HeaderRetryAfter, "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
-	u, _ := ParseURL(base + "/creator?t=posts")
-
-	if _, _, _, err := e.profileAlbums(context.Background(), u); err == nil {
+	if _, _, _, err := e.profileAlbums(context.Background(), mustParse(t, base+"/creator?t=posts"), Options{}, nil); err == nil {
 		t.Fatal("a profile whose first page never loaded was reported as empty rather than failed")
 	}
 }
@@ -346,8 +291,8 @@ func TestEromeDeletedAlbumIsReportedPlainly(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	e := NewErome(httpx.New("test-agent", "en-US", 0, 5*time.Second))
-	u, _ := ParseURL(srv.URL + "/a/AAAA")
+	e := NewErome(testClient())
+	u := mustParse(t, srv.URL+"/a/AAAA")
 	_, err := e.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a deleted album was accepted")
@@ -358,4 +303,26 @@ func TestEromeDeletedAlbumIsReportedPlainly(t *testing.T) {
 	if strings.Contains(err.Error(), "<") {
 		t.Errorf("error quotes the page's markup: %q", err)
 	}
+}
+
+func TestEromeRecognise(t *testing.T) {
+	e := NewErome(nil)
+	album := strings.Replace(eromeAlbumPage, "<video>", `<div class="media-group"></div><video>`, 1)
+	profile := `<html><head><title>Someone - EroMe</title></head><body>` +
+		`<div class="col-xs-12 user-info text-center"><h1 class="username">Someone</h1></div>` +
+		`<a class="album-link" href="https://albums.example.test/a/AAAA1111">First</a></body></html>`
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/a/AAAA1111", album), true)
+	// A profile is a bare /<user>, recognised by its page alone.
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/Someone", profile), true)
+	// The right form and the name, but not the album markup.
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/a/AAAA1111", eromeAlbumPage), false)
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/Someone",
+		`<html><head><title>Someone - EroMe</title></head><body></body></html>`), false)
+	// Album markup on a page of another form, and a section that is no user.
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/explore/new", album), false)
+	expectRecognised(t, e, htmlPage(t, "https://albums.example.test/explore", profile), false)
+
+	expectShape(t, e, "https://albums.example.test/a/AAAA1111", true)
+	expectShape(t, e, "https://albums.example.test/Someone", false)
+	expectShape(t, e, "https://albums.example.test/a/AAAA1111/extra", false)
 }

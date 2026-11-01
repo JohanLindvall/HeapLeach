@@ -5,15 +5,16 @@ package extractor
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -51,9 +52,12 @@ import (
 // page), each episode with its title as the season shows it, number and
 // all, and whether it is shown in Denmark alone. So a listing costs a
 // request a page, and an episode's videos are read when its transfer
-// starts. Anything else on dr.dk is still handed to yt-dlp.
+// starts. An audio page of the broadcaster's own front end, and a DR TV
+// page naming no item, is handed to yt-dlp. A news article is not: yt-dlp
+// refuses those as unsupported, and the generic fallback reads the media
+// an article links.
 type DRTV struct {
-	hostSet
+	about
 	client *httpx.Client
 	// api is the API's base, a field so that tests can stand in for it.
 	api     string
@@ -64,20 +68,58 @@ const drAPIRoot = "https://production-cdn.dr-massive.com/api"
 
 // drRest is the part of dr.dk still handed to yt-dlp.
 var drRest = handoffSite{
-	name:    "drtv",
-	domains: []string{"dr.dk"},
-	why:     "only DR TV's programmes and series are read natively, not a page like this one",
+	name: "drtv",
+	why:  "only DR TV's programmes and series are read natively, not a page like this one",
 }
 
 // NewDRTV builds the DR TV extractor.
 func NewDRTV(client *httpx.Client) *DRTV {
 	return &DRTV{
-		hostSet: drRest.domains, client: client, api: drAPIRoot,
-		handoff: &Handoff{hostSet: drRest.domains, client: client, site: drRest},
+		client: client, api: drAPIRoot,
+		handoff: newHandoff(client, drRest),
+		about: about{name: "drtv", shape: drShape,
+			recognises: "programmes, seasons and series (`/drtv/…/<slug>_<id>`) of DR TV, served by its app with the state it boots from; " +
+				"audio pages (`/lyd/…`, `/radio/…`) served by the broadcaster's own front end are handed to yt-dlp"},
 	}
 }
 
-func (d *DRTV) Name() string { return "drtv" }
+// drShell marks DR TV's app: the state it boots from, its route table.
+const drShell = `window.__data = {"app":{"config"`
+
+// drShape is a DR TV link ending in an item id.
+func drShape(u *url.URL) bool { return drLink(u) != "" }
+
+// Recognise takes a page of DR TV's app (its boot state, window.__data)
+// under /drtv/, and a page of the broadcaster's audio front end under the
+// sections yt-dlp reads (drRestPage). One naming no item is
+// handed to yt-dlp, as before.
+func (d *DRTV) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	if len(segs) >= 2 && segs[0] == "drtv" && p.Has(drShell) && p.Named("DRTV") {
+		return true
+	}
+	return drRestPage(p)
+}
+
+// drRestSections are the sections of the broadcaster's site outside DR TV
+// whose pages go to yt-dlp: audio. News articles are left out: yt-dlp
+// answers them "Unsupported URL", where the fallback finds the media they
+// link.
+var drRestSections = []string{"lyd", "radio"}
+
+// drRestPage is a page under one of those sections, served by the
+// broadcaster's audio front end (which loads its scripts from a path of
+// its own) under the broadcaster's name.
+func drRestPage(p *Page) bool {
+	segs := p.Segments()
+	if len(segs) < 2 || !slices.Contains(drRestSections, segs[0]) || !p.Named("DR", "DR LYD") {
+		return false
+	}
+	return p.Script(drAudioBundle)
+}
+
+// drAudioBundle is the path the broadcaster's audio front end loads from.
+const drAudioBundle = "/lyd/_next/"
 
 var drItemID = regexp.MustCompile(`(?:^|_)([0-9]+)$`)
 
@@ -114,16 +156,13 @@ func (d *DRTV) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, 
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Title: stem, Files: []File{{
-			Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
-			SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		}}}, nil
+		return &Result{Title: stem, Files: []File{target.file("")}}, nil
 	case "season":
 		return d.season(ctx, item, opts)
 	case "show":
 		return d.series(ctx, item, opts)
 	case "channel":
-		return nil, &drRefused{title: cmp.Or(strings.TrimSpace(item.Title), id), reason: "it is a live channel, which has no end to download to"}
+		return nil, &itemRefusal{"drtv", cmp.Or(strings.TrimSpace(item.Title), id), "it is a live channel, which has no end to download to"}
 	}
 	// A list, an event or another page DR TV composes: as before.
 	return d.handoff.Extract(ctx, u, opts)
@@ -167,7 +206,7 @@ func (it *drItem) show() string {
 // ("1. A title"); otherwise DR's own title.
 func (it *drItem) name(show string) string {
 	if title := strings.TrimSpace(it.ContextualTitle); title != "" {
-		return ardJoin(show, title)
+		return joinTitle(show, title, titleContains)
 	}
 	return cmp.Or(strings.TrimSpace(it.Title), it.ID)
 }
@@ -193,22 +232,17 @@ func drSeasonLabel(show string, season *drItem) string {
 	return season.ID
 }
 
-// drRefused is a programme DR TV does not offer for download here: gone,
-// live, DRM-protected, or offered to signed-in viewers alone.
-type drRefused struct{ title, reason string }
-
-func (e *drRefused) Error() string { return "drtv: " + e.title + ": " + e.reason }
-
 // drGone is what DR TV's answer means for an id it does not have.
 const drGone = "it is not on DR TV: removed, expired, or not published yet"
 
 // errDRDenmarkOnly is a programme DR shows in Denmark alone, refused here.
 var errDRDenmarkOnly = errors.New("shown in Denmark only, and its stream is refused anywhere else")
 
+// drRoot is the site the player is served from.
+const drRoot = "https://www.dr.dk"
+
 // drHeaders are what the site's own player sends.
-func drHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://www.dr.dk/", "https://www.dr.dk")
-}
+func drHeaders() httpx.Header { return httpx.SiteOrigin(drRoot) }
 
 // endpoint is an API URL, asked as the anonymous subscriber and the web
 // player.
@@ -225,7 +259,7 @@ func (d *DRTV) item(ctx context.Context, id string) (*drItem, error) {
 	var item drItem
 	if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id), url.Values{"expand": {"all"}}), drHeaders(), &item); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &drRefused{title: id, reason: drGone}
+			return nil, &itemRefusal{"drtv", id, drGone}
 		}
 		return nil, fmt.Errorf("drtv: %s: %w", id, err)
 	}
@@ -249,17 +283,15 @@ func (d *DRTV) videos(ctx context.Context, id, title string) ([]drStream, error)
 	if err == nil {
 		return streams, nil
 	}
-	if se, ok := errors.AsType[*httpx.StatusError](err); ok {
-		var answer struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal([]byte(se.Body), &answer)
+	if answer, ok := refusalBody[struct {
+		Code    flexValue `json:"code"`
+		Message string    `json:"message"`
+	}](err); ok {
 		switch {
-		case answer.Code == 8009:
-			return nil, &drRefused{title: title, reason: "DR TV offers no stream of it without signing in"}
+		case answer.Code.String() == "8009":
+			return nil, &itemRefusal{"drtv", title, "DR TV offers no stream of it without signing in"}
 		case strings.Contains(strings.ToLower(answer.Message), "not found"):
-			return nil, &drRefused{title: title, reason: drGone}
+			return nil, &itemRefusal{"drtv", title, drGone}
 		}
 	}
 	return nil, fmt.Errorf("drtv: %s: %w", title, err)
@@ -289,9 +321,9 @@ func (d *DRTV) programme(ctx context.Context, item *drItem, stem string) (*Targe
 	}
 	if chosen == nil {
 		if protected {
-			return nil, &drRefused{title: stem, reason: "it is DRM-protected"}
+			return nil, &itemRefusal{"drtv", stem, refusedDRM}
 		}
-		return nil, &drRefused{title: stem, reason: "DR TV offers no stream of it to download"}
+		return nil, &itemRefusal{"drtv", stem, "DR TV offers no stream of it to download"}
 	}
 	headers := drHeaders()
 	media, err := resolveMediaPlaylist(ctx, d.client, chosen.URL, headers)
@@ -301,11 +333,9 @@ func (d *DRTV) programme(ctx context.Context, item *drItem, stem string) (*Targe
 		}
 		return nil, fmt.Errorf("drtv: %s: %w", stem, err)
 	}
-	return &Target{
-		URL: chosen.URL, Name: stem + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: drAudio(media.Audio, chosen.Language),
-		Subtitles: media.Subtitles,
-	}, nil
+	target := media.target(chosen.URL, stem+media.extension(), headers)
+	target.Audio = drAudio(media.Audio, chosen.Language)
+	return target, nil
 }
 
 // drAudio is the one audio track a master's group holds, whatever bitrates
@@ -331,20 +361,21 @@ type drChildren struct {
 }
 
 // children reads every page of an item's children, in the order DR gives
-// them. What was read before a page failed comes back with the error.
-func (d *DRTV) children(ctx context.Context, id string) ([]drItem, error) {
-	var all []drItem
-	for page := 1; ; page++ {
-		var doc drChildren
-		if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id)+"/children",
-			url.Values{"page": {strconv.Itoa(page)}}), drHeaders(), &doc); err != nil {
-			return all, err
-		}
-		all = append(all, doc.Items...)
-		if len(doc.Items) == 0 || page >= doc.Paging.Total {
-			return all, nil
-		}
-	}
+// them, up to the page cap, with the note for a walk cut short. The listing
+// ends at the page count it states, or at an empty page.
+func (d *DRTV) children(ctx context.Context, id string) ([]drItem, string, error) {
+	return walkPages(ctx, pageWalk[drItem]{
+		fetch: func(ctx context.Context, n int) (pageOf[drItem], error) {
+			var doc drChildren
+			if err := d.client.GetJSON(ctx, d.endpoint("items/"+url.PathEscape(id)+"/children",
+				url.Values{"page": {strconv.Itoa(n + 1)}}), drHeaders(), &doc); err != nil {
+				return pageOf[drItem]{}, err
+			}
+			return pageOf[drItem]{items: doc.Items, next: true, end: len(doc.Items) == 0, pages: max(doc.Paging.Total, 1)}, nil
+		},
+		key:   func(item drItem) string { return item.ID },
+		limit: -1,
+	})
 }
 
 // drListed is an entry of a listing and the folder it goes into.
@@ -357,13 +388,18 @@ type drListed struct {
 // episode, each season's in a folder of its own.
 func (d *DRTV) series(ctx context.Context, show *drItem, opts Options) (*Result, error) {
 	title := cmp.Or(strings.TrimSpace(show.Title), show.ID)
-	children, walkErr := d.children(ctx, show.ID)
+	children, walkNote, walkErr := d.children(ctx, show.ID)
+	if walkErr != nil {
+		return nil, fmt.Errorf("drtv: %s: %w", title, walkErr)
+	}
 	var entries []drListed
 	for _, child := range children {
 		switch child.Type {
 		case "season":
-			episodes, err := d.children(ctx, child.ID)
+			// A season that cannot be read at all does not lose the others.
+			episodes, note, err := d.children(ctx, child.ID)
 			walkErr = cmp.Or(walkErr, err)
+			walkNote = cmp.Or(walkNote, note)
 			folder := sourceFolder(drSeasonLabel(title, &child))
 			for _, ep := range episodes {
 				entries = append(entries, drListed{item: ep, folder: folder})
@@ -372,59 +408,35 @@ func (d *DRTV) series(ctx context.Context, show *drItem, opts Options) (*Result,
 			entries = append(entries, drListed{item: child})
 		}
 	}
-	return d.listing(ctx, title, title, entries, walkErr, opts)
+	return d.listing(ctx, title, title, entries, joinNotes(walkNote, brokenNote(walkErr)), walkErr, opts)
 }
 
 // season reads a season into one file an episode.
 func (d *DRTV) season(ctx context.Context, season *drItem, opts Options) (*Result, error) {
 	show := cmp.Or(season.show(), strings.TrimSpace(season.Title), season.ID)
-	episodes, walkErr := d.children(ctx, season.ID)
+	title := joinTitle(show, drSeasonLabel(show, season), titleContains)
+	episodes, walkNote, err := d.children(ctx, season.ID)
+	if err != nil {
+		return nil, fmt.Errorf("drtv: %s: %w", title, err)
+	}
 	entries := make([]drListed, 0, len(episodes))
 	for _, ep := range episodes {
 		entries = append(entries, drListed{item: ep})
 	}
-	return d.listing(ctx, ardJoin(show, drSeasonLabel(show, season)), show, entries, walkErr, opts)
+	return d.listing(ctx, title, show, entries, walkNote, nil, opts)
 }
-
-// drGeoProbes is how many of a listing's Denmark-only programmes are asked
-// for before it is taken that this address cannot tell whether they are
-// refused here.
-const drGeoProbes = 3
 
 // listing makes a listing's programmes into files, each resolved when its
 // transfer starts. What DR shows in Denmark alone is left out, the note
-// saying so, once one of them has been refused here.
-func (d *DRTV) listing(ctx context.Context, title, show string, entries []drListed, walkErr error, opts Options) (*Result, error) {
-	blocked, probes := false, 0
-	for i := range entries {
-		if probes == drGeoProbes {
-			break
-		}
-		if !entries[i].item.geoRestricted() {
-			continue
-		}
-		probes++
-		if refused, known := d.refusedHere(ctx, &entries[i].item); known {
-			blocked = refused
-			break
-		}
-	}
-
-	var (
-		files          []File
-		denmark, shown int
-	)
-	limit := opts.maxFiles()
-	for i := range entries {
-		e := &entries[i]
-		if blocked && e.item.geoRestricted() {
-			denmark++
-			continue
-		}
-		shown++
-		if len(files) < limit {
-			files = append(files, d.lazy(e, show))
-		}
+// saying so, once one of them has been refused here. walkNote is what the
+// walk of the listing said of where it stopped, and walkErr why a season
+// of it could not be read at all.
+func (d *DRTV) listing(ctx context.Context, title, show string, entries []drListed, walkNote string, walkErr error, opts Options) (*Result, error) {
+	shown, denmark := regionGate(ctx, entries, func(e drListed) bool { return e.item.geoRestricted() },
+		config.GeoProbesDR, func(ctx context.Context, e drListed) (bool, bool) { return d.refusedHere(ctx, &e.item) })
+	var files []File
+	for i := range shown[:min(len(shown), opts.maxFiles())] {
+		files = append(files, d.lazy(&shown[i], show))
 	}
 	if len(files) == 0 {
 		switch {
@@ -435,17 +447,9 @@ func (d *DRTV) listing(ctx context.Context, title, show string, entries []drList
 		}
 		return nil, fmt.Errorf("drtv: %s lists nothing DR TV offers now", title)
 	}
-	var notes []string
-	if shown > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(files), shown))
-	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
-	}
-	if denmark > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that DR shows in Denmark only", denmark))
-	}
-	return &Result{Title: title, Files: files, Note: strings.Join(notes, "; ")}, nil
+	note := joinNotes(cappedNote(len(files), len(shown), "episodes"), walkNote,
+		leftOutNote(denmark, " that DR shows in Denmark only"))
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
 // refusedHere asks for a programme's master, to learn whether DR's CDN
@@ -460,19 +464,11 @@ func (d *DRTV) refusedHere(ctx context.Context, item *drItem) (refused, known bo
 		if s.URL == "" || !strings.Contains(s.Format, "hls") {
 			continue
 		}
-		req, err := d.client.NewRequest(ctx, http.MethodGet, s.URL, nil)
+		status, err := d.client.StatusOnce(ctx, http.MethodGet, s.URL, drHeaders())
 		if err != nil {
 			return false, false
 		}
-		for name, value := range drHeaders() {
-			req.Header.Set(name, value)
-		}
-		resp, err := d.client.DoOnce(req)
-		if err != nil {
-			return false, false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusForbidden, true
+		return status == http.StatusForbidden, true
 	}
 	return false, false
 }
@@ -483,14 +479,11 @@ func (d *DRTV) refusedHere(ctx context.Context, item *drItem) (refused, known bo
 func (d *DRTV) lazy(e *drListed, show string) File {
 	stem := e.item.name(show)
 	id := e.item.ID
-	return File{
-		Name: stem + ".mp4", Size: -1, Dir: e.folder, Headers: drHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			item, err := d.item(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			return d.programme(ctx, item, stem)
-		},
-	}
+	return lazyEpisode(stem+".mp4", e.folder, drHeaders(), func(ctx context.Context) (*Target, error) {
+		item, err := d.item(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return d.programme(ctx, item, stem)
+	})
 }

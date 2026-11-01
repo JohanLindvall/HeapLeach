@@ -129,7 +129,7 @@ func TestProxyStartupDefaultsAndFlagOverrides(t *testing.T) {
 func TestProxyTypeFlagsOverrideTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_DIR", t.TempDir())
 	t.Setenv("HEAPLEACH_PROXY_TYPE", "http")
-	t.Setenv("HEAPLEACH_PROXY_TYPES", "fileboom=any")
+	t.Setenv("HEAPLEACH_PROXY_TYPES", "fileboom=any") // a group of its own, not keep2share's
 	cfg, err := loadConfig(nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)

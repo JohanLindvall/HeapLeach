@@ -76,10 +76,7 @@ const nprWithheldPage = `<!doctype html><html><head>
 
 func nprTestURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, raw)
 	return u
 }
 
@@ -87,10 +84,7 @@ func nprTestURL(t *testing.T, raw string) *url.URL {
 // block for every control it draws for the same audio, and each repeat would
 // otherwise be a second copy of the same download.
 func TestNPRPageListsEveryPieceOfAudioOnce(t *testing.T) {
-	root, err := parseHTML(nprListingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, nprListingPage)
 
 	entries := nprAudioFrom(root)
 	if len(entries) != 8 {
@@ -119,10 +113,7 @@ func TestNPRPageListsEveryPieceOfAudioOnce(t *testing.T) {
 // strings with unencoded ampersands, and half of what follows one reads as
 // the opening of a character reference.
 func TestNPRAudioURLSurvivesTheParser(t *testing.T) {
-	root, err := parseHTML(nprListingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, nprListingPage)
 
 	entries := nprAudioFrom(root)
 	const want = "https://ondemand.npr.org/anon.npr-mp3/npr/example/00000000_ex_one.mp3" +
@@ -259,6 +250,12 @@ func TestNPRListingPageResolves(t *testing.T) {
 	if res.Title != "A Programme" {
 		t.Errorf("title = %q", res.Title)
 	}
+	// What was left out says why, as a page with nothing to fetch would.
+	const note = "1 left out: behind an NPR+ subscription; 1 left out: marked unavailable; " +
+		"1 left out: listed as a live stream, which has no end to download to"
+	if res.Note != note {
+		t.Errorf("note = %q, want %q", res.Note, note)
+	}
 
 	want := []File{
 		{Name: "A segment.mp3", Size: 4965817, Dir: "A Programme"},
@@ -325,19 +322,15 @@ func TestNPRWithheldPageNamesTheSubscription(t *testing.T) {
 // TestNPRRefusalsRead covers the counting, since it is the whole of what a
 // failed page has to say for itself.
 func TestNPRRefusalsRead(t *testing.T) {
-	var r nprRefusals
-	if got := r.String(); !strings.Contains(got, "names nothing to fetch") {
+	if got := nprTally(nprReasons(nil)); !strings.Contains(got, "names nothing to fetch") {
 		t.Errorf("an empty tally reads %q", got)
 	}
 
-	r.add(nprSubscriberOnly)
-	r.add(nprUnavailable)
-	r.add(nprUnavailable)
-	r.add(nprLiveStream)
-	r.add(nprNoAudio)
+	// Reported in NPR's order, whichever order the page listed them in.
+	reasons := nprReasons([]nprRefusal{nprNoAudio, nprUnavailable, nprSubscriberOnly, nprLiveStream, nprUnavailable})
 	const want = "1 behind an NPR+ subscription, 2 marked unavailable, " +
 		"1 listed as a live stream, which has no end to download to, 1 listed with no audio at all"
-	if got := r.String(); got != want {
+	if got := nprTally(reasons); got != want {
 		t.Errorf("tally = %q, want %q", got, want)
 	}
 }
@@ -389,34 +382,9 @@ func TestNPRPageTitle(t *testing.T) {
 		`<html><head></head><body></body></html>`:                                              "",
 	}
 	for doc, want := range tests {
-		root, err := parseHTML(doc)
-		if err != nil {
-			t.Fatal(err)
-		}
+		root := mustParseDoc(t, doc)
 		if got := nprPageTitle(root); got != want {
 			t.Errorf("nprPageTitle = %q, want %q", got, want)
-		}
-	}
-}
-
-// TestNPRMatch pins the host list. It is exact rather than the usual
-// subdomain match because every npr.org subdomain that matters is somebody
-// else's job: the on-demand store serves a plain MP3 the fallback extractor
-// downloads as it stands, and the feed host serves RSS that the feed
-// extractor reads.
-func TestNPRMatch(t *testing.T) {
-	n := NewNPR(nil)
-	for _, host := range []string{"npr.org", "www.npr.org", "WWW.NPR.ORG", "www.npr.org."} {
-		if !n.Match(&url.URL{Scheme: "https", Host: host, Path: "/programs/a-programme/"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{
-		"ondemand.npr.org", "feeds.npr.org", "media.npr.org",
-		"npr.simplecastaudio.com", "npr.org.example.test",
-	} {
-		if n.Match(&url.URL{Scheme: "https", Host: host, Path: "/a/b.mp3"}) {
-			t.Errorf("%s was matched", host)
 		}
 	}
 }

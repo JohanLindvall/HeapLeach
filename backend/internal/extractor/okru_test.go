@@ -3,7 +3,6 @@
 package extractor
 
 import (
-	"net/url"
 	"testing"
 )
 
@@ -37,21 +36,22 @@ func TestOKruBestPrefersTheLargestName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	best, ok := okruBest(meta.Videos)
+	best, ok := bestCandidate(okruCandidates(meta))
 	if !ok {
 		t.Fatal("no rendition was chosen")
 	}
-	if best != "https://vd1.example.test/full?expires=1" {
-		t.Errorf("chose %q, want the full-quality rendition", best)
+	if best.URL != "https://vd1.example.test/full?expires=1" || best.IsHLS {
+		t.Errorf("chose %+v, want the full-quality rendition", best)
 	}
 }
 
-func TestOKruBestHandlesAwkwardLists(t *testing.T) {
+func TestOKruCandidatesHandleAwkwardLists(t *testing.T) {
 	tests := []struct {
-		name   string
-		videos []okruVideo
-		want   string
-		wantOK bool
+		name     string
+		videos   []okruVideo
+		playlist string
+		want     string
+		wantOK   bool
 	}{
 		{
 			name:   "nothing at all",
@@ -77,12 +77,28 @@ func TestOKruBestHandlesAwkwardLists(t *testing.T) {
 			want:   "https://vd1.example.test/sd",
 			wantOK: true,
 		},
+		{
+			// The playlist is taken only when no file is offered.
+			name:     "an unknown label outranks the playlist",
+			videos:   []okruVideo{{Name: "superduper", URL: "https://vd1.example.test/x"}},
+			playlist: "https://vd1.example.test/video.m3u8",
+			want:     "https://vd1.example.test/x",
+			wantOK:   true,
+		},
+		{
+			name:     "only the playlist",
+			videos:   []okruVideo{{Name: "hd"}},
+			playlist: "https://vd1.example.test/video.m3u8",
+			want:     "https://vd1.example.test/video.m3u8",
+			wantOK:   true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := okruBest(tc.videos)
-			if ok != tc.wantOK || got != tc.want {
-				t.Errorf("okruBest = %q, %v; want %q, %v", got, ok, tc.want, tc.wantOK)
+			best, ok := bestCandidate(okruCandidates(&okruMetadata{Videos: tc.videos, HLSManifestURL: tc.playlist}))
+			wantHLS := tc.playlist != "" && tc.want == tc.playlist
+			if ok != tc.wantOK || best.URL != tc.want || best.IsHLS != wantHLS {
+				t.Errorf("best = %+v, %v; want %q, %v", best, ok, tc.want, tc.wantOK)
 			}
 		})
 	}
@@ -111,24 +127,9 @@ func TestOKruVideoID(t *testing.T) {
 		"https://ok.ru/":                            "",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := okruVideoID(u); got != want {
 			t.Errorf("okruVideoID(%s) = %q, want %q", raw, got, want)
 		}
-	}
-}
-
-func TestOKruMatch(t *testing.T) {
-	o := NewOKru(nil)
-	for _, host := range []string{"ok.ru", "www.ok.ru", "m.ok.ru", "odnoklassniki.ru"} {
-		if !o.Match(&url.URL{Scheme: "https", Host: host, Path: "/video/1"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	if o.Match(&url.URL{Scheme: "https", Host: "notok.ru"}) {
-		t.Error("a lookalike host was matched")
 	}
 }

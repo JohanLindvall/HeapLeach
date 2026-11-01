@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,8 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -65,6 +68,7 @@ import (
 // season's human label is null for a good part of the catalogue, so the
 // folder falls back to the season's slug.
 type NPOStart struct {
+	about
 	client *httpx.Client
 }
 
@@ -90,58 +94,22 @@ const (
 	npoSeriesPath  = "serie"
 	npoPlayPath    = "afspelen"
 	npoEpisodesTab = "afleveringen"
-
-	// npoMaxEpisodes bounds how many episodes one series URL expands to, and
-	// it is a good deal lower than the equivalent on the other broadcasters
-	// here. The reason is worth knowing before raising it.
-	//
-	// Every episode costs a player token of its own, so an expansion is that
-	// many requests to npo.nl and there is no way to make it fewer: a
-	// segmented file has to be resolved while extracting, since File.Resolve
-	// hands back a single URL and there is no late binding for a segment
-	// list. And npo.nl is behind an edge that stops answering at around two
-	// hundred requests — measured at one connection and six a second, so it
-	// counts requests rather than punishing parallelism — and then refuses
-	// everything for minutes. Being cut off is far worse than a bounded
-	// answer, because what comes back is an arbitrary fraction of the series
-	// with nothing to mark it as one.
-	//
-	// So this leaves room to be wrong, and room to be asked again: an
-	// expansion that spent the whole budget would succeed and leave the next
-	// thing the user pasted failing. A series with more instalments than
-	// this is offered a season at a time, which is how the site divides it
-	// too.
-	npoMaxEpisodes = 120
-
-	// npoMaxSeasons bounds how many season listings one series URL reads.
-	// Seasons arrive newest first and the episodes behind them are truncated
-	// to the above anyway, so all that reading further buys is spending the
-	// same request budget the episodes need. The longest-running strand
-	// looked at here had twenty-three.
-	npoMaxSeasons = 30
 )
 
 // NewNPOStart builds the NPO Start extractor.
-func NewNPOStart(client *httpx.Client) *NPOStart { return &NPOStart{client: client} }
+func NewNPOStart(client *httpx.Client) *NPOStart {
+	return &NPOStart{client: client, about: about{name: "npo", shape: npoShape,
+		recognises: "episodes and series (`/start/afspelen/<slug>`, `/start/serie/<slug>`) of NPO Start, served by its app"}}
+}
 
-func (n *NPOStart) Name() string { return "npo" }
+// npoShape is a player or series link under /start.
+var npoShape = pathShape(`^/start/(?:afspelen|serie)/[^/]+`)
 
-// Match takes the catch-up service and the domain it used to live on.
-//
-// npo.nl carries the corporation's own pages beside the player, and this
-// resolves none of them, so only paths under /start are claimed — leaving
-// the rest to the fallback, which will at least say something true about
-// them. npostart.nl is claimed whole: every address on it was a player link,
-// and every one of them redirects.
-func (n *NPOStart) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, "npostart.nl") {
-		return true
-	}
-	if !util.HostMatches(u.Host, "npo.nl") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && segs[0] == npoStartPath
+// Recognise takes a player or series page served by the NPO Start app,
+// whose bundle lives under /start/_next/: the page is a shell, and the
+// episodes are the API's to list.
+func (n *NPOStart) Recognise(_ context.Context, p *Page) bool {
+	return npoShape(p.Final) && p.Script("/start/_next/") && p.Named("NPO Start")
 }
 
 // Extract handles a single episode, one season, or a whole series.
@@ -228,13 +196,9 @@ func npoRoute(u *url.URL) npoTarget {
 // which is the same answer a browser following the link would arrive at, and
 // saves this from having to know the redirector in between.
 func (n *NPOStart) canonical(ctx context.Context, u *url.URL) (*url.URL, error) {
-	doc, err := n.client.GetString(ctx, u.String(), httpx.Referer(npoRoot))
+	root, _, err := fetchRoot(ctx, n.client, u, httpx.Referer(npoRoot))
 	if err != nil {
 		return nil, fmt.Errorf("npo: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("npo: parse %s: %w", u.Redacted(), err)
 	}
 	landed := metaContent(root, "og:url")
 	if landed == "" {
@@ -254,11 +218,7 @@ func (n *NPOStart) programme(ctx context.Context, slug string) (*Result, error) 
 	if err != nil {
 		return nil, err
 	}
-	// A lone file lands straight in the download directory with no folder to
-	// say what it belongs to, so the name carries the series as well.
-	title := util.FirstNonEmpty(doc.name(), slug)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(cmp.Or(doc.name(), slug), file), nil
 }
 
 // series expands a series, or one season of it, into one file per episode.
@@ -278,110 +238,70 @@ func (n *NPOStart) series(ctx context.Context, target npoTarget) (*Result, error
 			seasons = []npoSeason{only}
 		}
 	}
-	if len(seasons) > npoMaxSeasons {
-		seasons = seasons[:npoMaxSeasons]
+	// Seasons past config.MaxSeasonsNPO are not read, and the note says so.
+	seasonsNote := cappedNote(config.MaxSeasonsNPO, len(seasons), "seasons")
+	if len(seasons) > config.MaxSeasonsNPO {
+		seasons = seasons[:config.MaxSeasonsNPO]
 	}
 
-	episodes := n.listings(ctx, seasons)
+	episodes, unread := n.listings(ctx, seasons)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("npo: %s lists no episodes", target.series)
 	}
-	if len(episodes) > npoMaxEpisodes {
-		episodes = episodes[:npoMaxEpisodes]
-	}
 
-	title := util.FirstNonEmpty(episodes[0].series, target.series)
+	title := cmp.Or(episodes[0].programme, target.series)
 	if named {
 		// One season goes in the job title rather than in a folder below it,
 		// which would say nothing; and two seasons fetched separately would
 		// otherwise share a folder, where episode names that start again at
 		// the top of the season collide.
-		title = npoJoin(title, seasons[0].name())
+		title = joinTitle(title, seasons[0].name(), titleEqual)
 	}
 
-	result := &Result{Title: title}
-	var refused string
-	var throttled int
-	for _, ep := range n.resolve(ctx, episodes) {
-		if ep.err != nil {
-			// One locked or withdrawn episode must not sink the rest — a
-			// mixed series is the normal case here, not an edge one. The
-			// reason is kept, though: when nothing at all is playable it is
-			// for one reason, and NPO's own words for it once are worth more
-			// than several hundred identical failures.
-			refusal, unavailable := errors.AsType[*npoUnavailable](ep.err)
-			switch {
-			case unavailable:
-				if refused == "" {
-					refused = refusal.reason
-				}
-			case errors.Is(ep.err, errNPOThrottled):
-				throttled++
+	// One locked or withdrawn episode must not sink the rest — a mixed
+	// series is the normal case here, not an edge one. Every episode costs
+	// a player token, against an edge that bears about two hundred requests
+	// (config.MaxResolvedEpisodesNPO): a segmented file has to be resolved
+	// while extracting, and there is no way to make that fewer.
+	//
+	// Every episode is asked, and there is no shortcut past the ones that
+	// will be refused, tempting as it is when three quarters of the
+	// catalogue is encrypted. DRM here is a property of the asset and not of
+	// the title: one season of a documentary strand answered with seven
+	// clear episodes and three FairPlay ones, the locked ones being the
+	// oldest, as though the rights to serve them in the clear had lapsed
+	// underneath them. So a series judged from one episode would be judged
+	// wrong, and the only honest way to find out which instalments are
+	// downloadable is to ask about each.
+	var throttled atomic.Int32
+	resolved, note, err := expandSeries(ctx, series[broadcastEpisode]{
+		site: "npo", noun: "episodes", link: target.series,
+		items: episodes, budget: config.MaxResolvedEpisodesNPO,
+		label: broadcastEpisode.seasonOf,
+		split: len(seasons) > 1,
+		resolve: listedAs(func(ctx context.Context, productID string) (*File, string, error) {
+			file, err := n.stream(ctx, productID)
+			if errors.Is(err, errNPOThrottled) {
+				throttled.Add(1)
 			}
-			continue
-		}
-		ep.file.Name = util.FirstNonEmpty(ep.ref.name, ep.ref.productID) + ep.file.Name
-		if len(seasons) > 1 {
-			ep.file.Dir = ep.ref.season
-		}
-		result.Files = append(result.Files, *ep.file)
-	}
+			return file, "", err
+		}, nil),
+		unplayable: "the catalogue lists them but the player offers no stream",
+	})
 
 	// Being turned away by the edge is not a refusal of anything, and must
 	// never be reported as one. What it produces is a job holding however
 	// many episodes happened to be asked before the shutter came down, with
 	// nothing about it to say the rest exist — so it is an error, and the
 	// one thing the caller can do about it is said outright.
-	if throttled > 0 {
+	if unasked := throttled.Load(); unasked > 0 {
 		return nil, fmt.Errorf("npo: %d of the %d episodes of %s went unasked: %w",
-			throttled, len(episodes), target.series, errNPOThrottled)
+			unasked, min(len(episodes), config.MaxResolvedEpisodesNPO), target.series, errNPOThrottled)
 	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("npo: none of the %d episodes of %s are playable: %s",
-			len(episodes), target.series,
-			util.FirstNonEmpty(refused, "the catalogue lists them but the player offers no stream"))
+	if err != nil {
+		return nil, err
 	}
-	return result, nil
-}
-
-// npoEpisodeRef is one episode of a series, with the season it belongs to.
-type npoEpisodeRef struct {
-	productID string
-	name      string
-	series    string
-	season    string
-}
-
-// npoResolved pairs an episode with what resolving it produced. FanOut drops
-// a fetch that returned an error, and a refusal is exactly what must not be
-// dropped here, so the error travels as a value instead.
-type npoResolved struct {
-	ref  npoEpisodeRef
-	file *File
-	err  error
-}
-
-// resolve turns a series' episodes into files, all at once.
-//
-// Where NRK and SVT reach a stream in one request, this needs four — token,
-// stream link, master playlist, variant playlist — so a season resolved
-// strictly in turn would spend minutes before a single byte moved. FanOut
-// collects by index, so the files stay in the order the site listed them
-// however the requests interleave.
-//
-// Every episode is asked, and there is no shortcut past the ones that will
-// be refused, tempting as it is when three quarters of the catalogue is
-// encrypted. DRM here is a property of the asset and not of the title: one
-// season of a documentary strand answered with seven clear episodes and
-// three FairPlay ones, the locked ones being the oldest, as though the
-// rights to serve them in the clear had lapsed underneath them. So a series
-// judged from one episode would be judged wrong, and the only honest way to
-// find out which instalments are downloadable is to ask about each.
-func (n *NPOStart) resolve(ctx context.Context, episodes []npoEpisodeRef) []npoResolved {
-	return FanOut(ctx, episodes, func(ctx context.Context, ref npoEpisodeRef) ([]npoResolved, error) {
-		file, err := n.stream(ctx, ref.productID)
-		return []npoResolved{{ref: ref, file: file, err: err}}, nil
-	})
+	return &Result{Title: title, Files: listedFiles(resolved), Note: joinNotes(seasonsNote, unread, note)}, nil
 }
 
 // seasons lists a series' seasons, newest first.
@@ -393,28 +313,30 @@ func (n *NPOStart) seasons(ctx context.Context, slug string) ([]npoSeason, error
 	return seasons, nil
 }
 
-// listings reads every season's episode list. These are independent requests
-// and a news strand has twenty of them, so they go out together.
-func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) []npoEpisodeRef {
-	return FanOut(ctx, seasons, func(ctx context.Context, season npoSeason) ([]npoEpisodeRef, error) {
+// listings reads every season's episode list, and the note when some could
+// not be read. These are independent requests and a news strand has twenty
+// of them, so they go out together.
+func (n *NPOStart) listings(ctx context.Context, seasons []npoSeason) ([]broadcastEpisode, string) {
+	list, _ := readSeasons(ctx, seasons, false, func(ctx context.Context, season npoSeason) (seasonList[broadcastEpisode], error) {
 		var listing []npoProgram
 		if err := n.fetch(ctx, npoListEndpoint, "guid", season.GUID, &listing); err != nil {
-			return nil, err
+			return seasonList[broadcastEpisode]{}, err
 		}
-		out := make([]npoEpisodeRef, 0, len(listing))
+		out := make([]broadcastEpisode, 0, len(listing))
 		for _, ep := range listing {
 			if ep.ProductID == "" {
 				continue
 			}
-			out = append(out, npoEpisodeRef{
-				productID: ep.ProductID,
+			out = append(out, broadcastEpisode{
+				id:        ep.ProductID,
 				name:      ep.name(),
-				series:    ep.Series.Title,
+				programme: ep.Series.Title,
 				season:    season.name(),
 			})
 		}
-		return out, nil
+		return seasonList[broadcastEpisode]{items: out}, nil
 	})
+	return list.items, list.note
 }
 
 // stream resolves one product id to a playable segment list. The returned
@@ -446,15 +368,14 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 		map[string]string{"profileName": "hls", "referrerUrl": npoRoot}, &link)
 	if err != nil {
 		if reason := npoReason(err); reason != "" {
-			return nil, &npoUnavailable{productID: productID, reason: reason}
+			return nil, &itemRefusal{"npo", productID, reason}
 		}
 		return nil, fmt.Errorf("npo: stream for %s: %w", productID, err)
 	}
 
 	if scheme, ok := link.Stream.encrypted(); ok {
-		return nil, &npoUnavailable{productID: productID,
-			reason: "DRM protected — NPO serves it under " + scheme +
-				", and there is no key here to unlock it with"}
+		return nil, &itemRefusal{"npo", productID, "DRM protected — NPO serves it under " + scheme +
+			", and there is no key here to unlock it with"}
 	}
 	if link.Stream.URL == "" {
 		return nil, fmt.Errorf("npo: %s offers no stream", productID)
@@ -464,19 +385,7 @@ func (n *NPOStart) stream(ctx context.Context, productID string) (*File, error) 
 	// in it, which outlasts any queue this program will hold, so the
 	// segments are resolved now rather than through File.Resolve.
 	headers := httpx.Referer(npoRoot)
-	media, err := resolveMediaPlaylist(ctx, n.client, link.Stream.URL, headers)
-	if err != nil {
-		return nil, fmt.Errorf("npo: %s: %w", productID, err)
-	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return broadcastFile(ctx, n.client, "npo", productID, link.Stream.URL, "", headers, variantExt)
 }
 
 // errNPONotFound is NPO answering a slug it does not know.
@@ -532,18 +441,6 @@ func npoEmpty(raw json.RawMessage) bool {
 	return false
 }
 
-// npoUnavailable is the player declining to serve something. It is a type
-// rather than a message so that expanding a series can report the reason
-// once instead of several hundred times, which matters more here than on the
-// other broadcasters: a whole-series expansion routinely refuses most of what
-// it lists.
-type npoUnavailable struct {
-	productID string
-	reason    string
-}
-
-func (e *npoUnavailable) Error() string { return "npo: " + e.productID + ": " + e.reason }
-
 // npoReason is the player's own explanation for a refusal, dug out of the
 // body of the response that carried it.
 //
@@ -556,15 +453,10 @@ func (e *npoUnavailable) Error() string { return "npo: " + e.productID + ": " + 
 // either would be inventing an answer only NPO has, so the sentence is
 // passed through as written and the dates are appended to it.
 func npoReason(err error) string {
-	status, ok := errors.AsType[*httpx.StatusError](err)
-	if !ok {
-		return ""
+	if refusal, ok := refusalBody[npoRefusal](err); ok {
+		return refusal.message()
 	}
-	var refusal npoRefusal
-	if json.Unmarshal([]byte(status.Body), &refusal) != nil {
-		return ""
-	}
-	return refusal.message()
+	return ""
 }
 
 // npoRefusal is the document a refusal arrives in. There are two envelopes
@@ -583,7 +475,7 @@ type npoRefusal struct {
 }
 
 func (r npoRefusal) message() string {
-	message := strings.TrimSpace(util.FirstNonEmpty(r.Body, r.Message))
+	message := strings.TrimSpace(cmp.Or(r.Body, r.Message))
 	from, until := npoDay(r.Context.From), npoDay(r.Context.Until)
 	switch {
 	case message == "":
@@ -613,7 +505,6 @@ type npoStreamLink struct {
 // npoStream is the stream the player was given.
 type npoStream struct {
 	URL     string `json:"streamURL"`
-	Profile string `json:"streamProfile"`
 	DRMType string `json:"drmType"`
 	// DRM is the licence server and certificate the player would need. It is
 	// read as raw JSON because only its presence matters here.
@@ -655,7 +546,7 @@ type npoSeason struct {
 // different things on different series — "26" on one and "2026" on the next
 // — while the slug is always filled in and unique within the series, which
 // is what a folder name has to be.
-func (s npoSeason) name() string { return util.FirstNonEmpty(s.Label, s.Slug, s.Key) }
+func (s npoSeason) name() string { return cmp.Or(s.Label, s.Slug, s.Key) }
 
 // npoPick finds the season a URL named, if it named one at all.
 func npoPick(seasons []npoSeason, slug string) (npoSeason, bool) {
@@ -690,21 +581,9 @@ type npoProgram struct {
 // place, which is what a viewer calls that episode anyway.
 func (p npoProgram) name() string {
 	if p.Title == "" || strings.EqualFold(p.Series.Title, p.Title) {
-		return npoJoin(util.FirstNonEmpty(p.Series.Title, p.Title), npoDate(p.Published))
+		return joinTitle(cmp.Or(p.Series.Title, p.Title), npoDate(p.Published), titleEqual)
 	}
-	return npoJoin(p.Series.Title, p.Title)
-}
-
-// npoJoin names something by its series and what distinguishes it, and copes
-// with either half being missing or the two being the same.
-func npoJoin(series, part string) string {
-	switch {
-	case part == "":
-		return series
-	case series == "" || strings.EqualFold(series, part):
-		return part
-	}
-	return series + " - " + part
+	return joinTitle(p.Series.Title, p.Title, titleEqual)
 }
 
 // npoDate renders a broadcast timestamp as a plain date.

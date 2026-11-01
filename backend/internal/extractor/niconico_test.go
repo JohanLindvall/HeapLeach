@@ -14,30 +14,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
-
-// The site's links reach this extractor through the registry, the ones it
-// hands to yt-dlp included, and no longer the handoff table itself.
-func TestNiconicoIsWhereTheSitesLinksGo(t *testing.T) {
-	cfg := &config.Config{UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage}
-	registry := NewRegistry(cfg, httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), 0, time.Second))
-	for _, raw := range []string{
-		"https://www.nicovideo.jp/watch/sm0000000", "https://nico.ms/sm0000000",
-		"https://www.nicovideo.jp/tag/an-invented-tag",
-	} {
-		u, _ := url.Parse(raw)
-		if got := registry.Find(u).Name(); got != "niconico" {
-			t.Errorf("%s went to %q", raw, got)
-		}
-		if _, native := registry.Find(u).(*Niconico); !native {
-			t.Errorf("%s did not reach the native extractor", raw)
-		}
-	}
-}
 
 func TestNiconicoLink(t *testing.T) {
 	for raw, want := range map[string]struct {
@@ -55,6 +35,8 @@ func TestNiconicoLink(t *testing.T) {
 		"https://www.nicovideo.jp/user/5005":               {niconicoUploads, "5005"},
 		"https://www.nicovideo.jp/user/5005/video":         {niconicoUploads, "5005"},
 		// Pages still handed to yt-dlp.
+		"https://live.example.test/lv12345":            {0, ""},
+		"https://live.example.test/watch/lv12345":      {0, ""},
 		"https://www.nicovideo.jp/tag/an-invented-tag": {0, ""},
 		"https://www.nicovideo.jp/ranking":             {0, ""},
 		"https://www.nicovideo.jp/watch/not-an-id":     {0, ""},
@@ -63,6 +45,28 @@ func TestNiconicoLink(t *testing.T) {
 		if kind, id := niconicoLink(u); kind != want.kind || id != want.id {
 			t.Errorf("%s: %d %q, want %d %q", raw, kind, id, want.kind, want.id)
 		}
+	}
+}
+
+func TestNiconicoRecognisesLiveProgramState(t *testing.T) {
+	short := &url.URL{Scheme: "https", Host: "nico.ms", Path: "/lv12345"}
+	if kind, _ := niconicoLink(short); kind != 0 {
+		t.Fatal("live short link must use the metadata handoff")
+	}
+	const state = `<script src="/relive/program-watch/scripts/runtime.js"></script><script id="embedded-data" data-props='{"program":{"nicoliveProgramId":"lv12345"}}'></script>`
+	n := NewNiconico(nil)
+	for _, tc := range []struct {
+		path, body string
+		want       bool
+	}{
+		{"/watch/lv12345", state, true},
+		{"/watch/lv99999", state, false},
+		{"/watch/sm12345", state, false},
+		{"/help", state, false},
+		{"/watch/lv12345", strings.ReplaceAll(state, "/relive/program-watch/scripts/", "/other/"), false},
+		{"/watch/lv12345", `<title>ニコニコ生放送</title>`, false},
+	} {
+		expectRecognised(t, n, htmlPage(t, "https://live.example.test"+tc.path, tc.body), tc.want)
 	}
 }
 
@@ -137,7 +141,7 @@ func niconicoSite(t *testing.T) (*httptest.Server, *[][]string) {
 }
 
 func niconicoWith(srv *httptest.Server) *Niconico {
-	n := NewNiconico(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	n := NewNiconico(testClient())
 	n.watch, n.api = srv.URL+"/watch/", srv.URL
 	return n
 }
@@ -277,5 +281,51 @@ func TestNiconicoListsMylistsSeriesAndUploads(t *testing.T) {
 	u, _ := url.Parse("https://www.nicovideo.jp/mylist/9999")
 	if _, err := n.Extract(context.Background(), u, Options{}); err == nil || !strings.Contains(err.Error(), "private, or does not exist") {
 		t.Errorf("a missing mylist: %v", err)
+	}
+}
+
+// The grant is a complete buffered body, held to the same bound as every
+// other: an answer exactly at the limit is read whole and granted, with
+// its cookie; one a byte longer is refused as too large rather than read
+// as its first MaxResponseBytes, even when that prefix is a valid grant;
+// a refusal keeps quoting the answer it got.
+func TestNiconicoGrantIsReadWholeOrRefused(t *testing.T) {
+	grant := `{"meta": {"status": 201}, "data": {"contentUrl": "https://stream.example.test/master.m3u8"}}`
+	padded := func(n int) string { return grant + strings.Repeat(" ", n-len(grant)) }
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		want       string
+		tooLarge   bool
+	}{
+		{"exactly at the limit", padded(config.MaxResponseBytes), http.StatusCreated, "https://stream.example.test/master.m3u8", false},
+		{"one byte past it", padded(config.MaxResponseBytes + 1), http.StatusCreated, "", true},
+		{"a refusal", `{"meta": {"status": 403, "errorCode": "AN_INVENTED_REFUSAL"}}`, http.StatusForbidden, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.SetCookie(w, &http.Cookie{Name: "domand_bid", Value: "an-invented-cookie", Path: "/"})
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(srv.Close)
+			n := niconicoWith(srv)
+			master, cookie, err := n.grant(t.Context(), "sm1001", &niconicoWatch{video: "v", audio: "a", key: "k", track: "t"})
+			switch {
+			case tc.want != "":
+				if err != nil || master != tc.want || cookie != "an-invented-cookie" {
+					t.Errorf("master %q cookie %q err %v", master, cookie, err)
+				}
+			case tc.tooLarge:
+				if err == nil || !httpx.IsTooLarge(err) {
+					t.Errorf("master %q err %v, want the answer refused as too large", master, err)
+				}
+			default:
+				if err == nil || !strings.Contains(err.Error(), "the stream was not granted (403 Forbidden: ") ||
+					!strings.Contains(err.Error(), "AN_INVENTED_REFUSAL") {
+					t.Errorf("err %v, want the refusal quoted", err)
+				}
+			}
+		})
 	}
 }

@@ -4,24 +4,157 @@ Notes on hosts that serve single videos or embeddable players, and on the
 Kernel Video Sharing platform. The shared machinery they use is in
 [extractors.md](../extractors.md).
 
-## Script-reading players: streamtape, doodstream, mixdrop
+<a id="script-reading-players-streamtape-doodstream-mixdrop"></a>
 
-These are the most fragile extractors here, because each depends on the shape
-of a script the host can change. Each therefore reads the numbers it needs off
-the page — the substring offset, the packer's base and word list — rather than
-hard-coding them. `unpackJS` reverses the p,a,c,k,e,d packer and is
-host-neutral.
+## Player pages: one engine, one row per site
 
-Their `Extract` bodies, and those of xhamster, tnaflix and pornone, all have
-the same shape: one file, re-read at download time because the link is signed
-per visit. Most share `refetchedVideo` (`tube.go`).
+pornhub, xhamster, tnaflix, drtuber, pornone, eporner, streamable, vidmoly,
+ok.ru, streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid,
+knuthing and noodlemagazine are rows of one table (`playersites.go`, and a
+file of its own for the larger rows), run by the engine in `players.go`, each registered as its
+own `Player` under its own name, in the registry position its hand-written
+extractor had (form order decides `Known`, so the rows are registered one by
+one rather than as a block). A row states its forms and recogniser, the
+canonical page a pasted link is read as (`page`), the media referer, and
+how the page is read: `parse`, for a row whose page is all it reads, or
+`read`, for one that asks an API, runs a handshake or makes requests of its
+own. A `parse` row names the Referer the page is fetched with (`asks`) and
+receives a `playerPage`: the body, the final URL, the page as asked for, and
+the tree on demand (`tree`, `title`, `heading`), the probe's own when its
+request matches the row's Referer. Otherwise the row fetches its own page.
+A scan of the body never parses it. `TestRegisteredRowsAreComplete`
+(`rows_test.go`) holds every row to exactly one of the two, `withheld` only on a `signed`
+row and no `peek` row signed; `TestPlayerPageRowsHonorTheirPageReferer`
+checks that the converted rows send their requested Referer after recognition.
+Either way the row returns the title and rendition candidates. The engine takes the best (`bestCandidate`: quality, then a
+plain file over a playlist, then the larger stated size), follows a playlist
+to its segments (named by the segments' container) or hands over a plain
+file, carrying a size the candidate states exactly, and, for a row marked
+`signed`, reads the page again when the transfer starts. A 404 on the page is reported as the video being gone, for
+every row, keeping the status underneath. Only the video's own page counts
+(`videoPageError`, which `readPlayerPage` and each row's own `read` put
+around that one fetch): a 404 from a token or configuration endpoint, or a
+framed player, is that request's failure as it stands. New player sites
+belong in this table.
+
+When inferring HLS from a media URL, `isPlaylistLink` tests a case-insensitive
+`.m3u8` suffix on the parsed, decoded path. Escaped extensions count; a host
+label, directory name, query or fragment containing `.m3u8` does not turn a
+progressive file into a playlist. Parsing is only for classification: the
+original URL, including its escaped path and signature parameters, is kept.
+Callers that also read explicit HLS format or type metadata retain those
+checks independently of the suffix.
+
+What else a row can ask for:
+
+- **A referer of the read's own.** `playerVideo.referer` replaces the row's
+  for that read: the address of a player only the read found (knuthing's
+  embed), or the page as finally served (noodlemagazine, doodstream). A row
+  with neither sends no Referer (eporner).
+- **`peek`.** Extract learns only the title, and that the video plays; the
+  whole read waits for the transfer and runs again on recovery (`Resolve`
+  and `Refresh`). For a site whose player spends its signature by being
+  read at all (knuthing), or whose links are signed per visit
+  (noodlemagazine). `ext` names such a queued video before it is read.
+- **`listing`.** A listing of the site's videos, by `shape`: either a paged
+  listing `walkListing` reads (`walk`: the first page and the page reader;
+  the engine adds the caps and their notes), or one that pages its own way
+  (`links`). Each entry is queued unread under its
+  card's title and read like a peeked video.
+- **`finished`.** A media playlist without `#EXT-X-ENDLIST` is refused as
+  still being written, since it would finish as a fragment named as the
+  whole. Only sites that publish videos while they are encoded set it
+  (knuthing, noodlemagazine): elsewhere a playlist may be a live stream
+  (ok.ru) or simply leave its end unmarked, and is taken as it is.
+- **`proxyFallback`.** Opts the row's sources and files into proxy recovery
+  (doodstream). A link of the row's form whose probe was refused, failed or
+  answered with an error is opted in too (`Registry.proxyFallbackForm`):
+  such a probe is no page to recognise the player by, and an address the
+  host refuses is what the recovery exists for. The read on the new route
+  must still be recognised as the row's.
+- **`probeCanonical`.** When a link's own page has lost its player markup,
+  validate the canonical page (`page`) with one bounded request.
+  Recognition still requires the player's normal markers on that page, and
+  extraction reuses it. The request is made only for a probed page the
+  row's `canonicalGate` admits, the row's Shape when it sets none, and never
+  when the canonical page is the page already probed. VidMoly needs this
+  because old aliases redirect to advertising rather than the player, so
+  the final URL cannot identify the submitted video; its gate also admits a
+  bare twelve-character `/<code>`, but only when the page redirected
+  elsewhere or refused it, since an ordinary site's page of that form
+  answers for itself. lulustream reads every form as the plain `/<id>`,
+  vids.st `/e/<id>` as `/v/<id>`, sendvid the embed and `/<id>.mp4` as
+  `/<id>`, pornhub an `/embed/<key>` as its `view_video.php` page (a gate
+  only, never a Shape: every player host has `/embed/<id>`), and ok.ru a
+  group's or a profile's video and the legacy `/dk?st.mvId=<id>` as the
+  embed. ok.ru's embed is on the site's own host, so its gate stays on
+  those forms rather than every `/video/<id>`.
+- **`confirm`.** A page of the row's form that names the site but shows no
+  player is taken by one bounded question to the site (`pageJSON`): the
+  streamable document for an embed served without its meta tags or a video
+  still processing.
+- **`withheld`.** A signed row's queued file carries no link at all, only
+  its name and exact size, so the item waits against the site it came from
+  rather than the media host (streamable).
+
+## streamable
+
+streamable's "page" is the JSON document its own player reads
+(`ajax.streamable.com/videos/<id>`), served to anyone with no headers. It
+states the transcode's status, the title, and each rendition's height and
+exact byte size; the link is a signed CloudFront one, so the row is signed
+and withheld. `original_size` describes the upload, not the transcode, and
+is never read. A video still uploading, transcoding or failed is reported as
+that, and a 404 as no such video. A page is recognised by the player it
+offers for embedding, or, named Streamable without one, by the document
+describing its id (`confirm`); `/s/<id>/<slug>` is a watch page too. A
+page withheld from the probe (`probeWithheld`) is asked about by the same
+document, but only for an id mixing letters and digits
+(`streamableMixedID`), since a bare `/watch` or `/login` is every site's
+navigation. The
+row has no Shape: every form is a bare slug or another host's `/e/<id>`,
+so a link to it is never a probe for its form alone. The link scanner
+follows the canonical `/<id>` only on the site's own host, as a discovery
+form (`linkForms`, [extractors.md](../extractors.md#dispatch-is-by-page-never-by-host)). The renditions are listed in sorted name
+order so that equal ones are chosen alike on every read.
+
+The script-reading rows (streamtape, mixdrop, lulustream) are the most fragile
+extractors here, because each depends on the shape of a script the host can
+change. Each therefore reads the numbers it needs off the page — the
+substring offset, the packer's base and word list — rather than hard-coding
+them. `unpackJS` reverses the p,a,c,k,e,d packer and is host-neutral.
+`jwSource` reads a JW Player setup's `sources:` list (vidmoly, lulustream):
+only that list is media, since a `file:` key above it can name the seek-bar
+sprite, and a DASH entry is passed over for the HLS beside it.
+
+A vidmoly HLS file is named after its segments' container
+(`hlsMedia.extension`), as every other player row's is, not after the
+variant URL: some of its playlists carry `.mp4` in a path whose segments
+are MPEG-TS, and a TS stream named `.mp4` is one players refuse and
+`remux.go` never converts. A file saved under the old name is downloaded
+once more under the right one.
 
 ## doodstream
+
+doodstream is a row whose `read` is the whole token handshake, with its
+retries, `RELOAD` handling and stage notes (`doodstream.go`); the row adds
+only `proxyFallback`. `NewDoodStream` builds it for callers outside the
+registry.
 
 doodstream includes the `d000d.com` and `playmogo.com` aliases. An ordinary
 page embedding one of its players is reached by the generic link scanner, and
 the player goes through the native token resolver and the range engine, so
 linked players work without an extractor for every blog that embeds them.
+
+The first handshake attempt starts from the registry's probe when that
+probe is the `/e/` player itself, read whole on the same route with the
+requested origin Referer and naming the token endpoint; a
+reload, and every transfer-time read, fetches afresh.
+
+Landing pages require both the `/d/<code>` form and an `/e/<code>` player
+frame, with the site named in the title or site metadata. The host also uses
+the nonstandard `og:sitename` key with `DoodStream.com`; read that marker
+directly so recognition does not depend on the title retaining the brand.
 
 The final page URL after redirects supplies both the token endpoint's origin
 and the media referer, refreshed together on each attempt. The token endpoint
@@ -53,9 +186,22 @@ a transient failure.
   returns a `RefusedError`: the route is held back for the site and the file
   tries another, outside the retry budget. Taken at its word, the sentence
   would fail the file on the first address that met it.
+  Recognition accepts the exact bare refusal on both `/d/<code>` and
+  `/e/<code>`, so a nested source refreshed through a refused proxy still
+  reaches `doodRead` and returns `RefusedError`. Arbitrary plain text and HTML
+  quoting the sentence do not identify a player off the host's domains.
+  Otherwise strict source recognition would turn a route refusal into
+  terminal unsupported navigation before the decoder could classify it. On
+  its own domains the host claim hands doodstream any page nothing
+  recognised, so there any body without markup is a refusal whatever its
+  sentence, as `doodRefused` reads it.
 - **A removed video** is recognised by the not-found page's title (`doodGone`)
-  and reported as the host having removed it, rather than as a page without a
-  media token.
+  under the site's name, on either form, and reported as the host having
+  removed it, rather than as a page without a media token or under the name
+  of another site whose links share the `/e/` or `/d/` form. On the host's
+  own domains an unbranded not-found page is the row's by the host claim,
+  and reported the same way.
+- **Codes** are taken in either case (`doodShape`): the hosts hand out both.
 
 doodstream opts its sources and files into `ProxyFallback`, so temporary
 network and HTTP failures and persistent reloads try the shared recovery pool
@@ -73,22 +219,27 @@ workers use the item's own counter.
 ## lulustream
 
 lulustream (`lulustream.com`, `luluvdo.com`, `luluvido.com`) packs its JW
-Player setup with p,a,c,k,e,d, and `unpackJS` reads the HLS master out of it:
+Player setup with p,a,c,k,e,d, and `jwSource` reads the HLS master out of it
+once `unpackJS` has unpacked it:
 signed for eight hours, one muxed rendition, AES-128 segments under one key.
 The page is read again at transfer time, segments and key with it, through
 `Target.Segments`. Its key server refuses Go's default HTTP client outright
 with a 403 while serving the downloader's own client, so anything checking it
 must go through `httpx.Client`. The title is the page's `<h1>`; the document
-title carries the site's name. yt-dlp has no extractor for it.
+title carries the site's name. yt-dlp has no extractor for it. Ids are
+twelve characters of either case. A player or download page that came back
+without the player is checked against the plain `/<id>` (`probeCanonical`).
 
 ## vids.st
 
 vids.st states everything in one `playerConfig` object on `/v/<id>`: the
 file's address, usually the uploaded MP4 or MKV itself, tokenless and
-rangeable, and its original name. An `.m3u8` address is followed natively, as
-the player does. A removed video answers 404 with "Video not found", which is
-reported as such. The site's certificate chain is short; see
-[http.md](../http.md).
+rangeable, and its original name. `playerVideo.filename` preserves that
+complete progressive filename, including no extension; the generic player
+default must not append `.mp4` to an original name. A URL whose decoded path ends in `.m3u8`
+is followed natively, as the player does. A removed video answers 404 with
+"Video not found", which is reported as such. The site's certificate chain
+is short; see [http.md](../http.md).
 
 ## sendvid
 
@@ -99,8 +250,11 @@ connection to, about 270 kB/s. The signature covers all three: with the rate
 changed or left out, the link is a 401. The rate is per connection, though:
 each of several connections at once gets all of it, so the extra connections
 the engine opens for a slow file multiply it. The link is minted again when
-the transfer starts (`refetchedVideo`). `og:video` names `/<id>.mp4`, which
-only redirects back to the page, and the embed's `<title>` is the site's name
+the transfer starts (a `signed` row). `og:video` names `/<id>.mp4`, which
+only redirects back to the page; that form is in the row's Shape, so a
+pasted or harvested one is probed and recognised at the page it lands on
+(a root-level media file of that form elsewhere costs the probe of its
+headers and is then the fallback's), and the embed's `<title>` is the site's name
 alone, so the title is `og:title`. A video that is gone is a 404.
 
 ## knuthing
@@ -109,12 +263,20 @@ knuthing watch pages frame Bunny Stream. Read only the `bunnyframe` embed and
 its `bunny-stream-video` element's `content-src`; thumbnails and sharing
 embeds are not media. Free-video confirmation follows the page's own link for
 that same video once. Refresh the page, embed, HLS segments and AES-128 key on
-each download attempt, keeping the final embed URL as media referer.
-`/videos/<section>` listings start at page one, read only their primary video
+each download attempt, keeping the final embed URL as media referer. The row
+peeks: a pasted video is queued by the watch page's title alone, and its
+player is first opened when the transfer starts. `/videos/<section>` listings start at page one, read only their primary video
 cards, and follow their own pager within the selected section and filters.
-Cards supply queued titles without opening players. Source and file caps and
-incomplete pagination are reported in the job note; recovery reopens the
-individual video rather than walking the listing.
+Cards supply queued titles without opening players. The walk is the shared
+`walkListing` (`listing.go`), which reports source and file caps and
+incomplete pagination in the job note; recovery reopens the individual video
+rather than walking the listing.
+
+A watch page is recognised by the theme alone (its `/themes/knuthing/`
+script on the watch form), with or without the player. A restricted or
+removed video's page lists related videos beside the missing player, and
+the row's own "restricted or removed" error is the answer; `direct` would
+download the related videos instead.
 
 ## noodlemagazine
 
@@ -124,25 +286,46 @@ start at page zero, preserve filters and path escaping, and follow the
 the site's scripted POST. Only cards inside `id=list_videos` belong to the
 search: once it is exhausted the site serves a "Nothing Found" marker and
 unrelated "Watching now" cards in a container with the same class but no id.
-Those are never results. Repeated pages, failed pagination and source or
-file caps are reported in the job note.
+Those are never results: that marker ends the walk cleanly, and on the first
+page it is the search's error. Recognition takes that page too, by the
+marker and the site's search script; without it the empty search reached
+`direct`, which downloaded the recommendations. A watch page is recognised by
+its playlist or, where the player is gone, by the site's watch script, so
+its "no player" error is reported in place of the related videos beside it.
+The walk is the
+shared `walkListing` (`listing.go`), which reports repeated pages, failed
+pagination and source or file caps in the job note.
 
 Cards supply queued titles without opening each player. The watch page's
 `window.playlist` JSON supplies MP4 and HLS renditions, ranked by resolution
 with MP4 preferred on a tie; previews and advertising URLs elsewhere in the
-page are not sources. Media URLs are signed, so every transfer attempt
-reopens its own watch page and uses the final page URL as referer. HLS
+page are not sources. Media URLs are signed, so the row peeks: a pasted
+video's page is read for its title and to see that it plays, and every
+transfer attempt reopens its own watch page and uses the final page URL as
+referer. HLS
 segments, keys and separate tracks are refreshed together. The shared
 browser-style HTTP client reads these pages; a plain curl request can meet
 a Cloudflare challenge instead.
 
 ## ok.ru
 
-ok.ru reads the embed page rather than the watch page. Served to a logged-out
+ok.ru reads the embed page rather than the watch page. A group's or a
+profile's video (`/group/<g>/video/<id>`, `/profile/<u>/video/<id>`) is in
+the Shape; it and the legacy `/dk?st.cmd=…&st.mvId=<id>` are checked
+against the embed when their own page does not mount the player. Served to a logged-out
 caller the watch page carries an empty rendition list, and the player's own
 metadata endpoint answers the same way; the embed page, which exists to be
 framed by other sites, carries the identical structure filled in. No session,
 token or player JavaScript is involved.
+
+Its MP4s are ranked by name (`okruRank`: the site names renditions rather
+than measuring them, and an unknown name ranks below every known one), and
+the HLS manifest below them all, taken only when no file is offered. The
+links are signed for the address that asked, so the row is `signed`. A page
+that calls the video OK and lists nothing is asked for again within the
+extraction retry budget; the backend serves such pages for minutes at a
+time. A video the site calls gone says so in the site's words
+(`okruWhyNot`), and an untitled one is named `ok.ru-<id>`.
 
 ## pornone
 
@@ -158,7 +341,13 @@ group of eight hexadecimal digits has to be re-expressed in base 36 and the
 groups joined, with no padding, so a group of zeroes collapses to one digit.
 What comes back is signed with an expiry *and* the requesting address, so it
 is minted through `Resolve` at download time; a profile of a hundred videos
-would otherwise start failing partway down its own queue.
+would otherwise start failing partway down its own queue. The media requests
+carry no Referer. Profile tabs page by path rather than by a pager link, and
+end on a 404, so the row's listing (`listing.links`, which is handed the
+options) runs a numbered `walkListing` that names each next page itself
+and takes the 404 past the last, a page adding nothing or one without the
+listing as the end; any other failure is noted as a cut, held to `listingLimit` like the engine's own walks; each video is
+queued unread and reopened on its own on recovery.
 
 Two traps, both of which look like working code. The listing lives under
 `streamevents`; the `plister` block beside it is the tab's header and holds no
@@ -166,8 +355,13 @@ tiles, so anything choosing a container by what precedes a tile rather than
 what contains it finds nothing. And a profile also shows a sidebar of the same
 tiles plus unrelated ones, so scraping every `/video-` link on the page
 collects entries the tab does not own. The tab states its own total, which is
-what `epornerProfileTitle` compares against, so a short walk says so instead
-of passing for a whole one.
+what the profile's `cappedNote` (in `epornerProfile`) compares against, so a short walk says so instead
+of passing for a whole one; a walk the cap, the page bound
+(`EpornerMaxProfilePages`) or a failed page cut short carries its note beside
+the count ("partial — could not fetch next page; 120 of 400"). The pages are numbered, and asking past the last
+answers 404, so the profile is a `walkListing` that accepts that 404 as its
+end and names each next page by number: the stated total, not how the walk stopped, decides whether
+the listing came back whole.
 
 Titles need `epornerTitle` rather than the shared `trimSiteSuffix`, which cuts
 at the *first* `" - "`. Titles here carry that separator themselves in a
@@ -176,25 +370,142 @@ disk, one file that each download in turn overwrites. The page's JSON-LD
 states the exact name, and its breadcrumb list is in the same form, so the
 type is checked rather than taking the first name found.
 
-## yandex
+<a id="yandex"></a>
 
-yandex is a redirector rather than a host. Its preview pages are search output
-wrapped around somebody else's video, so the extractor finds the source link
-the page carries and hands that to yt-dlp. yt-dlp's own yandex extractor does
-not work, while its extractor for the site the preview points at does;
-following the link ourselves routes around that.
+## Pointer pages: yandex, alohatube
+
+`pointers.go` is one table for pages whose only job is to point at a video
+hosted elsewhere: yandex's video previews (search output wrapped around
+somebody else's video, the source linked beside the viewer) and alohatube's
+view pages (an index framing another tube's player). Each row reads the
+page's off-site links, likeliest first; `Extract` follows each through
+`Registry.follow`, strictly, and returns the first an extractor here
+resolves. Only when none is recognised — or the only answer was a challenge
+nobody claimed — is the first link handed to yt-dlp, named by
+`ytdlpTitle`. A row with `retry` (yandex) also hands a link to yt-dlp
+when the extractor that recognised it failed on it: a preview's source is
+anyone's video, and yt-dlp may read one the native extractor refuses; the
+native error stands when yt-dlp is missing or fails too. alohatube keeps
+the native error, its native extractor being the only thing that works.
+A source is always one video: `ytdlpTitle` and `Handoff.list` both ask
+with `--no-playlist`, so a source naming the playlist it was opened from
+is not expanded.
+
+The order matters both ways. A link a native extractor reads beats yt-dlp:
+the frame alohatube was written for points at a tube whose media endpoint
+yt-dlp no longer gets an answer from. And yt-dlp beats the generic fallback:
+yandex's own yt-dlp extractor does not work, but yt-dlp's extractor for the
+site a preview points at does, and strict following keeps an advert or an
+unknown player from being saved as a page.
+
+Each row is constructed by name (`NewPointer`) where its form sits in the
+registry, since a form shared with another host goes to whichever comes
+first: a preview's `/video/preview/<id>` is also a `/video/...` form that a
+later host claims. `NewRegistry` allocates the registry before building its
+list, so each row is handed the registry it resolves through as it is
+constructed. "Off-site" is per row: yandex excludes its country domains and
+`yastatic`, alohatube its own domain, since each page links its own furniture
+the same way it links the video.
+
+yandex's preview is `/video/preview/<id>`, or a search or preview naming the
+film in its query (`/video/search?…filmId=`, `/video/preview/?filmId=`), each
+also under `/video/touch/`; the viewer's source anchor and the front end's
+`/fiji-static/` scripts decide. alohatube keeps to its view page: its other
+pages (categories) frame promotions as well, and are no pointer.
+
+## Handoffs to yt-dlp
+
+`handoffs.go` is the table of hosts passed whole to yt-dlp (youtube, odysee,
+dailymotion, bilibili, soundcloud, mixcloud, rumble); its type comment says
+why each is. A row normally becomes one `External` item named by
+`ytdlpTitle` (rumble: by its oEmbed endpoint, asked once per video: the
+answer recognition had is kept on the page (`rumbleOEmbed`) and names the
+video, and a link claimed by its host without a probe asks it once in
+`oembedTitle`). A video link whose oEmbed request failed without an answer
+(a timeout, a rate limit, a server error) is still the site's by its form,
+and is handed over under its slug (`handoffName`); one answered with a
+challenge fails with the explanation that the host is blocking automated
+clients; only an answer — a 404, or one that is not Rumble's — decides
+against the link. A row with `expand` asks
+yt-dlp to list the link flat instead (`Handoff.list`), so a playlist,
+channel or set becomes one item per entry, bounded at the source by
+`--playlist-end` one past the file cap, which is how truncation is noticed.
+It passes `--no-playlist` as well, so a link naming both a video and the
+playlist it was opened from (`watch?v=<id>&list=<id>`) is the one video, as
+the download reads it, while the playlist's own link
+(`/playlist?list=<id>`) still lists the playlist.
+`expand` is on for youtube, odysee (channels), dailymotion (playlists) and
+soundcloud (sets): each has a collection form and yt-dlp lists it flat in one
+call. Bilibili stays off: a multi-part video lists as a playlist, which
+would split one video into its parts. Entries listed without a title are
+named by their page's slug (`entrySlug`) before their id; a page named by
+its query has no slug, so a YouTube entry falls back to its id and, where it
+names no page at all, is reached through the row's `watch` prefix.
+
+SoundCloud sets `keepSingleURL`: when the helper reports a single track,
+the queued `External` keeps the exact submitted URL. Its canonical
+`webpage_url` can omit the private track's secret suffix, although that
+secret was needed to read the metadata and is needed again to download.
+The helper still supplies the title. A playlist result always uses its
+entries' URLs, even when a set contains just one track; its playlist marker,
+not the number of entries, distinguishes it from a single-track submission.
+
+A row recognises more than its `shape`. The shape is the link forms worth
+following from a page; recognition also takes the site's collections and
+pages too generic to follow as links, once the page carries the site's own
+markers: youtube's channel tabs, hashtags, music `/browse/` pages and
+searches (`youtubePage`), and the music client's pages, which carry the web
+client's `ytcfg` under the YouTube Music name but hydrate through script
+calls of their own rather than the www client's `ytInitialData`;
+soundcloud's artists, and private tracks and sets by the secret token
+their link ends in (`/s-<token>`, by the page only: other sites end a path in `s-<word>` too); dailymotion's users and
+its embeddable player (`/player/<id>.html?video=…`, the player id optional,
+the player's `dmp.photon_` scripts), and a video id still carrying its old
+`_<slug>`; bilibili's spaces, series, lists and audio (its state or its
+`/bfs/seed/` scripts); odysee's playlists; rumble's channels, users and
+playlists (its `/rum-ui/` app), which oEmbed does not describe; mixcloud's
+shows without their trailing slash. yt-dlp lists or refuses what these turn
+out to be. youtube also takes a link of a form no other site shares — a video
+by id in each of its players (an embed's id holding a letter, since other
+players' `/embed/<n>` are numeric), a clip, a playlist by its list id, a
+channel by its `UC` id (`youtubeUnmistakable`), including
+one a rate-limit page says it will continue to — when its probe was refused,
+challenged or failed (`probeFailed`): yt-dlp may get in where the probe did
+not, and the fallback would only save the refusal as a file. A channel
+by handle (`/@<name>`), also a fediverse profile's form, is never taken so.
+Rumble's channels, users and playlists stay unrecognised while its challenge
+is up: oEmbed answers them with a bare 404, which tells the site from no
+other.
+
+Not recoverable without reading the host: short-link services whose links
+are a bare id at the root (`/<id>`), and mixcloud's users and playlists,
+whose pages carry nothing known to be the site's own beyond its name. A
+pasted short link still works where it redirects to a recognised page.
 
 ## Kernel Video Sharing
 
-KVS is a product, not a site. `kvs.go` holds the reusable parts (flashvars
-parsing, license-code permutation) and `kvssites.go` builds one extractor per
-known install, so each is matched and named like a hand-written host. A
-compiled-in list can only trail a platform sold to hundreds of sites, so there
-are two escapes: the `kvs` family of `HEAPLEACH_EXTRA_HOSTS` adds installs at
-runtime, and `kvsSniff`, called from the `Direct` fallback, recognises the
-`/videos/<id>/<slug>/` shape and tries the page before treating it as a file.
-A page that turns out not to be one falls through to what would have happened
-anyway.
+KVS is a product, not a site. `kvs.go` holds the one `kvs` extractor for
+every install and the reusable parts (flashvars parsing, license-code
+permutation); `kvslisting.go` the walk every listing shares, and
+`kvsbrowse.go` the listings it is handed: a member's videos, a search, and
+whatever else a fetched page turns out to list. The install is recognised
+by the platform's fingerprint: flashvars carrying a `license_code`, the
+`kt_player` script, the asynchronous `list_videos` controls, or a block's
+container with its `_items` list. There is no install list to keep.
+
+A video page whose player is gone (private, removed, or a 410) has lost the
+parts the fingerprint reads, but it is still the install's, and the right
+answer is its error. Left to `direct`, the related-videos block beside the
+missing player is what would be downloaded. So on a video path
+(`kvsVideoPath`) the platform's weaker signs also count
+(`kvsVideoPageSigns`): its own generator meta, an items list named
+`list_videos_<block>_items` without its container, or a link into
+`/contents/videos_screenshots/`. None of these is enough off a video path. The
+front page is recognised too, by the fingerprint, so that `kvsBrowse` refuses
+it rather than `direct` walking whatever the site promotes.
+`TestRegistryKVSVideoWithoutPlayerReportsItsError` and
+`TestRegistryKVSFrontPageIsRefused` (`unavailablepages_test.go`) pin both
+through the registry.
 
 Installs vary more than one product suggests, and three differences each
 produce output that looks right and is not:
@@ -219,7 +530,9 @@ A search, `/search/<query>/`, is the same walk (`kvslisting.go`) from a
 different first page, and so is every other listing an install lays out: a
 category, a model, a tag, a channel, the site's own latest list. Those are
 recognised by shape, not by path, since an install may rename its sections
-(one keeps its models under `/onlyfans-models/`). On a registered host, a URL
+(one keeps its models under `/onlyfans-models/`). On an install the KVS
+extractor took — by its page's player or videos block, or by its host
+(`hostclaims.go`) — a URL
 that is neither a profile nor a search is fetched once (`kvsBrowse`): a page
 with a player is a video, a page with no player but a videos block is walked
 as the listing it looks like, from the document already in hand, and the front
@@ -246,6 +559,27 @@ by name rather than by position. `kvsNextPage` treats an anchor at `#` as no
 page at all, since following it resolves straight back to page one. The query
 keeps the escaping it arrived with, because the site writes a plus as `%2B`
 and re-encoding a decoded segment would hand its routing a literal plus.
+
+`kvsListingWalk` hands its pages to the shared `walkListing`, with the first
+page from the probe or the browse fetch carried as a `document` (`first`):
+its text for the stated total and its tree, the probe's when recognition
+parsed it, for the walk, so the first page is neither fetched nor parsed a
+second time (`TestKVSListingWalksTheFirstPageInHand`). A canonical first
+page found by dropping a pasted page number is a request of its own. A
+browse read requests the origin Referer and fetches again if the probe used
+another one: a 200 response can carry the platform marker but withhold its
+player until that Referer is sent (`TestRegistryNamedReaderHonorsReferer`). A
+member or search listing takes the probe by URL and route alone
+(`probed`), as it always has. Its reader stops at the stated
+total, and a later page that repeats, adds nothing or carries no listing is
+the end of the listing rather than a partial one; a later page that fails is
+a cut, and noted. Every video
+is a page to read, so the walk is held to the file cap and notes when that
+cut it. The videos are read through `readListing` (`kvsListingResult`);
+when none can be, `noneRead` gives the first reason, and videos refused or
+unreadable beside others that resolved are counted in the note. A listing with no
+videos at all is a `kvsEmpty`, which `kvsBrowse` reads, like a 404 on a
+listing's first page, as a number that was the section's own name.
 
 ### Signed rather than scrambled links
 

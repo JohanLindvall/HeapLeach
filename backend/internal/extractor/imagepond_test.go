@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"golang.org/x/net/html"
@@ -65,10 +64,7 @@ const imagePondDirectVideoPage = `<!DOCTYPE html><html><head>
 // settling for the poster frame the metadata offers beside it.
 func TestImagePondMediaLinkTakesTheDirectRoute(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/abc123")
-	root, err := parseHTML(imagePondDirectVideoPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondDirectVideoPage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://www.imagepond.net/i/abc123/direct"
@@ -81,14 +77,11 @@ func TestImagePondMediaLinkTakesTheDirectRoute(t *testing.T) {
 // stored file rather than being rerouted through /direct.
 func TestImagePondMediaLinkStillPrefersAPlayerElement(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/abc123")
-	root, err := parseHTML(`<html><head>
+	root := mustParseDoc(t, `<html><head>
 		<meta property="og:video" content="https://www.imagepond.net/i/abc123/direct" />
 		</head><body>
 		<video data-src="https://media.imagepond.net/media/videos/SomeClipName_abc123.mov"></video>
 		</body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/videos/SomeClipName_abc123.mov"
@@ -101,10 +94,7 @@ func TestImagePondMediaLinkStillPrefersAPlayerElement(t *testing.T) {
 // link must not divert it away from the file its metadata names.
 func TestImagePondMediaLinkLeavesAnImagePageAlone(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/xyz789")
-	root, err := parseHTML(imagePondImagePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondImagePage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/images/AStillPicture_xyz789.jpg"
@@ -156,10 +146,7 @@ func TestImagePondMediaLinkPrefersThePlayerOverTheMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(imagePondVideoPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondVideoPage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/videos/SomeClipName_abc123.mov"
@@ -173,10 +160,7 @@ func TestImagePondMediaLinkPrefersThePlayerOverTheMetadata(t *testing.T) {
 // metadata that names the item rather than by scanning for a hosted image.
 func TestImagePondMediaLinkFindsTheImageNotTheLogo(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/xyz789")
-	root, err := parseHTML(imagePondImagePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, imagePondImagePage)
 
 	got := imagePondMediaLink(root, base)
 	want := "https://media.imagepond.net/media/images/AStillPicture_xyz789.jpg"
@@ -187,13 +171,10 @@ func TestImagePondMediaLinkFindsTheImageNotTheLogo(t *testing.T) {
 
 func TestImagePondMediaLinkIgnoresEverythingElse(t *testing.T) {
 	base, _ := url.Parse("https://www.imagepond.net/i/abc123")
-	root, err := parseHTML(`<html><body>
+	root := mustParseDoc(t, `<html><body>
 		<img src="https://ads.example.test/banner.jpg">
 		<video data-src="https://ads.example.test/preroll.mp4"></video>
 	</body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got := imagePondMediaLink(root, base); got != "" {
 		t.Errorf("media link = %q, want none: nothing on the page is hosted media", got)
 	}
@@ -222,13 +203,13 @@ func TestImagePondName(t *testing.T) {
 
 // imagePondServer serves one page as the viewer would, so Extract can be
 // exercised end to end without the site.
-func imagePondServer(t *testing.T, page string) (*ImagePond, string) {
+func imagePondServer(t *testing.T, page string) (*Share, string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(page))
 	}))
 	t.Cleanup(srv.Close)
-	return NewImagePond(httpx.New("test-agent", "en-US", 0, 5*time.Second)), srv.URL
+	return NewImagePond(testClient()), srv.URL
 }
 
 // End to end over the newer page shape: the item resolves to the site's own
@@ -236,12 +217,7 @@ func imagePondServer(t *testing.T, page string) (*ImagePond, string) {
 // segment is the same word for every video on the site.
 func TestImagePondExtractNamesTheDirectRoute(t *testing.T) {
 	ip, base := imagePondServer(t, imagePondDirectVideoPage)
-	u, _ := ParseURL(base + "/i/abc123")
-
-	res, err := ip.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, ip, base+"/i/abc123", Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -265,12 +241,7 @@ func TestImagePondExtractDoesNotNameAFileDirect(t *testing.T) {
 		<meta property="og:video" content="https://www.imagepond.net/i/abc123/direct" />
 		</head><body></body></html>`
 	ip, base := imagePondServer(t, page)
-	u, _ := ParseURL(base + "/i/a-clip-slug")
-
-	res, err := ip.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, ip, base+"/i/a-clip-slug", Options{})
 	if res.Files[0].Name == imagePondDirectSegment {
 		t.Fatal("the file was named after the route rather than the item")
 	}
@@ -298,21 +269,31 @@ func TestImagePondExtractReportsAPageWithNoMedia(t *testing.T) {
 	}
 }
 
-func TestImagePondMatch(t *testing.T) {
+func TestImagePondRecognise(t *testing.T) {
 	i := NewImagePond(nil)
-	for _, raw := range []string{"https://www.imagepond.net/i/abc123", "https://imagepond.net/i/abc123"} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !i.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	other, _ := url.Parse("https://example.test/i/abc123")
-	if i.Match(other) {
-		t.Error("matched an unrelated host")
-	}
+	head := `<meta property="og:site_name" content="ImagePond">`
+	video := `<html><head>` + head + `<meta property="og:video" content="https://media.example.test/media/videos/First_Clip_ab12.mov">` +
+		`<meta property="og:image" content="https://media.example.test/media/videos/First_Clip_ab12_thumb.jpg"></head><body></body></html>`
+	direct := `<html><head>` + head + `<meta property="og:video" content="/i/abc123/direct"></head><body></body></html>`
+	album := `<html><head>` + head + `</head><body><a :href="manageMode ? 'javascript:void(0)' : '/i/abc123'">First</a></body></html>`
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123", video), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123", direct), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1", album), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1", imagePondAlbumPage), true)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1",
+		`<html><head>`+head+`</head><body><a href="/i/abc123">First</a></body></html>`), true)
+	// The form and the name, without the stored file or the cards.
+	named := `<html><head>` + head + `<meta property="og:image" content="/logo.png"></head><body><a href="/browse">Browse</a></body></html>`
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123", named), false)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/a/album1", named), false)
+	// The stored file under another name, or on a page of another form.
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/i/abc123",
+		`<html><head><meta property="og:video" content="/media/videos/First_Clip.mov"></head></html>`), false)
+	expectRecognised(t, i, htmlPage(t, "https://images.example.test/trending", video), false)
+	expectShape(t, i, "https://images.example.test/i/abc123", true)
+	expectShape(t, i, "https://images.example.test/a/album1", true)
+	expectShape(t, i, "https://images.example.test/i/abc123/direct", false)
+	expectShape(t, i, "https://images.example.test/browse", false)
 }
 
 // An album listing shaped like the site's. The traps it holds are both real:
@@ -330,9 +311,9 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
   <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/voCUUYAj'"
      @click="manageMode &amp;&amp; toggleImageSelection(2043960)" class="block">
     <div class="aspect-square">
-      <img src="https://media.imagepond.net/media/videos/20260820_221249_TfNxuyl0_thumb.jpg" alt="">
+      <img src="https://media.imagepond.net/media/videos/20990101_120000_AbCdEf12_thumb.jpg" alt="">
     </div>
-    <p class="mt-1.5 text-xs text-gray-400 truncate">20260820_221249.mp4</p>
+    <p class="mt-1.5 text-xs text-gray-400 truncate">20990101_120000.mp4</p>
   </a>
 </div>
 <div class="group block relative">
@@ -340,12 +321,12 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
     <div class="aspect-square">
       <img src="https://www.imagepond.net/i/TSAehpVs/thumb/300" alt="">
     </div>
-    <p class="mt-1.5 text-xs text-gray-400 truncate">Screenshot_20260827_093756_Chrome.jpg</p>
+    <p class="mt-1.5 text-xs text-gray-400 truncate">Screenshot_20990102_080000_Browser.jpg</p>
   </a>
 </div>
 <div class="group block relative">
   <a :href="manageMode ? 'javascript:void(0)' : 'https://www.imagepond.net/i/TSAehpVs'" class="block">
-    <p class="truncate">Screenshot_20260827_093756_Chrome.jpg</p>
+    <p class="truncate">Screenshot_20990102_080000_Browser.jpg</p>
   </a>
 </div>
 <a href="https://www.imagepond.net/a/OtherAlbum">another album</a>
@@ -353,11 +334,8 @@ const imagePondAlbumPage = `<!DOCTYPE html><html><head>
 </body></html>`
 
 func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
-	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
-	root, err := parseHTML(imagePondAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://www.imagepond.net/a/AXxfH2Fp")
+	root := mustParseDoc(t, imagePondAlbumPage)
 
 	files := imagePondAlbumFiles(root, base, func(page, code string) func(context.Context) (*Target, error) {
 		return func(context.Context) (*Target, error) { return &Target{URL: page + "#" + code}, nil }
@@ -368,10 +346,10 @@ func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
 			"album link, the /direct link and the site furniture are none", len(files))
 	}
 	// Names come from the card, so the queue shows them before anything resolves.
-	if files[0].Name != "20260820_221249.mp4" {
+	if files[0].Name != "20990101_120000.mp4" {
 		t.Errorf("first name = %q", files[0].Name)
 	}
-	if files[1].Name != "Screenshot_20260827_093756_Chrome.jpg" {
+	if files[1].Name != "Screenshot_20990102_080000_Browser.jpg" {
 		t.Errorf("second name = %q", files[1].Name)
 	}
 	// No URL up front: the media address is a fetch further on.
@@ -394,7 +372,7 @@ func TestImagePondAlbumListsEveryItemOnce(t *testing.T) {
 }
 
 func TestImagePondCardLinkReadsTheAlpineExpression(t *testing.T) {
-	base := mustURL(t, "https://www.imagepond.net/a/AXxfH2Fp")
+	base := mustParse(t, "https://www.imagepond.net/a/AXxfH2Fp")
 	cases := []struct {
 		name, markup, want string
 	}{
@@ -431,15 +409,12 @@ func TestImagePondCardLinkReadsTheAlpineExpression(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root, err := parseHTML("<html><body>" + tc.markup + "</body></html>")
-			if err != nil {
-				t.Fatal(err)
-			}
+			root := mustParseDoc(t, "<html><body>"+tc.markup+"</body></html>")
 			a := findFirst(root, func(n *html.Node) bool { return isElem(n, atom.A) })
 			if a == nil {
 				t.Fatal("no anchor in the fixture")
 			}
-			if got := imagePondCardLink(a, base); got != tc.want {
+			if got := imagePondCardLink(a, base, imagePondItemPage); got != tc.want {
 				t.Errorf("imagePondCardLink = %q, want %q", got, tc.want)
 			}
 		})
@@ -465,11 +440,8 @@ func TestImagePondAlbumEndToEnd(t *testing.T) {
 	// The fixture names the real host, so the album is fetched from the test
 	// server while its cards still point at imagepond.net; only the listing
 	// hop is under test here.
-	ip := NewImagePond(httpx.New("test/1.0", "en", 0, 10*time.Second))
-	res, err := ip.Extract(context.Background(), mustURL(t, server.URL+"/a/AXxfH2Fp"), Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	ip := NewImagePond(testClient())
+	res := extractOK(t, ip, server.URL+"/a/AXxfH2Fp", Options{})
 	if res.Title != "Holiday pictures" {
 		t.Errorf("title = %q, want the album's h1", res.Title)
 	}
@@ -483,8 +455,8 @@ func TestImagePondAlbumEndToEnd(t *testing.T) {
 }
 
 func TestImagePondRejectsAProfilePage(t *testing.T) {
-	ip := NewImagePond(httpx.New("test/1.0", "en", 0, time.Second))
-	_, err := ip.Extract(context.Background(), mustURL(t, "https://www.imagepond.net/someone"), Options{})
+	ip := NewImagePond(testClient())
+	_, err := extract(t, ip, "https://www.imagepond.net/someone", Options{})
 	if err == nil {
 		t.Fatal("a profile page resolved")
 	}
@@ -493,28 +465,15 @@ func TestImagePondRejectsAProfilePage(t *testing.T) {
 	}
 }
 
-// mustURL parses a test URL or fails the test.
-func mustURL(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse %q: %v", raw, err)
-	}
-	return u
-}
-
 // A link straight to the media host is the file itself. Match claims that
 // host along with the site — one is a subdomain of the other — so if this
 // route did not exist nothing else would handle it, and the URL would be
 // refused for not being a page.
 func TestImagePondTakesAMediaHostLinkAsTheFile(t *testing.T) {
-	ip := NewImagePond(httpx.New("test/1.0", "en", 0, time.Second))
+	ip := NewImagePond(testClient())
 	raw := "https://media.imagepond.net/media/videos/SomeClip_abc123.mp4"
 
-	res, err := ip.Extract(context.Background(), mustURL(t, raw), Options{})
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
+	res := extractOK(t, ip, raw, Options{})
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
 	}
@@ -554,7 +513,7 @@ func TestImagePondMediaFile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := imagePondMediaFile(mustURL(t, tc.in)); got != tc.want {
+			if got := imagePondMediaFile(mustParse(t, tc.in)); got != tc.want {
 				t.Errorf("imagePondMediaFile(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})

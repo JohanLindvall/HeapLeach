@@ -143,13 +143,11 @@ const (
 // scene is the queue the pictures show: a mix of states, so one frame covers
 // running transfers, a split file, a finished job and one still queued.
 func scene() download.Snapshot {
-	now := time.Now()
 	jobs := []download.JobView{
 		{
 			ID: "j1", Title: "Coastal Drone Reel — 4K", Host: "bunkr",
 			Source: "https://example.com/a/9fL2xQ", Status: download.StatusRunning,
-			CreatedAt: now.Add(-4 * time.Minute), SizeKnown: true,
-			Total: 1, Active: 1, Size: 1800 * MB, Downloaded: 326 * MB, Speed: 13.2 * MB,
+			SizeKnown: true, Total: 1, Active: 1, Size: 1800 * MB, Downloaded: 326 * MB, Speed: 13.2 * MB,
 			Items: []download.ItemView{{
 				ID: "i1", Name: "coastal-drone-reel-2160p.mp4", Status: download.StatusRunning,
 				Size: 1800 * MB, Downloaded: 326 * MB, Speed: 13.2 * MB, Streams: 5, Elapsed: 26,
@@ -158,8 +156,7 @@ func scene() download.Snapshot {
 		{
 			ID: "j2", Title: "Studio Session — Photo Set", Host: "pixeldrain",
 			Source: "https://example.com/a/7Kd0mB", Status: download.StatusRunning,
-			CreatedAt: now.Add(-3 * time.Minute), SizeKnown: true,
-			Total: 5, Done: 2, Active: 1, Size: 96 * MB, Downloaded: 61 * MB, Speed: 6.4 * MB,
+			SizeKnown: true, Total: 5, Done: 2, Active: 1, Size: 96 * MB, Downloaded: 61 * MB, Speed: 6.4 * MB,
 			Items: []download.ItemView{
 				{ID: "i2", Name: "studio-session-014.jpg", Status: download.StatusDone,
 					Size: 18 * MB, Downloaded: 18 * MB, Path: "Studio Session/studio-session-014.jpg", Elapsed: 4},
@@ -174,8 +171,7 @@ func scene() download.Snapshot {
 		{
 			ID: "j3", Title: "Aurora Timelapse", Host: "mega",
 			Source: "https://example.com/file/4Tq8ZP", Status: download.StatusRunning,
-			CreatedAt: now.Add(-2 * time.Minute), SizeKnown: true,
-			Total: 1, Active: 1, Size: 46 * MB, Downloaded: 34*MB + 600*kB, Speed: 4.1 * MB,
+			SizeKnown: true, Total: 1, Active: 1, Size: 46 * MB, Downloaded: 34*MB + 600*kB, Speed: 4.1 * MB,
 			Items: []download.ItemView{{
 				ID: "i7", Name: "aurora-timelapse-04k.mp4", Status: download.StatusRunning,
 				Size: 46 * MB, Downloaded: 34*MB + 600*kB, Speed: 4.1 * MB, Streams: 2, Elapsed: 11,
@@ -186,8 +182,7 @@ func scene() download.Snapshot {
 			// so parts joined is the progress on show.
 			ID: "j6", Title: "Northern Waters — Episode 2", Host: "svtplay",
 			Source: "https://example.com/video/8Ur3Nc", Status: download.StatusRunning,
-			CreatedAt: now.Add(-70 * time.Second),
-			Total:     1, Active: 1, Downloaded: 210 * MB, Speed: 8.8 * MB,
+			Total: 1, Active: 1, Downloaded: 210 * MB, Speed: 8.8 * MB,
 			Items: []download.ItemView{{
 				ID: "i15", Name: "northern-waters-e02.ts", Status: download.StatusRunning,
 				Size: -1, Downloaded: 210 * MB, Speed: 8.8 * MB, Streams: 4,
@@ -199,8 +194,7 @@ func scene() download.Snapshot {
 			// like one that has died.
 			ID: "j7", Title: "Glacier Hike — Full Album", Host: "gofile",
 			Source: "https://example.com/d/Wt5pQz", Status: download.StatusRunning,
-			CreatedAt: now.Add(-50 * time.Second), SizeKnown: true,
-			Total: 1, Active: 1, Size: 3200 * MB, Downloaded: 48 * MB,
+			SizeKnown: true, Total: 1, Active: 1, Size: 3200 * MB, Downloaded: 48 * MB,
 			Items: []download.ItemView{{
 				ID: "i16", Name: "glacier-hike-full.mkv", Status: download.StatusRunning,
 				Size: 3200 * MB, Downloaded: 48 * MB, Elapsed: 41,
@@ -210,8 +204,7 @@ func scene() download.Snapshot {
 		{
 			ID: "j4", Title: "Field Recordings vol. 3", Host: "gofile",
 			Source: "https://example.com/d/Rm2xVt", Status: download.StatusQueued,
-			CreatedAt: now.Add(-90 * time.Second), SizeKnown: true,
-			Total: 6, Size: 212 * MB,
+			SizeKnown: true, Total: 6, Size: 212 * MB,
 			Items: []download.ItemView{
 				{ID: "i8", Name: "field-recordings-vol3-01.flac", Status: download.StatusQueued, Size: 38 * MB},
 				{ID: "i9", Name: "field-recordings-vol3-02.flac", Status: download.StatusQueued, Size: 41 * MB},
@@ -224,8 +217,7 @@ func scene() download.Snapshot {
 		{
 			ID: "j5", Title: "Wildlife s01e03 — The Delta", Host: "youtube",
 			Source: "https://example.com/watch/Xa71", Status: download.StatusDone,
-			CreatedAt: now.Add(-9 * time.Minute), SizeKnown: true,
-			Total: 1, Done: 1, Size: 742 * MB, Downloaded: 742 * MB,
+			SizeKnown: true, Total: 1, Done: 1, Size: 742 * MB, Downloaded: 742 * MB,
 			Items: []download.ItemView{{
 				ID: "i14", Name: "wildlife-s01e03-the-delta.mp4", Status: download.StatusDone,
 				Size: 742 * MB, Downloaded: 742 * MB, Path: "wildlife-s01e03-the-delta.mp4", Elapsed: 63,

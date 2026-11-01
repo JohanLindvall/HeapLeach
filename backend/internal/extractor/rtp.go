@@ -3,11 +3,10 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -64,7 +63,11 @@ import (
 // ordinary rangeable file — segmented, resumable, skippable when it is
 // already on disk — instead of a segment list.
 type RTPPlay struct {
+	about
 	client *httpx.Client
+	// episodes is the season listing endpoint, rtpEpisodesEndpoint but in
+	// a test.
+	episodes string
 }
 
 const (
@@ -114,24 +117,33 @@ var rtpDRMFlag = regexp.MustCompile(`\bdrm\s*:\s*(true|false)\b`)
 // The two id shapes a play URL is built from: p<n> for a programme, e<n> for
 // one of its episodes.
 var (
-	rtpProgramID = regexp.MustCompile(`^p[0-9]+$`)
-	rtpEpisodeID = regexp.MustCompile(`^e[0-9]+$`)
+	rtpProgramID = regexp.MustCompile(`(?i)^p[0-9]+$`)
+	rtpEpisodeID = regexp.MustCompile(`(?i)^e[0-9]+$`)
 )
 
 // NewRTPPlay builds the RTP Play extractor.
-func NewRTPPlay(client *httpx.Client) *RTPPlay { return &RTPPlay{client: client} }
+func NewRTPPlay(client *httpx.Client) *RTPPlay {
+	return &RTPPlay{client: client, episodes: rtpEpisodesEndpoint, about: about{name: "rtpplay", shape: rtpShape,
+		recognises: "episodes and seasons (`/play/p<id>[/e<id>]`) of RTP Play, whose page carries its player or its episode list"}}
+}
 
-func (r *RTPPlay) Name() string { return "rtpplay" }
+// rtpEpisodeLink is a link to an episode, as a season page lists them.
+var rtpEpisodeLink = regexp.MustCompile(`(?i)/play/p[0-9]+/e[0-9]+`)
 
-// Match takes rtp.pt paths under /play. The rest of the domain is the
-// broadcaster's news site and its radio station pages, which share nothing
-// with this but the host.
-func (r *RTPPlay) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "rtp.pt") {
+// rtpShape is an episode or season link.
+func rtpShape(u *url.URL) bool { return rtpTarget(u).program != "" }
+
+// Recognise takes an episode page carrying RTP's player configuration, or
+// a season page listing its episodes, which is what each is read by.
+func (r *RTPPlay) Recognise(_ context.Context, p *Page) bool {
+	ref := rtpTarget(p.Final)
+	if ref.program == "" || !p.Named("RTP Play") {
 		return false
 	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && strings.EqualFold(segs[0], "play")
+	if ref.episode != "" {
+		return p.Has("RTPPlayer")
+	}
+	return rtpEpisodeLink.MatchString(p.Body)
 }
 
 // Extract handles one episode or one season.
@@ -180,7 +192,7 @@ func rtpTarget(u *url.URL) rtpRef {
 // so a standalone episode can use it as the job title too.
 func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, string, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := r.client.GetString(ctx, page, headers)
+	doc, err := fetchPage(ctx, r.client, page, headers)
 	if err != nil {
 		return nil, "", fmt.Errorf("rtpplay: fetch %s: %w", page, err)
 	}
@@ -194,16 +206,16 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 	// it is settled entirely from the page.
 	manifest := rtpManifest(doc, program)
 	if rtpProtected(doc, manifest) {
-		return nil, "", &rtpRefused{page: page, reason: "DRM protected — RTP serves its entertainment " +
+		return nil, "", &itemRefusal{"rtpplay", page, "DRM protected — RTP serves its entertainment " +
 			"and fiction under FairPlay and Widevine, which nothing here can decrypt"}
 	}
 
 	// Radio needs none of what follows. Its pages name an MP3 outright, and a
 	// plain rangeable file is much the better thing to hand the downloader.
 	if link := rtpPlainMediaURL(doc); link != "" {
-		name := util.FirstNonEmpty(title, util.NameFromURL(link), program)
+		name := cmp.Or(title, util.NameFromURL(link), program)
 		return &File{
-			Name:    name + strings.ToLower(path.Ext(util.NameFromURL(link))),
+			Name:    name + linkExt(link, ""),
 			URL:     link,
 			Size:    -1,
 			Headers: headers,
@@ -215,27 +227,19 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 		// when there is not it says so in words meant for a viewer. Those are
 		// passed through: whether the episode expired, was never published or
 		// is licensed elsewhere is something only RTP knows.
-		return nil, "", &rtpRefused{page: page, reason: util.FirstNonEmpty(rtpUnavailable(root),
+		return nil, "", &itemRefusal{"rtpplay", page, cmp.Or(rtpUnavailable(root),
 			"the page carries no stream for this programme")}
 	}
 
-	media, err := resolveMediaPlaylist(ctx, r.client, manifest, headers)
+	name := cmp.Or(title, program)
+	// Named off the segments, not the variant URL: RTP's manifests are
+	// nginx-vod-module urlsets, which spell the source MP4s out in the path
+	// of an MPEG-TS stream. See segmentsExtension.
+	file, err := broadcastFile(ctx, r.client, "rtpplay", page, manifest, name, headers, segmentsExt)
 	if err != nil {
-		return nil, "", fmt.Errorf("rtpplay: %s: %w", page, err)
+		return nil, "", err
 	}
-	name := util.FirstNonEmpty(title, program)
-	return &File{
-		// Named off the segments, not the variant URL: RTP's manifests are
-		// nginx-vod-module urlsets, which spell the source MP4s out in the
-		// path of an MPEG-TS stream. See segmentsExtension.
-		Name:       name + media.extension(),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, name, nil
+	return file, name, nil
 }
 
 // season expands a programme page into its episodes.
@@ -250,90 +254,56 @@ func (r *RTPPlay) episode(ctx context.Context, page, program string) (*File, str
 // is in the selector the reader can already see.
 func (r *RTPPlay) season(ctx context.Context, ref rtpRef) (*Result, error) {
 	headers := httpx.Referer(rtpRoot + "/")
-	doc, err := r.client.GetString(ctx, ref.page, headers)
+	root, err := fetchPageRoot(ctx, r.client, ref.page, headers)
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: fetch %s: %w", ref.page, err)
 	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("rtpplay: %s: %w", ref.page, err)
-	}
 
-	// The rendered page is page one of the listing, so the walk starts at two
-	// rather than fetching what is already in hand.
-	seen := make(map[string]bool)
-	episodes := rtpEpisodeLinks(root, ref, seen)
-	capped := false
-	for page := 2; ; page++ {
-		if page > config.MaxAlbumPages {
-			capped = true
-			break
-		}
-		more, err := r.listing(ctx, ref, page, seen)
-		// A listing request that fails ends the walk with what it has: a
-		// truncated season is worth more than no season, and the title below
-		// says it was truncated.
-		if err != nil {
-			capped = true
-			break
-		}
-		if len(more) == 0 {
-			break // past the end of the season, which is how a season ends
-		}
-		episodes = append(episodes, more...)
-		if len(episodes) >= config.MaxListingVideos {
-			capped = true
-			break
-		}
+	episodes, more, walkNote, err := r.seasonEpisodes(ctx, root, ref)
+	if err != nil {
+		return nil, err
 	}
+	// Only the cap, or a listing request that failed, truncates the season:
+	// the title says so, and renames the job and its folder, so an end the
+	// walk accepts must never set it.
+	capped := more || walkNote != ""
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("rtpplay: no episodes listed on %s", ref.page)
 	}
-	if len(episodes) > config.MaxListingVideos {
-		episodes = episodes[:config.MaxListingVideos]
+
+	// One refused episode must not sink the rest, but the reasons are kept:
+	// when every episode is refused it is refused for the same reason, and
+	// RTP's own words for it beat anything concluded here.
+	resolved, _, err := expandSeries(ctx, series[rtpEpisodeRef]{
+		site: "rtpplay", noun: "episodes", link: ref.page,
+		items: episodes,
+		resolve: func(ctx context.Context, ep rtpEpisodeRef) (*File, error) {
+			file, _, err := r.episode(ctx, ep.page, ref.program)
+			return file, err
+		},
+		unplayable: "the page lists them but none carries a stream",
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// The error travels in the value rather than being returned, because
-	// FanOut drops an item whose fetch failed and a season refused in full has
-	// exactly one thing worth reporting: the reason.
-	outcomes := FanOut(ctx, episodes, func(ctx context.Context, ep rtpEpisodeRef) ([]rtpOutcome, error) {
-		file, _, err := r.episode(ctx, ep.page, ref.program)
-		return []rtpOutcome{{id: ep.id, file: file, err: err}}, nil
-	})
-
-	title := util.FirstNonEmpty(rtpTitle(root), ref.program)
+	title := cmp.Or(rtpTitle(root), ref.program)
 	if capped {
 		title = fmt.Sprintf("%s (first %d episodes)", title, len(episodes))
 	}
-
 	result := &Result{Title: title}
 	names := make(map[string]bool)
-	var refused string
-	for _, out := range outcomes {
-		if out.err != nil {
-			// One refused episode must not sink the rest, but its reason is
-			// kept: when every episode is refused it is refused for the same
-			// reason, and RTP's own words for it beat anything concluded here.
-			if refusal, ok := errors.AsType[*rtpRefused](out.err); ok && refused == "" {
-				refused = refusal.reason
-			}
-			continue
-		}
-		file := *out.file
+	for _, done := range resolved {
+		file := done.file
 		// Two episodes of one programme can share a page title, because RTP
 		// names an untitled instalment after its programme and the date and
 		// then repeats a date across parts. Two files with one name is one
 		// file, so the episode id is what tells them apart.
 		if names[file.Name] {
-			file.Name = out.id + " - " + file.Name
+			file.Name = done.item.id + " - " + file.Name
 		}
 		names[file.Name] = true
 		result.Files = append(result.Files, file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("rtpplay: none of the %d episodes of %s are playable: %s",
-			len(episodes), ref.page,
-			util.FirstNonEmpty(refused, "the page lists them but none carries a stream"))
 	}
 	return result, nil
 }
@@ -344,23 +314,15 @@ type rtpEpisodeRef struct {
 	page string
 }
 
-// rtpOutcome is what resolving one episode produced, which is either a file
-// or the reason there is none.
-type rtpOutcome struct {
-	id   string
-	file *File
-	err  error
-}
-
 // listing asks for one page of a programme's episodes.
-func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int, seen map[string]bool) ([]rtpEpisodeRef, error) {
+func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int) ([]rtpEpisodeRef, error) {
 	query := url.Values{
 		// The endpoint wants the bare number, not the "p" the URL spells it
 		// with.
 		"listProgram": {strings.TrimPrefix(ref.program, "p")},
 		"page":        {strconv.Itoa(page)},
 	}
-	link := rtpEpisodesEndpoint + "?" + query.Encode()
+	link := r.episodes + "?" + query.Encode()
 	doc, err := r.client.GetString(ctx, link, httpx.Referer(ref.page))
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: episode listing page %d of %s: %w", page, ref.program, err)
@@ -369,24 +331,25 @@ func (r *RTPPlay) listing(ctx context.Context, ref rtpRef, page int, seen map[st
 	if err != nil {
 		return nil, fmt.Errorf("rtpplay: episode listing page %d of %s: %w", page, ref.program, err)
 	}
-	return rtpEpisodeLinks(root, ref, seen), nil
+	return rtpEpisodeLinks(root, ref), nil
 }
 
 // rtpEpisodeLinks collects the episode links a listing document carries, in
-// the order the site put them, skipping any already taken.
+// the order the site put them, each once.
 //
 // It is given the whole document rather than a container, because the listing
 // endpoint answers with a bare fragment of articles while the programme page
 // wraps the same markup in a site. Restricting the links to this programme is
 // what keeps the two honest — a page also carries navigation into other
 // programmes, and an episode id is only unique beneath its own.
-func rtpEpisodeLinks(root *html.Node, ref rtpRef, seen map[string]bool) []rtpEpisodeRef {
+func rtpEpisodeLinks(root *html.Node, ref rtpRef) []rtpEpisodeRef {
 	base, err := ParseURL(ref.page)
 	if err != nil {
 		return nil
 	}
 
 	var out []rtpEpisodeRef
+	seen := make(map[string]bool)
 	for _, anchor := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
 		link := resolveRef(base, attr(anchor, "href"))
 		if link == "" {
@@ -517,12 +480,29 @@ func rtpUnavailable(root *html.Node) string {
 	return textOf(n)
 }
 
-// rtpRefused is RTP declining an episode, carrying the reason. It is a type
-// rather than a message so that a season of several hundred can report one
-// reason instead of the same refusal several hundred times.
-type rtpRefused struct {
-	page   string
-	reason string
+// seasonEpisodes walks a season's listing from its rendered page, root.
+func (r *RTPPlay) seasonEpisodes(ctx context.Context, root *html.Node, ref rtpRef) ([]rtpEpisodeRef, bool, string, error) {
+	// The rendered page is page one of the listing, so the walk takes it as
+	// it is rather than fetching what is already in hand. A page past the end
+	// of the season is empty, which is how a season ends; the rendered page
+	// being empty is not, since the listing may carry what the page did
+	// not render, so page two is asked for all the same. A listing request
+	// that fails ends the walk with what it has: a truncated season is worth
+	// more than no season, and the season's title says it was truncated, as it
+	// does for a walk the cap or the page limit stopped.
+	return walkEpisodes(ctx, config.MaxResolvedEpisodes, pageWalk[rtpEpisodeRef]{
+		fetch: func(ctx context.Context, n int) (pageOf[rtpEpisodeRef], error) {
+			// The walk drops what an earlier page listed.
+			listed, err := rtpEpisodeLinks(root, ref), error(nil)
+			if n > 0 {
+				listed, err = r.listing(ctx, ref, n+1)
+			}
+			empty := len(listed) == 0
+			return pageOf[rtpEpisodeRef]{items: listed, next: true, end: n > 0 && empty, skip: n == 0 && empty}, err
+		},
+		key: func(ep rtpEpisodeRef) string { return ep.id },
+		// A page past the end that serves the season's episodes again is
+		// how a season ends too, not a cut.
+		ends: walkAccepts{repeated: true},
+	})
 }
-
-func (e *rtpRefused) Error() string { return "rtpplay: " + e.page + ": " + e.reason }

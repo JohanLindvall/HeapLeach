@@ -8,12 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -43,7 +43,7 @@ import (
 // Any other page of the site, an article without a player of its own, is
 // still handed to yt-dlp.
 type RadioCanada struct {
-	hostSet
+	about
 	client *httpx.Client
 	// api is the media API's base, a field so that tests can stand in for
 	// it.
@@ -55,20 +55,50 @@ const radioCanadaAPIRoot = "https://services.radio-canada.ca/media/"
 
 // radioCanadaRest is the part of the site still handed to yt-dlp.
 var radioCanadaRest = handoffSite{
-	name:    "radio-canada",
-	domains: []string{"radio-canada.ca", "ici.radio-canada.ca"},
-	why:     "only Radio-Canada's videos and OHdio's audio are read natively, not a page like this one",
+	name: "radio-canada",
+	why:  "only Radio-Canada's videos and OHdio's audio are read natively, not a page like this one",
 }
 
 // NewRadioCanada builds the Radio-Canada extractor.
 func NewRadioCanada(client *httpx.Client) *RadioCanada {
 	return &RadioCanada{
-		hostSet: radioCanadaRest.domains, client: client, api: radioCanadaAPIRoot,
-		handoff: &Handoff{hostSet: radioCanadaRest.domains, client: client, site: radioCanadaRest},
+		client: client, api: radioCanadaAPIRoot,
+		handoff: newHandoff(client, radioCanadaRest),
+		about: about{name: "radio-canada", shape: radioCanadaShape,
+			recognises: "pages of ICI Radio-Canada and OHdio whose data layer (`IdsCollection`) names their media, media console links read from the link alone, and `/media-<id>` links named for the site or whose page could not be read"},
 	}
 }
 
-func (r *RadioCanada) Name() string { return "radio-canada" }
+// radioCanadaShape is a media link (/widgets/mediaconsole/<app>/<id>,
+// …/media-<id>), a news video (/info/videos/<id>/<slug>) or an OHdio
+// programme or episode (/ohdio/<kind>/<id>/<slug>…).
+var radioCanadaShape = pathShape(`/widgets/mediaconsole/[a-z0-9]+/[0-9]+`, `/media-[0-9]+(?:/|$)`,
+	`^/info/videos/[0-9-]+/[^/]+`, `^/ohdio/[a-z-]+/[0-9]+/[^/]+`)
+
+// Recognise takes a page of the site by its data layer (IdsCollection),
+// which names the page's own media and is what this reads. A page whose
+// data layer names none is handed to yt-dlp, as before.
+//
+// A media console link names its application and media outright, and is
+// read from the link alone, so it needs no page: whatever the probe met
+// there (the console is a script widget, often no page at all) is beside
+// the point. A /media-<id> link is read the same way, but its form is
+// common enough to want either the site's name on its page or a probe
+// that read nothing to say otherwise.
+func (r *RadioCanada) Recognise(_ context.Context, p *Page) bool {
+	if radioCanadaConsole.MatchString(p.URL.Path) || radioCanadaConsole.MatchString(p.Final.Path) {
+		return true
+	}
+	named := p.Named(radioCanadaNames...)
+	if (radioCanadaMediaPath.MatchString(p.URL.Path) || radioCanadaMediaPath.MatchString(p.Final.Path)) &&
+		(named || probeFailed(p)) {
+		return true
+	}
+	return len(p.Segments()) > 0 && p.Has("IdsCollection") && named
+}
+
+// radioCanadaNames are what the site calls itself.
+var radioCanadaNames = []string{"Radio-Canada", "ICI Radio-Canada", "Radio-Canada.ca"}
 
 var (
 	radioCanadaConsole   = regexp.MustCompile(`/widgets/mediaconsole/([a-z0-9]+)/([0-9]+)`)
@@ -80,7 +110,6 @@ var (
 	radioCanadaEmission  = regexp.MustCompile(`"Emission":"((?:[^"\\]|\\.)*)"`)
 	radioCanadaEpisode   = regexp.MustCompile(`\{"typename":"EpisodeListItem"(?s:.*?)"mediaIds":\[([0-9]+)[^\]]*\](?s:.*?)"title":"((?:[^"\\]|\\.)*)"`)
 	radioCanadaPages     = regexp.MustCompile(`"pagination":\{"pageNumber":[0-9]+,"pageSize":[0-9]+,"totalCount":([0-9]+)\}`)
-	radioCanadaTitle     = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 // Extract reads the media a page plays, or an OHdio programme's episodes,
@@ -93,20 +122,17 @@ func (r *RadioCanada) Extract(ctx context.Context, u *url.URL, opts Options) (*R
 	if m := radioCanadaMediaPath.FindStringSubmatch(u.Path); m != nil {
 		return r.single(ctx, "medianet", m[1], "")
 	}
-	page, final, err := r.client.GetPage(ctx, u.String(), nil, nil)
+	page, final, err := fetchDocument(ctx, r.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("radio-canada: %s: %w", u.Redacted(), err)
 	}
-	title := ""
-	if m := radioCanadaTitle.FindStringSubmatch(page); m != nil {
-		title = util.TrimTitleSuffix(util.Unescape(m[1]), " | ")
-	}
+	title := util.TrimTitleSuffix(writtenTitle(page), " | ")
 	if id := radioCanadaPageMedia(page); id != "" {
 		var emission string
 		if e := radioCanadaEmission.FindStringSubmatch(page); e != nil && strings.Contains(u.Path, "/ohdio/") {
 			emission = radioCanadaText(e[1])
 		}
-		return r.single(ctx, "medianet", id, ardJoin(emission, title))
+		return r.single(ctx, "medianet", id, joinTitle(emission, title, titleContains))
 	}
 	if radioCanadaEpisode.MatchString(page) {
 		return r.programme(ctx, final, title, page, opts)
@@ -155,43 +181,23 @@ func (r *RadioCanada) article(ctx context.Context, title, page string) (*Result,
 	case 1:
 		return r.single(ctx, media[0].app, media[0].id, title)
 	}
-	type found struct {
-		file   *File
-		reason string
-	}
-	results := FanOut(ctx, media, func(ctx context.Context, a attached) ([]found, error) {
-		target, err := r.stream(ctx, a.app, a.id, "")
-		if refused, ok := errors.AsType[*radioCanadaRefused](err); ok {
-			return []found{{reason: refused.reason}}, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		file := r.file(a.app, a.id, target)
-		return []found{{file: &file}}, nil
+	// Each is a request to resolve, so they are cut to the request budget
+	// and the registry holds the files to the user's cap. When none plays,
+	// the first reason one gave is the answer.
+	title = cmp.Or(title, "Radio-Canada")
+	return listSeries(ctx, title, series[attached]{
+		site: "radio-canada", noun: "media", link: title,
+		items: media, noteRefused: true,
+		resolve: func(ctx context.Context, a attached) (*File, error) {
+			target, err := r.stream(ctx, a.app, a.id, "")
+			if err != nil {
+				return nil, err
+			}
+			file := r.file(a.app, a.id, target)
+			return &file, nil
+		},
+		unplayable: "they hold nothing to download",
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	res := &Result{Title: cmp.Or(title, "Radio-Canada")}
-	var reasons []string
-	for _, f := range results {
-		if f.file != nil {
-			res.Files = append(res.Files, *f.file)
-		} else {
-			reasons = append(reasons, f.reason)
-		}
-	}
-	if len(res.Files) == 0 {
-		if len(reasons) > 0 {
-			return nil, fmt.Errorf("radio-canada: %s: none of its %d media can be had: %s", res.Title, len(media), reasons[0])
-		}
-		return nil, fmt.Errorf("radio-canada: %s: none of its media could be read", res.Title)
-	}
-	if len(reasons) > 0 {
-		res.Note = fmt.Sprintf("%d left out: %s", len(reasons), reasons[0])
-	}
-	return res, nil
 }
 
 // radioCanadaText is a string written into the page's data, its escapes
@@ -210,27 +216,18 @@ func (r *RadioCanada) single(ctx context.Context, app, id, stem string) (*Result
 		return nil, err
 	}
 	file := r.file(app, id, target)
-	return &Result{Title: strings.TrimSuffix(file.Name, path.Ext(file.Name)), Files: []File{file}}, nil
+	return &Result{Title: util.Stem(file.Name), Files: []File{file}}, nil
 }
 
 // file is a resolved media as its file, read again when its transfer
 // starts: some media are signed, their master for two minutes and their
 // segments for a day, which a queue can outwait.
 func (r *RadioCanada) file(app, id string, target *Target) File {
-	stem := strings.TrimSuffix(target.Name, path.Ext(target.Name))
-	return File{
-		Name: target.Name, URL: target.URL, Size: -1, Headers: target.Headers, Segments: target.Segments,
-		SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			return r.stream(ctx, app, id, stem)
-		},
-	}
+	stem := util.Stem(target.Name)
+	return refreshing(target, func(ctx context.Context) (*Target, error) {
+		return r.stream(ctx, app, id, stem)
+	})
 }
-
-// radioCanadaRefused is a media the API names no stream for.
-type radioCanadaRefused struct{ title, reason string }
-
-func (e *radioCanadaRefused) Error() string { return "radio-canada: " + e.title + ": " + e.reason }
 
 // stream asks the API for a media's stream and resolves it under the name
 // stem, or under the programme and title the API gives it.
@@ -250,7 +247,7 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 		stem = r.name(ctx, app, id)
 	}
 	if answer.URL == "" {
-		return nil, &radioCanadaRefused{title: stem, reason: cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
+		return nil, &itemRefusal{"radio-canada", stem, cmp.Or(strings.TrimSpace(answer.Message), "the media API names no stream for it")}
 	}
 	headers := radioCanadaHeaders()
 	master := radioCanadaUnfiltered(answer.URL)
@@ -264,21 +261,17 @@ func (r *RadioCanada) stream(ctx context.Context, app, id, stem string) (*Target
 	if err != nil {
 		return nil, fmt.Errorf("radio-canada: %s: %w", stem, err)
 	}
-	audio := media.Audio
-	for i := range audio {
+	for i, audio := range media.Audio {
 		// "audio1_fr" is the packager's, not a name, and the language says
 		// it; "audio0_frdv" is the audio description (vidéodescription).
-		if m := radioCanadaPackagerName.FindStringSubmatch(audio[i].Name); m != nil {
-			audio[i].Name = ""
+		if m := radioCanadaPackagerName.FindStringSubmatch(audio.Name); m != nil {
+			media.Audio[i].Name = ""
 			if strings.HasSuffix(m[1], "dv") {
-				audio[i].Name = "Vidéodescription"
+				media.Audio[i].Name = "Vidéodescription"
 			}
 		}
 	}
-	return &Target{
-		URL: master, Name: stem + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: audio, Subtitles: media.Subtitles,
-	}, nil
+	return media.target(master, stem+media.extension(), headers), nil
 }
 
 var radioCanadaPackagerName = regexp.MustCompile(`^audio[0-9]+_([a-z]+)$`)
@@ -300,7 +293,7 @@ func (r *RadioCanada) name(ctx context.Context, app, id string) string {
 	for _, m := range doc.Metas {
 		metas[m.Name] = strings.TrimSpace(m.Text)
 	}
-	return cmp.Or(ardJoin(metas["Emission"], metas["Title"]), id)
+	return cmp.Or(joinTitle(metas["Emission"], metas["Title"], titleContains), id)
 }
 
 // radioCanadaUnfiltered is a master's link without the filter the API puts
@@ -319,14 +312,11 @@ func radioCanadaUnfiltered(link string) string {
 	return u.String()
 }
 
-// radioCanadaHeaders are what the site's own player sends.
-func radioCanadaHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://ici.radio-canada.ca/", "https://ici.radio-canada.ca")
-}
+// radioCanadaRoot is the site the player is served from.
+const radioCanadaRoot = "https://ici.radio-canada.ca"
 
-// radioCanadaMaxPages is the most pages of a list the site's own loader asks
-// for.
-const radioCanadaMaxPages = 200
+// radioCanadaHeaders are what the site's own player sends.
+func radioCanadaHeaders() httpx.Header { return httpx.SiteOrigin(radioCanadaRoot) }
 
 var (
 	radioCanadaSeasonPath = regexp.MustCompile(`/saison-([0-9]+)$`)
@@ -342,7 +332,8 @@ var (
 // The programme's page shows its latest season alone, and a season's link
 // that season alone. OHdio's audio is MPEG-TS, and an episode is listed
 // under the name it resolves to, so that a listing read again finds what
-// was saved under it.
+// was saved under it. The episodes past the user's file limit are left
+// out, and the note counts them against what the programme listed.
 func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page string, opts Options) (*Result, error) {
 	title = cmp.Or(title, "OHdio")
 	base := strings.TrimSuffix(u.Path, "/")
@@ -355,64 +346,84 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 		seasons = radioCanadaSeasonsOf(page, base)
 	}
 
-	limit := opts.maxFiles()
+	// Episodes are resolved when their transfers start, so listing them
+	// costs only the pages; the file limit cuts the list once it is read,
+	// so the note can say how many of how many it kept.
 	var (
 		files       []File
-		listed      int
 		walkErr     error
+		walkNote    string
 		seen        = make(map[string]bool)
 		seasonTitle string
 	)
+	// read walks one season's list, or the programme's own; a page that
+	// fails, the first or a later one, is walkErr, for the note to say the
+	// listing broke off.
+	type listed struct {
+		id   string
+		file File
+	}
 	read := func(season int) {
 		path := base
 		if season > 0 {
 			path += "/saison-" + strconv.Itoa(season)
 		}
 		folder := ""
-		for number := 1; number <= radioCanadaMaxPages; number++ {
-			doc := page
-			if season > 0 || number > 1 || u.RawQuery != "" {
-				next := *u
-				next.Path, next.RawQuery = path, "pageNumber="+strconv.Itoa(number)
-				var err error
-				if doc, err = r.client.GetString(ctx, next.String(), nil); err != nil {
-					walkErr = cmp.Or(walkErr, err)
-					return
+		episodes, note, err := walkPages(ctx, pageWalk[listed]{
+			fetch: func(ctx context.Context, n int) (pageOf[listed], error) {
+				number, doc := n+1, page
+				if season > 0 || number > 1 || u.RawQuery != "" {
+					next := *u
+					next.Path, next.RawQuery = path, "pageNumber="+strconv.Itoa(number)
+					var err error
+					if doc, err = r.client.GetString(ctx, next.String(), nil); err != nil {
+						return pageOf[listed]{}, err
+					}
 				}
-			}
-			if number == 1 && season > 0 {
-				label := "Saison " + strconv.Itoa(season)
-				if m := radioCanadaSeasonName.FindStringSubmatch(doc); m != nil {
-					label = cmp.Or(ardJoin(radioCanadaText(m[2]), radioCanadaText(m[1])), label)
+				if number == 1 && season > 0 {
+					label := "Saison " + strconv.Itoa(season)
+					if m := radioCanadaSeasonName.FindStringSubmatch(doc); m != nil {
+						label = cmp.Or(joinTitle(radioCanadaText(m[2]), radioCanadaText(m[1]), titleContains), label)
+					}
+					switch {
+					case pastedSeason:
+						// A season pasted alone is filed under its own name.
+						seasonTitle = joinTitle(title, label, titleContains)
+					case len(seasons) > 1:
+						folder = sourceFolder(label)
+					}
 				}
-				switch {
-				case pastedSeason:
-					// A season pasted alone is filed under its own name.
-					seasonTitle = ardJoin(title, label)
-				case len(seasons) > 1:
-					folder = sourceFolder(label)
+				// An episode another season listed is not listed again, and a
+				// page that lists nothing new ends the list.
+				var items []listed
+				for _, e := range radioCanadaEpisode.FindAllStringSubmatch(doc, -1) {
+					if id := e[1]; !seen[id] {
+						items = append(items, listed{id, r.lazy(id, cmp.Or(joinTitle(title, radioCanadaText(e[2]), titleContains), id), folder)})
+					}
 				}
-			}
-			added := 0
-			for _, e := range radioCanadaEpisode.FindAllStringSubmatch(doc, -1) {
-				id := e[1]
-				if seen[id] {
-					continue
+				// The list ends at the count it states.
+				end := len(items) == 0
+				if m := radioCanadaPages.FindStringSubmatch(doc); m == nil {
+					end = true
+				} else if total, err := strconv.Atoi(m[1]); err != nil || number*radioCanadaPageSizeOf(doc) >= total {
+					end = true
 				}
-				seen[id] = true
-				added++
-				listed++
-				if len(files) < limit {
-					files = append(files, r.lazy(id, cmp.Or(ardJoin(title, radioCanadaText(e[2])), id), folder))
-				}
-			}
-			m := radioCanadaPages.FindStringSubmatch(doc)
-			if added == 0 || m == nil {
-				return
-			}
-			if total, err := strconv.Atoi(m[1]); err != nil || number*radioCanadaPageSizeOf(doc) >= total {
-				return
-			}
+				return pageOf[listed]{items: items, next: true, end: end}, nil
+			},
+			key:   func(l listed) string { return l.id },
+			limit: -1,
+			// A page that lists nothing new is the list's end, as the
+			// stated count is.
+			ends: walkAccepts{repeated: true},
+			failed: func(err error) (string, bool) {
+				walkErr = cmp.Or(walkErr, err)
+				return "", true
+			},
+		})
+		walkErr, walkNote = cmp.Or(walkErr, err), cmp.Or(walkNote, note)
+		for _, e := range episodes {
+			seen[e.id] = true
+			files = append(files, e.file)
 		}
 	}
 	if len(seasons) == 0 {
@@ -427,14 +438,10 @@ func (r *RadioCanada) programme(ctx context.Context, u *url.URL, title, page str
 		}
 		return nil, errors.New("radio-canada: " + title + " lists no episodes")
 	}
-	var notes []string
-	if listed > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(files), listed))
-	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
-	}
-	return &Result{Title: cmp.Or(seasonTitle, title), Files: files, Note: strings.Join(notes, "; ")}, nil
+	all := len(files)
+	files = files[:min(all, opts.maxFiles())]
+	note := joinNotes(cappedNote(len(files), all, "episodes"), walkNote, brokenNote(walkErr))
+	return &Result{Title: cmp.Or(seasonTitle, title), Files: files, Note: note}, nil
 }
 
 // radioCanadaSeasonsOf is the seasons a programme's page links to, in
@@ -451,7 +458,7 @@ func radioCanadaSeasonsOf(page, base string) []int {
 		return nil
 	}
 	if m := radioCanadaSeasons.FindStringSubmatch(page); m != nil {
-		if count, err := strconv.Atoi(m[1]); err == nil && count > len(found) && count <= radioCanadaMaxPages {
+		if count, err := strconv.Atoi(m[1]); err == nil && count > len(found) && count <= config.MaxAlbumPages {
 			for n := 1; n <= count; n++ {
 				found[n] = true
 			}
@@ -477,10 +484,7 @@ func radioCanadaPageSizeOf(doc string) int {
 
 // lazy is a listed episode, its stream resolved when its transfer starts.
 func (r *RadioCanada) lazy(id, stem, folder string) File {
-	return File{
-		Name: stem + ".ts", Size: -1, Dir: folder, Headers: radioCanadaHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			return r.stream(ctx, "medianet", id, stem)
-		},
-	}
+	return lazyEpisode(stem+".ts", folder, radioCanadaHeaders(), func(ctx context.Context) (*Target, error) {
+		return r.stream(ctx, "medianet", id, stem)
+	})
 }

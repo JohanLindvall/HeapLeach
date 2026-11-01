@@ -49,7 +49,11 @@ with an `http(s)` scheme, so the two can never be confused. Lists read from
 stdin ignore blank lines and `#` comments.
 
 It exits `0` when every source was accepted, resolved and downloaded, and `1`
-when an input was rejected, a source could not be read, or a file failed.
+when an input was rejected, a source could not be read, a listing was cut
+short by a failure, or a file failed. Files recovered from an incomplete
+listing finish downloading before the run reports failure, and the closing
+report names the affected sources. Deliberate file and source limits do not
+make an otherwise successful run fail.
 Failures are named, so it drops straight into a script or a cron job. `Ctrl-C` exits
 `130` and leaves the partial files in place; running the same command again
 continues them rather than starting over.
@@ -179,7 +183,11 @@ must be writable only by people you trust to run code as this account.
   server reports, so it works even for hosts that publish no sizes. Sizes
   read off listing pages are rounded, and are never used to make that call.
   Entries in one listing that share a sanitized destination get distinct,
-  stable numbered names, including when their lengths match.
+  stable numbered names, including when their lengths match. Files saved
+  before the move to recognising sites by their pages may have been named
+  differently — some board and archive folders, titles with a slash in
+  them, the extension of some streamed videos — and those download once
+  more under the current name, beside the old copy.
 - **Notices a stalled transfer — and steps around it.** A connection that
   stops delivering without closing is invisible to a read timeout; if the
   byte counter has not moved for `-stall-timeout`, the attempt is abandoned
@@ -213,7 +221,9 @@ must be writable only by people you trust to run code as this account.
 - **Cancel and retry** a whole job or a single file.
 - **Clear finished** removes jobs from the queue only when every file is
   complete and the source has no errors. Failed, canceled and incomplete
-  jobs stay available to inspect or retry. Downloaded files stay on disk.
+  jobs stay available to inspect or retry, also after a restart; a job whose
+  listing a failure cut short is shown under **Failed** with its **Retry
+  job** button. Downloaded files stay on disk.
 - **Resume** — partial files are kept and continued with a `Range` request;
   a cancelled 100 MB download restarts where it stopped.
 - **Password-protected folders** (gofile and filester). Open **Password
@@ -242,6 +252,11 @@ Paste a tag search or a post link. A listing with no tags fetches the
 board's latest posts; a bare domain is rejected, since that is far more
 likely a mis-paste than a request for everything.
 
+A tag search stops at 1,000 posts, or at the file limit when that is lower:
+the boards rate-limit long walks, and a broad tag can name hundreds of
+thousands. On a Philomena board, posts its default filter hides are read
+under the board's own "Everything" filter.
+
 Every board above was checked against its live API. Ones that now demand an
 API key (gelbooru.com), sit behind a challenge (danbooru.donmai.us) or have
 switched their API off (realbooru) are deliberately absent rather than
@@ -262,3 +277,28 @@ listed as supported and quietly broken.
   fixture tests only; a green suite alone does not verify live host support.
 - Be a good citizen: the defaults are deliberately modest, and the client
   honours `Retry-After` and backs off on 429s.
+- Cached page checks are repeated when the site's session cookies change,
+  including cookies used only after a redirect. A previous session's page
+  is not reused for a later submission with different cookies. If an extractor
+  needs a different Referer header, it also fetches its own page; this can add
+  a request after recognition.
+- One link's discovery holds at most twelve requests open at once, however
+  its listings nest, and a listing of albums is expanded in batches, the cap
+  checked between them. A listing of listings is read more slowly than its
+  hosts would allow, by design; transfers are not counted against this.
+- A listing that a later page fails to load keeps what it had read, notes
+  "partial — could not fetch …" beside its title, and offers **Retry job**
+  once its files are done, which reads it again for the rest. Cancelling a
+  job while its source is still being read discards what was listed so far:
+  a cancellation is not a partial result.
+- Since sites are recognised by their pages rather than their hosts, a job is
+  labelled by the software family that read it — `foolfuuka`, `chevereto`,
+  `keep2share` — rather than by each site's own name, and the README's
+  inventory lists families and what they recognise rather than every domain
+  they were seen on. Kernel Video Sharing and PeerTube jobs are the
+  exception: they are labelled by the install's name, taken from its host.
+- Folder names are made from titles with path separators (`/`, `\` and their
+  look-alikes) turned into `_`, trimmed, and two listings with the same title
+  told apart by their last path segment in brackets. A folder named before
+  that rule, for a title carrying one of those characters, is not reused: a
+  re-run files such a listing beside it, under the new name.

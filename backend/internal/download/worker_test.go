@@ -4,7 +4,6 @@ package download
 
 import (
 	"context"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,7 +105,7 @@ func TestAlreadyOnDisk(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.label, func(t *testing.T) {
 			it := &Item{ID: "i", Name: tc.file}
-			if got := m.alreadyOnDisk(it, dir, "", tc.file, tc.size); got != tc.want {
+			if got := m.alreadyOnDisk(it, dir, "", tc.file, tc.size, transferFiles{}); got != tc.want {
 				t.Errorf("alreadyOnDisk = %v, want %v", got, tc.want)
 			}
 			if tc.want && it.downloaded.Load() != tc.size {
@@ -123,7 +122,7 @@ func TestAlreadyOnDiskIgnoresDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &Manager{}
-	if m.alreadyOnDisk(&Item{ID: "i"}, dir, "", "clip.mp4", 4096) {
+	if m.alreadyOnDisk(&Item{ID: "i"}, dir, "", "clip.mp4", 4096, transferFiles{}) {
 		t.Error("a directory must never be mistaken for the downloaded file")
 	}
 }
@@ -149,8 +148,7 @@ func TestApproximateSizeDoesNotSkip(t *testing.T) {
 // when the length is known, and after the response headers, when it is not.
 func TestSkippingAFinishedFileLeavesItsMtimeAlone(t *testing.T) {
 	payload := []byte(strings.Repeat("finished file ", 512))
-	srv := httptest.NewServer((&rangeServer{payload: payload}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: payload}).handler())
 
 	for name, size := range map[string]int64{"known length": int64(len(payload)), "length from headers": -1} {
 		t.Run(name, func(t *testing.T) {
@@ -193,8 +191,7 @@ func TestSkippingAFinishedFileLeavesItsMtimeAlone(t *testing.T) {
 func TestAFileSavedUnderANumberedNameIsRecognised(t *testing.T) {
 	small := []byte(strings.Repeat("s", 1000))
 	large := []byte(strings.Repeat("L", 3000))
-	srv := httptest.NewServer((&rangeServer{payload: large}).handler())
-	defer srv.Close()
+	srv := testServer(t, (&rangeServer{payload: large}).handler())
 
 	m := busyManager(t)
 	dir := m.cfg.DownloadDir

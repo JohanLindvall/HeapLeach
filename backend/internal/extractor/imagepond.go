@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -15,7 +16,7 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// ImagePond resolves its viewer pages (/i/<code>).
+// imagepond resolves its viewer pages (/i/<code>).
 //
 // The media link is on the page, and the player element is what carries the
 // truth: its data-src is the file and its data-type is the real content
@@ -38,20 +39,17 @@ import (
 // that same stored file. See imagePondDirect.
 //
 // A link to the media host itself — media.imagepond.net/… — is the stored
-// file, and is taken as given: Match claims that host along with the site,
-// since one is a subdomain of the other, so nothing else would handle it.
+// file, and is taken as given, with the site's Referer: the registry hands
+// such a link to this extractor by its host (hostClaims, claimsFiles)
+// rather than to the direct fallback, so the job reads as ImagePond's.
 //
 // Albums (/a/<code>) are served whole and server-side, so one fetch names
 // every item. What that page does *not* carry is the media: each card links
 // only to the item's own viewer, so the file behind it is resolved per item,
-// at download time. See album.
+// at download time. See imagePondAlbum.
 //
 // Profile pages are still not handled: those render their listing
 // client-side, so the delivered HTML names none of the items.
-type ImagePond struct {
-	hostSet
-	client *httpx.Client
-}
 
 const imagePondRoot = "https://www.imagepond.net"
 
@@ -70,21 +68,68 @@ const (
 )
 
 // NewImagePond builds the imagepond extractor.
-func NewImagePond(client *httpx.Client) *ImagePond {
-	return &ImagePond{hostSet: hostSet{"imagepond.net"}, client: client}
+func NewImagePond(client *httpx.Client) *Share { return newShare(client, &imagePondSite) }
+
+// imagePondItemShape is a viewer page, /i/<code>; imagePondAlbumShape an
+// album, /a/<code>.
+var (
+	imagePondItemShape  = pathShape(`^/i/[^/]+/?$`)
+	imagePondAlbumShape = pathShape(`^/a/[^/]+/?$`)
+
+	// imagePondMediaPath is a stored file's path on the media host, or the
+	// site's /i/<code>/direct route to one.
+	imagePondMediaPath = regexp.MustCompile(`^/media/(images|videos)/[^/]+$|^/i/[^/]+/direct$`)
+)
+
+// imagePondSite reads the places extract takes the file from — the player
+// element, then og:video and og:image — for a link of the stored file's
+// form, and an album's cards for a link to a viewer page. The site's name is
+// required beside them, since a viewer path and a /media/ path are common.
+var imagePondSite = shareSite{
+	name: "imagepond",
+	recognises: "viewer pages (`/i/<code>`) naming their stored file (`/media/…`, `/i/<code>/direct`) in the player " +
+		"or og:video/og:image, and albums (`/a/<code>`) of cards linking to viewer pages, on pages named ImagePond",
+	forms: []shareForm{
+		{imagePondItemShape, func(p *Page) bool {
+			media := func(raw string) bool {
+				u, err := url.Parse(resolveRef(p.Final, raw))
+				return err == nil && imagePondMediaPath.MatchString(u.Path)
+			}
+			if !p.Named("ImagePond") {
+				return false
+			}
+			// An item the host aged out is its page saying so, which is
+			// the extractor's to report as expired.
+			if root := p.HTML(); root != nil && imagePondExpired(root) {
+				return true
+			}
+			return media(p.Meta("og:video")) || media(p.Meta("og:image")) || p.hasElement(func(n *html.Node) bool {
+				return (isElem(n, atom.Video) || isElem(n, atom.Source)) &&
+					(media(attr(n, "data-src")) || media(attr(n, "src")))
+			})
+		}},
+		{imagePondAlbumShape, func(p *Page) bool {
+			return p.Named("ImagePond") && p.hasElement(func(a *html.Node) bool {
+				return isElem(a, atom.A) && imagePondCardLink(a, p.Final, func(link string) bool {
+					u, err := url.Parse(link)
+					return err == nil && imagePondItemShape(u)
+				}) != ""
+			})
+		}},
+	},
+	extract: imagePondExtract,
 }
 
-func (i *ImagePond) Name() string { return "imagepond" }
-
-// Extract resolves a viewer page (/i/<code>), an album (/a/<code>), or a link
-// to the stored file itself.
-func (i *ImagePond) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	// The media host serves the files the pages point at, and Match claims
-	// it along with the site — one is a subdomain of the other. A link to it
-	// is already the answer the other two routes go looking for, so it is
-	// taken as it stands rather than rejected for not being a page.
+// imagePondExtract resolves a viewer page (/i/<code>), an album (/a/<code>),
+// or a link to the stored file itself.
+func imagePondExtract(ctx context.Context, s *Share, u *url.URL, _ Options) (*Result, error) {
+	// The media host serves the files the pages point at, and the registry
+	// claims it along with the site — one is a subdomain of the other. A
+	// link to it is already the answer the other two routes go looking
+	// for, so it is taken as it stands rather than rejected for not being
+	// a page.
 	if link := imagePondMediaFile(u); link != "" {
-		name := util.FirstNonEmpty(util.NameFromURL(link), "imagepond-file")
+		name := cmp.Or(util.NameFromURL(link), "imagepond-file")
 		return &Result{Title: name, Files: []File{{
 			Name: name,
 			URL:  link,
@@ -99,9 +144,13 @@ func (i *ImagePond) Extract(ctx context.Context, u *url.URL, _ Options) (*Result
 	segs := util.PathSegments(u)
 	switch {
 	case len(segs) >= 2 && segs[0] == "a":
-		return i.album(ctx, u, segs[1])
+		return imagePondAlbum(ctx, s, u, segs[1])
 	case len(segs) >= 2 && segs[0] == "i":
-		return i.item(ctx, u, segs[1])
+		target, err := imagePondItem(s, u.String(), segs[1])(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &Result{Title: target.Name, Files: []File{target.file("")}}, nil
 	}
 	return nil, fmt.Errorf("imagepond: %s is not an item page (/i/<code>), an album "+
 		"(/a/<code>), or a file on %s — profile pages list their items client-side, "+
@@ -124,31 +173,12 @@ func imagePondMediaFile(u *url.URL) string {
 	return u.String()
 }
 
-// item resolves one viewer page to the file behind it.
-func (i *ImagePond) item(ctx context.Context, u *url.URL, code string) (*Result, error) {
-	link, name, err := i.itemMedia(ctx, u, code)
+// imagePondMedia fetches one viewer page and reports the file it shows, with
+// the name the page states.
+func imagePondShown(ctx context.Context, s *Share, u *url.URL, code string) (link, name string, err error) {
+	root, err := s.root(ctx, u, imagePondRoot+"/")
 	if err != nil {
-		return nil, err
-	}
-	return &Result{Title: name, Files: []File{{
-		Name:    name,
-		URL:     link,
-		Size:    -1,
-		Headers: httpx.Referer(imagePondRoot + "/"),
-	}}}, nil
-}
-
-// itemMedia fetches one viewer page and reports the file it shows, with the
-// name the page states. Shared by the single-item route and an album's
-// per-item resolver, which need exactly the same hop.
-func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (link, name string, err error) {
-	doc, err := i.client.GetString(ctx, u.String(), httpx.Referer(imagePondRoot+"/"))
-	if err != nil {
-		return "", "", fmt.Errorf("imagepond: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return "", "", fmt.Errorf("imagepond: parse %s: %w", u.Redacted(), err)
+		return "", "", err
 	}
 
 	link = imagePondMediaLink(root, u)
@@ -174,7 +204,7 @@ func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (lin
 	if fromLink == imagePondDirectSegment {
 		fromLink = ""
 	}
-	name = util.FirstNonEmpty(
+	name = cmp.Or(
 		imagePondName(metaContent(root, "og:title")),
 		fromLink,
 		code,
@@ -182,7 +212,7 @@ func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (lin
 	return link, name, nil
 }
 
-// album lists what one album page links to, resolving each item lazily.
+// imagePondAlbum lists what one album page links to, resolving each item lazily.
 //
 // The whole album arrives in one document: there are no paging controls, and
 // asking for ?page=2 serves a listing with nothing in it, so this fetches
@@ -199,23 +229,21 @@ func (i *ImagePond) itemMedia(ctx context.Context, u *url.URL, code string) (lin
 // expire — it is simply that the media address is one fetch further on, and
 // doing that fetch per item at download time beats doing every one of them
 // before the first byte moves.
-func (i *ImagePond) album(ctx context.Context, u *url.URL, code string) (*Result, error) {
-	doc, err := i.client.GetString(ctx, u.String(), httpx.Referer(imagePondRoot+"/"))
+func imagePondAlbum(ctx context.Context, s *Share, u *url.URL, code string) (*Result, error) {
+	root, err := s.root(ctx, u, imagePondRoot+"/")
 	if err != nil {
-		return nil, fmt.Errorf("imagepond: fetch %s: %w", u.Redacted(), err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("imagepond: parse %s: %w", u.Redacted(), err)
+		return nil, err
 	}
 
-	files := imagePondAlbumFiles(root, u, i.resolver)
+	files := imagePondAlbumFiles(root, u, func(page, code string) func(context.Context) (*Target, error) {
+		return imagePondItem(s, page, code)
+	})
 	if len(files) == 0 {
 		return nil, fmt.Errorf("imagepond: no items on album %s "+
 			"(it may be empty or private, or the page layout changed)", u.Redacted())
 	}
 
-	title := util.FirstNonEmpty(
+	title := cmp.Or(
 		strings.TrimSpace(firstText(root, atom.H1)),
 		trimSiteSuffix(firstText(root, atom.Title)),
 		code,
@@ -223,21 +251,23 @@ func (i *ImagePond) album(ctx context.Context, u *url.URL, code string) (*Result
 	return &Result{Title: title, Files: files}, nil
 }
 
-// resolver returns the closure that turns one album entry into its file.
-func (i *ImagePond) resolver(page, code string) func(context.Context) (*Target, error) {
+// imagePondItem reads one viewer page into the file behind it: the
+// single-item route, and an album entry's resolver at download time, which
+// need exactly the same hop.
+func imagePondItem(s *Share, page, code string) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
 		u, err := ParseURL(page)
 		if err != nil {
 			return nil, err
 		}
-		link, name, err := i.itemMedia(ctx, u, code)
+		link, name, err := imagePondShown(ctx, s, u, code)
 		if err != nil {
 			return nil, err
 		}
 		return &Target{
 			URL: link,
 			// The viewer page states the stored filename, which is the
-			// authority; the album card's copy of it is what the queue shows
+			// authority; an album card's copy of it is what the queue shows
 			// until then. For a video reached by the /direct route it is the
 			// only name there is, since that URL ends in "direct".
 			Name:    name,
@@ -260,20 +290,15 @@ func imagePondAlbumFiles(root *html.Node, base *url.URL,
 	var files []File
 	seen := make(map[string]bool)
 	for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
-		page := imagePondCardLink(a, base)
+		page := imagePondCardLink(a, base, imagePondItemPage)
 		if page == "" || seen[page] {
 			continue
 		}
 		seen[page] = true
 
-		code := ""
-		if u, err := url.Parse(page); err == nil {
-			if segs := util.PathSegments(u); len(segs) >= 2 {
-				code = segs[1]
-			}
-		}
+		code := linkPathID(page, "i")
 		files = append(files, File{
-			Name:    util.FirstNonEmpty(collapseSpace(textOf(a)), code),
+			Name:    cmp.Or(collapseSpace(textOf(a)), code),
 			Size:    -1,
 			Resolve: resolver(page, code),
 		})
@@ -288,17 +313,16 @@ func imagePondAlbumFiles(root *html.Node, base *url.URL,
 // same card becomes a checkbox in the album owner's manage mode. So the
 // quoted operands are examined and the one naming an item page is taken,
 // which also ignores the `javascript:void(0)` beside it. A plain href is
-// still honoured, for the day the template stops doing this.
-func imagePondCardLink(a *html.Node, base *url.URL) string {
+// still honoured, for the day the template stops doing this. keep says
+// which resolved candidate is an item page.
+func imagePondCardLink(a *html.Node, base *url.URL, keep func(link string) bool) string {
 	for _, raw := range []string{attr(a, ":href"), attr(a, "href")} {
-		if raw == "" {
-			continue
-		}
-		if link := imagePondItemPage(resolveRef(base, raw)); link != "" {
-			return link
-		}
+		candidates := []string{raw}
 		for _, m := range imagePondQuoted.FindAllStringSubmatch(raw, -1) {
-			if link := imagePondItemPage(resolveRef(base, m[1])); link != "" {
+			candidates = append(candidates, m[1])
+		}
+		for _, c := range candidates {
+			if link := resolveRef(base, c); link != "" && keep(link) {
 				return link
 			}
 		}
@@ -309,18 +333,12 @@ func imagePondCardLink(a *html.Node, base *url.URL) string {
 // imagePondQuoted picks the single-quoted operands out of that expression.
 var imagePondQuoted = regexp.MustCompile(`'([^']*)'`)
 
-// imagePondItemPage keeps a link only when it addresses a viewer page on
-// this host, which is what separates an album card from the site's own
-// furniture and from the /i/<code>/direct route.
-func imagePondItemPage(link string) string {
-	u, err := url.Parse(strings.TrimSpace(link))
-	if err != nil || !util.HostMatches(u.Host, imagePondDomain) {
-		return ""
-	}
-	if segs := util.PathSegments(u); len(segs) == 2 && segs[0] == "i" {
-		return link
-	}
-	return ""
+// imagePondItemPage reports a link that addresses a viewer page on this
+// host, which is what separates an album card from the site's own furniture
+// and from the /i/<code>/direct route.
+func imagePondItemPage(link string) bool {
+	u, err := url.Parse(link)
+	return err == nil && util.HostMatches(u.Host, imagePondDomain) && linkPathID(link, "i") != ""
 }
 
 // imagePondExpired recognises the notice the host serves for an item it has
@@ -366,7 +384,7 @@ func imagePondMediaLink(root *html.Node, base *url.URL) string {
 			}
 		}
 	}
-	return util.FirstNonEmpty(
+	return cmp.Or(
 		imagePondUsable(resolveRef(base, metaContent(root, "og:video"))),
 		imagePondUsable(resolveRef(base, metaContent(root, "og:image"))),
 	)
@@ -375,7 +393,7 @@ func imagePondMediaLink(root *html.Node, base *url.URL) string {
 // imagePondUsable keeps a link the downloader can fetch: the stored file on
 // the media host, or the site's own route to it.
 func imagePondUsable(link string) string {
-	return util.FirstNonEmpty(imagePondHosted(link), imagePondDirect(link))
+	return cmp.Or(imagePondHosted(link), imagePondDirect(link))
 }
 
 // imagePondDirect keeps the site's own download route, /i/<code>/direct.

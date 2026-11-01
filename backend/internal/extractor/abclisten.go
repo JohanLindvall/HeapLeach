@@ -3,19 +3,18 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // ABCListen resolves abc.net.au/listen, the Australian broadcaster's radio
@@ -63,16 +62,16 @@ import (
 // catalogue is neither: pages and media alike answered a European address
 // with no token, cookie or referer.
 type ABCListen struct {
+	about
 	client *httpx.Client
 }
 
 const (
 	abcListenRoot = "https://www.abc.net.au"
 
-	// abcListenSection is the one part of abc.net.au this claims. The domain
-	// carries the whole broadcaster — the news site, iview, the education
-	// pages — and matching it wholesale would promise far more than this
-	// resolves.
+	// abcListenSection is the one part of the site this recognises. The
+	// news site shares this very page framework, JSON island and all, so
+	// the section is what keeps its pages out.
 	abcListenSection = "listen"
 
 	// abcListenIsland is the id of the JSON document the page is rendered
@@ -93,11 +92,6 @@ const (
 	// with fifty and says so.
 	abcListenPageSize = 50
 
-	// abcListenMaxEpisodes bounds how many episodes one programme URL expands
-	// to. The listing stops at 250 of its own accord today; this is the
-	// backstop for the day it does not.
-	abcListenMaxEpisodes = 500
-
 	// abcListenTitleSuffix is what the site appends to every page title.
 	abcListenTitleSuffix = " - ABC listen"
 
@@ -107,19 +101,21 @@ const (
 )
 
 // NewABCListen builds the ABC listen extractor.
-func NewABCListen(client *httpx.Client) *ABCListen { return &ABCListen{client: client} }
+func NewABCListen(client *httpx.Client) *ABCListen {
+	return &ABCListen{client: client, about: about{name: "abclisten", shape: abcListenShape,
+		recognises: "episodes and programmes (`/listen/programs/…`) of ABC listen, by the page props its `__NEXT_DATA__` island carries"}}
+}
 
-func (a *ABCListen) Name() string { return "abclisten" }
+// abcListenShape is a programme or one of its episodes.
+var abcListenShape = pathShape(`^/listen/programs/[^/]+`)
 
-// Match takes abc.net.au under /listen and nothing else on the domain. iview
-// is a subdomain of it and the news site shares this very page framework, but
-// neither carries the document this reads.
-func (a *ABCListen) Match(u *url.URL) bool {
-	if !util.HostMatches(u.Host, "abc.net.au") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && segs[0] == abcListenSection
+// Recognise takes a page of the listen section carrying the JSON island
+// (__NEXT_DATA__ with its pageProps) that this reads episodes and listings
+// out of.
+func (a *ABCListen) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	return len(segs) > 1 && segs[0] == abcListenSection && p.Has(`id="`+abcListenIsland+`"`, `"pageProps"`) &&
+		p.Named("ABC listen")
 }
 
 // Extract handles one episode or a whole programme. Which of the two a URL is
@@ -160,49 +156,41 @@ func (a *ABCListen) episode(u *url.URL, doc abcListenDoc) (*Result, error) {
 	// it belongs to, so the name carries the programme as well: a daily
 	// bulletin's own title is the programme's name and nothing more, which is
 	// also why saying it twice is worth avoiding.
-	title := strings.TrimSpace(doc.Title)
-	switch programme := doc.programme(); {
-	case title == "":
-		title = programme
-	case programme != "" && !strings.EqualFold(programme, title):
-		title = programme + " - " + title
-	}
+	title := joinTitle(doc.programme(), strings.TrimSpace(doc.Title), titleEqual)
 
 	file.Name = abcListenName(doc.ID, title) + file.Name // Name holds only the extension here
-	return &Result{Title: util.FirstNonEmpty(title, doc.ID), Files: []File{file}}, nil
+	return &Result{Title: cmp.Or(title, doc.ID), Files: []File{file}}, nil
 }
 
 // programme expands a programme into one file per episode.
 //
 // Every episode has to be opened. The listing names each one and links to it
 // but keeps the media on the episode's own page, and carries nothing that
-// stands in for it, so this is the shape FanOut exists for: several at a
+// stands in for it, so this is the shape resolveOutcomes exists for: several at a
 // time, in the listing's order, and an episode that will not load dropped
 // rather than sinking a job of hundreds.
 func (a *ABCListen) programme(ctx context.Context, u *url.URL, page *abcListenPage) (*Result, error) {
-	episodes := a.episodes(ctx, u, page.props.Collection)
+	// The listing stops at 250 of its own accord today; the cap is the
+	// backstop for the day it does not.
+	episodes, listed, walkNote := a.episodes(ctx, u, page.props.Collection, config.MaxResolvedEpisodesStrand)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("abclisten: no episodes listed on %s", u.Redacted())
 	}
 
-	files := FanOut(ctx, episodes, func(ctx context.Context, ep abcListenItem) ([]File, error) {
-		return a.listed(ctx, u, ep)
-	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("abclisten: none of the %d episodes of %s carry media",
-			len(episodes), u.Redacted())
-	}
-
-	return &Result{
-		Title: util.FirstNonEmpty(page.title, util.NameFromURL(u.Path)),
-		Files: files,
-	}, nil
+	return listSeries(ctx, cmp.Or(page.title, util.NameFromURL(u.Path)), series[abcListenItem]{
+		site: "abclisten", noun: "episodes", link: u.Redacted(),
+		items: episodes, listed: listed, budget: config.MaxResolvedEpisodesStrand,
+		resolve: func(ctx context.Context, ep abcListenItem) (*File, error) {
+			return a.listed(ctx, u, ep)
+		},
+		unplayable: "none carries media",
+	}, walkNote)
 }
 
 // listed resolves one entry of a programme listing. The episode goes in a
 // folder named after the programme, so unlike a lone episode its filename
 // says nothing about which programme it belongs to.
-func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem) ([]File, error) {
+func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem) (*File, error) {
 	link := resolveRef(base, ep.ArticleLink)
 	page, err := a.page(ctx, link)
 	if err != nil {
@@ -222,74 +210,77 @@ func (a *ABCListen) listed(ctx context.Context, base *url.URL, ep abcListenItem)
 		return nil, fmt.Errorf("abclisten: %s carries no audio or video", link)
 	}
 	file.Name = abcListenName(
-		util.FirstNonEmpty(doc.ID, ep.CardID),
-		util.FirstNonEmpty(doc.Title, ep.CardTitle)) + file.Name
-	return []File{file}, nil
+		cmp.Or(doc.ID, ep.CardID),
+		cmp.Or(doc.Title, ep.CardTitle)) + file.Name
+	return &file, nil
 }
 
-// episodes lists a programme's episodes.
+// episodes lists a programme's episodes, up to limit of them, with the
+// total the listing states when it went on past that, and the note for a
+// listing cut short some other way.
 //
 // The page renders only the first handful and loads the rest from an endpoint
 // of its own as the reader pages through; asked directly that endpoint
 // answers fifty at a time and reports the true total. Those the page already
 // rendered are kept and paging continues after them, which is what makes the
 // endpoint additive: if it goes away, a programme resolves to the episodes on
-// the page instead of to nothing at all.
-func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCollection) []abcListenItem {
-	var out []abcListenItem
-	seen := make(map[string]bool)
-	add := func(items []abcListenItem) int {
-		before := len(out)
-		for _, item := range items {
-			if item.ArticleLink == "" || seen[item.ArticleLink] {
-				continue
-			}
-			seen[item.ArticleLink] = true
-			out = append(out, item)
-		}
-		return len(out) - before
-	}
-
-	add(coll.Items)
-	total := coll.Pagination.Total
+// the page instead of to nothing at all, with a note that the listing was cut
+// there. A page that adds nothing new ends it too, in case the endpoint ever
+// stops honouring the offset.
+func (a *ABCListen) episodes(ctx context.Context, u *url.URL, coll *abcListenCollection, limit int) (episodes []abcListenItem, listed int, note string) {
+	total, offset := coll.Pagination.Total, 0
 	endpoint := util.Origin(u) + abcListenEpisodesPath + "/" + strings.Trim(u.EscapedPath(), "/")
-	for len(out) < total && len(out) < abcListenMaxEpisodes {
-		query := url.Values{
-			"collectionId": {coll.ID},
-			"offset":       {strconv.Itoa(len(out))},
-			"size":         {strconv.Itoa(abcListenPageSize)},
+	page := func(items []abcListenItem) pageOf[abcListenItem] {
+		offset += len(items)
+		var linked []abcListenItem
+		for _, item := range items {
+			if item.ArticleLink != "" {
+				linked = append(linked, item)
+			}
 		}
-		var body struct {
-			Collection abcListenCollection `json:"collection"`
-		}
-		err := a.client.GetJSON(ctx, endpoint+"?"+query.Encode(),
-			httpx.Referer(abcListenRoot+"/"), &body)
-		// A listing that stops early, for whatever reason, is still worth
-		// having: what is already in hand is the newest episodes, which is
-		// the half of a podcast anyone asks for first. A page that adds
-		// nothing new ends it too, in case the endpoint ever stops honouring
-		// the offset.
-		if err != nil || add(body.Collection.Items) == 0 {
-			break
-		}
-		if body.Collection.Pagination.Total > total {
-			total = body.Collection.Pagination.Total
-		}
+		// A listing that states no total is the page's own alone.
+		return pageOf[abcListenItem]{items: linked, next: total > 0, end: len(items) == 0, total: total}
 	}
-
-	if len(out) > abcListenMaxEpisodes {
-		out = out[:abcListenMaxEpisodes]
+	episodes, more, note, _ := walkEpisodes(ctx, limit, pageWalk[abcListenItem]{
+		fetch: func(ctx context.Context, n int) (pageOf[abcListenItem], error) {
+			if n == 0 && len(coll.Items) > 0 {
+				return page(coll.Items), nil
+			}
+			query := url.Values{
+				"collectionId": {coll.ID},
+				"offset":       {strconv.Itoa(offset)},
+				"size":         {strconv.Itoa(abcListenPageSize)},
+			}
+			var body struct {
+				Collection abcListenCollection `json:"collection"`
+			}
+			if err := a.client.GetJSON(ctx, endpoint+"?"+query.Encode(),
+				httpx.Referer(abcListenRoot+"/"), &body); err != nil {
+				return pageOf[abcListenItem]{}, err
+			}
+			total = max(total, body.Collection.Pagination.Total)
+			return page(body.Collection.Items), nil
+		},
+		key: func(item abcListenItem) string { return item.ArticleLink },
+		// A page adding nothing linkable is the collection's end, not a
+		// cut.
+		ends: walkAccepts{repeated: true},
+	})
+	if more {
+		return episodes, total, ""
 	}
-	return out
+	return episodes, 0, note
 }
 
 // page fetches one page and reads its JSON island.
 func (a *ABCListen) page(ctx context.Context, link string) (*abcListenPage, error) {
-	doc, err := a.client.GetString(ctx, link, httpx.Referer(abcListenRoot+"/"))
+	// The probe's own tree is read when it holds the page, so the document
+	// recognised is not parsed again.
+	root, err := fetchPageRoot(ctx, a.client, link, httpx.Referer(abcListenRoot+"/"))
 	if err != nil {
 		return nil, fmt.Errorf("abclisten: fetch %s: %w", link, err)
 	}
-	page, err := abcListenParse(doc)
+	page, err := abcListenRead(root)
 	if err != nil {
 		return nil, fmt.Errorf("abclisten: %s: %w", link, err)
 	}
@@ -304,17 +295,23 @@ type abcListenPage struct {
 	title string
 }
 
-// abcListenParse reads a fetched page. Kept apart from the fetch so a fixture
-// can stand in for the page.
+// abcListenParse is abcListenRead for a page held as a string, as the
+// fixtures hold theirs.
 func abcListenParse(doc string) (*abcListenPage, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return nil, err
 	}
-	island := findFirst(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && attr(n, "id") == abcListenIsland
-	})
-	if island == nil {
+	return abcListenRead(root)
+}
+
+// abcListenRead reads a fetched, parsed page. Kept apart from the fetch so a
+// fixture can stand in for the page. The tree may be the shared probe's, so
+// it is only read; the island is taken as written (nextDataIn), never through
+// display text, which would collapse the spacing inside its strings.
+func abcListenRead(root *html.Node) (*abcListenPage, error) {
+	island, ok := nextDataIn(root)
+	if !ok {
 		return nil, fmt.Errorf("no %s island on the page", abcListenIsland)
 	}
 
@@ -325,7 +322,7 @@ func abcListenParse(doc string) (*abcListenPage, error) {
 			PageProps abcListenPageProps `json:"pageProps"`
 		} `json:"props"`
 	}
-	if err := json.Unmarshal([]byte(abcListenScriptText(island)), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(island), &envelope); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", abcListenIsland, err)
 	}
 
@@ -334,23 +331,8 @@ func abcListenParse(doc string) (*abcListenPage, error) {
 	// behead every programme whose own name contains a dash.
 	return &abcListenPage{
 		props: envelope.Props.PageProps,
-		title: strings.TrimSpace(strings.TrimSuffix(
-			strings.TrimSpace(firstText(root, atom.Title)), abcListenTitleSuffix)),
+		title: strings.TrimSpace(strings.TrimSuffix(firstText(root, atomTitle), abcListenTitleSuffix)),
 	}, nil
-}
-
-// abcListenScriptText reads a script element's contents verbatim. textOf
-// would do almost as well and is what the other page parsers here use, but it
-// collapses runs of whitespace, and this element is JSON: the spacing inside
-// a title is data rather than presentation.
-func abcListenScriptText(n *html.Node) string {
-	var b strings.Builder
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if c.Type == html.TextNode {
-			b.WriteString(c.Data)
-		}
-	}
-	return b.String()
 }
 
 // file turns a document's best rendition into a download. The returned File
@@ -364,17 +346,15 @@ func (a *ABCListen) file(doc abcListenDoc) (File, bool) {
 
 	// The extension comes from the URL rather than from the MIME type beside
 	// it, which is wrong on one entry per AAC episode — see the note on the
-	// type.
+	// type — and as the link spells it, case and all, since that is what
+	// the episodes already downloaded are filed under.
 	headers := httpx.Referer(abcListenRoot + "/")
 	file := File{
-		Name:    path.Ext(util.NameFromURL(best.URL)),
-		URL:     best.URL,
-		Size:    -1,
-		Headers: headers,
-	}
-	if best.FileSize > 0 {
-		file.Size = best.FileSize
-		file.SizeApprox = !best.measured()
+		Name:       linkExtAsIs(best.URL, ""),
+		URL:        best.URL,
+		Size:       knownSize(best.FileSize),
+		SizeApprox: best.FileSize > 0 && !best.measured(),
+		Headers:    headers,
 	}
 	if abcListenGeoBucket(best.URL) {
 		file.Resolve = a.geoCheck(best.URL, headers)
@@ -421,26 +401,11 @@ func abcListenGeoBucket(raw string) bool {
 // refusing a download that had started working.
 func (a *ABCListen) geoCheck(link string, headers httpx.Header) func(context.Context) (*Target, error) {
 	return func(ctx context.Context) (*Target, error) {
-		target := &Target{URL: link, Headers: headers}
-		req, err := a.client.NewRequest(ctx, http.MethodGet, link, nil)
-		if err != nil {
-			return target, nil
-		}
-		for name, value := range headers {
-			req.Header.Set(name, value)
-		}
-		req.Header.Set(httpx.HeaderRange, "bytes=0-0")
-
-		resp, err := a.client.DoOnce(req)
-		if err != nil {
-			return target, nil
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode == http.StatusForbidden {
+		if refusesByte(ctx, a.client, link, headers) {
 			return nil, fmt.Errorf("abclisten: the ABC licenses this recording for "+
 				"Australia only, and its content network refuses %s from anywhere else", link)
 		}
-		return target, nil
+		return &Target{URL: link, Headers: headers}, nil
 	}
 }
 
@@ -496,10 +461,12 @@ func abcListenName(id, title string) string {
 // webDistributionRestricted is the field, and a page it is set on carries
 // neither media nor an episode list — the audiobooks are the case in point.
 // The payload says nothing to a listener about why, so unlike nrk there is no
-// sentence to pass through and these words are ours.
+// sentence to pass through and these words are ours. It is a refusal, so
+// that a programme whose every episode is withheld says so rather than that
+// its episodes failed.
 func abcListenAppOnly(link string) error {
-	return fmt.Errorf("abclisten: the ABC publishes %s through its listen app only, "+
-		"so the web page carries nothing to fetch", link)
+	return &itemRefusal{site: "abclisten", reason: "the ABC publishes " + link +
+		" through its listen app only, so the web page carries nothing to fetch"}
 }
 
 // abcListenPageProps is what a page was rendered from. An episode page fills

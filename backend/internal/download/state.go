@@ -107,6 +107,9 @@ type savedJob struct {
 	Err       string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	Canceled  bool      `json:"canceled,omitempty"`
+	// Incomplete is Job.incomplete: a listing a failure cut short still
+	// offers its retry after a restart, and is not cleared as finished.
+	Incomplete bool `json:"incomplete,omitempty"`
 	// Limit is the job's own limits, which no configuration sets, so they
 	// are kept whatever it says.
 	Limit JobLimit    `json:"limit,omitzero"`

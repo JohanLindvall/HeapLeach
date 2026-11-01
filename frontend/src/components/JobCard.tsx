@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 import { memo, useCallback, useRef, useState } from 'react';
 import { formatBytes, formatEta, formatSpeed, hostLabel, percentOf, sourceURL } from '../format';
-import { isActive, isRetryable } from '../status';
+import { isActive, offersRetry } from '../status';
 import type { JobLimit, JobView } from '../types';
 import { CancelIcon, ChevronIcon, GaugeIcon, PlayIcon, RetryIcon, TrashIcon } from './Icons';
 import { ItemRow } from './ItemRow';
@@ -76,7 +76,9 @@ function JobCardView({
   // "… left" phrase should be absent rather than empty.
   const jobEta = job.sizeKnown ? formatEta(job.size - job.downloaded, job.speed) : null;
   const busy = isActive(job.status);
-  const retryable = isRetryable(job.status);
+  // A listing a failure cut short is finished but not whole: retrying it
+  // reads the source again for what was left out.
+  const retryable = offersRetry(job);
   // Held at no files at once. With nothing of it running, that is the job's
   // state, and where a phone, which shows only the first few tags, sees it.
   const paused = job.fileLimit === 0 && busy;

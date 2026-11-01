@@ -4,7 +4,194 @@ Notes on sites read through their players' own APIs, mostly as HLS with
 separate audio and subtitle renditions. How playlists are fetched and joined
 is in [media.md](../media.md); what is common to every extractor is in
 [extractors.md](../extractors.md). Where a note says a site's other pages go
-to yt-dlp, the extractor keeps a `Handoff` for them.
+to yt-dlp, the extractor keeps a `Handoff` for them, and its `Recognise`
+takes those pages by a path family of its own and the site's name (and a
+front end's script path where the site has one), after its native forms:
+recognition is by page, so a page that only the handoff reads still has to
+be claimed by something, or the fallback queues it as a file.
+
+Link forms (`Shape`) are kept narrower than recognition. A form that is
+every news site's too (a slug ending in a number, `/live`, `/direct`,
+`/chaine/…`, `/<year>/<id>-<slug>.html`) would make each navigation link
+of an ordinary article a probe, and one of them failing sinks the page's
+own media. So zdf follows only `/video/` and its programme sections, and
+a document on its metadata API's host (`/mediathekV2/document/<id>`,
+`zdfDocumentPath`), which it reads by the id alone; and recognises any
+slug-number page whose data configures its player. pbs follows a video
+(`/video/<slug>/`) and reads one with a view after the slug
+(`/video/<slug>/<extra>/`) as the same video, taken by the host claim
+rather than followed; rtbf
+follows only its `/media/` and `/emission/` ids and recognises its live
+pages by their page; francetv follows a video page filed under a section
+and a programme. Link forms read case-insensitively where the site's links
+vary in case (bbcsounds' `/Sounds/`, rtpplay's `/Play/P…`), and ruv's
+player path at any depth, as `ruvTarget` reads it.
+
+A link that names its media outright needs no page at all: radio-canada's
+media console (`/widgets/mediaconsole/<app>/<id>`), and srf's `?urn=` when
+the urn is the broadcasting group's own (`urn:srf|rts|rsi|rtr|swi:video|audio:…`,
+`srfOwnURN`), are recognised whatever the probe met. radio-canada's
+`/media-<id>`, a commoner form, also needs the site's name on the page or a
+probe that read nothing.
+
+The public broadcasters' APIs have nothing in common, so each keeps its own
+extractor, but they share `broadcast.go`. A programme a broadcaster declines
+(gone, live, DRM-protected, licensed elsewhere) is an `itemRefusal`
+reading `<site>: <title>: <reason>` (zdf's listed videos that offer no
+stream or are licensed elsewhere among them, `zdfNoStream` and
+`zdfBlocked`), so that a series refused in full says
+why once rather than once an episode; `resolveEach` fans a listing out,
+keeping each file beside its item in order with the refusals and the first
+other failure beside them, a refusal being the answer a caller can act on.
+`inTurn` asks one episode at a time, for nrk, whose player is asked for
+episodes one after another, and ruv, whose session remembers the first
+Iceland-only refusal and turns the rest of that scope away without asking.
+
+A broadcaster's paged listing walks through `walkPages` (see "Walking
+pages" in [extractors.md](../extractors.md)): the engine owns the page cap,
+the repeat check and what a later page that fails means. One whose
+episodes are resolved as it is listed walks through `walkEpisodes`, which
+stops at the request budget and says whether the listing went on (`more`)
+for `expandSeries` to note in its own words; drtv, orf, niconico, francetv
+and radio-canada, whose episodes are resolved when their transfers start,
+walk the whole listing to the page cap and cut it to the file cap after.
+A listing whose end is found by asking past it (rtve, which answers a page
+past the end with the first again, francetv's `toutes-les-videos`, rtpplay's
+seasons, yle's lists, abclisten's collections, srf's and ard's episode lists
+and radio-canada's programmes) accepts a page adding nothing as its end
+(`walkAccepts{repeated}`), with
+the failure note kept for a page that really failed and the page cap noted.
+A first page that renders nothing is no end for francetv's
+`toutes-les-videos` or rtpplay's seasons: it is passed over (`skip`) and
+page two asked for, since the listing may serve what the page did not
+render.
+Where a later page fails, the note says so ("partial — could not fetch next
+page", or "the listing broke off partway" for rtbf, radio-canada and yle,
+whose notes already said it that way, and for a drtv season that could not
+be read at all), and rtpplay names the cut in its title — only for the cap
+or a failed request, never for an end the walk accepted, since the title
+renames the job and its folder.
+
+A series resolved while it is listed goes through `expandSeries`, the one
+sequence ard, nrk, svtplay, srf, rtve, vrtmax, pbs, zdf, npostart, raiplay,
+ruv, rtpplay, bbcsounds, arte, abclisten, rtbf and yle share. It cuts the episodes to
+`config.MaxResolvedEpisodes`, or `config.MaxResolvedEpisodesStrand` (500)
+for nrk, svtplay, ruv, raiplay, abclisten and pbs, the bound they always had
+(`series.budget`; yle, rtbf's programmes and arte's collections
+pass `Options.episodeBudget`, which is that or the user's file cap where it is
+set higher, as those three followed the file cap before), because each
+episode costs the broadcaster's
+player a request or several before a byte moves (npostart passes
+`config.MaxResolvedEpisodesNPO`, its edge bearing about two hundred
+requests). The user's file cap is not that budget: a refused episode costs
+a request and yields no file, so asking only as many episodes as files are
+wanted would come back empty from a series whose first ones are refused.
+The registry holds the files to that cap afterwards ("partial — file
+limit"). A walk of the listing stops at the same budget
+and says whether the listing went on (`more`), or the caller passes the count
+the listing stated (`listed`); either way the note says what the cap left
+out ("1000 of 3000 episodes", "first 1000 episodes"), and a listing that ended
+by itself says nothing. Episodes that could not be read beside others that
+resolved are always counted ("2 left out: could not be read"); refusals are
+counted only where the broadcaster asks (`noteRefused`). Episodes are filed by their season's label through
+`sourceFolder` when more than one label is listed (`nestByLabel`), or always
+when the caller had several seasons (`split`, npostart's rule); the label is
+read after resolving, so pbs and svtplay, which learn a video's season or
+programme only from its player, fill it in as they resolve. When nothing
+resolves the error is `<site>: none of the <n> <noun> of <link> are
+playable: <reason>`, the reason being the first refusal, else the first
+failure less its site prefix, else the caller's own sentence. rtpplay names
+a capped season in its title instead, so it cuts before and passes the rest.
+A broadcaster whose note names the refusals (arte, the players of an rtbf
+page, a radio-canada article's media) sets `noteRefused`, and one that
+places them among notes of its own (rtbf's tabs, yle) passes `refused` to
+be handed the reasons. Either way `refusedNote` counts them by reason, in
+the order the reasons came up ("3 left out: <reason>; 1 left out:
+<reason>"), so that one refusal's reason never stands for all of them. npr, which resolves nothing per item, notes the audio a page passes over the same way, in the order its error for a page with nothing playable names the reasons (subscription, unavailable, live stream, no audio). Most callers end there, and `listSeries` is that ending: the
+result titled, its note the cap's followed by the caller's own, and the
+context's error rather than a partial result when it ended while the
+episodes resolved; npostart, pbs, svtplay, rtpplay, yle and rtbf's tabs,
+which do more with what resolved, call `expandSeries` themselves. A resolve that keeps an
+episode whose check failed for any other cause, for its transfer to try
+again, returns the lazy file rather than the error. npostart reads at most
+`config.MaxSeasonsNPO` seasons, each a request against the same budget, and
+its note says when it cut them.
+
+A programme's season lists are read through `readSeasons`, several at a
+time (npostart, vrtmax, rtve) or one after another (ard, arte), into one
+listing in the seasons' order, with whether any went on past its limit and
+the first walk's note. A season that cannot be read is left out rather than
+losing the others, and the note says "partial — unreadable seasons". arte
+fails the collection when its first entry is a season that cannot be read,
+nothing having been read to stand for the rest; ard falls back on the flat
+listing, which is complete, when no season read. yle reads its lists in
+turn sharing one budget and stops at the first that fails, saying "the
+listing broke off partway", so it walks them itself.
+
+The players an rtbf page embeds and the media a radio-canada article
+attaches go through `expandSeries` too (noun "players", "media"), so that
+when none plays the error gives the first reason one was refused for;
+rtbf's players are resolved in rounds up to the user's file cap
+(`series.files`), none past it. A listing of lazy episodes that costs only
+its pages (radio-canada's programmes) is read whole and then cut to the
+file cap, the note saying "N of M episodes".
+
+A lone episode lands with no folder above it, so its name carries the
+programme as well: `joinTitle(series, episode, says)`, which leaves the
+programme out where the episode's title already says it, and each
+broadcaster keeps its own test of that. nrk, npostart, pbs, ruv, vrtmax,
+abclisten and arte use `titleEqual`, a one-off programme being named after
+itself (vrtmax keeps the programme's spelling where the two differ only in
+case; ruv trims the episode's title first, and writes no colon between
+the two as its site does, a colon not surviving a filename); srf and
+raiplay use `titlePrefixed`, a daily strand's instalment or a drama's
+episode opening with the programme's name; ard, drtv, francetv,
+radio-canada, orf, rtbf and yle use `titleContains`, ard's episode titles
+spelling the series out anywhere in them. Changing a broadcaster's test
+renames its files, so a listing read again would no longer find what it
+saved. A resolve that answers with a file named only by its extension
+ends a lone programme through `soleFile(title, file)`, which names the
+file and the job alike (ard, srf, vrtmax, zdf, npostart). A listing of
+such episodes is `broadcastEpisode`s (id, the listing's name, season, and
+the programme where the listing names it per entry), filed by
+`broadcastEpisode.seasonOf`; `listedAs(play, fallback)` names each by the
+listing's name, else the player's, else the fallback of its id (srf,
+vrtmax, zdf, npostart). ard keeps its own resolve, its item's title
+winning over the listing's short one. A page title read by radio-canada and for rtbf's embedded players
+is `writtenTitle`, the `<title>` as written, rather than `firstTitleOf`,
+which folds the no-break spaces of French typography into plain ones.
+
+A rendition's place in a quality ladder is `rankIn` (`renditions.go`), each caller
+saying where an unknown name lands. A file's extension read off its link is
+`linkExt` (`html.go`), read off the link's last path element, lowercased,
+with the broadcaster's usual container as fallback. A
+probe of whether a host serves a file to this address at all is one
+`httpx.Client.StatusOnce`. abclisten and yle ask it through `refusesByte`,
+a request for the file's first byte that takes a 403 for a refusal and a
+probe that could not be made for none; zdf (a HEAD) and drtv ask it
+directly, each keeping its own answer for a probe that could not be made.
+A listing whose items are shown in one region alone is cut by
+`regionGate` (drtv, yle), which asks of those items until one can tell
+and lets that answer stand for the rest. An episode
+resolved at transfer time is `lazyEpisode`, one resolved now and read again
+at transfer time `refreshing` (`contract.go`, shared with the signed file
+hosts), and a listing's note is assembled from
+`cappedNote`, `leftOutNote`, `refusedNote` and `brokenNote`. Playlists become
+files and targets through `hlsMedia.file` and `hlsMedia.target` only; a
+broadcaster's playlist is resolved through `broadcastMedia`, whose failure
+reads `<site>: <name>: <cause>`. One whose resolution ends with the file
+uses `broadcastFile`, naming the extension policy where it decides names on
+disk: `segmentsExt` (svtplay, ard, rtve and rtp, whose manifest paths spell
+".mp4" over MPEG-TS segments) or `variantExt` (npostart, nrk and bbcsounds,
+which fall back to the variant playlist's path). One that labels or checks
+audio, adds subtitles or builds a Target (srf, raiplay, vrtmax, arte,
+francetv, orf, rtbf) keeps `broadcastMedia` and its own tail rather than
+hooks on a shared one. A plain progressive file is
+`progressiveFile`, its length left to the response. A refusal written in
+the body of a failed request (vrtmax's code, npostart's sentence,
+francetv's code, rtbf's play answer) is read with `refusalBody`, limited
+to the statuses that carry one. Reasons several broadcasters word alike
+are `refusedDRM`, `refusedLiveBroadcast` and `refusedLiveStream`.
 
 ## vimeo
 
@@ -26,6 +213,14 @@ Widevine DASH (`request.drm`), which yt-dlp cannot fetch either, and those are
 refused in those words. A `view` other than 1 is a private or
 password-protected video. An unlisted link's `<hash>` becomes `?h=`.
 
+A watch page is any of the forms a video is listed under: `/<id>`,
+`/<id>/<hash>`, a channel's, a group's, an album's or a showcase's video, a
+review link (`/<user>/review/<id>/<hash>`) and the uploader's manage page.
+It is recognised by the player it offers for embedding, or, named Vimeo
+without one (a sign-in wall, a page served without its meta tags), by the
+player page for its id carrying the configuration, asked once with a
+bounded request.
+
 ## arte
 
 arte reads ARTE's player API (`api.arte.tv/api/player/v2`), which answers
@@ -42,8 +237,10 @@ ARTE's words. A collection (`RC-…`) is the playlist endpoint, which names each
 programme and its title. A season nested in a series is read into a folder of
 its own. ARTE shows some programmes of a collection in fewer countries than
 others and the listing does not say which, so each programme's configuration
-is read as the collection is (`FanOut`). One not shown here is left out, the
-note giving the reason once (`arteRefused`); one that could not be read for
+is read as the collection is (`expandSeries`, a season's programmes filed
+under it). A season that cannot be read is left out, the note saying so,
+unless it is the collection's first entry. One not shown here is left out, the
+note counting the reasons (`itemRefusal`); one that could not be read for
 another cause is kept, for its transfer to try again. Their streams are
 resolved when the transfers start.
 
@@ -66,8 +263,14 @@ the stream: asked from elsewhere, the master redirects to a notice
 (`insert_geoprotection`) that would download as a short clip of something
 else. It is recognised and refused in words, and a series' Austria-only
 episodes are left out once one has shown it. A series (`/sendereihe/<id>`,
-`profile/<id>/episodes`) lists newest first and is filed oldest first.
-Anything else on orf.at, its radio and news pages, goes to yt-dlp.
+`profile/<id>/episodes`) lists newest first and is filed oldest first, so
+it is read whole, up to the page cap, before the file cap cuts it.
+The broadcaster's radio broadcasts (`/radio/<station>/<id>…`, a
+programme's `/radio/<station>/sendung/<id>…`, a station player's
+`/player/<date>/<id>`), podcasts
+(`/podcast/…`) and stories (`/stories/<id>`), named for it (a name beginning
+"ORF", or its youth station's), go to yt-dlp, as does an ORF ON page naming
+no episode or series.
 
 ## svtplay
 
@@ -117,7 +320,7 @@ Three things here are not what they look like:
   refuse.
 - What Yle shows in Finland alone (`region` "Finland") is handed a stream like
   any other, whatever `countryCode` says, and the CDN refuses it from
-  elsewhere with a 403, the MP3s as well as the masters (`refusedHere` asks an
+  elsewhere with a 403, the MP3s as well as the masters (`refusesByte` asks an
   MP3 for one byte). The player sends `countryCode` FI until it has located
   the viewer; since it changes nothing, it is not sent.
 - A series id asked of the preview answers with one of its episodes, so the
@@ -132,9 +335,12 @@ options (`path.season`), read in the site's order, each into a folder. A
 season's own page carries the same filter with itself as the default, and
 lists itself alone. A list is followed by the `count` it states and by what
 each page adds, not by the size asked for. Each episode is asked of the
-preview as the listing is read (`FanOut`): one Areena does not offer is left
-out with its reason once, as are the Finland-only ones once one of them has
-been refused here. An episode keeps the name it is listed under, the card's
+preview as the listing is read (`expandSeries`): one Areena does not offer is
+left out, counted by its reason, as are the Finland-only ones once one of them
+has been refused here. That probe is made after the previews, of the first
+Finland-only episode in the listing's order, so it is asked once and of the
+same episode however the previews were scheduled (`regionGate`, which drtv
+shares). An episode keeps the name it is listed under, the card's
 title with its number, so that a listing read again finds what was saved:
 `finishedLocked` keys on the name an item finished with, the `.ts`, not the
 MP4 it was remuxed into.
@@ -166,12 +372,19 @@ the programme and names no language, so the track is left unnamed.
 
 What DR shows in Denmark alone (`IsGeoRestricted`) its CDN refuses from
 elsewhere with a 403, sent as an HTML page under a playlist's content type;
-the API does not refuse it. DRM is marked per version (`drm`: `PlayReady`). A
+the API does not refuse it. A listing asks for the masters of its
+Denmark-only entries in order, at most `config.GeoProbesDR` of them, until
+one answers, and leaves them all out when that one is refused
+(`regionGate`). DRM is marked per version (`drm`: `PlayReady`). A
 show lists its seasons and a season its episodes (`/children`, 200 a page,
 `paging.total` counting pages). Each entry carries its `contextualTitle`, the
 episode as its season names it, number and all, and its geo flag, so a listing
 needs no request per episode. A season whose title is only the show's is filed
-as "Sæson N". Anything else on dr.dk goes to yt-dlp.
+as "Sæson N". A DR TV page naming no item, and an audio page (`/lyd/…`,
+`/radio/…`) served by the broadcaster's audio front end (`/lyd/_next/`)
+under its name, go to yt-dlp. A news article (`/nyheder/…`) does not:
+yt-dlp answers those "Unsupported URL", and the generic fallback reads the
+media the article links (checked against the recorded corpus).
 
 ## rtbf
 
@@ -203,8 +416,9 @@ session.
 A programme's episodes are the tabs of its `TAB_LIST` (a season or a year,
 each a folder), each list paged by its own `links.next`, 50 at most a page.
 The entries say nothing of who may play them, so each is asked of the play API
-as the listing is read (`FanOut`), and what cannot be had is left out with
-each reason counted once. Any other rtbf.be page, an article say, is read for
+as the listing is read (`expandSeries`, labelled by tab); the walk stops at
+that budget, the note saying the programme went on, and what cannot be
+had is left out with each reason counted once. Any other rtbf.be page, an article say, is read for
 the players it embeds (`data-asset-id`, embed links, escaped ones in script
 included).
 
@@ -238,7 +452,10 @@ number the link ends in. A video page's own `<title>` is the site's name
 alone, so pages are named by `og:title`, less its "en replay". A programme's
 page and its `toutes-les-videos` pages (`?page=N`) list cards with the video's
 id and `content_format`; whole programmes (`integrale`) are kept and clips
-left out where both are listed. Anything else on france.tv goes to yt-dlp.
+left out where both are listed. A page past the end lists nothing new, which
+ends the walk quietly. Any other `.html` page of the site's app (its
+`/_next/static/` scripts, the site's name), such as a live channel's, goes to
+yt-dlp.
 
 ## radio-canada
 
@@ -259,9 +476,9 @@ media is its player's item for that episode (`playlistItemId`, whose
 `globalId2.id` is the episode, `mediaId`). An article (`NewstoryId`) plays the
 media of its attachments (`attachment.playableContent.media`): one is named
 after the article, several each by the API under the article's title. The
-media console's older link shapes are read too
+media console's older link shapes are read too, from the link alone
 (`/widgets/mediaconsole/<app>/<id>` and `/media-<id>`). An article with no
-media, and any page with none of its own, goes to yt-dlp.
+media, and any page of the site's with none of its own, goes to yt-dlp.
 
 Some media are signed (`hdnea` on the master for two minutes, then an `hdntl`
 path token and `aka_me_session` on every segment for a day; a segment without
@@ -282,8 +499,9 @@ leaves such a track out).
 
 An OHdio programme's page lists its episodes as `EpisodeListItem` entries with
 their media ids, fifty a page, newest first. The next pages are
-`?pageNumber=N`, which the site's own loader reads off the URL (1 to 200;
-`?page=` is ignored), and `pagination.totalCount` says when to stop. A
+`?pageNumber=N`, which the site's own loader reads off the URL (1 to 200,
+the page cap, `config.MaxAlbumPages`; `?page=` is ignored), and
+`pagination.totalCount` says when to stop. A
 programme with seasons shows its latest alone; each season is a path of its
 own (`/saison-N`), linked from the page's season selector, with
 `numberOfSeasons` in its structured data. So every season is read, every page
@@ -297,7 +515,9 @@ video in the JSON of a `<meta name="server-response">`: the qualities on offer
 (`media.domand`, video and audio apart, each marked available or not without
 an account), a key to ask with (`accessRightKey`), and the player's track id.
 POSTed one video and one audio quality, the access-rights API mints an HLS
-master for the pair and sets a `domand_bid` cookie. The segments sit on signed
+master for the pair and sets a `domand_bid` cookie. The grant is POSTed with
+`NewRequest`/`Do` for that cookie and read whole with `httpx.ReadBody`, so an
+answer past the limit is refused rather than read as its prefix. The segments sit on signed
 links anyone can fetch, but the AES-128 key answers 403 without that cookie,
 so it rides in the transfer's headers rather than being left to the jar. The
 audio is a rendition of its own, and the parts are fragmented MP4 under
@@ -314,4 +534,12 @@ Mylists (`/v2/mylists`), series (`/v2/series`) and a user's uploads
 (`/v3/users/<id>/videos`) list each video's id and title, so a listing costs a
 request a page and no watch page until a transfer starts. Entries gone from
 the site, or paid, are left out and counted in the note apart from what the
-cap cut. Any other page (tags, rankings, channels) goes to yt-dlp.
+cap cut. Any other page carrying the site's description or web client
+(tags, rankings) goes to yt-dlp, and so does a channel, which is served by
+the channel front end (`/nicochannel/` scripts) under the channel portal's
+name.
+
+Live watch pages use the live client's `embedded-data` program description
+and `/relive/program-watch/scripts/` bundle for recognition. Its program id
+must match the URL. An `lv` id is handed to yt-dlp rather than sent to the
+ordinary watch API, which only reads uploaded videos.

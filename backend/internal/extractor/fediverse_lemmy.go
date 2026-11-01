@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -10,50 +11,48 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // The Lemmy dialect of the fediverse extractor, which shares nothing with
-// the Mastodon client API. Split from fediverse.go; the shared discovery and
-// URL shapes stay there.
+// the Mastodon client API. The shared discovery, URL shapes and timeline
+// engine stay in fediverse.go.
 
-// --------------------------------------------------------------------- lemmy
+// fediLemmy is the link aggregator's API: a community, or a person's
+// submissions, paged by number.
+var fediLemmy = fediDialect{
+	stride: fediLemmyPageSize, communities: true,
+	post: lemmySingle, owner: lemmyOwner, page: lemmyTimeline,
+	empty: "%s has no image or video submissions among its most recent %d posts",
+}
 
 // lemmyAPIs are the API roots to try, in the order a probe should ask.
 //
 // v3 comes first because it is what every instance in the wild answers today;
 // v4 arrives with Lemmy 1.0. Which one an instance speaks is not something to
 // assume in either direction, so it is discovered — once per job, on the
-// first request, rather than as a request of its own.
+// first request, rather than as a request of its own — and kept on the
+// session, so the probe is not repeated for every page of a listing.
 var lemmyAPIs = []string{"/api/v3", "/api/v4"}
 
-// lemmyClient remembers which version answered, so the probe is not repeated
-// for every page of a listing.
-type lemmyClient struct {
-	f    *Fediverse
-	root string
-	api  string
-}
-
-// get performs one API call, resolving the version on the way if it is not
-// settled yet.
+// lemmyGet performs one API call, resolving the version on the way if it is
+// not settled yet.
 //
 // A 404 is what the wrong version answers — and, awkwardly, also what an
 // unknown community answers. That ambiguity is why a total failure reports
 // the *first* version's error rather than the last: on every instance
 // deployed today that is the one whose message names what was really missing.
-func (l *lemmyClient) get(ctx context.Context, route string, query url.Values, out any) error {
-	if l.api != "" {
-		return l.f.client.GetJSON(ctx, l.endpoint(l.api, route, query), fediHeaders(l.root), out)
+func lemmyGet(ctx context.Context, s *fediSession, route string, query url.Values, out any) error {
+	endpoint := func(api string) string { return s.root + api + route + "?" + query.Encode() }
+	if s.api != "" {
+		return s.client.GetJSON(ctx, endpoint(s.api), fediHeaders(s.root), out)
 	}
 
 	var first error
 	for _, api := range lemmyAPIs {
-		err := l.f.client.GetJSON(ctx, l.endpoint(api, route, query), fediHeaders(l.root), out)
+		err := s.client.GetJSON(ctx, endpoint(api), fediHeaders(s.root), out)
 		if err == nil {
-			l.api = api
+			s.api = api
 			return nil
 		}
 		if first == nil {
@@ -64,10 +63,6 @@ func (l *lemmyClient) get(ctx context.Context, route string, query url.Values, o
 		}
 	}
 	return first
-}
-
-func (l *lemmyClient) endpoint(api, route string, query url.Values) string {
-	return l.root + api + route + "?" + query.Encode()
 }
 
 // lemmyPost is one submission.
@@ -92,86 +87,60 @@ type lemmyPostView struct {
 	Post lemmyPost `json:"post"`
 }
 
-// lemmy resolves a community, a person's submissions, or a single post.
-func (f *Fediverse) lemmy(ctx context.Context, u *url.URL, t *fediTarget) (*Result, error) {
-	client := &lemmyClient{f: f, root: util.Origin(u)}
-
-	if t.kind == fediPost {
-		var payload struct {
-			PostView lemmyPostView `json:"post_view"`
-		}
-		if err := client.get(ctx, "/post", url.Values{"id": {t.id}}, &payload); err != nil {
-			return nil, fmt.Errorf("fediverse: read post %s: %w", t.id, err)
-		}
-		files := lemmyFiles([]lemmyPostView{payload.PostView})
-		if len(files) == 0 {
-			return nil, fmt.Errorf("fediverse: post %s links to no media — it is a text post, "+
-				"or a link to a page rather than to a file", t.id)
-		}
-		title := util.FirstNonEmpty(payload.PostView.Post.Name, "post "+t.id)
-		return &Result{Title: folderName(title), Files: files}, nil
+// lemmySingle reads a single post.
+func lemmySingle(ctx context.Context, s *fediSession) (*Result, error) {
+	var payload struct {
+		PostView lemmyPostView `json:"post_view"`
 	}
-
-	route, key := "/post/list", "community_name"
-	title := "!" + fediHandle(t.handle, u.Hostname())
-	if t.kind == fediAccount {
-		// A person's page is the same listing keyed differently. The response
-		// carries their comments as well, which hold nothing to download.
-		route, key = "/user", "username"
-		title = "@" + fediHandle(t.handle, u.Hostname())
+	if err := lemmyGet(ctx, s, "/post", url.Values{"id": {s.t.id}}, &payload); err != nil {
+		return nil, fmt.Errorf("fediverse: read post %s: %w", s.t.id, err)
 	}
-
-	var views []lemmyPostView
-	for page := 1; page <= config.MaxTimelinePages; page++ {
-		query := url.Values{}
-		query.Set(key, t.handle)
-		query.Set("limit", strconv.Itoa(fediLemmyPageSize))
-		query.Set("page", strconv.Itoa(page))
-		query.Set("sort", "New")
-
-		var payload struct {
-			Posts []lemmyPostView `json:"posts"`
-		}
-		if err := client.get(ctx, route, query, &payload); err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("fediverse: read %s: %w", title, err)
-			}
-			break
-		}
-		// Lemmy 1.0 replaces page numbers with a cursor, and an instance that
-		// ignores a parameter it no longer knows would hand back the first
-		// page for ever. Stopping once a page adds nothing new is what makes
-		// that one wasted request instead of an endless loop.
-		before := len(views)
-		lemmyAppend(&views, payload.Posts)
-		if len(views) == before || len(payload.Posts) < fediLemmyPageSize {
-			break
-		}
-	}
-
-	files := lemmyFiles(views)
+	files := fediFiles(lemmyEntries([]lemmyPostView{payload.PostView}))
 	if len(files) == 0 {
-		return nil, fmt.Errorf("fediverse: %s has no image or video submissions among its most "+
-			"recent %d posts", title, config.MaxTimelinePages*fediLemmyPageSize)
+		return nil, fmt.Errorf("fediverse: post %s links to no media — it is a text post, "+
+			"or a link to a page rather than to a file", s.t.id)
 	}
-	return &Result{Title: title, Files: files}, nil
+	title := cmp.Or(payload.PostView.Post.Name, "post "+s.t.id)
+	return &Result{Title: folderName(title), Files: files}, nil
 }
 
-// lemmyAppend adds the posts of a page that are not held already.
-func lemmyAppend(views *[]lemmyPostView, page []lemmyPostView) {
-	seen := make(map[int64]bool, len(*views))
-	for _, view := range *views {
-		seen[view.Post.ID] = true
+// lemmyOwner names a community, or a person, by its handle: the listing is
+// asked by name, so there is no id to look up.
+func lemmyOwner(_ context.Context, s *fediSession) (string, string, error) {
+	sigil := "!"
+	if s.t.kind == fediAccount {
+		sigil = "@"
 	}
-	for _, view := range page {
-		if !seen[view.Post.ID] {
-			seen[view.Post.ID] = true
-			*views = append(*views, view)
-		}
-	}
+	return s.t.handle, sigil + fediHandle(s.t.handle, s.host()), nil
 }
 
-// lemmyFiles keeps the submissions that are a file rather than a page.
+// lemmyTimeline reads page n of a community's posts, or of a person's: the same
+// listing keyed differently, whose response carries their comments as well,
+// which hold nothing to download. Lemmy 1.0 replaces page numbers with a
+// cursor; see the engine for how an instance ignoring them ends the walk.
+// Most posts may be text, which is why the engine counts the cap in files.
+func lemmyTimeline(ctx context.Context, s *fediSession, _ string, n int) ([]fediEntry, error) {
+	route, key := "/post/list", "community_name"
+	if s.t.kind == fediAccount {
+		route, key = "/user", "username"
+	}
+	query := url.Values{}
+	query.Set(key, s.owner)
+	query.Set("limit", strconv.Itoa(fediLemmyPageSize))
+	query.Set("page", strconv.Itoa(n+1))
+	query.Set("sort", "New")
+
+	var payload struct {
+		Posts []lemmyPostView `json:"posts"`
+	}
+	if err := lemmyGet(ctx, s, route, query, &payload); err != nil {
+		return nil, fmt.Errorf("fediverse: read %s: %w", s.title, err)
+	}
+	return lemmyEntries(payload.Posts), nil
+}
+
+// lemmyEntries reads submissions as the posts the engine walks, keeping as
+// a file the submission that is a file rather than a page.
 //
 // A post's url is whatever was submitted: for an image post it is the pict-rs
 // object — often on another instance, since a federated community carries
@@ -179,31 +148,21 @@ func lemmyAppend(views *[]lemmyPostView, page []lemmyPostView) {
 // would save an HTML page under a picture's name. The saved name pairs the
 // post id with its title, because pict-rs names everything after a UUID and
 // two posts can share a title.
-func lemmyFiles(views []lemmyPostView) []File {
-	seen := make(map[string]bool)
-	var files []File
-
+func lemmyEntries(views []lemmyPostView) []fediEntry {
+	entries := make([]fediEntry, 0, len(views))
 	for _, view := range views {
 		post := view.Post
-		if post.URL == "" || post.Deleted || post.Removed || seen[post.URL] {
-			continue
+		entry := fediEntry{id: strconv.FormatInt(post.ID, 10)}
+		if post.URL != "" && !post.Deleted && !post.Removed && lemmyIsMedia(&post) {
+			name := entry.id
+			if title := folderName(post.Name); title != "" {
+				name += " " + title
+			}
+			entry.files = []File{{Name: name + fediExt(post.URL), URL: post.URL, Size: -1}}
 		}
-		if !lemmyIsMedia(&post) {
-			continue
-		}
-		seen[post.URL] = true
-
-		name := strconv.FormatInt(post.ID, 10)
-		if title := folderName(post.Name); title != "" {
-			name += " " + title
-		}
-		files = append(files, File{
-			Name: name + fediExt(post.URL),
-			URL:  post.URL,
-			Size: -1,
-		})
+		entries = append(entries, entry)
 	}
-	return files
+	return entries
 }
 
 // lemmyIsMedia reports whether a submission points at a file worth fetching.

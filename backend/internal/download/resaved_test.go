@@ -17,14 +17,13 @@ import (
 // endpoint does: nothing before the bytes themselves says how long it is.
 func unsizedServer(t *testing.T, body func() []byte, fetched *atomic.Int32) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")
 		fetched.Add(1)
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush() // headers out before the body: no length
 		_, _ = w.Write(body())
 	}))
-	t.Cleanup(srv.Close)
 	return srv
 }
 
@@ -68,8 +67,10 @@ func TestARestartDoesNotFetchAgainWhatTheJobSaved(t *testing.T) {
 			if tc.recorded != 0 {
 				recorded = tc.recorded
 			}
-			m, dir := newTestManager(t)
-			m.SetPaused(true)
+			m := testManager(t, nil)
+			m.Start()
+			dir := m.DownloadDir()
+			_ = m.ApplySettings(Settings{Paused: new(true)})
 			if tc.onDisk {
 				if err := os.WriteFile(filepath.Join(dir, "photo.jpg"), photo, 0o644); err != nil {
 					t.Fatal(err)
@@ -83,12 +84,11 @@ func TestARestartDoesNotFetchAgainWhatTheJobSaved(t *testing.T) {
 					{ID: "saved", Name: "photo.jpg", Status: StatusDone, Path: "photo.jpg", Size: recorded},
 				},
 			}
-			m.jobs[job.ID] = job
-			m.order = append(m.order, job.ID)
+			m.queueJobLocked(job)
 			m.mu.Unlock()
 
-			m.SetPaused(false)
-			if !waitForCond(20*time.Second, func() bool { return itemStatusesOf(m, "restored", StatusDone) == 1 }) {
+			_ = m.ApplySettings(Settings{Paused: new(false)})
+			if !waitForCond(20*time.Second, func() bool { return countStatus(m, "restored", StatusDone) == 1 }) {
 				t.Fatal("the re-read job did not finish")
 			}
 			m.mu.Lock()
@@ -150,8 +150,10 @@ func TestARestartRecognisesAFileItsResolverRenamed(t *testing.T) {
 	photo := []byte("jpeg bytes of a photo its resolver named")
 	var fetched atomic.Int32
 	srv := unsizedServer(t, func() []byte { return photo }, &fetched)
-	m, dir := newTestManager(t)
-	m.SetPaused(true)
+	m := testManager(t, nil)
+	m.Start()
+	dir := m.DownloadDir()
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	if err := os.WriteFile(filepath.Join(dir, "A Photo Named By Its Resolver.jpg"), photo, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -164,12 +166,11 @@ func TestARestartRecognisesAFileItsResolverRenamed(t *testing.T) {
 			Path: "A Photo Named By Its Resolver.jpg", Size: int64(len(photo)),
 		}},
 	}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
+	m.queueJobLocked(job)
 	m.mu.Unlock()
 
-	m.SetPaused(false)
-	if !waitForCond(20*time.Second, func() bool { return itemStatusesOf(m, "restored", StatusDone) == 1 }) {
+	_ = m.ApplySettings(Settings{Paused: new(false)})
+	if !waitForCond(20*time.Second, func() bool { return countStatus(m, "restored", StatusDone) == 1 }) {
 		t.Fatal("the re-read job did not finish")
 	}
 	if got := fetched.Load(); got != 0 {

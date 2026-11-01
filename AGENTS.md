@@ -126,9 +126,43 @@ not care whose host a path belongs to; real-world correctness belongs in the
 live tests. Generate the expected value with the implementation once, then pin
 it.
 
-`.gitignore` carries `*live_test.go` to keep the live tests out, which makes
-them the place for a URL or filename taken from a real page. Before
-committing, check that nothing new slipped in:
+**Standing rule: live tests and real URLs live in the private
+[`hl-priv`](https://github.com/JohanLindvall/hl-priv) repository, and only
+there.** That covers every `*live_test.go`, and every list or note of URLs or
+filenames taken from real pages (verification corpora included). Clone it
+beside this checkout and run its `link.sh`, which symlinks the live tests into
+place; `.gitignore` carries `*live_test.go`, so the links are never committed
+here. Create a new live test in `hl-priv` and link it, rather than writing it
+into this checkout, and commit it there.
+
+**Standing rule: retain fetched corpus pages and metadata responses in
+`hl-priv`, and run the real extraction code against those saved responses.**
+Reuse the recorded pages, API responses and metadata-helper outputs for
+routine parser checks; offline replay must fail on a missing recording
+rather than silently contact the network. Fetch missing responses or refresh
+recordings explicitly when investigating site changes. Preserve redirects
+and request identity so a replay exercises recognition and extraction as a
+live request would. Store no media bodies, and do not invoke file resolvers
+or transfers during parsing checks. The private corpus owns these copies;
+public regression fixtures remain synthetic. See the replay commands in
+`hl-priv/README.md` and [extractors.md](docs/agents/extractors.md).
+
+**Standing rule: every test or fix that touches live data records the
+responses it received in `hl-priv`.** That covers live tests, ad hoc
+investigations, reproductions of a reported failure, and requests made
+through a proxy or a leased route, not only corpus runs. Commit the
+recorded pages, API responses, redirects and metadata-helper output to
+`hl-priv` with the change they informed, so a later reviewer can replay the
+same evidence offline and verify the fix without asking the site again.
+Keep the request identity a replay needs — method, URL, body,
+representation headers, and for a routed request which route or proxy kind
+answered — but never cookies, credentials, signed tokens tied to an
+account, or the proxy's address and login. Media bodies are still not
+recorded. A live check whose responses were not recorded is not evidence a
+reviewer can rely on: record it, or say plainly that it was not.
+
+Before committing here, check that
+nothing slipped in:
 
 ```bash
 git ls-files -z | xargs -0 grep -nE 'gofile\.io/d/[A-Za-z0-9]|thisvid\.com/videos/|youtube\.com/watch\?v=|mega\.nz/(file|folder)/[A-Za-z0-9_-]{4}'
@@ -172,8 +206,8 @@ editing either side:
 
 - **Every tunable constant lives in `internal/config/limits.go`**, and HTTP
   header names and common values in `internal/httpx/headers.go`
-  (`httpx.Header`, `httpx.Referer`, `httpx.RefererOrigin`). Add new ones there
-  rather than scattering literals. Shared dependency-free helpers belong in
+  (`httpx.Header`, `httpx.Referer`, `httpx.RefererOrigin`,
+  `httpx.SiteOrigin`). Add new ones there rather than scattering literals. Shared dependency-free helpers belong in
   `internal/util`.
 - **Byte counts are SI and read the same everywhere.** `cli.formatBytes`
   mirrors `frontend/src/format.ts`, and their test tables
@@ -182,7 +216,7 @@ editing either side:
   terminal and "1.6 GB" in the browser. Change them together or not at all.
 - **Everything the event stream carries is rendered somewhere.** A field the
   UI stops reading comes out of the payload rather than being left to
-  accumulate.
+  accumulate. A job's `createdAt` is the one exception: API clients read it.
 
 ## Area guides
 

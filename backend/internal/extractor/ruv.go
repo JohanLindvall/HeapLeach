@@ -3,16 +3,16 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -52,7 +52,7 @@ import (
 // extraction, so a wholly Iceland-only series costs one failed request
 // rather than one per episode.
 type RUV struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -68,9 +68,6 @@ const (
 
 	// ruvGlobalScope is the one scope that is not restricted to Iceland.
 	ruvGlobalScope = "Global"
-
-	// ruvMaxEpisodes bounds how many episodes one programme URL expands to.
-	ruvMaxEpisodes = 500
 
 	// ruvPlaylistExt marks an adaptive manifest. Everything else RÚV names
 	// is a file that can be fetched whole.
@@ -95,12 +92,21 @@ const ruvProgramQuery = `query getEpisode($programID: Int!) {
 }`
 
 // NewRUV builds the RÚV extractor.
-func NewRUV(client *httpx.Client) *RUV { return &RUV{hostSet: hostSet{"ruv.is"}, client: client} }
+func NewRUV(client *httpx.Client) *RUV {
+	return &RUV{client: client, about: about{name: "ruv", shape: ruvShape,
+		recognises: "programmes and episodes (`/<station>/spila/<slug>/<id>`) of RÚV's player, whose page configures its GraphQL endpoint (`window._GQL_`)"}}
+}
 
-func (r *RUV) Name() string { return "ruv" }
+// ruvShape is a playable link: /<station>/spila/<slug>/<programme id>[/<episode>],
+// the player's path at any depth, as ruvTarget reads it.
+var ruvShape = pathShape(`^/(?:[a-z]+/)*` + ruvPlayPath + `/[^/]+/[0-9]+(?:/[^/]+)?/?$`)
 
-// Match takes ruv.is and everything under it. The stations are separate
-// paths rather than separate hosts, and the API lives on a subdomain.
+// Recognise takes a playable link served by the player, whose page
+// configures the GraphQL endpoint (window._GQL_) this reads the programme
+// from.
+func (r *RUV) Recognise(_ context.Context, p *Page) bool {
+	return ruvShape(p.Final) && p.Has("window._GQL_") && p.Named("Spilari RÚV")
+}
 
 // Extract handles one episode or a whole programme, which are the same
 // request: the listing already carries every stream URL, so a link naming an
@@ -154,46 +160,45 @@ func (s *ruvSession) single(ctx context.Context, prog *ruvProgram, episodeID str
 	// A lone file lands in the download directory with no folder to say what
 	// it belongs to, so its name carries the programme as well: RÚV episode
 	// titles are routinely no more than "Þáttur 1 af 6".
-	title := ruvJoin(prog.name(), prog.Episodes[i].Title)
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(joinTitle(prog.name(), strings.TrimSpace(prog.Episodes[i].Title), titleEqual), file), nil
 }
 
 // whole expands a programme into one file per episode.
 func (s *ruvSession) whole(ctx context.Context, prog *ruvProgram, u *url.URL) (*Result, error) {
-	episodes := prog.ordered()
-	if len(episodes) > ruvMaxEpisodes {
-		// The cap keeps the head of the list as RÚV orders it, which is what
-		// makes it the right end to keep: the only programmes long enough to
-		// reach it are the daily strands, and those are the ones the player
-		// leaves newest-first.
-		episodes = episodes[:ruvMaxEpisodes]
-	}
+	all := prog.ordered()
+	// The cap keeps the head of the list as RÚV orders it, which is what
+	// makes it the right end to keep: the only programmes long enough to
+	// reach it are the daily strands, and those are the ones the player
+	// leaves newest-first. Names are told apart within what is kept.
+	episodes := all[:min(len(all), config.MaxResolvedEpisodesStrand)]
 	names := ruvNames(episodes)
 
-	result := &Result{Title: prog.name()}
-	var refused string
+	type named struct {
+		ep   ruvEpisode
+		name string
+	}
+	listed := make([]named, len(episodes))
 	for i, ep := range episodes {
-		file, err := s.file(ctx, ep)
-		if err != nil {
-			// One Iceland-only or empty episode must not sink the rest. The
-			// reason is kept, though: when every episode is refused they are
-			// refused for the same reason, and saying it once is the whole
-			// point of recognising it.
-			if refusal, ok := errors.AsType[*ruvRefused](err); ok && refused == "" {
-				refused = refusal.message
+		listed[i] = named{ep, names[i]}
+	}
+	// One Iceland-only or empty episode must not sink the rest. The reasons
+	// are kept, though: when every episode is refused they are refused for
+	// the same reason, and saying it once is the whole point of recognising
+	// it. They are asked in turn, because the session remembers the first
+	// Iceland-only refusal and turns the rest of that scope away unasked.
+	return listSeries(ctx, prog.name(), series[named]{
+		site: "ruv", noun: "episodes", link: u.Redacted(),
+		items: listed, listed: len(all), inTurn: true, budget: config.MaxResolvedEpisodesStrand,
+		resolve: func(ctx context.Context, l named) (*File, error) {
+			file, err := s.file(ctx, l.ep)
+			if err != nil {
+				return nil, err
 			}
-			continue
-		}
-		file.Name = names[i] + file.Name
-		result.Files = append(result.Files, *file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("ruv: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(),
-			util.FirstNonEmpty(refused, "the programme lists them but none carries a stream"))
-	}
-	return result, nil
+			file.Name = l.name + file.Name
+			return file, nil
+		},
+		unplayable: "the programme lists them but none carries a stream",
+	})
 }
 
 // file resolves one episode to something downloadable. The returned File
@@ -209,51 +214,35 @@ func (s *ruvSession) file(ctx context.Context, ep ruvEpisode) (*File, error) {
 	// file has been turned away, the rest need not be asked for.
 	domestic := !strings.EqualFold(ep.Scope, ruvGlobalScope)
 	if domestic && s.outsideIceland {
-		return nil, &ruvRefused{episode: ep.label(), message: ruvDomesticRefusal}
+		return nil, &itemRefusal{"ruv", ep.label(), ruvDomesticRefusal}
 	}
 
 	headers := httpx.Referer(ruvRoot + "/")
-	if ext := ruvExtension(ep.File); ext != ruvPlaylistExt {
+	if ext := linkExt(ep.File, ""); ext != ruvPlaylistExt {
 		// Radio: a plain file with a length and byte ranges. There is no
 		// size to declare here — the schema publishes duration in seconds
 		// and no byte count anywhere — so the transfer reads Content-Length
 		// itself, which is exact where a rounded figure would poison the
 		// skip check.
-		return &File{
-			Name:    ext,
-			URL:     ep.File,
-			Size:    -1,
-			Headers: headers,
-		}, nil
+		return progressiveFile(ep.File, ext, headers), nil
 	}
 
 	media, err := resolveMediaPlaylist(ctx, s.client, ep.File, headers)
 	if err != nil {
 		if domestic && httpx.HasStatus(err, http.StatusForbidden) {
 			s.outsideIceland = true
-			return nil, &ruvRefused{episode: ep.label(), message: ruvDomesticRefusal}
+			return nil, &itemRefusal{"ruv", ep.label(), ruvDomesticRefusal}
 		}
 		return nil, fmt.Errorf("ruv: %s: %w", ep.label(), err)
 	}
-	return &File{
-		Name:       media.extensionOr(playlistExtension(media.Variant)),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // programme fetches a listing, which is the only request this host needs.
 func (r *RUV) programme(ctx context.Context, id int) (*ruvProgram, error) {
-	body := map[string]any{
-		"query":     ruvProgramQuery,
-		"variables": map[string]int{"programID": id},
-	}
 	var out ruvResponse
-	if err := r.client.PostJSON(ctx, ruvGraphQL, httpx.Referer(ruvRoot+"/"), body, &out); err != nil {
+	if err := postGraphQL(ctx, r.client, ruvGraphQL, httpx.Referer(ruvRoot+"/"), ruvProgramQuery,
+		map[string]int{"programID": id}, &out); err != nil {
 		return nil, fmt.Errorf("ruv: programme %d: %w", id, err)
 	}
 	return out.program(id)
@@ -328,7 +317,7 @@ func ruvNames(episodes []ruvEpisode) []string {
 	names := make([]string, len(episodes))
 	count := make(map[string]int, len(episodes))
 	for i, ep := range episodes {
-		names[i] = util.FirstNonEmpty(strings.TrimSpace(ep.Title), ep.ID)
+		names[i] = cmp.Or(strings.TrimSpace(ep.Title), ep.ID)
 		count[names[i]]++
 	}
 	for i, ep := range episodes {
@@ -339,33 +328,6 @@ func ruvNames(episodes []ruvEpisode) []string {
 	return names
 }
 
-// ruvJoin names one episode by its programme and its own title together.
-//
-// RÚV writes that pair as "Programme: Episode" throughout its own site, and
-// this does not: a colon is one of the characters a filename cannot keep, so
-// it would arrive on disk as an underscore. The equality case is not
-// hypothetical either — a one-off programme is routinely given a single
-// episode named after itself.
-func ruvJoin(programme, episode string) string {
-	episode = strings.TrimSpace(episode)
-	switch {
-	case episode == "":
-		return programme
-	case programme == "" || strings.EqualFold(programme, episode):
-		return episode
-	}
-	return programme + " - " + episode
-}
-
-// ruvExtension reads the container off an episode's file URL: ".m3u8" for
-// television, ".mp3" for radio.
-func ruvExtension(file string) string {
-	if u, err := ParseURL(file); err == nil {
-		return strings.ToLower(path.Ext(u.Path))
-	}
-	return strings.ToLower(path.Ext(file))
-}
-
 // ruvDomesticRefusal is what a Domestic scope turns into once the CDN has
 // confirmed it. RÚV publishes a category rather than a sentence — there is no
 // endUserMessage to pass through the way NRK offers one — so the words are
@@ -373,16 +335,6 @@ func ruvExtension(file string) string {
 // licensed it and that the refusal was of this address rather than of the
 // request.
 const ruvDomesticRefusal = "RÚV licenses this for Iceland only, and its CDN turned this address away"
-
-// ruvRefused is an episode declined for where the caller is. It is a type
-// rather than a message so that expanding a whole programme can report the
-// reason once instead of once per episode.
-type ruvRefused struct {
-	episode string
-	message string
-}
-
-func (e *ruvRefused) Error() string { return "ruv: " + e.episode + ": " + e.message }
 
 // ruvProgram is a programme and every episode of it, which is the whole of
 // what this host is asked for.
@@ -398,7 +350,7 @@ type ruvProgram struct {
 
 // name is what the job and its folder are called.
 func (p *ruvProgram) name() string {
-	return util.FirstNonEmpty(strings.TrimSpace(p.Title), p.Slug, strconv.Itoa(p.ID))
+	return cmp.Or(strings.TrimSpace(p.Title), p.Slug, strconv.Itoa(p.ID))
 }
 
 // ordered puts the episodes in the order RÚV's own player shows them.
@@ -430,5 +382,5 @@ type ruvEpisode struct {
 
 // label names an episode in an error message.
 func (e ruvEpisode) label() string {
-	return util.FirstNonEmpty(strings.TrimSpace(e.Title), e.ID, "an untitled episode")
+	return cmp.Or(strings.TrimSpace(e.Title), e.ID, "an untitled episode")
 }

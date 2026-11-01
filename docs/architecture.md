@@ -25,8 +25,8 @@ flowchart TD
     paste(["a link — pasted into the UI, or given on the command line"])
 
     subgraph resolve["extractor — what is behind it"]
-        claim{"a registered host claims it?"}
-        host["that host's extractor"]
+        claim{"an extractor recognises the page?"}
+        host["that extractor"]
         direct["Direct — the catch-all, after sniffing for a player, a manifest or a directory index"]
         res["Result: one File per download<br>URL · Resolve · Segments · External · Cipher"]
         claim -- yes --> host --> res

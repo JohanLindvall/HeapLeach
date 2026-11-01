@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
 )
@@ -116,12 +117,8 @@ func (t *browserTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	t.fellBack[host] = true
 	t.mu.Unlock()
 
-	if req.GetBody != nil {
-		body, bodyErr := req.GetBody()
-		if bodyErr != nil {
-			return nil, bodyErr
-		}
-		req.Body = body
+	if err := rewind(req); err != nil {
+		return nil, err
 	}
 	return t.standard.RoundTrip(req)
 }
@@ -187,8 +184,7 @@ func dialChrome(ctx context.Context, network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).
-		DialContext(ctx, network, addr)
+	raw, err := dialer(config.DialTimeout).DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}

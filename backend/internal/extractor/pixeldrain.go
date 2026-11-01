@@ -3,10 +3,10 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
-	"path"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -23,14 +23,15 @@ import (
 // is nothing here to fork. The one thing that differs between them is which
 // host the link named, and that is read off the URL at extraction time rather
 // than compiled in, which is why no request or Referer below mentions a host
-// at all. Another site running this software costs one line in Match.
+// at all, and why another site running this software needs nothing here: it
+// is recognised by the software's viewer, or by its API answering.
 //
 // The label stays "pixeldrain" whichever host answered: it names the software
 // both of them run, and a user who pasted a nova.storage link is better
 // served by an error that says which program is talking than by one that
 // repeats the domain back at them.
 type Pixeldrain struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -42,11 +43,6 @@ const (
 	pixeldrainDirNode  = "dir"
 	pixeldrainFileNode = "file"
 )
-
-// pixeldrainMaxFiles bounds what one shared link resolves to. A shared
-// directory can be somebody's whole drive, and a job of tens of thousands of
-// items is not what anyone pasting a link meant.
-const pixeldrainMaxFiles = 5000
 
 // pixeldrainPace asks for one connection per file, because this host counts
 // connections rather than files.
@@ -72,38 +68,80 @@ var pixeldrainPace = Pace{Streams: 1}
 
 // NewPixeldrain builds the pixeldrain extractor.
 func NewPixeldrain(client *httpx.Client) *Pixeldrain {
-	return &Pixeldrain{hostSet: hostSet{"pixeldrain.com", "nova.storage"}, client: client}
+	return &Pixeldrain{client: client, about: about{name: "pixeldrain", shape: pixeldrainLinkShape,
+		recognises: "pixeldrain files, lists and shared directories (`/u/<id>`, `/l/<id>`, `/d/<id>`, " +
+			"`/api/file/<id>`) served by the software's viewer, which is handed its API root inline, or, " +
+			"for the software's eight-character ids, or any id whose page was withheld, whose origin's API describes exactly that file, list " +
+			"or directory"}}
 }
 
-func (p *Pixeldrain) Name() string { return "pixeldrain" }
+// pixeldrainShape is a file (/u/<id>, /f/<id>), a list (/l/<id>), a
+// shared filesystem path (/d/<id>[/...]) or a file's API link
+// (/api/file/<id>).
+var pixeldrainShape = pathShape(`^/[uf]/[A-Za-z0-9]+/?$`, `^/l/[A-Za-z0-9]+/?$`, `^/d/[^/]+(/.*)?$`,
+	pixeldrainAPIFileForm)
 
-// pixeldrainSniff recognises compatible installs by their file, list or
-// filesystem metadata. The short paths alone are common on unrelated sites.
-func pixeldrainSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) (*Result, error) {
-	segs := util.PathSegments(u)
-	if len(segs) < 2 {
-		return nil, nil
+// pixeldrainLinkShape is the narrower form a link alone is followed for: the
+// software's eight-character file and list ids, and a file's API link, which
+// is how a page that embeds a file names it. /f/<id> and /d/<id> are other
+// hosts' forms as well, and are recognised only once fetched.
+var pixeldrainLinkShape = pathShape(`^/[ul]/[A-Za-z0-9]{8}/?$`, pixeldrainAPIFileForm)
+
+// pixeldrainAPIFileForm is a file's API link, /api/file/<id>.
+const pixeldrainAPIFileForm = `^/api/file/[A-Za-z0-9]{8}/?$`
+
+// pixeldrainGuessShape is the narrower form the API is asked about a page
+// with no viewer of its own: the software's eight-character ids. /d/, /f/
+// and /u/ are every other share and player host's forms too, and their
+// landing pages are not to cost a round of API guesses each.
+var pixeldrainGuessShape = pathShape(`^/[ufl]/[A-Za-z0-9]{8}/?$`, `^/d/[A-Za-z0-9]{8}(/.*)?$`, pixeldrainAPIFileForm)
+
+// The viewer's own structure: the bundle path its pages load their viewer
+// from, and the API root the page hands that viewer inline.
+const (
+	pixeldrainViewerPath = "/res/svelte/"
+	pixeldrainAPIGlobal  = "window.api_endpoint"
+)
+
+// Recognise takes a link of those forms served by the software's viewer. A
+// custom frontend or challenge is settled by the metadata the API publishes
+// for the very id the link names; the short paths alone establish nothing.
+// The API is asked about an id of any length when the probe was withheld
+// (probeWithheld): the eight-character bound only keeps served landing
+// pages of other hosts from costing a guess each.
+func (p *Pixeldrain) Recognise(ctx context.Context, page *Page) bool {
+	if !pixeldrainShape(page.Final) {
+		return false
 	}
-	origin := util.Origin(u)
+	if page.Script(pixeldrainViewerPath) && page.Has(pixeldrainAPIGlobal) {
+		return true
+	}
+	return (pixeldrainGuessShape(page.Final) || probeWithheld(page)) && pixeldrainAnswers(ctx, page, p.client)
+}
+
+// pixeldrainAnswers recognises a compatible install by its file, list or
+// filesystem metadata for the id the page's URL names.
+func pixeldrainAnswers(ctx context.Context, page *Page, client *httpx.Client) bool {
+	segs := page.Segments()
+	if len(segs) < 2 {
+		return false
+	}
+	origin := util.Origin(page.Final)
 	validFile := func(f pixeldrainFile) bool {
 		return f.ID != "" && f.Name != "" && f.MimeType != ""
 	}
-	recognised := false
 	switch {
-	case len(segs) == 2 && (segs[0] == "u" || segs[0] == "f"):
+	case len(segs) == 2 && (segs[0] == "u" || segs[0] == "f"), len(segs) == 3 && segs[0] == "api" && segs[1] == "file":
+		id := segs[len(segs)-1]
 		var f pixeldrainFile
-		recognised = platformJSON(ctx, client, origin+pixeldrainAPI+"/file/"+url.PathEscape(segs[1])+"/info", nil, &f) &&
-			f.ID == segs[1] && validFile(f)
+		return pageJSON(ctx, page, client, origin+pixeldrainAPI+"/file/"+url.PathEscape(id)+"/info", nil, &f) &&
+			f.ID == id && validFile(f)
 	case len(segs) == 2 && segs[0] == "l":
-		var list struct {
-			Success bool             `json:"success"`
-			Files   []pixeldrainFile `json:"files"`
-		}
-		if platformJSON(ctx, client, origin+pixeldrainAPI+"/list/"+url.PathEscape(segs[1]), nil, &list) && list.Success {
+		var list pixeldrainList
+		if pageJSON(ctx, page, client, origin+pixeldrainAPI+"/list/"+url.PathEscape(segs[1]), nil, &list) && list.Success {
 			for _, f := range list.Files {
 				if validFile(f) {
-					recognised = true
-					break
+					return true
 				}
 			}
 		}
@@ -112,21 +150,17 @@ func pixeldrainSniff(ctx context.Context, client *httpx.Client, u *url.URL, opts
 			Path      []pixeldrainNode `json:"path"`
 			BaseIndex *int             `json:"base_index"`
 		}
-		if platformJSON(ctx, client, pixeldrainFSURL(origin, segs[1:])+"?stat", nil, &stat) &&
+		if pageJSON(ctx, page, client, pixeldrainFSURL(origin, segs[1:])+"?stat", nil, &stat) &&
 			stat.BaseIndex != nil && *stat.BaseIndex >= 0 && *stat.BaseIndex < len(stat.Path) {
 			node := stat.Path[*stat.BaseIndex]
-			recognised = node.Name != "" &&
-				(node.Type == pixeldrainDirNode || node.Type == pixeldrainFileNode)
+			return node.Name != "" && (node.Type == pixeldrainDirNode || node.Type == pixeldrainFileNode)
 		}
 	}
-	if !recognised {
-		return nil, nil
-	}
-	return NewPixeldrain(client).Extract(ctx, u, opts)
+	return false
 }
 
 // Extract lists a whole album, a shared directory, or a single file.
-func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	origin := util.Origin(u)
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {
@@ -134,38 +168,36 @@ func (p *Pixeldrain) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	}
 
 	switch segs[0] {
+	case "api":
+		if len(segs) == 3 && segs[1] == "file" {
+			return p.file(ctx, origin, segs[2])
+		}
 	case "l":
 		return p.list(ctx, origin, segs[1])
 	case "d":
 		// A share link may point into the tree rather than at its root, and
 		// everything after the id is part of the address.
-		return p.shared(ctx, origin, segs[1:])
+		return p.shared(ctx, origin, segs[1:], opts)
 	}
 	return p.file(ctx, origin, segs[1])
 }
 
 // list resolves an album of files.
 func (p *Pixeldrain) list(ctx context.Context, origin, id string) (*Result, error) {
-	var out struct {
-		Success bool             `json:"success"`
-		Title   string           `json:"title"`
-		Files   []pixeldrainFile `json:"files"`
-		Value   string           `json:"value"`
-		Message string           `json:"message"`
-	}
+	var out pixeldrainList
 	endpoint := origin + pixeldrainAPI + "/list/" + url.PathEscape(id)
 	if err := p.client.GetJSON(ctx, endpoint, nil, &out); err != nil {
 		return nil, fmt.Errorf("pixeldrain: list %s: %w", id, err)
 	}
 	if !out.Success {
-		return nil, fmt.Errorf("pixeldrain: list %s: %s", id, util.FirstNonEmpty(out.Message, out.Value, "not available"))
+		return nil, fmt.Errorf("pixeldrain: list %s: %s", id, cmp.Or(out.Message, out.Value, "not available"))
 	}
 
 	files := make([]File, 0, len(out.Files))
 	for _, f := range out.Files {
 		files = append(files, p.toFile(origin, f))
 	}
-	return &Result{Title: util.FirstNonEmpty(out.Title, id), Files: files}, nil
+	return &Result{Title: cmp.Or(out.Title, id), Files: files}, nil
 }
 
 // file resolves a single upload.
@@ -178,22 +210,27 @@ func (p *Pixeldrain) file(ctx context.Context, origin, id string) (*Result, erro
 	if f.ID == "" {
 		f.ID = id
 	}
-	return &Result{Title: util.FirstNonEmpty(f.Name, id), Files: []File{p.toFile(origin, f)}}, nil
+	return &Result{Title: cmp.Or(f.Name, id), Files: []File{p.toFile(origin, f)}}, nil
 }
 
 // toFile converts API metadata into a downloadable entry.
 func (p *Pixeldrain) toFile(origin string, f pixeldrainFile) File {
-	size := f.Size
-	if size == 0 {
-		size = -1
-	}
 	return File{
-		Name:    util.FirstNonEmpty(f.Name, f.ID),
+		Name:    cmp.Or(f.Name, f.ID),
 		URL:     origin + pixeldrainAPI + "/file/" + url.PathEscape(f.ID) + "?download",
-		Size:    size,
+		Size:    knownSize(f.Size),
 		Headers: httpx.Referer(origin + "/"),
 		Pace:    &pixeldrainPace,
 	}
+}
+
+// pixeldrainList is a list's metadata: its files, or why there are none.
+type pixeldrainList struct {
+	Success bool             `json:"success"`
+	Title   string           `json:"title"`
+	Files   []pixeldrainFile `json:"files"`
+	Value   string           `json:"value"`
+	Message string           `json:"message"`
 }
 
 // pixeldrainFile is the subset of the file metadata we need.
@@ -214,7 +251,7 @@ type pixeldrainFile struct {
 // file, since a stat lists its children in full — which is why it is done
 // here rather than by asking for the bulk-download archive: that arrives as
 // one opaque item, cannot resume per file, and has to be unpacked afterwards.
-func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string) (*Result, error) {
+func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string, opts Options) (*Result, error) {
 	node, children, err := p.stat(ctx, origin, segs)
 	if err != nil {
 		return nil, err
@@ -222,7 +259,7 @@ func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string) (
 
 	// A share can name a single file just as well as a directory.
 	if node.Type == pixeldrainFileNode {
-		file, ok := p.toNodeFile(origin, segs, node, "")
+		file, ok := p.toNodeFile(origin, segs, node)
 		if !ok {
 			return nil, fmt.Errorf("pixeldrain: %s cannot be downloaded (%s)",
 				pixeldrainPath(segs), pixeldrainWhyNot(node))
@@ -230,48 +267,70 @@ func (p *Pixeldrain) shared(ctx context.Context, origin string, segs []string) (
 		return &Result{Title: file.Name, Files: []File{file}}, nil
 	}
 
-	res := &Result{Title: util.FirstNonEmpty(node.Name, segs[0])}
-	p.collect(ctx, origin, segs, children, "", 0, res)
+	res := &Result{Title: cmp.Or(node.Name, segs[0])}
+	root := pixeldrainDir{segs: segs, children: children}
+	if err := walkTreeWithin(ctx, opts, pixeldrainBounds(opts), res, pixeldrainPath(segs), root, p.lister(origin)); err != nil {
+		return nil, err
+	}
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("pixeldrain: %s holds no downloadable files", pixeldrainPath(segs))
 	}
 	return res, nil
 }
 
-// collect appends a directory's files to res and recurses into its
-// subdirectories, preserving the tree in File.Dir.
+// pixeldrainBounds bounds a shared directory's walk: its files at
+// config.PixeldrainMaxFiles, said as the listing limit, or at the user's
+// file limit when that is lower. A shared directory can be somebody's whole
+// drive, and a job of tens of thousands of items is not what anyone pasting
+// a link meant.
+func pixeldrainBounds(opts Options) treeBounds {
+	bounds := defaultTreeBounds(opts)
+	if config.PixeldrainMaxFiles < bounds.files {
+		bounds.files, bounds.filesReason = config.PixeldrainMaxFiles, "listing limit"
+	}
+	return bounds
+}
+
+// pixeldrainDir is one directory of a shared filesystem, as walkTree carries
+// it: its path, and its children once they have been read.
+type pixeldrainDir struct {
+	segs     []string
+	children []pixeldrainNode
+}
+
+// lister reads one directory for walkTree. The root's children arrive with
+// it, since its stat is what said it was a directory.
 //
 // A child is addressed by appending its name to the path this listing was
 // asked for, rather than by the path the node itself carries: the request
 // path is the one just proved to address this directory, while a node's own
 // path is written relative to the filesystem it lives in — which is not
 // necessarily the one the share id opened onto.
-func (p *Pixeldrain) collect(ctx context.Context, origin string, base []string,
-	children []pixeldrainNode, dir string, depth int, res *Result) {
-
-	for _, child := range children {
-		if len(res.Files) >= pixeldrainMaxFiles {
-			return
+func (p *Pixeldrain) lister(origin string) treeList[pixeldrainDir] {
+	return func(ctx context.Context, _ *treeWalk, d pixeldrainDir, depth int) ([]treeItem[pixeldrainDir], error) {
+		if depth > 0 {
+			var err error
+			if _, d.children, err = p.stat(ctx, origin, d.segs); err != nil {
+				return nil, err
+			}
 		}
-		if child.Name == "" {
-			continue
-		}
-		segs := append(append([]string(nil), base...), child.Name)
-
-		if child.Type == pixeldrainDirNode {
-			if depth >= config.MaxFolderDepth {
+		var items []treeItem[pixeldrainDir]
+		for _, child := range d.children {
+			if child.Name == "" {
 				continue
 			}
-			_, grandchildren, err := p.stat(ctx, origin, segs)
-			if err != nil {
-				continue // one unreadable subdirectory must not sink the job
+			segs := append(append([]string(nil), d.segs...), child.Name)
+			if child.Type == pixeldrainDirNode {
+				items = append(items, treeItem[pixeldrainDir]{
+					Folder: pixeldrainDir{segs: segs}, Key: pixeldrainPath(segs), Name: child.Name,
+				})
+				continue
 			}
-			p.collect(ctx, origin, segs, grandchildren, path.Join(dir, child.Name), depth+1, res)
-			continue
+			if file, ok := p.toNodeFile(origin, segs, &child); ok {
+				items = append(items, treeItem[pixeldrainDir]{File: &file})
+			}
 		}
-		if file, ok := p.toNodeFile(origin, segs, &child, dir); ok {
-			res.Files = append(res.Files, file)
-		}
+		return items, nil
 	}
 }
 
@@ -291,23 +350,18 @@ func (p *Pixeldrain) stat(ctx context.Context, origin string, segs []string) (*p
 }
 
 // toNodeFile turns one file node into a downloadable entry.
-func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode, dir string) (File, bool) {
+func (p *Pixeldrain) toNodeFile(origin string, segs []string, n *pixeldrainNode) (File, bool) {
 	// A reported node is refused by the API itself, so it is left out rather
 	// than queued to fail.
 	if n.AbuseType != "" {
 		return File{}, false
 	}
-	size := n.FileSize
-	if size <= 0 {
-		size = -1
-	}
 	return File{
-		Name: util.FirstNonEmpty(n.Name, segs[len(segs)-1]),
+		Name: cmp.Or(n.Name, segs[len(segs)-1]),
 		// ?attach asks for the bytes; the bare path serves the viewer for
 		// anything the site can render.
 		URL:     pixeldrainFSURL(origin, segs) + "?attach",
-		Size:    size,
-		Dir:     dir,
+		Size:    knownSize(n.FileSize),
 		Headers: httpx.Referer(origin + "/"),
 		Pace:    &pixeldrainPace,
 	}, true
@@ -366,7 +420,6 @@ type pixeldrainNode struct {
 	Type     string `json:"type"`
 	Name     string `json:"name"`
 	FileSize int64  `json:"file_size"`
-	FileType string `json:"file_type"`
 	// AbuseType is present only on a node that has been reported, and such a
 	// node is refused to every caller.
 	AbuseType string `json:"abuse_type"`

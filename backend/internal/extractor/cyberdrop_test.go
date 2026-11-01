@@ -67,14 +67,11 @@ func TestCyberdropAlbumListsEveryFileOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(cyberdropAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, cyberdropAlbumPage)
 
-	res, err := NewCyberdrop(nil).albumFrom(root, u)
+	res, err := cyberdropAlbum(NewCyberdrop(nil), root, u)
 	if err != nil {
-		t.Fatalf("albumFrom: %v", err)
+		t.Fatalf("cyberdropAlbum: %v", err)
 	}
 	// The heading's text is padded; its attribute is the name verbatim.
 	if res.Title != "a holiday album" {
@@ -108,10 +105,7 @@ func TestCyberdropAlbumListsEveryFileOnce(t *testing.T) {
 // one, or puts something else between the two, must not shift the columns.
 func TestCyberdropAlbumSizesStayWithTheirOwnFile(t *testing.T) {
 	u, _ := url.Parse("https://cyberdrop.cr/a/abcd1234")
-	root, err := parseHTML(cyberdropAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, cyberdropAlbumPage)
 
 	entries := cyberdropEntries(root, u)
 	want := []cyberdropEntry{
@@ -141,7 +135,7 @@ func TestCyberdropAlbumWithoutEntriesIsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewCyberdrop(nil).albumFrom(root, u); err == nil {
+	if _, err := cyberdropAlbum(NewCyberdrop(nil), root, u); err == nil {
 		t.Fatal("an album naming no files resolved to something")
 	}
 }
@@ -182,8 +176,8 @@ func TestCyberdropSlug(t *testing.T) {
 		"://not a url":                        "",
 	}
 	for link, want := range cases {
-		if got := cyberdropSlug(link); got != want {
-			t.Errorf("cyberdropSlug(%q) = %q, want %q", link, got, want)
+		if got := linkPathID(link, "f", "e"); got != want {
+			t.Errorf("linkPathID(%q) = %q, want %q", link, got, want)
 		}
 	}
 }
@@ -192,49 +186,43 @@ func TestCyberdropSlug(t *testing.T) {
 // relies on: nothing but the slug is needed to sign an entry, which is why the
 // listing never asks the metadata endpoint about its own files.
 func TestCyberdropAPIURLsAreSlugSubstitution(t *testing.T) {
-	if got, want := cyberdropInfoURL("abcd1234"), "https://api.cyberdrop.cr/api/file/info/abcd1234"; got != want {
+	if got, want := cyberdropInfoURL(cyberdropAPI, "abcd1234"), "https://api.cyberdrop.cr/api/file/info/abcd1234"; got != want {
 		t.Errorf("cyberdropInfoURL = %q, want %q", got, want)
 	}
-	if got, want := cyberdropAuthURL("abcd1234"), "https://api.cyberdrop.cr/api/file/auth/abcd1234"; got != want {
+	if got, want := cyberdropAuthURL(cyberdropAPI, "abcd1234"), "https://api.cyberdrop.cr/api/file/auth/abcd1234"; got != want {
 		t.Errorf("cyberdropAuthURL = %q, want %q", got, want)
 	}
 	// A slug is site-generated, but it is still remote input: it must not be
 	// able to reach a different endpoint.
-	if got, want := cyberdropAuthURL("../info/x"), "https://api.cyberdrop.cr/api/file/auth/..%2Finfo%2Fx"; got != want {
+	if got, want := cyberdropAuthURL(cyberdropAPI, "../info/x"), "https://api.cyberdrop.cr/api/file/auth/..%2Finfo%2Fx"; got != want {
 		t.Errorf("cyberdropAuthURL escaped to %q, want %q", got, want)
 	}
 }
 
-// TestCyberdropMatchIsTheOneDomain is the correction worth pinning: the two
-// domains listed alongside this host are not aliases of it. One does not
-// resolve, and the other is parked and would answer with advertising.
-func TestCyberdropMatchIsTheOneDomain(t *testing.T) {
+// TestCyberdropRecognise pins the correction the type comment describes: a
+// page is the service's by what it carries, so a parked lookalike serving
+// advertising under the service's name is not taken for it.
+func TestCyberdropRecognise(t *testing.T) {
 	c := NewCyberdrop(nil)
-	for _, raw := range []string{
-		"https://cyberdrop.cr/a/abcd1234",
-		"https://www.cyberdrop.cr/f/abcd1234",
-	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !c.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	for _, raw := range []string{
-		"https://cyberdrop.me/a/abcd1234",
-		"https://cyberdrop.to/a/abcd1234",
-		"https://cyberdrop.example.test/a/abcd1234",
-	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.Match(u) {
-			t.Errorf("Match(%q) = true, but that host is not this service", raw)
-		}
-	}
+	album := `<html><head><title>Album: Example [1 file] | CyberDrop</title></head><body><h1 id="title">Example</h1>` +
+		`<div class="image-container"><a id="file" href="/f/abcd1234" title="first.gif">first.gif</a>` +
+		`<p class="file-size">798155 B</p></div></body></html>`
+	file := `<html><head><title>CyberDrop</title></head><body><h1 id="file-name"></h1>` +
+		`<script>axios.get("https://api.example.test/api/file/info/" + slug)</script></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/a/abcd1234", album), true)
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/f/abcd1234", file), true)
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/e/abcd1234", file), true)
+	// The form and the name: a parked page, or an album emptied of entries.
+	parked := `<html><head><title>CyberDrop</title><meta name="application-name" content="CyberDrop"></head>` +
+		`<body><script src="/fingerprint.js"></script></body></html>`
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/a/abcd1234", parked), false)
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/f/abcd1234", parked), false)
+	// The markers on a page of another form.
+	expectRecognised(t, c, htmlPage(t, "https://drop.example.test/faq", file), false)
+	expectShape(t, c, "https://drop.example.test/a/abcd1234", true)
+	expectShape(t, c, "https://drop.example.test/e/abcd1234", true)
+	expectShape(t, c, "https://drop.example.test/u/someone", false)
+	expectShape(t, c, "https://drop.example.test/f/abcd1234/extra", false)
 }
 
 // TestCyberdropRejectsUnknownPathsWithoutFetching keeps a URL that names

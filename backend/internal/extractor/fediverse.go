@@ -4,13 +4,14 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -22,10 +23,10 @@ import (
 // It can do that because these servers publish what they are. nodeinfo is a
 // specification rather than a convention: /.well-known/nodeinfo answers with a
 // list of links, and the document one of those points at carries
-// software.name. That is what separates this from booru.go, which has to
-// carry a list of hosts that starts rotting the day it is written, and from
-// the KVS sniff, which guesses from the shape of a page. Here the instance
-// states its own software and is believed.
+// software.name. Other platform families recognise an install by what its
+// pages or API happen to serve — booru.go by an API family answering, the
+// KVS reader by its player's markup. Here the instance states its own
+// software and is believed.
 //
 // A list does remain, but it is of API families rather than of hosts, and it
 // names only the servers that speak something other than the Mastodon client
@@ -35,20 +36,18 @@ import (
 // up front. So that list grows when a new server *implementation* appears,
 // which is rare, and not when a new instance does, which is daily.
 //
-// Match cannot fetch anything, so it is the URL's shape that routes here —
-// /@name, /c/name and the post paths, which are the fediverse's own
-// conventions rather than any one server's — and nodeinfo that decides how to
-// ask. A shape that turns out to belong to something else entirely fails
-// naming the host, which is more use than the alternative: saving somebody's
-// front page to disk under the name of a picture.
+// A page is recognised by its URL's shape — /@name, /c/name and the post
+// paths, which are the fediverse's own conventions rather than any one
+// server's — together with the server's nodeinfo naming its software, and
+// nodeinfo again decides how to ask.
 type Fediverse struct {
+	about
 	client *httpx.Client
 
-	// mu guards software, which remembers what each host answered nodeinfo
-	// with. Discovery costs two requests, and no instance changes which
-	// server it runs between one paste and the next.
-	mu       sync.Mutex
-	software map[string]string
+	// software remembers what each host answered nodeinfo with. Discovery
+	// costs two requests, and no instance changes which server it runs
+	// between one paste and the next.
+	software hostMemo[string]
 }
 
 const (
@@ -63,13 +62,6 @@ const (
 	// fediSchemaRel prefixes the rel of every nodeinfo link. Instances
 	// publish other rels beside them, so this is what picks the right ones.
 	fediSchemaRel = "http://nodeinfo.diaspora.software/ns/schema/"
-
-	// fediMastodonAPI is the Mastodon client API's base.
-	fediMastodonAPI = "/api/v1"
-
-	// fediPixelfedAPI is where pixelfed keeps its statuses route; see
-	// mastodonTimeline for why it is not the one above.
-	fediPixelfedAPI = "/api/pixelfed/v1"
 )
 
 // Page strides. Each is the largest its API accepts, so a timeline costs as
@@ -83,57 +75,129 @@ const (
 	fediMisskeyPageSize  = 100
 )
 
-// fediDialect is one API family.
-type fediDialect int
-
-const (
-	// fediMastodon is the Mastodon client API, which Pleroma, Akkoma,
-	// GoToSocial, Hometown and most forks implement as well. It is the zero
-	// value because it is also what software nobody here has heard of is
-	// assumed to speak.
-	fediMastodon fediDialect = iota
-	// fediPixelfed is that same API with its statuses route moved.
-	fediPixelfed
-	// fediLemmy is the link aggregator's, which shares nothing with it.
-	fediLemmy
-	// fediMisskey is the Misskey family's, which is POST-only.
-	fediMisskey
-)
+// fediDialect is one API family, as the rows the timeline engine (read)
+// asks. Each dialect's file holds its row and the calls the row names.
+type fediDialect struct {
+	// api is the base a Mastodon-family dialect reads statuses from.
+	api string
+	// stride is the page size asked for; see the page strides above.
+	stride int
+	// communities says the dialect has them: only Lemmy does.
+	communities bool
+	// post reads the single post the link names.
+	post func(ctx context.Context, s *fediSession) (*Result, error)
+	// owner reads whose timeline the link names: the id its pages are asked
+	// by and the job's title.
+	owner func(ctx context.Context, s *fediSession) (id, title string, err error)
+	// page reads one page of the owner's posts: those preceding until, the
+	// last id of the page before ("" for the first), or page n for an API
+	// that pages by number. An empty page ends the timeline.
+	page func(ctx context.Context, s *fediSession, until string, n int) ([]fediEntry, error)
+	// empty is the error for a timeline with nothing to fetch, given the
+	// title and how many posts were looked through.
+	empty string
+}
 
 // fediDialects maps nodeinfo's software.name onto the API family it speaks.
 // Names are lower-cased before the lookup, since the field is free text.
-var fediDialects = map[string]fediDialect{
+// Software that is not listed is asked in Mastodon's dialect, the
+// fediverse's lingua franca.
+var fediDialects = map[string]*fediDialect{
 	// The Mastodon API proper, and the servers that reimplement it. Listed
 	// so a failure on one of them is reported as what it is rather than as
 	// the consequence of a guessed dialect.
-	"mastodon":   fediMastodon,
-	"pleroma":    fediMastodon,
-	"akkoma":     fediMastodon,
-	"gotosocial": fediMastodon,
-	"hometown":   fediMastodon,
+	"mastodon":   &fediMastodon,
+	"pleroma":    &fediMastodon,
+	"akkoma":     &fediMastodon,
+	"gotosocial": &fediMastodon,
+	"hometown":   &fediMastodon,
 
-	"pixelfed": fediPixelfed,
-	"lemmy":    fediLemmy,
+	"pixelfed": &fediPixelfed,
+	"lemmy":    &fediLemmy,
 
 	// The Misskey family: each of these is a fork of it and carries the same
 	// POST /api/users/notes.
-	"misskey":    fediMisskey,
-	"sharkey":    fediMisskey,
-	"firefish":   fediMisskey,
-	"calckey":    fediMisskey,
-	"foundkey":   fediMisskey,
-	"iceshrimp":  fediMisskey,
-	"cherrypick": fediMisskey,
+	"misskey":    &fediMisskey,
+	"sharkey":    &fediMisskey,
+	"firefish":   &fediMisskey,
+	"calckey":    &fediMisskey,
+	"foundkey":   &fediMisskey,
+	"iceshrimp":  &fediMisskey,
+	"cherrypick": &fediMisskey,
 }
+
+// fediSession is one extraction: the instance, the link's target, the
+// dialect asked, and what the asking has settled so far.
+type fediSession struct {
+	*Fediverse
+	d    *fediDialect
+	u    *url.URL
+	t    *fediTarget
+	root string
+	// owner and title are the timeline's, once the dialect's owner read them.
+	owner, title string
+	// api is the Lemmy API version that answered, once one has.
+	api string
+}
+
+// host is the instance's name, as handles are qualified with it.
+func (s *fediSession) host() string { return s.u.Hostname() }
 
 // NewFediverse builds the fediverse extractor.
 func NewFediverse(client *httpx.Client) *Fediverse {
-	return &Fediverse{client: client, software: make(map[string]string)}
+	return &Fediverse{client: client, about: about{name: "fediverse", shape: fediShape,
+		recognises: "fediverse accounts, communities and posts (`/@name`, `/users/<name>`, `/u/<name>`, " +
+			"`/c/<name>`, `/notes/<id>`, `/notice/<id>`, `/post/<n>`, `/p/<user>/<id>`) on any server " +
+			"whose nodeinfo names its software"}}
 }
 
-func (f *Fediverse) Name() string { return "fediverse" }
+// fediShape is the fediverse's own path conventions.
+func fediShape(u *url.URL) bool { return fediTargetOf(u) != nil }
 
-func (f *Fediverse) Match(u *url.URL) bool { return fediTargetOf(u) != nil }
+// Recognise takes a page of one of those forms on a server whose nodeinfo
+// names the software it runs, which is the document this extractor's
+// choice of API depends on and which every fediverse server publishes by
+// specification. The page itself is not read: these are application
+// shells, often behind a challenge, and the specification is the better
+// witness. The answer is kept on the probed page, so the extraction that
+// follows asks nothing again.
+//
+// The form is the submitted link's, or failing that the page's it ended
+// on: a server sends a logged-out visitor of an account or post to its
+// sign-in page, a remote-interaction page or a canonical path of another
+// form, and the link is still the account or post Extract reads through
+// the API, as it was before pages were probed.
+func (f *Fediverse) Recognise(ctx context.Context, p *Page) bool {
+	form := fediForm(p)
+	if form == nil {
+		return false
+	}
+	_, err := f.identified(ctx, p, form)
+	return err == nil
+}
+
+// fediForm is the end of the probe's redirect chain that has a fediverse
+// form, the submitted link first, or nil.
+func fediForm(p *Page) *url.URL {
+	for _, u := range []*url.URL{p.URL, p.Final} {
+		if u != nil && fediTargetOf(u) != nil {
+			return u
+		}
+	}
+	return nil
+}
+
+// identified is the software the server at form runs: what an earlier
+// paste established about the same server when one did, and otherwise its
+// nodeinfo, asked through the page's memo and remembered for the next. The
+// server's name keys the memory, as softwareName's does; it is never the
+// reason a page is taken, only where its answer is kept, so a timeline of
+// posts asks nodeinfo once rather than once a post.
+func (f *Fediverse) identified(ctx context.Context, p *Page, form *url.URL) (string, error) {
+	return f.software.lookup(form.Host, func() (string, error) {
+		return f.nodeInfo(form, f.probedJSON(ctx, p, util.Origin(form)))
+	})
+}
 
 // Extract discovers what the instance runs, then asks it in its own dialect.
 func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
@@ -145,25 +209,14 @@ func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 
 	software, err := f.softwareName(ctx, u)
 	if err != nil {
-		// /u/<id> also names a Pixeldrain file, and /post/<id> a
-		// szurubooru post. A path match has not identified this platform;
-		// without nodeinfo, let a compatible API establish the other one.
-		if res, probeErr := platformAPIs(ctx, f.client, u, opts); res != nil || probeErr != nil {
-			return res, probeErr
-		}
 		return nil, err
 	}
-	dialect, known := fediDialects[software]
-
-	var res *Result
-	switch dialect {
-	case fediLemmy:
-		res, err = f.lemmy(ctx, u, target)
-	case fediMisskey:
-		res, err = f.misskey(ctx, u, target)
-	default:
-		res, err = f.mastodon(ctx, u, target, dialect == fediPixelfed)
+	d, known := fediDialects[software]
+	if !known {
+		d = &fediMastodon
 	}
+	s := &fediSession{Fediverse: f, d: d, u: u, t: target, root: util.Origin(u)}
+	res, err := s.read(ctx, opts)
 	if err != nil && !known {
 		// The dialect was an assumption, so a failure has two possible
 		// causes and the user is owed both.
@@ -173,26 +226,140 @@ func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 	return res, err
 }
 
-// ----------------------------------------------------------------- discovery
-
-// softwareName reads software.name out of the instance's nodeinfo.
+// read is the timeline engine every dialect is a row of: a single post is
+// the dialect's to read, and a timeline is the owner's pages walked back
+// from the newest.
 //
-// Two requests, because the specification says so: the well-known path
-// carries links, and the document behind one of them carries the software.
-func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error) {
-	host := strings.ToLower(u.Host)
-	f.mu.Lock()
-	cached, ok := f.software[host]
-	f.mu.Unlock()
-	if ok {
-		return cached, nil
+// An id cursor is exclusive and the listing newest first, so each page asks
+// for what precedes the last id of the one before; a dialect paging by
+// number reads n instead. An empty page ends the walk, as does a page that
+// adds nothing — a Lemmy 1.0 instance ignoring the page number it no longer
+// knows hands back the first page again — and the timeline page cap, which
+// is what stops an account with a decade of posts resolving for minutes. A
+// page after the first that fails is not fatal: what has already been
+// collected is still worth queueing. The walk stops sooner at the user's
+// file cap, counted in files, since one post may carry several and another
+// none.
+func (s *fediSession) read(ctx context.Context, opts Options) (*Result, error) {
+	switch {
+	case s.t.kind == fediCommunity && !s.d.communities:
+		return nil, fmt.Errorf("fediverse: communities are a lemmy thing, and %s does not run "+
+			"it (%s)", s.host(), s.u.Redacted())
+	case s.t.kind == fediPost:
+		return s.d.post(ctx, s)
+	}
+	var err error
+	if s.owner, s.title, err = s.d.owner(ctx, s); err != nil {
+		return nil, err
 	}
 
-	root := util.Origin(u)
+	until := ""
+	counted := make(map[string]bool)
+	posts, note, err := walkPages(ctx, pageWalk[fediEntry]{
+		key:   func(post fediEntry) string { return post.id },
+		limit: opts.maxFiles(), limitNote: fileLimitNote, pages: config.MaxTimelinePages,
+		weigh: func(posts []fediEntry) int {
+			// Final flattening keeps each attachment URL once across the
+			// timeline, so its file budget must use that same identity.
+			added := 0
+			for _, file := range fediFiles(posts) {
+				if !counted[file.URL] {
+					counted[file.URL] = true
+					added++
+				}
+			}
+			return added
+		},
+		// A page that adds nothing is the timeline's end, not a cut.
+		ends: walkAccepts{repeated: true},
+		fetch: func(ctx context.Context, n int) (pageOf[fediEntry], error) {
+			batch, err := s.d.page(ctx, s, until, n)
+			if err != nil {
+				return pageOf[fediEntry]{}, err
+			}
+			if len(batch) == 0 {
+				return pageOf[fediEntry]{end: true}, nil
+			}
+			until = batch[len(batch)-1].id
+			// The page size asked for is one every dialect serves in full
+			// while the timeline goes on, so a shorter page is its last,
+			// and asking for the empty one after it is a request wasted.
+			return pageOf[fediEntry]{items: batch, next: until != "" && len(batch) >= s.d.stride}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	files := fediFiles(posts)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("fediverse: "+s.d.empty, s.title, config.MaxTimelinePages*s.d.stride)
+	}
+	return &Result{Title: s.title, Files: files, Note: note}, nil
+}
+
+// fediEntry is one post as the timeline engine walks it: the id it is
+// listed, and paged past, by, and the files it carries.
+type fediEntry struct {
+	id    string
+	files []File
+}
+
+// fediFiles flattens posts into their files, each link once.
+func fediFiles(posts []fediEntry) []File {
+	seen := make(map[string]bool)
+	var files []File
+	for _, post := range posts {
+		for _, file := range post.files {
+			if !seen[file.URL] {
+				seen[file.URL] = true
+				files = append(files, file)
+			}
+		}
+	}
+	return files
+}
+
+// ----------------------------------------------------------------- discovery
+
+// errNoAnswer is a bounded probe's silence, which Recognise reads as no.
+var errNoAnswer = errors.New("no answer")
+
+// probedJSON asks through the probed page's memo, so each endpoint is asked
+// once whether a recogniser or the extraction asks first.
+func (f *Fediverse) probedJSON(ctx context.Context, p *Page, root string) func(string, any) error {
+	return func(endpoint string, out any) error {
+		if !pageJSON(ctx, p, f.client, endpoint, fediHeaders(root), out) {
+			return errNoAnswer
+		}
+		return nil
+	}
+}
+
+// softwareName reads software.name out of the instance's nodeinfo: through
+// the probed page's memo when there is one, and otherwise, or when that
+// came to nothing, with requests of its own.
+func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error) {
+	return f.software.lookup(u.Host, func() (string, error) {
+		root := util.Origin(u)
+		if p := probed(ctx, u); p != nil {
+			if name, err := f.nodeInfo(u, f.probedJSON(ctx, p, root)); err == nil {
+				return name, nil
+			}
+		}
+		return f.nodeInfo(u, func(endpoint string, out any) error {
+			return f.client.GetJSON(ctx, endpoint, fediHeaders(root), out)
+		})
+	})
+}
+
+// nodeInfo reads software.name with get. Two requests, because the
+// specification says so: the well-known path carries links, and the
+// document behind one of them carries the software.
+func (f *Fediverse) nodeInfo(u *url.URL, get func(endpoint string, out any) error) (string, error) {
 	var index struct {
 		Links []fediNodeLink `json:"links"`
 	}
-	if err := f.client.GetJSON(ctx, root+fediWellKnown, fediHeaders(root), &index); err != nil {
+	if err := get(util.Origin(u)+fediWellKnown, &index); err != nil {
 		return "", fmt.Errorf("fediverse: %s publishes no nodeinfo, so it is not a fediverse "+
 			"instance this can read: %w", u.Hostname(), err)
 	}
@@ -208,7 +375,7 @@ func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error
 			Name string `json:"name"`
 		} `json:"software"`
 	}
-	if err := f.client.GetJSON(ctx, href, fediHeaders(root), &doc); err != nil {
+	if err := get(href, &doc); err != nil {
 		return "", fmt.Errorf("fediverse: %s: read nodeinfo: %w", u.Hostname(), err)
 	}
 	name := strings.ToLower(strings.TrimSpace(doc.Software.Name))
@@ -216,13 +383,6 @@ func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error
 		return "", fmt.Errorf("fediverse: %s published a nodeinfo document naming no software",
 			u.Hostname())
 	}
-
-	f.mu.Lock()
-	if f.software == nil {
-		f.software = make(map[string]string)
-	}
-	f.software[host] = name
-	f.mu.Unlock()
 	return name, nil
 }
 
@@ -337,7 +497,7 @@ func fediTargetOf(u *url.URL) *fediTarget {
 	// notes: misskey. notice: pleroma. post: lemmy, whose ids are numeric.
 	case len(segs) == 2 && (segs[0] == "notes" || segs[0] == "notice") && fediIsID(segs[1]):
 		return &fediTarget{kind: fediPost, id: segs[1]}
-	case len(segs) == 2 && segs[0] == "post" && fediIsNumber(segs[1]):
+	case len(segs) == 2 && segs[0] == "post" && len(segs[1]) <= 20 && allDigits(segs[1]):
 		return &fediTarget{kind: fediPost, id: segs[1]}
 
 	// Pixelfed writes a post as /p/<user>/<id>, and the user is needed: see
@@ -374,43 +534,18 @@ func fediAccountTarget(seg string) *fediTarget {
 // fediverse's own rule is letters, digits and underscores, with dots and
 // dashes tolerated; anything else is some other site's URL that happens to
 // begin with an @.
-func fediIsName(name string) bool {
-	if name == "" || len(name) > 64 {
-		return false
-	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '_', r == '-', r == '.':
-		default:
-			return false
-		}
-	}
-	return true
-}
+func fediIsName(name string) bool { return fediToken(name, 64, fediAlnum+"_-.") }
 
 // fediIsID reports whether a segment can be a post id: mastodon numbers them,
 // pleroma and misskey use short alphanumeric ones.
-func fediIsID(id string) bool {
-	if id == "" || len(id) > 64 {
-		return false
-	}
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		default:
-			return false
-		}
-	}
-	return true
-}
+func fediIsID(id string) bool { return fediToken(id, 64, fediAlnum) }
 
-// fediIsNumber reports whether a segment is all digits.
-func fediIsNumber(id string) bool {
-	if id == "" || len(id) > 20 {
-		return false
-	}
-	return strings.IndexFunc(id, func(r rune) bool { return r < '0' || r > '9' }) < 0
+const fediAlnum = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+// fediToken reports whether seg is one to most bytes of the characters in
+// set and nothing else.
+func fediToken(seg string, most int, set string) bool {
+	return seg != "" && len(seg) <= most && strings.Trim(seg, set) == ""
 }
 
 // fediHandle renders a handle the way the fediverse writes one, qualifying a

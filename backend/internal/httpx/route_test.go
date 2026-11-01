@@ -621,3 +621,52 @@ func TestWithoutRouteGoesOverTheCallersOwnConnection(t *testing.T) {
 		t.Fatalf("route %q, proxied %d times; want none and once", RouteID(direct), proxied.Load())
 	}
 }
+
+// TestRouteRefusalWithAStalledBodyFailsOverAtOnce: a route that answers a
+// refusal's headers and then stalls is given up by its status, not after
+// the header timeout spent waiting for the body, and is not scored by the
+// stall; a refusal whose body arrives keeps its sample.
+func TestRouteRefusalWithAStalledBodyFailsOverAtOnce(t *testing.T) {
+	release := make(chan struct{})
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer stalled.Close()
+	defer close(release)
+	base := New("test", "en", 0, 5*time.Second)
+	route, _ := base.ThroughProxy(stalled.URL)
+	defer route.CloseIdleConnections()
+	var observation RouteObservation
+	ctx := WithRoute(context.Background(), "route", route, func(o RouteObservation) { observation = o })
+	req, _ := base.NewRequest(ctx, http.MethodGet, "http://example.test/file", nil)
+	start := time.Now()
+	_, err := base.Streaming().Bytes(req)
+	if _, ok := errors.AsType[*RouteError](err); !ok || !HasStatus(err, http.StatusServiceUnavailable) {
+		t.Fatalf("err=%v, want the route's 503", err)
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("failover took %v, waiting on the refusal's body", took)
+	}
+	if observation.Duration > time.Second {
+		t.Fatalf("route scored by %v, including the stalled body", observation.Duration)
+	}
+
+	answered := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, "this address is refused")
+	}))
+	defer answered.Close()
+	route, _ = base.ThroughProxy(answered.URL)
+	defer route.CloseIdleConnections()
+	ctx = WithRoute(context.Background(), "route", route, nil)
+	req, _ = base.NewRequest(ctx, http.MethodGet, "http://example.test/file", nil)
+	_, err = base.Streaming().Bytes(req)
+	if se, ok := errors.AsType[*StatusError](err); !ok || se.Body != "this address is refused" {
+		t.Fatalf("err=%v, want the refusal with its body", err)
+	}
+}

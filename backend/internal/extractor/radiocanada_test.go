@@ -8,12 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // radioCanadaFakeSite stands in for Radio-Canada: pages naming their own
@@ -44,6 +40,10 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 			page(w, "Un article à deux vidéos", `{"IdsCollection":"|NewstoryId:11-5002|"}`+
 				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1001}}}}`+
 				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1003}}}}`)
+		case path == "/nouvelle/5003/un-article-hors-pays":
+			page(w, "Un article hors pays", `{"IdsCollection":"|NewstoryId:11-5003|"}`+
+				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1009}}}}`+
+				`{"attachment":{"playableContent":{"media":{"__typename":"Video","appCode":"medianet","id":1011}}}}`)
 		case path == "/ohdio/balados/2000/un-balado-invente/2001/un-episode":
 			page(w, "Un épisode inventé | OHdio", `{"Emission":"Un balado inventé","IdsCollection":"|ProgramId:2000|EpisodeId:2001|MedianetId:1002|"}`)
 		case path == "/ohdio/balados/2000/un-balado-invente":
@@ -54,6 +54,18 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 				items = append(items, fmt.Sprintf(`{"typename":"EpisodeListItem","isPlayable":true,"mediaIds":[%s],"summary":"","title":"L\u0027épisode %s&nbsp;: inventé","url":"/balados/2000/x/%s/y"}`, id, id, id))
 			}
 			page(w, "Un balado inventé | OHdio", `{"episodes":[`+strings.Join(items, ",")+`],"pagination":{"pageNumber":1,"pageSize":2,"totalCount":5}}`)
+		case path == "/ohdio/balados/2100/un-balado-repete":
+			// The count says more than the list holds: past its last
+			// episode the list serves that page again.
+			episodes := map[string][]string{"": {"1002", "1004"}, "1": {"1002", "1004"}, "2": {"1006"}}[q.Get("pageNumber")]
+			if episodes == nil {
+				episodes = []string{"1006"}
+			}
+			var items []string
+			for _, id := range episodes {
+				items = append(items, fmt.Sprintf(`{"typename":"EpisodeListItem","isPlayable":true,"mediaIds":[%s],"summary":"","title":"Épisode %s","url":"/balados/2100/x/%s/y"}`, id, id, id))
+			}
+			page(w, "Un balado répété | OHdio", `{"episodes":[`+strings.Join(items, ",")+`],"pagination":{"pageNumber":1,"pageSize":2,"totalCount":9}}`)
 		case strings.HasPrefix(path, "/ohdio/balados/3000/un-balado-a-saisons"):
 			// The programme's page shows its latest season, and links to each.
 			season := strings.TrimPrefix(path, "/ohdio/balados/3000/un-balado-a-saisons")
@@ -108,15 +120,14 @@ func radioCanadaFakeSite(t *testing.T) *httptest.Server {
 }
 
 func radioCanadaWith(srv *httptest.Server) *RadioCanada {
-	r := NewRadioCanada(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	r := NewRadioCanada(testClient())
 	r.api = srv.URL + "/media/"
 	return r
 }
 
 func radioCanadaExtract(t *testing.T, srv *httptest.Server, path string) (*Result, error) {
 	t.Helper()
-	u, _ := url.Parse(srv.URL + path)
-	return radioCanadaWith(srv).Extract(context.Background(), u, Options{})
+	return extract(t, radioCanadaWith(srv), srv.URL+path, Options{})
 }
 
 // A video page's own media is the one its data layer names, not the first
@@ -171,10 +182,7 @@ func TestRadioCanadaListsEveryPageOfAProgramme(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
-	for _, f := range res.Files {
-		names = append(names, f.Name)
-	}
+	names := fileNames(res.Files)
 	want := []string{
 		"Un balado inventé - L'épisode 1002 : inventé.ts", "Un balado inventé - L'épisode 1004 : inventé.ts",
 		"Un balado inventé - L'épisode 1006 : inventé.ts", "Un balado inventé - L'épisode 1008 : inventé.ts",
@@ -189,6 +197,32 @@ func TestRadioCanadaListsEveryPageOfAProgramme(t *testing.T) {
 	}
 }
 
+// A programme longer than the file limit keeps as many episodes as it
+// allows, and says how many of how many.
+func TestRadioCanadaCountsTheEpisodesTheFileLimitLeftOut(t *testing.T) {
+	srv := radioCanadaFakeSite(t)
+	res, err := extract(t, radioCanadaWith(srv), srv.URL+"/ohdio/balados/2000/un-balado-invente", Options{limits: Limits{Files: 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 3 || res.Note != "3 of 5 episodes" {
+		t.Errorf("%d files, note %q; want 3 and \"3 of 5 episodes\"", len(res.Files), res.Note)
+	}
+}
+
+// A list that serves a page again past its last episode has ended, though
+// its count said more: no note says it was cut.
+func TestRadioCanadaEndsQuietlyOnARepeatedPage(t *testing.T) {
+	srv := radioCanadaFakeSite(t)
+	res, err := radioCanadaExtract(t, srv, "/ohdio/balados/2100/un-balado-repete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 3 || res.Note != "" {
+		t.Errorf("%d files, note %q; want 3 and none", len(res.Files), res.Note)
+	}
+}
+
 // A programme with seasons is each season its page links to, in a folder
 // of its own, though its page shows the latest alone; a season's own link
 // is that season alone.
@@ -198,10 +232,7 @@ func TestRadioCanadaListsEverySeason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []string
-	for _, f := range res.Files {
-		got = append(got, f.Dir+"/"+f.Name)
-	}
+	got := filePaths(res.Files)
 	want := "Saison 1 - La première/Un balado à saisons - Un épisode 1012.ts|Saison 2 - La deuxième/Un balado à saisons - Un épisode 1014.ts"
 	if strings.Join(got, "|") != want {
 		t.Errorf("%s\nwant %s", strings.Join(got, "|"), want)
@@ -263,5 +294,11 @@ func TestRadioCanadaReadsDailyEpisodesAndArticles(t *testing.T) {
 	}
 	if res.Title != "Un article à deux vidéos" || len(res.Files) != 2 || res.Files[0].Name != "Une émission inventée - Un titre inventé.mp4" {
 		t.Errorf("%q: %+v", res.Title, res.Files)
+	}
+	// None of them playable, the first reason one gave is the answer.
+	_, err = radioCanadaExtract(t, srv, "/nouvelle/5003/un-article-hors-pays")
+	if err == nil || !strings.HasPrefix(err.Error(), "radio-canada: none of the 2 media of Un article hors pays are playable: ") ||
+		!strings.Contains(err.Error(), "n'est pas disponible dans votre pays") {
+		t.Errorf("err = %v", err)
 	}
 }

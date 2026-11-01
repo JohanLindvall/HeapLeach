@@ -19,14 +19,26 @@ export function isTerminal(status: Status): boolean {
   return status === 'done' || status === 'failed' || status === 'canceled';
 }
 
-/** Safe to clear: every file completed, with no source error. Mirrors Job.complete. */
+/**
+ * Safe to clear: every file completed, with no source error and no listing
+ * a failure cut short. Mirrors Job.complete.
+ */
 export function isComplete(job: JobView): boolean {
-  return job.status === 'done' && !job.error && job.total > 0 && job.done === job.total;
+  return job.status === 'done' && !job.error && !job.incomplete && job.total > 0 && job.done === job.total;
 }
 
 /** Stopped short: a retry makes sense here. */
 export function isRetryable(status: Status): boolean {
   return status === 'failed' || status === 'canceled';
+}
+
+/**
+ * Whether a job's card offers a retry: it stopped short, or its listing was
+ * cut short by a failure and nothing of it is still moving, since retrying
+ * that reads the source again for what was left out.
+ */
+export function offersRetry(job: JobView): boolean {
+  return isRetryable(job.status) || (job.incomplete === true && !isActive(job.status));
 }
 
 /** The status groups the sidebar filters by. */
@@ -39,10 +51,12 @@ export function matchesFilter(job: JobView, filter: Filter): boolean {
   switch (filter) {
     case 'active':
       return isActive(job.status);
+    // A finished job whose listing a failure cut short sits with the failed
+    // ones: like them, it is what a retry is for.
     case 'done':
-      return job.status === 'done';
+      return job.status === 'done' && !offersRetry(job);
     case 'failed':
-      return isRetryable(job.status);
+      return offersRetry(job);
     default:
       return true;
   }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -130,6 +131,40 @@ func numberedName(name string, number int) string {
 	return strings.TrimSuffix(name, ext) + suffix + ext
 }
 
+// numberedSiblings returns the first of name and the numbered names beside
+// it in dir — "clip (2).mp4" and on, as numberedName makes them — for which
+// match holds. name itself is tried first, so the directory is read only
+// when it does not match.
+func numberedSiblings(dir, name string, files transferFiles, match func(entry string) bool) (string, bool) {
+	if match(name) {
+		return name, true
+	}
+	directory, err := files.open(dir, os.O_RDONLY, 0)
+	if err != nil {
+		return "", false
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return "", false
+	}
+	ext := filepath.Ext(name)
+	prefix, suffix := strings.TrimSuffix(name, ext)+" (", ")"+ext
+	for _, entry := range entries {
+		n := entry.Name()
+		if !strings.HasPrefix(n, prefix) || !strings.HasSuffix(n, suffix) {
+			continue
+		}
+		if _, err := strconv.Atoi(n[len(prefix) : len(n)-len(suffix)]); err != nil {
+			continue
+		}
+		if match(n) {
+			return n, true
+		}
+	}
+	return "", false
+}
+
 // separateNames assigns stable destinations within a listing before any
 // worker can mistake another entry of equal size for an existing download.
 // Reserve all original names first, so "clip (2).bin" keeps its own name
@@ -204,10 +239,7 @@ func partNames(name, source, id string) [2]string {
 // holds nothing.
 func (m *Manager) startedOnDisk(it *Item) bool {
 	m.mu.Lock()
-	name, rel, id, source := SafeName(it.Name), it.Dir, it.ID, it.URL
-	if job, found := m.jobs[it.JobID]; found && job.Source != "" {
-		source = job.Source
-	}
+	name, rel, id, source := SafeName(it.Name), it.Dir, it.ID, m.jobSourceLocked(it)
 	m.mu.Unlock()
 	root, err := os.OpenRoot(m.DownloadDir())
 	if err != nil {

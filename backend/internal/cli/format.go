@@ -113,12 +113,6 @@ func barParts(fraction float64, width int) (fill, track string) {
 	return strings.Repeat(fillRune, filled), strings.Repeat(trackRune, width-filled)
 }
 
-// bar renders both parts uncoloured, which is what the tests measure.
-func bar(fraction float64, width int) string {
-	fill, track := barParts(fraction, width)
-	return fill + track
-}
-
 // truncate shortens a string to a display width, marking the cut. Width is
 // counted in runes, which is close enough for the names hosts hand out.
 func truncate(s string, width int) string {
@@ -135,28 +129,24 @@ func truncate(s string, width int) string {
 	return string(runes[:width-1]) + "…"
 }
 
-// pad right-pads to an exact rune width so columns line up.
-func pad(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	s = truncate(s, width)
-	if n := width - len([]rune(s)); n > 0 {
-		return s + strings.Repeat(" ", n)
-	}
-	return s
-}
+// pad left-aligns s in an exact rune width so columns line up.
+func pad(s string, width int) string { return fitWidth(s, width, false) }
 
-// alignRight right-pads a field to an exact width, keeping columns in line
-// down the screen. Overlong values are truncated rather than allowed to push
-// the layout sideways.
-func alignRight(s string, width int) string {
+// alignRight right-aligns s in an exact rune width, keeping columns in line
+// down the screen.
+func alignRight(s string, width int) string { return fitWidth(s, width, true) }
+
+// fitWidth fills width exactly: overlong values are truncated rather than
+// allowed to push the layout sideways, short ones padded on the left when
+// right is set, else on the right.
+func fitWidth(s string, width int, right bool) string {
 	if width <= 0 {
 		return ""
 	}
 	s = truncate(s, width)
-	if n := width - len([]rune(s)); n > 0 {
-		return strings.Repeat(" ", n) + s
+	fill := strings.Repeat(" ", max(width-len([]rune(s)), 0))
+	if right {
+		return fill + s
 	}
-	return s
+	return s + fill
 }

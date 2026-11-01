@@ -4,7 +4,6 @@ package download
 
 import (
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -74,10 +73,7 @@ func validatePartial(resp *http.Response, start, end, total int64) error {
 	}
 	// Chunked responses have no Content-Length to check. Their body still
 	// belongs only to the range declared in the header.
-	resp.Body = struct {
-		io.Reader
-		io.Closer
-	}{io.LimitReader(resp.Body, length), resp.Body}
+	httpx.LimitResponseBody(resp, length)
 	return nil
 }
 

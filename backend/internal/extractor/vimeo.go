@@ -45,7 +45,7 @@ import (
 // decrypt: yt-dlp fails on them too. The configuration says so (request.drm),
 // and those are refused in so many words.
 type Vimeo struct {
-	hostSet
+	about
 	client *httpx.Client
 	// player is where the player pages are, a field so that tests can stand
 	// in for it.
@@ -60,10 +60,93 @@ const vimeoConfigMarker = "window.playerConfig = "
 
 // NewVimeo builds the vimeo extractor.
 func NewVimeo(client *httpx.Client) *Vimeo {
-	return &Vimeo{hostSet: hostSet{"vimeo.com", "player.vimeo.com"}, client: client, player: vimeoPlayerRoot}
+	return &Vimeo{client: client, player: vimeoPlayerRoot, about: about{name: "vimeo",
+		shape: eitherShape(vimeoWatchShape, vimeoPlayerShape),
+		recognises: "player pages (`/video/<id>`) carrying `window.playerConfig`, and watch pages " +
+			"(`/<id>`, `/<id>/<hash>`, channel, group, album and showcase videos, review and manage links) " +
+			"of a site named Vimeo that offer that player for embedding, or whose video's player page does"}}
 }
 
-func (v *Vimeo) Name() string { return "vimeo" }
+var (
+	// vimeoWatchShape is a video's own page in each of the places it is
+	// listed: /<id>, /<id>/<hash>, a channel's, a group's, an album's.
+	vimeoWatchShape = pathShape(
+		`^/[0-9]{3,}(?:/[0-9a-f]{6,})?/?$`,
+		`^/channels/[^/]+/[0-9]{3,}/?$`,
+		`^/groups/[^/]+/videos/[0-9]{3,}/?$`,
+		`^/album/[0-9]+/video/[0-9]{3,}/?$`,
+		`^/showcase/[0-9]+/video/[0-9]{3,}/?$`,
+		`^/[^/]+/review/[0-9]{3,}/[0-9a-f]+/?$`,
+		`^/manage/videos/[0-9]{3,}(?:/[^/]*)?/?$`,
+	)
+	// vimeoPlayerShape is the player page, /video/<id>.
+	vimeoPlayerShape = pathShape(`^/video/[0-9]{3,}/?$`)
+	// vimeoPlayerMeta is the player a watch page offers for embedding.
+	vimeoPlayerMeta = pathShape(`^/video/[0-9]+`)
+)
+
+// Recognise takes the player page by the configuration this extractor
+// reads, and a watch page by the player it names in its meta tags — the
+// page this extractor goes on to read. A watch page answers anything but a
+// browser with a bot check, but that check still carries the meta tags.
+//
+// A watch page named Vimeo that offers no player — a review or manage link
+// behind a sign-in, a showcase video, a page whose meta tags were left out
+// — is taken by the player page of the id it names carrying the
+// configuration, asked once with a bounded request.
+func (v *Vimeo) Recognise(ctx context.Context, p *Page) bool {
+	if vimeoPlayerShape(p.Final) {
+		return p.Has(vimeoConfigMarker)
+	}
+	form := p.Final
+	if !vimeoWatchShape(form) {
+		// A sign-in redirect keeps the form only on the submitted link.
+		if form = p.URL; !vimeoWatchShape(form) {
+			return false
+		}
+	}
+	if !p.Named("Vimeo") {
+		return false
+	}
+	if form == p.Final && p.playerMeta(vimeoPlayerMeta) {
+		return true
+	}
+	return v.playerAnswers(ctx, p, form)
+}
+
+// playerAnswers reports whether the player page of the video form names
+// carries the configuration Extract reads.
+func (v *Vimeo) playerAnswers(ctx context.Context, p *Page, form *url.URL) bool {
+	id, hash := vimeoVideoID(form)
+	if id == "" || v.client == nil {
+		return false
+	}
+	player := vimeoPlayerURL(v.player, id, hash)
+	return memoAsked(ctx, p, "vimeo player "+player, func() bool {
+		// The deadline starts once the probe is admitted, so a discovery
+		// queue that keeps every slot busy cannot spend it (probeContext).
+		ctx, done, ok := probeContext(ctx)
+		if !ok {
+			return false
+		}
+		defer done()
+		req, err := v.client.NewRequest(ctx, http.MethodGet, player, nil)
+		if err != nil {
+			return false
+		}
+		httpx.Navigate.Apply(req)
+		resp, err := v.client.DoOnce(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		body, err := httpx.ReadBody(resp.Body)
+		return err == nil && strings.Contains(string(body), vimeoConfigMarker)
+	})
+}
 
 // Extract reads the player page into the one file it plays, read again
 // before each transfer for links freshly signed.
@@ -73,22 +156,18 @@ func (v *Vimeo) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, er
 		return nil, fmt.Errorf("vimeo: no video id in %s "+
 			"(a link to a channel or a profile names no single video)", u.Redacted())
 	}
-	player := vimeoPlayerURLAt(v.player, id, hash)
+	player := vimeoPlayerURL(v.player, id, hash)
 	video, err := v.read(ctx, player, "")
 	if err != nil {
 		return nil, err
 	}
-	file := video.file
-	kind := video.kind
-	file.Resolve = func(ctx context.Context) (*Target, error) {
-		fresh, err := v.read(ctx, player, kind)
+	file := refreshing(video.target, func(ctx context.Context) (*Target, error) {
+		fresh, err := v.read(ctx, player, video.kind)
 		if err != nil {
 			return nil, err
 		}
-		f := fresh.file
-		return &Target{URL: f.URL, Name: f.Name, Size: -1, Headers: f.Headers,
-			Segments: f.Segments, SegmentKey: f.SegmentKey, Audio: f.Audio, Subtitles: f.Subtitles}, nil
-	}
+		return fresh.target, nil
+	})
 	return &Result{Title: video.title, Files: []File{file}}, nil
 }
 
@@ -119,12 +198,11 @@ type vimeoConfig struct {
 	} `json:"video"`
 }
 
-// vimeoVideo is one reading of a player page: the file it plays, which of
-// the two kinds of stream that file is, and the video's title.
+// vimeoVideo is one reading of a player page: what it plays, which of the
+// two kinds of stream that is, and the video's title.
 type vimeoVideo struct {
-	file  File
-	kind  string
-	title string
+	target      *Target
+	kind, title string
 }
 
 // The two kinds of stream a video is fetched as.
@@ -151,17 +229,17 @@ func (v *Vimeo) read(ctx context.Context, player, kind string) (*vimeoVideo, err
 
 	var hlsErr error
 	if kind != vimeoProgressive {
-		file, err := v.hls(ctx, cfg, title, headers)
+		target, err := v.hls(ctx, cfg, title, headers)
 		if err == nil {
-			return &vimeoVideo{file: *file, kind: vimeoHLS, title: title}, nil
+			return &vimeoVideo{target: target, kind: vimeoHLS, title: title}, nil
 		}
 		if kind == vimeoHLS || ctx.Err() != nil {
 			return nil, fmt.Errorf("vimeo: %s: %w", player, err)
 		}
 		hlsErr = err
 	}
-	if file, ok := vimeoProgressiveFile(cfg, title, headers); ok {
-		return &vimeoVideo{file: file, kind: vimeoProgressive, title: title}, nil
+	if target := vimeoProgressiveTarget(cfg, title, headers); target != nil {
+		return &vimeoVideo{target: target, kind: vimeoProgressive, title: title}, nil
 	}
 	if vimeoDRM(cfg) {
 		return nil, fmt.Errorf("vimeo: %s is DRM-protected in every form it is offered in, "+
@@ -172,7 +250,12 @@ func (v *Vimeo) read(ctx context.Context, player, kind string) (*vimeoVideo, err
 
 // config fetches the player page and reads its configuration.
 func (v *Vimeo) config(ctx context.Context, player string) (*vimeoConfig, error) {
-	page, err := v.client.GetString(ctx, player, httpx.Referer("https://vimeo.com/"))
+	playerURL, err := url.Parse(player)
+	if err != nil {
+		return nil, fmt.Errorf("vimeo: %s: %w", player, err)
+	}
+	// The player page is often the page submitted, already probed.
+	page, _, err := fetchDocument(ctx, v.client, playerURL, httpx.Referer("https://vimeo.com/"))
 	if err != nil {
 		if httpx.HasStatus(err, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound) {
 			return nil, fmt.Errorf("vimeo: %w (%s)", errVimeoNotPublic, player)
@@ -193,10 +276,10 @@ func (v *Vimeo) config(ctx context.Context, player string) (*vimeoConfig, error)
 	return &cfg, nil
 }
 
-// hls resolves the configuration's HLS master into the file: its video, and
+// hls resolves the configuration's HLS master: its video, and
 // every audio and subtitle track beside it. The AVC master is preferred, the
 // one every player decodes.
-func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers httpx.Header) (*File, error) {
+func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers httpx.Header) (*Target, error) {
 	if vimeoLive(cfg) {
 		return nil, errors.New("this is a live event, which has no end to download to")
 	}
@@ -225,21 +308,12 @@ func (v *Vimeo) hls(ctx context.Context, cfg *vimeoConfig, title string, headers
 	if err != nil {
 		return nil, err
 	}
-	return &File{
-		Name:       title + media.extension(),
-		URL:        master,
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, nil
+	return media.target(master, title+media.extension(), headers), nil
 }
 
-// vimeoProgressiveFile is the tallest progressive MP4 the configuration
-// offers, one file carrying audio and video together.
-func vimeoProgressiveFile(cfg *vimeoConfig, title string, headers httpx.Header) (File, bool) {
+// vimeoProgressiveTarget is the tallest progressive MP4 the configuration
+// offers, one file carrying audio and video together, or nil.
+func vimeoProgressiveTarget(cfg *vimeoConfig, title string, headers httpx.Header) *Target {
 	files := cfg.Request.Files.Progressive
 	best := -1
 	for i, f := range files {
@@ -248,9 +322,9 @@ func vimeoProgressiveFile(cfg *vimeoConfig, title string, headers httpx.Header) 
 		}
 	}
 	if best < 0 {
-		return File{}, false
+		return nil
 	}
-	return File{Name: title + ".mp4", URL: files[best].URL, Size: -1, Headers: headers}, true
+	return &Target{Name: title + ".mp4", URL: files[best].URL, Size: -1, Headers: headers}
 }
 
 // vimeoDRM reports a configuration that names DRM for the video.
@@ -265,12 +339,9 @@ func vimeoLive(cfg *vimeoConfig) bool {
 	return len(raw) > 0 && !bytes.Equal(raw, []byte("null"))
 }
 
-// vimeoPlayerURL builds the embed URL, carrying the unlisted hash when the
-// link had one.
-func vimeoPlayerURL(id, hash string) string { return vimeoPlayerURLAt(vimeoPlayerRoot, id, hash) }
-
-// vimeoPlayerURLAt builds it under another root.
-func vimeoPlayerURLAt(root, id, hash string) string {
+// vimeoPlayerURL builds the embed URL under root (vimeoPlayerRoot, or a
+// test's server), carrying the unlisted hash when the link had one.
+func vimeoPlayerURL(root, id, hash string) string {
 	player := root + url.PathEscape(id)
 	if hash != "" {
 		player += "?h=" + url.QueryEscape(hash)

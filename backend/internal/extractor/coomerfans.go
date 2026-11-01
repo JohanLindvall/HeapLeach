@@ -3,12 +3,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -30,7 +32,7 @@ import (
 // item starts rather than when the page is read. Image links are plain and
 // need no such treatment.
 type CoomerFans struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -44,19 +46,51 @@ const (
 
 // NewCoomerFans builds the coomerfans extractor.
 func NewCoomerFans(client *httpx.Client) *CoomerFans {
-	return &CoomerFans{hostSet: hostSet{"coomerfans.com"}, client: client}
+	return &CoomerFans{client: client, about: about{name: "coomerfans",
+		shape: eitherShape(coomerFansProfileShape, coomerFansPostShape),
+		recognises: "creator pages (`/u/<service>/<id>/<name>`) listing that creator's `/p/` posts, and posts " +
+			"(`/p/<post>/<id>/<service>`) carrying the `post-body` the media is read from"}}
 }
 
-func (c *CoomerFans) Name() string { return "coomerfans" }
+var (
+	// coomerFansPostLink is a link to a post, capturing the creator's id.
+	coomerFansPostLink = regexp.MustCompile(`href="[^"]*?/p/\d+/(\d+)/`)
+	// coomerFansProfileShape is a creator's page, /u/<service>/<id>[/<name>].
+	coomerFansProfileShape = pathShape(`^/u/[A-Za-z]+/\d+(?:/[^/]+)?/?$`)
+	// coomerFansPostShape is a post, /p/<post>/<id>/<service>.
+	coomerFansPostShape = pathShape(`^/p/\d+/\d+/[A-Za-z]+/?$`)
+)
+
+// Recognise takes a post whose page has the post-body coomerFansPost reads,
+// or a creator's page linking posts of that same creator, which is what
+// postLinks collects.
+func (c *CoomerFans) Recognise(_ context.Context, p *Page) bool {
+	switch segs := p.Segments(); {
+	case coomerFansPostShape(p.Final):
+		return p.hasElement(func(n *html.Node) bool { return hasClass(n, coomerFansBodyClass) })
+	case coomerFansProfileShape(p.Final):
+		for _, m := range coomerFansPostLink.FindAllStringSubmatch(p.Body, -1) {
+			if m[1] == segs[2] {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Extract resolves a creator's page or a single post.
-func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (c *CoomerFans) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	// The site's random-creator and random-post links redirect to the page
+	// they chose, which is the one recognised and the one to read.
+	if _, final, ok := probedDocument(ctx, u); ok && final.String() != u.String() {
+		u = final
+	}
 	segs := util.PathSegments(u)
 	switch {
 	case len(segs) >= 2 && segs[0] == "p":
 		return c.post(ctx, u)
 	case len(segs) >= 2 && segs[0] == "u":
-		return c.profile(ctx, u)
+		return c.profile(ctx, u, opts)
 	}
 	return nil, fmt.Errorf("coomerfans: %s is neither a creator page (/u/<service>/<id>/<name>) "+
 		"nor a post (/p/<post>/<id>/<service>)", u.Redacted())
@@ -70,28 +104,40 @@ func (c *CoomerFans) post(ctx context.Context, u *url.URL) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	return coomerFansPostResult(u, title, files)
+}
+
+// coomerFansPostResult is a single post's job: its files under its title.
+func coomerFansPostResult(u *url.URL, title string, files []File) (*Result, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("coomerfans: %s holds no media (it may be text only)", u.Redacted())
 	}
-	return &Result{Title: util.FirstNonEmpty(title, util.NameFromURL(u.String())), Files: files}, nil
+	return &Result{Title: cmp.Or(title, util.NameFromURL(u.String())), Files: files}, nil
 }
 
 // postFiles reads one post page into downloadable files.
 func (c *CoomerFans) postFiles(ctx context.Context, u *url.URL) ([]File, string, error) {
 	page := u.String()
-	doc, err := c.client.GetString(ctx, page, httpx.Referer(coomerFansRoot+"/"))
+	// The probe's own tree is read when it holds the page, so the post
+	// recognised is not parsed again.
+	root, _, err := fetchRoot(ctx, c.client, u, httpx.Referer(coomerFansRoot+"/"))
 	if err != nil {
 		return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", page, err)
 	}
 
-	title, media, err := coomerFansPost(doc, u)
+	title, media, err := coomerFansRead(root, u)
 	if err != nil {
 		return nil, "", fmt.Errorf("coomerfans: %s: %w", page, err)
 	}
+	return c.mediaFiles(u, title, media), title, nil
+}
 
+// mediaFiles turns a post's media into downloadable files.
+func (c *CoomerFans) mediaFiles(u *url.URL, title string, media []coomerFansItem) []File {
+	page := u.String()
 	files := make([]File, 0, len(media))
 	for _, item := range media {
-		name := util.FirstNonEmpty(util.NameFromURL(item.URL), title)
+		name := cmp.Or(util.NameFromURL(item.URL), title)
 		file := File{
 			Name:    name,
 			URL:     item.URL,
@@ -104,10 +150,14 @@ func (c *CoomerFans) postFiles(ctx context.Context, u *url.URL) ([]File, string,
 		}
 		files = append(files, file)
 	}
-	return files, title, nil
+	return files
 }
 
 // videoResolver re-reads the post page for a fresh signed link.
+//
+// The page is fetched afresh rather than taken from the probe: the link
+// read when the job was listed is the one that expired, so an earlier page
+// is never the answer here.
 //
 // The video is found again by its storage path rather than by position: the
 // signature changes on every visit, and a post can hold more than one video,
@@ -161,19 +211,26 @@ type coomerFansItem struct {
 	Video bool
 }
 
-// coomerFansPost reads a post page's title and media. Kept apart from the
-// fetch so it can be tested against a page rather than against the site.
+// coomerFansPost is coomerFansRead for a page held as a string: the
+// transfer-time re-read and the fixtures.
 func coomerFansPost(doc string, base *url.URL) (string, []coomerFansItem, error) {
 	root, err := parseHTML(doc)
 	if err != nil {
 		return "", nil, err
 	}
+	return coomerFansRead(root, base)
+}
+
+// coomerFansRead reads a parsed post page's title and media. Kept apart from
+// the fetch so it can be tested against a page rather than against the site.
+// The tree may be the shared probe's, so it is only read.
+func coomerFansRead(root *html.Node, base *url.URL) (string, []coomerFansItem, error) {
 	body := findFirst(root, func(n *html.Node) bool { return hasClass(n, coomerFansBodyClass) })
 	if body == nil {
 		return "", nil, fmt.Errorf("no post body (the post may have been removed)")
 	}
 
-	title := coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))
+	title := coomerFansTitle(cmp.Or(firstText(root, atom.H1), firstText(root, atomTitle)))
 
 	seen := make(map[string]bool)
 	var media []coomerFansItem
@@ -197,64 +254,72 @@ func coomerFansPost(doc string, base *url.URL) (string, []coomerFansItem, error)
 
 // ---------------------------------------------------------------- profile
 
-// profile expands a creator's page into every post they have.
-func (c *CoomerFans) profile(ctx context.Context, u *url.URL) (*Result, error) {
-	links, title, err := c.postLinks(ctx, u)
+// profile expands a creator's page into every post they have, up to the
+// listing cap: every post is a page to read.
+func (c *CoomerFans) profile(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	expanded := listingFiles[string]{limit: opts.maxFiles()}
+	links, title, note, err := c.postLinks(ctx, u, opts, func(links []listingLink) (bool, bool) {
+		return expanded.add(ctx, listingURLs(links), func(ctx context.Context, link string) ([]File, error) {
+			u, err := ParseURL(link)
+			if err != nil {
+				return nil, err
+			}
+			files, _, err := c.postFiles(ctx, u)
+			return files, err
+		})
+	})
 	if err != nil {
 		return nil, err
 	}
 	if len(links) == 0 {
 		return nil, fmt.Errorf("coomerfans: no posts on %s", u.Redacted())
 	}
-	return &Result{Title: title, Files: c.expand(ctx, links)}, nil
+	files, refused, err := expanded.result(ctx, "coomerfans", "posts", u.Redacted())
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Title: title, Files: files, Note: joinNotes(note, refused)}, nil
 }
 
-// postLinks walks the creator's pages for the posts they list.
+// postLinks walks the creator's pages for the posts they list, up to the
+// listing cap, with the note for a walk the cap cut short.
 //
 // Paging stops at a page that adds nothing new as well as at the absence of
 // a next link, because a listing that runs past its end tends to answer with
-// the last page again rather than with nothing.
-func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL) ([]string, string, error) {
-	var (
-		links []string
-		title string
-		seen  = make(map[string]bool)
-		page  = u.String()
-	)
-
-	for i := 0; i < config.MaxAlbumPages && page != ""; i++ {
-		doc, err := c.client.GetString(ctx, page, httpx.Referer(coomerFansRoot+"/"))
-		if err != nil {
-			if i == 0 {
-				return nil, "", fmt.Errorf("coomerfans: fetch %s: %w", page, err)
-			}
-			break // a later page failing still leaves the earlier ones
-		}
-		root, parseErr := parseHTML(doc)
-		if parseErr != nil {
-			break
-		}
-		if title == "" {
-			title = coomerFansTitle(util.FirstNonEmpty(firstText(root, atom.H1), firstText(root, atomTitle)))
-		}
-
-		added := 0
-		for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
-			link := resolveRef(u, attr(a, "href"))
-			if !coomerFansIsPost(link) || seen[link] {
-				continue
-			}
-			seen[link] = true
-			links = append(links, link)
-			added++
-		}
-		if added == 0 {
-			break
-		}
-		page = coomerFansNextPage(root, u)
+// the last page again rather than with nothing, which is its end, as is a
+// page past the end that answers 404 or carries no listing. A later page
+// that fails any other way ends the walk with the earlier ones, and says
+// the listing was cut: a timeout is not the creator's last post.
+func (c *CoomerFans) postLinks(ctx context.Context, u *url.URL, opts Options, consume func([]listingLink) (bool, bool)) ([]string, string, string, error) {
+	headers := httpx.Referer(coomerFansRoot + "/")
+	fallback := strings.Trim(u.Path, "/")
+	root, _, err := fetchRoot(ctx, c.client, u, headers)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("coomerfans: fetch %s: %w", u.String(), err)
 	}
-
-	return links, util.FirstNonEmpty(title, strings.Trim(u.Path, "/")), nil
+	found, title, note, err := walkListing(ctx, c.client, u, listingWalk{
+		name: "coomerfans", title: fallback, root: root,
+		ends:  walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound}},
+		limit: opts.maxSources(), limitNote: sourceLimitNote,
+		consume: consume, consumeNote: fileLimitNote,
+		fetch: fetchAsAsked(c.client, headers),
+		read: func(root *html.Node, _, _ *url.URL) listingPage {
+			p := listingPage{title: coomerFansTitle(cmp.Or(firstText(root, atom.H1), firstText(root, atomTitle)))}
+			for _, a := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) }) {
+				if link := resolveRef(u, attr(a, "href")); coomerFansIsPost(link) {
+					p.links = append(p.links, listingLink{url: link})
+				}
+			}
+			if next := coomerFansNextPage(root, u); next != "" {
+				p.next, _ = url.Parse(next)
+			}
+			return p
+		},
+	})
+	if err != nil {
+		return nil, "", "", err
+	}
+	return listingURLs(found), title, note, nil
 }
 
 // coomerFansNextPage follows the listing's own next link.
@@ -278,18 +343,4 @@ func coomerFansIsPost(link string) bool {
 	}
 	segs := util.PathSegments(u)
 	return len(segs) >= 2 && segs[0] == "p"
-}
-
-// expand reads every post page, several at a time. FanOut supplies the
-// bounded concurrency, the ordering and the skip-on-failure; see fanout.go
-// for why each of those matters.
-func (c *CoomerFans) expand(ctx context.Context, links []string) []File {
-	return FanOut(ctx, links, func(ctx context.Context, link string) ([]File, error) {
-		u, err := ParseURL(link)
-		if err != nil {
-			return nil, err
-		}
-		files, _, err := c.postFiles(ctx, u)
-		return files, err
-	})
 }

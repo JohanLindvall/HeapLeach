@@ -3,38 +3,43 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 )
 
 // Rajce reads an album's embedded settings, which contain its entire media
 // list. Images and videos have separate URLs; a video's image is its poster.
-type Rajce struct {
-	hostSet
-	client *httpx.Client
+// It is a Share row: one discoverable form, recognised by the page alone,
+// with no state of its own between jobs.
+func NewRajce(client *httpx.Client) *Share { return newShare(client, &rajceSite) }
+
+var rajceSite = shareSite{
+	name:       "rajce",
+	recognises: "albums (`/<user>/album/<slug>`) whose page assigns the album's settings, media list included, in a script",
+	forms:      []shareForm{{rajceShape, rajceRecognise}},
+	extract:    rajceExtract,
 }
 
-func NewRajce(client *httpx.Client) *Rajce {
-	return &Rajce{hostSet: hostSet{"rajce.idnes.cz", "rajce.net"}, client: client}
+var rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
+
+// rajceShape is an album: /<user>/album/<slug>, optionally with one of its
+// items after it.
+var rajceShape = pathShape(`^/[^/]+/album/[^/]+(?:/\d+)?/?$`)
+
+// rajceRecognise takes an album page whose script assigns the settings
+// object rajceAlbumData decodes, with its legacy_media list.
+func rajceRecognise(p *Page) bool {
+	return rajceSettings.MatchString(p.Body) && p.Has(`"legacy_media"`)
 }
-
-func (r *Rajce) Name() string { return "rajce" }
-
-var (
-	rajceSettings = regexp.MustCompile(`\b(?:var|let|const)\s+settings\s*=\s*`)
-	rajceStorage  = regexp.MustCompile(`^img\d+\.(?:rajce\.idnes\.cz|rajce\.net)$`)
-)
 
 type rajceAlbum struct {
 	Title string        `json:"album_name"`
@@ -52,24 +57,29 @@ type rajceMedium struct {
 	Version  int       `json:"version"`
 }
 
-func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	// hostSet also claims storage subdomains. Keep pasted media links usable
-	// without fetching their bytes as though they were an album document.
-	if rajceStorage.MatchString(strings.ToLower(u.Hostname())) {
-		name := util.NameFromURL(u.String())
-		if name == "" {
-			return nil, fmt.Errorf("rajce: storage URL names no file")
-		}
+// rajceRoot is the site, the referer its media hosts expect.
+const rajceRoot = "https://www.rajce.idnes.cz"
+
+// rajceStorage is a media link on the site's storage hosts
+// (img<N>.rajce.idnes.cz/storage/…), which the host claim hands here when
+// it names no file type of its own: a pasted video, which is the file.
+var rajceStorage = pathShape(`^/storage/`)
+
+// rajceExtract reads an album. The referer its files carry is the album's
+// address after redirects, without a fragment. A storage link is the file
+// itself, named from its URL with .mp4 for a video, fetched with the site
+// as its referer, as the storage hosts expect.
+func rajceExtract(ctx context.Context, s *Share, u *url.URL, opts Options) (*Result, error) {
+	if rajceStorage(u) && !rajceShape(u) {
+		name := cmp.Or(util.NameFromURL(u.String()), u.Hostname())
 		if strings.Contains(u.Path, "/video/") {
-			name = strings.TrimSuffix(name, path.Ext(name)) + ".mp4"
+			name = util.WithExt(name, ".mp4")
 		}
 		return &Result{Title: name, Files: []File{{
-			Name: name, URL: u.String(), Size: -1,
-			Headers: httpx.Referer("https://www.rajce.idnes.cz/"),
+			Name: name, URL: u.String(), Size: -1, Headers: httpx.Referer(rajceRoot + "/"),
 		}}}, nil
 	}
-
-	doc, page, err := r.client.GetPage(ctx, u.String(), nil, nil)
+	doc, page, err := fetchDocument(ctx, s.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rajce: fetch album: %w", err)
 	}
@@ -77,8 +87,10 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	if err != nil {
 		return nil, err
 	}
+	// fetchDocument hands back a URL of the caller's own, never the shared
+	// probe's, so it may be edited in place.
 	page.Fragment, page.RawFragment = "", ""
-	res := &Result{Title: util.FirstNonEmpty(strings.TrimSpace(album.Title), util.NameFromURL(page.String()))}
+	res := &Result{Title: cmp.Or(strings.TrimSpace(album.Title), util.NameFromURL(page.String()))}
 	headers := httpx.Referer(page.String())
 	seen := make(map[string]bool)
 	unavailable := 0
@@ -94,7 +106,7 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 			continue
 		}
 		if len(res.Files) == opts.maxFiles() {
-			notes = append(notes, "partial — file limit")
+			notes = append(notes, fileLimitNote)
 			break
 		}
 		seen["url:"+file.URL] = true
@@ -107,13 +119,8 @@ func (r *Rajce) Extract(ctx context.Context, u *url.URL, opts Options) (*Result,
 	if len(res.Files) == 0 {
 		return nil, fmt.Errorf("rajce: album has no downloadable photos or videos (it may be empty or restricted)")
 	}
-	if album.Count > len(res.Files) {
-		notes = append(notes, fmt.Sprintf("%d of %d files", len(res.Files), album.Count))
-	}
-	if unavailable > 0 {
-		notes = append(notes, fmt.Sprintf("%d album items unavailable", unavailable))
-	}
-	res.Note = strings.Join(notes, "; ")
+	notes = append(notes, cappedNote(len(res.Files), album.Count, "files"))
+	res.Note = joinNotes(append(notes, countNote(unavailable, "album items unavailable"))...)
 	return res, nil
 }
 
@@ -122,13 +129,9 @@ func rajceAlbumData(doc string) (*rajceAlbum, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, node := range findAll(root, func(n *html.Node) bool { return isElem(n, atom.Script) }) {
-		if node.FirstChild == nil {
-			continue
-		}
-		// Script text must retain its whitespace: collapsing it would change
-		// filenames and titles inside the JSON strings as well.
-		script := node.FirstChild.Data
+	// Script text must retain its whitespace: collapsing it would change
+	// filenames and titles inside the JSON strings as well.
+	for _, script := range scriptTexts(root) {
 		marker := rajceSettings.FindStringIndex(script)
 		if marker == nil {
 			continue
@@ -153,20 +156,18 @@ func (m rajceMedium) file(page *url.URL) (File, bool) {
 	} else if m.Type != "photo" {
 		return File{}, false
 	}
-	ref = strings.TrimSpace(ref)
-	u, err := page.Parse(ref)
-	if ref == "" || err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	u := webLink(page, ref)
+	if u == nil {
 		return File{}, false
 	}
-	u.Fragment, u.RawFragment = "", ""
-	name := util.FirstNonEmpty(m.Filename, util.NameFromURL(u.String()))
+	name := cmp.Or(m.Filename, util.NameFromURL(u.String()))
 	if name == "" {
 		return File{}, false
 	}
 	if video {
 		// filename can be a JPEG poster or an extensionless media id. The
 		// separate video_url serves MP4 bytes in both cases.
-		name = strings.TrimSuffix(name, path.Ext(name)) + ".mp4"
+		name = util.WithExt(name, ".mp4")
 	} else if m.Version > 0 {
 		query := u.Query()
 		query.Set("ver", strconv.Itoa(m.Version))

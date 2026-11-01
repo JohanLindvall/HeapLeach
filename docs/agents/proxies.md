@@ -16,9 +16,18 @@ discovery, scoring, leases, exit probing and claims, and their defaults.
 Application scope policy, the health epoch, the cached probe-outage policy and
 HTTP identity stay here.
 
-The pool's scopes are `config.ProxyGroups`: `keep2share`, `fileboom`,
-`emload`, `mega` and `cloudflare` (WAF recovery). An extractor marks a
-per-address service with `Pace.PerRoute` and names it in `Pace.Group`.
+The pool's scopes are `config.ProxyGroups`: `keep2share`, `fileboom` (the
+other service of the same software, which counts free downloads per address
+on its own), `emload`, `mega` and `cloudflare` (WAF recovery), named in code
+by `config.GroupKeep2Share`, `GroupFileBoom`, `GroupEmload`, `GroupMega` and
+`GroupWAF`;
+the strings are what settings, the API and the proxy database carry, so they
+do not change. `config.IsProxyGroup` asks whether a name is one without
+copying the list, which matters because the dispatcher asks it of every
+queued item. An extractor marks a per-address service with `Pace.PerRoute`
+and names it in `Pace.Group`. Two services that share a software but not a
+quota are two groups: merged, a mixed queue got one free download per
+address across both, and one's wait held back the other.
 
 The inventory lives beside the queue file wherever that is put
 (`defaultProxyDB`), and in the default state directory when no queue is kept,
@@ -28,6 +37,13 @@ active leases stay in memory. Progress samples never write Bolt from
 `sampleLocked`; a background task flushes changed rows. The manager owns the
 pool, opens it lazily when proxies are enabled, and closes it after the
 workers finish.
+
+The inventory's request count and last-success timestamp come from HTTP
+observations. A fully received, validated byte range is a success even when
+its response is chunked and the transfer closes at the range boundary before
+HTTP EOF. `httpx.LimitResponseBody` conveys that boundary to the route's body
+observer; it reports once and the pool persists the result. A short range
+records failure; closing an unread or partially read response is neutral.
 
 Explicit routes never fall back to direct and never disable destination
 certificate verification. An HTTPS proxy's outer TLS connection accepts
@@ -380,8 +396,9 @@ does).
 
 ### Temporary failures
 
-A source or file that opts into `ProxyFallback` (doodstream does) starts on
-the normal connection and, after a temporary network or HTTP failure there, or
+A source or file that opts into `ProxyFallback` (doodstream does, and so
+does a link of its form whose probe failed, before any page could be
+recognised) starts on the normal connection and, after a temporary network or HTTP failure there, or
 a persistent `RELOAD`, tries the shared recovery pool. The manager classifies
 errors and owns reservations, penalties and random unmeasured draws; a missing
 video or a parser error cannot start a proxy search. Source recovery exempts

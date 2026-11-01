@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -34,174 +34,190 @@ import (
 // splitting on the one step that differs would duplicate the seven that do
 // not.
 
-// booruAPI is one API family.
+// booruAPI is one API family, its dialect in booruDialects.
 type booruAPI int
 
 const (
-	// apiDanbooru: GET /posts.json -> [ {file_url, id, ...} ], page=N
 	apiDanbooru booruAPI = iota
-	// apiE621: GET /posts.json -> {posts: [ {file: {url}}, ... ]}, page=N
 	apiE621
-	// apiMoebooru: GET /post.json -> [ {file_url, id, ...} ], page=N
 	apiMoebooru
-	// apiGelbooru: GET /index.php?page=dapi&s=post&q=index&json=1, pid=N
 	apiGelbooru
-	// apiPhilomena: GET /api/v1/json/search/images -> {images: [...]}, page=N
 	apiPhilomena
-	// apiTwibooru: a later philomena at /api/v3/search/posts -> {posts: [...]}
 	apiTwibooru
-	// apiSzurubooru: GET /api/posts/?query=<tags> -> {results: [...]},
-	// offset=N counting posts. The Accept header is not optional here: a
-	// request that does not name JSON is answered 406, not with HTML.
 	apiSzurubooru
-	// apiGelbooru01: the booru.org boards, which have no JSON API at all —
-	// page=dapi redirects away — so the listing HTML is what is read.
 	apiGelbooru01
 )
 
-// booruSite is one supported host.
+// booruDialect is how a family is asked for one page of posts: its
+// endpoint and the constant part of its query, the parameters naming the
+// search, the page and the page's size (none when limit is ""), and how the
+// page parameter counts — from first, by step a page.
+type booruDialect struct {
+	path, fixed       string
+	tags, page, limit string
+	first, step       int
+	// json marks a family whose API answers a request that does not name
+	// JSON in its Accept header with 406 rather than with HTML.
+	json bool
+}
+
+// booruDialects are the families' listings, and what each answers with.
+var booruDialects = [...]booruDialect{
+	// [ {file_url, id, ...} ]
+	apiDanbooru: {path: "/posts.json", tags: "tags", page: "page", limit: "limit", first: 1, step: 1},
+	// {posts: [ {file: {url}}, ... ]}, at Danbooru's endpoint
+	apiE621: {path: "/posts.json", tags: "tags", page: "page", limit: "limit", first: 1, step: 1},
+	// [ {file_url, id, ...} ]
+	apiMoebooru: {path: "/post.json", tags: "tags", page: "page", limit: "limit", first: 1, step: 1},
+	// {post: [...]}, its pid counting pages from nought
+	apiGelbooru: {path: "/index.php", fixed: "page=dapi&s=post&q=index&json=1",
+		tags: "tags", page: "pid", limit: "limit", step: 1},
+	// {images: [...], total}
+	apiPhilomena: {path: "/api/v1/json/search/images", tags: "q", page: "page", limit: "per_page", first: 1, step: 1},
+	// a later philomena: {posts: [...], total}
+	apiTwibooru: {path: "/api/v3/search/posts", tags: "q", page: "page", limit: "per_page", first: 1, step: 1},
+	// {results: [...], total}, its offset counting posts
+	apiSzurubooru: {path: "/api/posts/", tags: "query", page: "offset", limit: "limit", step: booruPageSize, json: true},
+	// the booru.org boards, which have no JSON API at all — page=dapi
+	// redirects away — so the listing HTML is what is read. Its pid counts
+	// posts rather than pages: the board's own paginator steps it by the
+	// size of a page, which the board offers no way to change.
+	apiGelbooru01: {path: "/index.php", fixed: "page=post&s=list", tags: "tags", page: "pid", step: gelbooru01PageSize},
+}
+
+// booruSite is the board one URL is on, as recognition established it.
 type booruSite struct {
-	name    string
-	root    string
-	api     booruAPI
-	domains []string
-	// filterID unlocks the default-hidden results on philomena sites.
+	// name is the board's label: its host's first label, or a booru.org
+	// board's own subdomain.
+	name string
+	root string
+	api  booruAPI
+	// filterID unlocks the default-hidden results on philomena sites: the
+	// id of the site's own "everything" filter, which each site numbers
+	// differently and publishes among its system filters.
 	filterID string
-	// multi marks one install serving many boards, where the root and the
-	// label belong to whichever board the link named rather than to this
-	// entry. See forURL.
-	multi bool
+	// probe is the page recognition asked the API through, whose answer
+	// for the first page the walk reuses rather than asks again.
+	probe *Page
 }
 
-// booruSites is the supported set. Each was checked against its live API;
-// hosts that now demand an API key or sit behind a challenge are left out
-// rather than shipped as something that looks supported but is not.
-var booruSites = []booruSite{
-	// Danbooru family. danbooru.donmai.us itself is behind a challenge that
-	// a plain client cannot pass, so only its siblings are listed.
-	{name: "aibooru", root: "https://aibooru.online", api: apiDanbooru, domains: []string{"aibooru.online"}},
-	{name: "booruvar", root: "https://booru.borvar.art", api: apiDanbooru, domains: []string{"booru.borvar.art"}},
-
-	// e621 family: same API, but the file URL is nested.
-	{name: "e621", root: "https://e621.net", api: apiE621, domains: []string{"e621.net"}},
-	{name: "e926", root: "https://e926.net", api: apiE621, domains: []string{"e926.net"}},
-	{name: "e6ai", root: "https://e6ai.net", api: apiE621, domains: []string{"e6ai.net"}},
-
-	// Moebooru family.
-	{name: "yandere", root: "https://yande.re", api: apiMoebooru, domains: []string{"yande.re"}},
-	{name: "konachan", root: "https://konachan.com", api: apiMoebooru, domains: []string{"konachan.com", "konachan.net"}},
-	{name: "sakugabooru", root: "https://www.sakugabooru.com", api: apiMoebooru, domains: []string{"sakugabooru.com"}},
-
-	// Gelbooru 0.2 family. gelbooru.com itself now requires an API key.
-	{name: "safebooru", root: "https://safebooru.org", api: apiGelbooru, domains: []string{"safebooru.org"}},
-	{name: "tbib", root: "https://tbib.org", api: apiGelbooru, domains: []string{"tbib.org"}},
-	{name: "hypnohub", root: "https://hypnohub.net", api: apiGelbooru, domains: []string{"hypnohub.net"}},
-	{name: "xbooru", root: "https://xbooru.com", api: apiGelbooru, domains: []string{"xbooru.com"}},
-
-	// Philomena family. filterID selects the site's "everything" filter, so
-	// a search returns what the site itself would show.
-	{name: "derpibooru", root: "https://derpibooru.org", api: apiPhilomena, domains: []string{"derpibooru.org"}, filterID: "56027"},
-	{name: "ponybooru", root: "https://ponybooru.org", api: apiPhilomena, domains: []string{"ponybooru.org"}, filterID: "3"},
-	{name: "furbooru", root: "https://furbooru.org", api: apiPhilomena, domains: []string{"furbooru.org"}, filterID: "2"},
-	{name: "twibooru", root: "https://twibooru.org", api: apiTwibooru, domains: []string{"twibooru.org"}},
-
-	// szurubooru family. The software is self-hosted, so this is the set of
-	// public instances that answer rather than a canonical list.
-	// booru.bcbnsfw.space runs it too but serves an age-consent page in
-	// place of every API answer, so it is left out for the same reason
-	// danbooru.donmai.us is: shipping it would look like support and behave
-	// like a parse failure.
-	{name: "snootbooru", root: "https://snootbooru.com", api: apiSzurubooru, domains: []string{"snootbooru.com"}},
-	{name: "foalcon", root: "https://booru.foalcon.com", api: apiSzurubooru, domains: []string{"booru.foalcon.com"}},
-
-	// Gelbooru 0.1: booru.org is one install hosting a board per subdomain,
-	// so a single entry covers every one of them. See forURL.
-	{name: "booru.org", api: apiGelbooru01, domains: []string{"booru.org"}, multi: true},
-}
-
-const (
-	// booruPageSize is what each family accepts as a page limit.
-	booruPageSize = 100
-	// booruMaxPosts bounds a tag search, which can otherwise be endless.
-	booruMaxPosts = 1000
-)
+// booruPageSize is what each family accepts as a page limit.
+const booruPageSize = 100
 
 // Gelbooru 0.1, which is scraped rather than queried.
 const (
 	// gelbooru01PageSize is what one listing page holds. The board offers no
-	// way to ask for more, and this is what tells a last page from a full
-	// one, so it has to be what the site does rather than what we would like.
+	// way to ask for more, and its pid counts posts, so this is the step from
+	// one page to the next.
 	gelbooru01PageSize = 20
-	// gelbooru01Pace is the wait between listing pages.
-	//
-	// Twenty posts to a page makes a long search a great many requests in a
-	// row, and these boards answer a burst of them with 429: measured, a walk
-	// with no pause is refused around the thirteenth page, and the same walk
-	// with a second between pages is not refused at all. Backing off after
-	// the refusal costs more than this does, and yields less.
-	gelbooru01Pace = time.Second
 	// Markers on the pages a board serves: a thumbnail on a listing, and the
 	// full image on a post's own page.
 	gelbooru01ThumbClass = "thumb"
 	gelbooru01ImageID    = "image"
 )
 
+// philomenaEverything is the name philomena sites give the system filter
+// that hides nothing.
+const philomenaEverything = "Everything"
+
 // Booru resolves tag searches and single posts on image-board sites.
-type Booru struct {
-	client *httpx.Client
-}
-
-// NewBooru builds the image-board extractor.
-func NewBooru(client *httpx.Client) *Booru { return &Booru{client: client} }
-
-func (b *Booru) Name() string { return "booru" }
-
-func (b *Booru) Match(u *url.URL) bool { return siteFor(u) != nil }
-
-// siteFor finds the entry covering a URL.
-func siteFor(u *url.URL) *booruSite {
-	for i := range booruSites {
-		for _, domain := range booruSites[i].domains {
-			if util.HostMatches(u.Host, domain) {
-				return &booruSites[i]
-			}
-		}
-	}
-	return nil
-}
-
-// forURL fills in the parts of a multi-tenant entry that only the link can
-// supply.
 //
-// booru.org is one install serving a board per subdomain, and there are far
-// more of them than anyone will enumerate — the same argument the KVS host
-// list loses, and the same answer: the board's own subdomain is its root and
-// its label, so both are read off the URL and neither is compiled in.
-func (s *booruSite) forURL(u *url.URL) *booruSite {
-	if !s.multi {
-		return s
-	}
-	board := *s
-	board.root = util.Origin(u)
-	if label, _, _ := strings.Cut(strings.ToLower(u.Hostname()), "."); label != "" {
-		board.name = label
-	}
-	return &board
+// The boards claimed by their hosts (familyInstalls) are known, and each
+// is read as the software it is known to run (booruBoards), with nothing
+// guessed and nothing asked ahead of the extraction's own requests.
+//
+// Any other board is recognised: a page by the form its family lays posts
+// out at, by the markup its software renders — the posts controller and
+// request-forgery token of the Rails boards, the thumbnail anchors of the
+// PHP ones, the post registry of Moebooru, the image containers of
+// Philomena, the app shell of szurubooru — and then by the family's API
+// answering for that very post or listing. Several of these sites answer
+// the page with a challenge while serving their JSON openly, so a page
+// that cannot say is asked of the API alone.
+type Booru struct {
+	about
+	client *httpx.Client
+	// boards are the known boards, a field so a test can stand in for one.
+	boards map[string]booruBoard
+	// szurubooru remembers per origin whether it answered szurubooru's
+	// post API at all: its /post/<n> is every forum's and link
+	// aggregator's post too, and a page of them would otherwise put the
+	// same guess to the same site once a link.
+	szurubooru verdictMemo
 }
 
-// Extract resolves a tag search, or a single post, into files.
-func (b *Booru) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	site := siteFor(u)
+// booruBoard is what a known board runs: its API family and, on a
+// Philomena board, the id of its "Everything" filter.
+type booruBoard struct {
+	api      booruAPI
+	filterID string
+}
+
+// booruBoards are the boards claimed by their hosts, by domain (a domain
+// takes its subdomains, which is every board booru.org hosts). The
+// Philomena boards' "Everything" filters are numbered by each board, and
+// are its own system filters; one not known here is looked up.
+var booruBoards = map[string]booruBoard{
+	"aibooru.online": {api: apiDanbooru}, "booru.borvar.art": {api: apiDanbooru},
+	"e621.net": {api: apiE621}, "e926.net": {api: apiE621}, "e6ai.net": {api: apiE621},
+	"yande.re": {api: apiMoebooru}, "konachan.com": {api: apiMoebooru}, "konachan.net": {api: apiMoebooru},
+	"sakugabooru.com": {api: apiMoebooru},
+	"safebooru.org":   {api: apiGelbooru}, "tbib.org": {api: apiGelbooru}, "hypnohub.net": {api: apiGelbooru},
+	"xbooru.com":     {api: apiGelbooru},
+	"derpibooru.org": {api: apiPhilomena, filterID: "56027"}, "ponybooru.org": {api: apiPhilomena, filterID: "3"},
+	"furbooru.org": {api: apiPhilomena, filterID: "2"}, "twibooru.org": {api: apiTwibooru},
+	"snootbooru.com": {api: apiSzurubooru}, "booru.foalcon.com": {api: apiSzurubooru},
+	"booru.org": {api: apiGelbooru01},
+}
+
+// NewBooru builds the image-board extractor. Its shape is the forms the
+// families lay their posts out at.
+func NewBooru(client *httpx.Client) *Booru {
+	return &Booru{client: client, boards: booruBoards, about: about{name: "booru",
+		shape: func(u *url.URL) bool { return len(booruCandidates(u)) > 0 },
+		recognises: "image-board tag searches and posts on Danbooru, e621, Moebooru, Gelbooru, Philomena, " +
+			"Twibooru and szurubooru boards (`/posts?tags=`, `/posts/<id>`, `/post/show/<id>`, " +
+			"`/index.php?page=post`, `/images/<id>`, `/post/<id>`) whose page carries the software's " +
+			"markup and whose API answers for the same post or listing; Gelbooru 0.1 boards by their " +
+			"listing markup alone"}}
+}
+
+// Recognise takes a post or listing form whose page is a board's, by its
+// markup, and whose API then answers; or, where the page cannot say, whose
+// API answers alone.
+func (b *Booru) Recognise(ctx context.Context, p *Page) bool {
+	return b.detect(ctx, p, p.Final) != nil
+}
+
+// Extract resolves a tag search, or a single post, into files. A known
+// board (booruBoards) is read as what it runs; any other is detected.
+func (b *Booru) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	p := probed(ctx, u)
+	if board, ok := b.board(u); ok {
+		site := &booruSite{name: booruLabel(u.Hostname()), root: util.Origin(u), api: board.api,
+			filterID: board.filterID, probe: p}
+		if site.api == apiPhilomena && site.filterID == "" {
+			site.filterID = philomenaEverythingFilter(ctx, p, b.client, site)
+		}
+		return b.extract(ctx, u, site, opts)
+	}
+	if p == nil {
+		p = probePage(ctx, b.client, u)
+	}
+	site := b.detect(ctx, p, u)
 	if site == nil {
-		return nil, fmt.Errorf("booru: %s is not a supported board", u.Redacted())
+		return nil, fmt.Errorf("booru: %s is not a board this can read", u.Redacted())
 	}
-	return b.extract(ctx, u, site.forURL(u))
+	if site.api == apiPhilomena && site.filterID == "" {
+		site.filterID = philomenaEverythingFilter(ctx, p, b.client, site)
+	}
+	return b.extract(ctx, u, site, opts)
 }
 
-func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Result, error) {
+func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite, opts Options) (*Result, error) {
 	tags, postID, listing := site.parseTarget(u)
 	if postID != "" {
-		files, err := b.fetch(ctx, site, "id:"+postID, postID)
+		files, _, err := b.fetch(ctx, site, "id:"+postID, postID, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +231,7 @@ func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Resu
 			"paste a tag search or a post link", u.Redacted())
 	}
 
-	files, err := b.fetch(ctx, site, tags, "")
+	files, note, err := b.fetch(ctx, site, tags, "", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -225,67 +241,278 @@ func (b *Booru) extract(ctx context.Context, u *url.URL, site *booruSite) (*Resu
 	} else {
 		title += " latest"
 	}
-	return &Result{Title: title, Files: files}, nil
+	return &Result{Title: title, Files: files, Note: note}, nil
 }
 
-// booruSniff uses the route to select plausible API dialects, then requires
-// a post id and original-media metadata in the response. Danbooru and e621
-// share an endpoint; the nested file in the answer distinguishes them.
-func booruSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options) (*Result, error) {
-	segs := util.PathSegments(u)
-	var candidates []booruAPI
-	switch {
-	case u.Query().Get("page") == "post" && (u.Path == "/" || u.Path == "/index.php"):
-		candidates = []booruAPI{apiGelbooru}
-	case len(segs) > 0 && segs[0] == "posts":
-		candidates = []booruAPI{apiDanbooru, apiSzurubooru, apiTwibooru, apiPhilomena}
-	case len(segs) > 0 && segs[0] == "post":
-		if len(segs) == 1 || (len(segs) >= 3 && segs[1] == "show") {
-			candidates = []booruAPI{apiMoebooru}
-		} else {
-			candidates = []booruAPI{apiSzurubooru}
-		}
-	case len(segs) > 0 && (segs[0] == "images" || segs[0] == "search"):
-		candidates = []booruAPI{apiPhilomena, apiTwibooru}
-	case len(segs) == 0 && u.Query().Has("tags"):
-		candidates = []booruAPI{apiDanbooru, apiMoebooru, apiGelbooru, apiSzurubooru, apiPhilomena, apiTwibooru}
+// philomenaEverythingFilter looks up the philomena site's own "everything"
+// filter, or "" to leave the site's default in force. It is asked through
+// the page's memo, so recognition and extraction ask it once between them.
+func philomenaEverythingFilter(ctx context.Context, p *Page, client *httpx.Client, site *booruSite) string {
+	var resp struct {
+		Filters []struct {
+			ID   json.Number `json:"id"`
+			Name string      `json:"name"`
+		} `json:"filters"`
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, config.PlatformProbeTimeout)
-	defer cancel()
+	if !pageJSON(ctx, p, client, site.root+"/api/v1/json/filters/system", site.apiHeaders(), &resp) {
+		return ""
+	}
+	for _, f := range resp.Filters {
+		if strings.EqualFold(f.Name, philomenaEverything) {
+			return f.ID.String()
+		}
+	}
+	return ""
+}
+
+// booruCandidates are the API families a URL's form could belong to, most
+// likely first; none when the form is no board's.
+func booruCandidates(u *url.URL) []booruAPI {
+	segs := util.PathSegments(u)
+	switch {
+	case u.Query().Get("page") == "post" && (u.Path == "/" || u.Path == "" || u.Path == "/index.php"):
+		return []booruAPI{apiGelbooru, apiGelbooru01}
+	case len(segs) > 0 && segs[0] == "posts" && len(segs) <= 2:
+		return []booruAPI{apiDanbooru, apiSzurubooru, apiTwibooru, apiPhilomena}
+	case len(segs) > 0 && segs[0] == "post":
+		// Moebooru writes a post as /post/show/<id>, and links it with the
+		// post's tags after the id as a slug.
+		switch {
+		case len(segs) == 1:
+			return []booruAPI{apiMoebooru, apiSzurubooru}
+		case len(segs) >= 3 && segs[1] == "show":
+			return []booruAPI{apiMoebooru}
+		case len(segs) == 2:
+			return []booruAPI{apiSzurubooru}
+		}
+	case len(segs) == 2 && segs[0] == "images":
+		return []booruAPI{apiPhilomena, apiTwibooru}
+	case len(segs) == 1 && segs[0] == "search" && u.Query().Has("q"):
+		return []booruAPI{apiPhilomena, apiTwibooru}
+	case len(segs) == 0 && u.Query().Has("tags"):
+		return []booruAPI{apiDanbooru, apiMoebooru, apiGelbooru, apiSzurubooru, apiPhilomena, apiTwibooru}
+	}
+	return nil
+}
+
+// booruMarked reports whether a page carries a board's own markup: the
+// structure one of the families renders, which no ordinary page shares.
+func booruMarked(p *Page) bool {
+	if p.HTML() == nil {
+		return false
+	}
+	if p.Has("Post.register") || p.Has(`data-uris`) || strings.HasPrefix(p.Generator(), "booru-on-rails") ||
+		p.Script("js/app.min.js") && p.Script("js/vendor.min.js") {
+		return true
+	}
+	return p.hasElement(func(n *html.Node) bool {
+		switch {
+		case n.DataAtom == atom.Body:
+			// The Rails boards' posts controller.
+			return attr(n, "data-controller") == "posts"
+		case n.DataAtom == atom.Img:
+			return attr(n, "id") == gelbooru01ImageID && p.Has("page=post")
+		case n.DataAtom == atom.A:
+			return strings.HasPrefix(attr(n, "id"), "p") && strings.Contains(attr(n, "href"), "s=view")
+		case n.DataAtom == atom.Div:
+			return attr(n, "id") == "image-container" || hasClass(n, "image-show-container")
+		}
+		return false
+	})
+}
+
+// booruDetect works out which board family a page belongs to, or nil.
+//
+// The URL selects plausible families, even when a custom frontend carries
+// no recognised markup. The API must answer for this very target with a
+// post id and original-media metadata. Danbooru and e621 share an endpoint;
+// the nested file in the answer distinguishes them. A Gelbooru-shaped page
+// whose API does not answer is a Gelbooru 0.1 board, which publishes none
+// and is scraped — taken only on its markup, never on silence. Every API
+// question goes through the page's memo, so recognising and extracting ask
+// it once.
+func booruDetect(ctx context.Context, p *Page, client *httpx.Client, u *url.URL) *booruSite {
+	return booruDetectGated(ctx, p, client, u, nil)
+}
+
+// detect is booruDetect with szurubooru's guess put once per origin
+// (Booru.szurubooru).
+func (b *Booru) detect(ctx context.Context, p *Page, u *url.URL) *booruSite {
+	return booruDetectGated(ctx, p, b.client, u, &b.szurubooru)
+}
+
+// board is the known board u is on, if any.
+func (b *Booru) board(u *url.URL) (booruBoard, bool) {
+	for domain, board := range b.boards {
+		if util.HostMatches(u.Hostname(), domain) {
+			return board, true
+		}
+	}
+	return booruBoard{}, false
+}
+
+// booruDetectGated is booruDetect, asking szurubooru's API of an origin
+// only while szurubooru (when set) has not found that it answers in
+// another shape or not at all.
+func booruDetectGated(ctx context.Context, p *Page, client *httpx.Client, u *url.URL, szurubooru *verdictMemo) *booruSite {
+	candidates := booruCandidates(u)
+	marked := booruMarked(p)
+	if len(candidates) == 0 && marked && u.Path == "/search" {
+		// A bare /search is the latest images on a Philomena board, and
+		// too common a form for the link scanner: it is taken only from a
+		// page that carries a board's own markup.
+		candidates = []booruAPI{apiPhilomena, apiTwibooru}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	segs := util.PathSegments(u)
+	name := booruLabel(u.Hostname())
 	for _, api := range candidates {
-		if probeCtx.Err() != nil {
-			return nil, ctx.Err()
+		if ctx.Err() != nil {
+			return nil
 		}
 		if api == apiSzurubooru && len(segs) > 1 && segs[0] == "posts" {
 			continue // szurubooru's single-post route is /post/<id>
 		}
-		site := &booruSite{name: u.Hostname(), root: util.Origin(u), api: api}
+		site := &booruSite{name: name, root: util.Origin(u), api: api, probe: p}
 		tags, postID, listing := site.parseTarget(u)
 		if !listing && postID == "" {
+			continue
+		}
+		if api == apiGelbooru01 {
+			// A Gelbooru 0.2 board renders much the same markup, so an API
+			// that did not answer once is not taken for one that does not
+			// exist: only a page whose images are on the legacy network's
+			// own thumbnail and image layout is scraped. Otherwise a 0.2
+			// board whose API failed would be read for its samples.
+			if marked && p.OK() && gelbooru01Layout(p) {
+				return site
+			}
 			continue
 		}
 		if postID != "" {
 			tags = "id:" + postID
 		}
-		var raw json.RawMessage
-		if !platformJSON(probeCtx, client, site.endpoint(tags, 0), site.apiHeaders(), &raw) {
+		if api == apiSzurubooru && szurubooru != nil && !szurubooru.ask(ctx, u.Host, func() (yes, definite bool) {
+			return szurubooruAnswered(ctx, p, client, site, tags)
+		}) {
 			continue
 		}
-		posts, err := booruDecode(raw)
-		if err != nil {
-			continue
+		if booruAnswers(ctx, p, client, site, tags, postID, marked) {
+			return site
 		}
-		for _, post := range posts {
-			if post.ID.String() == "" || post.fileURL(site) == "" || (postID != "" && post.ID.String() != postID) {
-				continue
+		// A philomena site's default filter hides much of what it holds,
+		// so a post or search it hides answers empty. Asked again under
+		// the site's own "everything" filter, it answers for what it has.
+		if api == apiPhilomena && philomenaAnswered(ctx, p, client, site, tags) {
+			if site.filterID = philomenaEverythingFilter(ctx, p, client, site); site.filterID != "" &&
+				booruAnswers(ctx, p, client, site, tags, postID, marked) {
+				return site
 			}
-			if api == apiDanbooru && post.File.URL != "" {
-				site.api = apiE621
-			}
-			return NewBooru(client).extract(ctx, u, site)
 		}
 	}
-	return nil, nil
+	return nil
+}
+
+// booruAnswers reports whether the site's API answers the first page of tags
+// with a post, the post postID when one is named, that has a file; the
+// answer's nested file says e621 apart from Danbooru, which share an
+// endpoint. On a page that carries a board's own markup (marked), a search
+// whose first page holds only posts that withhold their file from an
+// anonymous caller answers too: later pages may still hold files.
+func booruAnswers(ctx context.Context, p *Page, client *httpx.Client, site *booruSite, tags, postID string, marked bool) bool {
+	var raw json.RawMessage
+	if !pageJSON(ctx, p, client, site.endpoint(tags, 0), site.apiHeaders(), &raw) {
+		return false
+	}
+	posts, err := booruDecode(raw)
+	if err != nil {
+		return false
+	}
+	hidden := false
+	for _, post := range posts {
+		if post.ID.String() == "" || (postID != "" && post.ID.String() != postID) {
+			continue
+		}
+		if post.fileURL(site) == "" {
+			hidden = hidden || marked
+			continue
+		}
+		if site.api == apiDanbooru && post.File.URL != "" {
+			site.api = apiE621
+		}
+		return true
+	}
+	return hidden && postID == ""
+}
+
+// philomenaAnswered reports whether the first page of tags was answered in
+// philomena's own shape, a list of images however empty: a site that runs
+// the software, whose filter may be what emptied it.
+func philomenaAnswered(ctx context.Context, p *Page, client *httpx.Client, site *booruSite, tags string) bool {
+	var answer struct {
+		Images *[]json.RawMessage `json:"images"`
+	}
+	return pageJSON(ctx, p, client, site.endpoint(tags, 0), site.apiHeaders(), &answer) && answer.Images != nil
+}
+
+// szurubooruAnswered reports whether the first page of tags was answered in
+// szurubooru's own shape, a list of results however empty: an origin that
+// runs the software, whatever this one post or search holds. It is the
+// question booruAnswers asks, read for its shape alone, so the first link
+// on an origin costs no request of its own.
+// It also reports whether the endpoint gave an answer of its own, so that
+// only that is remembered as a no (verdictMemo).
+func szurubooruAnswered(ctx context.Context, p *Page, client *httpx.Client, site *booruSite, tags string) (yes, answered bool) {
+	var answer struct {
+		Results *[]json.RawMessage `json:"results"`
+	}
+	ok, answered := pageJSONAnswer(ctx, p, client, site.endpoint(tags, 0), site.apiHeaders(), &answer)
+	return ok && answer.Results != nil, answered
+}
+
+// gelbooru01Layout reports whether a page's images are laid out as the
+// legacy network serves them: a listing thumbnail the original can be
+// derived from (gelbooru01Image), or a post's image under its board's own
+// images directory on an image host.
+func gelbooru01Layout(p *Page) bool {
+	return p.hasElement(func(n *html.Node) bool {
+		if n.DataAtom != atom.Img {
+			return false
+		}
+		src := attr(n, "src")
+		if gelbooru01Image(src) != "" {
+			return true
+		}
+		return attr(n, "id") == gelbooru01ImageID && gelbooru01Original(src)
+	})
+}
+
+// gelbooru01Original reports whether a post's image is where the legacy
+// network keeps originals: https://img.<network>/<board>/images/<dir>/<name>.
+func gelbooru01Original(src string) bool {
+	u, err := url.Parse(strings.TrimSpace(src))
+	if err != nil || !strings.HasPrefix(u.Hostname(), "img.") {
+		return false
+	}
+	segs := util.PathSegments(u)
+	return len(segs) >= 4 && segs[1] == "images"
+}
+
+// booruLabel names a board by its host's first label, as hostLabel does,
+// unless that label is a word boards share — "booru" itself, an image or
+// mobile subdomain — when the next label is the board's own: two boards at
+// booru.<a> and booru.<b> never share a name or a folder.
+func booruLabel(host string) string {
+	labels := strings.Split(strings.TrimPrefix(strings.ToLower(host), "www."), ".")
+	if len(labels) > 2 {
+		switch labels[0] {
+		case "booru", "img", "m", "api", "boards":
+			return labels[1]
+		}
+	}
+	return hostLabel(host)
 }
 
 // parseTarget pulls a tag query or a single post id out of a URL, and
@@ -308,7 +535,7 @@ func (s *booruSite) parseTarget(u *url.URL) (tags, postID string, listing bool) 
 			return "", segs[1], true
 		}
 		_, hasQuery := query["query"]
-		return util.FirstNonEmpty(query.Get("query"), query.Get("tags")), "",
+		return cmp.Or(query.Get("query"), query.Get("tags")), "",
 			hasQuery || hasTags || (len(segs) >= 1 && segs[0] == "posts")
 	case apiPhilomena, apiTwibooru:
 		// /search?q=...  or  /images/123
@@ -316,7 +543,7 @@ func (s *booruSite) parseTarget(u *url.URL) (tags, postID string, listing bool) 
 			return "", segs[1], true
 		}
 		_, hasQuery := query["q"]
-		return util.FirstNonEmpty(query.Get("q"), query.Get("tags")), "",
+		return cmp.Or(query.Get("q"), query.Get("tags")), "",
 			hasQuery || hasTags || (len(segs) == 1 && segs[0] == "search")
 	case apiMoebooru:
 		// /post?tags=...  or  /post/show/123
@@ -334,77 +561,111 @@ func (s *booruSite) parseTarget(u *url.URL) (tags, postID string, listing bool) 
 	}
 }
 
-// fetch pages through the board until the results run out.
-func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string) ([]File, error) {
-	var files []File
+// fetch pages through the board until the results run out: to the total
+// the families that state one give, or else to the first empty page.
+func (b *Booru) fetch(ctx context.Context, site *booruSite, tags, single string, opts Options) ([]File, string, error) {
 	fileHeaders := httpx.Referer(site.root + "/")
 	apiHeaders := site.apiHeaders()
 
-	// Capped on pages as well as posts: a tag whose posts all withhold their
-	// file from an anonymous caller adds nothing per page and would
-	// otherwise be walked to the board's end.
-	for page := 0; len(files) < booruMaxPosts && page < config.MaxAlbumPages; page++ {
-		posts, err := b.posts(ctx, site, tags, single, page, apiHeaders)
-		if err != nil {
-			if page == 0 {
-				return nil, fmt.Errorf("booru: %s: %w", site.name, err)
+	// Posts are what is walked, so that a page whose posts all withhold their
+	// file from an anonymous caller is no page that adds nothing. A board
+	// that stops answering partway through is not a reason to discard what
+	// it did answer: booru.org ends a long walk exactly this way when its
+	// rate limit runs out.
+	//
+	// The walk is held to the boards' own bound as well as the user's file
+	// cap (hostLimit), since they rate-limit a long walk hard. A board that
+	// ignores its page parameter past the end serves the last page again,
+	// and a page that adds nothing is that end rather than a cut. A legacy
+	// board's pages hold a fixed twenty, so a shorter one is its last.
+	limit, limitNote := hostLimit(opts, config.MaxBooruPosts)
+	posts, note, err := walkPages(ctx, pageWalk[booruPost]{
+		key: func(post booruPost) string {
+			return cmp.Or(post.ID.String(), post.fileURL(site), post.MD5)
+		},
+		limit: limit, limitNote: limitNote,
+		// Gelbooru 0.2 answers a page past the end with an empty body,
+		// which is that end, not a page that could not be fetched.
+		ends: walkAccepts{repeated: true, undecodable: true},
+		// The bound counts files: a post that withholds its file from an
+		// anonymous caller uses none of it.
+		weigh: func(posts []booruPost) int {
+			n := 0
+			for _, post := range posts {
+				if post.fileURL(site) != "" {
+					n++
+				}
 			}
-			// A board that stops answering partway through is not a reason
-			// to discard what it did answer: several hundred posts already
-			// in hand beat an error message. booru.org ends a long walk
-			// exactly this way when its rate limit runs out.
-			break
-		}
-		for _, post := range posts {
-			link := post.fileURL(site)
-			if link == "" {
-				continue
+			return n
+		},
+		fetch: func(ctx context.Context, n int) (pageOf[booruPost], error) {
+			posts, total, short, err := b.posts(ctx, site, tags, single, n, apiHeaders)
+			if err != nil {
+				return pageOf[booruPost]{}, fmt.Errorf("booru: %s: %w", site.name, err)
 			}
-			files = append(files, File{
-				Name:    post.filename(link),
-				URL:     link,
-				Size:    post.size(),
-				Headers: fileHeaders,
-			})
+			// A single post never pages.
+			return pageOf[booruPost]{items: posts, next: true, total: total,
+				end: single != "" || len(posts) == 0 || short}, nil
+		},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	var files []File
+	for _, post := range posts {
+		link := post.fileURL(site)
+		if link == "" {
+			continue
 		}
-		// A short page is the last page, and a single post never pages.
-		if len(posts) < site.pageSize() || single != "" {
-			break
-		}
+		files = append(files, File{
+			Name:    post.filename(link),
+			URL:     link,
+			Size:    post.size(),
+			Headers: fileHeaders,
+		})
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("booru: %s returned no posts for %q", site.name, tags)
+		return nil, "", fmt.Errorf("booru: %s returned no posts for %q", site.name, tags)
 	}
-	return files, nil
+	// The page that crossed the bound was kept whole; what is past it is
+	// this walk's to cut.
+	if len(files) > limit {
+		files = files[:limit]
+	}
+	return files, note, nil
 }
 
 // posts fetches one page of results in whichever form the board publishes
-// them: as JSON from an API, or as the listing page itself.
+// them: as JSON from an API, or as the listing page itself, with the total
+// the page states, 0 when it states none, and whether the page is short of
+// the fixed size a board that sets one serves, which makes it the last.
 func (b *Booru) posts(ctx context.Context, site *booruSite, tags, single string,
-	page int, headers httpx.Header) ([]booruPost, error) {
+	page int, headers httpx.Header) ([]booruPost, int, bool, error) {
 
 	if site.api == apiGelbooru01 {
 		if single != "" {
-			return b.scrapePost(ctx, site, single, headers)
+			posts, err := b.scrapePost(ctx, site, single, headers)
+			return posts, 0, false, err
 		}
 		if page > 0 {
-			if err := util.SleepCtx(ctx, gelbooru01Pace); err != nil {
-				return nil, err
+			if err := util.SleepCtx(ctx, config.Gelbooru01Pace); err != nil {
+				return nil, 0, false, err
 			}
 		}
-		return b.scrapeList(ctx, site, tags, page, headers)
+		posts, thumbs, err := b.scrapeList(ctx, site, tags, page, headers)
+		return posts, 0, thumbs < gelbooru01PageSize, err
 	}
-	return b.page(ctx, site.endpoint(tags, page), headers)
+	posts, total, err := b.page(ctx, site, tags, page, headers)
+	return posts, total, false, err
 }
 
-// pageSize is how many posts one request returns when there are more to come.
-// It is what tells the last page from a full one, so it has to be what the
-// board does rather than what was asked of it.
-func (s *booruSite) pageSize() int {
-	if s.api == apiGelbooru01 {
-		return gelbooru01PageSize
+// hostLimit is the lower of the user's file cap and a host's own bound on a
+// long walk, with the note naming which cut it.
+func hostLimit(opts Options, bound int) (int, string) {
+	if limit := opts.maxFiles(); limit <= bound {
+		return limit, fileLimitNote
 	}
-	return booruPageSize
+	return bound, postLimitNote
 }
 
 // apiHeaders are what a request for a listing needs, which is not what a
@@ -417,71 +678,49 @@ func (s *booruSite) pageSize() int {
 // files: asking an image server for JSON is a different question.
 func (s *booruSite) apiHeaders() httpx.Header {
 	headers := httpx.Referer(s.root + "/")
-	if s.api == apiSzurubooru {
+	if booruDialects[s.api].json {
 		headers[httpx.HeaderAccept] = httpx.ContentTypeJSON
 	}
 	return headers
 }
 
-// endpoint builds the API request for one page.
+// endpoint builds the API request for one page, counted from 0, in the
+// family's dialect.
 func (s *booruSite) endpoint(tags string, page int) string {
-	query := url.Values{}
-	switch s.api {
-	case apiGelbooru:
-		query.Set("page", "dapi")
-		query.Set("s", "post")
-		query.Set("q", "index")
-		query.Set("json", "1")
-		query.Set("tags", tags)
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		query.Set("pid", strconv.Itoa(page)) // zero-based
-		return s.root + "/index.php?" + query.Encode()
-	case apiGelbooru01:
-		query.Set("page", "post")
-		query.Set("s", "list")
-		query.Set("tags", tags)
-		// pid counts posts rather than pages here: the board's own paginator
-		// steps it by the size of a page.
-		query.Set("pid", strconv.Itoa(page*gelbooru01PageSize))
-		return s.root + "/index.php?" + query.Encode()
-	case apiSzurubooru:
-		query.Set("query", tags)
-		query.Set("offset", strconv.Itoa(page*booruPageSize))
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		return s.root + "/api/posts/?" + query.Encode()
-	case apiPhilomena:
-		query.Set("q", tags)
-		query.Set("per_page", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		if s.filterID != "" {
-			query.Set("filter_id", s.filterID)
-		}
-		return s.root + "/api/v1/json/search/images?" + query.Encode()
-	case apiTwibooru:
-		query.Set("q", tags)
-		query.Set("per_page", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		return s.root + "/api/v3/search/posts?" + query.Encode()
-	case apiMoebooru:
-		query.Set("tags", tags)
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		return s.root + "/post.json?" + query.Encode()
-	default: // danbooru, e621
-		query.Set("tags", tags)
-		query.Set("limit", strconv.Itoa(booruPageSize))
-		query.Set("page", strconv.Itoa(page+1))
-		return s.root + "/posts.json?" + query.Encode()
+	d := booruDialects[s.api]
+	query, _ := url.ParseQuery(d.fixed)
+	query.Set(d.tags, tags)
+	query.Set(d.page, strconv.Itoa(d.first+page*d.step))
+	if d.limit != "" {
+		query.Set(d.limit, strconv.Itoa(booruPageSize))
 	}
+	// Only a philomena site's is ever looked up.
+	if s.filterID != "" {
+		query.Set("filter_id", s.filterID)
+	}
+	return s.root + d.path + "?" + query.Encode()
 }
 
-// page fetches and normalises one response, whatever shape it arrives in.
-func (b *Booru) page(ctx context.Context, endpoint string, headers httpx.Header) ([]booruPost, error) {
+// page fetches and normalises one response, whatever shape it arrives in,
+// with the total that szurubooru and philomena state beside their results.
+// The first page is the one recognition asked for, when it did, and its
+// answer is taken rather than asked again.
+func (b *Booru) page(ctx context.Context, site *booruSite, tags string, n int, headers httpx.Header) ([]booruPost, int, error) {
+	endpoint := site.endpoint(tags, n)
 	var raw json.RawMessage
-	if err := b.client.GetJSON(ctx, endpoint, headers, &raw); err != nil {
-		return nil, err
+	if n > 0 || !askedJSON(ctx, site.probe, b.client, endpoint, headers, &raw) {
+		if err := b.client.GetJSON(ctx, endpoint, headers, &raw); err != nil {
+			return nil, 0, err
+		}
 	}
-	return booruDecode(raw)
+	var stated struct {
+		Total int `json:"total"`
+	}
+	if len(raw) > 0 && raw[0] == '{' {
+		_ = json.Unmarshal(raw, &stated)
+	}
+	posts, err := booruDecode(raw)
+	return posts, stated.Total, err
 }
 
 func booruDecode(raw json.RawMessage) ([]booruPost, error) {
@@ -526,13 +765,14 @@ func booruDecode(raw json.RawMessage) ([]booruPost, error) {
 // of twenty-one. If the board ever changes that mapping the downloads fail
 // visibly with a 404 rather than quietly saving thumbnails.
 func (b *Booru) scrapeList(ctx context.Context, site *booruSite, tags string,
-	page int, headers httpx.Header) ([]booruPost, error) {
+	page int, headers httpx.Header) ([]booruPost, int, error) {
 
 	doc, err := b.client.GetString(ctx, site.endpoint(tags, page), headers)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return gelbooru01Posts(doc), nil
+	posts, thumbs := gelbooru01Posts(doc)
+	return posts, thumbs, nil
 }
 
 // scrapePost reads a single post's own page, which is where a board with no
@@ -561,17 +801,20 @@ func (s *booruSite) postURL(id string) string {
 //
 // Only the thumbnails count. A board's page carries plenty of other images —
 // its own furniture, and the adverts it is paid for — and every one of them
-// would otherwise be queued as a post.
-func gelbooru01Posts(doc string) []booruPost {
+// would otherwise be queued as a post. How many thumbnails the page held is
+// returned beside the posts, read or not, since that is what says whether
+// the page was a full one.
+func gelbooru01Posts(doc string) ([]booruPost, int) {
 	root, err := parseHTML(doc)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 
 	var posts []booruPost
-	for _, thumb := range findAll(root, func(n *html.Node) bool {
+	thumbs := findAll(root, func(n *html.Node) bool {
 		return hasClass(n, gelbooru01ThumbClass)
-	}) {
+	})
+	for _, thumb := range thumbs {
 		img := findFirst(thumb, func(n *html.Node) bool { return isElem(n, atom.Img) })
 		if img == nil {
 			continue
@@ -585,7 +828,7 @@ func gelbooru01Posts(doc string) []booruPost {
 			FileURL: link,
 		})
 	}
-	return posts
+	return posts, len(thumbs)
 }
 
 // gelbooru01Post reads the one image a post's page shows.
@@ -694,7 +937,7 @@ type booruPost struct {
 
 // fileURL finds the full-size file for a post.
 func (p *booruPost) fileURL(site *booruSite) string {
-	if link := util.FirstNonEmpty(p.FileURL, p.File.URL, p.ContentURL,
+	if link := cmp.Or(p.FileURL, p.File.URL, p.ContentURL,
 		p.ViewURL, p.Representations.Full); link != "" {
 		switch {
 		case strings.HasPrefix(link, "//"):
@@ -719,26 +962,18 @@ func (p *booruPost) fileURL(site *booruSite) string {
 // filename names the saved file after the post, so results sort by id and
 // two boards never collide.
 func (p *booruPost) filename(link string) string {
-	ext := path.Ext(util.NameFromURL(link))
-	if ext == "" && p.File.Ext != "" {
+	ext := ""
+	if p.File.Ext != "" {
 		ext = "." + p.File.Ext
 	}
+	ext = linkExtAsIs(link, ext)
 	if id := p.ID.String(); id != "" {
 		return id + ext
 	}
-	return util.FirstNonEmpty(util.NameFromURL(link), p.MD5+ext)
+	return cmp.Or(util.NameFromURL(link), p.MD5+ext)
 }
 
 // size reports the byte length when the board included one.
 func (p *booruPost) size() int64 {
-	if p.Size > 0 {
-		return p.Size
-	}
-	if p.File.Size > 0 {
-		return p.File.Size
-	}
-	if p.Bytes > 0 {
-		return p.Bytes
-	}
-	return -1
+	return knownSize(p.Size, p.File.Size, p.Bytes)
 }

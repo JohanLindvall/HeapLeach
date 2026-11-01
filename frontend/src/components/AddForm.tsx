@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { memo, useRef, useState, type FormEvent } from 'react';
-import { addUrls, ApiError } from '../api';
+import { addUrls, errorMessage } from '../api';
 import { linksIn } from '../links';
 import type { AddResponse } from '../types';
 import { ClipboardIcon, DownloadIcon } from './Icons';
@@ -60,7 +60,7 @@ export const AddForm = memo(function AddForm({ onNotice }: AddFormProps) {
       }
       return result;
     } catch (error) {
-      onNotice(error instanceof ApiError ? error.message : 'Could not reach the server.', 'error');
+      onNotice(errorMessage(error, 'Could not reach the server.'), 'error');
       return null;
     }
   };

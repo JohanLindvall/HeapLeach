@@ -12,15 +12,13 @@ import (
 )
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, s.mgr.CurrentSettings())
 }
 
 func (s *Server) handleProxies(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
 	values := r.URL.Query()
 	q := proxy.Query{Search: values.Get("search"), Status: values.Get("status"), Sort: values.Get("sort"), Site: values.Get("site")}
-	if q.Site != "" && !slices.Contains(proxy.Services(), q.Site) {
+	if q.Site != "" && !config.IsProxyGroup(q.Site) {
 		writeError(w, http.StatusBadRequest, "invalid proxy service")
 		return
 	}

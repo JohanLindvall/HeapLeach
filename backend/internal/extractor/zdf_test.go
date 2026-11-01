@@ -4,10 +4,11 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -244,10 +245,7 @@ func zdfTestClient() *httpx.Client {
 
 func zdfParse(t *testing.T, body string) *zdfResponse {
 	t.Helper()
-	var res zdfResponse
-	if err := json.Unmarshal([]byte(body), &res); err != nil {
-		t.Fatal(err)
-	}
+	res := decode[zdfResponse](t, body)
 	return &res
 }
 
@@ -258,7 +256,7 @@ func zdfParse(t *testing.T, body string) *zdfResponse {
 func TestZDFFileTakesTheLargestOrdinaryRendition(t *testing.T) {
 	doc := zdfParse(t, zdfProgramme)
 
-	file, err := (&ZDF{}).file(context.Background(), &doc.Document, newZDFReach(nil))
+	file, err := NewZDF(nil).file(context.Background(), &doc.Document, newZDFReach(nil))
 	if err != nil {
 		t.Fatalf("file: %v", err)
 	}
@@ -331,10 +329,7 @@ func TestZDFPickFallsBackToThePlaylist(t *testing.T) {
 // TestZDFMasterPlaylistIsSelfContained is the ordinary case, and the reason
 // the playlist fallback is worth having at all.
 func TestZDFMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://vod.example.test/i/mp4/none/a.csmil/master.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://vod.example.test/i/mp4/none/a.csmil/master.m3u8")
 
 	variants := parseMasterPlaylist(zdfMasterPlaylist, base)
 	if len(variants) != 2 {
@@ -384,7 +379,7 @@ func TestZDFDescribedPlaylistComesWithItsAudio(t *testing.T) {
 		}},
 	}
 
-	file, err := (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	file, err := NewZDF(zdfTestClient()).file(context.Background(), doc, newZDFReach(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +391,7 @@ func TestZDFDescribedPlaylistComesWithItsAudio(t *testing.T) {
 	}
 
 	master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1609656,CODECS=\"avc1.4d401f\"\nindex-f1-v1.m3u8\n"
-	_, err = (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	_, err = NewZDF(zdfTestClient()).file(context.Background(), doc, newZDFReach(nil))
 	if err == nil || !strings.Contains(err.Error(), "names no audio") {
 		t.Errorf("err = %v; want a playlist with no audio anywhere refused, saying so", err)
 	}
@@ -424,7 +419,7 @@ func TestZDFPlaylistResolvesToSegments(t *testing.T) {
 		}},
 	}
 
-	file, err := (&ZDF{client: zdfTestClient()}).file(context.Background(), doc, newZDFReach(nil))
+	file, err := NewZDF(zdfTestClient()).file(context.Background(), doc, newZDFReach(nil))
 	if err != nil {
 		t.Fatalf("file: %v", err)
 	}
@@ -445,7 +440,7 @@ func TestZDFPlaylistResolvesToSegments(t *testing.T) {
 func TestZDFAnnouncedProgrammeQuotesTheBroadcaster(t *testing.T) {
 	doc := zdfParse(t, zdfAnnounced)
 
-	_, err := (&ZDF{}).file(context.Background(), &doc.Document, newZDFReach(nil))
+	_, err := NewZDF(nil).file(context.Background(), &doc.Document, newZDFReach(nil))
 	if err == nil {
 		t.Fatal("a document with no renditions was accepted")
 	}
@@ -466,7 +461,7 @@ func TestZDFAnnouncedProgrammeQuotesTheBroadcaster(t *testing.T) {
 func TestZDFWatershedQuotesTheRightField(t *testing.T) {
 	doc := zdfParse(t, zdfWatershed)
 
-	_, err := (&ZDF{}).file(context.Background(), &doc.Document, newZDFReach(nil))
+	_, err := NewZDF(nil).file(context.Background(), &doc.Document, newZDFReach(nil))
 	if err == nil {
 		t.Fatal("a document with no renditions was accepted")
 	}
@@ -495,12 +490,9 @@ func TestZDFRegionIsProbedOnceAndNamed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var res zdfResponse
-	if err := json.Unmarshal([]byte(strings.Replace(zdfRegionLocked, "%s", srv.URL, 1)), &res); err != nil {
-		t.Fatal(err)
-	}
+	res := decode[zdfResponse](t, strings.Replace(zdfRegionLocked, "%s", srv.URL, 1))
 
-	z := &ZDF{client: zdfTestClient()}
+	z := NewZDF(zdfTestClient())
 	reach := newZDFReach(z.client)
 	for range 3 {
 		_, err := z.file(context.Background(), &res.Document, reach)
@@ -526,12 +518,9 @@ func TestZDFRegionWithinReachIsNotRefused(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var res zdfResponse
-	if err := json.Unmarshal([]byte(strings.Replace(zdfRegionLocked, "%s", srv.URL, 1)), &res); err != nil {
-		t.Fatal(err)
-	}
+	res := decode[zdfResponse](t, strings.Replace(zdfRegionLocked, "%s", srv.URL, 1))
 
-	z := &ZDF{client: zdfTestClient()}
+	z := NewZDF(zdfTestClient())
 	file, err := z.file(context.Background(), &res.Document, newZDFReach(z.client))
 	if err != nil {
 		t.Fatalf("a programme this address can reach was refused: %v", err)
@@ -583,7 +572,7 @@ func TestZDFShowListsEveryVideoOnce(t *testing.T) {
 	res := zdfParse(t, zdfShow)
 
 	refs := res.videos()
-	want := []zdfRef{
+	want := []broadcastEpisode{
 		{id: "third-100", name: "Third", season: "2"},
 		{id: "trailer-100", name: "Trailer: A Show", season: ""},
 		{id: "fourth-100", name: "Fourth", season: "2"},
@@ -676,23 +665,11 @@ func TestZDFRank(t *testing.T) {
 	}
 }
 
-func TestZDFMatch(t *testing.T) {
-	z := NewZDF(nil)
-	tests := map[string]bool{
-		"https://www.zdf.de/dokus/a-show-100":                       true,
-		"https://zdf.de/video/dokus/a-show-100/a-programme-100":     true,
-		"https://zdf-prod-futura.zdf.de/mediathekV2/document/x-100": true,
-		"https://www.zdf.example.test/dokus/a-show-100":             false,
-		"https://notzdf.de/dokus/a-show-100":                        false,
-		"https://www.ardmediathek.de/video/x":                       false,
-	}
-	for raw, want := range tests {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := z.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
+func TestMatchedIDsKeepsFirstSightingsAcrossPatterns(t *testing.T) {
+	a := regexp.MustCompile(`a=([0-9]*)`)
+	b := regexp.MustCompile(`b=([0-9]+)`)
+	got := matchedIDs("a=3 b=1 a=1 a= a=2 b=3 b=4 a=3", a, b)
+	if want := []string{"3", "1", "2", "4"}; !slices.Equal(got, want) {
+		t.Errorf("matchedIDs = %q, want %q", got, want)
 	}
 }

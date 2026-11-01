@@ -81,10 +81,7 @@ func (m *Manager) joinTracks(ctx context.Context, it *Item, tracks []playlistTra
 	}
 	run, cancel := context.WithTimeout(ctx, config.RemuxTimeout)
 	defer cancel()
-	cmd := tools.CommandContext(run, ffmpeg, joinArgs(tracks, subtitles, m.probeVideo(run, tracks, subtitles), out)...)
-	diagnostic := &util.BoundedBuffer{Limit: config.ErrorBodySample}
-	cmd.Stdout, cmd.Stderr = diagnostic, diagnostic
-	err = cmd.Run()
+	diagnostic, err := runFFmpeg(run, ffmpeg, joinArgs(tracks, subtitles, m.probeVideo(run, tracks, subtitles), out)...)
 	if err == nil {
 		if info, statErr := files.stat(out); statErr != nil || info.Size() == 0 {
 			err = errors.New("it wrote nothing")
@@ -99,10 +96,20 @@ func (m *Manager) joinTracks(ctx context.Context, it *Item, tracks []playlistTra
 			return "", fmt.Errorf("joining the tracks to the video took longer than %s", config.RemuxTimeout)
 		}
 		return "", fmt.Errorf("join the tracks to the video with ffmpeg: %w: %s", err,
-			util.Truncate(strings.TrimSpace(string(diagnostic.Bytes())), 300))
+			util.Truncate(strings.TrimSpace(string(diagnostic)), 300))
 	}
 	m.log.Debug("joined the tracks to the video", "item", it.ID, "audio", apart, "subtitles", len(subtitles))
 	return out, nil
+}
+
+// runFFmpeg runs ffmpeg and returns what it said, the start of it, which is
+// where it puts the reason a run failed.
+func runFFmpeg(ctx context.Context, ffmpeg string, args ...string) ([]byte, error) {
+	cmd := tools.CommandContext(ctx, ffmpeg, args...)
+	diagnostic := &util.BoundedBuffer{Limit: config.ErrorBodySample}
+	cmd.Stdout, cmd.Stderr = diagnostic, diagnostic
+	err := cmd.Run()
+	return diagnostic.Bytes(), err
 }
 
 // videoProbe is what a join needs to know of the video's own part: how many

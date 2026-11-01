@@ -13,6 +13,15 @@ the environment named, even when an argument overrides it.
 
 Download directory precedence: positional argument → `-dir` → `HEAPLEACH_DIR`.
 
+A setting whose empty value means something of its own (`HEAPLEACH_STATE`
+empty turns persistence off) is read with `envSet`, which tells set from
+unset; the rest treat empty as absent. Numbers, sizes, durations and switches
+are one table in `FromEnv`, each row an `envInto(name, &field, parse)`; a
+new one is a row, and its error names the variable like the rest. Proxy protocols are checked in one
+place, `config.CheckProxyType` and `config.CheckProxyTypes`, for the
+environment, flags and `/api/settings` alike, so all three refuse the same
+values, and say why in the words `/api/settings` answers with.
+
 **The ceiling on parallel transfers is a setting**
 (`HEAPLEACH_MAX_CONCURRENCY`, `-max-concurrency`, default
 `config.DefaultMaxConcurrency`, 256; zero means the default). It bounds the
@@ -27,8 +36,8 @@ GiB of buffers at worst; slow ones keep the 64 KiB they start with
 
 Settings documented with what they govern:
 
-- listing caps (`HEAPLEACH_MAX_SOURCES`, `HEAPLEACH_MAX_FILES`) and
-  `HEAPLEACH_EXTRA_HOSTS`: [extractors.md](extractors.md)
+- listing caps (`HEAPLEACH_MAX_SOURCES`, `HEAPLEACH_MAX_FILES`):
+  [extractors.md](extractors.md)
 - the free-space floor, `HEAPLEACH_RESUME`, `HEAPLEACH_STATE`, and the
   settings and job limits saved with the queue: [download.md](download.md)
 - the proxy pool and its protocols: [proxies.md](proxies.md)
@@ -74,7 +83,9 @@ small, and they are worth knowing apart because they fail differently:
   out: a signed storage link is a couple of hundred characters, one per item,
   the largest thing a frame would carry, and the browser never looks at it.
   `Elapsed` is the terminal's, read from a `Snapshot` in process. A field the
-  UI stops reading comes out of the payload.
+  UI stops reading comes out of the payload. The one exception is a job's
+  `createdAt`, part of the documented API (docs/api.md) for clients that
+  sort or age jobs: one timestamp per job per frame.
 - **Only the rows that changed are sent** (`Manager.patchLocked`,
   `frontend/src/snapshotMerge.ts`). Almost nothing in a queue changes from one
   second to the next: a thousand finished files say exactly what they said
@@ -187,7 +198,14 @@ Four things are easy to break:
   `queued` forever because it has no items to finish; `finished()` treats a
   non-resolving job with zero items as done. A failed source with no items
   still makes the summary fail, as does any rejected command-line input: zero
-  failed files is not proof that every requested source succeeded.
+  failed files is not proof that every requested source succeeded. A job
+  with `JobView.Incomplete` also fails the final summary after its retained
+  files finish, with a red marker, an explicit incomplete-listing notice,
+  and `ErrIncomplete`. Completed-file and byte totals still count what was
+  saved. A failed source with no items is reported once as a resolution
+  failure. Use the flag, not the title's note: deliberate listing caps do
+  not set it and remain successful. The real `Run` tests cover a later-page
+  failure and a deliberate file cap alongside the summary's mixed cases.
 - **Byte counts must match the web UI digit for digit**: `cli.formatBytes`
   mirrors `frontend/src/format.ts` (see the conventions in
   [AGENTS.md](../../AGENTS.md)).

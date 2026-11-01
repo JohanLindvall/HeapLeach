@@ -17,17 +17,11 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
-// testFoolFuuka is an install on a reserved domain. What these tests pin is
-// how a FoolFuuka response is read, which is the same on every install and
-// cares nothing for whose archive it came from.
-var testFoolFuuka = foolFuukaSite{
-	name:    "example",
-	root:    "https://archive.example.test",
-	domains: []string{"archive.example.test"},
-}
-
-func testFoolFuukaExtractor() *FoolFuuka {
-	return &FoolFuuka{site: testFoolFuuka}
+// testFoolFuukaExtractor reads an install on a reserved domain. What these
+// tests pin is how a FoolFuuka response is read, which is the same on every
+// install and cares nothing for whose archive it came from.
+func testFoolFuukaExtractor() *foolFuukaArchive {
+	return &foolFuukaArchive{name: "example", root: "https://archive.example.test"}
 }
 
 // foolFuukaThreadJSON is a thread in the shape the API serves one, and every
@@ -434,10 +428,7 @@ func TestFoolFuukaParse(t *testing.T) {
 		{raw: "https://archive.example.test/a/search/filename/x.jpg/deleted/not-deleted/", kind: foolFuukaSearchTarget, board: "a", page: 1, query: "deleted=not-deleted&filename=x.jpg"},
 	}
 	for _, tc := range tests {
-		u, err := ParseURL(tc.raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, tc.raw)
 		got, err := foolFuukaParse(u)
 		if err != nil {
 			t.Errorf("%s: %v", tc.raw, err)
@@ -466,10 +457,7 @@ func TestFoolFuukaParseRejectsWhatIsNotABoard(t *testing.T) {
 		"https://archive.example.test/a/gallery/",
 		"https://archive.example.test/a/thread/",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got, err := foolFuukaParse(u); err == nil {
 			t.Errorf("%s was accepted as board %q kind %d", raw, got.board, got.kind)
 		}
@@ -497,67 +485,75 @@ func TestFoolFuukaIsBoard(t *testing.T) {
 	}
 }
 
-// TestFoolFuukaSitesNameAndMatchTheirHosts covers the table, including the
-// domain that is an alias rather than an install: a link to it has to resolve
-// against the archive that absorbed it, not against itself.
-func TestFoolFuukaSitesNameAndMatchTheirHosts(t *testing.T) {
-	sites := NewFoolFuukaSites(nil, nil)
-	if len(sites) != len(foolFuukaSites) {
-		t.Fatalf("got %d extractors for %d installs", len(sites), len(foolFuukaSites))
-	}
-	for i, site := range foolFuukaSites {
-		if got := sites[i].Name(); got != site.name {
-			t.Errorf("%s is named %q, want %q", site.root, got, site.name)
-		}
-		for _, domain := range site.domains {
-			u := &url.URL{Scheme: "https", Host: domain, Path: "/a/thread/1/"}
-			if !sites[i].Match(u) {
-				t.Errorf("%s did not match its own domain %s", site.name, domain)
-			}
-		}
-		if sites[i].Match(&url.URL{Scheme: "https", Host: "unrelated.example.test"}) {
-			t.Errorf("%s matched an unrelated host", site.name)
-		}
-	}
+// An archive page is recognised by the software's generator and assets,
+// whatever host serves it; a board-shaped path on an ordinary site is not.
+func TestFoolFuukaRecognise(t *testing.T) {
+	f := NewFoolFuuka(nil)
+	page := `<html><head><meta name="generator" content="FoolFuuka 2.2.0"><title>/b/ - Thread</title>
+<script src="/foolfuuka/foolz/theme/assets/board.js"></script></head><body><article class="thread"></article></body></html>`
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/thread/42/", page), true)
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/", page), true)
+	// The right form and the generator, without the software's own assets.
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/b/thread/42/",
+		`<html><head><meta name="generator" content="FoolFuuka 2.2.0"></head></html>`), false)
+	// The software's page on a path that names no board.
+	expectRecognised(t, f, htmlPage(t, "https://archive.example.test/_/about/", page), false)
+	// A challenge with no client to ask the API through says nothing.
+	expectRecognised(t, f, challengedPage(t, "https://archive.example.test/b/thread/42/"), false)
+
+	expectShape(t, f, "https://archive.example.test/b/thread/42/", true)
+	expectShape(t, f, "https://archive.example.test/b/post/42/", true)
+	expectShape(t, f, "https://archive.example.test/b/search/text/thing/", true)
+	expectShape(t, f, "https://archive.example.test/b/", false)
+	expectShape(t, f, "https://archive.example.test/about-us/", false)
 }
 
-// TestFoolFuukaAliasResolvesAgainstItsArchive is the point of listing rbt.asia
-// under desuarchive rather than as an install: everything on it redirects, so
-// a request built against the pasted host would be one hop of guesswork.
-func TestFoolFuukaAliasResolvesAgainstItsArchive(t *testing.T) {
-	sites := NewFoolFuukaSites(nil, nil)
-	u, err := ParseURL("https://rbt.asia/g/thread/1/")
-	if err != nil {
-		t.Fatal(err)
+// A challenged archive is recognised by its API answering for the thread,
+// asked once however many times the page is consulted.
+func TestFoolFuukaRecogniseChallengedThroughTheAPI(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, foolFuukaThreadJSON)
+	}))
+	t.Cleanup(srv.Close)
+	f := NewFoolFuuka(httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 10*time.Second))
+	p := challengedPage(t, srv.URL+"/b/thread/9998/")
+	for range 2 {
+		if !f.Recognise(context.Background(), p) {
+			t.Fatal("a challenged thread whose API answers was not recognised")
+		}
 	}
-	for _, ex := range sites {
-		if !ex.Match(u) {
-			continue
-		}
-		ff, ok := ex.(*FoolFuuka)
-		if !ok {
-			t.Fatalf("rbt.asia matched a %T", ex)
-		}
-		if ff.site.root != "https://desuarchive.org" {
-			t.Errorf("rbt.asia is addressed at %s, want the archive it redirects to", ff.site.root)
-		}
-		return
+	if calls != 1 {
+		t.Errorf("the API was asked %d times, want once", calls)
 	}
-	t.Error("no extractor matched rbt.asia")
 }
 
 // foolFuukaFixture stands an install up on a local address serving canned
 // responses. What that buys over the pure-function tests above is the paging:
 // where the walk stops, and what it does with a page it has seen before, are
 // decisions that only exist across several requests.
-func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *FoolFuuka {
+func foolFuukaFixture(t *testing.T, handler http.HandlerFunc) *foolFuukaArchive {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return &FoolFuuka{
+	return &foolFuukaArchive{
 		client: httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 10*time.Second),
-		site:   foolFuukaSite{name: "example", root: srv.URL, domains: []string{"example.test"}},
+		name:   "example",
+		root:   srv.URL,
 	}
+}
+
+// foolFuukaUnderTest drives a fixture's archive through the extraction
+// helpers, which call nothing but Extract.
+type foolFuukaUnderTest struct {
+	Extractor
+	archive *foolFuukaArchive
+}
+
+func (f foolFuukaUnderTest) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
+	return f.archive.Extract(ctx, u, opts)
 }
 
 // foolFuukaSearchPage renders one page of results, numbered from base.
@@ -571,6 +567,33 @@ func foolFuukaSearchPage(base int) string {
 			"media_size":"100","media_status":"normal"}}`, num, num, num))
 	}
 	return `{"0":{"posts":[` + strings.Join(posts, ",") + `]},"meta":{"total_found":9}}`
+}
+
+// TestFoolFuukaSearchCountsTheCapInFiles walks past posts that carry no
+// file: the cap counts attachments, so a search whose first page is all text
+// still reaches the files after it, and the page that passes the cap is
+// noted.
+func TestFoolFuukaSearchCountsTheCapInFiles(t *testing.T) {
+	var pages int
+	f := foolFuukaFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("page") {
+		case "1":
+			_, _ = io.WriteString(w, `{"0":{"posts":[{"num":"1","title":null},{"num":"2","title":null},{"num":"3","title":null}]}}`)
+		case "2":
+			_, _ = io.WriteString(w, foolFuukaSearchPage(100))
+		default:
+			_, _ = io.WriteString(w, foolFuukaSearchPage(200))
+		}
+	})
+
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/search/text/thing/",
+		Options{limits: Limits{Files: 2}})
+	if len(res.Files) != 2 || res.Note != "partial — file limit" || pages != 2 {
+		t.Errorf("%d files over %d pages, note %q; want the second page's files cut to 2 and the cap noted",
+			len(res.Files), pages, res.Note)
+	}
 }
 
 // TestFoolFuukaSearchStopsWhenAPageRepeats covers a listing walked past its
@@ -594,14 +617,7 @@ func TestFoolFuukaSearchStopsWhenAPageRepeats(t *testing.T) {
 		}
 	})
 
-	u, err := ParseURL("https://example.test/b/search/text/thing/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := f.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/search/text/thing/", Options{})
 	if len(res.Files) != 6 {
 		t.Errorf("got %d files, want the 6 distinct ones — a repeated page was collected twice",
 			len(res.Files))
@@ -624,11 +640,8 @@ func TestFoolFuukaSearchReportsAnEmptyFirstPage(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":"No results found."}`)
 	})
 
-	u, err := ParseURL("https://example.test/b/search/text/nothing/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://example.test/b/search/text/nothing/")
+	_, err := f.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a search that matched nothing was accepted")
 	}
@@ -663,14 +676,7 @@ func TestFoolFuukaIndexOpensEveryThread(t *testing.T) {
 			num, num, num, num, num, num, num, num))
 	})
 
-	u, err := ParseURL("https://example.test/b/page/2/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := f.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/page/2/", Options{})
 
 	var got []string
 	for _, file := range res.Files {
@@ -708,15 +714,12 @@ func TestFoolFuukaIndexSaysWhyAPageYieldedNothing(t *testing.T) {
 		_, _ = io.WriteString(w, "<html><head><title>Just a moment...</title></head></html>")
 	})
 
-	u, err := ParseURL("https://example.test/b/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = f.Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://example.test/b/")
+	_, err := f.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a page whose every thread was refused was accepted")
 	}
-	if !strings.Contains(err.Error(), "would open") {
+	if !strings.Contains(err.Error(), "could be read") {
 		t.Errorf("error %q reads as though the threads held no files, "+
 			"when in fact none of them could be opened", err)
 	}
@@ -725,31 +728,38 @@ func TestFoolFuukaIndexSaysWhyAPageYieldedNothing(t *testing.T) {
 	}
 }
 
-// TestFoolFuukaAcceptsExtraHosts covers the escape hatch for a list of
-// volunteer-run archives that outlives no release intact.
-func TestFoolFuukaAcceptsExtraHosts(t *testing.T) {
-	cfg := &config.Config{ExtraHosts: map[string][]string{
-		config.FamilyFoolFuuka: {"arch.example.test", "desuarchive.org"},
-	}}
-	sites := NewFoolFuukaSites(cfg, nil)
+// TestFoolFuukaIndexNotesThreadsThatWouldNotOpen: one thread refused beside
+// another that opened leaves the page's files standing, and says that a
+// thread was left out, so the page is never taken for the whole board page.
+// A text-only thread is the board as it is and is not mentioned.
+func TestFoolFuukaIndexNotesThreadsThatWouldNotOpen(t *testing.T) {
+	f := foolFuukaFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, foolFuukaIndexAPI) {
+			_, _ = io.WriteString(w, `{
+				"300":{"op":{"num":"300","title":"Text"}},
+				"200":{"op":{"num":"200","title":"Refused"}},
+				"100":{"op":{"num":"100","title":"Open"}}}`)
+			return
+		}
+		switch num := r.URL.Query().Get("num"); num {
+		case "200":
+			w.WriteHeader(http.StatusForbidden)
+		case "300":
+			_, _ = io.WriteString(w, `{"300":{"op":{"num":"300","title":"Text"}}}`)
+		default:
+			_, _ = io.WriteString(w, fmt.Sprintf(`{"%s":{"op":{"num":"%s","title":"T","media":{
+				"media":"%s-op.jpg","media_filename":"a.jpg",
+				"media_link":"https://media.example.test/b/image/1/1/%s-op.jpg",
+				"media_size":"10","media_status":"normal"}}}}`, num, num, num, num))
+		}
+	})
 
-	if len(sites) != len(foolFuukaSites)+1 {
-		t.Fatalf("got %d extractors, want the %d built in plus one — naming an "+
-			"archive that is already covered must not register it twice",
-			len(sites), len(foolFuukaSites))
+	res := extractOK(t, foolFuukaUnderTest{archive: f}, "https://example.test/b/page/2/", Options{})
+	if len(res.Files) != 1 || res.Files[0].Name != "100-op.jpg" {
+		t.Fatalf("files = %+v", res.Files)
 	}
-	added, ok := sites[len(sites)-1].(*FoolFuuka)
-	if !ok {
-		t.Fatalf("the added host is a %T", sites[len(sites)-1])
-	}
-	if added.Name() != "arch" {
-		t.Errorf("the added host is named %q, want %q", added.Name(), "arch")
-	}
-	if added.site.root != "https://arch.example.test" {
-		t.Errorf("the added host is addressed at %q", added.site.root)
-	}
-	u := &url.URL{Scheme: "https", Host: "arch.example.test", Path: "/g/thread/1/"}
-	if !added.Match(u) {
-		t.Error("the added host did not match itself")
+	if res.Note != "1 left out: could not be read" {
+		t.Errorf("note = %q, want the refused thread counted", res.Note)
 	}
 }

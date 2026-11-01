@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,7 +44,7 @@ func (c *Client) ThroughProxy(raw string) (*Client, error) {
 		default:
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
-		tr.DialContext = (&net.Dialer{Timeout: config.ProxyDialTimeout, KeepAlive: 30 * time.Second}).DialContext
+		tr.DialContext = dialer(config.ProxyDialTimeout).DialContext
 		if err := proxytron.SetHTTPProxy(tr, raw, &tls.Config{InsecureSkipVerify: true}); err != nil {
 			return nil, err
 		}
@@ -116,6 +118,54 @@ func RouteID(ctx context.Context) string {
 		return route.id
 	}
 	return ""
+}
+
+// RequestKey names a GET of u through c on ctx's route for sharing its
+// answer between routes: the URL, the client's Accept-Language and the
+// cookies the jar the request would use (the source's, else the route's,
+// else the client's) holds for u. Two routes with one key ask for the same
+// thing from different addresses. The User-Agent is left out: a route may
+// present a browser of its own (WithRouteAgent), and a successful page is
+// taken to be the same page whichever browser asked. This names only u;
+// a cached redirect must also validate each hop against SentRequestKey.
+// Headers a caller adds are checked by the reader holding the answer.
+// Empty when there is no client.
+func RequestKey(ctx context.Context, c *Client, u *url.URL) string {
+	if c == nil || u == nil {
+		return ""
+	}
+	jar := c.hc.Jar
+	if route, ok := ctx.Value(routeContextKey{}).(*requestRoute); ok && route != nil {
+		jar = route.client.hc.Jar
+	}
+	if own, ok := ctx.Value(cookieJarContextKey{}).(http.CookieJar); ok {
+		jar = own
+	}
+	var cookies []*http.Cookie
+	if jar != nil {
+		cookies = jar.Cookies(u)
+	}
+	return requestKey(u, c.acceptLang, cookies)
+}
+
+// SentRequestKey names the request actually sent, including cookies added
+// by net/http's jar at this redirect hop. Compare it with RequestKey before
+// sharing the answer with another request. Like RequestKey, it contains
+// cookies and must never be logged.
+func SentRequestKey(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return ""
+	}
+	return requestKey(req.URL, req.Header.Get(HeaderAcceptLanguage), req.Cookies())
+}
+
+func requestKey(u *url.URL, language string, cookies []*http.Cookie) string {
+	values := make([]string, 0, len(cookies))
+	for _, cookie := range cookies {
+		values = append(values, cookie.Name+"="+cookie.Value)
+	}
+	slices.Sort(values)
+	return strings.Join([]string{u.String(), language, strings.Join(values, "; ")}, "\n")
 }
 
 // RouteError asks the owner of a lease to retry on a different route. It is
@@ -205,8 +255,13 @@ func (r *requestRoute) do(original *Client, req *http.Request) (*http.Response, 
 		if wait, stated := retryAfter(resp); stated {
 			until = time.Now().Add(wait)
 		}
-		err := &StatusError{Code: code, Status: resp.Status, URL: req.URL.Redacted(), Header: resp.Header}
+		// The status is the refusal: report it before the body is read, and
+		// read the body's sample only briefly, so a proxy that sends the
+		// headers and stalls neither delays the failover nor scores the
+		// route by its stall.
+		err := statusError(resp, req, nil)
 		report(code, 0, err, until)
+		err.Body = string(refusalSample(resp.Body, config.RouteRefusalBodyWait))
 		resp.Body.Close()
 		return nil, &RouteError{err}
 	}
@@ -223,11 +278,18 @@ type routeBody struct {
 	once            sync.Once
 	bytes, expected int64
 	report          func(int64, error)
+	// Only a caller-validated payload length adds an EOF check. The HTTP
+	// transport enforces Content-Length itself, including bodyless HEAD
+	// responses whose header describes the resource rather than this body.
+	verifiedLength bool
 }
 
 func (b *routeBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	b.bytes += int64(n)
+	if b.verifiedLength && errors.Is(err, io.EOF) && b.bytes < b.expected {
+		err = io.ErrUnexpectedEOF
+	}
 	if err != nil {
 		b.once.Do(func() {
 			if errors.Is(err, io.EOF) {
@@ -261,4 +323,25 @@ func (b *routeBody) Close() error {
 // never set them aside.
 func reachesNoHost(code int) bool {
 	return code == http.StatusBadGateway || code == http.StatusGatewayTimeout
+}
+
+// refusalSample reads up to config.ErrorBodySample bytes of a refused
+// answer's body within wait. A body still unread when wait runs out is
+// closed, which ends the read, and what arrived by then is the sample.
+func refusalSample(body io.ReadCloser, wait time.Duration) []byte {
+	var sample []byte
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sample, _ = io.ReadAll(io.LimitReader(body, config.ErrorBodySample))
+	}()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		body.Close()
+		<-done
+	}
+	return sample
 }

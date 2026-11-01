@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
@@ -101,22 +102,19 @@ func TestAStartedFileTakesTheNextRouteAfterOneFailsIt(t *testing.T) {
 	var attempts []string
 	m.mu.Lock()
 	job := &Job{ID: newID(), Source: "http://service.example.test/collection"}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
-	for i, name := range []string{"started.bin", "second.bin", "third.bin"} {
-		it := m.newItem(job, extractor.File{Name: name, Size: -1,
+	var files []extractor.File
+	for _, name := range []string{"started.bin", "second.bin", "third.bin"} {
+		files = append(files, extractor.File{Name: name, Size: -1,
 			Resolve: func(context.Context) (*extractor.Target, error) {
 				mu.Lock()
 				attempts = append(attempts, name)
 				mu.Unlock()
 				return &extractor.Target{URL: "http://storage.example.test/" + name, Size: -1}, nil
 			},
-			Pace: &extractor.Pace{Files: 1, Streams: 1, Group: "keep2share", PerRoute: true}}, "", i)
-		job.Items = append(job.Items, it)
-		m.queue = append(m.queue, it)
+			Pace: &extractor.Pace{Files: 1, Streams: 1, Group: config.GroupKeep2Share, PerRoute: true}})
 	}
-	started := job.Items[0]
-	started.preferredRoute = pool.Page("keep2share", proxy.Query{Search: dropping.URL}).Rows[0].ID
+	started := m.queueJobLocked(job, files...)[0]
+	started.preferredRoute = pool.Page(config.GroupKeep2Share, proxy.Query{Search: dropping.URL}).Rows[0].ID
 	m.mu.Unlock()
 	half := len(payload) / 2
 	part := filepath.Join(m.DownloadDir(), partNames("started.bin", job.Source, started.ID)[0])
@@ -125,7 +123,7 @@ func TestAStartedFileTakesTheNextRouteAfterOneFailsIt(t *testing.T) {
 	}
 
 	m.Start()
-	if !waitForCond(20*time.Second, func() bool { return itemStatusesOf(m, job.ID, StatusDone) == 3 }) {
+	if !waitForCond(20*time.Second, func() bool { return countStatus(m, job.ID, StatusDone) == 3 }) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		t.Fatalf("not all done: %s %s %s (%s)", job.Items[0].Status, job.Items[1].Status, job.Items[2].Status, job.Items[0].Err)

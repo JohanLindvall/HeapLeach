@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -39,10 +38,10 @@ const linksThreadPage = `<html><head><title>A thread with things in it | Board</
 <nav><a href="/forums/">Forums</a> <a href="/threads/another-thread">Another thread</a></nav>
 <article class="post">
   <img class="avatar" src="https://media.imagepond.net/media/avatar-1.png">
-  <p>Here you go: <a href="https://gofile.io/d/AAAA" rel="nofollow">gofile.io/d/AAAA</a></p>
+  <p>Here you go: <a href="https://share.example.test/d/AAAA" rel="nofollow">share.example.test/d/AAAA</a></p>
   <p>Mirror: <a href="/goto/link?url=https%3A%2F%2Fpixhost.to%2Fgallery%2Fabc123">https://pixhost.to/gallery/abc123</a></p>
-  <p>And the big one, https://mega.nz/file/AAAAAAAA#SECRETKEY. Enjoy.</p>
-  <p>Reposting <a href="https://gofile.io/d/AAAA">the first one</a> for visibility</p>
+  <p>And the big one, https://mega.example.test/file/AAAAAAAA#SECRETKEY. Enjoy.</p>
+  <p>Reposting <a href="https://share.example.test/d/AAAA">the first one</a> for visibility</p>
   <p>Clip: <iframe src="https://ok.ru/videoembed/1234567890"></iframe></p>
 </article>
 <footer><a href="mailto:staff@example.test">Contact</a>
@@ -56,10 +55,7 @@ func linksSweep(t *testing.T, doc string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, doc)
 	return linksCandidates(root, base)
 }
 
@@ -76,7 +72,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"https://gofile.io/d/AAAA",
+		"https://share.example.test/d/AAAA",
 		"https://pixhost.to/gallery/abc123",
 		// The player is framed in, and is in no anchor on the page.
 		"https://ok.ru/videoembed/1234567890",
@@ -103,7 +99,7 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 
 	// The mega key lives in the fragment, and the full stop after it in the
 	// sentence does not belong to the link.
-	const mega = "https://mega.nz/file/AAAAAAAA#SECRETKEY"
+	const mega = "https://mega.example.test/file/AAAAAAAA#SECRETKEY"
 	if _, ok := index[mega]; !ok {
 		t.Errorf("the mega link lost its key or kept the sentence's full stop: %v", got)
 	}
@@ -117,8 +113,25 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 	}
 
 	// Order is the page's own, which is what the job's file order is built on.
-	if index["https://gofile.io/d/AAAA"] > index["https://ok.ru/videoembed/1234567890"] {
+	if index["https://share.example.test/d/AAAA"] > index["https://ok.ru/videoembed/1234567890"] {
 		t.Error("candidates came back out of page order")
+	}
+}
+
+func TestLinksCandidatesIgnoreSelfAndKeepOtherFragments(t *testing.T) {
+	base := mustParse(t, "https://board.example.test/topics/current")
+	original := mustParse(t, "https://board.example.test/entry")
+	root, err := parseHTML(`<a href="/topics/current">Self</a><a href="#files">Anchor</a>
+<a href="/entry#files">Original address</a><iframe src="/topics/current"></iframe>
+<script type="application/ld+json">{"url":"https://board.example.test/topics/current"}</script>
+<a href="next#section">Next page</a><a href="https://files.example.test/file/sample#key">File</a>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := linksCandidates(root, base, original)
+	want := "https://board.example.test/topics/next#section,https://files.example.test/file/sample#key"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("candidates = %v, want %s", got, want)
 	}
 }
 
@@ -130,13 +143,14 @@ func TestLinksCandidatesReadsAnchorsFramesAndText(t *testing.T) {
 // exactly as a posted link does. Every one of them then costs a request and
 // fails, and on a page belonging to a supported host there are hundreds.
 func TestLinksSweepIgnoresAPagesOwnFurniture(t *testing.T) {
-	harvester := &Links{registry: NewRegistry(&config.Config{}, nil)}
+	harvester := NewLinks(nil, NewRegistry(&config.Config{}, nil))
+	aliasHosts(harvester.registry, "gofile", "share.example.test")
 
-	got := supportedSources(harvester.registry, linksSweep(t, linksThreadPage), harvester)
+	got := supportedSources(harvester.registry, linksSweep(t, linksThreadPage), harvester, nil)
 	want := []string{
-		"https://gofile.io/d/AAAA",
+		"https://share.example.test/d/AAAA",
 		"https://pixhost.to/gallery/abc123",
-		"https://mega.nz/file/AAAAAAAA#SECRETKEY",
+		"https://mega.example.test/file/AAAAAAAA#SECRETKEY",
 		"https://ok.ru/videoembed/1234567890",
 	}
 	if len(got) != len(want) {
@@ -169,18 +183,19 @@ func TestLinksCandidatesReadsThroughARedirector(t *testing.T) {
 // used Find would queue the board's navigation as files.
 func TestLinksSupportedKeepsOnlyRealExtractors(t *testing.T) {
 	reg := NewRegistry(&config.Config{}, nil)
-	harvester := &Links{registry: reg}
+	aliasHosts(reg, "gofile", "share.example.test")
+	harvester := NewLinks(nil, reg)
 
 	got := supportedSources(harvester.registry, []string{
-		"https://gofile.io/d/AAAA",
+		"https://share.example.test/d/AAAA",
 		"https://board.example.test/threads/another-thread",
 		"https://static.example.test/board.css",
-		"https://mega.nz/file/AAAAAAAA#SECRETKEY",
+		"https://mega.example.test/file/AAAAAAAA#SECRETKEY",
 		// A harvest inside a harvest, which is where the recursion would be.
 		"links:https://board.example.test/threads/a-thread",
-	}, harvester)
+	}, harvester, nil)
 
-	want := []string{"https://gofile.io/d/AAAA", "https://mega.nz/file/AAAAAAAA#SECRETKEY"}
+	want := []string{"https://share.example.test/d/AAAA", "https://mega.example.test/file/AAAAAAAA#SECRETKEY"}
 	if len(got) != len(want) {
 		t.Fatalf("kept %v, want %v", got, want)
 	}
@@ -252,44 +267,44 @@ func TestLinksParseURLRejectsAnEmptyTarget(t *testing.T) {
 func TestLinksRoutesAheadOfTheHosts(t *testing.T) {
 	reg := NewRegistry(&config.Config{}, nil)
 	for _, raw := range []string{
-		"links:https://gofile.io/d/AAAA",
-		"links:https://thisvid.com/",
+		"links:https://share.example.test/d/AAAA",
+		"links:https://tube.example.test/",
 		"links:https://board.example.test/threads/a-thread",
 	} {
 		u, err := ParseURL(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := reg.Find(u).Name(); got != linksScheme {
+		if got := reg.Guess(u); got != linksScheme {
 			t.Errorf("%s went to %q, want the harvester", raw, got)
 		}
 	}
 
-	// And the prefix is the only thing that redirects it: the same pages
-	// without it belong to their own hosts.
-	u, err := ParseURL("https://gofile.io/d/AAAA")
+	// And the prefix is the only thing that redirects it: the same link
+	// without it has its own extractor's form.
+	u, err := ParseURL("https://share.example.test/d/AAAA")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reg.Find(u).Name(); got != "gofile" {
+	if got := reg.Guess(u); got != "gofile" {
 		t.Errorf("an ordinary link went to %q, want gofile", got)
 	}
 }
 
 // TestLinksMatchIsPrefixOnly is the gate: no page is harvested by accident.
 func TestLinksMatchIsPrefixOnly(t *testing.T) {
-	harvester := &Links{}
+	harvester := NewLinks(nil, nil)
 	for raw, want := range map[string]bool{
 		"links:https://board.example.test/t": true,
 		"https://board.example.test/t":       false,
-		"https://gofile.io/d/AAAA":           false,
+		"https://share.example.test/d/AAAA":  false,
 	} {
 		u, err := ParseURL(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := harvester.Match(u); got != want {
-			t.Errorf("Match(%q) = %v, want %v", raw, got, want)
+		if got := harvester.Shape(u); got != want {
+			t.Errorf("Shape(%q) = %v, want %v", raw, got, want)
 		}
 	}
 }
@@ -299,7 +314,9 @@ func TestLinksMatchIsPrefixOnly(t *testing.T) {
 // linksStub stands in for the registry's real hosts, so an end-to-end harvest
 // can be tested without a live one.
 type linksStub struct {
-	host  string
+	// The stub stands in for a host's extractor, so it is claimed by host,
+	// as no real recogniser may be.
+	hostClaim
 	files int
 	// title is what the source calls itself, and so what its folder is named.
 	title string
@@ -312,8 +329,6 @@ type linksStub struct {
 }
 
 func (s *linksStub) Name() string { return "stub" }
-
-func (s *linksStub) Match(u *url.URL) bool { return u.Host == s.host }
 
 func (s *linksStub) Extract(_ context.Context, u *url.URL, opts Options) (*Result, error) {
 	s.mu.Lock()
@@ -332,7 +347,7 @@ func (s *linksStub) Extract(_ context.Context, u *url.URL, opts Options) (*Resul
 			// A host that signs its links resolves them per attempt, and that
 			// closure has to reach the downloader intact.
 			Resolve: func(context.Context) (*Target, error) {
-				return &Target{URL: "https://" + s.host + u.Path + "/signed/" + name, Name: name}, nil
+				return &Target{URL: "https://" + string(s.hostClaim) + u.Path + "/signed/" + name, Name: name}, nil
 			},
 		})
 	}
@@ -351,7 +366,7 @@ func linksHarvester(t *testing.T, page string, stub Extractor) (*Links, string) 
 	t.Cleanup(srv.Close)
 
 	reg := &Registry{fallback: NewDirect(nil)}
-	harvester := NewLinks(httpx.New("test-agent", "en-US", 0, 5*time.Second), reg)
+	harvester := NewLinks(testClient(), reg)
 	// Harvester first, as NewRegistry orders it.
 	reg.extractors = []Extractor{harvester, stub}
 	return harvester, "links:" + srv.URL + "/threads/a-thread"
@@ -370,7 +385,7 @@ func linksExtract(t *testing.T, harvester *Links, raw string, opts Options) (*Re
 // feature: files in the page's order, one folder per source, dead links
 // skipped rather than fatal, and every resolver still attached.
 func TestLinksExtractGroupsEverySourceIntoItsOwnFolder(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 2, title: "Album / Two", fail: "/dead"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 2, title: "Album / Two", fail: "/dead"}
 	page := `<html><head><title>Thread | Board</title></head><body>
 	<a href="https://files.example.test/first">one</a>
 	<a href="https://files.example.test/dead">gone</a>
@@ -437,7 +452,7 @@ func TestLinksExtractGroupsEverySourceIntoItsOwnFolder(t *testing.T) {
 // what the aggregator forums answer an anonymous fetch with. Reported as
 // "nothing to download" it would look like an empty thread.
 func TestLinksExtractReportsAPageWithNothingOnIt(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 1, title: "Album"}
 	page := `<html><body><h1>Log in</h1>
 	<a href="/login">Log in</a> <a href="/register">Register</a></body></html>`
 
@@ -456,7 +471,7 @@ func TestLinksExtractReportsAPageWithNothingOnIt(t *testing.T) {
 func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 	const posted = config.MaxExpandedSources + 100
 
-	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 1, title: "Album"}
 	var page strings.Builder
 	page.WriteString(`<html><head><title>Big thread</title></head><body>`)
 	for i := range posted {
@@ -487,7 +502,7 @@ func TestLinksExtractCapsTheLinksItFollows(t *testing.T) {
 func TestLinksExtractStopsAtASourceBoundary(t *testing.T) {
 	const each = config.MaxListingFiles/2 + 100
 
-	stub := &linksStub{host: "files.example.test", files: each, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: each, title: "Album"}
 	page := `<html><head><title>Two big albums</title></head><body>
 	<a href="https://files.example.test/one">one</a>
 	<a href="https://files.example.test/two">two</a>
@@ -514,7 +529,7 @@ func TestLinksExtractStopsAtASourceBoundary(t *testing.T) {
 // A first source larger than the cap on its own is the one case cut inside:
 // leaving the job empty would help nobody.
 func TestLinksExtractCutsALoneSourceLargerThanTheCap(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 130, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 130, title: "Album"}
 	page := `<html><head><title>One huge album</title></head><body>
 	<a href="https://files.example.test/one">one</a>
 	</body></html>`
@@ -532,7 +547,7 @@ func TestLinksExtractCutsALoneSourceLargerThanTheCap(t *testing.T) {
 // Resolving stops once the cap is reached, rather than resolving every
 // source and throwing most of the files away.
 func TestLinksExtractStopsResolvingAtTheCap(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 10, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 10, title: "Album"}
 	var page strings.Builder
 	page.WriteString(`<html><head><title>Long thread</title></head><body>`)
 	for i := range 100 {
@@ -559,7 +574,7 @@ func TestLinksExtractStopsResolvingAtTheCap(t *testing.T) {
 // TestLinksExtractRefusesAStackedPrefix stops the one input that would make
 // the harvester call itself.
 func TestLinksExtractRefusesAStackedPrefix(t *testing.T) {
-	stub := &linksStub{host: "files.example.test", files: 1, title: "Album"}
+	stub := &linksStub{hostClaim: "files.example.test", files: 1, title: "Album"}
 	harvester, raw := linksHarvester(t, "<html></html>", stub)
 
 	_, err := linksExtract(t, harvester, "links:"+raw, Options{})
@@ -603,11 +618,25 @@ func TestPartialNoteAdmitsOnlyWhatACapDropped(t *testing.T) {
 		{"too many files", expansion{used: 224, full: true}, 500, false, "224 of 500 links"},
 		{"both caps", expansion{used: 224, full: true}, 2700, true, "224 of 2700 links"},
 		{"one huge source", expansion{used: 1, full: true, cut: 2000, of: 3120}, 1, false, "2000 of 3120 files"},
-		{"huge first of several", expansion{used: 1, full: true, cut: 2000, of: 3120}, 3, false, "1 of 3 links, 2000 of 3120 files"},
+		{"huge first of several", expansion{used: 1, full: true, cut: 2000, of: 3120}, 3, false, "1 of 3 links; 2000 of 3120 files"},
 	}
 	for _, c := range cases {
 		if got := partialNote("links", c.e, c.found, c.capped); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestLinkExtAsIsKeepsTheLinksSpelling(t *testing.T) {
+	tests := map[string]string{
+		"https://s1.example.test/v/abcdefghijkl.mp4?t=TOKEN": ".mp4",
+		"https://s1.example.test/v/abcdefghijkl.MKV":         ".MKV",
+		"https://s1.example.test/v/abcdefghijkl.1080p/":      ".1080p",
+		"https://s1.example.test/v/abcdefghijkl":             ".mp4",
+	}
+	for link, want := range tests {
+		if got := linkExtAsIs(link, ".mp4"); got != want {
+			t.Errorf("linkExtAsIs(%s) = %q, want %q", link, got, want)
 		}
 	}
 }

@@ -112,7 +112,7 @@ func run() error {
 	// told to resume says it for itself. After Start, so there are workers
 	// to take what the jobs resolve to.
 	if cfg.ResumeRestored {
-		manager.SetPaused(false)
+		_ = manager.ApplySettings(download.Settings{Paused: new(false)})
 	}
 
 	// URLs on the command line mean "download these and quit" — no server,
@@ -345,7 +345,7 @@ func loadConfig(args []string, out io.Writer) (*config.Config, error) {
 	flags.StringVar(&cfg.ProxyType, "proxy-type", cfg.ProxyType,
 		"protocol download proxies are drawn from: any, socks or http (socks and http leave the direct connection out)")
 	proxyTypes := flags.String("proxy-types", config.FormatProxyTypes(cfg.ProxyTypes),
-		"a protocol per proxy group, overriding -proxy-type: keep2share=socks,fileboom=socks,cloudflare=any")
+		"a protocol per proxy group, overriding -proxy-type: keep2share=socks,fileboom=socks,mega=http,cloudflare=any")
 	flags.IntVar(&cfg.MaxRetries, "retries", cfg.MaxRetries, "retries per request and per transfer")
 	flags.IntVar(&cfg.Streams, "streams", cfg.Streams,
 		fmt.Sprintf("connections to split a slow file across (1-%d)", config.MaxStreams))
@@ -514,8 +514,7 @@ Environment:
   HEAPLEACH_MAX_RETRIES, HEAPLEACH_STREAMS, HEAPLEACH_SLOW_SPEED,
   HEAPLEACH_MAX_SPEED, HEAPLEACH_MIN_FREE, HEAPLEACH_STALL_TIMEOUT,
   HEAPLEACH_DEBUG, HEAPLEACH_OPEN, HEAPLEACH_USER_AGENT, HEAPLEACH_LANGUAGE,
-  HEAPLEACH_GOFILE_SECRET, HEAPLEACH_EXTRA_HOSTS (family:host,host;family:host),
-  HEAPLEACH_KVS_HOSTS, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME,
+  HEAPLEACH_GOFILE_SECRET, HEAPLEACH_IA_FORMATS, HEAPLEACH_UTLS, HEAPLEACH_RESUME,
   HEAPLEACH_MAX_CONCURRENCY, HEAPLEACH_MAX_SOURCES, HEAPLEACH_MAX_FILES,
   HEAPLEACH_PPROF, HEAPLEACH_PROXIES, HEAPLEACH_PROXY_DB,
   HEAPLEACH_PROXY_ENDPOINTS, HEAPLEACH_PROXY_FEEDS, HEAPLEACH_PROXY_TYPE,

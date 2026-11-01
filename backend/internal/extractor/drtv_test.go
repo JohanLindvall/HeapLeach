@@ -11,9 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestDRLink(t *testing.T) {
@@ -79,7 +76,7 @@ func drFakeSite(t *testing.T) *httptest.Server {
 				_, _ = io.WriteString(w, item(id, "channel", "En opfundet kanal", "", false, ""))
 			case "2000":
 				_, _ = io.WriteString(w, item(id, "show", "Opfundet serie", "", false, ""))
-			case "2100":
+			case "2100", "2300", "2400":
 				_, _ = io.WriteString(w, item(id, "season", "Opfundet serie", "", false, `, "seasonNumber": 1, "show": {"title": "Opfundet serie"}`))
 			case "2101", "2102", "2201":
 				_, _ = io.WriteString(w, episode(id, int(id[3]-'0'), false))
@@ -121,6 +118,13 @@ func drFakeSite(t *testing.T) *httptest.Server {
 				_, _ = io.WriteString(w, page([]string{episode("2102", 2, false)}, 2))
 			case "2200/1":
 				_, _ = io.WriteString(w, page([]string{episode("2201", 1, false), episode("2202", 2, true)}, 1))
+			case "2300/1", "2300/2", "2300/3":
+				// A listing that ignores its page, stating more of them.
+				_, _ = io.WriteString(w, page([]string{episode("2101", 1, false)}, 50))
+			case "2400/1":
+				_, _ = io.WriteString(w, page([]string{episode("2101", 1, false)}, 2))
+			case "2400/2":
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			default:
 				_, _ = io.WriteString(w, page(nil, 0))
 			}
@@ -170,27 +174,9 @@ func drFakeSite(t *testing.T) *httptest.Server {
 }
 
 func drWith(srv *httptest.Server) *DRTV {
-	d := NewDRTV(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	d := NewDRTV(testClient())
 	d.api = srv.URL + "/api"
 	return d
-}
-
-func drExtract(t *testing.T, srv *httptest.Server, raw string, opts Options) *Result {
-	t.Helper()
-	u, _ := url.Parse(raw)
-	res, err := drWith(srv).Extract(context.Background(), u, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return res
-}
-
-func drNames(res *Result) string {
-	var names []string
-	for _, f := range res.Files {
-		names = append(names, strings.TrimPrefix(f.Dir+"/", "/")+f.Name)
-	}
-	return strings.Join(names, "\n")
 }
 
 // An episode is its standard version: the video's byte ranges, one audio
@@ -199,7 +185,7 @@ func drNames(res *Result) string {
 // subtitles as DR names them.
 func TestDRReadsAnEpisodesStandardVersion(t *testing.T) {
 	srv := drFakeSite(t)
-	res := drExtract(t, srv, "https://www.dr.dk/drtv/episode/opfundet-serie_-foerste-afsnit_1001", Options{})
+	res := extractOK(t, drWith(srv), "https://www.dr.dk/drtv/episode/opfundet-serie_-foerste-afsnit_1001", Options{})
 	f := res.Files[0]
 	if res.Title != "Opfundet serie - 1. Første afsnit" || f.Name != "Opfundet serie - 1. Første afsnit.mp4" {
 		t.Errorf("title %q, name %q", res.Title, f.Name)
@@ -220,7 +206,7 @@ func TestDRReadsAnEpisodesStandardVersion(t *testing.T) {
 // the English its renditions claim.
 func TestDRLeavesAForeignProgrammesLanguageUnnamed(t *testing.T) {
 	srv := drFakeSite(t)
-	res := drExtract(t, srv, "https://www.dr.dk/drtv/episode/opfundet-serie_-afsnit_1007", Options{})
+	res := extractOK(t, drWith(srv), "https://www.dr.dk/drtv/episode/opfundet-serie_-afsnit_1007", Options{})
 	if audio := res.Files[0].Audio; len(audio) != 1 || audio[0].Language != "" || audio[0].Name != "" {
 		t.Errorf("audio %+v", audio)
 	}
@@ -232,13 +218,13 @@ func TestDRLeavesAForeignProgrammesLanguageUnnamed(t *testing.T) {
 // name when its transfer starts.
 func TestDRListsAShowBySeason(t *testing.T) {
 	srv := drFakeSite(t)
-	res := drExtract(t, srv, "https://www.dr.dk/drtv/serie/opfundet-serie_2000", Options{})
+	res := extractOK(t, drWith(srv), "https://www.dr.dk/drtv/serie/opfundet-serie_2000", Options{})
 	want := strings.Join([]string{
 		"Sæson 1/Opfundet serie - 1. Afsnit 2101.mp4",
 		"Sæson 1/Opfundet serie - 2. Afsnit 2102.mp4",
 		"2026/Opfundet serie - 1. Afsnit 2201.mp4",
 	}, "\n")
-	if got := drNames(res); res.Title != "Opfundet serie" || got != want {
+	if got := strings.Join(filePaths(res.Files), "\n"); res.Title != "Opfundet serie" || got != want {
 		t.Fatalf("%q:\n%s\nwant:\n%s", res.Title, got, want)
 	}
 	if note := "1 left out that DR shows in Denmark only"; res.Note != note {
@@ -254,14 +240,30 @@ func TestDRListsAShowBySeason(t *testing.T) {
 // own.
 func TestDRListsASeasonAlone(t *testing.T) {
 	srv := drFakeSite(t)
-	res := drExtract(t, srv, "https://www.dr.dk/drtv/saeson/opfundet-serie_2100", Options{})
+	res := extractOK(t, drWith(srv), "https://www.dr.dk/drtv/saeson/opfundet-serie_2100", Options{})
 	want := "Opfundet serie - 1. Afsnit 2101.mp4\nOpfundet serie - 2. Afsnit 2102.mp4"
-	if got := drNames(res); res.Title != "Opfundet serie - Sæson 1" || got != want {
+	if got := strings.Join(filePaths(res.Files), "\n"); res.Title != "Opfundet serie - Sæson 1" || got != want {
 		t.Errorf("%q:\n%s", res.Title, got)
 	}
-	res = drExtract(t, srv, "https://www.dr.dk/drtv/saeson/opfundet-serie_2100", Options{limits: Limits{Files: 1}})
+	res = extractOK(t, drWith(srv), "https://www.dr.dk/drtv/saeson/opfundet-serie_2100", Options{limits: Limits{Files: 1}})
 	if len(res.Files) != 1 || res.Note != "1 of 2 episodes" {
 		t.Errorf("%d files, note %q", len(res.Files), res.Note)
+	}
+}
+
+// A listing that serves its first page again, whatever page it states, ends
+// there rather than at the page cap; one whose next page fails keeps what
+// came before. Either way the note says the listing was cut short.
+func TestDRStopsAListingThatRepeatsOrBreaksOff(t *testing.T) {
+	srv := drFakeSite(t)
+	for id, note := range map[string]string{
+		"2300": "partial — repeated or empty page",
+		"2400": "partial — could not fetch next page",
+	} {
+		res := extractOK(t, drWith(srv), "https://www.dr.dk/drtv/saeson/opfundet-serie_"+id, Options{})
+		if got := strings.Join(filePaths(res.Files), "\n"); got != "Opfundet serie - 1. Afsnit 2101.mp4" || res.Note != note {
+			t.Errorf("%s: %s, note %q, want %q", id, got, res.Note, note)
+		}
 	}
 }
 
@@ -275,8 +277,7 @@ func TestDRSaysWhyAProgrammeCannotBeHad(t *testing.T) {
 		"1005": "without signing in",
 		"1006": "it is a live channel",
 	} {
-		u, _ := url.Parse("https://www.dr.dk/drtv/program/an-invented-title_" + id)
-		_, err := drWith(srv).Extract(context.Background(), u, Options{})
+		_, err := extract(t, drWith(srv), "https://www.dr.dk/drtv/program/an-invented-title_"+id, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v; want it to say %q", id, err, want)
 		}

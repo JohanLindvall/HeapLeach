@@ -21,29 +21,67 @@ import (
 // being fetched. The thumbnails differ from the full-size file by a "_300px"
 // suffix, which is simply dropped.
 type Fapello struct {
-	hostSet
+	about
 	client *httpx.Client
 }
-
-const (
-	// fapelloMaxPages bounds the walk; paging past the end wraps back to
-	// the first page rather than returning nothing, so the real stop
-	// condition is a page that adds nothing new.
-	fapelloMaxPages = 200
-)
 
 // fapelloThumbSuffix marks a listing thumbnail.
 var fapelloThumbSuffix = regexp.MustCompile(`_\d+px(\.[A-Za-z0-9]+)$`)
 
 // NewFapello builds the fapello extractor.
 func NewFapello(client *httpx.Client) *Fapello {
-	return &Fapello{hostSet: hostSet{"fapello.com"}, client: client}
+	return &Fapello{client: client, about: about{name: "fapello", shape: fapelloShape,
+		recognises: "model pages and their posts (`/<model>/`, `/<model>/<n>/`) whose page links the model's own " +
+			"media under `/content/…/<model>/`"}}
 }
 
-func (f *Fapello) Name() string { return "fapello" }
+// fapelloShape is one of a model's posts, /<model>/<n>/. The model's own
+// page is a bare /<model>/, which is no shape, so it is recognised by its
+// page alone.
+var fapelloShape = pathShape(`^/[A-Za-z0-9_.-]+/\d+/$`)
+
+// fapelloPost is a post's path with or without its trailing slash.
+var fapelloPost = regexp.MustCompile(`^/[A-Za-z0-9_.-]+/\d+/?$`)
+
+// Recognise takes a model page, or one of its posts, carrying what Extract
+// collects: media under the content tree in the model's own folder, on a
+// page that names the site. A post linked without its trailing slash is
+// taken by its page too; that form stays out of the shape, since
+// /<word>/<number> is too common a path for the link scanner.
+func (f *Fapello) Recognise(_ context.Context, p *Page) bool {
+	segs := p.Segments()
+	if len(segs) != 1 && !fapelloShape(p.Final) && !fapelloPost.MatchString(p.Final.Path) {
+		return false
+	}
+	return p.Named("Fapello") && fapelloLinksMedia(p.Body, segs[0])
+}
+
+// fapelloContentLink is a link into the content tree, capturing what follows
+// it.
+var fapelloContentLink = regexp.MustCompile(`https?://[a-z0-9.-]+/content/([^"'\\ <>]+)`)
+
+// fapelloLinksMedia reports what fapelloMedia matches without compiling it
+// per page: a link into the content tree with the model's folder inside it,
+// and something after the folder.
+func fapelloLinksMedia(body, model string) bool {
+	folder := "/" + model + "/"
+	for _, m := range fapelloContentLink.FindAllStringSubmatch(body, -1) {
+		if rest := m[1]; strings.Contains(rest[:len(rest)-1], folder) {
+			return true
+		}
+	}
+	return false
+}
+
+// fapelloMedia matches a link to the model's own media: the content tree
+// files every model's media under a folder of their name.
+func fapelloMedia(model string) *regexp.Regexp {
+	return regexp.MustCompile(`https?://[a-z0-9.-]+/content/[^"'\\ <>]*/` +
+		regexp.QuoteMeta(model) + `/[^"'\\ <>]+`)
+}
 
 // Extract walks a model's pages and collects everything of theirs.
-func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (f *Fapello) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) == 0 {
 		return nil, fmt.Errorf("fapello: %s names no model", u.Redacted())
@@ -56,53 +94,41 @@ func (f *Fapello) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	headers := httpx.Referer(base + "/")
 
 	// Media lives on the shared content host and always names the model.
-	ownMedia := regexp.MustCompile(
-		`https?://[a-z0-9.-]*fapello\.com/content/[^"'\\ <>]*/` +
-			regexp.QuoteMeta(model) + `/[^"'\\ <>]+`)
+	ownMedia := fapelloMedia(model)
 
-	seen := make(map[string]bool)
-	var files []File
-
-	for page := 1; page <= fapelloMaxPages; page++ {
-		target := base + "/" + url.PathEscape(model) + "/"
-		if page > 1 {
-			target += "page-" + strconv.Itoa(page) + "/"
-		}
-
-		doc, err := f.client.GetString(ctx, target, headers)
-		if err != nil {
-			if page == 1 {
-				return nil, fmt.Errorf("fapello: fetch %s: %w", target, err)
+	// Paging past the last page wraps back to the first rather than
+	// returning nothing, so the end is a page that adds nothing new.
+	files, note, err := walkPages(ctx, pageWalk[File]{
+		key:   func(f File) string { return f.URL },
+		limit: opts.maxFiles(), limitNote: fileLimitNote, ends: walkAccepts{repeated: true},
+		fetch: func(ctx context.Context, n int) (pageOf[File], error) {
+			target := base + "/" + url.PathEscape(model) + "/"
+			if n > 0 {
+				target += "page-" + strconv.Itoa(n+1) + "/"
 			}
-			break
-		}
-
-		var added int
-		for _, link := range ownMedia.FindAllString(doc, -1) {
-			full := fapelloFullSize(link)
-			if seen[full] {
-				continue
+			targetURL, err := url.Parse(target)
+			if err != nil {
+				return pageOf[File]{}, fmt.Errorf("fapello: %w", err)
 			}
-			seen[full] = true
-			added++
-			files = append(files, File{
-				Name:    util.NameFromURL(full),
-				URL:     full,
-				Size:    -1,
-				Headers: headers,
-			})
-		}
-		// Paging past the last page wraps to the first, so a page that
-		// contributes nothing means the walk is over.
-		if added == 0 {
-			break
-		}
+			doc, _, err := fetchDocument(ctx, f.client, targetURL, headers)
+			if err != nil {
+				return pageOf[File]{}, fmt.Errorf("fapello: fetch %s: %w", target, err)
+			}
+			var files []File
+			for _, link := range ownMedia.FindAllString(doc, -1) {
+				files = append(files, linkFile(fapelloFullSize(link), headers))
+			}
+			return pageOf[File]{items: files, next: true}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if len(files) == 0 {
 		return nil, fmt.Errorf("fapello: found no media for %q", model)
 	}
-	return &Result{Title: model, Files: files}, nil
+	return &Result{Title: model, Files: files, Note: note}, nil
 }
 
 // fapelloFullSize turns a listing thumbnail into the full-size file.

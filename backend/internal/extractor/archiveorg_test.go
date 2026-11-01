@@ -3,10 +3,15 @@
 package extractor
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
@@ -172,10 +177,7 @@ const archiveOddlyTypedItem = `{
 
 func archiveDocOf(t *testing.T, body string) *archiveDoc {
 	t.Helper()
-	var doc archiveDoc
-	if err := json.Unmarshal([]byte(body), &doc); err != nil {
-		t.Fatalf("fixture does not decode: %v", err)
-	}
+	doc := decode[archiveDoc](t, body)
 	return &doc
 }
 
@@ -190,21 +192,9 @@ func archiveResolve(t *testing.T, body, id string) *Result {
 	return res
 }
 
-func archiveNamesOf(files []File) []string {
-	names := make([]string, 0, len(files))
-	for _, f := range files {
-		if f.Dir != "" {
-			names = append(names, f.Dir+"/"+f.Name)
-			continue
-		}
-		names = append(names, f.Name)
-	}
-	return names
-}
-
 func archiveWantNames(t *testing.T, files []File, want ...string) {
 	t.Helper()
-	got := archiveNamesOf(files)
+	got := filePaths(files)
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("files = %v, want %v", got, want)
 	}
@@ -445,11 +435,7 @@ func TestArchiveFileSizeIsExactOrUnknown(t *testing.T) {
 		`{"size": "-7"}`:        -1,
 	}
 	for body, want := range cases {
-		var f archiveFile
-		if err := json.Unmarshal([]byte(body), &f); err != nil {
-			t.Fatalf("%s: %v", body, err)
-		}
-		if got := f.size(); got != want {
+		if got := decode[archiveFile](t, body).size(); got != want {
 			t.Errorf("%s: size = %d, want %d", body, got, want)
 		}
 	}
@@ -530,42 +516,140 @@ func TestArchiveCapsTheFileCount(t *testing.T) {
 	}
 }
 
-// TestArchiveMatch keeps the Wayback Machine and the storage nodes out. Both
-// are archive.org subdomains and neither has an identifier to look up; the
-// direct-link fallback already handles them correctly.
-func TestArchiveMatch(t *testing.T) {
+// TestArchiveRecognise takes the archive's item page and file listing by
+// their markup, and leaves the Wayback Machine and the storage nodes out:
+// neither has an item route, and the direct-link fallback handles both.
+func TestArchiveRecognise(t *testing.T) {
 	a := NewArchiveOrg(nil, nil)
-	yes := []string{
-		"https://archive.org/details/a-film",
-		"https://www.archive.org/details/a-film",
-		"https://archive.org/download/a-film/A%20Film.mp4",
-		"https://archive.org./metadata/a-film",
+	item := `<html><head><title>A Film : Free Download : Internet Archive</title></head><body>` +
+		`<ia-topnav></ia-topnav><section class="item-details-metadata"></section></body></html>`
+	listing := `<html><head><title>a-film directory listing</title></head><body><ia-topnav></ia-topnav>` +
+		`<div class="download-directory-listing"><table class="directory-listing-table"></table></div></body></html>`
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/details/a-film", item), true)
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/download/a-film", listing), true)
+	// The right form and the archive's name, but not its item page.
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/details/a-film",
+		`<html><head><title>Internet Archive</title></head><body><ia-topnav></ia-topnav></body></html>`), false)
+	// The item page's markup on a page of another form.
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/about", item), false)
+	expectRecognised(t, a, htmlPage(t, "https://items.example.test/web/2020/https://example.test/", item), false)
+
+	for raw, want := range map[string]bool{
+		"https://items.example.test/details/a-film":                  true,
+		"https://items.example.test/download/a-film/A%20Film.mp4":    true,
+		"https://items.example.test/metadata/a-film":                 true,
+		"https://items.example.test/details/a-film/page/n5/mode/2up": true,
+		"https://items.example.test/web/2020/https://example.test/":  false,
+		"https://items.example.test/6/items/a-film/A%20Film.mp4":     false,
+		"https://items.example.test/about":                           false,
+		"https://items.example.test/":                                false,
+	} {
+		expectShape(t, a, raw, want)
 	}
-	no := []string{
-		"https://web.archive.org/web/2020/https://example.test/",
-		"https://ia601607.us.archive.org/6/items/a-film/A%20Film.mp4",
-		"https://dn790009.ca.archive.org/0/items/a-film/A%20Film.mp4",
-		"https://archive.org/about",
-		"https://archive.org/",
-		"https://openlibrary.org/works/OL1W",
+}
+
+// A file inside an item is media, not a page: the metadata API on the
+// URL's own origin settles it, once however many times it is asked.
+func TestArchiveRecognisesAFileByItsMetadata(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/metadata/a-film" {
+			_, _ = w.Write([]byte(`{"metadata":{"identifier":"a-film","mediatype":"movies"},"files":[{"name":"A Film.mp4"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	a := NewArchiveOrg(nil, testClient())
+	media := fixturePage(t, srv.URL+"/download/a-film/A%20Film.mp4", http.StatusOK, "video/mp4", "")
+	// A file route ends on a storage node, whose path names the item again.
+	media.Final = mustParse(t, srv.URL+"/12/items/a-film/A%20Film.mp4")
+	for range 2 {
+		if !a.Recognise(t.Context(), media) {
+			t.Fatal("a file of a real item was not recognised")
+		}
 	}
-	for _, raw := range yes {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
+	if hits.Load() != 1 {
+		t.Errorf("asked the metadata API %d times, want once", hits.Load())
+	}
+	if a.Recognise(t.Context(), fixturePage(t, srv.URL+"/download/no-such-item/x.mp4", http.StatusOK, "video/mp4", "")) {
+		t.Error("an identifier the API does not know was recognised")
+	}
+	// An ordinary page of the right form is somebody else's, with no question asked.
+	before := hits.Load()
+	if a.Recognise(t.Context(), htmlPage(t, srv.URL+"/download/setup", "<html><title>Downloads</title></html>")) || hits.Load() != before {
+		t.Error("an ordinary download page was recognised or cost a request")
+	}
+	// A file of that form served from where it was asked is another host's
+	// download link: its origin is asked nothing.
+	if a.Recognise(t.Context(), fixturePage(t, srv.URL+"/download/a-film/A%20Film.mp4", http.StatusOK, "video/mp4", "")) ||
+		hits.Load() != before {
+		t.Error("a file that did not redirect to a storage node was recognised or cost a request")
+	}
+}
+
+// archiveLike serves an item the way the archive does: a file route
+// redirects to a storage path naming the item, and the metadata API
+// answers for it. Requests are counted by method and path.
+func archiveLike(t *testing.T, files string) (*httptest.Server, *sync.Map) {
+	t.Helper()
+	var seen sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, _ := seen.LoadOrStore(r.Method+" "+r.URL.Path, new(atomic.Int32))
+		n.(*atomic.Int32).Add(1)
+		switch {
+		case r.URL.Path == "/metadata/an-item":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"metadata":{"identifier":"an-item","mediatype":"data"},"files":[`+files+`]}`)
+		case strings.HasPrefix(r.URL.Path, "/download/an-item/"):
+			http.Redirect(w, r, "/7/items/an-item/"+strings.TrimPrefix(r.URL.Path, "/download/an-item/"), http.StatusFound)
+		case strings.HasSuffix(r.URL.Path, ".html"):
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, `<html><title>Notes</title><body><a href="other.zip">x</a></body></html>`)
+		default:
+			w.Header().Set("Content-Type", "application/zip")
+			_, _ = io.WriteString(w, "PK")
 		}
-		if !a.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &seen
+}
+
+func countOf(seen *sync.Map, key string) int32 {
+	n, ok := seen.Load(key)
+	if !ok {
+		return 0
+	}
+	return n.(*atomic.Int32).Load()
+}
+
+// TestArchiveFileThroughTheRegistry: a file of an item, media or an HTML
+// file, is the archive's — named by its metadata, never fetched to find
+// out — while a download link of the same form on a host that serves it in
+// place costs only a HEAD and asks no metadata.
+func TestArchiveFileThroughTheRegistry(t *testing.T) {
+	srv, seen := archiveLike(t, `{"name":"data.zip","source":"original","size":"2"},`+
+		`{"name":"notes.html","source":"original","size":"9"}`)
+	reg := NewRegistry(&config.Config{}, testClient())
+	for _, name := range []string{"data.zip", "notes.html"} {
+		res, ex, err := reg.Extract(context.Background(), srv.URL+"/download/an-item/"+name, Options{})
+		if err != nil || ex.Name() != "archive.org" || len(res.Files) != 1 || res.Files[0].Name != name {
+			t.Fatalf("%s: got %v from %v: %v, want the item's file", name, res, ex, err)
 		}
 	}
-	for _, raw := range no {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if a.Match(u) {
-			t.Errorf("Match(%q) = true", raw)
-		}
+	if n := countOf(seen, "GET /7/items/an-item/data.zip"); n != 0 {
+		t.Errorf("the file was fetched %d times to recognise it", n)
+	}
+
+	other, otherSeen := archiveLike(t, "")
+	res, ex, err := reg.Extract(context.Background(), other.URL+"/download/token123/file.zip", Options{})
+	if err != nil || ex.Name() != "direct" || len(res.Files) != 1 {
+		t.Fatalf("got %v from %v: %v, want the fallback's file", res, ex, err)
+	}
+	if countOf(otherSeen, "GET /download/token123/file.zip") != 0 || countOf(otherSeen, "GET /metadata/token123") != 0 {
+		t.Error("a download link of the item form on another host was fetched or asked for metadata")
 	}
 }
 

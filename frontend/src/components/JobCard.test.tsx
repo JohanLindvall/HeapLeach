@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it } from 'vitest';
+import { host, mountEachTest, root } from '../testkit';
 import { formatSpeed } from '../format';
 import type { JobLimit, JobView } from '../types';
 import { JobCard } from './JobCard';
@@ -10,28 +10,18 @@ import type { QueueLimits } from './JobLimits';
 
 const job: JobView = {
   id: 'job-1', source: 'https://site.example.test/album', title: 'An Album', host: 'site', status: 'queued',
-  createdAt: '2026-01-01T00:00:00Z', items: [], total: 0, done: 0, failed: 0, canceled: 0, active: 0,
+  items: [], total: 0, done: 0, failed: 0, canceled: 0, active: 0,
   size: 0, downloaded: 0, speed: 0, sizeKnown: true,
 };
 const queue: QueueLimits = { files: 10, streams: 4, speed: 0 };
 const noop = () => {};
 
-let root: Root;
-let host: HTMLDivElement;
 let sent: [string, JobLimit][];
 
-beforeEach(() => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-  sent = [];
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-});
+mountEachTest();
 
-afterEach(async () => {
-  await act(async () => { root.unmount(); });
-  host.remove();
-  vi.unstubAllGlobals();
+beforeEach(() => {
+  sent = [];
 });
 
 async function render(view: JobView) {
@@ -76,4 +66,15 @@ it('opens the job’s limits and sends a change for that job', async () => {
   });
   await act(async () => { files.focus(); files.blur(); });
   expect(sent).toEqual([['job-1', { fileLimit: 1, streamLimit: 2 }]]);
+});
+
+it('offers a retry for a finished job whose listing a failure cut short', async () => {
+  const retry = () => host.querySelector('button[title="Retry job"]');
+  await render({ ...job, status: 'done' });
+  expect(retry()).toBeNull();
+  await render({ ...job, status: 'done', incomplete: true });
+  expect(retry()).not.toBeNull();
+  // Not while it is still running: the retry is for what is left out.
+  await render({ ...job, status: 'running', active: 1, incomplete: true });
+  expect(retry()).toBeNull();
 });

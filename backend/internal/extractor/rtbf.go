@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,7 +52,7 @@ import (
 //
 // It used to go to yt-dlp, whose RTBF extractor no longer works.
 type RTBF struct {
-	hostSet
+	about
 	client *httpx.Client
 	// bff and exposure are the APIs' bases, fields so that tests can stand
 	// in for them.
@@ -78,10 +77,33 @@ const (
 
 // NewRTBF builds the RTBF Auvio extractor.
 func NewRTBF(client *httpx.Client) *RTBF {
-	return &RTBF{hostSet: hostSet{"rtbf.be", "auvio.rtbf.be"}, client: client, bff: rtbfBFF, exposure: rtbfExposure}
+	return &RTBF{client: client, bff: rtbfBFF, exposure: rtbfExposure, about: about{name: "rtbf", shape: rtbfShape,
+		recognises: "media, programmes and live pages of RTBF Auvio (`/media/<slug>-<id>`, `/emission/<slug>-<id>`) whose page addresses the Auvio API, and RTBF pages embedding Auvio players"}}
 }
 
-func (r *RTBF) Name() string { return "rtbf" }
+// rtbfAuvioAPI marks an Auvio page: its widgets are addressed by the BFF
+// API's paths, which this reads too.
+var rtbfAuvioAPI = regexp.MustCompile(`/auvio/v1\.[0-9]+/widgets/`)
+
+// rtbfShape is a media or programme link, or an embedded player's, by the
+// id each carries. A live page (/live, /direct, /chaine/…) is recognised by
+// its page but never followed as a link: those are the paths of every
+// other site's navigation too, and a probe each on a page full of them is
+// what it would cost.
+func rtbfShape(u *url.URL) bool {
+	kind, _ := rtbfLink(u)
+	return kind == rtbfMedia || kind == rtbfProgramme
+}
+
+// Recognise takes an Auvio page whose widgets are addressed by the Auvio
+// API, or a page of RTBF's own that embeds Auvio players by asset id.
+func (r *RTBF) Recognise(_ context.Context, p *Page) bool {
+	if kind, _ := rtbfLink(p.Final); kind != rtbfOther {
+		return rtbfAuvioAPI.MatchString(p.Body) && p.Named("RTBF Auvio", "Auvio")
+	}
+	return len(p.Segments()) > 0 && p.Named("RTBF", "RTBF Actus") &&
+		(rtbfAssetAttr.MatchString(p.Body) || rtbfEmbedLink.MatchString(p.Body))
+}
 
 // The kinds of link read.
 const (
@@ -91,10 +113,7 @@ const (
 	rtbfOther
 )
 
-var (
-	rtbfTrailingID = regexp.MustCompile(`(?:^|-)([0-9]+)$`)
-	rtbfNumber     = regexp.MustCompile(`^[0-9]+$`)
-)
+var rtbfTrailingID = regexp.MustCompile(`(?:^|-)([0-9]+)$`)
 
 // rtbfLink tells what a link names: Auvio's /media/<slug>-<id>,
 // /emission/<slug>-<id>, an embedded player's /embed/…/media/<id>, the
@@ -102,7 +121,7 @@ var (
 // page to look in for players.
 func rtbfLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
-	if util.HostMatches(u.Host, "auvio.rtbf.be") && len(segs) > 0 {
+	if len(segs) > 0 {
 		trailing := func(seg string) string {
 			if m := rtbfTrailingID.FindStringSubmatch(seg); m != nil {
 				return m[1]
@@ -116,7 +135,7 @@ func rtbfLink(u *url.URL) (kind int, id string) {
 			return rtbfProgramme, segs[1]
 		case segs[0] == "live", segs[0] == "chaine", segs[0] == "direct":
 			return rtbfLive, ""
-		case segs[0] == "embed" && len(segs) >= 3 && rtbfNumber.MatchString(last):
+		case segs[0] == "embed" && len(segs) >= 3 && allDigits(last):
 			switch segs[len(segs)-2] {
 			case "media":
 				return rtbfMedia, last
@@ -125,7 +144,7 @@ func rtbfLink(u *url.URL) (kind int, id string) {
 			}
 		}
 	}
-	if len(segs) > 0 && segs[0] == "auvio" && rtbfNumber.MatchString(u.Query().Get("id")) {
+	if len(segs) > 0 && segs[0] == "auvio" && allDigits(u.Query().Get("id")) {
 		return rtbfMedia, u.Query().Get("id")
 	}
 	return rtbfOther, ""
@@ -137,27 +156,21 @@ func (r *RTBF) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, 
 	case rtbfMedia:
 		return r.media(ctx, id)
 	case rtbfProgramme:
-		return r.programme(ctx, id, opts)
+		return r.programme(ctx, id, opts.episodeBudget(), opts.maxFiles())
 	case rtbfLive:
 		return nil, fmt.Errorf("rtbf: %s is a live stream, which has no end to download to", u.Redacted())
 	}
-	return r.embedded(ctx, u, opts)
+	return r.embedded(ctx, u, opts.maxFiles())
 }
-
-// rtbfRefused is a media Auvio does not play here: gone, live, protected,
-// or kept for viewers signed in, in Belgium or paying. It is a type so
-// that a listing can leave such entries out, counting each reason once.
-type rtbfRefused struct{ title, reason string }
-
-func (e *rtbfRefused) Error() string { return "rtbf: " + e.title + ": " + e.reason }
 
 // rtbfGone is what RTBF's answer means for an id it has nothing under.
 const rtbfGone = "it is not on Auvio: removed, expired, or not published yet"
 
+// rtbfRoot is the site the player is served from.
+const rtbfRoot = "https://auvio.rtbf.be"
+
 // rtbfHeaders are what the site's own player sends.
-func rtbfHeaders() httpx.Header {
-	return httpx.RefererOrigin("https://auvio.rtbf.be/", "https://auvio.rtbf.be")
-}
+func rtbfHeaders() httpx.Header { return httpx.SiteOrigin(rtbfRoot) }
 
 // bffURL is an endpoint of RTBF's own API, asked as the site's pages ask.
 func (r *RTBF) bffURL(endpoint string) string {
@@ -182,7 +195,7 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	var doc rtbfMediaDoc
 	if err := r.client.GetJSON(ctx, r.bffURL("embed/media/"+url.PathEscape(id)), rtbfHeaders(), &doc); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &rtbfRefused{title: id, reason: rtbfGone}
+			return nil, &itemRefusal{"rtbf", id, rtbfGone}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", id, err)
 	}
@@ -191,23 +204,15 @@ func (r *RTBF) media(ctx context.Context, id string) (*Result, error) {
 	if data.Program != nil {
 		programme = data.Program.Title
 	}
-	stem := cmp.Or(ardJoin(strings.TrimSpace(cmp.Or(programme, data.Title)), strings.TrimSpace(data.Subtitle)), id)
+	stem := cmp.Or(joinTitle(strings.TrimSpace(cmp.Or(programme, data.Title)), strings.TrimSpace(data.Subtitle), titleContains), id)
 	if strings.EqualFold(data.PlayerType, "LIVE") {
-		return nil, &rtbfRefused{title: stem, reason: "it is a live stream, which has no end to download to"}
+		return nil, &itemRefusal{"rtbf", stem, refusedLiveStream}
 	}
 	target, err := r.stream(ctx, cmp.Or(data.AssetID, id+"_6BA97Bb"), stem)
 	if err != nil {
 		return nil, err
 	}
 	return &Result{Title: stem, Files: []File{target.file("")}}, nil
-}
-
-// file is a target as the file it resolves to.
-func (t *Target) file(dir string) File {
-	return File{
-		Name: t.Name, URL: t.URL, Size: t.Size, Dir: dir, Headers: t.Headers, Segments: t.Segments,
-		SegmentKey: t.SegmentKey, Audio: t.Audio, Subtitles: t.Subtitles,
-	}
 }
 
 // rtbfPlay is Red Bee's answer to a request to play: the formats a media
@@ -271,7 +276,7 @@ func (p *rtbfPlay) refusal(title string, now time.Time) error {
 			}
 		}
 	}
-	return &rtbfRefused{title: title, reason: reason}
+	return &itemRefusal{"rtbf", title, reason}
 }
 
 // play asks Red Bee to play a media, with the anonymous session, made
@@ -289,17 +294,17 @@ func (r *RTBF) play(ctx context.Context, assetID, title string) (*rtbfPlay, erro
 		if err == nil {
 			return &answer, nil
 		}
-		se, ok := errors.AsType[*httpx.StatusError](err)
+		refused, forbidden := refusalBody[rtbfPlay](err, http.StatusForbidden)
 		switch {
-		case ok && se.Code == http.StatusUnauthorized && !renewed:
+		case httpx.HasStatus(err, http.StatusUnauthorized) && !renewed:
 			if token, err = r.anonymous(ctx, token); err != nil {
 				return nil, err
 			}
 			continue
-		case ok && se.Code == http.StatusForbidden && json.Unmarshal([]byte(se.Body), &answer) == nil && answer.Message != "":
-			return nil, answer.refusal(title, time.Now())
-		case ok && se.Code == http.StatusNotFound:
-			return nil, &rtbfRefused{title: title, reason: rtbfGone}
+		case forbidden && refused.Message != "":
+			return nil, refused.refusal(title, time.Now())
+		case httpx.HasStatus(err, http.StatusNotFound):
+			return nil, &itemRefusal{"rtbf", title, rtbfGone}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", title, err)
 	}
@@ -346,30 +351,27 @@ func (r *RTBF) stream(ctx context.Context, assetID, stem string) (*Target, error
 		return nil, err
 	}
 	if answer.StreamInfo.Live {
-		return nil, &rtbfRefused{title: stem, reason: "it is a live stream, which has no end to download to"}
+		return nil, &itemRefusal{"rtbf", stem, refusedLiveStream}
 	}
 	headers := rtbfHeaders()
 	hls, file, protected := answer.playable()
 	switch {
 	case hls != "":
-		media, err := resolveMediaPlaylist(ctx, r.client, hls, headers)
+		media, err := broadcastMedia(ctx, r.client, "rtbf", stem, hls, headers)
 		if err != nil {
-			return nil, fmt.Errorf("rtbf: %s: %w", stem, err)
+			return nil, err
 		}
-		audio := media.Audio
-		if len(audio) > 1 && r.audioTracks(ctx, assetID) == 1 {
-			audio = audio[:1] // the default, which the group is sorted to begin with
+		target := media.target(hls, stem+media.extension(), headers)
+		if len(target.Audio) > 1 && r.audioTracks(ctx, assetID) == 1 {
+			target.Audio = target.Audio[:1] // the default, which the group is sorted to begin with
 		}
-		return &Target{
-			URL: hls, Name: stem + media.extension(), Size: -1, Headers: headers,
-			Segments: media.Segments, SegmentKey: media.Key, Audio: audio, Subtitles: media.Subtitles,
-		}, nil
+		return target, nil
 	case file != "":
-		return &Target{URL: file, Name: stem + rtbfExtension(file), Size: -1, Headers: headers}, nil
+		return &Target{URL: file, Name: stem + linkExt(file, ".mp3"), Size: -1, Headers: headers}, nil
 	case protected:
-		return nil, &rtbfRefused{title: stem, reason: "it is DRM-protected"}
+		return nil, &itemRefusal{"rtbf", stem, refusedDRM}
 	}
-	return nil, &rtbfRefused{title: stem, reason: "Auvio offers no stream of it to download"}
+	return nil, &itemRefusal{"rtbf", stem, "Auvio offers no stream of it to download"}
 }
 
 // audioTracks is how many audio tracks the asset itself has, or 0 where
@@ -382,16 +384,6 @@ func (r *RTBF) audioTracks(ctx context.Context, assetID string) int {
 		return 0
 	}
 	return len(record.Audio)
-}
-
-// rtbfExtension is a file's extension, as its link names it.
-func rtbfExtension(link string) string {
-	if u, err := url.Parse(link); err == nil {
-		if ext := strings.ToLower(path.Ext(u.Path)); len(ext) > 1 && len(ext) <= 5 {
-			return ext
-		}
-	}
-	return ".mp3"
 }
 
 // rtbfWidget is one block of a programme's page, or a tab of one.
@@ -410,15 +402,17 @@ type rtbfEntry struct {
 	Subtitle     string `json:"subtitle"`
 }
 
-// rtbfListed is an entry and the folder it goes into.
+// rtbfListed is an entry and the tab it was listed under.
 type rtbfListed struct {
-	entry  rtbfEntry
-	folder string
+	entry rtbfEntry
+	tab   string
 }
 
 // programme reads a programme's episodes: each tab of its episodes widget,
 // a season or a year, into a folder of its own when there are several.
-func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Result, error) {
+// budget is how many episodes are listed and resolved at most
+// (Options.episodeBudget).
+func (r *RTBF) programme(ctx context.Context, slug string, budget, fileCap int) (*Result, error) {
 	var page struct {
 		Data struct {
 			Content struct {
@@ -429,7 +423,7 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 	}
 	if err := r.client.GetJSON(ctx, r.bffURL("pages/emission/"+url.PathEscape(slug)), rtbfHeaders(), &page); err != nil {
 		if httpx.HasStatus(err, http.StatusNotFound) {
-			return nil, &rtbfRefused{title: slug, reason: "it is not on Auvio"}
+			return nil, &itemRefusal{"rtbf", slug, "it is not on Auvio"}
 		}
 		return nil, fmt.Errorf("rtbf: %s: %w", slug, err)
 	}
@@ -442,95 +436,84 @@ func (r *RTBF) programme(ctx context.Context, slug string, opts Options) (*Resul
 		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
 	}
 
-	limit := opts.maxFiles()
+	// Each episode kept is asked of the player as it is listed, so the
+	// walk stops at the budget, saying the listing went on.
 	var (
-		entries []rtbfListed
-		listed  int
-		walkErr error
-		seen    = make(map[string]bool)
+		entries  []rtbfListed
+		more     bool
+		walkNote string
+		walkErr  error
+		seen     = make(map[string]bool)
 	)
 	for _, tab := range tabs {
-		folder := ""
-		if len(tabs) > 1 {
-			folder = sourceFolder(tab.Title)
+		left := budget - len(entries)
+		if left == 0 {
+			more = true
+			break
 		}
-		err := r.walk(ctx, tab.ContentPath, func(e rtbfEntry) bool {
-			if e.AssetID == "" || seen[e.AssetID] || e.ResourceType != "" && e.ResourceType != "MEDIA" {
-				return false
-			}
+		listed, cut, note, err := r.walk(ctx, tab.ContentPath, seen, left)
+		walkErr, walkNote = cmp.Or(walkErr, err), cmp.Or(walkNote, note)
+		for _, e := range listed {
 			seen[e.AssetID] = true
-			listed++
-			if len(entries) < limit {
-				entries = append(entries, rtbfListed{entry: e, folder: folder})
-			}
-			return true
-		})
-		walkErr = cmp.Or(walkErr, err)
-	}
-
-	type checked struct {
-		listed rtbfListed
-		ext    string
-		reason string
-	}
-	results := FanOut(ctx, entries, func(ctx context.Context, l rtbfListed) ([]checked, error) {
-		c := checked{listed: l}
-		answer, err := r.play(ctx, l.entry.AssetID, l.entry.ID)
-		if refused, ok := errors.AsType[*rtbfRefused](err); ok {
-			c.reason = refused.reason
-		} else if answer != nil {
-			switch hls, file, protected := answer.playable(); {
-			case answer.StreamInfo.Live:
-				c.reason = "it is a live stream"
-			case hls != "":
-				c.ext = ".mp4"
-			case file != "":
-				c.ext = rtbfExtension(file)
-			case protected:
-				c.reason = "it is DRM-protected"
-			}
+			entries = append(entries, rtbfListed{entry: e, tab: tab.Title})
 		}
-		return []checked{c}, nil
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	var (
-		files   []File
-		reasons []string
-		counts  = make(map[string]int)
-	)
-	for _, c := range results {
-		if c.reason != "" {
-			if counts[c.reason] == 0 {
-				reasons = append(reasons, c.reason)
-			}
-			counts[c.reason]++
-			continue
+		if cut {
+			more = true
+			break
 		}
-		files = append(files, r.lazy(c.listed, cmp.Or(c.ext, ".mp4")))
 	}
-	if len(files) == 0 {
-		switch {
-		case len(reasons) > 0:
-			return nil, fmt.Errorf("rtbf: %s: none of its %d episodes can be had here: %s", title, len(results), reasons[0])
-		case walkErr != nil:
+	if len(entries) == 0 {
+		if walkErr != nil {
 			return nil, fmt.Errorf("rtbf: %s: %w", title, walkErr)
 		}
 		return nil, fmt.Errorf("rtbf: %s lists no episodes", title)
 	}
-	var notes []string
-	if listed > len(entries) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(entries), listed))
+
+	// An episode whose answer did not arrive, or names nothing this knows,
+	// is still listed: its transfer asks again, and says why if it fails.
+	var refusals []string
+	resolved, note, err := expandSeries(ctx, series[rtbfListed]{
+		site: "rtbf", noun: "episodes", link: title,
+		items: entries, more: more, budget: budget, files: fileCap,
+		// Each tab of several, a season or a year, is a folder of its own.
+		label:   func(l rtbfListed) string { return l.tab },
+		split:   len(tabs) > 1,
+		refused: &refusals,
+		resolve: r.listedFile,
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if walkErr != nil {
-		notes = append(notes, "the listing broke off partway")
+	if err != nil {
+		return nil, err
 	}
-	for _, reason := range reasons {
-		notes = append(notes, fmt.Sprintf("%d left out: %s", counts[reason], reason))
+
+	note = joinNotes(note, walkNote, brokenNote(walkErr), refusedNote(refusals))
+	return &Result{Title: title, Files: listedFiles(resolved), Note: note}, nil
+}
+
+// listedFile is a listed episode's file, its stream resolved when its
+// transfer starts, or the reason the player gave for refusing it.
+func (r *RTBF) listedFile(ctx context.Context, l rtbfListed) (*File, error) {
+	answer, err := r.play(ctx, l.entry.AssetID, l.entry.ID)
+	if _, ok := refusalReason(err); ok {
+		return nil, err
 	}
-	return &Result{Title: title, Files: files, Note: strings.Join(notes, "; ")}, nil
+	ext := ""
+	if answer != nil {
+		switch hls, file, protected := answer.playable(); {
+		case answer.StreamInfo.Live:
+			return nil, &itemRefusal{site: "rtbf", reason: "it is a live stream"}
+		case hls != "":
+			ext = ".mp4"
+		case file != "":
+			ext = linkExt(file, ".mp3")
+		case protected:
+			return nil, &itemRefusal{site: "rtbf", reason: refusedDRM}
+		}
+	}
+	file := r.lazy(l, cmp.Or(ext, ".mp4"))
+	return &file, nil
 }
 
 // tabs is what a programme's page lists its episodes in: the tabs of its
@@ -565,37 +548,46 @@ func (r *RTBF) tabs(ctx context.Context, widgets []rtbfWidget) ([]rtbfWidget, er
 }
 
 // walk reads a list a page at a time, following each page's own next
-// link, and hands each entry on; each says whether it was new. A page that
-// adds nothing ends the walk, whatever its next link says, so a list that
-// pages in a circle cannot hold it.
-func (r *RTBF) walk(ctx context.Context, list string, each func(rtbfEntry) bool) error {
+// link, into the media it names that are not in seen, up to limit of them,
+// saying whether the list went on past them. A page that names nothing new
+// ends the list, whatever its next link says. A page that fails is err,
+// whether or not pages were read before it, for the caller to say the
+// listing broke off; note is the walk's own, for a list that pages in a
+// circle or past the page cap.
+func (r *RTBF) walk(ctx context.Context, list string, seen map[string]bool, limit int) (entries []rtbfEntry, cut bool, note string, err error) {
 	next := rtbfWithQuery(list, url.Values{
 		"_page": {"1"}, "_limit": {strconv.Itoa(rtbfPage)}, "_embed": {"content"}, "userAgent": {rtbfAgent},
 	})
-	for next != "" {
-		var doc struct {
-			Data struct {
-				Content []rtbfEntry `json:"content"`
-			} `json:"data"`
-			Links struct {
-				Next string `json:"next"`
-			} `json:"links"`
-		}
-		if err := r.client.GetJSON(ctx, next, rtbfHeaders(), &doc); err != nil {
-			return err
-		}
-		added := 0
-		for _, e := range doc.Data.Content {
-			if each(e) {
-				added++
+	var broke error
+	entries, cut, note, err = walkEpisodes(ctx, limit, pageWalk[rtbfEntry]{
+		fetch: func(ctx context.Context, _ int) (pageOf[rtbfEntry], error) {
+			var doc struct {
+				Data struct {
+					Content []rtbfEntry `json:"content"`
+				} `json:"data"`
+				Links struct {
+					Next string `json:"next"`
+				} `json:"links"`
 			}
-		}
-		if added == 0 {
-			return nil
-		}
-		next = doc.Links.Next
-	}
-	return nil
+			if err := r.client.GetJSON(ctx, next, rtbfHeaders(), &doc); err != nil {
+				return pageOf[rtbfEntry]{}, err
+			}
+			var media []rtbfEntry
+			for _, e := range doc.Data.Content {
+				if e.AssetID != "" && !seen[e.AssetID] && (e.ResourceType == "" || e.ResourceType == "MEDIA") {
+					media = append(media, e)
+				}
+			}
+			next = doc.Links.Next
+			return pageOf[rtbfEntry]{items: media, next: next != "", end: len(media) == 0}, nil
+		},
+		key: func(e rtbfEntry) string { return e.AssetID },
+		failed: func(err error) (string, bool) {
+			broke = err
+			return "", true
+		},
+	})
+	return entries, cut, note, cmp.Or(err, broke)
 }
 
 // rtbfWithQuery is link with the parameters set on it.
@@ -616,85 +608,48 @@ func rtbfWithQuery(link string, params url.Values) string {
 // keeps the name it is listed under, so that a listing read again finds
 // what was saved under it.
 func (r *RTBF) lazy(l rtbfListed, ext string) File {
-	stem := cmp.Or(ardJoin(strings.TrimSpace(l.entry.Title), strings.TrimSpace(l.entry.Subtitle)), l.entry.ID)
+	stem := cmp.Or(joinTitle(strings.TrimSpace(l.entry.Title), strings.TrimSpace(l.entry.Subtitle), titleContains), l.entry.ID)
 	assetID := l.entry.AssetID
-	return File{
-		Name: stem + ext, Size: -1, Dir: l.folder, Headers: rtbfHeaders(),
-		Resolve: func(ctx context.Context) (*Target, error) {
-			return r.stream(ctx, assetID, stem)
-		},
-	}
+	return lazyEpisode(stem+ext, "", rtbfHeaders(), func(ctx context.Context) (*Target, error) {
+		return r.stream(ctx, assetID, stem)
+	})
 }
 
 var (
 	rtbfAssetAttr = regexp.MustCompile(`data-asset-id="([0-9]+)"`)
 	rtbfEmbedLink = regexp.MustCompile(`auvio\.rtbf\.be/embed/[^"'\s<>]*?/media/([0-9]+)`)
-	rtbfPageTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
 
 // embedded reads the Auvio players a page embeds, an article's say, each
-// into its file.
-func (r *RTBF) embedded(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	html, err := r.client.GetString(ctx, u.String(), nil)
+// into its file, resolving no more than fileCap of them.
+func (r *RTBF) embedded(ctx context.Context, u *url.URL, fileCap int) (*Result, error) {
+	html, _, err := fetchDocument(ctx, r.client, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rtbf: %s: %w", u.Redacted(), err)
 	}
 	text := strings.ReplaceAll(html, `\/`, "/")
-	var ids []string
-	seen := make(map[string]bool)
-	for _, re := range []*regexp.Regexp{rtbfAssetAttr, rtbfEmbedLink} {
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			if !seen[m[1]] {
-				seen[m[1]] = true
-				ids = append(ids, m[1])
-			}
-		}
-	}
+	ids := matchedIDs(text, rtbfAssetAttr, rtbfEmbedLink)
 	switch len(ids) {
 	case 0:
 		return nil, fmt.Errorf("rtbf: %s embeds no Auvio player", u.Redacted())
 	case 1:
 		return r.media(ctx, ids[0])
 	}
-	ids = ids[:min(len(ids), opts.maxFiles())]
-	type found struct {
-		file   *File
-		reason string
-	}
-	results := FanOut(ctx, ids, func(ctx context.Context, id string) ([]found, error) {
-		res, err := r.media(ctx, id)
-		if refused, ok := errors.AsType[*rtbfRefused](err); ok {
-			return []found{{reason: refused.reason}}, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return []found{{file: &res.Files[0]}}, nil
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	title := u.Redacted()
-	if m := rtbfPageTitle.FindStringSubmatch(html); m != nil {
-		title = cmp.Or(strings.TrimSpace(util.Unescape(m[1])), title)
-	}
-	res := &Result{Title: title}
-	var reasons []string
-	for _, f := range results {
-		if f.file != nil {
-			res.Files = append(res.Files, *f.file)
-		} else {
-			reasons = append(reasons, f.reason)
-		}
-	}
-	if len(res.Files) == 0 {
-		if len(reasons) > 0 {
-			return nil, fmt.Errorf("rtbf: %s: none of its %d players can be had here: %s", title, len(ids), reasons[0])
-		}
-		return nil, fmt.Errorf("rtbf: %s: none of its players could be read", title)
-	}
-	if len(reasons) > 0 {
-		res.Note = fmt.Sprintf("%d left out: %s", len(reasons), reasons[0])
-	}
-	return res, nil
+	title = cmp.Or(strings.TrimSpace(writtenTitle(html)), title)
+	// Each player is several requests to resolve, so they are resolved in
+	// rounds up to the user's file cap (series.files), none past it. When
+	// none plays, the first reason one gave is the answer.
+	return listSeries(ctx, title, series[string]{
+		site: "rtbf", noun: "players", link: title,
+		items: ids, noteRefused: true, files: fileCap,
+		resolve: func(ctx context.Context, id string) (*File, error) {
+			res, err := r.media(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return &res.Files[0], nil
+		},
+		unplayable: "they hold nothing to download",
+	})
 }

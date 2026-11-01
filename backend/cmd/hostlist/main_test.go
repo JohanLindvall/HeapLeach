@@ -57,9 +57,9 @@ func TestRewriteTouchesOnlyTheMarkedSection(t *testing.T) {
 	}
 }
 
-// The rendered inventory names every site and every extractor, sorted, with
-// the headline count agreeing with the table.
-func TestRenderListsEverySite(t *testing.T) {
+// The rendered inventory names every extractor with its description, and
+// the headline count agrees with the table.
+func TestRenderListsEveryExtractor(t *testing.T) {
 	catalogue := testCatalogue()
 	out := render(catalogue)
 
@@ -67,50 +67,14 @@ func TestRenderListsEverySite(t *testing.T) {
 		t.Error("the generated section does not say it is generated")
 	}
 	for _, host := range catalogue {
-		if !strings.Contains(out, "| `"+host.Name+"` |") {
+		if host.Recognises == "" {
+			t.Errorf("%s does not say what it recognises", host.Name)
+		}
+		if !strings.Contains(out, "| `"+host.Name+"` | "+host.Recognises+" |") {
 			t.Errorf("%s is missing from the rendered inventory", host.Name)
 		}
-		for _, site := range host.Sites {
-			if !strings.Contains(out, "`"+site+"`") {
-				t.Errorf("%s: site %s is missing from the rendered inventory", host.Name, site)
-			}
-		}
 	}
-
-	count := countSites(catalogue)
-	if count == 0 {
-		t.Fatal("the catalogue counts no sites at all")
-	}
-	if !strings.Contains(out, fmt.Sprintf("\n%d sites across ", count)) {
-		t.Errorf("the headline does not state %d sites:\n%s", count, out)
-	}
-}
-
-// A shape-matching extractor with no description would render as the vague
-// fallback, which reads as a defect in the README rather than as the point.
-func TestEveryShapeExtractorIsDescribed(t *testing.T) {
-	for _, host := range testCatalogue() {
-		if !host.ByShape {
-			continue
-		}
-		if shapeOf(host.Name) == shapeOf("\x00no such extractor") {
-			t.Errorf("%s matches by shape but shapeOf has nothing to say about it", host.Name)
-		}
-	}
-	if shapeOf("direct") == shapeOf("\x00no such extractor") {
-		t.Error("the fallback, which every unrecognised link reaches, has no description")
-	}
-}
-
-// countSites counts domains, not extractors: a family covering thirty boards
-// is thirty sites, and two extractors naming one domain are one.
-func TestCountSitesCountsDistinctDomains(t *testing.T) {
-	catalogue := []extractor.HostInfo{
-		{Name: "a", Sites: []string{"one.test", "two.test"}},
-		{Name: "b", Sites: []string{"two.test", "three.test"}},
-		{Name: "c", ByShape: true},
-	}
-	if got := countSites(catalogue); got != 3 {
-		t.Errorf("countSites = %d, want 3", got)
+	if !strings.Contains(out, fmt.Sprintf("\n%d extractors, ", len(catalogue))) {
+		t.Errorf("the headline does not state %d extractors:\n%s", len(catalogue), out)
 	}
 }

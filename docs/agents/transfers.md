@@ -19,10 +19,10 @@ transfer backoff and an item note. Parser errors, missing files, certificate
 failures and permanent refusals stop immediately. Check the caller's context
 separately: an HTTP client deadline is retryable while that context is alive;
 a canceled or expired caller stops the attempt and its backoff. Leased routes,
-challenges, host waits and enabled proxy fallback keep their existing recovery
-paths rather than spending another retry budget on the same route. Tests in
-`resolve_retry_test.go` cover both initial resolution and refresh after a
-partial transfer.
+challenges, host waits and enabled proxy fallback (`proxyRecovers`) keep their
+existing recovery paths rather than spending another retry budget on the same
+route. Tests in `resolve_retry_test.go` cover both initial resolution and
+refresh after a partial transfer.
 
 **The retry budget counts attempts in a row that moved nothing.** An attempt
 that received bytes and then lost its connection — a CDN node dropping every
@@ -31,7 +31,17 @@ failing on a host that was serving the file a moment ago, not the transfer
 going nowhere. `Manager.transfer` therefore resumes it from the part file
 after a flat `config.ProgressRetryDelay` (30s) and starts the attempt count
 over, so `MaxRetries` bounds consecutive unproductive attempts rather than the
-whole life of a large file on a flaky host. The judgement is made against the
+whole life of a large file on a flaky host. The waits that are not failures
+— a busy host, a connection limit, a dropped connection after progress — go
+through `retryUnspent`, which logs, waits in `waitThenRefresh` (sleep under a
+note, clear it, resolve the link again) and returns the attempt counter the
+loop carries on from: one back for a refusal, so it is not counted, and `-1`
+after progress, so the count starts over. A failed attempt waits through
+`retryAfter`, which every
+retry loop of the transfer engine shares; the item loop goes through
+`retryAnnounced`, which logs "retrying download" with the wait once the retry
+is decided and before the backoff, so the log is not silent through the wait
+and a transfer cancelled during it has still said a retry was pending. The judgement is made against the
 disk, not the wire: `onDisk` reads what the part file held before the attempt
 — the segment sidecar's tally, the playlist checkpoint, or the file's length —
 and the position afterwards has to be further. Bytes arriving is not enough,
@@ -79,9 +89,29 @@ refuse the response; a rejection is final and never retried.
 `segments.go` holds the range table and its resume sidecar, `multistream.go`
 the engine and its supervisor. Points worth knowing before changing them:
 
+- Every resume checkpoint — the segment table's `.state`, a playlist's
+  `.playlist` — goes through `writeSidecar`, `readSidecar` and `clearSidecar`
+  in `files.go`, which write JSON whole under a `.tmp` name and rename it
+  into place (`writeFile`, which the merged subtitles use too). A write that
+  fails removes its `.tmp`; a missing or unreadable checkpoint reads as none,
+  which means starting over. Every file operation of a transfer takes the
+  `transferFiles` it was started under; the zero value is for trusted local
+  paths only (remuxing, tests). Both supervisors, single- and multi-route,
+  write the segment `.state` from their tick through `saveDue`, so the two
+  checkpoint at the same interval.
+- The primary connection and every extra one ask for their range through
+  `rangedRequest`, so they send the same headers, `Accept-Encoding:
+  identity` and the same `If-Range` rules.
+
 - Every hot-path copy and decrypt draws its 256 KiB buffer from one shared
   pool (`buffers.go`, `borrowChunk`). They all want exactly `CopyBufferSize`,
-  so keep new ones on the pool rather than allocating per attempt.
+  so keep new ones on the pool rather than allocating per attempt. A buffer
+  of another size gets a `bytePool` of its own, as the write buffers have.
+- A transfer reads its intervals from `Manager.timings` as it runs rather
+  than copying them. Every default lives in `downloadTimings.withDefaults`,
+  so a test that replaces the timings wholesale passes them through it
+  (`fastTimings`), and one that builds a `Manager` by hand for a supervisor
+  sets them there; a zero interval would stop the supervisor's ticker cold.
 - Splitting bisects the *remaining* span of the widest segment, with ties
   broken leftmost-first. That is what produces the halves, quarters and
   eighths in their natural order, and it self-balances once some segments are
@@ -102,6 +132,9 @@ the engine and its supervisor. Points worth knowing before changing them:
   offset, span, body length and known total must agree. A 416 only proves
   completion when it states the exact length of a sequential part. For a
   partial response with an unknown total, the next range confirms the end.
+  The validated payload length is passed to `httpx.LimitResponseBody`, so a
+  fully received chunked range also records its route's success when the
+  bounded reader closes before HTTP EOF. A short body remains a failure.
   Resume also checks that the part still contains the bytes its checkpoint
   records; a missing or truncated part or a corrupt checkpoint starts over.
   These regressions live in `ranges_test.go`.
@@ -136,6 +169,8 @@ has been *received* and decides what to read next; `segment.flushed` is what
 the file actually holds, and it is the only thing `state()` writes to the
 sidecar. A sidecar that counted buffered bytes would resume past a gap and
 finish a file with a hole in it — the sidecar may only ever under-report.
+A connection whose flush failed goes back to `flushed` before it retries
+(`segment.rewind`), on the single-route and the multi-route path alike.
 Reads stay bounded by `CopyBufferSize` whatever the buffer holds, because the
 promise that keeps a split point ahead of the writer is stated in those terms;
 see `MinSegmentSize`. Tests live in `writebuf_test.go`, and the invariant

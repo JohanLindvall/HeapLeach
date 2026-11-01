@@ -3,69 +3,84 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
 
-// Eporner resolves single videos and whole profile tabs on eporner.com.
+// Single videos and whole profile tabs.
 //
 // The renditions are not in the page. The page carries a video id and a
 // 32-character hash, and that hash has to be folded into a shorter form
 // before the player's own endpoint will answer with the source list — the
 // hash as it stands is refused. The links that come back are signed with
-// both an expiry and the requesting address, so they are minted at download
-// time rather than at extraction time: a profile of a hundred videos would
-// otherwise start failing partway down its own queue.
-type Eporner struct {
-	hostSet
-	client *httpx.Client
-}
-
+// both an expiry and the requesting address, so the row is signed and a
+// profile's videos are queued unread: a profile of a hundred videos would
+// otherwise start failing partway down its own queue. The media requests
+// carry no Referer.
 const (
 	epornerRoot   = "https://www.eporner.com"
 	epornerDomain = "www.eporner.com"
-	epornerSite   = "eporner.com"
-	epornerExt    = ".mp4"
 
 	// The player hash arrives as four groups of eight hexadecimal digits.
 	epornerHashGroups   = 4
 	epornerHashGroupLen = 8
 	epornerHashLen      = epornerHashGroups * epornerHashGroupLen
-
-	// epornerMaxProfilePages and epornerMaxVideos bound a profile walk, the
-	// way erome's are bounded.
-	epornerMaxProfilePages = 60
-	epornerMaxVideos       = 2000
 )
 
-// NewEporner builds the eporner extractor.
-func NewEporner(client *httpx.Client) *Eporner {
-	return &Eporner{hostSet: hostSet{epornerSite}, client: client}
-}
+var (
+	// epornerVideoShape is a video by each of its routes.
+	epornerVideoShape = pathShape(`^/video-[A-Za-z0-9]+(?:/[^/]*)?/?$`, `^/(?:hd-porn|embed)/[A-Za-z0-9]+(?:/[^/]*)?/?$`)
+	// epornerProfileShape is a profile's video tab, or a later page of it.
+	epornerProfileShape = pathShape(`(?i)^/profile/[^/]+/(?:uploaded-videos|videos)(?:/[0-9]+)?/?$`)
+)
 
-func (e *Eporner) Name() string { return "eporner" }
-
-// Extract handles one video or a profile tab that lists them.
-func (e *Eporner) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	segs := util.PathSegments(u)
-	if user, tab, ok := epornerProfileOf(segs); ok {
-		return e.profile(ctx, u, user, tab)
-	}
-	if epornerVideoID(segs) != "" {
-		return e.video(ctx, u.String())
-	}
-	return nil, fmt.Errorf("eporner: no video or profile in %s", u.Redacted())
+var epornerPlayer = playerSite{
+	name:  "eporner",
+	shape: func(u *url.URL) bool { return epornerVideoShape(u) || epornerProfileShape(u) },
+	// A video page by the player's id and hash, which read folds into the
+	// request for the sources, and a profile tab by the site's profile
+	// script, under the site's own name.
+	recognise: func(p *Page) bool {
+		if !p.Named("EPORNER.COM", "EPORNER") {
+			return false
+		}
+		if epornerVideoShape(p.Final) {
+			return p.Has("EP.video.player") && epornerHashPattern.MatchString(p.Body)
+		}
+		return epornerProfileShape(p.Final) && p.Script("/profile.js")
+	},
+	recognises: "videos (`/video-<id>/<slug>/`, `/hd-porn/<id>/`) whose page sets the EPORNER player's " +
+		"video id and hash, and profile video tabs rendered with its profile script",
+	page: func(u *url.URL) (string, error) {
+		if epornerVideoID(util.PathSegments(u)) == "" {
+			return "", fmt.Errorf("no video or profile in %s", u.Redacted())
+		}
+		return u.String(), nil
+	},
+	read:   epornerRead,
+	signed: true,
+	listing: &playerListing{
+		shape: func(u *url.URL) bool {
+			_, _, ok := epornerProfileOf(util.PathSegments(u))
+			return ok
+		},
+		links: epornerProfile,
+	},
 }
 
 // ------------------------------------------------------------------ paths
@@ -135,31 +150,23 @@ func epornerBaseOf(page string) string {
 
 // ------------------------------------------------------------ one video
 
-// video defers the whole resolution to download time, because the link the
-// player hands out is signed and short-lived.
-func (e *Eporner) video(ctx context.Context, page string) (*Result, error) {
-	return refetchedVideo(ctx, epornerExt, nil, func(ctx context.Context) (string, string, error) {
-		return e.rendition(ctx, page)
-	})
-}
-
-// rendition reads a video page, asks the player endpoint for its sources and
-// returns the page's title with the best MP4 link.
-func (e *Eporner) rendition(ctx context.Context, page string) (string, string, error) {
+// epornerRead reads a video page and asks the player endpoint for its
+// sources.
+func epornerRead(ctx context.Context, client *httpx.Client, page string) (*playerVideo, error) {
 	base := epornerBaseOf(page)
-	doc, err := e.client.GetString(ctx, page, httpx.Referer(base+"/"))
+	doc, err := fetchPage(ctx, client, page, httpx.Referer(base+"/"))
 	if err != nil {
-		return "", "", fmt.Errorf("eporner: fetch video page: %w", err)
+		return nil, videoPageError{fmt.Errorf("fetch video page: %w", err)}
 	}
 	vid, hash := epornerPlayerVars(doc)
 	if vid == "" || hash == "" {
-		return "", "", fmt.Errorf("eporner: no player configuration in the page (the video may be private or removed)")
+		return nil, fmt.Errorf("no player configuration in the page (the video may be private or removed)")
 	}
-	link, err := e.sources(ctx, base, vid, hash)
+	candidates, err := epornerSources(ctx, client, base, vid, hash)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	return util.FirstNonEmpty(epornerTitle(doc), vid), link, nil
+	return &playerVideo{title: cmp.Or(epornerTitle(doc), vid), candidates: candidates}, nil
 }
 
 // epornerTitleSuffix strips the site's own name, and any tagline behind it,
@@ -189,14 +196,12 @@ func epornerTitle(doc string) string {
 // page carries a breadcrumb list in the same form, so the type is checked
 // rather than taking the first name found.
 func epornerLinkedName(root *html.Node) string {
-	for _, script := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.Script) && strings.Contains(strings.ToLower(attr(n, "type")), "ld+json")
-	}) {
+	for _, payload := range linkedData(root) {
 		var obj struct {
 			Type string `json:"@type"`
 			Name string `json:"name"`
 		}
-		if json.Unmarshal([]byte(textOf(script)), &obj) != nil {
+		if json.Unmarshal([]byte(payload), &obj) != nil {
 			continue
 		}
 		if strings.EqualFold(obj.Type, "VideoObject") {
@@ -251,12 +256,11 @@ type epornerSource struct {
 	Src        string `json:"src"`
 }
 
-// sources asks the player endpoint for the video's renditions and returns
-// the best MP4 link.
-func (e *Eporner) sources(ctx context.Context, base, vid, hash string) (string, error) {
+// epornerSources asks the player endpoint for the video's MP4 renditions.
+func epornerSources(ctx context.Context, client *httpx.Client, base, vid, hash string) ([]mediaCandidate, error) {
 	short := epornerPlayerHash(hash)
 	if short == "" {
-		return "", fmt.Errorf("eporner: the player hash is not the expected %d characters", epornerHashLen)
+		return nil, fmt.Errorf("the player hash is not the expected %d characters", epornerHashLen)
 	}
 	query := url.Values{
 		"hash":             {short},
@@ -276,20 +280,20 @@ func (e *Eporner) sources(ctx context.Context, base, vid, hash string) (string, 
 	}
 	headers := httpx.Referer(base + "/")
 	headers[httpx.HeaderRequestedWith] = httpx.RequestedWithXHR
-	if err := e.client.GetJSON(ctx, endpoint, headers, &payload); err != nil {
-		return "", fmt.Errorf("eporner: player sources: %w", err)
+	if err := client.GetJSON(ctx, endpoint, headers, &payload); err != nil {
+		return nil, fmt.Errorf("player sources: %w", err)
 	}
 	if !payload.Available {
 		if msg := strings.TrimSpace(payload.Message); msg != "" {
-			return "", fmt.Errorf("eporner: %s", msg)
+			return nil, errors.New(msg)
 		}
-		return "", fmt.Errorf("eporner: the host reports this video as unavailable")
+		return nil, fmt.Errorf("the host reports this video as unavailable")
 	}
-	best, ok := bestCandidate(epornerCandidates(payload.Sources.MP4))
-	if !ok {
-		return "", fmt.Errorf("eporner: no MP4 rendition is offered")
+	candidates := epornerCandidates(payload.Sources.MP4)
+	if _, ok := bestCandidate(candidates); !ok {
+		return nil, fmt.Errorf("no MP4 rendition is offered")
 	}
-	return best.URL, nil
+	return candidates, nil
 }
 
 // epornerCandidates reads the MP4 source map. A video offering none answers
@@ -334,88 +338,64 @@ func epornerQuality(short, label, src string) int {
 
 // ------------------------------------------------------------- a profile
 
-// epornerVideo is one entry in a profile listing.
-type epornerVideo struct {
-	Page  string
-	Title string
-}
-
-// profile walks a profile tab and queues every video it lists.
-func (e *Eporner) profile(ctx context.Context, u *url.URL, user, tab string) (*Result, error) {
-	videos, declared, err := e.profileVideos(ctx, u, user, tab)
+// epornerProfile walks a profile tab for the videos it lists, up to the
+// listing and page caps. A walk cut short says why, and one that came back
+// short of the tab's own count says that too ("4 of 9"), whatever cut it,
+// for a listing that stops early otherwise looks exactly like a complete one. It is a note
+// rather than part of the title, which names the folder, so a later
+// complete run files into the same one.
+func epornerProfile(ctx context.Context, client *httpx.Client, u *url.URL, opts Options) ([]listingLink, string, string, error) {
+	user, tab, _ := epornerProfileOf(util.PathSegments(u))
+	links, declared, note, err := epornerProfileVideos(ctx, client, u, user, tab, opts)
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
-	if len(videos) == 0 {
-		return nil, fmt.Errorf("eporner: %s lists no videos under %s", user, tab)
+	if len(links) == 0 {
+		return nil, "", "", fmt.Errorf("%s lists no videos under %s", user, tab)
 	}
-	files := make([]File, 0, len(videos))
-	for _, v := range videos {
-		files = append(files, e.deferredFile(v))
-	}
-	return &Result{
-		Title: epornerProfileTitle(user, tab),
-		Note:  epornerProfileNote(len(videos), declared),
-		Files: files,
-	}, nil
+	return links, epornerProfileTitle(user, tab), joinNotes(note, partial(cappedNote(len(links), declared, ""))), nil
 }
 
-// deferredFile queues a listed video without resolving it. The listing gives
-// the page and a title to show while it waits; the signed link is minted
-// when the item's turn actually comes.
-func (e *Eporner) deferredFile(v epornerVideo) File {
-	page := v.Page
-	fallback := v.Title
-	return File{
-		Name: fallback + epornerExt,
-		Size: -1,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			title, link, err := e.rendition(ctx, page)
-			if err != nil {
-				return nil, err
-			}
-			return &Target{
-				URL:  link,
-				Name: util.FirstNonEmpty(title, fallback) + epornerExt,
-				Size: -1,
-			}, nil
-		},
+// epornerProfileVideos pages through a profile tab by number, collecting
+// what it lists and the total the tab claims to hold. Asking past the last
+// page is how the walk finds its end — the listing answers 404 rather than
+// an empty page — so the walk is quiet: a short one is caught by the
+// declared count, not by trusting how it stopped. Its videos are read only
+// when their transfers start, so the listing cap is what bounds it, and
+// the note is the cap's when it cut the walk short.
+func epornerProfileVideos(ctx context.Context, client *httpx.Client, u *url.URL, user, tab string, opts Options) ([]listingLink, int, string, error) {
+	headers := httpx.Referer(epornerRoot + "/")
+	first, err := url.Parse(epornerProfilePage(u, user, tab, 1))
+	if err != nil {
+		return nil, 0, "", err
 	}
-}
-
-// profileVideos pages through a profile tab, collecting what it lists and
-// the total the tab claims to hold.
-func (e *Eporner) profileVideos(ctx context.Context, u *url.URL, user, tab string) ([]epornerVideo, int, error) {
-	var videos []epornerVideo
-	declared := 0
+	root, err := fetchPageRoot(ctx, client, first.String(), headers)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("fetch profile: %w", err)
+	}
+	declared := epornerDeclaredCount(root, tab)
 	seen := make(map[string]bool)
-
-	for page := 1; page <= epornerMaxProfilePages && len(videos) < epornerMaxVideos; page++ {
-		link := epornerProfilePage(u, user, tab, page)
-		doc, err := e.client.GetString(ctx, link, httpx.Referer(epornerRoot+"/"))
-		if err != nil {
-			if page == 1 {
-				return nil, 0, fmt.Errorf("eporner: fetch profile: %w", err)
+	page := 1
+	limit, limitNote := entryLimit(opts, config.MaxProfileVideos)
+	links, _, note, err := walkListing(ctx, client, first, listingWalk{
+		name: "eporner", anyRedirect: true, root: root,
+		// Asking past the last page answers 404; a page adding nothing is
+		// the end too. Any other failure is a cut, and noted beside the
+		// stated total's count.
+		ends:  walkAccepts{repeated: true, missing: true, statuses: []int{http.StatusNotFound}},
+		limit: limit, limitNote: limitNote, pages: config.EpornerMaxProfilePages,
+		fetch: fetchAsAsked(client, headers),
+		read: func(root *html.Node, at, _ *url.URL) listingPage {
+			lp := listingPage{links: epornerListing(root, at.String(), seen)}
+			if len(lp.links) == 0 {
+				return listingPage{end: true}
 			}
-			// Asking past the last page is how the walk finds its end: the
-			// listing answers 404 rather than an empty page. A short walk
-			// is caught by the declared count, not by trusting this.
-			break
-		}
-		root, err := parseHTML(doc)
-		if err != nil {
-			return nil, 0, fmt.Errorf("eporner: %w", err)
-		}
-		if page == 1 {
-			declared = epornerDeclaredCount(root, tab)
-		}
-		found := epornerListing(root, link, seen)
-		videos = append(videos, found...)
-		if len(found) == 0 {
-			break
-		}
-	}
-	return videos, declared, nil
+			page++
+			lp.next, _ = url.Parse(epornerProfilePage(u, user, tab, page))
+			return lp
+		},
+	})
+	return links, declared, note, err
 }
 
 // epornerListingClass marks the profile's own list. The page also carries a
@@ -433,7 +413,7 @@ const epornerListingClass = "streamevents"
 var epornerVideoHref = regexp.MustCompile(`^/` + epornerVideoPrefix + `([A-Za-z0-9]+)/`)
 
 // epornerListing collects the videos one page owns, in the page's own order.
-func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []epornerVideo {
+func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []listingLink {
 	scope := findFirst(root, func(n *html.Node) bool { return hasClass(n, epornerListingClass) })
 	if scope == nil {
 		return nil
@@ -464,13 +444,10 @@ func epornerListing(root *html.Node, pageURL string, seen map[string]bool) []epo
 		}
 	}
 
-	found := make([]epornerVideo, 0, len(order))
+	found := make([]listingLink, 0, len(order))
 	for _, id := range order {
 		seen[id] = true
-		found = append(found, epornerVideo{
-			Page:  pages[id],
-			Title: util.FirstNonEmpty(titles[id], util.NameFromURL(pages[id]), id),
-		})
+		found = append(found, listingLink{url: pages[id], title: cmp.Or(titles[id], util.NameFromURL(pages[id]), id)})
 	}
 	return found
 }
@@ -516,15 +493,4 @@ func epornerDeclaredCount(root *html.Node, tab string) int {
 // epornerProfileTitle names the job after the profile and its tab.
 func epornerProfileTitle(user, tab string) string {
 	return user + " (" + strings.ReplaceAll(tab, "-", " ") + ")"
-}
-
-// epornerProfileNote says so when the walk came back short of what the tab
-// claims to hold, for the job's Note: a listing that stops early otherwise
-// looks exactly like a complete one. A note rather than part of the title,
-// which names the folder, so a later complete run files into the same one.
-func epornerProfileNote(got, declared int) string {
-	if declared > 0 && got < declared {
-		return fmt.Sprintf("partial — %d of %d", got, declared)
-	}
-	return ""
 }

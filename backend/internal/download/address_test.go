@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -58,8 +58,7 @@ func TestALinkRefusedForItsAddressIsMintedAgainAndResumed(t *testing.T) {
 		resumedAt.CompareAndSwap(-1, int64(from))
 		second.handler().ServeHTTP(w, r)
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	srv := testServer(t, mux)
 
 	m := progressManager(t, 1)
 	var discards atomic.Int32
@@ -87,8 +86,7 @@ func TestALinkRefusedForItsAddressIsMintedAgainAndResumed(t *testing.T) {
 // A link refused every time is not tried for ever: the retry budget still
 // bounds attempts that get nowhere, and the refusal is what fails the file.
 func TestLinksAlwaysRefusedForTheirAddressFailWithinTheBudget(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
-	t.Cleanup(srv.Close)
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
 	m := progressManager(t, 1)
 	var discards atomic.Int32
 	it := &Item{ID: newID(), Name: "clip.bin", Size: -1,
@@ -105,8 +103,7 @@ func TestLinksAlwaysRefusedForTheirAddressFailWithinTheBudget(t *testing.T) {
 // Only a resolver that says its links are bound to an address has a 409 read
 // that way. Any other 409 still fails the file at once.
 func TestAConflictOnAnUnboundLinkStillFails(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
-	t.Cleanup(srv.Close)
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refuseForAddress(w) }))
 	m := progressManager(t, 1)
 	var resolves atomic.Int32
 	it := &Item{ID: newID(), Name: "clip.bin", Size: -1, resolve: func(context.Context) (*extractor.Target, error) {
@@ -132,8 +129,8 @@ func TestALinkRefusedForItsAddressMovesTheFileToAnotherRoute(t *testing.T) {
 	var discards atomic.Int32
 	job := addProxyFiles(m, 1, boundLink(&discards, func(int32) string { return "http://storage.example.test/link" }))
 	it := job.Items[0]
-	row := pool.Page("keep2share", proxy.Query{Search: route.URL}).Rows[0]
-	if it.route = pool.Acquire("keep2share", row.ID, 1); it.route == nil {
+	row := pool.Page(config.GroupKeep2Share, proxy.Query{Search: route.URL}).Rows[0]
+	if it.route = pool.Acquire(config.GroupKeep2Share, row.ID, 1); it.route == nil {
 		t.Fatal("no route")
 	}
 	retries := it.proxyRetries
@@ -145,7 +142,7 @@ func TestALinkRefusedForItsAddressMovesTheFileToAnotherRoute(t *testing.T) {
 		t.Fatalf("discards=%d, retries %d -> %d; want the link dropped at no cost to the file",
 			discards.Load(), retries, it.proxyRetries)
 	}
-	if row = pool.Page("keep2share", proxy.Query{Search: route.URL}).Rows[0]; row.Status != "cooling" {
+	if row = pool.Page(config.GroupKeep2Share, proxy.Query{Search: route.URL}).Rows[0]; row.Status != "cooling" {
 		t.Fatalf("route status %q, want it held back for the service", row.Status)
 	}
 }

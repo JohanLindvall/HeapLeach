@@ -17,7 +17,8 @@ server precomputes job aggregates so the UI does no derivation. Everything the
 snapshot carries is rendered somewhere: `note` explains a deliberate wait, and
 `segmentsDone`/`segmentsTotal` are the only progress a playlist has, since it
 has no byte total until its last part lands. A field the UI stops reading
-should come out of the payload rather than being left to accumulate.
+should come out of the payload rather than being left to accumulate; a job's
+`createdAt`, kept for API clients (docs/api.md), is the one exception.
 
 The one vocabulary the UI does own is in `status.ts`: which statuses count as
 active, terminal or retryable, and the sidebar's filters and the search built
@@ -28,7 +29,13 @@ pure-logic tests for that live.
 "Clear finished" uses `isComplete`, matching `Job.complete` in the backend:
 the job is done, has no source error, and every file is done. A done job can
 still contain canceled files or a partial listing, so its status alone is
-not enough to include it in the count.
+not enough to include it in the count. A job the backend marks `incomplete`
+— its listing cut short by a failure — is done but offers **Retry job** once
+nothing of it is active, beside the statuses `isRetryable` names
+(`offersRetry`): the retry reads the source again for what was left out. It
+is therefore not complete, and the sidebar files it under **Failed** rather
+than **Done**, with the other jobs a retry is for, so every job still sits
+in exactly one of the three groups.
 
 The sidebar's second section, **Files**, is built on the same module:
 `phaseOf` sorts every file across all jobs into Downloading, Queued, Failed
@@ -55,8 +62,11 @@ The header's Settings button opens live concurrency, streams, speed and
 download proxy controls. Proxy settings last for the session; parallel
 downloads, streams and proxy protocols are kept with the queue
 ([download.md](download.md)). The protocol choices (`ProtocolSelect`) show a
-choice as made until a snapshot agrees, or for a few seconds if none does, as
-the proxy switch does, and each sends only its own group.
+choice as made until a snapshot agrees, or for `SETTLE_TIMEOUT_MS` if none
+does, as the proxy switch does (both through `useSettledChoice`, whose
+constant the sliders share), and each sends only its own group. A failed call
+shows the server's message where there is one (`errorMessage` in `api.ts`)
+and the caller's own words otherwise.
 
 Each job card's gauge button opens that job's own limits (`JobLimits`): number
 fields that commit on Enter or blur and are held to the queue's values, a
@@ -65,7 +75,10 @@ shown otherwise. Tags on the card say which limits hold while it is closed.
 
 `ProxyList` selects Keep2Share, FileBoom, EMLOAD, MEGA or WAF recovery with
 the `site` query and polls `/api/proxies` only while mounted and the tab is
-visible. The inventory can contain tens of thousands of routes and must not be
+visible, through `usePolling`, which the Logs panel shares: one poll at a
+time, the next an interval after the last ends, at once when the tab is shown
+again, and each poll's signal aborted when its query changes or the component
+goes. The inventory can contain tens of thousands of routes and must not be
 added to SSE snapshots. Filtering, sorting and pagination happen server-side,
 in `proxytron/lease`'s `Pool.Page`, which builds rows only up to the end of
 the requested page and works out each route's ID and shown address once;
@@ -81,6 +94,12 @@ The Logs panel polls `/api/logs` deltas only while it is open, visible and
 unpaused, aborts pending reads on close or pause, and discards expired rows
 even when the byte limit shortens the window. Export uses the current filters.
 Messages render as text, including markup in remote error messages.
+
+## Tests
+
+Component tests run under jsdom. `testkit.ts` gives each test of a file a
+fresh `host` and `root` (`mountEachTest`, called before the file's own
+`beforeEach`) and `deferred<T>()` for a request a test holds open.
 
 ## Styles
 

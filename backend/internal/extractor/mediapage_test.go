@@ -4,17 +4,12 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
-	"golang.org/x/net/html"
 )
 
 // Every fixture here is written by hand on reserved domains. What is under
@@ -41,24 +36,6 @@ const mediaPagePlayerHTML = `<html><head>
   <source src="https://cdn.example.test/media/clip_640x360_800k.mp4" type="video/mp4" label="1080p" res="1080">
 </video>
 </body></html>`
-
-func mustParse(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
-}
-
-func mustParseDoc(t *testing.T, doc string) *html.Node {
-	t.Helper()
-	root, err := parseHTML(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
 
 // TestMediaPageElementsReadOnlyThePlayer pins the restriction that makes this
 // safe to run on an arbitrary page: <source> is also how a responsive image
@@ -196,8 +173,8 @@ func TestMediaPageOpenGraph(t *testing.T) {
 		if found.Quality != 720 {
 			t.Errorf("quality = %d, want the height the page states", found.Quality)
 		}
-		if found.Size != -1 {
-			t.Errorf("size = %d, want -1: the page stated no length", found.Size)
+		if found.Size != 0 || knownSize(found.Size) != -1 {
+			t.Errorf("size = %d, want none: the page stated no length", found.Size)
 		}
 	})
 
@@ -498,50 +475,37 @@ func TestJWPlayerBestFallsBackThroughTheKinds(t *testing.T) {
 
 func decodeJWFeed(t *testing.T, doc string) *jwPlayerFeed {
 	t.Helper()
-	var feed jwPlayerFeed
-	if err := json.Unmarshal([]byte(doc), &feed); err != nil {
-		t.Fatal(err)
-	}
+	feed := decode[jwPlayerFeed](t, doc)
 	return &feed
 }
 
 // --- the sniff end to end ----------------------------------------------------
 
-// mediaPageServer serves the fixtures a sniff walks through, and counts what
-// was asked for so a test can pin what was *not*.
-func mediaPageServer(t *testing.T, pages map[string]mediaPageResponse) (*httptest.Server, *atomic.Int32) {
+// mediaPageServer serves the fixtures a sniff walks through, and counts every
+// request so a test can pin what was *not* asked for.
+func mediaPageServer(t *testing.T, pages map[string]sitePage) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		page, found := pages[r.URL.Path]
-		if !found {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set(httpx.HeaderContentType, page.kind)
-		_, _ = w.Write([]byte(page.body))
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &hits
+	srv, hits := fakeSite(t, pages)
+	return srv, &hits.asked
 }
 
-type mediaPageResponse struct {
-	kind string
-	body string
-}
-
-func mediaPageClient() *httpx.Client {
-	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
+// sniffMediaPage is the generic fallback's reading of a page no extractor
+// claimed, with no registry behind it: only the media sniff can answer.
+func sniffMediaPage(t *testing.T, link string) (*Result, bool) {
+	t.Helper()
+	res, _, err := NewDirect(testClient()).pageSniff(context.Background(), mustParse(t, link), Options{})
+	if err != nil {
+		t.Fatalf("%s: %v", link, err)
+	}
+	return res, res != nil
 }
 
 func TestMediaPageSniffResolvesAPage(t *testing.T) {
-	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, _ := mediaPageServer(t, map[string]sitePage{
 		"/watch/an-interview": {kind: "text/html; charset=utf-8", body: mediaPagePlayerHTML},
 	})
 
-	res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/watch/an-interview"))
+	res, ok := sniffMediaPage(t, srv.URL+"/watch/an-interview")
 	if !ok {
 		t.Fatal("a page with a player on it was not recognised")
 	}
@@ -570,12 +534,11 @@ func TestMediaPageSniffResolvesAPage(t *testing.T) {
 // counter is the assertion that matters: a file must not be fetched at all to
 // find out it is one.
 func TestMediaPageSniffLeavesAURLThatNamesAFile(t *testing.T) {
-	srv, hits := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, hits := mediaPageServer(t, map[string]sitePage{
 		"/downloads/clip.mp4": {kind: "text/html; charset=utf-8", body: mediaPagePlayerHTML},
 	})
 
-	if _, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/downloads/clip.mp4")); ok {
+	if _, ok := sniffMediaPage(t, srv.URL+"/downloads/clip.mp4"); ok {
 		t.Error("a URL naming a file was sniffed as a page")
 	}
 	if n := hits.Load(); n != 0 {
@@ -587,12 +550,11 @@ func TestMediaPageSniffLeavesAURLThatNamesAFile(t *testing.T) {
 // here is a page, and it is still not read, because the host said it was
 // sending a video — which is what an extensionless media link looks like.
 func TestMediaPageSniffLeavesWhatIsNotServedAsHTML(t *testing.T) {
-	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, _ := mediaPageServer(t, map[string]sitePage{
 		"/get/abc123": {kind: "video/mp4", body: mediaPagePlayerHTML},
 	})
 
-	if _, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/get/abc123")); ok {
+	if _, ok := sniffMediaPage(t, srv.URL+"/get/abc123"); ok {
 		t.Error("a response the host called a video was parsed as a page")
 	}
 }
@@ -600,15 +562,14 @@ func TestMediaPageSniffLeavesWhatIsNotServedAsHTML(t *testing.T) {
 // TestMediaPageSniffFallsThroughQuietly covers the contract the caller
 // depends on: a page carrying no media is not an error, it is a no.
 func TestMediaPageSniffFallsThroughQuietly(t *testing.T) {
-	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, _ := mediaPageServer(t, map[string]sitePage{
 		"/about": {kind: "text/html", body: `<html><head><title>About us</title></head>
 <body><picture><source srcset="/img/team.jpg"></picture><p>Nothing to download here.</p></body></html>`},
 		"/gone": {kind: "text/html", body: "<html><body>Not found</body></html>"},
 	})
 
 	for _, path := range []string{"/about", "/missing", "/gone"} {
-		if res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-			mustParse(t, srv.URL+path)); ok {
+		if res, ok := sniffMediaPage(t, srv.URL+path); ok {
 			t.Errorf("%s produced %+v, want a quiet no", path, res)
 		}
 	}
@@ -634,14 +595,13 @@ func TestMediaPageSniffResolvesAPlaylist(t *testing.T) {
 #EXT-X-ENDLIST
 `
 
-	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, _ := mediaPageServer(t, map[string]sitePage{
 		"/watch/a-live-set":   {kind: "text/html", body: page},
 		"/hls/master.m3u8":    {kind: "application/vnd.apple.mpegurl", body: master},
 		"/hls/720/media.m3u8": {kind: "application/vnd.apple.mpegurl", body: media},
 	})
 
-	res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/watch/a-live-set"))
+	res, ok := sniffMediaPage(t, srv.URL+"/watch/a-live-set")
 	if !ok {
 		t.Fatal("a page offering a playlist was not recognised")
 	}
@@ -672,7 +632,7 @@ func TestMediaPageSniffThroughJWPlayer(t *testing.T) {
 <script src="https://cdn.jwplayer.com/players/AbCd1234-XyZw9876.js"></script>
 </body></html>`
 
-	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, _ := mediaPageServer(t, map[string]sitePage{
 		"/talks/a-talk":      {kind: "text/html", body: page},
 		"/v2/media/AbCd1234": {kind: "application/json", body: jwPlayerFeedJSON},
 	})
@@ -681,8 +641,7 @@ func TestMediaPageSniffThroughJWPlayer(t *testing.T) {
 	jwPlayerMediaAPI = srv.URL + "/v2/media/"
 	t.Cleanup(func() { jwPlayerMediaAPI = restore })
 
-	res, ok := mediaPageSniff(context.Background(), mediaPageClient(),
-		mustParse(t, srv.URL+"/talks/a-talk"))
+	res, ok := sniffMediaPage(t, srv.URL+"/talks/a-talk")
 	if !ok {
 		t.Fatal("a page embedding the player was not resolved")
 	}
@@ -703,15 +662,11 @@ func TestMediaPageSniffThroughJWPlayer(t *testing.T) {
 // or the whole point is lost — the page would land on disk under its own name
 // and be recorded as a finished download.
 func TestDirectExtractSniffsAPage(t *testing.T) {
-	srv, _ := mediaPageServer(t, map[string]mediaPageResponse{
+	srv, _ := mediaPageServer(t, map[string]sitePage{
 		"/watch/an-interview": {kind: "text/html; charset=utf-8", body: mediaPagePlayerHTML},
 	})
 
-	res, err := NewDirect(mediaPageClient()).Extract(context.Background(),
-		mustParse(t, srv.URL+"/watch/an-interview"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewDirect(testClient()), srv.URL+"/watch/an-interview", Options{})
 	if got := res.Files[0].URL; got != srv.URL+"/media/clip_1920x1080_4000k.mp4" {
 		t.Errorf("the fallback resolved to %q, want the page's own rendition", got)
 	}
@@ -721,11 +676,7 @@ func TestDirectExtractSniffsAPage(t *testing.T) {
 // the sniff declines has to come out exactly as it did before, since every
 // ordinary direct link goes through the same path.
 func TestDirectExtractStillWrapsAFile(t *testing.T) {
-	res, err := NewDirect(mediaPageClient()).Extract(context.Background(),
-		mustParse(t, "https://cdn.example.test/files/archive.zip"), Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, NewDirect(testClient()), "https://cdn.example.test/files/archive.zip", Options{})
 	if len(res.Files) != 1 || res.Files[0].URL != "https://cdn.example.test/files/archive.zip" {
 		t.Fatalf("a plain file came out as %+v", res.Files)
 	}

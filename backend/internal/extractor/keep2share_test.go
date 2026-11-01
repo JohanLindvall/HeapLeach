@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,7 +32,7 @@ func TestKeep2ShareDirectTicketsAndCooldownSurviveProxyToggle(t *testing.T) {
 	})
 	f := keep2ShareTestExtract(t, k)
 	plain := context.Background()
-	routed := httpx.WithRoute(plain, httpx.DirectRoute, k.client, nil)
+	routed := httpx.WithRoute(plain, httpx.DirectRoute, k.ex.client, nil)
 	for _, ctx := range []context.Context{plain, routed, plain} {
 		if _, err := f.Resolve(ctx); err != nil {
 			t.Fatal(err)
@@ -56,8 +57,8 @@ func TestKeep2ShareCooldownIsPerRoute(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"status":"success","url":"https://cdn.example.test/first-clip"}`)
 	})
-	first := httpx.WithRoute(context.Background(), "first", k.client, nil)
-	second := httpx.WithRoute(context.Background(), "second", k.client, nil)
+	first := httpx.WithRoute(context.Background(), "first", k.ex.client, nil)
+	second := httpx.WithRoute(context.Background(), "second", k.ex.client, nil)
 	f := keep2ShareTestExtract(t, k)
 	if _, err := f.Resolve(first); err == nil {
 		t.Fatal("first route was not cooled")
@@ -81,8 +82,8 @@ func TestKeep2ShareSignedLinkIsNeverReusedOnAnotherRoute(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"status": "success", "url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d", time.Now().Add(time.Hour).Unix())})
 	})
 	f := keep2ShareTestExtract(t, k)
-	first := httpx.WithRoute(context.Background(), "first", k.client, nil)
-	second := httpx.WithRoute(context.Background(), "second", k.client, nil)
+	first := httpx.WithRoute(context.Background(), "first", k.ex.client, nil)
+	second := httpx.WithRoute(context.Background(), "second", k.ex.client, nil)
 	for _, ctx := range []context.Context{first, first, second, second} {
 		if _, err := f.Resolve(ctx); err != nil {
 			t.Fatal(err)
@@ -107,22 +108,118 @@ func TestKeep2ShareRejectsRestrictedOrMissingFilesBeforeRequestingCaptcha(t *tes
 				_, _ = fmt.Fprint(w, tc.info)
 			}))
 			defer srv.Close()
-			k := NewKeep2Share(httpx.New("test-agent", "en-US", 0, time.Second))
-			k.api = srv.URL
+			k := NewKeep2Share(testClient())
+			k.services[0].api = srv.URL
 			u, _ := url.Parse("https://example.test/file/test-file")
-			if _, err := k.Extract(context.Background(), u, Options{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := k.Extract(keep2SharePageContext(t, u, "Keep2Share"), u, Options{}); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error = %v; want %q", err, tc.want)
 			}
 		})
 	}
 }
 
-func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[string]string)) *Keep2Share {
+func keep2ShareTestSite(t *testing.T, getURL func(http.ResponseWriter, map[string]string)) *keep2ShareService {
 	t.Helper()
-	return keep2ShareProtocolTestSite(t, NewKeep2Share, getURL)
+	return keep2ShareProtocolTestSite(t, "Keep2Share", getURL)
 }
 
-func keep2ShareProtocolTestSite(t *testing.T, create func(*httpx.Client) *Keep2Share, getURL func(http.ResponseWriter, map[string]string)) *Keep2Share {
+// keep2ShareStatusAPI answers file status under /api/ on mux, the one call
+// discovery may make: each file is named after its id and available unless
+// its id is "removed". Any other API call — a ticket, a CAPTCHA — fails the
+// test. It returns how often each file was asked about, keyed by API path
+// and id.
+func keep2ShareStatusAPI(t *testing.T, mux *http.ServeMux) func() map[string]int {
+	t.Helper()
+	var mu sync.Mutex
+	asked := make(map[string]int)
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/getFileStatus") {
+			t.Errorf("discovery asked for more than file status: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected API call", http.StatusBadRequest)
+			return
+		}
+		var in map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		asked[r.URL.Path+"/"+in["id"]]++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success", "name": in["id"] + ".bin", "size": 1234,
+			"is_available": in["id"] != "removed", "isAvailableForFree": true,
+		})
+	})
+	return func() map[string]int {
+		mu.Lock()
+		defer mu.Unlock()
+		return maps.Clone(asked)
+	}
+}
+
+// keep2ShareAPIs points the registry's services at base/api/<service>, with
+// no question of whether a file is free. The shells (keep2ShareShell) are
+// served as localhost, a host of neither service, so their links are
+// followed and read as pages, each named by its service.
+func keep2ShareAPIs(reg *Registry, base string) {
+	for _, ex := range reg.extractors {
+		if k, ok := ex.(*Keep2Share); ok {
+			for _, s := range k.services {
+				s.api, s.files = base+"/api/"+strings.ToLower(s.label), ""
+			}
+		}
+	}
+	aliasHosts(reg, "keep2share", "localhost")
+}
+
+// keep2SharePageContext carries the probe of u as the service named label
+// answers it, as the registry hands it to Extract.
+func keep2SharePageContext(t *testing.T, u *url.URL, label string) context.Context {
+	t.Helper()
+	return withPage(context.Background(), htmlPage(t, u.String(), keep2ShareShellHTML(label)))
+}
+
+// keep2ShareShellHTML is the app shell, named as a service names itself.
+func keep2ShareShellHTML(name string) string {
+	return `<html><head><title>` + name + `</title><script type="module" crossorigin src="/static/js/entry-index-A1b2.js"></script>` +
+		`<link rel="modulepreload" href="/static/js/chunk-client-C3d4.js"></head><body><div id="root"></div></body></html>`
+}
+
+// keep2ShareShell serves the app shell a service answers its file links
+// with, named as the service names itself, and returns its origin. It is
+// served as localhost so that a test's other sites, matched on 127.0.0.1,
+// do not take its links.
+func keep2ShareShell(t *testing.T, name string) string {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpx.HeaderContentType, "text/html; charset=utf-8")
+		fmt.Fprint(w, keep2ShareShellHTML(name))
+	}))
+	t.Cleanup(s.Close)
+	return strings.Replace(s.URL, "127.0.0.1", "localhost", 1)
+}
+
+// keep2ShareShells points the placeholder service hosts fixtures link to,
+// keep2share.example.test, its -alias and fileboom.example.test, at shells
+// of the services, so the links are identified by their pages. The alias is
+// the same shell over plain HTTP: one host, as the services' own domains
+// fold their links by id (Keep2Share.fileKey).
+func keep2ShareShells(t *testing.T) *strings.Replacer {
+	t.Helper()
+	k2s, boom := keep2ShareShell(t, "Keep2Share"), keep2ShareShell(t, "FileBoom")
+	alias := k2s
+	bare := func(origin string) string { return strings.TrimPrefix(origin, "http:") }
+	return strings.NewReplacer(
+		"https://keep2share.example.test", k2s, "//keep2share.example.test", bare(k2s),
+		"http://keep2share-alias.example.test", alias, "https://keep2share-alias.example.test", alias,
+		"https://fileboom.example.test", boom, "//fileboom.example.test", bare(boom),
+	)
+}
+
+// keep2ShareProtocolTestSite serves the API of the service named label and
+// returns that service, left as its extractor's only one.
+func keep2ShareProtocolTestSite(t *testing.T, label string, getURL func(http.ResponseWriter, map[string]string)) *keep2ShareService {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v2/getFileStatus", func(w http.ResponseWriter, r *http.Request) {
@@ -154,17 +251,19 @@ func keep2ShareProtocolTestSite(t *testing.T, create func(*httpx.Client) *Keep2S
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	k := create(httpx.New("test-agent", "en-US", 0, time.Second))
+	ex := NewKeep2Share(testClient())
+	ex.services = slices.DeleteFunc(ex.services, func(s *keep2ShareService) bool { return s.label != label })
+	k := ex.services[0]
 	k.api = srv.URL + "/api/v2"
 	k.files = srv.URL + "/v1/files"
-	k.solver = func(ctx context.Context, raw []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
+	k.ex.solver = func(ctx context.Context, raw []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
 	return k
 }
 
 // keep2ShareFreeAnswers has the site answer whether the file can be had free
 // with each of answers in turn, the last one from then on, and counts the
 // questions.
-func keep2ShareFreeAnswers(t *testing.T, k *Keep2Share, answers ...string) *atomic.Int32 {
+func keep2ShareFreeAnswers(t *testing.T, k *keep2ShareService, answers ...string) *atomic.Int32 {
 	t.Helper()
 	var asked atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +378,7 @@ func TestKeep2ShareChecksAFileOverTheCallersOwnConnection(t *testing.T) {
 		if f.Check == nil {
 			t.Fatal("no check offered for the file")
 		}
-		dead, err := httpx.New("test-agent", "en-US", 0, time.Second).ThroughProxy("http://127.0.0.1:1")
+		dead, err := testClient().ThroughProxy("http://127.0.0.1:1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -310,10 +409,10 @@ func TestKeep2ShareGoesOnWhenTheSiteCannotSayWhetherAFileIsFree(t *testing.T) {
 	}
 }
 
-func keep2ShareTestExtract(t *testing.T, k *Keep2Share) File {
+func keep2ShareTestExtract(t *testing.T, k *keep2ShareService) File {
 	t.Helper()
 	u, _ := url.Parse("https://example.test/file/test-file/obsolete-name.mp4")
-	result, err := k.Extract(context.Background(), u, Options{})
+	result, err := k.ex.Extract(keep2SharePageContext(t, u, k.label), u, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +423,7 @@ func keep2ShareTestExtract(t *testing.T, k *Keep2Share) File {
 	if f.Name != "First Clip.mp4" || f.Size != 1234 || f.SizeApprox || f.URL != "" || f.Resolve == nil {
 		t.Fatalf("file = %+v; want exact metadata with the download deferred", f)
 	}
-	if f.Pace == nil || f.Pace.Streams != 1 || f.Pace.Files != 1 || f.Pace.Group != "keep2share" {
+	if f.Pace == nil || f.Pace.Streams != 1 || f.Pace.Files != 1 || f.Pace.Group != config.GroupKeep2Share {
 		t.Fatalf("pace = %+v; free downloads must use one connection", f.Pace)
 	}
 	return f
@@ -395,7 +494,7 @@ func TestKeep2ShareBoundsWrongCaptchaAnswers(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"status":"error","code":406,"errorCode":31,"message":"Invalid captcha code"}`)
 	})
 	// More readings than may be tried, so both bounds are what stops it.
-	k.solver = func(context.Context, []byte) ([]string, error) {
+	k.ex.solver = func(context.Context, []byte) ([]string, error) {
 		solves.Add(1)
 		return []string{"aB3dE1", "aB3dE2", "aB3dE3", "aB3dE4", "aB3dE5"}, nil
 	}
@@ -424,7 +523,7 @@ func TestKeep2ShareTriesTheNextReadingOnTheSameImage(t *testing.T) {
 		}
 		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":0}`)
 	})
-	k.solver = func(context.Context, []byte) ([]string, error) {
+	k.ex.solver = func(context.Context, []byte) ([]string, error) {
 		solves.Add(1)
 		return []string{"aB3dEI", "aB3dEl", "aB3dE1"}, nil
 	}
@@ -457,7 +556,7 @@ func TestKeep2ShareNeverAnswersASpentChallengeAgain(t *testing.T) {
 			_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/first-clip"}`)
 		}
 	})
-	k.solver = func(context.Context, []byte) ([]string, error) {
+	k.ex.solver = func(context.Context, []byte) ([]string, error) {
 		if solves.Add(1) == 1 {
 			return []string{"first1", "first2", "first3"}, nil
 		}
@@ -556,7 +655,7 @@ func TestKeep2ShareSendsALongTicketWaitBackToTheQueue(t *testing.T) {
 		}
 		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"free_download_key":"ticket","time_wait":4300}`)
 	})
-	k.solver = func(context.Context, []byte) ([]string, error) {
+	k.ex.solver = func(context.Context, []byte) ([]string, error) {
 		solves.Add(1)
 		return []string{"aB3dE7"}, nil
 	}
@@ -576,9 +675,9 @@ func TestKeep2ShareSendsALongTicketWaitBackToTheQueue(t *testing.T) {
 
 	// When it comes round again, the ticket is redeemed: no second CAPTCHA.
 	d.free(httpx.DirectRoute).ready = time.Now()
-	k.mu.Lock()
-	clear(k.cooldowns)
-	k.mu.Unlock()
+	k.cooldowns.mu.Lock()
+	clear(k.cooldowns.until)
+	k.cooldowns.mu.Unlock()
 	if target, err := d.resolve(context.Background()); err != nil || target.URL != "https://cdn.example.test/first-clip" {
 		t.Fatalf("target=%+v error=%v", target, err)
 	}
@@ -606,10 +705,7 @@ func TestKeep2ShareRefreshesExpiredLinksWithTheAcceptedTicket(t *testing.T) {
 }
 
 func TestKeep2ShareReadsTheHostsCooldown(t *testing.T) {
-	var response keep2ShareResponse
-	if err := json.Unmarshal([]byte(`{"status":"error","errorCode":42,"errors":[{"code":5,"timeRemaining":"123.500000"}]}`), &response); err != nil {
-		t.Fatal(err)
-	}
+	response := decode[keep2ShareResponse](t, `{"status":"error","errorCode":42,"errors":[{"code":5,"timeRemaining":"123.500000"}]}`)
 	if got := response.retryDelay(); got != 124*time.Second {
 		t.Fatalf("delay=%s, want to wait through the stated cooldown", got)
 	}
@@ -644,7 +740,7 @@ func TestKeep2ShareSendsTheWaitBetweenFreeDownloadsBackToTheQueue(t *testing.T) 
 		}
 		_, _ = fmt.Fprint(w, `{"status":"success","code":200,"url":"https://cdn.example.test/first-clip"}`)
 	})
-	k.solver = func(context.Context, []byte) ([]string, error) {
+	k.ex.solver = func(context.Context, []byte) ([]string, error) {
 		solves.Add(1)
 		return []string{"aB3dE7"}, nil
 	}
@@ -672,9 +768,9 @@ func TestKeep2ShareSendsTheWaitBetweenFreeDownloadsBackToTheQueue(t *testing.T) 
 	}
 
 	// Once it is over, the next turn goes ahead.
-	k.mu.Lock()
-	k.cooldowns[httpx.DirectRoute] = time.Now().Add(-time.Second)
-	k.mu.Unlock()
+	k.cooldowns.mu.Lock()
+	k.cooldowns.until[httpx.DirectRoute] = time.Now().Add(-time.Second)
+	k.cooldowns.mu.Unlock()
 	cooling.Store(false)
 	target, err := next.Resolve(context.Background())
 	if err != nil || target.URL != "https://cdn.example.test/first-clip" {
@@ -702,7 +798,7 @@ func TestKeep2ShareTakesAnAddressLimitForThatRoutesWait(t *testing.T) {
 				w.WriteHeader(http.StatusNotAcceptable)
 				_, _ = fmt.Fprint(w, answer)
 			})
-			k.solver = func(context.Context, []byte) ([]string, error) {
+			k.ex.solver = func(context.Context, []byte) ([]string, error) {
 				solves.Add(1)
 				return []string{"aB3dE7"}, nil
 			}
@@ -778,7 +874,7 @@ func TestKeep2ShareKeepsAFreeDownloadPerRoute(t *testing.T) {
 			"url": fmt.Sprintf("https://cdn.example.test/first-clip?temp_url_expires=%d&for=%s", expires, in["free_download_key"])})
 	})
 	f := keep2ShareTestExtract(t, k)
-	client := httpx.New("test", "en", 0, time.Second)
+	client := testClient()
 	on := func(route string) context.Context {
 		return httpx.WithRoute(context.Background(), route, client, nil)
 	}
@@ -813,5 +909,43 @@ func TestKeep2ShareKeepsAFreeDownloadPerRoute(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestKeep2ShareRecognise(t *testing.T) {
+	k2s := NewKeep2Share(nil)
+	shell := keep2ShareShellHTML
+	link := "https://share.example.test/file/0a1b2c3d4e5f6/First.Clip.mp4"
+	// One app on both services, each named as itself: the name picks the
+	// service, and with it the API.
+	for _, tc := range []struct{ name, api string }{
+		{"Keep2Share", "https://k2s.cc/api/v2"},
+		{"FileBoom", "https://fboom.me/api/v2"},
+		{"Elsewhere", ""},
+	} {
+		p := htmlPage(t, link, shell(tc.name))
+		expectRecognised(t, k2s, p, tc.api != "")
+		if s := k2s.service(p); (s == nil) != (tc.api == "") || (s != nil && s.api != tc.api) {
+			t.Errorf("%s: service = %+v; want API %q", tc.name, s, tc.api)
+		}
+	}
+	// A removed file is the same shell, answered with a 404.
+	expectRecognised(t, k2s, fixturePage(t, link, http.StatusNotFound, "text/html", shell("Keep2Share")), true)
+	// The form and the name, but not the app shell.
+	expectRecognised(t, k2s, htmlPage(t, link, `<html><head><title>Keep2Share</title></head><body></body></html>`), false)
+	// The shell, but not a file link.
+	expectRecognised(t, k2s, htmlPage(t, "https://share.example.test/premium", shell("Keep2Share")), false)
+
+	expectShape(t, k2s, "https://share.example.test/file/0a1b2c3d4e5f6", true)
+	expectShape(t, k2s, link, true)
+	expectShape(t, k2s, "https://share.example.test/file/", false)
+	expectShape(t, k2s, "https://share.example.test/folder/0a1b2c3d4e5f6", false)
+}
+
+func TestKeep2ShareOCRChecksInstallationBeforeRequestingAChallenge(t *testing.T) {
+	t.Setenv("HEAPLEACH_OCR_DIR", t.TempDir())
+	solver, err := keep2ShareOCR()
+	if solver != nil || err == nil || !strings.Contains(err.Error(), "OCR") {
+		t.Fatalf("solver=%v, error=%v; want an installation error before requesting a CAPTCHA", solver != nil, err)
 	}
 }

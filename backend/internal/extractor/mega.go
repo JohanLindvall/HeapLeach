@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,9 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,7 +51,7 @@ import (
 // mega until it lifts. The waits are kept by route, so the rest of the queue
 // learns one without asking.
 type Mega struct {
-	hostSet
+	about
 	client *httpx.Client
 	// links asks for download links, which go through proxy routes once the
 	// normal connection's quota is used up. It is capped like the other
@@ -64,8 +65,7 @@ type Mega struct {
 	seq atomic.Int64
 
 	// spent is when each route's transfer quota is back, by route.
-	mu    sync.Mutex
-	spent map[string]time.Time
+	spent routeWaits
 }
 
 const (
@@ -85,15 +85,88 @@ const (
 // megaPace starts a file on the normal connection and moves it onto mega's
 // proxy routes, one file to an address, once that connection's quota is used
 // up.
-var megaPace = Pace{Group: "mega", Files: 1, PerRoute: true, DirectFirst: true}
+var megaPace = Pace{Group: config.GroupMega, Files: 1, PerRoute: true, DirectFirst: true}
 
 // NewMega builds the mega extractor.
 func NewMega(client *httpx.Client) *Mega {
-	return &Mega{hostSet: hostSet{"mega.nz", "mega.co.nz"}, client: client,
-		links: client.WithTimeout(config.MegaRequestTimeout), endpoint: megaAPI}
+	return &Mega{about: about{name: "mega", shape: megaShape,
+		recognises: "file and folder links (`/file/<handle>#<key>`, `/folder/<handle>#<key>`, `/embed/…`, `#!…!…`) " +
+			"whose page is the MEGA web client's boot shell (`secureboot.js`, `#fmholder`)"},
+		client: client, links: client.WithTimeout(config.MegaRequestTimeout), endpoint: megaAPI}
 }
 
-func (m *Mega) Name() string { return "mega" }
+// megaPathShape is a link with the handle in the path: /file/<handle>,
+// /embed/<handle> or /folder/<handle>, the key following in the fragment.
+var megaPathShape = pathShape(`^/(file|embed|folder)/[A-Za-z0-9_-]{8}/?$`)
+
+// megaFragmentShape is the older form, everything in the fragment:
+// #!<handle>!<key> or #F!<handle>!<key>.
+var megaFragmentShape = regexp.MustCompile(`^F?![A-Za-z0-9_-]{8}!`)
+
+// megaShape is a file, folder or embed link in either form. A link without
+// its key still has the shape: it is mega's to explain that the key is
+// missing, which nobody else can.
+func megaShape(u *url.URL) bool {
+	if megaPathShape(u) {
+		return true
+	}
+	path := u.EscapedPath()
+	// The old embed frame, /embed#!<handle>!<key>, kept the fragment form.
+	return (path == "" || path == "/" || path == "/embed" || path == "/embed/") && megaFragmentShape.MatchString(u.Fragment)
+}
+
+// Recognise takes a link of mega's form served by its web client. The
+// server sees nothing of the link but the handle, so the page is the same
+// boot shell for every link, and that shell is what is checked: the boot
+// script every path loads, and the file manager it boots into. Its name is
+// checked as well, since the shell is all there is.
+//
+// A link whose page the probe was kept from (probeWithheld) is taken when
+// the API, asked once, describes what it names under its key: a file whose
+// attributes decrypt with it, or a folder it lists. The shell says nothing
+// of any link, and the API is what Extract reads.
+func (m *Mega) Recognise(ctx context.Context, p *Page) bool {
+	if !m.Shape(p.URL) && !m.Shape(p.Final) {
+		return false
+	}
+	if probeWithheld(p) {
+		return m.answers(ctx, p)
+	}
+	return p.Script("/secureboot.js") && p.Has(`id="fmholder"`) &&
+		strings.Contains(strings.ToUpper(p.Title()), "MEGA")
+}
+
+// answers asks the API about the link a withheld page was probed for, once
+// per page.
+func (m *Mega) answers(ctx context.Context, p *Page) bool {
+	u := p.URL
+	if !m.Shape(u) {
+		u = p.Final
+	}
+	link, err := parseMegaLink(u)
+	if err != nil || m.client == nil {
+		return false
+	}
+	return withheldAsked(ctx, p, "mega "+m.endpoint+" "+link.handle, func(ctx context.Context) bool {
+		if link.folder {
+			var listing struct {
+				Nodes []megaNode `json:"f"`
+			}
+			return m.api(ctx, m.client, link.handle, megaCommand{A: "f", C: 1, R: 1}, &listing) == nil &&
+				len(listing.Nodes) > 0
+		}
+		key, _, _, err := megaFileKey(link.key)
+		if err != nil {
+			return false
+		}
+		info, err := m.describe(ctx, link.handle)
+		if err != nil {
+			return false
+		}
+		_, err = megaDecryptAttrs(string(info.Attrs), key)
+		return err == nil
+	})
+}
 
 // Extract resolves a public link into its files.
 func (m *Mega) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
@@ -119,6 +192,9 @@ type megaLink struct {
 	key []byte
 	// node names one file inside a folder share, when the link selects one.
 	node string
+	// sub names a subfolder of a folder share, when the link selects one:
+	// only the files under it are taken, filed from it down.
+	sub string
 }
 
 // parseMegaLink reads both link shapes mega has used.
@@ -138,8 +214,12 @@ func parseMegaLink(u *url.URL) (*megaLink, error) {
 		case "file", "embed":
 			return newMegaLink(false, segs[1], frag, "")
 		case "folder":
-			key, node := splitMegaFolderFragment(frag)
-			return newMegaLink(true, segs[1], key, node)
+			key, node, sub := splitMegaFolderFragment(frag)
+			link, err := newMegaLink(true, segs[1], key, node)
+			if link != nil {
+				link.sub = sub
+			}
+			return link, err
 		}
 	}
 
@@ -162,22 +242,26 @@ func parseMegaLink(u *url.URL) (*megaLink, error) {
 	return nil, fmt.Errorf("mega: %s is not a file or folder link", u.Redacted())
 }
 
-// splitMegaFolderFragment separates a folder key from the node a link may
-// select after it: "<key>/file/<node>".
+// splitMegaFolderFragment separates a folder key from what a link may
+// select after it: a file, "<key>/file/<node>", or a subfolder,
+// "<key>/folder/<sub>".
 //
-// Only a file selection is honoured. The same shape with "folder" selects a
-// subtree, which there is no way to name to the API separately — taking it
-// for a file handle would find nothing and report the folder as empty,
-// where ignoring it downloads the whole share.
-func splitMegaFolderFragment(frag string) (key, node string) {
+// The API lists the whole share either way, so a subfolder is picked out of
+// that listing rather than asked for; one the listing does not hold leaves
+// the whole share, as a selection nothing can be found for is no reason to
+// download nothing.
+func splitMegaFolderFragment(frag string) (key, node, sub string) {
 	key, rest, ok := strings.Cut(frag, "/")
 	if !ok {
-		return key, ""
+		return key, "", ""
 	}
-	if kind, handle, ok := strings.Cut(rest, "/"); ok && kind == "file" {
-		return key, handle
+	switch kind, handle, _ := strings.Cut(rest, "/"); kind {
+	case "file":
+		return key, handle, ""
+	case "folder":
+		return key, "", handle
 	}
-	return key, ""
+	return key, "", ""
 }
 
 // newMegaLink validates the parts and decodes the key.
@@ -227,7 +311,7 @@ func (m *Mega) extractFile(ctx context.Context, link *megaLink) (*Result, error)
 	if err != nil {
 		return nil, fmt.Errorf("mega: %w", err)
 	}
-	name := util.FirstNonEmpty(attrs.Name, link.handle)
+	name := cmp.Or(attrs.Name, link.handle)
 
 	file := File{
 		Name:    name,
@@ -280,6 +364,13 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 	}
 
 	res := &Result{Title: megaFolderTitle(nodes, order)}
+	// top is the subfolder the link selects, when the listing holds it; its
+	// files are filed from it down, under its name.
+	top := ""
+	if sub := nodes[link.sub]; link.sub != "" && sub != nil && sub.node.Type == megaTypeFolder {
+		top = link.sub
+		res.Title = cmp.Or(sub.name, res.Title)
+	}
 	for _, dec := range order {
 		if dec.node.Type != megaTypeFile || dec.key == nil {
 			continue
@@ -287,15 +378,18 @@ func (m *Mega) extractFolder(ctx context.Context, link *megaLink) (*Result, erro
 		if link.node != "" && dec.node.Handle != link.node {
 			continue
 		}
+		if top != "" && !megaUnder(nodes, dec, top) {
+			continue
+		}
 		key, nonce, _, err := megaFileKey(dec.key)
 		if err != nil {
 			continue // a node whose key is the wrong shape is not ours to read
 		}
-		name := util.FirstNonEmpty(dec.name, dec.node.Handle)
+		name := cmp.Or(dec.name, dec.node.Handle)
 		cmd := megaCommand{A: "g", G: 1, SSL: 2, N: dec.node.Handle}
 		res.Files = append(res.Files, File{
 			Name:    name,
-			Dir:     megaDir(nodes, dec),
+			Dir:     megaDir(nodes, dec, top),
 			Size:    dec.node.Size,
 			Cipher:  &StreamCipher{Key: key, Nonce: nonce},
 			Resolve: m.resolver(link.handle, cmd, name),
@@ -374,7 +468,7 @@ func (d *megaDecrypted) decrypt(share []byte) {
 }
 
 // megaDir builds the relative directory a file sits in, walking up towards
-// the share root.
+// the share root, or towards top, the subfolder a link selects, when set.
 //
 // The root itself is left out, because the manager already files a
 // multi-file job under the job title and that is the same name. It is
@@ -382,24 +476,38 @@ func (d *megaDecrypted) decrypt(share []byte) {
 // own parent is not in the listing — so the two cannot disagree and produce
 // the folder name twice. The depth bound doubles as a guard against a
 // listing whose parents form a cycle.
-func megaDir(nodes map[string]*megaDecrypted, file *megaDecrypted) string {
+func megaDir(nodes map[string]*megaDecrypted, file *megaDecrypted, top string) string {
 	var parts []string
-	for handle := file.node.Parent; len(parts) < config.MaxFolderDepth; {
+	for handle := file.node.Parent; len(parts) < config.MaxFolderDepth && (top == "" || handle != top); {
 		parent := nodes[handle]
 		if parent == nil || parent.node.Type == megaTypeRoot || nodes[parent.node.Parent] == nil {
 			break // the share root, or a parent outside the listing
 		}
-		// A folder whose name would not decrypt still has a place in the
-		// tree. Dropping it and everything above would fold two deep
-		// branches into one shallower folder, where their files collide.
-		name := parent.name
-		if name == "" {
-			name = handle
-		}
-		parts = append([]string{name}, parts...)
+		// Each name is one component: a slash in one is no folder of its
+		// own. A folder whose name would not decrypt still has a place in
+		// the tree, by its handle. Dropping it and everything above would
+		// fold two deep branches into one shallower folder, where their
+		// files collide.
+		parts = append([]string{treeDir(parent.name, handle)}, parts...)
 		handle = parent.node.Parent
 	}
 	return path.Join(parts...)
+}
+
+// megaUnder reports whether file sits somewhere under the folder top.
+func megaUnder(nodes map[string]*megaDecrypted, file *megaDecrypted, top string) bool {
+	handle := file.node.Parent
+	for range config.MaxFolderDepth {
+		if handle == top {
+			return true
+		}
+		parent := nodes[handle]
+		if parent == nil {
+			return false
+		}
+		handle = parent.node.Parent
+	}
+	return false
 }
 
 // megaFolderTitle names the job after the shared folder itself, which is the
@@ -453,7 +561,7 @@ type megaDownloadLink struct {
 // answered with the time left instead, which is that address's wait, and is
 // not asked again before it is over.
 func (m *Mega) link(ctx context.Context, folder string, cmd megaCommand) (*megaDownloadLink, error) {
-	if err := m.waiting(ctx); err != nil {
+	if err := m.spent.waiting(ctx, megaQuotaNote); err != nil {
 		return nil, err
 	}
 	var dl megaDownloadLink
@@ -515,27 +623,7 @@ func (m *Mega) spend(ctx context.Context, left time.Duration) error {
 	if left <= 0 {
 		left = config.MegaQuotaWait
 	}
-	route := util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.spent == nil {
-		m.spent = make(map[string]time.Time)
-	}
-	if until := time.Now().Add(left); until.After(m.spent[route]) {
-		m.spent[route] = until
-	}
-	return &WaitError{Until: m.spent[route], Reason: megaQuotaNote}
-}
-
-// waiting returns the route's wait while its quota is used up, and nil after.
-func (m *Mega) waiting(ctx context.Context) error {
-	route := util.FirstNonEmpty(httpx.RouteID(ctx), httpx.DirectRoute)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if until := m.spent[route]; time.Now().Before(until) {
-		return &WaitError{Until: until, Reason: megaQuotaNote}
-	}
-	return nil
+	return m.spent.hold(ctx, left, megaQuotaNote)
 }
 
 // api sends one command and decodes the single result mega answers with.
@@ -547,7 +635,7 @@ func (m *Mega) api(ctx context.Context, client *httpx.Client, folder string, cmd
 
 	var raw json.RawMessage
 	err := client.PostJSON(ctx, endpoint,
-		httpx.RefererOrigin(megaRoot+"/", megaRoot), []megaCommand{cmd}, &raw)
+		httpx.SiteOrigin(megaRoot), []megaCommand{cmd}, &raw)
 	if err != nil {
 		return fmt.Errorf("mega: api request: %w", err)
 	}

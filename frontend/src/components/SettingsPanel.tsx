@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 import { useEffect, useRef, useState } from 'react';
-import { ApiError, fetchSettings, updateSettings, type Settings } from '../api';
+import { errorMessage, fetchSettings, updateSettings, type Settings } from '../api';
 import type { ProxyGroup, ProxyProtocol, Snapshot } from '../types';
+import { useSettledChoice } from '../useSettledChoice';
 import { BoltIcon, SplitIcon } from './Icons';
 import { ProxyList } from './ProxyList';
 import { SettingSlider } from './SettingSlider';
 import { SpeedLimit } from './SpeedLimit';
-
-const SETTLE_TIMEOUT_MS = 4000;
 
 const PROTOCOLS: Record<ProxyProtocol, string> = { any: 'Any protocol', socks: 'SOCKS only', http: 'HTTP only' };
 
@@ -21,19 +20,9 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
   const [revision, setRevision] = useState(0);
   const [switching, setSwitching] = useState(false);
   const switchingRef = useRef(false);
-  const [proxyChoice, setProxyChoice] = useState<boolean | null>(null);
+  // The acknowledged choice stays visible until the event stream catches up.
+  const [proxyChoice, setProxyChoice] = useSettledChoice(snapshot.proxies, switching);
   const proxies = proxyChoice ?? snapshot.proxies;
-  useEffect(() => {
-    if (proxyChoice === null || switching) return;
-    if (proxyChoice === snapshot.proxies) {
-      setProxyChoice(null);
-      return;
-    }
-    // Keep the acknowledged choice visible until SSE catches up, then
-    // return to server state. A disconnected tab must not keep an override.
-    const timer = window.setTimeout(() => setProxyChoice(null), SETTLE_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [proxyChoice, snapshot.proxies, switching]);
 
   const change = async (patch: Partial<Settings>): Promise<boolean> => {
     setError('');
@@ -42,7 +31,7 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
       setRevision((value) => value + 1);
       return true;
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not update settings.');
+      setError(errorMessage(e, 'Could not update settings.'));
       return false;
     }
   };
@@ -58,7 +47,7 @@ export function SettingsPanel({ snapshot }: { readonly snapshot: Snapshot }) {
       setRevision((value) => value + 1);
     } catch (e) {
       setProxyChoice(null);
-      setError(e instanceof ApiError ? e.message : 'Could not update settings.');
+      setError(errorMessage(e, 'Could not update settings.'));
     } finally {
       switchingRef.current = false;
       setSwitching(false);
@@ -133,17 +122,8 @@ function ProtocolSelect({ id, label, value, follows, onCommit }: {
   readonly follows?: ProxyProtocol;
   readonly onCommit: (value: string) => Promise<boolean>;
 }) {
-  const [choice, setChoice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  useEffect(() => {
-    if (choice === null || pending) return;
-    if (choice === value) {
-      setChoice(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setChoice(null), SETTLE_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [choice, value, pending]);
+  const [choice, setChoice] = useSettledChoice(value, pending);
 
   const commit = async (next: string): Promise<void> => {
     setChoice(next);
@@ -179,7 +159,7 @@ function ProxySources({ onSaved }: { readonly onSaved: () => void }) {
         setDraft({ endpoints: settings.proxyEndpoints.join('\n'), feeds: settings.proxyFeeds.join('\n') });
       }
     }).catch((e: unknown) => {
-      if (!controller.signal.aborted) setError(e instanceof ApiError ? e.message : 'Could not load proxy sources.');
+      if (!controller.signal.aborted) setError(errorMessage(e, 'Could not load proxy sources.'));
     });
     return () => controller.abort();
   }, []);
@@ -194,7 +174,7 @@ function ProxySources({ onSaved }: { readonly onSaved: () => void }) {
       await updateSettings({ proxyEndpoints: lines(draft.endpoints), proxyFeeds: lines(draft.feeds) });
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Could not save proxy sources.');
+      setError(errorMessage(e, 'Could not save proxy sources.'));
     } finally {
       pending.current = false;
       setSaving(false);

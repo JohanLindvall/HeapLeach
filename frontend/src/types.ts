@@ -73,7 +73,8 @@ export interface JobView extends JobLimit {
   status: Status;
   error?: string;
   note?: string;
-  createdAt: string;
+  /** When the job was first queued, RFC 3339; carried for API clients. */
+  createdAt?: string;
   items: ItemView[];
   total: number;
   done: number;
@@ -87,6 +88,8 @@ export interface JobView extends JobLimit {
   sizeKnown: boolean;
   /** Restored from the last run and waiting for a Resume or a retry. */
   held?: boolean;
+  /** Its listing was cut short by a failure; a retry reads the source again. */
+  incomplete?: boolean;
 }
 
 /**

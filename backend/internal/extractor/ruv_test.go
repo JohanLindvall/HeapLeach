@@ -4,17 +4,14 @@ package extractor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -60,10 +57,7 @@ segment2.ts
 // declares subtitles as a separate rendition and audio not at all, so the
 // best variant simply wins and its segments join into a playable file.
 func TestRUVMasterPlaylistIsSelfContained(t *testing.T) {
-	base, err := ParseURL("https://cdn.example.test/opid/1234A0/1234A0.m3u8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustParse(t, "https://cdn.example.test/opid/1234A0/1234A0.m3u8")
 
 	// The document does carry an EXT-X-MEDIA entry with a URI of its own.
 	// That it names no audio group is the whole point.
@@ -231,7 +225,7 @@ func TestRUVResolvesAPlaylistToSegments(t *testing.T) {
 	srv, _ := ruvCDN(t, nil)
 	prog := ruvDecode(t, ruvSeries(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	file, err := session.file(context.Background(), prog.Episodes[0])
 	if err != nil {
 		t.Fatalf("file: %v", err)
@@ -260,12 +254,12 @@ func TestRUVDomesticIsRefusedInWords(t *testing.T) {
 	srv, seen := ruvCDN(t, map[string]bool{"/lokad/": true})
 	prog := ruvDecode(t, ruvDomestic(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	_, err := session.file(context.Background(), prog.Episodes[0])
 	if err == nil {
 		t.Fatal("an Iceland-only episode resolved from outside Iceland")
 	}
-	var refusal *ruvRefused
+	var refusal *itemRefusal
 	if !errors.As(err, &refusal) {
 		t.Fatalf("error = %v, want a refusal this run can recognise", err)
 	}
@@ -297,12 +291,12 @@ func TestRUVGlobalFailureIsNotAGeoBlock(t *testing.T) {
 	srv, _ := ruvCDN(t, map[string]bool{"/opid/": true})
 	prog := ruvDecode(t, ruvSeries(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	_, err := session.file(context.Background(), prog.Episodes[0])
 	if err == nil {
 		t.Fatal("a refused playlist resolved anyway")
 	}
-	if _, ok := errors.AsType[*ruvRefused](err); ok {
+	if _, ok := errors.AsType[*itemRefusal](err); ok {
 		t.Errorf("a Global episode was reported as Iceland-only: %v", err)
 	}
 	if session.outsideIceland {
@@ -318,7 +312,7 @@ func TestRUVDomesticIsTriedRatherThanPreJudged(t *testing.T) {
 	srv, seen := ruvCDN(t, nil) // a CDN that serves everyone, i.e. Iceland
 	prog := ruvDecode(t, ruvDomestic(srv.URL))
 
-	session := &ruvSession{client: ruvTestClient()}
+	session := &ruvSession{client: testClient()}
 	file, err := session.file(context.Background(), prog.Episodes[0])
 	if err != nil {
 		t.Fatalf("an Iceland-only episode was refused from inside Iceland: %v", err)
@@ -354,10 +348,7 @@ func TestRUVResponseRejectsWhatIsNotAProgramme(t *testing.T) {
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
-			var out ruvResponse
-			if err := json.Unmarshal([]byte(body), &out); err != nil {
-				t.Fatal(err)
-			}
+			out := decode[ruvResponse](t, body)
 			prog, err := out.program(10001)
 			if err == nil {
 				t.Fatalf("accepted %+v", prog)
@@ -370,10 +361,7 @@ func TestRUVResponseRejectsWhatIsNotAProgramme(t *testing.T) {
 
 	// The message an errors block carries is worth more than anything this
 	// could conclude, so it is passed through.
-	var out ruvResponse
-	if err := json.Unmarshal([]byte(tests["a schema that has moved on"]), &out); err != nil {
-		t.Fatal(err)
-	}
+	out := decode[ruvResponse](t, tests["a schema that has moved on"])
 	if _, err := out.program(1); err == nil || !strings.Contains(err.Error(), "Cannot query field") {
 		t.Errorf("error = %v, want the server's own explanation", err)
 	}
@@ -407,10 +395,7 @@ func TestRUVTarget(t *testing.T) {
 		"https://www.ruv.is/sjonvarp/spila/a-programme/10001/eeee01/": {10001, "eeee01", true},
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		programme, episode, ok := ruvTarget(u)
 		got := target{programme, episode, ok}
 		if got != want {
@@ -424,10 +409,7 @@ func TestRUVTarget(t *testing.T) {
 // all digits would otherwise supply the id and push the real one into the
 // episode.
 func TestRUVTargetIgnoresANumericSlug(t *testing.T) {
-	u, err := ParseURL("https://www.ruv.is/sjonvarp/spila/112/10001/eeee01")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.ruv.is/sjonvarp/spila/112/10001/eeee01")
 	programme, episode, ok := ruvTarget(u)
 	if !ok || programme != 10001 || episode != "eeee01" {
 		t.Errorf("ruvTarget = (%d, %q, %v), want the segment after the slug", programme, episode, ok)
@@ -452,8 +434,8 @@ func TestRUVJoin(t *testing.T) {
 		{"", "", ""},
 	}
 	for _, tc := range tests {
-		if got := ruvJoin(tc.programme, tc.episode); got != tc.want {
-			t.Errorf("ruvJoin(%q, %q) = %q, want %q", tc.programme, tc.episode, got, tc.want)
+		if got := joinTitle(tc.programme, strings.TrimSpace(tc.episode), titleEqual); got != tc.want {
+			t.Errorf("joinTitle(%q, %q) = %q, want %q", tc.programme, tc.episode, got, tc.want)
 		}
 	}
 }
@@ -469,22 +451,8 @@ func TestRUVExtension(t *testing.T) {
 		"https://vod.example.test/opid/1000002T0":                  "",
 	}
 	for raw, want := range tests {
-		if got := ruvExtension(raw); got != want {
-			t.Errorf("ruvExtension(%s) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-func TestRUVMatch(t *testing.T) {
-	r := NewRUV(nil)
-	for _, host := range []string{"ruv.is", "www.ruv.is", "RUV.IS", "spilari.nyr.ruv.is"} {
-		if !r.Match(&url.URL{Scheme: "https", Host: host, Path: "/sjonvarp/spila/a/1"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{"ruv.example.test", "notruv.is", "ruv.is.example.test"} {
-		if r.Match(&url.URL{Scheme: "https", Host: host, Path: "/sjonvarp/spila/a/1"}) {
-			t.Errorf("%s was matched", host)
+		if got := linkExt(raw, ""); got != want {
+			t.Errorf("linkExt(%s) = %q, want %q", raw, got, want)
 		}
 	}
 }
@@ -559,21 +527,12 @@ func ruvDomestic(cdn string) string { return fmt.Sprintf(ruvDomesticTemplate, cd
 // ruvDecode unwraps a GraphQL answer the way the extractor does.
 func ruvDecode(t *testing.T, body string) *ruvProgram {
 	t.Helper()
-	var out ruvResponse
-	if err := json.Unmarshal([]byte(body), &out); err != nil {
-		t.Fatal(err)
-	}
+	out := decode[ruvResponse](t, body)
 	prog, err := out.program(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return prog
-}
-
-// ruvTestClient retries nothing, so a test expecting a refusal gets one at
-// once.
-func ruvTestClient() *httpx.Client {
-	return httpx.New("test-agent", "en-US", 0, 5*time.Second)
 }
 
 // ruvCDN serves the master playlist for any /<scope>/<id>/<id>.m3u8 and the

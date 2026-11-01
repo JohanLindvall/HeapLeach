@@ -10,8 +10,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -365,22 +365,6 @@ func TestFeedExtension(t *testing.T) {
 	}
 }
 
-func TestFeedLength(t *testing.T) {
-	cases := map[string]int64{
-		"12345678": 12345678,
-		" 42 ":     42,
-		"0":        -1,
-		"":         -1,
-		"unknown":  -1,
-		"-3":       -1,
-	}
-	for raw, want := range cases {
-		if got := feedLength(raw); got != want {
-			t.Errorf("feedLength(%q) = %d, want %d", raw, got, want)
-		}
-	}
-}
-
 func TestFeedIsEnclosure(t *testing.T) {
 	cases := map[string]bool{
 		"enclosure":   true,
@@ -417,7 +401,7 @@ func feedServer(t *testing.T, contentType, body string) (*httptest.Server, *stri
 
 func testFeeds(t *testing.T) *Feeds {
 	t.Helper()
-	return NewFeeds(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	return NewFeeds(testClient())
 }
 
 func TestFeedsExtract(t *testing.T) {
@@ -464,11 +448,9 @@ func TestFeedsExtractFallsBackToTheFile(t *testing.T) {
 	}
 }
 
-func TestFeedsMatch(t *testing.T) {
+func TestFeedsShape(t *testing.T) {
 	f := NewFeeds(nil)
-	yes := []string{
-		"https://feeds.example.test/the-example-show",
-		"https://rss.example.test/shows/one",
+	for _, raw := range []string{
 		"https://example.test/blog/feed/",
 		"https://example.test/feed",
 		"https://example.test/s/12345/podcast/rss",
@@ -476,29 +458,51 @@ func TestFeedsMatch(t *testing.T) {
 		"https://example.test/show.rss",
 		"https://example.test/updates.atom",
 		"https://example.test/?feed=rss2",
+	} {
+		expectShape(t, f, raw, true)
 	}
-	no := []string{
+	for _, raw := range []string{
 		"https://example.test/",
 		"https://example.test/feedback/a-story",
 		"https://example.test/videos/1/a-clip/",
 		"https://example.test/files/episode.mp3",
+		// A feeds subdomain is no part of the Shape: it is a form the
+		// scanner follows (linkForms) and a host the feed is asked for by
+		// name on (TestFeedsOnAFeedsHost).
+		"https://feeds.example.test/the-example-show",
+	} {
+		expectShape(t, f, raw, false)
 	}
-	for _, raw := range yes {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !f.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
+}
+
+// A feed is recognised by what was served, at any URL; a document of another
+// kind is not, whatever its URL says.
+func TestFeedsRecognise(t *testing.T) {
+	f := NewFeeds(nil)
+	expectRecognised(t, f, fixturePage(t, "https://pod.example.test/shows/one", http.StatusOK, "text/xml", feedRSSFixture), true)
+	expectRecognised(t, f, fixturePage(t, "https://pod.example.test/x", http.StatusOK, "application/rss+xml", "<rss/>"), true)
+	const sitemap = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>`
+	expectRecognised(t, f, fixturePage(t, "https://pod.example.test/feed.xml", http.StatusOK, "application/xml", sitemap), false)
+	expectRecognised(t, f, htmlPage(t, "https://pod.example.test/feed/", `<html><title>Subscribe</title></html>`), false)
+	expectRecognised(t, f, fixturePage(t, "https://pod.example.test/feed/", http.StatusNotFound, "text/xml", feedRSSFixture), false)
+}
+
+// Through the registry the feed the probe read is the feed extracted: it is
+// fetched once.
+func TestFeedsReadOnceThroughTheRegistry(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set(httpx.HeaderContentType, "application/rss+xml")
+		_, _ = io.WriteString(w, feedRSSFixture)
+	}))
+	t.Cleanup(srv.Close)
+	res, ex, err := NewRegistry(&config.Config{}, testClient()).
+		Extract(context.Background(), srv.URL+"/shows/one", Options{})
+	if err != nil || ex.Name() != "feed" || len(res.Files) != 5 {
+		t.Fatalf("got %v from %v: %v", res, ex, err)
 	}
-	for _, raw := range no {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if f.Match(u) {
-			t.Errorf("Match(%q) = true, want the URL left to the other extractors", raw)
-		}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the feed was fetched %d times, want once", n)
 	}
 }

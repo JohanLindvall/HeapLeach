@@ -5,12 +5,9 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +17,6 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
@@ -106,13 +102,9 @@ func parseRange(header string, total int64) (start, end int64, err error) {
 // places. A wrong offset would corrupt the file silently, so the check is
 // byte-for-byte against what was served.
 func TestSegmentedTransferIsByteExact(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 	origin := &rangeServer{payload: payload, perChunk: 3 * time.Millisecond}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	part, got := runSegmented(t, srv.URL, len(payload), 8)
 
@@ -132,13 +124,9 @@ func TestSegmentedTransferIsByteExact(t *testing.T) {
 // A server that ignores Range must fall back to one connection and still
 // produce the right file.
 func TestSegmentedTransferHandlesNoRangeSupport(t *testing.T) {
-	payload := make([]byte, 9<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 9<<20)
 	origin := &rangeServer{payload: payload, perChunk: time.Millisecond, ignoreRange: true}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	_, got := runSegmented(t, srv.URL, len(payload), 1)
 
@@ -153,13 +141,9 @@ func TestSegmentedTransferHandlesNoRangeSupport(t *testing.T) {
 // An interrupted transfer must resume from its sidecar rather than starting
 // over, and still finish byte-exact.
 func TestSegmentedTransferResumesFromState(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 	origin := &rangeServer{payload: payload, perChunk: 3 * time.Millisecond}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	dir := t.TempDir()
 	part := filepath.Join(dir, "resume.part")
@@ -180,7 +164,7 @@ func TestSegmentedTransferResumesFromState(t *testing.T) {
 	tr.saveState()
 	partFile.Close()
 
-	state := loadTransferState(part)
+	state := loadTransferState(part, transferFiles{})
 	if state == nil {
 		t.Fatal("no resume state was written")
 	}
@@ -225,23 +209,11 @@ func TestSegmentedTransferResumesFromState(t *testing.T) {
 
 func testTransferDeps(t *testing.T, url string) (*Manager, *Item) {
 	t.Helper()
-	cfg := &config.Config{
-		DownloadDir:  t.TempDir(),
-		Concurrency:  1,
-		Streams:      8,
-		SlowSpeed:    1 << 40, // always "slow", so splitting always applies
-		UserAgent:    config.DefaultUserAgent,
-		Language:     config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   2,
-		Timeout:      30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	manager := New(cfg, extractor.NewRegistry(cfg, client), client, log)
-
-	item := &Item{ID: "test", URL: url}
-	return manager, item
+	manager := testManager(t, func(c *config.Config) {
+		c.Streams, c.MaxRetries = 8, 2
+		c.SlowSpeed = 1 << 40 // always "slow", so splitting always applies
+	})
+	return manager, &Item{ID: "test", URL: url}
 }
 
 // newTestTransfer builds a transfer over a fresh part file, returning the
@@ -253,16 +225,24 @@ func newTestTransfer(m *Manager, it *Item, part string, table *segmentTable, str
 	if err != nil {
 		panic(err)
 	}
+	m.timings = fastTimings()
 	tr := &segmentedTransfer{
 		manager: m, item: it, file: f, table: table, part: part,
 		name: "test", validator: `"fixed-etag"`, maxStreams: streams,
-		slowBelow:     m.cfg.SlowSpeed,
-		pollInterval:  5 * time.Millisecond,
-		probeInterval: 25 * time.Millisecond,
-		addCooldown:   25 * time.Millisecond,
-		saveInterval:  20 * time.Millisecond,
+		slowBelow: m.cfg.SlowSpeed,
 	}
-	return tr.withDefaults(), f
+	return tr, f
+}
+
+// fastTimings is the production timings with the supervisor's intervals cut
+// to a few milliseconds.
+func fastTimings() downloadTimings {
+	return downloadTimings{
+		poll:     5 * time.Millisecond,
+		probe:    25 * time.Millisecond,
+		cooldown: 25 * time.Millisecond,
+		save:     20 * time.Millisecond,
+	}.withDefaults()
 }
 
 func openPrimary(t *testing.T, ctx context.Context, m *Manager, url string, seg *segment) io.ReadCloser {
@@ -302,7 +282,7 @@ func runSegmented(t *testing.T, url string, size, streams int) (string, []byte) 
 	if err := partFile.Close(); err != nil {
 		t.Fatal(err)
 	}
-	clearTransferState(part)
+	clearTransferState(part, transferFiles{})
 
 	got, err := os.ReadFile(part)
 	if err != nil {
@@ -322,36 +302,16 @@ func runSegmented(t *testing.T, url string, size, streams int) (string, []byte) 
 // judged incapable of ranges, and no transfer was ever split. This covers
 // that seam.
 func TestSlowDownloadSplitsThroughTheManager(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 	origin := &rangeServer{payload: payload, perChunk: 4 * time.Millisecond}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
-	dir := t.TempDir()
-	cfg := &config.Config{
-		DownloadDir:  dir,
-		Concurrency:  1,
-		Streams:      8,
-		SlowSpeed:    1 << 40, // treat every transfer as slow
-		UserAgent:    config.DefaultUserAgent,
-		Language:     config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   1,
-		Timeout:      30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	manager := New(cfg, extractor.NewRegistry(cfg, client), client, log)
-	manager.timings = downloadTimings{
-		poll:     5 * time.Millisecond,
-		probe:    25 * time.Millisecond,
-		cooldown: 25 * time.Millisecond,
-		save:     20 * time.Millisecond,
-	}
+	manager := testManager(t, func(c *config.Config) {
+		c.Streams, c.MaxRetries = 8, 1
+		c.SlowSpeed = 1 << 40 // treat every transfer as slow
+	})
+	dir := manager.DownloadDir()
+	manager.timings = fastTimings()
 	manager.Start()
 	defer manager.Close()
 
@@ -359,24 +319,7 @@ func TestSlowDownloadSplitsThroughTheManager(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(60 * time.Second)
-	var finished bool
-	for time.Now().Before(deadline) && !finished {
-		for _, job := range manager.Snapshot().Jobs {
-			for _, item := range job.Items {
-				switch item.Status {
-				case StatusDone:
-					finished = true
-				case StatusFailed:
-					t.Fatalf("download failed: %s", item.Error)
-				}
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !finished {
-		t.Fatal("download did not finish in time")
-	}
+	waitForStatus(t, manager, StatusDone, 1, 60*time.Second)
 
 	if peak := origin.peak.Load(); peak < 2 {
 		t.Errorf("peak connections = %d; a slow transfer was never split", peak)
@@ -404,10 +347,7 @@ func TestSlowDownloadSplitsThroughTheManager(t *testing.T) {
 // ones are turned away the transfer must settle for what it has and still
 // finish correctly, rather than failing a download that was working.
 func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
-	payload := make([]byte, 12<<20)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 12<<20)
 
 	origin := &rangeServer{payload: payload, perChunk: 4 * time.Millisecond}
 	const allowed = 2 // this host tolerates two connections and no more
@@ -422,8 +362,7 @@ func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
 		}
 		origin.handler().ServeHTTP(w, r)
 	})
-	srv := httptest.NewServer(gated)
-	defer srv.Close()
+	srv := testServer(t, gated)
 
 	manager, item := testTransferDeps(t, srv.URL)
 	manager.hosts = newHostLimiter(8)
@@ -470,15 +409,12 @@ func TestRefusedExtraConnectionsStillFinish(t *testing.T) {
 // resolver-less item stops; TestBusyCap* pin the boundary itself from both
 // sides.
 func TestBusyHostRetriesBeyondTheRetryBudget(t *testing.T) {
-	payload := make([]byte, 1<<20) // small enough that nothing is split
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := randomPayload(t, 1<<20) // small enough that nothing is split
 
 	const busyResponses = 5 // far more than the retry budget below
 	var attempts atomic.Int32
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) <= busyResponses {
 			// What gofile's 302-to-its-own-page looks like once followed.
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -488,24 +424,11 @@ func TestBusyHostRetriesBeyondTheRetryBudget(t *testing.T) {
 		}
 		(&rangeServer{payload: payload}).handler().ServeHTTP(w, r)
 	}))
-	defer srv.Close()
 
-	dir := t.TempDir()
-	cfg := &config.Config{
-		DownloadDir:  dir,
-		Concurrency:  1,
-		Streams:      1,
-		SlowSpeed:    0,
-		UserAgent:    config.DefaultUserAgent,
-		Language:     config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   1, // deliberately tiny: busy must not consume it
-		Timeout:      30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	manager := New(cfg, extractor.NewRegistry(cfg, client), client, log)
+	manager := testManager(t, func(c *config.Config) {
+		c.MaxRetries = 1 // deliberately tiny: busy must not consume it
+	})
+	dir := manager.DownloadDir()
 	manager.timings.busyBase = 10 * time.Millisecond
 	manager.timings.busyMax = 40 * time.Millisecond
 	manager.Start()
@@ -515,31 +438,13 @@ func TestBusyHostRetriesBeyondTheRetryBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
-	var status Status
-	for time.Now().Before(deadline) {
-		for _, job := range manager.Snapshot().Jobs {
-			for _, item := range job.Items {
-				status = item.Status
-				if item.Status == StatusFailed {
-					t.Fatalf("gave up on a busy host after %d attempts: %s",
-						attempts.Load(), item.Error)
-				}
-			}
-		}
-		if status == StatusDone {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if status != StatusDone {
-		t.Fatalf("download did not finish (status %q after %d attempts)", status, attempts.Load())
-	}
+	// A failure here is giving up on a busy host.
+	waitForStatus(t, manager, StatusDone, 1, 30*time.Second)
 
 	if got := attempts.Load(); got <= busyResponses {
 		t.Errorf("made %d attempts, want more than the %d busy responses", got, busyResponses)
 	} else {
-		t.Logf("waited through %d busy responses on a retry budget of %d", busyResponses, cfg.MaxRetries)
+		t.Logf("waited through %d busy responses on a retry budget of %d", busyResponses, manager.cfg.MaxRetries)
 	}
 
 	entries, err := os.ReadDir(dir)

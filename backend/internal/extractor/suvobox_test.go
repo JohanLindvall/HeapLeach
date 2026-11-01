@@ -34,10 +34,7 @@ func TestSuvoboxAlbum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := parseHTML(suvoboxAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, suvoboxAlbumPage)
 
 	res, err := suvoboxAlbum(root, u)
 	if err != nil {
@@ -70,43 +67,27 @@ func TestSuvoboxAlbum(t *testing.T) {
 
 func TestSuvoboxAlbumWithoutTilesIsAnError(t *testing.T) {
 	u, _ := url.Parse("https://www.suvobox.com/a/abcd")
-	root, err := parseHTML(`<html><body><p>gone</p></body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, `<html><body><p>gone</p></body></html>`)
 	if _, err := suvoboxAlbum(root, u); err == nil {
 		t.Fatal("an album with no tiles resolved to something")
 	}
 }
 
-func TestSuvoboxFileID(t *testing.T) {
-	cases := map[string]string{
-		"https://www.suvobox.com/f/aaaa1111?album=abcd": "aaaa1111",
-		"https://www.suvobox.com/f/aaaa1111":            "aaaa1111",
-		"https://www.suvobox.com/a/abcd":                "",
-		"https://www.suvobox.com/takedowns":             "",
-		"://not a url":                                  "",
-	}
-	for link, want := range cases {
-		if got := suvoboxFileID(link); got != want {
-			t.Errorf("suvoboxFileID(%q) = %q, want %q", link, got, want)
-		}
-	}
-}
-
-func TestSuvoboxMatch(t *testing.T) {
+func TestSuvoboxRecognise(t *testing.T) {
 	s := NewSuvobox(nil)
-	for _, raw := range []string{"https://www.suvobox.com/a/abcd", "https://suvobox.com/f/aaaa1111"} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !s.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	other, _ := url.Parse("https://example.test/a/abcd")
-	if s.Match(other) {
-		t.Error("matched an unrelated host")
-	}
+	file := `<html><head><meta property="og:title" content="first.jpg"><meta property="og:site_name" content="suvobox"></head>` +
+		`<body><a href="//cdn.example.test/f/aaaa1111?dl=1&amp;token=1.abc">Download</a></body></html>`
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/a/abcd", suvoboxAlbumPage), true)
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/f/aaaa1111", file), true)
+	// The form and the name, without the tiles or the file's own button.
+	named := `<html><head><meta property="og:site_name" content="suvobox"></head><body></body></html>`
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/a/abcd", named), false)
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/f/aaaa1111", named), false)
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/f/bbbb2222", file), false)
+	// The tiles on a page of another form.
+	expectRecognised(t, s, htmlPage(t, "https://share.example.test/browse", suvoboxAlbumPage), false)
+	expectShape(t, s, "https://share.example.test/a/abcd", true)
+	expectShape(t, s, "https://share.example.test/f/aaaa1111?album=abcd", true)
+	expectShape(t, s, "https://share.example.test/f/aaaa1111/extra", false)
+	expectShape(t, s, "https://share.example.test/browse", false)
 }

@@ -1,0 +1,431 @@
+// SPDX-License-Identifier: MIT
+
+package extractor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+)
+
+func TestBroadcastRefusalReadsAsBefore(t *testing.T) {
+	tests := map[string]struct {
+		err  *itemRefusal
+		want string
+	}{
+		"titled":   {&itemRefusal{"site", "A Programme", "it is gone"}, "site: A Programme: it is gone"},
+		"untitled": {&itemRefusal{site: "site", reason: "refused (CODE)"}, "site: refused (CODE)"},
+	}
+	for name, tc := range tests {
+		if got := tc.err.Error(); got != tc.want {
+			t.Errorf("%s: Error() = %q, want %q", name, got, tc.want)
+		}
+	}
+	wrapped := fmt.Errorf("outer: %w", &itemRefusal{"site", "x", "why"})
+	if reason, ok := refusalReason(wrapped); !ok || reason != "why" {
+		t.Errorf("refusalReason(wrapped) = %q, %v", reason, ok)
+	}
+	if _, ok := refusalReason(errors.New("plain")); ok {
+		t.Error("a plain error read as a refusal")
+	}
+}
+
+// TestResolveEachKeepsOrderAndReasons pins what every series expansion
+// leans on: files in the listing's order, refusals kept in order, and the
+// first other failure kept beside them.
+func TestResolveEachKeepsOrderAndReasons(t *testing.T) {
+	items := []string{"a", "refused-1", "b", "failed", "refused-2", "c"}
+	resolved, outcomes := resolveEach(context.Background(), items, false, func(_ context.Context, item string) (*File, error) {
+		switch item {
+		case "refused-1", "refused-2":
+			return nil, &itemRefusal{"site", item, "reason " + item}
+		case "failed":
+			return nil, errors.New("transport")
+		}
+		return &File{Name: item}, nil
+	})
+	names := fileNames(listedFiles(resolved))
+	if fmt.Sprint(names) != "[a b c]" {
+		t.Errorf("files = %v, want [a b c]", names)
+	}
+	if fmt.Sprint(outcomes.refusals) != "[reason refused-1 reason refused-2]" {
+		t.Errorf("refusals = %v", outcomes.refusals)
+	}
+	if outcomes.failed == nil || outcomes.failed.Error() != "transport" || outcomes.failures != 1 {
+		t.Errorf("failed = %v (%d)", outcomes.failed, outcomes.failures)
+	}
+}
+
+// TestResolveEachInTurnAsksOneAtATime pins the sequential mode the stateful
+// series lean on: never two resolves at once, each after the one before it
+// in listing order, with the same files and reasons as the parallel mode.
+func TestResolveEachInTurnAsksOneAtATime(t *testing.T) {
+	items := []string{"a", "refused-1", "b", "failed", "refused-2", "c"}
+	var running, seen int
+	resolved, outcomes := resolveEach(context.Background(), items, true, func(_ context.Context, item string) (*File, error) {
+		running++
+		defer func() { running-- }()
+		if running > 1 {
+			t.Errorf("%s resolved while another was running", item)
+		}
+		seen++
+		switch item {
+		case "refused-1", "refused-2":
+			return nil, &itemRefusal{"site", item, "reason " + item}
+		case "failed":
+			return nil, errors.New("transport")
+		}
+		return &File{Name: fmt.Sprint(item, seen)}, nil
+	})
+	names := fileNames(listedFiles(resolved))
+	if fmt.Sprint(names) != "[a1 b3 c6]" {
+		t.Errorf("files = %v, want [a1 b3 c6]", names)
+	}
+	if fmt.Sprint(outcomes.refusals) != "[reason refused-1 reason refused-2]" {
+		t.Errorf("refusals = %v", outcomes.refusals)
+	}
+	if outcomes.failed == nil || outcomes.failed.Error() != "transport" || outcomes.failures != 1 {
+		t.Errorf("failed = %v (%d)", outcomes.failed, outcomes.failures)
+	}
+}
+
+// TestResolveEachKeepsItems pins that each kept file stays beside the item
+// it came from, in either mode, for a caller that names files after them.
+func TestResolveEachKeepsItems(t *testing.T) {
+	for _, inTurn := range []bool{false, true} {
+		resolved, _ := resolveEach(context.Background(), []int{1, 2, 3, 4}, inTurn, func(_ context.Context, n int) (*File, error) {
+			if n == 2 {
+				return nil, &itemRefusal{site: "site", reason: "no"}
+			}
+			return &File{Name: fmt.Sprint("f", n)}, nil
+		})
+		var got []string
+		for _, r := range resolved {
+			got = append(got, fmt.Sprint(r.item, "=", r.file.Name))
+		}
+		if fmt.Sprint(got) != "[1=f1 3=f3 4=f4]" {
+			t.Errorf("inTurn=%v: resolved = %v", inTurn, got)
+		}
+	}
+}
+
+// TestReadSeasons pins how a programme's seasons are read, at once or in
+// turn: in the seasons' order, a season that fails left out with the note
+// saying so, the first walk note and any cut kept, and the first season's
+// failure handed back for a caller that fails on it.
+func TestReadSeasons(t *testing.T) {
+	read := func(_ context.Context, n int) (seasonList[string], error) {
+		switch n {
+		case 2:
+			return seasonList[string]{}, errors.New("unreadable")
+		case 3:
+			return seasonList[string]{items: []string{"c"}, more: true, note: "walk"}, nil
+		}
+		return seasonList[string]{items: []string{fmt.Sprint("s", n)}}, nil
+	}
+	for _, inTurn := range []bool{false, true} {
+		list, first := readSeasons(context.Background(), []int{1, 2, 3, 4}, inTurn, read)
+		if fmt.Sprint(list.items) != "[s1 c s4]" || !list.more || first != nil ||
+			list.note != "walk; "+unreadableSeasons {
+			t.Errorf("inTurn=%v: %+v, %v", inTurn, list, first)
+		}
+		list, first = readSeasons(context.Background(), []int{2, 1}, inTurn, read)
+		if fmt.Sprint(list.items) != "[s1]" || first == nil || list.note != unreadableSeasons {
+			t.Errorf("inTurn=%v, first failing: %+v, %v", inTurn, list, first)
+		}
+		list, first = readSeasons(context.Background(), []int{1, 4}, inTurn, read)
+		if fmt.Sprint(list.items) != "[s1 s4]" || list.more || list.note != "" || first != nil {
+			t.Errorf("inTurn=%v, all read: %+v, %v", inTurn, list, first)
+		}
+	}
+}
+
+// TestExpandSeriesCapsNestsAndExplains pins the sequence every series
+// expansion shares: the request budget with a note where it cut, folders
+// only for more than one season, a season label kept to one folder, and the
+// broadcaster's own reason when nothing resolves.
+func TestExpandSeriesCapsNestsAndExplains(t *testing.T) {
+	type ep struct{ name, season string }
+	resolve := func(_ context.Context, e ep) (*File, error) {
+		switch e.name {
+		case "refused":
+			return nil, &itemRefusal{"site", e.name, "shown at home only"}
+		case "failed":
+			return nil, errors.New("site: transport")
+		}
+		return &File{Name: e.name + ".mp4"}, nil
+	}
+	label := func(e ep) string { return e.season }
+	items := []ep{{"a", "Season 1"}, {"refused", "Season 1"}, {"b", "Season 2/3"}, {"c", "Season 2/3"}}
+
+	resolved, note, err := expandSeries(context.Background(), series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, label: label, resolve: resolve,
+	})
+	if err != nil || note != "" {
+		t.Fatalf("note %q, err %v", note, err)
+	}
+	if got := fmt.Sprint(filePaths(listedFiles(resolved))); got != "[Season 1/a.mp4 Season 2_3/b.mp4 Season 2_3/c.mp4]" {
+		t.Errorf("files = %s", got)
+	}
+
+	// Cut by the request budget, and said so.
+	resolved, note, _ = expandSeries(context.Background(), series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, label: label, budget: 2, resolve: resolve,
+	})
+	if got := fmt.Sprint(filePaths(listedFiles(resolved))); got != "[a.mp4]" || note != "2 of 4 episodes" {
+		t.Errorf("capped: files = %s, note %q", got, note)
+	}
+	// A listing whose walk stopped at the cap does not know its length.
+	_, note, _ = expandSeries(context.Background(), series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items[:1], more: true, resolve: resolve,
+	})
+	if note != "first 1 episodes" {
+		t.Errorf("walk cut: note %q", note)
+	}
+	// A broadcaster that notes what it left out is handed the reasons.
+	var refused []string
+	_, _, _ = expandSeries(context.Background(), series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, resolve: resolve, refused: &refused,
+	})
+	if got := fmt.Sprint(refused); got != "[shown at home only]" {
+		t.Errorf("refused = %s", got)
+	}
+	// listSeries ends the listing: the cap's note, the refusals' and the
+	// caller's, in that order.
+	res, err := listSeries(context.Background(), "A Series", series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, budget: 3, resolve: resolve, noteRefused: true,
+	}, "", "the listing broke off partway")
+	if err != nil || res.Title != "A Series" || len(res.Files) != 2 ||
+		res.Note != "3 of 4 episodes; 1 left out: shown at home only; the listing broke off partway" {
+		t.Errorf("listSeries = %+v, %v", res, err)
+	}
+	// A listing whose context ended returns that, not what had resolved.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if res, err := listSeries(ctx, "A Series", series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items, resolve: resolve,
+	}); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled listSeries = %+v, %v", res, err)
+	}
+	// One season listed beside an empty one still files into its folder
+	// when the listing says it had several.
+	resolved, _, _ = expandSeries(context.Background(), series[ep]{
+		site: "site", noun: "episodes", link: "the link", items: items[:1], label: label, split: true, resolve: resolve,
+	})
+	if got := fmt.Sprint(filePaths(listedFiles(resolved))); got != "[Season 1/a.mp4]" {
+		t.Errorf("split: files = %s", got)
+	}
+
+	for _, tc := range []struct {
+		items []ep
+		want  string
+	}{
+		{[]ep{{"failed", ""}, {"refused", ""}}, "site: none of the 2 videos of the link are playable: shown at home only"},
+		{[]ep{{"failed", ""}}, "site: none of the 1 videos of the link are playable: transport"},
+		{nil, "site: none of the 0 videos of the link are playable: nothing offered"},
+	} {
+		_, _, err := expandSeries(context.Background(), series[ep]{
+			site: "site", noun: "videos", link: "the link", items: tc.items, resolve: resolve, unplayable: "nothing offered",
+		})
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("err = %v, want %q", err, tc.want)
+		}
+	}
+}
+
+// TestWalkEpisodesSaysWhetherTheListingWentOn pins the cut a series walk
+// hands expandSeries: more where the limit stopped a listing that goes on,
+// nothing where the listing ended at the limit, and the walk's own note
+// for a listing cut short some other way.
+func TestWalkEpisodesSaysWhetherTheListingWentOn(t *testing.T) {
+	walk := func(limit, pages int, fail bool) ([]int, bool, string) {
+		items, more, note, err := walkEpisodes(context.Background(), limit, pageWalk[int]{
+			fetch: func(_ context.Context, n int) (pageOf[int], error) {
+				if fail && n == 1 {
+					return pageOf[int]{}, errors.New("down")
+				}
+				return pageOf[int]{items: []int{2 * n, 2*n + 1}, next: n+1 < pages}, nil
+			},
+			key: func(n int) string { return fmt.Sprint(n) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return items, more, note
+	}
+	if items, more, note := walk(3, 3, false); len(items) != 3 || !more || note != "" {
+		t.Errorf("cut: %v, more %v, note %q", items, more, note)
+	}
+	if items, more, note := walk(4, 2, false); len(items) != 4 || more || note != "" {
+		t.Errorf("ended at the limit: %v, more %v, note %q", items, more, note)
+	}
+	if items, more, note := walk(10, 3, true); len(items) != 2 || more || note != "partial — could not fetch next page" {
+		t.Errorf("broke off: %v, more %v, note %q", items, more, note)
+	}
+}
+
+func TestListedAsNamesByListingThenPlayerThenID(t *testing.T) {
+	play := func(_ context.Context, id string) (*File, string, error) {
+		switch id {
+		case "gone":
+			return nil, "", nil
+		case "refused":
+			return nil, "", errors.New("refused")
+		case "nameless":
+			return &File{Name: ".mp4"}, "", nil
+		}
+		return &File{Name: ".mp4"}, "Player Name", nil
+	}
+	resolve := listedAs(play, func(id string) string { return "#" + id })
+	for _, tc := range []struct {
+		ep   broadcastEpisode
+		want string
+	}{
+		{broadcastEpisode{id: "a", name: "Listed Name"}, "Listed Name.mp4"},
+		{broadcastEpisode{id: "a"}, "Player Name.mp4"},
+		{broadcastEpisode{id: "nameless"}, "#nameless.mp4"},
+	} {
+		file, err := resolve(context.Background(), tc.ep)
+		if err != nil || file == nil || file.Name != tc.want {
+			t.Errorf("%+v: got %+v, %v; want %q", tc.ep, file, err, tc.want)
+		}
+	}
+	if file, err := resolve(context.Background(), broadcastEpisode{id: "gone"}); file != nil || err != nil {
+		t.Errorf("passed-over episode = %+v, %v", file, err)
+	}
+	if _, err := resolve(context.Background(), broadcastEpisode{id: "refused"}); err == nil {
+		t.Error("a refusal was lost")
+	}
+}
+
+func TestRefusalBodyReadsOnlyTheStatusesAsked(t *testing.T) {
+	type body struct {
+		Code string `json:"code"`
+	}
+	err := fmt.Errorf("wrapped: %w", &httpx.StatusError{Code: http.StatusBadRequest, Body: `{"code":"NOPE"}`})
+	if got, ok := refusalBody[body](err); !ok || got.Code != "NOPE" {
+		t.Errorf("any status: %+v, %v", got, ok)
+	}
+	if got, ok := refusalBody[body](err, http.StatusBadRequest); !ok || got.Code != "NOPE" {
+		t.Errorf("asked status: %+v, %v", got, ok)
+	}
+	if _, ok := refusalBody[body](err, http.StatusForbidden); ok {
+		t.Error("read the body of a status not asked for")
+	}
+	if _, ok := refusalBody[body](&httpx.StatusError{Code: http.StatusForbidden, Body: "<html>"}); ok {
+		t.Error("read a body that is no JSON")
+	}
+	if _, ok := refusalBody[body](errors.New("plain")); ok {
+		t.Error("read a plain error")
+	}
+	// A field of another type does not lose the rest of the body.
+	type typed struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	mistyped := &httpx.StatusError{Code: http.StatusNotFound, Body: `{"code":"8009","message":"Not found"}`}
+	if got, ok := refusalBody[typed](mistyped); !ok || got.Message != "Not found" {
+		t.Errorf("mistyped field: %+v, %v", got, ok)
+	}
+}
+
+// TestRegionGate covers the probe's three outcomes: refused, which leaves
+// every region-only item out; allowed, which keeps them; and a probe that
+// cannot tell, which asks the next one, up to the limit.
+func TestRegionGate(t *testing.T) {
+	items := []string{"a", "x1", "b", "x2", "x3"}
+	only := func(s string) bool { return s[0] == 'x' }
+	cases := map[string]struct {
+		answers []int // per probe: 0 cannot tell, 1 refused, 2 allowed
+		probes  int
+		kept    []string
+		asked   int
+	}{
+		"refused":           {[]int{1}, 3, []string{"a", "b"}, 1},
+		"allowed":           {[]int{2}, 3, items, 1},
+		"unknown then":      {[]int{0, 1}, 3, []string{"a", "b"}, 2},
+		"never known":       {[]int{0, 0, 0}, 3, items, 3},
+		"limit before tell": {[]int{0, 1}, 1, items, 1},
+	}
+	for name, tc := range cases {
+		asked := 0
+		kept, left := regionGate(context.Background(), items, only, tc.probes, func(_ context.Context, s string) (bool, bool) {
+			answer := tc.answers[asked]
+			asked++
+			return answer == 1, answer != 0
+		})
+		if !slices.Equal(kept, tc.kept) || left != len(items)-len(tc.kept) || asked != tc.asked {
+			t.Errorf("%s: kept %v, left out %d, asked %d; want %v, %d", name, kept, left, asked, tc.kept, tc.asked)
+		}
+	}
+}
+
+// TestNextData reads the island wherever the script names its id.
+func TestNextData(t *testing.T) {
+	for _, doc := range []string{
+		`<script id="__NEXT_DATA__" type="application/json">{"a":1}</script>`,
+		`<script type="application/json" id="__NEXT_DATA__">{"a":1}</script>`,
+	} {
+		if got, ok := nextData(doc); !ok || got != `{"a":1}` {
+			t.Errorf("nextData(%q) = %q, %v", doc, got, ok)
+		}
+	}
+	if _, ok := nextData(`<script id="other">{}</script>`); ok {
+		t.Error("read an island from a page with none")
+	}
+}
+
+// broadcastFile resolves a programme's playlist into its file with every
+// media field carried, named prefix and the extension its broadcaster
+// chose: off the segments (an MPEG-TS stream whose manifest path spells
+// ".mp4" stays ".ts"), or off the variant's own path where the segments'
+// say nothing more.
+func TestBroadcastFileNamesByTheChosenExtension(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/source.mp4/master.m3u8", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720\nindex.m3u8\n")
+	})
+	mux.HandleFunc("/source.mp4/index.m3u8", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n"+`#EXT-X-KEY:METHOD=AES-128,URI="key.bin"`+
+			"\n#EXTINF:6,\nseg-1.ts\n#EXTINF:6,\nseg-2.ts\n#EXT-X-ENDLIST\n")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	headers := httpx.Referer("https://broadcaster.example.test/")
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		ext    func(*hlsMedia) string
+		want   string
+	}{
+		{"segments", "Episode One", segmentsExt, "Episode One.ts"},
+		{"variant", "", variantExt, ".mp4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := broadcastFile(context.Background(), testClient(), "site", "id", srv.URL+"/source.mp4/master.m3u8",
+				tc.prefix, headers, tc.ext)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.Name != tc.want {
+				t.Errorf("name %q, want %q", f.Name, tc.want)
+			}
+			if len(f.Segments) != 2 || f.SegmentKey == nil || f.SegmentKey.URI != srv.URL+"/source.mp4/key.bin" ||
+				f.Headers[httpx.HeaderReferer] != headers[httpx.HeaderReferer] {
+				t.Errorf("media fields lost: %+v", f)
+			}
+		})
+	}
+	if _, err := broadcastFile(context.Background(), testClient(), "site", "id", srv.URL+"/missing.m3u8", "", nil, segmentsExt); err == nil ||
+		!strings.HasPrefix(err.Error(), "site: id: ") {
+		t.Errorf("err = %v, want the broadcaster's own context", err)
+	}
+}

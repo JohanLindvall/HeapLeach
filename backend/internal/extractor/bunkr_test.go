@@ -3,7 +3,8 @@
 package extractor
 
 import (
-	"net/url"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,25 +12,25 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-func TestBunkrMatchCoversTheDomainRotation(t *testing.T) {
+func TestBunkrRecognise(t *testing.T) {
 	b := NewBunkr(nil)
-	cases := map[string]bool{
-		"https://bunkr.cr/a/AAAA":       true,
-		"https://bunkr.si/f/BBBB":       true,
-		"https://bunkrr.su/f/CCCC":      true,
-		"https://cdn.bunkr.example/x":   true,
-		"https://example.test/f/DDDD":   false,
-		"https://notbunkr.example/f/EE": false,
-	}
-	for raw, want := range cases {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := b.Match(u); got != want {
-			t.Errorf("Match(%s) = %v, want %v", raw, got, want)
-		}
-	}
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", bunkrServingPage), true)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", bunkrMaintenancePage), true)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/a/AAAA", bunkrAlbumPage), true)
+	// The right form and the site's name, without the file id or the cards.
+	named := `<html><head><title>a-clip.mp4 | Bunkr</title></head><body><h1>a-clip.mp4</h1></body></html>`
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", named), false)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/a/AAAA", named), false)
+	// The markers, on a page of another form.
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/faq", bunkrServingPage), false)
+	expectRecognised(t, b, htmlPage(t, "https://files.example.test/f/AAAA", bunkrAlbumPage), false)
+
+	expectShape(t, b, "https://files.example.test/f/AAAA", true)
+	expectShape(t, b, "https://files.example.test/v/AAAA", true)
+	expectShape(t, b, "https://files.example.test/a/AAAA", true)
+	expectShape(t, b, "https://files.example.test/f/AAAA/extra", false)
+	expectShape(t, b, "https://files.example.test/AAAA", false)
+	expectShape(t, b, "https://files.example.test/", false)
 }
 
 func TestParseBunkrDownloadHref(t *testing.T) {
@@ -52,7 +53,7 @@ func TestParseBunkrDownloadHref(t *testing.T) {
 }
 
 func TestIsBunkrFilePage(t *testing.T) {
-	if !isBunkrFilePage("https://bunkr.example/f/AAAA") {
+	if !bunkrFilePage("https://bunkr.example/f/AAAA") {
 		t.Error("a /f/<slug> link was not recognised")
 	}
 	for _, raw := range []string{
@@ -60,7 +61,7 @@ func TestIsBunkrFilePage(t *testing.T) {
 		"https://bunkr.example/f/AAAA/extra",
 		"https://bunkr.example/",
 	} {
-		if isBunkrFilePage(raw) {
+		if bunkrFilePage(raw) {
 			t.Errorf("%q was taken for a file page", raw)
 		}
 	}
@@ -86,14 +87,14 @@ const bunkrAlbumPage = `<html><body>
 </body></html>`
 
 func TestBunkrAlbumEntries(t *testing.T) {
-	root, err := parseHTML(bunkrAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base, _ := url.Parse("https://bunkr.example/a/AAAA")
+	root := mustParseDoc(t, bunkrAlbumPage)
+	base := mustParse(t, "https://bunkr.example/a/AAAA")
 
 	b := NewBunkr(nil)
-	files := b.albumEntries(root, base, make(map[string]bool))
+	var files []File
+	for _, e := range bunkrAlbumEntries(b, root, base) {
+		files = append(files, e.file)
+	}
 	if len(files) != 2 {
 		t.Fatalf("read %d entries, want 2 (the repeat folded, the FAQ ignored)", len(files))
 	}
@@ -136,7 +137,7 @@ const bunkrMaintenancePage = `<html><body>
 </body></html>`
 
 // A healthy page offers the download as a link to the download host, which is
-// what pageInfo reads that host out of.
+// what bunkrPageInfo reads that host out of.
 const bunkrServingPage = `<html><body>
   <div data-file-id="12345"></div>
   <h1>a-clip.mp4</h1>
@@ -145,10 +146,7 @@ const bunkrServingPage = `<html><body>
 </body></html>`
 
 func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
-	root, err := parseHTML(bunkrMaintenancePage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bunkrMaintenancePage)
 	got := bunkrUnavailable(root)
 	if got == "" {
 		t.Fatal("a disabled download control was read as a page offering a download")
@@ -166,10 +164,7 @@ func TestBunkrUnavailableReportsTheHostsOwnWords(t *testing.T) {
 // A page that will serve the file must not be read as a refusal, and a
 // disabled control that is not the download must not be mistaken for one.
 func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
-	root, err := parseHTML(bunkrServingPage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, bunkrServingPage)
 	if got := bunkrUnavailable(root); got != "" {
 		t.Errorf("a servable page was refused: %q", got)
 	}
@@ -177,32 +172,22 @@ func TestBunkrUnavailableIgnoresAServingPage(t *testing.T) {
 
 // The fact is worth reporting even when the page says nothing about why.
 func TestBunkrUnavailableWithoutAnExplanation(t *testing.T) {
-	root, err := parseHTML(
+	root := mustParseDoc(t,
 		`<html><body><button class="ic-download-01" disabled></button></body></html>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if got := bunkrUnavailable(root); got == "" {
 		t.Error("a disabled download control with no tooltip reported nothing at all")
 	}
 }
 
 func TestLastAlbumPage(t *testing.T) {
-	root, err := parseHTML(bunkrAlbumPage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := lastAlbumPage(root); got != 3 {
+	if got := lastAlbumPage(mustParseDoc(t, bunkrAlbumPage)); got != 3 {
 		t.Errorf("last page = %d, want 3", got)
 	}
 }
 
 func TestBunkrLinkLabel(t *testing.T) {
-	root, err := parseHTML(`<a href="/f/x"><img alt="from the alt"></a>` +
+	root := mustParseDoc(t, `<a href="/f/x"><img alt="from the alt"></a>`+
 		`<a id="second" href="/f/y">from the text</a>`)
-	if err != nil {
-		t.Fatal(err)
-	}
 	anchors := findAll(root, func(n *html.Node) bool { return isElem(n, atom.A) })
 	if len(anchors) != 2 {
 		t.Fatalf("parsed %d anchors, want 2", len(anchors))
@@ -212,5 +197,26 @@ func TestBunkrLinkLabel(t *testing.T) {
 	}
 	if got := linkLabel(anchors[1]); got != "from the text" {
 		t.Errorf("label = %q, want the anchor's text", got)
+	}
+}
+
+// Asking for a page past an album's end serves its last page again, which
+// adds nothing: that is the album's end, with no note calling it cut.
+func TestBunkrAlbumEndsQuietlyOnARepeatedPage(t *testing.T) {
+	var asked int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked++
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(bunkrAlbumPage))
+	}))
+	defer srv.Close()
+	client := testClient()
+	defer client.CloseIdleConnections()
+	res, err := bunkrAlbum(t.Context(), NewBunkr(client), mustParse(t, srv.URL+"/a/AAAA"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 2 || res.Note != "" || asked != 2 {
+		t.Errorf("files %d, note %q, asked %d; want 2 files, no note, and the page that repeated", len(res.Files), res.Note, asked)
 	}
 }

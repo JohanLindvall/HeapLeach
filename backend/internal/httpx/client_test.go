@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -147,7 +148,7 @@ func TestDoStopsWhenTheContextDoes(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if !IsCanceled(err) {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("cancelled request should report cancellation, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
@@ -440,6 +441,37 @@ func TestStatusErrorMessage(t *testing.T) {
 	}
 }
 
+// An HTML error page is quoted by its title alone: the rest is a WAF's or
+// a CDN's markup. A plain or JSON refusal is quoted as it came, as is plain
+// text a server labels HTML by default, and Body keeps every byte either way.
+func TestStatusErrorQuotesAnHTMLPageByItsTitle(t *testing.T) {
+	page := "<!DOCTYPE html>\n<html><head><title>  Access\n denied &amp; logged </title>" +
+		"<script>var x = 1;</script><style>body{}</style></head><body>Ray ID</body></html>"
+	for _, tc := range []struct {
+		name, kind, body, want, absent string
+	}{
+		{"declared HTML", "text/html; charset=utf-8", page, "(Access denied & logged)", "<script"},
+		{"sniffed HTML", "", page, "(Access denied & logged)", "<script"},
+		{"untitled HTML", "text/html", "<html><head></head><body><div>x</div></body></html>", "403 Forbidden", "<div"},
+		{"JSON", "application/json", `{"error":"quota exceeded"}`, `({"error":"quota exceeded"})`, ""},
+		{"plain", "text/plain", "slow down", "(slow down)", ""},
+		{"plain text labelled HTML", "text/html", "Too many connections from your IP\n",
+			"(Too many connections from your IP)", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &StatusError{Code: 403, Status: "403 Forbidden", URL: "https://example.test/a",
+				Body: tc.body, Header: http.Header{HeaderContentType: {tc.kind}}}
+			msg := err.Error()
+			if !strings.Contains(msg, tc.want) || tc.absent != "" && strings.Contains(msg, tc.absent) {
+				t.Errorf("message %q, want %q without %q", msg, tc.want, tc.absent)
+			}
+			if tc.name == "untitled HTML" && strings.Contains(msg, "(") {
+				t.Errorf("an untitled page quoted something: %q", msg)
+			}
+		})
+	}
+}
+
 func TestHeaderHelpers(t *testing.T) {
 	base := Header{"A": "1", "B": "2"}
 	merged := base.Merge(Header{"B": "3", "C": "4"})
@@ -456,6 +488,10 @@ func TestHeaderHelpers(t *testing.T) {
 	ro := RefererOrigin("https://example.test/page", "https://example.test")
 	if ro[HeaderReferer] != "https://example.test/page" || ro[HeaderOrigin] != "https://example.test" {
 		t.Errorf("RefererOrigin = %v", ro)
+	}
+	so := SiteOrigin("https://example.test")
+	if so[HeaderReferer] != "https://example.test/" || so[HeaderOrigin] != "https://example.test" {
+		t.Errorf("SiteOrigin = %v", so)
 	}
 }
 
@@ -780,5 +816,138 @@ func TestStreamingTimeoutCoversHeadersButNotBody(t *testing.T) {
 				t.Fatalf("streaming body: %q, %v", body, err)
 			}
 		})
+	}
+}
+
+func TestFetchReadsWithoutNavigating(t *testing.T) {
+	var asked http.Header
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/end", http.StatusFound)
+	})
+	mux.HandleFunc("/end", func(w http.ResponseWriter, r *http.Request) {
+		asked = r.Header.Clone()
+		w.Header().Set(HeaderCacheControl, "max-age=60")
+		_, _ = io.WriteString(w, "#EXTM3U")
+	})
+
+	body, resp, err := testClient(t, 0).Fetch(context.Background(), srv.URL+"/start", Referer("https://example.test/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "#EXTM3U" {
+		t.Errorf("body = %q", body)
+	}
+	// Relative references resolve against the address that answered.
+	if resp.Request.URL.Path != "/end" {
+		t.Errorf("final URL = %s, want the redirect's target", resp.Request.URL)
+	}
+	if got := resp.Header.Get(HeaderCacheControl); got != "max-age=60" {
+		t.Errorf("Cache-Control = %q, want the response's own", got)
+	}
+	// A script or playlist is not a page being navigated to.
+	if got := asked.Get(HeaderAccept); got != AcceptAny {
+		t.Errorf("Accept = %q, want the client's default %q", got, AcceptAny)
+	}
+	if got := asked.Get(HeaderSecFetchMode); got != "cors" {
+		t.Errorf("Sec-Fetch-Mode = %q, want cors", got)
+	}
+	if got := asked.Get(HeaderReferer); got != "https://example.test/" {
+		t.Errorf("Referer = %q", got)
+	}
+}
+
+func TestFetchRefusesAnOversizedBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strings.Repeat("x", config.MaxResponseBytes+1))
+	}))
+	defer srv.Close()
+	// Cut short, a script or playlist would parse as something it is not.
+	body, _, err := testClient(t, 0).Fetch(context.Background(), srv.URL, nil)
+	if err == nil || body != nil {
+		t.Fatalf("oversized body returned %d bytes with error %v", len(body), err)
+	}
+}
+
+func TestNewStatusErrorNamesTheAddressAsked(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/asked", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/signed?token=secret", http.StatusFound)
+	})
+	mux.HandleFunc("/signed", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Reason", "gone")
+		w.WriteHeader(http.StatusGone)
+		_, _ = io.WriteString(w, "removed"+strings.Repeat(".", 2*config.ErrorBodySample))
+	})
+
+	c := testClient(t, 0)
+	req, _ := c.NewRequest(context.Background(), http.MethodGet, srv.URL+"/asked", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	se := NewStatusError(resp)
+	if se.URL != srv.URL+"/asked" {
+		t.Errorf("URL = %q, want the address asked for, not the redirect's target", se.URL)
+	}
+	if se.Code != http.StatusGone || !strings.HasPrefix(se.Body, "removed") || len(se.Body) != config.ErrorBodySample {
+		t.Errorf("code %d, body of %d bytes starting %.10q: want 410 and a bounded sample", se.Code, len(se.Body), se.Body)
+	}
+	if se.Header.Get("X-Reason") != "gone" {
+		t.Errorf("headers not kept: %v", se.Header)
+	}
+}
+
+func TestDoQuotesTheLastRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down for maintenance", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := testClient(t, 0)
+	req, _ := c.NewRequest(context.Background(), http.MethodGet, srv.URL, nil)
+	_, err := c.Do(req)
+	if !HasStatus(err, http.StatusServiceUnavailable) || !strings.Contains(err.Error(), "down for maintenance") {
+		t.Errorf("error = %v, want the 503 and the reason its body gave", err)
+	}
+}
+
+func TestResponsesAreLoggedOutsideTransfers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+
+	var out strings.Builder
+	log := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx := WithResponseLog(context.Background(), log)
+	c := testClient(t, 0)
+	if _, err := c.GetString(ctx, srv.URL, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), "http: response"); n != 1 {
+		t.Fatalf("logged %d response lines, want one:\n%s", n, out.String())
+	}
+	// The ordinary job logger keeps only what went wrong.
+	out.Reset()
+	if _, err := c.GetString(WithLogger(context.Background(), log), srv.URL, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("a job's logger recorded a response that went right:\n%s", out.String())
+	}
+	// A transfer's client stays quiet: a segmented video is thousands of
+	// responses, and the transfer reports its own failures.
+	out.Reset()
+	if _, err := c.Streaming().GetString(ctx, srv.URL, nil); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("the streaming client logged:\n%s", out.String())
 	}
 }

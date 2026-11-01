@@ -38,7 +38,6 @@ function job(items: ItemView[], patch = false): JobView {
     source: 'https://example.test/a',
     host: 'example',
     status: 'running',
-    createdAt: '',
     items,
     total: items.length,
     done: 0,

@@ -144,16 +144,6 @@ func TestExecutable(t *testing.T) {
 	}
 }
 
-func TestScriptDirIsWhereTheBinaryLives(t *testing.T) {
-	exe, err := os.Executable()
-	if err != nil {
-		t.Skip("no executable path on this platform")
-	}
-	if got, want := ScriptDir(), filepath.Dir(exe); got != want {
-		t.Errorf("ScriptDir = %q, want %q", got, want)
-	}
-}
-
 func TestNotInstalledNamesTheToolAndTheRemedy(t *testing.T) {
 	msg := NotInstalled(YtDlp)
 	for _, want := range []string{YtDlp, "make dependencies", "PATH"} {

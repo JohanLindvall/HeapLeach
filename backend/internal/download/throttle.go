@@ -147,15 +147,6 @@ func (t *throttle) wakeLocked() {
 	t.gate = make(chan struct{})
 }
 
-// take blocks until the caller may move at least one byte, and reports how
-// many. The answer is never larger than want and never zero without an
-// error, so callers can read straight into buf[:n].
-func (t *throttle) take(ctx context.Context, want int) (int, error) {
-	n, gate, err := t.takeReservation(ctx, want)
-	t.finishReservation(n, n, gate)
-	return n, err
-}
-
 // The gate identifies the settings under which the budget was reserved.
 // A short read may return unused tokens only while those settings still hold.
 func (t *throttle) takeReservation(ctx context.Context, want int) (int, chan struct{}, error) {

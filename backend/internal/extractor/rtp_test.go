@@ -3,6 +3,8 @@
 package extractor
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path"
 	"strings"
 	"testing"
@@ -468,9 +470,8 @@ func TestRTPTitleTrimsTheSuffixAsOneString(t *testing.T) {
 // unique beneath its own programme.
 func TestRTPEpisodeLinksKeepTheSeasonsOwn(t *testing.T) {
 	ref := rtpRef{program: "p1", page: "https://www.rtp.pt/play/p1/a-programme"}
-	seen := make(map[string]bool)
 
-	got := rtpEpisodeLinks(mustParseDoc(t, rtpSeasonPage), ref, seen)
+	got := rtpEpisodeLinks(mustParseDoc(t, rtpSeasonPage), ref)
 	want := []rtpEpisodeRef{
 		{id: "e13", page: "https://www.rtp.pt/play/p1/e13/a-programme"},
 		{id: "e12", page: "https://www.rtp.pt/play/p1/e12/a-programme"},
@@ -485,15 +486,11 @@ func TestRTPEpisodeLinksKeepTheSeasonsOwn(t *testing.T) {
 		}
 	}
 
-	// The endpoint answers with a bare fragment; the same collector reads it,
-	// and the seen set is what stops the walk repeating itself.
-	fragment := mustParseDoc(t, rtpListingFragment)
-	more := rtpEpisodeLinks(fragment, ref, seen)
+	// The endpoint answers with a bare fragment, which the same collector
+	// reads.
+	more := rtpEpisodeLinks(mustParseDoc(t, rtpListingFragment), ref)
 	if len(more) != 2 || more[0].id != "e10" || more[1].id != "e9" {
 		t.Errorf("listing fragment gave %+v", more)
-	}
-	if again := rtpEpisodeLinks(fragment, ref, seen); len(again) != 0 {
-		t.Errorf("the same page contributed %d episodes twice", len(again))
 	}
 }
 
@@ -528,49 +525,6 @@ func TestRTPTarget(t *testing.T) {
 	}
 }
 
-// TestRTPMatch pins the host rule. RTP's news site and its radio station
-// pages share the domain and nothing else, so only /play is claimed.
-func TestRTPMatch(t *testing.T) {
-	r := NewRTPPlay(nil)
-	for _, raw := range []string{
-		"https://www.rtp.pt/play/p1/a-programme",
-		"https://rtp.pt/play/p1/e11/a-programme",
-		"https://WWW.RTP.PT/play/p1/a-programme",
-		"https://www.rtp.pt/play/",
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !r.Match(u) {
-			t.Errorf("%s was not matched", raw)
-		}
-	}
-	for _, raw := range []string{
-		"https://www.rtp.pt/noticias/pais/a-story_v1",
-		"https://www.rtp.pt/antena1/programas/a-show",
-		"https://www.rtp.pt/",
-		"https://notrtp.pt.example.test/play/p1/a-programme",
-	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if r.Match(u) {
-			t.Errorf("%s was matched", raw)
-		}
-	}
-}
-
-// TestRTPRefusedCarriesTheReason covers what the season expansion leans on:
-// a whole season refused for one reason should read as that one reason.
-func TestRTPRefusedCarriesTheReason(t *testing.T) {
-	err := &rtpRefused{page: "https://www.rtp.pt/play/p2/e21/x", reason: "DRM protected"}
-	if got := err.Error(); got != "rtpplay: https://www.rtp.pt/play/p2/e21/x: DRM protected" {
-		t.Errorf("Error() = %q", got)
-	}
-}
-
 // TestRTPProgramIDShapes guards the two id patterns against the slug, which
 // sits in the same position and can begin with either letter.
 func TestRTPProgramIDShapes(t *testing.T) {
@@ -593,5 +547,29 @@ func TestRTPProgramIDShapes(t *testing.T) {
 		if rtpEpisodeID.MatchString(id) {
 			t.Errorf("%q was read as an episode id", id)
 		}
+	}
+}
+
+// A season page that renders no episode is not the season's end: its
+// listing is asked for page two all the same, and read until a page past
+// the end comes back empty.
+func TestRTPSeasonListsPastAnEmptyRenderedPage(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Query().Get("page"))
+		if r.URL.Query().Get("page") == "2" {
+			_, _ = w.Write([]byte(rtpListingFragment))
+		}
+	}))
+	defer srv.Close()
+	r := NewRTPPlay(testClient())
+	r.episodes = srv.URL + "/bg_l_ep/"
+	ref := rtpRef{program: "p1", page: "https://www.rtp.pt/play/p1/a-programme"}
+	episodes, more, note, err := r.seasonEpisodes(t.Context(), mustParseDoc(t, "<html><body></body></html>"), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(episodes) != 2 || more || note != "" || strings.Join(asked, ",") != "2,3" {
+		t.Errorf("episodes %+v, more %v, note %q, pages asked %v", episodes, more, note, asked)
 	}
 }

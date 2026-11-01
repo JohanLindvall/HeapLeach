@@ -119,9 +119,9 @@ and `git diff --check`; run `make hosts-check` if you edit the README.
 Do not hand-edit the generated inventory between `BEGIN HOSTS` and `END HOSTS`.
 
 Checked-in tests use synthetic fixtures and local HTTP servers. Live-site
-tests are optional, gitignored `*live_test.go` files with the `live` build
-tag; `make test-live` runs those present locally. A fresh clone contains no
-live sources. See the [live-test guide](docs/agents/extractors.md#live-tests).
+tests are `*live_test.go` files with the `live` build tag, kept in a separate
+private repository and symlinked in (gitignored here); `make test-live` runs
+those present locally. A fresh clone contains no live sources. See the [live-test guide](docs/agents/extractors.md#live-tests).
 
 ## Keep fixtures and reports shareable
 

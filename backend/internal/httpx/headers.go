@@ -2,7 +2,10 @@
 
 package httpx
 
-import "maps"
+import (
+	"maps"
+	"net/http"
+)
 
 // Header is a set of request headers to apply on top of the client defaults.
 // Extractors return one per file so the downloader can replay exactly what a
@@ -38,6 +41,18 @@ const (
 	HeaderSecFetchDest = "Sec-Fetch-Dest"
 	HeaderSecFetchMode = "Sec-Fetch-Mode"
 	HeaderSecFetchSite = "Sec-Fetch-Site"
+
+	// Response headers, most of them set by the server on what it serves.
+	HeaderAccelBuffering        = "X-Accel-Buffering"
+	HeaderAllow                 = "Allow"
+	HeaderCacheControl          = "Cache-Control"
+	HeaderContentEncoding       = "Content-Encoding"
+	HeaderContentLength         = "Content-Length"
+	HeaderContentSecurityPolicy = "Content-Security-Policy"
+	HeaderContentTypeOptions    = "X-Content-Type-Options"
+	HeaderFrameOptions          = "X-Frame-Options"
+	HeaderReferrerPolicy        = "Referrer-Policy"
+	HeaderVary                  = "Vary"
 )
 
 // Common header values.
@@ -58,6 +73,23 @@ const (
 	EncodingIdentity = "identity"
 )
 
+// Navigate is what a browser sends with a page it is navigating to: it asks
+// for HTML, and says so in the fetch metadata some hosts check. It is shared:
+// apply it, or Merge it into a header of your own, but never write to it.
+var Navigate = Header{
+	HeaderAccept:       AcceptHTML,
+	HeaderSecFetchDest: "document",
+	HeaderSecFetchMode: "navigate",
+}
+
+// Apply sets each entry on the request, overriding what is there: the
+// client's defaults, or what an earlier Apply set.
+func (h Header) Apply(req *http.Request) {
+	for name, value := range h {
+		req.Header.Set(name, value)
+	}
+}
+
 // Merge returns a copy of base with the entries of extra applied over it.
 // Either may be nil.
 func (h Header) Merge(extra Header) Header {
@@ -76,4 +108,10 @@ func Referer(url string) Header {
 // expect from a real browser.
 func RefererOrigin(referer, origin string) Header {
 	return Header{HeaderReferer: referer, HeaderOrigin: origin}
+}
+
+// SiteOrigin is RefererOrigin for a request made from a site's front page:
+// root is the scheme and host, without a trailing slash.
+func SiteOrigin(root string) Header {
+	return RefererOrigin(root+"/", root)
 }

@@ -5,12 +5,8 @@ package download
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,8 +16,6 @@ import (
 	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
-	"github.com/JohanLindvall/HeapLeach/internal/extractor"
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // droppingServer serves a file the way a flaky CDN does: each response
@@ -80,27 +74,9 @@ func (s *droppingServer) handler() http.Handler {
 // after a productive attempt shrunk to test speed.
 func progressManager(t *testing.T, retries int) *Manager {
 	t.Helper()
-	cfg := &config.Config{
-		DownloadDir: t.TempDir(), Concurrency: 1, Streams: 1,
-		UserAgent: config.DefaultUserAgent, Language: config.DefaultLanguage,
-		GofileSecret: config.FallbackGofileSecret,
-		MaxRetries:   retries, Timeout: 30 * time.Second,
-	}
-	client := httpx.New(cfg.UserAgent, cfg.AcceptLanguage(), cfg.MaxRetries, cfg.Timeout)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	m := New(cfg, extractor.NewRegistry(cfg, client), client, log)
+	m := testManager(t, func(c *config.Config) { c.MaxRetries = retries })
 	m.timings.progressRetry = time.Millisecond
-	t.Cleanup(m.Close)
 	return m
-}
-
-func randomPayload(t *testing.T, n int) []byte {
-	t.Helper()
-	payload := make([]byte, n)
-	if _, err := rand.Read(payload); err != nil {
-		t.Fatal(err)
-	}
-	return payload
 }
 
 // A connection that drops after moving bytes is resumed, not counted: with
@@ -109,8 +85,7 @@ func randomPayload(t *testing.T, n int) []byte {
 func TestDroppedConnectionAfterProgressResumesRatherThanFailing(t *testing.T) {
 	payload := randomPayload(t, 100_000)
 	origin := &droppingServer{payload: payload, chunks: []int{30_000}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 0)
 	// Long enough to be seen, short enough not to matter.
@@ -170,8 +145,7 @@ func TestDroppedConnectionAfterProgressResumesRatherThanFailing(t *testing.T) {
 // is a failure.
 func TestAttemptsThatMoveNothingStillSpendTheBudget(t *testing.T) {
 	origin := &droppingServer{payload: randomPayload(t, 100_000), chunks: []int{0}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -193,8 +167,7 @@ func TestAttemptsThatMoveNothingStillSpendTheBudget(t *testing.T) {
 // get kept on disk for a retry to resume from.
 func TestProgressRestartsTheRetryCount(t *testing.T) {
 	origin := &droppingServer{payload: randomPayload(t, 100_000), chunks: []int{30_000, 0}}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -223,8 +196,7 @@ func TestProgressRestartsTheRetryCount(t *testing.T) {
 // other attempt that got nowhere.
 func TestRestartingFromZeroIsNotProgress(t *testing.T) {
 	origin := &droppingServer{payload: randomPayload(t, 100_000), chunks: []int{30_000}, ignoreRange: true}
-	srv := httptest.NewServer(origin.handler())
-	defer srv.Close()
+	srv := testServer(t, origin.handler())
 
 	m := progressManager(t, 1)
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL + "/clip.mp4", Size: -1}
@@ -247,7 +219,7 @@ func TestRestartingFromZeroIsNotProgress(t *testing.T) {
 func TestStallAfterProgressRestartsTheDeferralCount(t *testing.T) {
 	m := &Manager{
 		cfg: &config.Config{MaxRetries: 2},
-		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		log: testLogger(),
 	}
 
 	// Two deferrals in, with the budget about to run out.

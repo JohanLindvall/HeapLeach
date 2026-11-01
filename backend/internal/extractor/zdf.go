@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -60,7 +60,7 @@ import (
 // says which question to ask, not what the answer is. See zdfReach for who
 // asks it.
 type ZDF struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -118,9 +118,34 @@ var zdfRegions = map[string]string{
 }
 
 // NewZDF builds the ZDF extractor.
-func NewZDF(client *httpx.Client) *ZDF { return &ZDF{hostSet: hostSet{"zdf.de"}, client: client} }
+func NewZDF(client *httpx.Client) *ZDF {
+	return &ZDF{client: client, about: about{name: "zdf", shape: zdfShape,
+		recognises: "videos and show pages (`/…/<slug>-<number>`) of the ZDF Mediathek, whose page data names its PTMD player templates, " +
+			"and documents of its metadata API (`/mediathekV2/document/<id>`)"}}
+}
 
-func (z *ZDF) Name() string { return "zdf" }
+// zdfPage is a page whose last segment is a document id, <slug>-<number>,
+// filed under at least one section: /<section>/…/<slug>-<number>. That is
+// nearly every article URL on the web, so it is the form recognised once
+// the page is shown to be the Mediathek's, not one to follow as a link.
+var zdfPage = pathShape(`^/(?:[a-z0-9-]+/)+[a-z0-9-]+-[0-9]+/?$`)
+
+// zdfShape is the link form: a document id filed under /video/ or under
+// one of the Mediathek's programme sections, or the document itself as the
+// metadata API serves it (zdfDocumentAPI), whose last segment is the id
+// Extract asks for. A news site's /sport/… or /news/… is not among them.
+var zdfShape = pathShape(`^/(?:video|play|serien|filme|dokus|dokumentation|shows?|animation|talk|magazine|kinder|`+
+	`comedy|krimi|wissen|kultur|geschichte|natur|ratgeber|unterhaltung)/(?:[a-z0-9-]+/)*[a-z0-9-]+-[0-9]+/?$`,
+	zdfDocumentPath)
+
+// zdfDocumentPath is a document on the metadata API's host.
+const zdfDocumentPath = `^/mediathekV2/document/[A-Za-z0-9_-]+/?$`
+
+// Recognise takes a Mediathek page ending in a document id: its page data
+// configures the player's media service (ptmdService, ptmdTemplate).
+func (z *ZDF) Recognise(_ context.Context, p *Page) bool {
+	return zdfPage(p.Final) && p.HasAny("ptmdTemplate", "ptmdService") && p.Named("ZDF")
+}
 
 // Extract handles a single video, a show page that lists many, and the hub
 // pages that are neither.
@@ -154,7 +179,7 @@ func (z *ZDF) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 		return z.single(ctx, &doc.Document, id, reach)
 	}
 	if refs := doc.videos(); len(refs) > 0 {
-		return z.expand(ctx, u, util.FirstNonEmpty(doc.Document.Titel, id), refs, reach)
+		return z.expand(ctx, u, cmp.Or(doc.Document.Titel, id), refs, reach)
 	}
 	// A film or a stage recording is filed under a page of its own that
 	// carries no renditions and lists nothing, because the one video it
@@ -164,30 +189,14 @@ func (z *ZDF) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, erro
 
 // single resolves one video into a job of its own.
 func (z *ZDF) single(ctx context.Context, doc *zdfDocument, fallback string, reach *zdfReach) (*Result, error) {
-	title := util.FirstNonEmpty(doc.Titel, fallback)
+	title := cmp.Or(doc.Titel, fallback)
 	file, err := z.file(ctx, doc, reach)
 	if err != nil {
 		// file's refusals are written to follow the programme's name as a
 		// sentence about it, so there is no colon between the two.
 		return nil, fmt.Errorf("zdf: %s %w", title, err)
 	}
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
-}
-
-// zdfRef is one video a listing named, with what the listing knew about it.
-type zdfRef struct {
-	id     string
-	name   string
-	season string
-}
-
-// zdfOutcome is what became of one video: a file, or ZDF's reason for
-// declining it. FanOut drops an error, and the reason is the one part of it
-// worth keeping.
-type zdfOutcome struct {
-	file   *File
-	reason string
+	return soleFile(title, file), nil
 }
 
 // fromPage resolves a page by the videos it links to, for the pages futura
@@ -197,7 +206,7 @@ type zdfOutcome struct {
 // is what keeps a hub page's recommendations out: a /video/ link filed under
 // some other id belongs to some other page.
 func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach *zdfReach) (*Result, error) {
-	page, err := z.client.GetString(ctx, u.String(), zdfHeaders())
+	page, _, err := fetchDocument(ctx, z.client, u, zdfHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("zdf: fetch %s: %w", u.Redacted(), err)
 	}
@@ -213,71 +222,63 @@ func (z *ZDF) fromPage(ctx context.Context, u *url.URL, id, title string, reach 
 		if err != nil {
 			return nil, err
 		}
-		return z.single(ctx, &doc.Document, util.FirstNonEmpty(title, ids[0]), reach)
+		return z.single(ctx, &doc.Document, cmp.Or(title, ids[0]), reach)
 	}
 
-	refs := make([]zdfRef, 0, len(ids))
+	refs := make([]broadcastEpisode, 0, len(ids))
 	for _, videoID := range ids {
-		refs = append(refs, zdfRef{id: videoID})
+		refs = append(refs, broadcastEpisode{id: videoID})
 	}
-	return z.expand(ctx, u, util.FirstNonEmpty(title, pageTitle(page)), refs, reach)
+	return z.expand(ctx, u, cmp.Or(title, pageTitle(page)), refs, reach)
 }
 
 // expand resolves a listing's videos into one file each.
-func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []zdfRef, reach *zdfReach) (*Result, error) {
-	if len(refs) > config.MaxListingVideos {
-		refs = refs[:config.MaxListingVideos]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(refs, func(ref zdfRef) string { return ref.season })
-
-	outcomes := FanOut(ctx, refs, func(ctx context.Context, ref zdfRef) ([]zdfOutcome, error) {
-		return []zdfOutcome{z.video(ctx, ref, nest, reach)}, nil
+func (z *ZDF) expand(ctx context.Context, u *url.URL, title string, refs []broadcastEpisode, reach *zdfReach) (*Result, error) {
+	return listSeries(ctx, title, series[broadcastEpisode]{
+		site: "zdf", noun: "videos", link: u.Redacted(),
+		items: refs,
+		label: func(ref broadcastEpisode) string {
+			if ref.season == "" {
+				return ""
+			}
+			return zdfSeasonFolder(ref.season)
+		},
+		// The listing's own name for a video wins: it is what the page
+		// showed, and for a series it is the episode title where the
+		// document's is occasionally the whole strand's.
+		resolve: listedAs(func(ctx context.Context, id string) (*File, string, error) {
+			return z.video(ctx, id, reach)
+		}, nil),
+		// "each" carries the reason, which is written as a sentence about
+		// one video: when a whole run is refused it is refused the same way
+		// all the way down, and ZDF's words for it beat anything concluded
+		// here.
+		unplayable: "each offers no stream",
 	})
-
-	result := &Result{Title: title}
-	var refused string
-	for _, outcome := range outcomes {
-		switch {
-		case outcome.file != nil:
-			result.Files = append(result.Files, *outcome.file)
-		case refused == "":
-			refused = outcome.reason
-		}
-	}
-	if len(result.Files) == 0 {
-		// "each" carries the reason, which is written as a sentence about one
-		// video: when a whole run is refused it is refused the same way all
-		// the way down, and ZDF's words for it beat anything concluded here.
-		return nil, fmt.Errorf("zdf: none of the %d videos on %s can be fetched: each %s",
-			len(refs), u.Redacted(), util.FirstNonEmpty(refused, "offers no stream"))
-	}
-	return result, nil
 }
 
-// video resolves one listed video. It reports rather than returns its
-// failure, because one withdrawn or region-locked episode must not sink a
-// listing of hundreds.
-func (z *ZDF) video(ctx context.Context, ref zdfRef, nest bool, reach *zdfReach) zdfOutcome {
-	doc, err := z.document(ctx, ref.id)
+// video resolves one listed video, with its document's title. A document
+// that will not load is passed over without a reason, since it says
+// nothing about the others; ZDF's refusal of the video is the reason, as a
+// sentence about each one.
+func (z *ZDF) video(ctx context.Context, id string, reach *zdfReach) (*File, string, error) {
+	doc, err := z.document(ctx, id)
 	if err != nil {
-		// A document that would not load says nothing about the others.
-		return zdfOutcome{}
+		return nil, "", nil
 	}
 	file, err := z.file(ctx, &doc.Document, reach)
 	if err != nil {
-		return zdfOutcome{reason: err.Error()}
+		// ZDF declining the video — nothing offered, or licensed
+		// elsewhere — is a refusal, which the listing tallies by its
+		// reason; anything else is a video that could not be read.
+		_, noStream := errors.AsType[*zdfNoStream](err)
+		_, blocked := errors.AsType[*zdfBlocked](err)
+		if noStream || blocked {
+			return nil, "", &itemRefusal{site: "zdf", title: doc.Document.Titel, reason: "each " + err.Error()}
+		}
+		return nil, "", fmt.Errorf("each %w", err)
 	}
-
-	// The listing's own name for a video wins: it is what the page showed,
-	// and for a series it is the episode title where the document's is
-	// occasionally the whole strand's.
-	file.Name = util.FirstNonEmpty(ref.name, doc.Document.Titel, ref.id) + file.Name
-	if nest && ref.season != "" {
-		file.Dir = zdfSeasonFolder(ref.season)
-	}
-	return zdfOutcome{file: file}
+	return file, doc.Document.Titel, nil
 }
 
 // file turns a document's rendition list into something to fetch.
@@ -290,7 +291,7 @@ func (z *ZDF) video(ctx context.Context, ref zdfRef, nest bool, reach *zdfReach)
 func (z *ZDF) file(ctx context.Context, doc *zdfDocument, reach *zdfReach) (*File, error) {
 	best, ok := zdfPick(doc.Formitaeten)
 	if !ok {
-		return nil, fmt.Errorf("offers no stream%s", zdfWhyNot(doc))
+		return nil, &zdfNoStream{why: zdfWhyNot(doc)}
 	}
 	if err := reach.refuse(ctx, doc.GeoLocation, best.URL); err != nil {
 		return nil, err
@@ -305,7 +306,7 @@ func (z *ZDF) file(ctx context.Context, doc *zdfDocument, reach *zdfReach) (*Fil
 		// for a different file is not an approximation of this one, so it may
 		// carry neither Size nor SizeApprox; the transfer learns the real
 		// length from the response headers, and the skip check with it.
-		return &File{Name: ".mp4", URL: best.URL, Size: -1, Headers: headers}, nil
+		return progressiveFile(best.URL, ".mp4", headers), nil
 	}
 
 	media, err := resolveMediaPlaylist(ctx, z.client, best.URL, headers)
@@ -319,8 +320,7 @@ func (z *ZDF) file(ctx context.Context, doc *zdfDocument, reach *zdfReach) (*Fil
 		return nil, errors.New("names no audio, in its renditions or beside them, and publishes " +
 			"no progressive file to take instead")
 	}
-	return &File{Name: media.extensionOr(playlistExtension(media.Variant)), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles}, nil
+	return new(media.file(media.extensionOr(playlistExtension(media.Variant)), headers)), nil
 }
 
 // document reads one futura document.
@@ -351,17 +351,7 @@ func zdfDocumentID(u *url.URL) string {
 // zdfVideoLinks finds the videos a page plays, keeping only those filed under
 // pageID. Ids are returned once each, in the order the page had them.
 func zdfVideoLinks(page, pageID string) []string {
-	pattern := regexp.MustCompile(`/video/[A-Za-z0-9_-]+/` + regexp.QuoteMeta(pageID) + `/([A-Za-z0-9_-]+)`)
-
-	var ids []string
-	seen := make(map[string]bool)
-	for _, match := range pattern.FindAllStringSubmatch(page, -1) {
-		if id := match[1]; !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	return ids
+	return matchedIDs(page, regexp.MustCompile(`/video/[A-Za-z0-9_-]+/`+regexp.QuoteMeta(pageID)+`/([A-Za-z0-9_-]+)`))
 }
 
 // zdfSeasonFolder names the folder a season's videos go in.
@@ -438,14 +428,7 @@ func zdfScore(f zdfFormat) int {
 // zdfRank orders a rendition by name. A name this does not recognise ranks
 // below every one it does but above nothing at all, so a ladder ZDF relabels
 // still yields a download.
-func zdfRank(quality string) int {
-	for i, known := range zdfQualities {
-		if strings.EqualFold(quality, known) {
-			return i
-		}
-	}
-	return -1
-}
+func zdfRank(quality string) int { return rankIn(zdfQualities, quality, -1) }
 
 // zdfWhyNot explains a document with nothing to fetch, in ZDF's own words.
 //
@@ -476,6 +459,12 @@ func zdfRestricted(region string) bool {
 	region = strings.TrimSpace(region)
 	return region != "" && !strings.EqualFold(region, zdfUnrestricted)
 }
+
+// zdfNoStream is a document offering nothing to fetch, with ZDF's reason
+// when it gives one, as a sentence about the programme.
+type zdfNoStream struct{ why string }
+
+func (e *zdfNoStream) Error() string { return "offers no stream" + e.why }
 
 // zdfBlocked is ZDF licensing something for a region this address is not in.
 // Like every refusal here it reads as a sentence about a programme, so that
@@ -549,18 +538,8 @@ func (r *zdfReach) refuse(ctx context.Context, region, media string) error {
 // says nothing about where this address is, and reading "outside" into it
 // would refuse a download that was going to work.
 func (r *zdfReach) probe(ctx context.Context, media string) bool {
-	req, err := r.client.NewRequest(ctx, http.MethodHead, media, nil)
-	if err != nil {
-		return true
-	}
-	req.Header.Set(httpx.HeaderReferer, zdfRoot+"/")
-
-	resp, err := r.client.DoOnce(req)
-	if err != nil {
-		return true
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode != http.StatusForbidden
+	status, err := r.client.StatusOnce(ctx, http.MethodHead, media, httpx.Referer(zdfRoot+"/"))
+	return err != nil || status != http.StatusForbidden
 }
 
 // zdfResponse is one futura document and whatever it lists.
@@ -577,8 +556,8 @@ type zdfResponse struct {
 // the editors are pushing this week — so the same episode routinely appears
 // on two of them, and a page's featured entry is always a repeat of one
 // further down.
-func (r *zdfResponse) videos() []zdfRef {
-	var refs []zdfRef
+func (r *zdfResponse) videos() []broadcastEpisode {
+	var refs []broadcastEpisode
 	seen := make(map[string]bool)
 	for _, cluster := range r.Cluster {
 		for _, teaser := range cluster.Teaser {
@@ -586,7 +565,7 @@ func (r *zdfResponse) videos() []zdfRef {
 				continue
 			}
 			seen[teaser.ID] = true
-			refs = append(refs, zdfRef{
+			refs = append(refs, broadcastEpisode{
 				id:     teaser.ID,
 				name:   teaser.Titel,
 				season: strings.TrimSpace(teaser.SeasonNumber),

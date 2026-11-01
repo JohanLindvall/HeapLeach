@@ -28,6 +28,24 @@ editing. In an SSE job marked `patch`, merge items by
 ID and retain unmentioned items; otherwise replace its item list. Every
 frame contains the complete job list and current aggregates.
 
+In the proxy inventory, `lastSuccess` and the request count include completed
+byte-range responses even when they have no `Content-Length`. These
+observations are persisted. Closing a partial response or cancelling its
+request does not turn it into a success.
+
+A job marked `incomplete` finished with a listing that a failure cut short —
+a later page, folder or season that could not be read, or a host that
+rate-limited — and its note says so beside its title. `/retry` on such a job
+reads its source again for what was left out, keeping the files already
+saved, as it does for a job that failed; while some of its files are still
+queued or downloading, `/retry` re-queues only the failed ones. The mark
+outlives a restart. A job cut at a cap is not marked: reading it again would
+stop at the same cap.
+
+Every job carries `createdAt`, the RFC 3339 time it was first queued. A job
+restored from the queue file keeps its original time, so a client can sort
+or age jobs by it across a restart.
+
 Oversized JSON requests return `413`; malformed JSON returns `400`. Unknown
 API routes return `404`, and a known route with an unsupported method returns
 `405`. Ordinary HTTP requests have 30-second read/write deadlines. Event

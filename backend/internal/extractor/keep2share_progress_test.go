@@ -22,10 +22,10 @@ import (
 // Exercise the production budget, with a longer general HTTP deadline. A
 // shortened test client alone would also pass if the host forgot its cap.
 func TestKeep2ShareCaptchaRequestUsesItsOwnTimeout(t *testing.T) {
-	for _, newHost := range []func(*httpx.Client) *Keep2Share{NewKeep2Share, NewFileBoom} {
+	for i := range NewKeep2Share(nil).services {
 		base := httpx.New("test", "en", 3, time.Minute)
-		k := newHost(base)
-		t.Run(k.Name(), func(t *testing.T) {
+		k := NewKeep2Share(base).services[i]
+		t.Run(k.label, func(t *testing.T) {
 			t.Parallel()
 			defer base.CloseIdleConnections()
 			var calls atomic.Int32
@@ -47,7 +47,7 @@ func TestKeep2ShareCaptchaRequestUsesItsOwnTimeout(t *testing.T) {
 			}
 			defer route.CloseIdleConnections()
 			k.api, k.files = "http://service.example.test/api/v2", ""
-			k.solver = func(context.Context, []byte) ([]string, error) {
+			k.ex.solver = func(context.Context, []byte) ([]string, error) {
 				t.Error("OCR ran before the CAPTCHA request finished")
 				return nil, nil
 			}
@@ -126,9 +126,9 @@ func TestKeep2ShareCaptchaNetworkStallsNameTheStepAndPenaliseTheRoute(t *testing
 				t.Fatal(err)
 			}
 			defer route.CloseIdleConnections()
-			k := NewKeep2Share(client)
+			k := NewKeep2Share(client).services[0]
 			k.api, k.files = "http://service.example.test/api/v2", ""
-			k.solver = func(context.Context, []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
+			k.ex.solver = func(context.Context, []byte) ([]string, error) { return []string{"aB3dE7"}, nil }
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			ctx = WithResolveNote(ctx, func(note string) { current.Store(note) })

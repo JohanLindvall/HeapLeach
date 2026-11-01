@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { deferred, host, mountEachTest, root } from '../testkit';
 import { addUrls, ApiError } from '../api';
 import type { AddResponse } from '../types';
 
@@ -14,31 +14,15 @@ const { readText } = vi.hoisted(() => {
 vi.mock('../api', async (original) => ({ ...await original<typeof import('../api')>(), addUrls: vi.fn() }));
 import { AddForm } from './AddForm';
 
-let root: Root;
-let host: HTMLDivElement;
 const notice = vi.fn();
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => { resolve = yes; });
-  return { promise, resolve };
-}
+mountEachTest();
 
 beforeEach(async () => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.mocked(addUrls).mockReset();
   readText.mockReset();
   notice.mockReset();
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
   await act(async () => { root.render(<AddForm onNotice={notice} />); });
-});
-
-afterEach(async () => {
-  await act(async () => { root.unmount(); });
-  host.remove();
-  vi.unstubAllGlobals();
 });
 
 function field(): HTMLTextAreaElement { return host.querySelector('textarea')!; }

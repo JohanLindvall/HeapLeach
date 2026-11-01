@@ -8,68 +8,229 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/tools"
 )
 
-// TestHandoffMatch pins the routing. A host list is the whole of what these
-// extractors decide, so too broad a match steals a URL another extractor
-// handles and too narrow a one drops it on the direct-link fallback, which
-// would save the page rather than the media.
-func TestHandoffMatch(t *testing.T) {
-	sites := NewHandoffs(nil)
-
-	match := func(raw string) string {
-		t.Helper()
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
+// handoffNamed is the registered handoff of that name.
+func handoffNamed(t *testing.T, name string) *Handoff {
+	t.Helper()
+	for _, e := range NewHandoffs(nil) {
+		if e.Name() == name {
+			return e.(*Handoff)
 		}
-		for _, site := range sites {
-			if site.Match(u) {
-				return site.Name()
-			}
-		}
-		return ""
 	}
+	t.Fatalf("no handoff %s", name)
+	return nil
+}
 
-	for raw, want := range map[string]string{
-		"https://odysee.com/@channel:1/a-clip:2":     "odysee",
-		"https://lbry.tv/@channel:1/a-clip:2":        "odysee",
-		"https://www.dailymotion.com/video/x000000":  "dailymotion",
-		"https://dai.ly/x000000":                     "dailymotion",
-		"https://www.bilibili.com/video/BV00000000":  "bilibili",
-		"https://b23.tv/aaaaaa":                      "bilibili",
-		"https://soundcloud.com/an-artist/a-track":   "soundcloud",
-		"https://m.soundcloud.com/an-artist/a-track": "soundcloud",
-		"https://www.mixcloud.com/a-user/a-show/":    "mixcloud",
-		"https://rumble.com/v000000-a-clip.html":     "rumble",
-		// Lookalikes: a suffix match on the bare string would take these.
-		"https://rumble.example.test/v000000-x/": "",
-		"https://notsoundcloud.com/a/b":          "",
+// TestHandoffExpand pins which sites list a collection one item per entry:
+// each has a collection form of its own, and yt-dlp lists it flat.
+func TestHandoffExpand(t *testing.T) {
+	var got []string
+	for _, site := range handoffSites {
+		if site.expand {
+			got = append(got, site.name)
+		}
+	}
+	want := []string{"youtube", "odysee", "dailymotion", "soundcloud"}
+	if !slices.Equal(got, want) {
+		t.Errorf("expanding sites = %v, want %v", got, want)
+	}
+}
+
+func metadataScript(t *testing.T, json string) (string, string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX shell")
+	}
+	dir := t.TempDir()
+	script, args := filepath.Join(dir, "metadata"), filepath.Join(dir, "args")
+	t.Setenv("HEAPLEACH_TEST_METADATA", json)
+	t.Setenv("HEAPLEACH_TEST_ARGS", args)
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HEAPLEACH_TEST_ARGS\"\nprintf '%s' \"$HEAPLEACH_TEST_METADATA\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, args
+}
+
+func TestHandoffListBoundsPlaylistAtTheHelper(t *testing.T) {
+	helper, args := metadataScript(t, `{"_type":"url","title":"First clip","url":"https://example.test/first"}
+{"_type":"url","title":"Second clip","url":"https://example.test/second"}
+{"_type":"url","title":"Third clip","url":"https://example.test/third"}
+{"_type":"playlist","title":"Synthetic playlist"}
+`)
+	res, err := handoffNamed(t, "youtube").list(t.Context(), helper, "https://example.test/playlist", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 2 || res.Note == "" || res.Title != "Synthetic playlist" || res.Files[1].Name != "Second clip" {
+		t.Fatalf("playlist = %+v", res)
+	}
+	got, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "--playlist-end\n3\n--\nhttps://example.test/playlist\n") {
+		t.Fatalf("unbounded or unprotected helper arguments: %s", got)
+	}
+	// A video opened from a playlist is the one video: yt-dlp is told so,
+	// and lists a playlist's own link as the playlist still.
+	if !strings.Contains(string(got), "--no-playlist\n") {
+		t.Fatalf("a watch link with a list would expand to the playlist: %s", got)
+	}
+}
+
+func TestHandoffListShortPlaylistHasNoTruncationNote(t *testing.T) {
+	helper, _ := metadataScript(t, `{}
+null
+{"_type":"url","title":"Only clip","url":"https://example.test/only"}
+{"_type":"playlist","title":"Synthetic playlist"}`)
+	res, err := handoffNamed(t, "youtube").list(t.Context(), helper, "https://example.test/playlist", 3)
+	if err != nil || len(res.Files) != 1 || res.Note != "" {
+		t.Fatalf("playlist = %+v, %v", res, err)
+	}
+}
+
+// An entry naming no page of its own is reached through the site's watch
+// page where the site has one, and skipped where it does not.
+func TestHandoffListEntryByID(t *testing.T) {
+	const listing = `{"_type":"url","id":"abcdefghijk","title":"Bare clip"}
+{"_type":"playlist","title":"Synthetic playlist"}`
+	helper, _ := metadataScript(t, listing)
+	res, err := handoffNamed(t, "youtube").list(t.Context(), helper, "https://example.test/playlist", 3)
+	if err != nil || len(res.Files) != 1 || res.Files[0].External != handoffNamed(t, "youtube").site.watch+"abcdefghijk" {
+		t.Fatalf("playlist = %+v, %v", res, err)
+	}
+	if _, err := handoffNamed(t, "dailymotion").list(t.Context(), helper, "https://example.test/playlist", 3); err == nil {
+		t.Fatal("an entry with no page was listed on a site with no watch page")
+	}
+}
+
+func TestHandoffListSingleVideoAndTitle(t *testing.T) {
+	helper, args := metadataScript(t, `{"title":"Synthetic clip","webpage_url":"https://example.test/clip"}`)
+	res, err := handoffNamed(t, "youtube").list(t.Context(), helper, "https://example.test/input", 2)
+	if err != nil || len(res.Files) != 1 || res.Files[0].External != "https://example.test/clip" || res.Note != "" {
+		t.Fatalf("video = %+v, %v", res, err)
+	}
+	if title, err := ytdlpTitle(t.Context(), helper, "--untrusted-input"); err != nil || title != "Synthetic clip" {
+		t.Fatalf("title = %q, %v", title, err)
+	}
+	got, err := os.ReadFile(args)
+	if err != nil || !strings.Contains(string(got), "--no-playlist\n") || !strings.HasSuffix(string(got), "--\n--untrusted-input\n") {
+		t.Fatalf("title helper arguments = %q, %v", got, err)
+	}
+}
+
+// A private track's canonical webpage_url can omit the secret that let
+// the metadata helper read it. The later download needs the same input.
+func TestHandoffSingleTrackKeepsSubmittedURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+	}{
+		{"secret path", "https://audio.example.test/an-artist/a-recording/s-synthetic"},
+		{"secret query", "https://audio.example.test/an-artist/a-recording?secret_token=s-synthetic%2Btoken"},
 	} {
-		if got := match(raw); got != want {
-			t.Errorf("%s went to %q, want %q", raw, got, want)
+		t.Run(tc.name, func(t *testing.T) {
+			helper, args := metadataScript(t, `{"title":"Synthetic recording","webpage_url":"https://audio.example.test/an-artist/a-recording"}`)
+			dir := filepath.Dir(helper)
+			if err := os.Rename(helper, filepath.Join(dir, tools.YtDlp)); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			tools.Reset()
+			t.Cleanup(tools.Reset)
+			res, err := handoffNamed(t, "soundcloud").Extract(t.Context(), mustParse(t, tc.input), Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Files) != 1 || res.Files[0].External != tc.input || res.Files[0].Name != "Synthetic recording" {
+				t.Fatalf("track = %+v; want the submitted URL and metadata title", res.Files)
+			}
+			got, err := os.ReadFile(args)
+			if err != nil || !strings.HasSuffix(string(got), "--\n"+tc.input+"\n") {
+				t.Fatalf("metadata helper arguments = %q, %v; want the submitted URL", got, err)
+			}
+		})
+	}
+}
+
+// Even a one-track set must queue its entry, not the submitted set URL.
+func TestHandoffSingleEntrySetUsesTrackURL(t *testing.T) {
+	const track = "https://audio.example.test/an-artist/first-recording/s-track-secret"
+	helper, _ := metadataScript(t, `{"_type":"url","title":"First recording","url":"`+track+`"}
+{"_type":"playlist","title":"Synthetic set"}`)
+	res, err := handoffNamed(t, "soundcloud").list(t.Context(), helper,
+		"https://audio.example.test/an-artist/sets/a-set/s-set-secret", 2)
+	if err != nil || len(res.Files) != 1 || res.Files[0].External != track || res.Title != "Synthetic set" {
+		t.Fatalf("set = %+v, %v; want its listed track", res, err)
+	}
+}
+
+// A single untitled item a listing site hands back is named by its page's
+// slug, as one handed over unlisted is; and a failed probe names the link
+// without its password.
+func TestHandoffListSingleUntitledItemAndRedactedErrors(t *testing.T) {
+	helper, _ := metadataScript(t, `{"id":"x8abcde","webpage_url":"https://example.test/video/x8abcde"}`)
+	res, err := handoffNamed(t, "odysee").list(t.Context(), helper, "https://example.test/@a-channel/a-claim", 2)
+	if err != nil || len(res.Files) != 1 || res.Title != "a-claim" || res.Files[0].Name != "a-claim" {
+		t.Fatalf("video = %+v, %v", res, err)
+	}
+	failing := filepath.Join(t.TempDir(), "failing")
+	if err := os.WriteFile(failing, []byte("#!/bin/sh\necho refused >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = handoffNamed(t, "odysee").list(t.Context(), failing, "https://user:secret@example.test/@a-channel/a-claim", 2)
+	if err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("err = %v, want the link without its password", err)
+	}
+}
+
+// The probes ask for the fields they read and nothing else. A full -J dump
+// of one ordinary video came to ten megabytes, nearly all of it
+// machine-translated captions, and failed the job on the cap on helper
+// output before anything was downloaded. And they say --simulate outright:
+// the playlist: print switches off the simulation --print otherwise implies,
+// and a probe without it downloaded the whole video into its working
+// directory.
+func TestHandoffProbesPrintOnlyTheFieldsTheyRead(t *testing.T) {
+	helper, args := metadataScript(t, `{"title":"Synthetic clip"}`)
+	if _, err := handoffNamed(t, "youtube").list(t.Context(), helper, "https://example.test/clip", 2); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ytdlpTitle(t.Context(), helper, "https://example.test/clip"); err != nil {
+		t.Fatal(err)
+	}
+	title, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]string{"probe": string(probe), "title": string(title)} {
+		lines := strings.Split(got, "\n")
+		if slices.Contains(lines, "-J") || slices.Contains(lines, "--dump-single-json") || !slices.Contains(lines, "--print") {
+			t.Errorf("%s arguments = %q; want selected fields printed, not the whole info dump", name, got)
+		}
+		if !slices.Contains(lines, "--simulate") {
+			t.Errorf("%s arguments = %q; without --simulate the probe downloads the video", name, got)
 		}
 	}
 }
 
-// TestHandoffSitesAreUsable guards the table itself. Every field of it ends
-// up in front of the user: the name opens each error and labels the host in
-// the UI, and `why` completes a sentence explaining what yt-dlp is for.
-func TestHandoffSitesAreUsable(t *testing.T) {
-	seen := make(map[string]bool, len(handoffSites))
-	for _, site := range handoffSites {
-		if site.name == "" || site.why == "" || len(site.domains) == 0 {
-			t.Errorf("%+v is missing a name, a reason or a domain", site)
-		}
-		if seen[site.name] {
-			t.Errorf("two handoff hosts are both named %q", site.name)
-		}
-		seen[site.name] = true
+func TestHandoffListThatPrintsNothingIsAnError(t *testing.T) {
+	helper, _ := metadataScript(t, "")
+	if _, err := handoffNamed(t, "youtube").list(t.Context(), helper, "https://example.test/clip", 2); err == nil {
+		t.Fatal("an empty answer from yt-dlp was taken for a video")
 	}
 }
 
@@ -83,10 +244,7 @@ func TestHandoffName(t *testing.T) {
 		// Nothing in the path to name it after.
 		"https://soundcloud.com/": "soundcloud.com",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := handoffName(u); got != want {
 			t.Errorf("handoffName(%s) = %q, want %q", raw, got, want)
 		}
@@ -139,10 +297,7 @@ const oembedPayload = `{
 
 func testHandoff(t *testing.T, oembed string) *Handoff {
 	t.Helper()
-	return &Handoff{
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
-		site:   handoffSite{name: "rumble", domains: []string{"example.test"}, why: "testing", oembed: oembed},
-	}
+	return newHandoff(testClient(), handoffSite{name: "rumble", why: "testing", oembed: oembed})
 }
 
 func TestOEmbedTitle(t *testing.T) {
@@ -153,10 +308,7 @@ func TestOEmbedTitle(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, err := ParseURL("https://example.test/v000000-a-clip.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://example.test/v000000-a-clip.html")
 	title, err := testHandoff(t, srv.URL).oembedTitle(context.Background(), u)
 	if err != nil {
 		t.Fatalf("oembedTitle: %v", err)

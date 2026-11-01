@@ -3,13 +3,14 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -57,7 +58,7 @@ import (
 // page document, which is proper UTF-8; the refusal sentence is ASCII and
 // survives intact.
 type RaiPlay struct {
-	hostSet
+	about
 	client *httpx.Client
 }
 
@@ -72,20 +73,22 @@ const (
 	// raiUnavailable is the placeholder clip Rai substitutes for a video it
 	// will not serve.
 	raiUnavailable = "video_no_available"
-
-	// raiMaxEpisodes bounds how many entries one programme URL expands to. A
-	// nightly news strand lists its last few hundred bulletins and its clips
-	// beside them, which is a mistake being carried out efficiently rather
-	// than a download anybody meant to start.
-	raiMaxEpisodes = 500
 )
 
 // NewRaiPlay builds the RaiPlay extractor.
 func NewRaiPlay(client *httpx.Client) *RaiPlay {
-	return &RaiPlay{hostSet: hostSet{"raiplay.it"}, client: client}
+	return &RaiPlay{client: client, about: about{name: "raiplay", shape: raiShape,
+		recognises: "videos (`/video/….html`) and programmes (`/programmi/<name>`) of RaiPlay, whose page mounts its `rai-player`"}}
 }
 
-func (r *RaiPlay) Name() string { return "raiplay" }
+// raiShape is a video page or a programme.
+var raiShape = pathShape(`^/video/.+\.html$`, `^/programmi/[^/]+`)
+
+// Recognise takes a video or programme page mounting RaiPlay's player
+// element, whose JSON document is what this reads.
+func (r *RaiPlay) Recognise(_ context.Context, p *Page) bool {
+	return raiShape(p.Final) && p.HasAny("<rai-player", "data-path-id=") && p.Named("RaiPlay")
+}
 
 // Extract handles a single video or a programme, which expands to every
 // episode and clip the programme lists.
@@ -116,8 +119,7 @@ func (r *RaiPlay) video(ctx context.Context, page string) (*Result, error) {
 	// A lone file is written straight into the download directory, with no
 	// folder to say what it belongs to, so the name carries the programme as
 	// well where the video's own name does not already.
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(title, file), nil
 }
 
 // programme expands a programme into one file per entry, filed by listing
@@ -132,47 +134,22 @@ func (r *RaiPlay) programme(ctx context.Context, u *url.URL) (*Result, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("raiplay: %s lists nothing to download", u.Redacted())
 	}
-	if len(entries) > raiMaxEpisodes {
-		entries = entries[:raiMaxEpisodes]
-	}
-	nest := raiNest(entries)
 
-	result := &Result{Title: util.FirstNonEmpty(doc.Name, strings.Trim(u.Path, "/"))}
-	var refused string
 	// Every entry is four requests deep — the page document, the relinker, the
 	// master playlist and the chosen variant — and a programme routinely lists
 	// several hundred, so they are resolved a few at a time rather than one
-	// after another. FanOut keeps the listing's own order regardless.
-	for _, resolved := range FanOut(ctx, entries, r.resolve) {
-		if resolved.file == nil {
-			// One refused entry must not sink the rest, but its reason is
-			// kept: when every entry is refused they are refused for the same
-			// reason, and Rai's own words for it beat anything concluded here.
-			if refused == "" {
-				refused = resolved.refused
-			}
-			continue
-		}
-		file := *resolved.file
-		if !nest {
-			file.Dir = ""
-		}
-		result.Files = append(result.Files, file)
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("raiplay: none of the %d entries of %s are playable: %s",
-			len(entries), u.Redacted(),
-			util.FirstNonEmpty(refused, "Rai offers no stream for any of them"))
-	}
-	return result, nil
-}
-
-// raiEntry is one video a programme lists, with the folder its listing would
-// file it under.
-type raiEntry struct {
-	page  string
-	name  string
-	label string
+	// after another. A nightly news strand lists its last few hundred
+	// bulletins and its clips beside them, which the cap cuts short. One
+	// listing needs no folder: a folder every file goes in says nothing, and
+	// two programmes fetched separately would then share it.
+	return listSeries(ctx, cmp.Or(doc.Name, strings.Trim(u.Path, "/")), series[broadcastEpisode]{
+		site: "raiplay", noun: "entries", link: u.Redacted(),
+		items:      entries,
+		budget:     config.MaxResolvedEpisodesStrand,
+		label:      broadcastEpisode.seasonOf,
+		resolve:    listedAs(r.episode, nil),
+		unplayable: "Rai offers no stream for any of them",
+	})
 }
 
 // raiSetRef is one of a programme's listings.
@@ -184,10 +161,10 @@ type raiSetRef struct {
 // entries reads a programme's listings and collects what they hold. The
 // listings are few and are read one after another; it is the entries inside
 // them that run to the hundreds.
-func (r *RaiPlay) entries(ctx context.Context, doc raiProgramme) []raiEntry {
+func (r *RaiPlay) entries(ctx context.Context, doc raiProgramme) []broadcastEpisode {
 	headers := raiHeaders()
 	seen := make(map[string]bool)
-	var entries []raiEntry
+	var entries []broadcastEpisode
 	for _, ref := range raiListings(doc) {
 		var listing raiSet
 		if err := r.client.GetJSON(ctx, raiDocument(ref.page), headers, &listing); err != nil {
@@ -222,50 +199,16 @@ func raiListings(doc raiProgramme) []raiSetRef {
 // raiItems collects one listing's entries, skipping any the caller has already
 // taken from another listing: a clip is routinely filed under its season and
 // again under the programme's clip reel.
-func raiItems(listing raiSet, label string, seen map[string]bool) []raiEntry {
-	var out []raiEntry
+func raiItems(listing raiSet, label string, seen map[string]bool) []broadcastEpisode {
+	var out []broadcastEpisode
 	for _, item := range listing.Items {
 		if item.PathID == "" || seen[item.PathID] {
 			continue
 		}
 		seen[item.PathID] = true
-		out = append(out, raiEntry{page: item.PathID, name: item.Name, label: label})
+		out = append(out, broadcastEpisode{id: item.PathID, name: item.Name, season: label})
 	}
 	return out
-}
-
-// raiNest reports whether a programme's entries want folders. One listing
-// needs none: a folder every file goes in says nothing, and two programmes
-// fetched separately would then share it.
-func raiNest(entries []raiEntry) bool {
-	return nestByLabel(entries, func(entry raiEntry) string { return entry.label })
-}
-
-// raiResolved is what expanding one entry produced: a file, or Rai's own words
-// for why there is none.
-//
-// FanOut drops an item whose fetch returned an error, which is the right fate
-// for one bad entry among hundreds — but it would drop the refusal message
-// with it, and from outside Italy that message is the whole answer. So a
-// refusal is reported as a result rather than as an error.
-type raiResolved struct {
-	file    *File
-	refused string
-}
-
-// resolve turns one listed entry into a file, or into Rai's reason for there
-// being none.
-func (r *RaiPlay) resolve(ctx context.Context, entry raiEntry) ([]raiResolved, error) {
-	file, title, err := r.episode(ctx, entry.page)
-	if err != nil {
-		if refusal, ok := errors.AsType[*raiRefused](err); ok {
-			return []raiResolved{{refused: refusal.reason()}}, nil
-		}
-		return nil, err
-	}
-	file.Name = util.FirstNonEmpty(entry.name, title) + file.Name
-	file.Dir = entry.label
-	return []raiResolved{{file: file}}, nil
 }
 
 // episode resolves one video page to a playable segment list. The returned
@@ -278,7 +221,7 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	if err := r.client.GetJSON(ctx, raiDocument(page), headers, &doc); err != nil {
 		return nil, "", fmt.Errorf("raiplay: video %s: %w", page, err)
 	}
-	title := util.FirstNonEmpty(raiTitle(doc.ProgramInfo.Name, doc.Name),
+	title := cmp.Or(joinTitle(doc.ProgramInfo.Name, doc.Name, titlePrefixed),
 		strings.TrimSuffix(util.NameFromURL(page), ".json"))
 
 	switch {
@@ -300,9 +243,9 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	// the audio description among them, and those come with the video
 	// (media.Audio) for the downloader to join to it. Any rendition that
 	// carries its own audio is still preferred (bestVariant).
-	media, err := resolveMediaPlaylist(ctx, r.client, manifest, headers)
+	media, err := broadcastMedia(ctx, r.client, "raiplay", title, manifest, headers)
 	if err != nil {
-		return nil, "", fmt.Errorf("raiplay: %s: %w", title, err)
+		return nil, "", err
 	}
 
 	// The signed link the relinker mints lives for 150 seconds, but the CDN
@@ -310,19 +253,12 @@ func (r *RaiPlay) episode(ctx context.Context, page string) (*File, string, erro
 	// below it answer without a token long after it has expired. So these
 	// resolve eagerly, and no File.Resolve is needed to keep a long queue
 	// alive.
-	return &File{
-		// Named off the segments alone: Rai's .csmil packaging puts ".mp4" in
-		// the path of MPEG-TS streams — about half the catalogue — so the
-		// variant URL is not consulted even as a fallback, and a zero variant
-		// leaves the default at ".ts". See segmentsExtension.
-		Name:       media.extensionOr(segmentsExtension(media.Segments, hlsVariant{})),
-		Size:       -1,
-		Headers:    headers,
-		Segments:   media.Segments,
-		SegmentKey: media.Key,
-		Audio:      media.Audio,
-		Subtitles:  media.Subtitles,
-	}, title, nil
+	//
+	// Named off the segments alone: Rai's .csmil packaging puts ".mp4" in the
+	// path of MPEG-TS streams — about half the catalogue — so the variant URL
+	// is not consulted even as a fallback, and a zero variant leaves the
+	// default at ".ts". See segmentsExtension.
+	return new(media.file(media.extensionOr(segmentsExtension(media.Segments, hlsVariant{})), headers)), title, nil
 }
 
 // manifest asks the relinker for the playlist behind a content URL, and is
@@ -338,7 +274,7 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 	case !raiEmpty(asset.LicenceServerMap):
 		return "", fmt.Errorf("raiplay: %s is DRM protected", title)
 	case asset.refused():
-		return "", &raiRefused{title: title, message: asset.Description}
+		return "", &itemRefusal{"raiplay", title, raiReason(asset.Description)}
 	case link == "":
 		return "", fmt.Errorf("raiplay: %s: the relinker named no stream", title)
 	case !strings.EqualFold(asset.CT, "m3u8"):
@@ -348,25 +284,16 @@ func (r *RaiPlay) manifest(ctx context.Context, contentURL, title string) (strin
 	return link, nil
 }
 
-// raiRefused is Rai declining to serve something, carrying its own words for
-// it. It is a type rather than a message so that expanding a whole programme
-// can report the reason once instead of several hundred times.
-type raiRefused struct {
-	title   string
-	message string
-}
-
-func (e *raiRefused) Error() string { return "raiplay: " + e.title + ": " + e.reason() }
-
-// reason is Rai's sentence with what it can mean spelled out beside it.
+// raiReason is Rai's sentence declining to serve something, with what it can
+// mean spelled out beside it.
 //
 // Nothing sharper is available: the geoprotection flags are set on material
 // that plays, login_required correlates with a refusal without deciding it,
 // and the relinker reports "geoprotection":"N" while refusing. Naming one of
 // the three causes would be a guess dressed up as an answer, so all three are
 // named as the possibilities they are.
-func (e *raiRefused) reason() string {
-	said := util.FirstNonEmpty(strings.TrimSpace(e.message), "Rai will not serve this video")
+func raiReason(message string) string {
+	said := cmp.Or(strings.TrimSpace(message), "Rai will not serve this video")
 	return said + " (Rai does not say why; the usual causes are a licence limited to " +
 		"Italy, an availability window that has closed, and material that needs a " +
 		"Rai account)"
@@ -400,30 +327,13 @@ func raiRelinker(contentURL string) string {
 	return contentURL + "?" + raiOutput
 }
 
-// raiTitle names a video by its programme and its own name together.
-//
-// Rai is inconsistent about whether the two overlap: a drama's episode is
-// called "Trauma S1E1 - Episodio 1" and already says which series it belongs
-// to, while a news clip's name says nothing about the bulletin it came from.
-// So the programme is prefixed only where the name does not already open with
-// it.
-func raiTitle(program, name string) string {
-	switch {
-	case name == "":
-		return program
-	case program == "" || strings.HasPrefix(strings.ToLower(name), strings.ToLower(program)):
-		return name
-	}
-	return program + " - " + name
-}
-
 // raiLabel names the folder one listing's videos go in, from the block and the
 // set that hold it. The duplicate is dropped, which is the common case: a
 // programme with one listing names the block and the set alike.
 func raiLabel(block, set string) string {
 	switch {
 	case set == "" || strings.EqualFold(block, set):
-		return util.FirstNonEmpty(block, set)
+		return cmp.Or(block, set)
 	case block == "":
 		return set
 	}

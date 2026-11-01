@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-// WeTransfer resolves a share link into the archive of everything behind it.
+// wetransfer resolves a share link into the archive of everything behind it.
 //
 // A transfer holds several files, and none of them is individually reachable
 // by whoever holds the link: the endpoint that lists a transfer's contents
@@ -38,20 +39,12 @@ import (
 // or it was addressed to named recipients and never shared by link at all.
 // Neither improves by being retried, so both are mapped to something the user
 // can act on rather than left to look like a transient failure.
-type WeTransfer struct {
-	client *httpx.Client
-	// api is the transfers endpoint's base, a field only so a test can point
-	// it somewhere that is not the live site.
-	api string
-}
 
 const (
 	wetransferRoot = "https://wetransfer.com"
-	wetransferAPI  = wetransferRoot + "/api/v4/transfers"
-
-	// wetransferShort is the site's own URL shortener, which is a plain
-	// redirect to a download page and carries nothing of its own.
-	wetransferShort = "we.tl"
+	// wetransferAPI is the transfers endpoint's base, which a test points
+	// somewhere that is not the live site (Share.api).
+	wetransferAPI = wetransferRoot + "/api/v4/transfers"
 
 	// wetransferDownloads is the one path on the site this handles.
 	wetransferDownloads = "downloads"
@@ -72,37 +65,53 @@ const (
 )
 
 // NewWeTransfer builds the wetransfer extractor.
-func NewWeTransfer(client *httpx.Client) *WeTransfer {
-	return &WeTransfer{client: client, api: wetransferAPI}
-}
+func NewWeTransfer(client *httpx.Client) *Share { return newShare(client, &wetransferSite) }
 
-func (w *WeTransfer) Name() string { return "wetransfer" }
+// wetransferPageShape is a download page, /downloads/<id>[/<recipient>]/<hash>;
+// wetransferShortShape the short link the site mails, /t-<code>, which
+// redirects to one.
+var (
+	wetransferPageShape  = pathShape(`^/downloads/[A-Za-z0-9]+(/[A-Za-z0-9]+)?/[A-Za-z0-9]+/?$`)
+	wetransferShortShape = pathShape(`^/t-[A-Za-z0-9]+/?$`)
+)
 
-// Match takes the site's download pages and its short links.
+// wetransferSite takes a download page — where a short link's redirect
+// ends — served by the site's app, whose page data carries the security
+// hash the download endpoint is then asked with. A short link is followed
+// for that redirect. The bytes are served from signed links of another
+// form, which stay the direct fallback's.
 //
-// The path gate on the site itself is deliberate. The bytes are served from a
-// signed link on a subdomain of the same domain, and one of those pasted
-// straight in is already a plain file that the direct fallback downloads as
-// it stands — whereas matching the whole domain here would leave this
-// extractor hunting for a transfer id in a storage path and failing the job.
-func (w *WeTransfer) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, wetransferShort) {
-		return true
-	}
-	if !util.HostMatches(u.Host, "wetransfer.com") {
-		return false
-	}
-	segs := util.PathSegments(u)
-	return len(segs) > 0 && segs[0] == wetransferDownloads
+// A link on the site's own hosts never gets here: the registry gives it to
+// extract unprobed (hostClaims), which asks the API whatever the page looks
+// like. A page of the form on any other host that the probe was kept from
+// is not taken, so the API is never asked to mint another host's id.
+var wetransferSite = shareSite{
+	name: "wetransfer",
+	recognises: "download pages (`/downloads/<id>/<hash>`) and the short links (`/t-<code>`) that redirect to them, " +
+		"served by the WeTransfer app with the transfer's `securityHash` in its page data",
+	forms: []shareForm{
+		{wetransferPageShape, func(p *Page) bool {
+			return p.Has(`id="__NEXT_DATA__"`, `"securityHash"`) && p.Named("WeTransfer")
+		}},
+		{shape: wetransferShortShape},
+	},
+	extract: wetransferExtract,
+	api:     wetransferAPI,
 }
 
-// Extract resolves a share link to the transfer's archive.
-func (w *WeTransfer) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+// wetransferExtract resolves a share link to the transfer's archive.
+func wetransferExtract(ctx context.Context, s *Share, u *url.URL, _ Options) (*Result, error) {
+	// A short link names no transfer itself: the page it redirected to,
+	// which the probe already followed, or a fetch of it, does.
 	page := u
-	if util.HostMatches(u.Host, wetransferShort) {
-		var err error
-		if page, err = w.follow(ctx, u); err != nil {
-			return nil, err
+	if _, ok := wetransferParse(u); !ok {
+		if _, final, probed := probedDocument(ctx, u); probed {
+			page = final
+		} else {
+			var err error
+			if page, err = wetransferFollow(ctx, s, u); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -117,7 +126,7 @@ func (w *WeTransfer) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 	// transfer that has expired, or that was never shared by link at all, is
 	// permanently unreachable, and belongs in the extraction error the user
 	// reads at once rather than in a worker that would retry it first.
-	if _, err := w.mint(ctx, link); err != nil {
+	if _, err := wetransferMint(ctx, s, link); err != nil {
 		return nil, err
 	}
 
@@ -127,12 +136,13 @@ func (w *WeTransfer) Extract(ctx context.Context, u *url.URL, _ Options) (*Resul
 		// No URL on purpose: every attempt mints its own.
 		Size:    -1,
 		Headers: httpx.Referer(wetransferRoot + "/"),
-		Resolve: func(ctx context.Context) (*Target, error) { return w.mint(ctx, link) },
+		Resolve: func(ctx context.Context) (*Target, error) { return wetransferMint(ctx, s, link) },
 	}}}, nil
 }
 
-// mint asks the API to build the archive and hand back a link to it.
-func (w *WeTransfer) mint(ctx context.Context, link wetransferLink) (*Target, error) {
+// wetransferMint asks the API to build the archive and hand back a link to
+// it.
+func wetransferMint(ctx context.Context, s *Share, link wetransferLink) (*Target, error) {
 	body := wetransferRequest{
 		Intent:       wetransferIntent,
 		SecurityHash: link.hash,
@@ -142,14 +152,14 @@ func (w *WeTransfer) mint(ctx context.Context, link wetransferLink) (*Target, er
 		DirectLink string `json:"direct_link"`
 		Message    string `json:"message"`
 	}
-	endpoint := w.api + "/" + url.PathEscape(link.id) + "/download"
-	if err := w.client.PostJSON(ctx, endpoint,
-		httpx.RefererOrigin(wetransferRoot+"/", wetransferRoot), body, &out); err != nil {
+	endpoint := s.api + "/" + url.PathEscape(link.id) + "/download"
+	if err := s.client.PostJSON(ctx, endpoint,
+		httpx.SiteOrigin(wetransferRoot), body, &out); err != nil {
 		return nil, wetransferFailure(link.id, err)
 	}
 	if out.DirectLink == "" {
 		return nil, fmt.Errorf("wetransfer: %s: %s", link.id,
-			util.FirstNonEmpty(wetransferReason(out.Message), "the API returned no download link"))
+			cmp.Or(wetransferReason(out.Message), "the API returned no download link"))
 	}
 	return &Target{
 		URL:     out.DirectLink,
@@ -210,20 +220,20 @@ func wetransferReason(message string) string {
 	return ""
 }
 
-// follow resolves a short link to the download page behind it.
+// wetransferFollow resolves a short link to the download page behind it.
 //
 // The redirect's destination is the whole point: the id and hash the API
 // needs are in the URL it lands on, and the page it lands on is an
 // application shell that says nothing, so the body is drained and discarded.
 // A code standing for nothing is redirected to an error page instead, which
 // parses as no transfer at all and is reported as such.
-func (w *WeTransfer) follow(ctx context.Context, short *url.URL) (*url.URL, error) {
-	req, err := w.client.NewRequest(ctx, http.MethodGet, short.String(), nil)
+func wetransferFollow(ctx context.Context, s *Share, short *url.URL) (*url.URL, error) {
+	req, err := s.client.NewRequest(ctx, http.MethodGet, short.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptHTML)
-	resp, err := w.client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("wetransfer: follow %s: %w", short.Redacted(), err)
 	}

@@ -3,14 +3,19 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Kemono covers kemono and coomer, which run the same software and expose
@@ -21,136 +26,180 @@ import (
 // That is the site telling callers how to ask politely, so that is what is
 // sent.
 type Kemono struct {
+	about
 	client *httpx.Client
 }
 
 // kemonoScrapeAccept is the header the sites themselves ask scrapers to use.
 const kemonoScrapeAccept = "text/css"
 
-// kemonoPageSize is the fixed page stride of their post listing.
-const (
-	kemonoPageSize = 50
-	kemonoMaxPages = 40
-)
+// kemonoPageSize is how many posts the API serves a page, and the step
+// between the offsets it accepts.
+const kemonoPageSize = 50
 
-// kemonoHosts maps each supported domain to the instance root.
-var kemonoHosts = map[string]string{
-	"kemono.cr": "https://kemono.cr", "kemono.su": "https://kemono.su",
-	"kemono.party": "https://kemono.party", "kemono.st": "https://kemono.st",
-	"coomer.st": "https://coomer.st", "coomer.su": "https://coomer.su",
-	"coomer.party": "https://coomer.party",
-}
+const kemonoPreviewsOnly = "original attachments have not been archived (previews only)"
 
 // NewKemono builds the kemono/coomer extractor.
-func NewKemono(client *httpx.Client) *Kemono { return &Kemono{client: client} }
-
-func (k *Kemono) Name() string { return "kemono" }
-
-func (k *Kemono) Match(u *url.URL) bool { return kemonoRoot(u) != "" }
-
-// kemonoRoot returns the instance root for a URL, or "".
-func kemonoRoot(u *url.URL) string {
-	for domain, root := range kemonoHosts {
-		if util.HostMatches(u.Host, domain) {
-			return root
-		}
-	}
-	return ""
+func NewKemono(client *httpx.Client) *Kemono {
+	return &Kemono{client: client, about: about{name: "kemono", shape: kemonoShape,
+		recognises: "Kemono and Coomer creators and posts (`/<service>/user/<id>`, `…/post/<id>`) served " +
+			"by the sites' app shell, or whose origin's API returns the creator's matching profile"}}
 }
 
-// kemonoSniff verifies the requested creator's profile, whose service and
-// id must agree with the URL. This also identifies an empty creator without
-// mistaking an arbitrary JSON array for this platform.
-func kemonoSniff(ctx context.Context, client *httpx.Client, u *url.URL, _ Options) (*Result, error) {
-	segs := util.PathSegments(u)
-	if len(segs) < 3 || segs[1] != "user" || (len(segs) != 3 && (len(segs) != 5 || segs[3] != "post")) {
-		return nil, nil
+// kemonoShape is a creator, /<service>/user/<id>, one of the creator's
+// tabs (/community, /fancards, /announcements and the like, each read as
+// the creator), or one of their posts, /<service>/user/<id>/post/<post>,
+// including a revision of it (…/revision/<id>), which is read as the post.
+var kemonoShape = pathShape(
+	`^/[a-z0-9_-]+/user/[^/]+(?:/[a-z]+)?/?$`,
+	`^/[a-z0-9_-]+/user/[^/]+/post/[^/]+(?:/revision/[^/]+)?/?$`)
+
+// kemonoShell is the script the sites' app shell loads first, before its
+// hashed bundle; kemonoNames are what the shell calls the sites.
+const kemonoShell = "/static/js/lazy-styles.js"
+
+var kemonoNames = []string{"Kemono", "Coomer"}
+
+// Recognise takes a creator or post link served by the sites' app shell:
+// the shell's own loader script, its empty application root and its name.
+// Compatible installs may render their own frontend instead, so an
+// unfamiliar page is settled by the API's profile of exactly this creator.
+func (k *Kemono) Recognise(ctx context.Context, p *Page) bool {
+	if !kemonoShape(p.Final) {
+		return false
 	}
-	root := util.Origin(u)
-	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/profile", root, url.PathEscape(segs[0]), url.PathEscape(segs[2]))
+	if p.Script(kemonoShell) && p.Named(kemonoNames...) &&
+		p.hasElement(func(n *html.Node) bool { return isElem(n, atom.Div) && attr(n, "id") == "root" }) {
+		return true
+	}
+	return kemonoProfile(ctx, p, k.client)
+}
+
+// kemonoProfile asks for the creator's profile, whose service and id must
+// agree with the URL. This also identifies an empty creator without
+// mistaking an arbitrary JSON array for this platform.
+func kemonoProfile(ctx context.Context, p *Page, client *httpx.Client) bool {
+	segs := p.Segments()
+	root := util.Origin(p.Final)
 	var profile struct {
 		ID      string `json:"id"`
 		Service string `json:"service"`
 		Name    string `json:"name"`
 	}
-	if !platformJSON(ctx, client, endpoint, httpx.Header{
-		httpx.HeaderAccept: kemonoScrapeAccept, httpx.HeaderReferer: root + "/",
-	}, &profile) || profile.ID != segs[2] || profile.Service != segs[0] || profile.Name == "" {
-		return nil, nil
-	}
-	return NewKemono(client).extract(ctx, u, root)
+	return pageJSON(ctx, p, client, creatorAPI(root, segs[0], segs[2])+"/profile", kemonoHeaders(root), &profile) &&
+		profile.ID == segs[2] && profile.Service == segs[0] && profile.Name != ""
 }
 
-// Extract handles a creator (/​<service>/user/<id>) or a single post.
-func (k *Kemono) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
-	return k.extract(ctx, u, kemonoRoot(u))
+// kemonoHeaders are what every request to the site at root carries: the
+// header these sites ask for, and the site as referer.
+func kemonoHeaders(root string) httpx.Header {
+	return httpx.Header{httpx.HeaderAccept: kemonoScrapeAccept, httpx.HeaderReferer: root + "/"}
 }
 
-func (k *Kemono) extract(ctx context.Context, u *url.URL, root string) (*Result, error) {
+// Extract handles a creator (/​<service>/user/<id>) or a single post, on
+// whichever site the link names.
+func (k *Kemono) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	segs := util.PathSegments(u)
 	if len(segs) < 3 || segs[1] != "user" {
 		return nil, fmt.Errorf("kemono: %s is not a creator or post link", u.Redacted())
 	}
+	root := util.Origin(u)
 	service, creator := segs[0], segs[2]
+	api := creatorAPI(root, service, creator)
 
-	name := k.creatorName(ctx, root, service, creator)
+	name, total := k.creator(ctx, probed(ctx, u), api, root, service, creator)
 
 	// /<service>/user/<id>/post/<postId>
 	if len(segs) >= 5 && segs[3] == "post" {
-		post, err := k.post(ctx, root, service, creator, segs[4])
+		post, err := k.post(ctx, api, root, segs[4])
 		if err != nil {
 			return nil, err
+		}
+		if post.previewOnly() {
+			return nil, fmt.Errorf("kemono: %s", kemonoPreviewsOnly)
 		}
 		files := k.filesOf(root, []kemonoPost{post}, false)
 		if len(files) == 0 {
 			return nil, fmt.Errorf("kemono: post %s has no attachments", segs[4])
 		}
-		return &Result{Title: util.FirstNonEmpty(post.Title, name), Files: files}, nil
+		return &Result{Title: cmp.Or(post.Title, name), Files: files}, nil
 	}
 
-	var all []kemonoPost
-	for page := range kemonoMaxPages {
-		posts, err := k.posts(ctx, root, service, creator, page*kemonoPageSize)
-		if err != nil {
-			if page == 0 {
-				return nil, err
+	// The API serves a creator's posts kemonoPageSize at a time, at offsets
+	// that are multiples of it, so a shorter page is the last; an empty page
+	// or the 400 it answers an offset past the end with ends it too. The
+	// profile's post count is not the end: it lags the posts the API serves,
+	// and a walk that stopped there would leave the newest out unnoticed.
+	// It is only compared with what was listed, for the note. The file cap
+	// is counted in attachments: a post may carry several, or none.
+	attached := make(map[string]bool)
+	all, note, err := walkPages(ctx, pageWalk[kemonoPost]{
+		key:   func(post kemonoPost) string { return post.ID },
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
+		weigh: func(posts []kemonoPost) int {
+			n := 0
+			for _, post := range posts {
+				for _, item := range post.items() {
+					if item.Path != "" && !attached[item.Path] {
+						attached[item.Path] = true
+						n++
+					}
+				}
 			}
-			break
-		}
-		all = append(all, posts...)
-		if len(posts) < kemonoPageSize {
-			break
-		}
+			return n
+		},
+		ends:  walkAccepts{statuses: []int{http.StatusBadRequest}},
+		pages: config.KemonoMaxPages,
+		fetch: func(ctx context.Context, n int) (pageOf[kemonoPost], error) {
+			var posts []kemonoPost
+			if err := k.client.GetJSON(ctx, fmt.Sprintf("%s/posts?o=%d", api, n*kemonoPageSize), kemonoHeaders(root), &posts); err != nil {
+				return pageOf[kemonoPost]{}, fmt.Errorf("kemono: posts for %s/%s: %w", service, creator, err)
+			}
+			return pageOf[kemonoPost]{items: posts, next: len(posts) >= kemonoPageSize, end: len(posts) == 0}, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if note == "" && total > len(all) {
+		note = partial(fmt.Sprintf("the profile states %d posts; the API listed %d", total, len(all)))
 	}
 	files := k.filesOf(root, all, true)
+	previews := 0
+	for _, post := range all {
+		if post.previewOnly() {
+			previews++
+		}
+	}
 	if len(files) == 0 {
+		if previews > 0 {
+			return nil, fmt.Errorf("kemono: %s", kemonoPreviewsOnly)
+		}
 		return nil, fmt.Errorf("kemono: %s has no downloadable attachments", u.Redacted())
 	}
-	return &Result{Title: name, Files: files}, nil
+	note = joinNotes(note, partial(leftOutNote(previews, ": "+kemonoPreviewsOnly)))
+	return &Result{Title: name, Files: files, Note: note}, nil
 }
 
 // filesOf flattens posts into downloadable entries, optionally filing each
 // post's attachments into their own folder.
 func (k *Kemono) filesOf(root string, posts []kemonoPost, group bool) []File {
-	headers := httpx.Header{
-		httpx.HeaderReferer: root + "/",
-		httpx.HeaderAccept:  kemonoScrapeAccept,
-	}
+	headers := kemonoHeaders(root)
 	seen := make(map[string]bool)
 	var files []File
 
 	for _, post := range posts {
 		folder := ""
 		if group {
-			folder = folderName(util.FirstNonEmpty(post.Title, post.ID))
+			folder = folderName(cmp.Or(post.Title, post.ID))
 		}
-		for _, item := range append([]kemonoAttachment{post.File}, post.Attachments...) {
+		for _, item := range post.items() {
 			if item.Path == "" || seen[item.Path] {
 				continue
 			}
 			seen[item.Path] = true
 			files = append(files, File{
-				Name:    util.FirstNonEmpty(item.Name, path.Base(item.Path)),
+				Name:    cmp.Or(item.Name, path.Base(item.Path)),
 				URL:     root + "/data" + item.Path,
 				Size:    -1,
 				Dir:     folder,
@@ -161,28 +210,13 @@ func (k *Kemono) filesOf(root string, posts []kemonoPost, group bool) []File {
 	return files
 }
 
-// posts fetches one page of a creator's posts.
-func (k *Kemono) posts(ctx context.Context, root, service, creator string, offset int) ([]kemonoPost, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/posts?o=%d",
-		root, url.PathEscape(service), url.PathEscape(creator), offset)
-
-	var posts []kemonoPost
-	if err := k.get(ctx, endpoint, root, &posts); err != nil {
-		return nil, fmt.Errorf("kemono: posts for %s/%s: %w", service, creator, err)
-	}
-	return posts, nil
-}
-
-// post fetches one post.
-func (k *Kemono) post(ctx context.Context, root, service, creator, id string) (kemonoPost, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/post/%s",
-		root, url.PathEscape(service), url.PathEscape(creator), url.PathEscape(id))
-
+// post fetches one post of the creator whose records are at api.
+func (k *Kemono) post(ctx context.Context, api, root, id string) (kemonoPost, error) {
 	// The post arrives wrapped on current instances and bare on older ones.
 	// One response is read both ways rather than asked for twice: the body
 	// is the same either way, and only the envelope differs.
 	var raw json.RawMessage
-	if err := k.get(ctx, endpoint, root, &raw); err != nil {
+	if err := k.client.GetJSON(ctx, api+"/post/"+url.PathEscape(id), kemonoHeaders(root), &raw); err != nil {
 		return kemonoPost{}, fmt.Errorf("kemono: post %s: %w", id, err)
 	}
 	var payload struct {
@@ -198,26 +232,18 @@ func (k *Kemono) post(ctx context.Context, root, service, creator, id string) (k
 	return direct, nil
 }
 
-// creatorName looks up a display name, falling back to the id.
-func (k *Kemono) creatorName(ctx context.Context, root, service, creator string) string {
-	endpoint := fmt.Sprintf("%s/api/v1/%s/user/%s/profile",
-		root, url.PathEscape(service), url.PathEscape(creator))
-
+// creator looks up a display name, falling back to the id, and how many
+// posts the creator has, 0 when the profile does not say.
+func (k *Kemono) creator(ctx context.Context, page *Page, api, root, service, creator string) (name string, posts int) {
 	var profile struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Posts int    `json:"post_count"`
 	}
-	if err := k.get(ctx, endpoint, root, &profile); err == nil && profile.Name != "" {
-		return profile.Name
+	if (askedJSON(ctx, page, k.client, api+"/profile", kemonoHeaders(root), &profile) ||
+		k.client.GetJSON(ctx, api+"/profile", kemonoHeaders(root), &profile) == nil) && profile.Name != "" {
+		return profile.Name, profile.Posts
 	}
-	return service + "-" + creator
-}
-
-// get performs an API request with the header these sites ask for.
-func (k *Kemono) get(ctx context.Context, endpoint, root string, out any) error {
-	return k.client.GetJSON(ctx, endpoint, httpx.Header{
-		httpx.HeaderAccept:  kemonoScrapeAccept,
-		httpx.HeaderReferer: root + "/",
-	}, out)
+	return service + "-" + creator, 0
 }
 
 // kemonoPost is one post and its attachments.
@@ -228,9 +254,29 @@ type kemonoPost struct {
 	Title       string             `json:"title"`
 	File        kemonoAttachment   `json:"file"`
 	Attachments []kemonoAttachment `json:"attachments"`
+	// Compatible archives may list metadata before storing the originals.
+	// An absent flag is the ordinary API, where attachments are available.
+	HasFull *bool `json:"has_full"`
+}
+
+func (p kemonoPost) previewOnly() bool { return p.HasFull != nil && !*p.HasFull }
+
+// items is the post's file and its attachments, in the order shown.
+func (p kemonoPost) items() []kemonoAttachment {
+	if p.previewOnly() {
+		return nil
+	}
+	return append([]kemonoAttachment{p.File}, p.Attachments...)
 }
 
 type kemonoAttachment struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
+}
+
+// creatorAPI is where the API on origin keeps a creator's records — their
+// /profile, /posts and each /post/<id> — on the creator-archive software
+// kemono runs and on the API cum.st modelled on it.
+func creatorAPI(origin, service, creator string) string {
+	return origin + "/api/v1/" + url.PathEscape(service) + "/user/" + url.PathEscape(creator)
 }

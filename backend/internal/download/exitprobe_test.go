@@ -7,12 +7,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
@@ -39,7 +39,7 @@ func TestExitProbeFallbackRetainsRouteIdentity(t *testing.T) {
 	})
 	pool := attachPool(t, m, []string{server.URL})
 	m.cfg.ProxyExitProbes = []string{"http://echo.example.test/first", "http://echo.example.test/second"}
-	route := pool.Acquire("keep2share", "", 1)
+	route := pool.Acquire(config.GroupKeep2Share, "", 1)
 	if route == nil {
 		t.Fatal("no route")
 	}
@@ -53,7 +53,7 @@ func TestExitProbeFallbackRetainsRouteIdentity(t *testing.T) {
 		t.Fatalf("exit=%s claimed=%v calls=%d", route.Exit(), route.Claimed(), calls.Load())
 	}
 	route.Release()
-	if next := pool.Acquire("keep2share", route.ID(), 1); next == nil {
+	if next := pool.Acquire(config.GroupKeep2Share, route.ID(), 1); next == nil {
 		t.Fatal("probe service refusal cooled the destination scope")
 	} else {
 		next.Release()
@@ -65,7 +65,7 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 		t.Run(map[bool]string{false: "outage", true: "broken route"}[reachable], func(t *testing.T) {
 			m := busyManager(t)
 			var directCalls atomic.Int32
-			echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			echo := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				directCalls.Add(1)
 				if reachable {
 					io.WriteString(w, "192.0.2.1")
@@ -73,13 +73,12 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 					w.WriteHeader(http.StatusServiceUnavailable)
 				}
 			}))
-			defer echo.Close()
 			server := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusForbidden)
 			})
 			pool := attachPool(t, m, []string{server.URL})
 			m.cfg.ProxyExitProbes = []string{echo.URL}
-			route := pool.Acquire("keep2share", "", 1)
+			route := pool.Acquire(config.GroupKeep2Share, "", 1)
 			if route == nil {
 				t.Fatal("no route")
 			}
@@ -97,7 +96,7 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 				t.Fatalf("outage check was not cached: up=%v err=%v calls=%d", up, err, directCalls.Load())
 			}
 			route.Release()
-			next := pool.Acquire("keep2share", "", 1)
+			next := pool.Acquire(config.GroupKeep2Share, "", 1)
 			if reachable && next != nil {
 				next.Release()
 				t.Fatal("confirmed broken route was not shelved")
@@ -115,17 +114,16 @@ func TestExitProbeOutagePolicyPreservesRetryAccounting(t *testing.T) {
 func TestExitProbeCanceledOutageCheckIsNotCached(t *testing.T) {
 	m := busyManager(t)
 	started := make(chan struct{})
-	echo := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	echo := testServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(started)
 		<-r.Context().Done()
 	}))
-	defer echo.Close()
 	server := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	pool := attachPool(t, m, []string{server.URL})
 	m.cfg.ProxyExitProbes = []string{echo.URL}
-	route := pool.Acquire("keep2share", "", 1)
+	route := pool.Acquire(config.GroupKeep2Share, "", 1)
 	if route == nil {
 		t.Fatal("no route")
 	}
@@ -147,7 +145,7 @@ func TestExitProbeCanceledOutageCheckIsNotCached(t *testing.T) {
 		t.Fatal("cancellation cached a false outage or claimed an exit")
 	}
 	route.Release()
-	if next := pool.Acquire("keep2share", "", 1); next == nil {
+	if next := pool.Acquire(config.GroupKeep2Share, "", 1); next == nil {
 		t.Fatal("cancellation penalized the route")
 	} else {
 		next.Release()

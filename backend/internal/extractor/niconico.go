@@ -8,16 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
+	"golang.org/x/net/html"
 )
 
 // Niconico reads niconico's own player API.
@@ -45,7 +44,7 @@ import (
 // rather than one a video. Anything else on the site is still handed to
 // yt-dlp, as all of it was.
 type Niconico struct {
-	hostSet
+	about
 	client *httpx.Client
 	// watch and api are where the watch pages and the API are, fields so
 	// that tests can stand in for them.
@@ -63,20 +62,92 @@ const (
 
 // niconicoRest is the part of the site still handed to yt-dlp.
 var niconicoRest = handoffSite{
-	name:    "niconico",
-	domains: []string{"nicovideo.jp", "nico.ms"},
-	why:     "only its videos, mylists, series and uploads are read natively, not a page like this one",
+	name: "niconico",
+	why:  "only its videos, mylists, series and uploads are read natively, not a page like this one",
 }
 
 // NewNiconico builds the niconico extractor.
 func NewNiconico(client *httpx.Client) *Niconico {
 	return &Niconico{
-		hostSet: niconicoRest.domains, client: client, watch: niconicoWatchRoot, api: niconicoAPIRoot,
-		handoff: &Handoff{hostSet: niconicoRest.domains, client: client, site: niconicoRest},
+		about: about{name: "niconico", shape: eitherShape(niconicoWatchShape, niconicoListShape),
+			recognises: "watch pages (`/watch/<id>`) describing their video in a `server-response` meta element, " +
+				"and mylists, series and users' uploads rendered by the niconico web client's bundle; " +
+				"live watch pages describing their program in the live client's embedded data, and channels " +
+				"rendered by the channel front end under its portal's name, are handed to yt-dlp"},
+		client: client, watch: niconicoWatchRoot, api: niconicoAPIRoot,
+		handoff: newHandoff(client, niconicoRest),
 	}
 }
 
-func (n *Niconico) Name() string { return "niconico" }
+var (
+	// niconicoWatchShape is a watch page, and the short link to one.
+	niconicoWatchShape = pathShape(`^/watch/(?:[a-z]{2})?[0-9]+/?$`, `^/(?:sm|nm|so)[0-9]+/?$`)
+	// niconicoListShape is a mylist, a series or a user's uploads.
+	niconicoListShape = pathShape(
+		`^/(?:mylist|series)/[0-9]+/?$`,
+		`^/user/[0-9]+(?:/video|/(?:mylist|series)/[0-9]+)?/?$`,
+	)
+)
+
+// niconicoNames are what the site calls itself: the video service, and the
+// portal its user pages belong to.
+var niconicoNames = []string{"ニコニコ動画", "ニコニコ", "niconico"}
+
+// niconicoResponseMeta is the meta element a watch page describes its
+// video in, which is what this extractor reads.
+const niconicoResponseMeta = `name="server-response"`
+
+// niconicoBundle is the web client's script bundle, which renders the
+// pages that carry no description of their own: a user's, a mylist.
+const niconicoBundle = "/web/scripts/bundle/"
+
+// A channel's pages are rendered by the channel front end, whose scripts
+// load from niconicoChannelBundle, under the channel portal's name.
+const (
+	niconicoChannelName   = "ニコニコチャンネル"
+	niconicoChannelBundle = "/nicochannel/"
+)
+
+// Recognise takes a page of the site by what this extractor reads on it: a
+// watch page by its server-response description, which a short link
+// redirects to, and a listing by the web client that renders it. Any other
+// page of the site that carries either is the handoff's, as all of it was
+// before videos and listings were read natively.
+func (n *Niconico) Recognise(_ context.Context, p *Page) bool {
+	if niconicoLivePage(p) {
+		return true
+	}
+	// A channel is served by its own front end under its own name; yt-dlp
+	// lists it.
+	if p.Named(niconicoChannelName) && p.Script(niconicoChannelBundle) {
+		return true
+	}
+	if !p.Named(niconicoNames...) {
+		return false
+	}
+	return p.Has(niconicoResponseMeta) || p.Script(niconicoBundle)
+}
+
+// Live programs use another player and API. Their state identifies the
+// requested program; neither branding nor a watch-shaped path alone does.
+func niconicoLivePage(p *Page) bool {
+	segs := p.Segments()
+	if len(segs) != 2 || segs[0] != "watch" || !strings.HasPrefix(segs[1], "lv") || !allDigits(strings.TrimPrefix(segs[1], "lv")) ||
+		!p.Script("/relive/program-watch/scripts/") {
+		return false
+	}
+	return p.hasElement(func(node *html.Node) bool {
+		if node.Type != html.ElementNode || node.Data != "script" || attr(node, "id") != "embedded-data" {
+			return false
+		}
+		var state struct {
+			Program struct {
+				ID string `json:"nicoliveProgramId"`
+			} `json:"program"`
+		}
+		return json.Unmarshal([]byte(attr(node, "data-props")), &state) == nil && state.Program.ID == segs[1]
+	})
+}
 
 // The kinds of page read natively.
 const (
@@ -86,22 +157,25 @@ const (
 	niconicoUploads
 )
 
-var (
-	niconicoVideoID = regexp.MustCompile(`^(?:[a-z]{2})?[0-9]+$`)
-	niconicoNumber  = regexp.MustCompile(`^[0-9]+$`)
-)
+// niconicoVideoID is a video's id: digits, after a two-letter prefix where
+// the id has one.
+var niconicoVideoID = regexp.MustCompile(`^(?:[a-z]{2})?[0-9]+$`)
 
 // niconicoLink tells what a link names: a video, a mylist, a series, a
 // user's uploads, or none of those (0).
 func niconicoLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
+	if len(segs) > 0 && strings.HasPrefix(segs[len(segs)-1], "lv") &&
+		(len(segs) == 1 || len(segs) == 2 && segs[0] == "watch") {
+		return 0, ""
+	}
 	if util.HostMatches(u.Host, "nico.ms") {
 		if len(segs) == 1 && niconicoVideoID.MatchString(segs[0]) {
 			return niconicoVideo, segs[0]
 		}
 		return 0, ""
 	}
-	if len(segs) >= 2 && segs[0] == "user" && niconicoNumber.MatchString(segs[1]) {
+	if len(segs) >= 2 && segs[0] == "user" && allDigits(segs[1]) {
 		switch {
 		case len(segs) == 2, len(segs) == 3 && segs[2] == "video":
 			return niconicoUploads, segs[1]
@@ -115,9 +189,9 @@ func niconicoLink(u *url.URL) (kind int, id string) {
 		switch {
 		case segs[0] == "watch" && niconicoVideoID.MatchString(segs[1]):
 			return niconicoVideo, segs[1]
-		case segs[0] == "mylist" && niconicoNumber.MatchString(segs[1]):
+		case segs[0] == "mylist" && allDigits(segs[1]):
 			return niconicoMylist, segs[1]
-		case segs[0] == "series" && niconicoNumber.MatchString(segs[1]):
+		case segs[0] == "series" && allDigits(segs[1]):
 			return niconicoSeries, segs[1]
 		}
 	}
@@ -150,7 +224,7 @@ func (n *Niconico) file(id, title string) File {
 	return File{
 		Name:    title + ".mp4",
 		Size:    -1,
-		Headers: httpx.RefererOrigin(niconicoOrigin+"/", niconicoOrigin),
+		Headers: httpx.SiteOrigin(niconicoOrigin),
 		Resolve: func(ctx context.Context) (*Target, error) { return n.stream(ctx, id) },
 	}
 }
@@ -204,7 +278,11 @@ var errNiconicoNoStream = errors.New("offers no quality to a viewer without a ni
 // kind it offers, and what to ask for them with. A page that is an error
 // says so in the same description, behind a 4xx, and that is read instead.
 func (n *Niconico) watchPage(ctx context.Context, id string) (*niconicoWatch, error) {
-	page, err := n.client.GetString(ctx, n.watch+url.PathEscape(id), httpx.Referer(niconicoOrigin+"/"))
+	watchURL, err := url.Parse(n.watch + url.PathEscape(id))
+	if err != nil {
+		return nil, fmt.Errorf("niconico: %s: %w", id, err)
+	}
+	page, _, err := fetchDocument(ctx, n.client, watchURL, httpx.Referer(niconicoOrigin+"/"))
 	if err != nil {
 		status, ok := errors.AsType[*httpx.StatusError](err)
 		if !ok || !strings.Contains(status.Body, "server-response") {
@@ -273,7 +351,7 @@ func (n *Niconico) stream(ctx context.Context, id string) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	headers := httpx.RefererOrigin(niconicoOrigin+"/", niconicoOrigin)
+	headers := httpx.SiteOrigin(niconicoOrigin)
 	if cookie != "" {
 		headers[httpx.HeaderCookie] = "domand_bid=" + cookie
 	}
@@ -281,10 +359,7 @@ func (n *Niconico) stream(ctx context.Context, id string) (*Target, error) {
 	if err != nil {
 		return nil, fmt.Errorf("niconico: %s: %w", id, err)
 	}
-	return &Target{
-		URL: master, Name: watch.title + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: media.Subtitles,
-	}, nil
+	return media.target(master, watch.title+media.extension(), headers), nil
 }
 
 // grant asks the access-rights API for an HLS master of the chosen pair of
@@ -303,15 +378,14 @@ func (n *Niconico) grant(ctx context.Context, id string, watch *niconicoWatch) (
 	req.Header.Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
 	req.Header.Set(httpx.HeaderAccept, httpx.AcceptJSON)
 	req.Header.Set("X-Access-Right-Key", watch.key)
-	for name, value := range niconicoAPIHeaders() {
-		req.Header.Set(name, value)
-	}
+	niconicoAPIHeaders().Apply(req)
 	resp, err := n.client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("niconico: %s: ask for the stream: %w", id, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxResponseBytes))
+	// Read whole or not at all: a grant cut at the limit could still parse.
+	raw, err := httpx.ReadBody(resp.Body)
 	if err != nil {
 		return "", "", fmt.Errorf("niconico: %s: ask for the stream: %w", id, err)
 	}
@@ -373,42 +447,53 @@ type niconicoPage struct {
 func (n *Niconico) list(ctx context.Context, opts Options, label string,
 	page func(context.Context, int) (*niconicoPage, error)) (*Result, error) {
 	var (
-		title                string
-		files                []File
-		total, skipped, gone int
-		seen                 = make(map[string]bool)
+		title         string
+		total         int
+		files         []File
+		skipped, gone int
 	)
 	limit := opts.maxFiles()
-	for number := 1; len(files) < limit; number++ {
-		p, err := page(ctx, number)
-		if err != nil {
-			if number == 1 {
-				return nil, fmt.Errorf("niconico: %s: %w", label, err)
+	// The walk stops once the pages read hold as many playable videos as
+	// the file cap: what is left out does not count towards it. The note
+	// for the cap is made below, from the total.
+	entries, walkNote, err := walkPages(ctx, pageWalk[niconicoEntry]{
+		fetch: func(ctx context.Context, number int) (pageOf[niconicoEntry], error) {
+			p, err := page(ctx, number+1)
+			if err != nil {
+				return pageOf[niconicoEntry]{}, err
 			}
-			break
-		}
-		title, total = cmp.Or(title, p.title), max(total, p.total)
-		added := 0
-		for _, e := range p.entries {
-			if e.ID == "" || seen[e.ID] {
-				continue
+			title, total = cmp.Or(title, p.title), max(total, p.total)
+			var entries []niconicoEntry
+			for _, e := range p.entries {
+				if e.ID != "" {
+					entries = append(entries, e)
+				}
 			}
-			seen[e.ID] = true
-			added++
-			switch {
-			case e.gone:
-				gone++
-				continue
-			case e.IsPaymentRequired:
-				skipped++
-				continue
+			return pageOf[niconicoEntry]{items: entries, next: p.more, end: len(entries) == 0}, nil
+		},
+		key:   func(e niconicoEntry) string { return e.ID },
+		limit: limit,
+		weigh: func(entries []niconicoEntry) int {
+			playable := 0
+			for _, e := range entries {
+				if !e.gone && !e.IsPaymentRequired {
+					playable++
+				}
 			}
-			if len(files) < limit {
-				files = append(files, n.file(e.ID, cmp.Or(strings.TrimSpace(e.Title), e.ID)))
-			}
-		}
-		if added == 0 || !p.more {
-			break
+			return playable
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("niconico: %s: %w", label, err)
+	}
+	for _, e := range entries {
+		switch {
+		case e.gone:
+			gone++
+		case e.IsPaymentRequired:
+			skipped++
+		case len(files) < limit:
+			files = append(files, n.file(e.ID, cmp.Or(strings.TrimSpace(e.Title), e.ID)))
 		}
 	}
 	if len(files) == 0 {
@@ -417,19 +502,15 @@ func (n *Niconico) list(ctx context.Context, opts Options, label string,
 		}
 		return nil, fmt.Errorf("niconico: %s lists no videos it still has", label)
 	}
-	res := &Result{Title: cmp.Or(title, label), Files: files}
-	var notes []string
+	// The total counts what was left out too, so only what is left over
+	// after those is what the cap cut.
+	capped := ""
 	if total > len(files)+skipped+gone {
-		notes = append(notes, fmt.Sprintf("%d of %d videos", len(files), total))
+		capped = cappedNote(len(files), total, "videos")
 	}
-	if skipped > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that need an account or a payment", skipped))
-	}
-	if gone > 0 {
-		notes = append(notes, fmt.Sprintf("%d no longer on the site", gone))
-	}
-	res.Note = strings.Join(notes, "; ")
-	return res, nil
+	note := joinNotes(capped, leftOutNote(skipped, " that need an account or a payment"),
+		countNote(gone, "no longer on the site"), walkNote)
+	return &Result{Title: cmp.Or(title, label), Files: files, Note: note}, nil
 }
 
 // apiGet fetches one API document, saying what a 403 or 404 there means.

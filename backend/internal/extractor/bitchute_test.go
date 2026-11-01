@@ -9,13 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // Nothing here came off bitchute. The endpoints are reproduced from their
@@ -94,13 +90,11 @@ func (s *bitchuteStub) start(t *testing.T) *BitChute {
 	t.Cleanup(srv.Close)
 	s.root = srv.URL
 
-	return &BitChute{
-		// No retries: a 404 from this stub is an answer, not a hiccup, and
-		// a test should not wait out a backoff to see it.
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
-		api:    srv.URL + "/api/beta",
-		site:   srv.URL,
-	}
+	// No retries: a 404 from this stub is an answer, not a hiccup, and a
+	// test should not wait out a backoff to see it.
+	b := NewBitChute(testClient())
+	b.api, b.site = srv.URL+"/api/beta", srv.URL
+	return b
 }
 
 func (s *bitchuteStub) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
@@ -239,27 +233,11 @@ func bitchuteVideos(n int) []bitchuteVideo {
 	return out
 }
 
-func bitchuteExtract(t *testing.T, b *BitChute, raw string) *Result {
-	t.Helper()
-	u, err := ParseURL(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := b.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract(%s): %v", raw, err)
-	}
-	return res
-}
-
 // hostOf is the host of a link, for assertions that care which mirror served
 // it and not about the rest.
 func hostOf(t *testing.T, raw string) string {
 	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("parse %q: %v", raw, err)
-	}
+	u := mustParse(t, raw)
 	return u.Host
 }
 
@@ -273,7 +251,7 @@ func TestBitChuteVideoIsAnUnsignedFileOnEveryMirror(t *testing.T) {
 	stub := &bitchuteStub{}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/", Options{})
 
 	if res.Title != "A Video Called AAAABBBBCCCC" {
 		t.Errorf("title = %q, want the video's own name", res.Title)
@@ -307,10 +285,7 @@ func TestBitChuteVideoIsAnUnsignedFileOnEveryMirror(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve: %v", err)
 		}
-		u, err := url.Parse(target.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, target.URL)
 		if want := "/CHANNEL/AAAABBBBCCCC.mp4"; u.Path != want {
 			t.Errorf("mirror %s changed the path to %q, want %q", u.Host, u.Path, want)
 		}
@@ -334,7 +309,7 @@ func TestBitChuteVideoNameFallsBackToTheID(t *testing.T) {
 	stub := &bitchuteStub{noTitles: true}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://old.bitchute.com/video/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://old.bitchute.com/video/AAAABBBBCCCC/", Options{})
 
 	if res.Title != "bitchute-AAAABBBBCCCC" {
 		t.Errorf("title = %q, want the id", res.Title)
@@ -353,7 +328,7 @@ func TestBitChuteEmbedPageIsASecondRouteToTheMedia(t *testing.T) {
 	}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/embed/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://www.bitchute.com/embed/AAAABBBBCCCC/", Options{})
 
 	if len(res.Files) != 1 {
 		t.Fatalf("got %d files, want 1", len(res.Files))
@@ -396,11 +371,7 @@ func TestBitChuteReportsAVideoNeitherRouteCanResolve(t *testing.T) {
 	stub := &bitchuteStub{refuse: map[string]bool{"AAAABBBBCCCC": true}}
 	b := stub.start(t)
 
-	u, err := ParseURL("https://www.bitchute.com/video/AAAABBBBCCCC/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = b.Extract(context.Background(), u, Options{})
+	_, err := extract(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/", Options{})
 	if err == nil {
 		t.Fatal("a video that resolves nowhere was accepted")
 	}
@@ -419,7 +390,7 @@ func TestBitChutePlaylistMediaArrivesAsSegments(t *testing.T) {
 	stub := &bitchuteStub{playlists: map[string]bool{"AAAABBBBCCCC": true}}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/")
+	res := extractOK(t, b, "https://www.bitchute.com/video/AAAABBBBCCCC/", Options{})
 
 	file := res.Files[0]
 	if file.URL != "" {
@@ -435,13 +406,15 @@ func TestBitChutePlaylistMediaArrivesAsSegments(t *testing.T) {
 
 // ---------------------------------------------------------------- channel
 
-// TestBitChuteChannelPagesUntilAShortPage pins the only stop condition the
-// endpoint offers. A listing that never went short would page to the backstop.
-func TestBitChuteChannelPagesUntilAShortPage(t *testing.T) {
+// TestBitChuteChannelPagesUntilAnEmptyPage pins the stop conditions: no
+// total and no cursor, but the endpoint serves exactly the page size asked
+// for until the channel runs out, so a short page is the last and the empty
+// one after it is never asked for.
+func TestBitChuteChannelPagesUntilAnEmptyPage(t *testing.T) {
 	stub := &bitchuteStub{videos: bitchuteVideos(117)}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/A-Legacy-Slug/")
+	res := extractOK(t, b, "https://www.bitchute.com/channel/A-Legacy-Slug/", Options{})
 
 	if res.Title != "A Channel" {
 		t.Errorf("title = %q, want the channel's own name", res.Title)
@@ -450,7 +423,7 @@ func TestBitChuteChannelPagesUntilAShortPage(t *testing.T) {
 		t.Fatalf("got %d files, want 117", len(res.Files))
 	}
 	if got := stub.hits("/api/beta/channel/videos"); got != 3 {
-		t.Errorf("asked for %d pages, want 3: 50, 50 and a short one", got)
+		t.Errorf("asked for %d pages, want 3: 50, 50 and the short last one", got)
 	}
 
 	// Files keep the channel's order however the media calls interleaved.
@@ -483,20 +456,23 @@ func TestBitChuteChannelPagesUntilAShortPage(t *testing.T) {
 	}
 }
 
-// TestBitChuteChannelPagesExactlyToTheEnd covers the boundary a short page
-// cannot signal: a channel whose count is a multiple of the page size only
-// ends when an empty page comes back.
-func TestBitChuteChannelPagesExactlyToTheEnd(t *testing.T) {
+// TestBitChuteChannelStopsAtTheListingCap: every listed video is a file of
+// its own, so the file cap bounds the channel, and the source cap, which
+// bounds a page's followed links, does not.
+func TestBitChuteChannelStopsAtTheListingCap(t *testing.T) {
+	whole := &bitchuteStub{videos: bitchuteVideos(2 * bitchutePageSize)}
+	if res := extractOK(t, whole.start(t), "https://www.bitchute.com/channel/CHANNELID/", Options{limits: Limits{Sources: 60}}); len(res.Files) != 2*bitchutePageSize || res.Note != "" {
+		t.Fatalf("source cap: got %d files, note %q; want the whole channel", len(res.Files), res.Note)
+	}
+
 	stub := &bitchuteStub{videos: bitchuteVideos(2 * bitchutePageSize)}
 	b := stub.start(t)
-
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/CHANNELID/")
-
-	if len(res.Files) != 2*bitchutePageSize {
-		t.Fatalf("got %d files, want %d", len(res.Files), 2*bitchutePageSize)
+	res := extractOK(t, b, "https://www.bitchute.com/channel/CHANNELID/", Options{limits: Limits{Files: 60}})
+	if len(res.Files) != 60 || res.Note != "partial — file limit" {
+		t.Fatalf("got %d files, note %q", len(res.Files), res.Note)
 	}
-	if got := stub.hits("/api/beta/channel/videos"); got != 3 {
-		t.Errorf("asked for %d pages, want 3: two full ones and the empty one that ends it", got)
+	if got := stub.hits("/api/beta/channel/videos"); got != 2 {
+		t.Errorf("asked for %d pages, want 2", got)
 	}
 }
 
@@ -511,7 +487,7 @@ func TestBitChuteChannelSkipsAVideoThatWillNotResolve(t *testing.T) {
 	}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/CHANNELID/")
+	res := extractOK(t, b, "https://www.bitchute.com/channel/CHANNELID/", Options{})
 
 	want := []string{"video-000.mp4", "video-001.mp4", "video-003.mp4", "video-004.mp4"}
 	if len(res.Files) != len(want) {
@@ -530,7 +506,7 @@ func TestBitChuteChannelTitleFallsBackToTheURLSegment(t *testing.T) {
 	stub := &bitchuteStub{videos: bitchuteVideos(3), noChannelName: true}
 	b := stub.start(t)
 
-	res := bitchuteExtract(t, b, "https://www.bitchute.com/channel/a-legacy-slug/")
+	res := extractOK(t, b, "https://www.bitchute.com/channel/a-legacy-slug/", Options{})
 
 	if res.Title != "a-legacy-slug" {
 		t.Errorf("title = %q, want the segment from the URL", res.Title)
@@ -547,10 +523,7 @@ func TestBitChuteChannelReportsAnEmptyListing(t *testing.T) {
 	stub := &bitchuteStub{}
 	b := stub.start(t)
 
-	u, err := ParseURL("https://www.bitchute.com/channel/CHANNELID/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.bitchute.com/channel/CHANNELID/")
 	if _, err := b.Extract(context.Background(), u, Options{}); err == nil {
 		t.Fatal("a channel with nothing on it was accepted")
 	}
@@ -568,10 +541,7 @@ func TestBitChuteRejectsPathsThatNameNeitherAVideoNorAChannel(t *testing.T) {
 		"https://www.bitchute.com/profile/AAAABBBBCCCC/",
 		"https://www.bitchute.com/search?query=x",
 	} {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if _, err := b.Extract(context.Background(), u, Options{}); err == nil {
 			t.Errorf("%s was accepted", raw)
 		}

@@ -1,15 +1,15 @@
 # Keep2Share, FileBoom and the CAPTCHA reader
 
-`keep2share.go`, `keep2shareocr.go` and `voyeurking.go` in
+`keep2share.go` and `voyeurking.go` in
 `internal/extractor`, and `internal/captcha`. Keep2Share and FileBoom are
-per-address services: each address gets one free download at a time, which is
-what the proxy pool is for. How routes are leased, scored and cooled is in
+two per-address services of the same software: each address gets one free
+download at a time from each, which is what the proxy pool is for. How routes are leased, scored and cooled is in
 [proxies.md](../proxies.md).
 
 ## The free-download flow
 
 keep2share uses the public `/api/v2` free-download flow, on both `k2s.cc` and
-`keep2share.cc`. Metadata needs no CAPTCHA. The resolver requests one, reads
+`keep2share.cc`, and FileBoom's on `fboom.me`. Metadata needs no CAPTCHA. The resolver requests one, reads
 it with the in-process CAPTCHA model, and waits for the API's timer before
 redeeming the accepted key for a ticket and then a storage link.
 
@@ -115,23 +115,76 @@ notes so successive `requesting CAPTCHA (1/3)` attempts visibly differ.
 
 ## FileBoom
 
-fileboom on `fboom.me` shares this implementation with its own `/api/v2` base,
-label and `Pace.Group`. The API namespaces are separate: a FileBoom file ID
-cannot be resolved through K2S. Each instance keeps its own tickets and
-address cooldowns. Proxy statistics and admission limits are per service too,
-with one transfer per address per service under the manager's shared live
-concurrency limit.
+FileBoom (`fboom.me`) serves the same app shell and the same `/api/v2` free
+flow as Keep2Share, so one extractor, `keep2share`, takes both. Its
+`services` are the hosts (`keep2ShareService`: label, `/api/v2` base, the
+newer files API and its own domains). The services' domains are exactly
+`k2s.cc` and `keep2share.cc` for Keep2Share and `fboom.me` for FileBoom,
+the hosts the registry claims for the extractor first (`siteHosts`,
+`claimFirst`): a link on one reaches `Extract` unprobed, and the domain
+picks the service (`serviceOf`), so a FileBoom link is resolved, paced,
+proxied and labelled as FileBoom's whatever its page would have said, and
+an id the API refuses is reported in its words ("file is unavailable or has
+been removed", the API's own message). A link of the form on any other host
+is taken only when its page is the shell: `Recognise` needs the shell and
+one of the names, and `Extract` asks the API of the service the page names
+(probing the page itself when called without one, and refusing a page that
+names neither). A page there withheld from the probe is not taken, and
+neither service's API is asked about another host's id.
+
+The two services count free downloads per address apart, so everything
+that follows from that count is kept per service. Each keeps its own address
+cooldowns, by route in a `routeWaits` as mega keeps its quota waits (one
+service's wait between free downloads says nothing of the other's), and its
+own `Pace` (`keep2SharePace`, `fileBoomPace`): its own `Pace.Group`
+(`keep2share`, `fileboom`), so its own one-file-per-address admission, its
+own proxy scope (`CappedScopes`), lease cooldowns, route health and proxy
+statistics, and its own protocol setting. A mixed queue therefore runs one
+free download of each service per address at once, and an address waiting
+out one service's interval still serves the other. The service is the one
+the link's domain or the probed page names. Notes and log lines carry its
+label, and API errors are prefixed with its name in lower case. The `keep2share` group covers Keep2Share alone, including in
+settings saved while the two shared one group: such a choice now applies to
+Keep2Share only, and FileBoom follows the general protocol until it is
+given its own.
+
+The API namespaces are separate: each service keeps its own file store, and
+a FileBoom file ID is not resolved through Keep2Share. Page sources
+deduplicate a K2S file link by file ID within each service
+(`Keep2Share.fileKey`, used by `fileLinkSources`), across that service's
+domains and whatever filename or query the link carries; the same ID on the
+other service is another file, and both are queued. A link of the same form
+on any other host is keyed by that host and ID, so a third host's
+`/file/<id>` listed first cannot shadow the service's link.
+
+A job is labelled by its service (`keep2share` or `fileboom`) rather than
+by the one extractor's name: by `Result.Site` once read, and by the link's
+domain (`installName`) before it is read and after it failed. Both labels
+are among `Registry.Hosts`, which the UI counts and filters jobs by. A link
+on another host whose read failed is labelled `keep2share`.
+
+The API names its CAPTCHA image over HTTP. On the service's own domains
+(and their subdomains) it is asked for over HTTPS, as every other step is
+(`captchaURL`); an image on any other host is asked as named, since whether
+that host serves HTTPS is not known.
 
 ## voyeurking
 
-voyeurking hosts nothing: it is an index of K2S and FileBoom files. Category
+voyeurking hosts nothing: it is an index of K2S files on either host. Category
 and collection pages expose their video links and `rel="next"` pager in HTML,
-and pagination stays within the same listing type and slug. A video's file
+and pagination stays within the same listing type and slug. The walk is the
+shared `walkListing` (`listing.go`), with its partial-listing notes. It
+reads a listing wherever the site redirects it (`anyRedirect`), a renamed
+category's old slug say, as the listing always did. A video's file
 link lives in the flattened React Router data table. Read only the primary
 route's `video.file`: the same table also contains related videos and player
 assets. Expansion goes through the registry, so the host's deferred resolver
-and per-route pacing reach the downloader intact. The listing pages use the
-ordinary HTTP client; only the K2S and FileBoom transfers use the proxy pool.
+and per-route pacing reach the downloader intact. A file link not even
+shaped like Keep2Share's (`Registry.Known`) is refused before it is
+followed, so a foreign link costs no probe on a third party's host and the
+refusal is voyeurking's own; one that is shaped like it is still followed
+strictly and must be recognised as Keep2Share's. The listing pages use the
+ordinary HTTP client; only the K2S transfers use the proxy pool.
 
 ## The CAPTCHA reader
 

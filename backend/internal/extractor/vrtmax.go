@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,9 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -56,12 +57,11 @@ import (
 // — so it is put into words here, with the code kept beside them so a reader
 // can check the translation against what VRT actually said.
 type VRTMax struct {
+	about
 	client *httpx.Client
 
-	// mu guards the player token, which every episode of a series shares.
-	mu     sync.Mutex
-	token  string
-	expiry time.Time
+	// token is the player token, which every episode of a series shares.
+	token renewable[string]
 }
 
 const (
@@ -69,7 +69,6 @@ const (
 	vrtGraphQL  = vrtRoot + "/vrtnu-api/graphql/public/v1"
 	vrtMediaAPI = "https://media-services-public.vrt.be/vualto-video-aggregator-web/rest/external/v2/"
 
-	vrtDomain    = "vrt.be"
 	vrtMaxDomain = "vrtmax.be"
 
 	// vrtSection is where the catalogue sits under vrt.be, and what a
@@ -85,18 +84,6 @@ const (
 	// vrtClientHeader is the one thing the GraphQL endpoint insists on.
 	vrtClientHeader = "x-vrt-client-name"
 	vrtClientName   = "WEB"
-
-	// vrtMaxEpisodes bounds how many episodes one programme URL expands to.
-	// VRT's daily strands run to thousands: Thuis alone lists six thousand
-	// across thirty-one seasons, which is a mistake being carried out
-	// efficiently rather than a download.
-	vrtMaxEpisodes = 500
-
-	// vrtTokenLife is assumed when the token service does not say when its
-	// token expires, and vrtTokenMargin is how long before that moment a
-	// fresh one is minted instead.
-	vrtTokenLife   = 15 * time.Minute
-	vrtTokenMargin = time.Minute
 )
 
 // The GraphQL type names the walk below reads. They are string constants
@@ -181,20 +168,22 @@ var vrtRefusals = map[string]string{
 }
 
 // NewVRTMax builds the VRT MAX extractor.
-func NewVRTMax(client *httpx.Client) *VRTMax { return &VRTMax{client: client} }
+func NewVRTMax(client *httpx.Client) *VRTMax {
+	return &VRTMax{client: client, about: about{name: "vrtmax", shape: vrtShape,
+		recognises: "programmes and episodes (`/vrtmax/a-z/…`) of VRT MAX, served by its app"}}
+}
 
-func (v *VRTMax) Name() string { return "vrtmax" }
+// vrtShape is a programme or episode in the catalogue: /vrtmax/a-z/<programme>/….
+var vrtShape = pathShape(`^/(?:vrtmax|vrtnu)/a-z/[^/]+`)
 
-// Match takes the VRT MAX catalogue and nothing else on vrt.be. The domain
-// also carries the news site, the radio, the sports service and the
-// broadcaster's own pages, none of which this resolves — and claiming them
-// would leave the link harvester treating every navigation link on a VRT page
-// as something to download.
-func (v *VRTMax) Match(u *url.URL) bool {
-	if util.HostMatches(u.Host, vrtMaxDomain) {
-		return true
-	}
-	return util.HostMatches(u.Host, vrtDomain) && vrtPageID(u) != ""
+// vrtShell marks the VRT MAX app: the resources it is served from.
+const vrtShell = "/vrtnu-resources/"
+
+// Recognise takes a catalogue page served by the VRT MAX app, which ships
+// nothing but its shell (/vrtnu-resources/): the page is the API's to
+// describe, and it is asked by the path.
+func (v *VRTMax) Recognise(_ context.Context, p *Page) bool {
+	return vrtInCatalogue(vrtPath(p.Final)) && len(p.Segments()) > 1 && p.Has(vrtShell) && p.Named("VRT MAX")
 }
 
 // Extract handles a single episode or a whole programme.
@@ -219,7 +208,7 @@ func (v *VRTMax) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, e
 		return v.series(ctx, u, page, id)
 	}
 	return nil, fmt.Errorf("vrtmax: %s is a %s, which names neither a programme nor an episode",
-		u.Redacted(), util.FirstNonEmpty(page.TypeName, "page of some other kind"))
+		u.Redacted(), cmp.Or(page.TypeName, "page of some other kind"))
 }
 
 // single resolves one episode page into a job of its own.
@@ -228,81 +217,37 @@ func (v *VRTMax) single(ctx context.Context, page *vrtPage, id string) (*Result,
 	if err != nil {
 		return nil, err
 	}
-	title := vrtTitle(programme, util.FirstNonEmpty(episode, vrtSlug(id)))
-	file.Name = title + file.Name
-	return &Result{Title: title, Files: []File{*file}}, nil
+	return soleFile(vrtTitle(programme, cmp.Or(episode, vrtSlug(id))), file), nil
 }
 
 // series expands a programme into one file per episode, filed by season when
 // there is more than one season to tell apart.
 func (v *VRTMax) series(ctx context.Context, u *url.URL, page *vrtPage, id string) (*Result, error) {
-	episodes := vrtRefs(FanOut(ctx, vrtLists(page), v.fill))
+	// A season that will not load is left out, and the note says so.
+	lists, _ := readSeasons(ctx, vrtLists(page), false, v.fill)
+	episodes := vrtRefs(lists.items)
 	if len(episodes) == 0 {
 		return nil, fmt.Errorf("vrtmax: %s lists no episodes "+
 			"(a programme page can outlive the run of the programme on it)", u.Redacted())
 	}
-	// The newest season is listed first, so what a cap drops is the oldest
+
+	// The newest season is listed first, so what the cap drops is the oldest
 	// material and the extras that follow it rather than a slice from the
-	// middle.
-	if len(episodes) > vrtMaxEpisodes {
-		episodes = episodes[:vrtMaxEpisodes]
-	}
-
-	// Only nest by season when there is more than one to tell apart.
-	nest := nestByLabel(episodes, func(ep vrtEpisodeRef) string { return ep.season })
-
-	resolved := FanOut(ctx, episodes, func(ctx context.Context, ep vrtEpisodeRef) ([]vrtOutcome, error) {
-		file, _, episode, err := v.episode(ctx, ep.id)
-		if err != nil {
-			return []vrtOutcome{{err: err}}, nil
-		}
-		file.Name = util.FirstNonEmpty(ep.name, episode, vrtSlug(ep.id)) + file.Name
-		if nest {
-			file.Dir = ep.season
-		}
-		return []vrtOutcome{{file: file}}, nil
-	})
-
-	result := &Result{Title: util.FirstNonEmpty(page.Title, vrtSlug(id))}
-	var refused, failed string
-	for _, out := range resolved {
-		refusal, refusedHere := errors.AsType[*vrtRefused](out.err)
-		switch {
-		case out.file != nil:
-			result.Files = append(result.Files, *out.file)
-		case refusedHere:
-			// A whole season refused is a whole season refused for one
-			// reason, and VRT's code for it is the only thing the caller can
-			// act on. A refusal therefore outranks a transport failure.
-			if refused == "" {
-				refused = vrtReason(refusal.code)
-			}
-		case failed == "" && out.err != nil:
-			failed = out.err.Error()
-		}
-	}
-	if len(result.Files) == 0 {
-		return nil, fmt.Errorf("vrtmax: none of the %d episodes of %s are playable: %s",
-			len(episodes), u.Redacted(), util.FirstNonEmpty(refused, failed,
-				"the listing named them but the player offered no stream"))
-	}
-	return result, nil
-}
-
-// vrtOutcome is what one episode came to: a file, or the reason there is
-// none. FanOut drops an error outright and the reason is the whole point
-// here, so it travels as a value rather than as a failure.
-type vrtOutcome struct {
-	file *File
-	err  error
-}
-
-// vrtEpisodeRef is one episode of a programme, with the season it belongs to.
-// The id is the episode page's own path, which is what the tile carried.
-type vrtEpisodeRef struct {
-	id     string
-	name   string
-	season string
+	// middle: VRT's daily strands run to thousands of episodes across
+	// thirty-odd seasons. A whole season refused is a whole season refused
+	// for one reason, and VRT's code for it is the only thing the caller can
+	// act on.
+	return listSeries(ctx, cmp.Or(page.Title, vrtSlug(id)), series[broadcastEpisode]{
+		site: "vrtmax", noun: "episodes", link: u.Redacted(),
+		items: episodes,
+		label: broadcastEpisode.seasonOf,
+		// A daily strand's six thousand episodes are a mistake carried out
+		// efficiently, so this broadcaster keeps its own lower budget.
+		budget: config.MaxResolvedEpisodesVRT,
+		// An episode's id is its page's own path, which the tile carried.
+		resolve:    listedAs(v.episode, vrtSlug),
+		unplayable: "the listing named them but the player offered no stream",
+	}, lists.note)
 }
 
 // vrtList is one list of episodes found on a programme page, with the label
@@ -375,26 +320,26 @@ func vrtSeasonLabel(title string) string {
 }
 
 // fill fetches a season the programme page named but did not inline.
-func (v *VRTMax) fill(ctx context.Context, list vrtList) ([]vrtList, error) {
+func (v *VRTMax) fill(ctx context.Context, list vrtList) (seasonList[vrtList], error) {
 	if list.listID == "" {
-		return []vrtList{list}, nil
+		return seasonList[vrtList]{items: []vrtList{list}}, nil
 	}
 	resp, err := v.gql(ctx, vrtListQuery, list.listID)
 	if err != nil {
-		return nil, err
+		return seasonList[vrtList]{}, err
 	}
 	if resp.Data.List == nil {
-		return nil, fmt.Errorf("vrtmax: season %q holds no list", list.label)
+		return seasonList[vrtList]{}, fmt.Errorf("vrtmax: season %q holds no list", list.label)
 	}
 	list.tiles = resp.Data.List.Items
-	return []vrtList{list}, nil
+	return seasonList[vrtList]{items: []vrtList{list}}, nil
 }
 
 // vrtRefs flattens the filled lists into episode references, keeping the
 // order they were listed in and dropping both the tiles that name something
 // other than an episode and anything an earlier list already claimed.
-func vrtRefs(lists []vrtList) []vrtEpisodeRef {
-	var out []vrtEpisodeRef
+func vrtRefs(lists []vrtList) []broadcastEpisode {
+	var out []broadcastEpisode
 	seen := make(map[string]bool)
 	for _, list := range lists {
 		for _, tile := range list.tiles {
@@ -403,22 +348,24 @@ func vrtRefs(lists []vrtList) []vrtEpisodeRef {
 				continue
 			}
 			seen[link] = true
-			out = append(out, vrtEpisodeRef{id: link, name: tile.Title, season: list.label})
+			out = append(out, broadcastEpisode{id: link, name: tile.Title, season: list.label})
 		}
 	}
 	return out
 }
 
-// episode resolves one episode page id to a playable segment list.
-func (v *VRTMax) episode(ctx context.Context, id string) (*File, string, string, error) {
+// episode resolves one episode page id to a playable segment list, with
+// the episode's name.
+func (v *VRTMax) episode(ctx context.Context, id string) (*File, string, error) {
 	resp, err := v.gql(ctx, vrtEpisodeQuery, id)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
 	if resp.Data.Page == nil || resp.Data.Page.TypeName != vrtEpisodePage {
-		return nil, "", "", fmt.Errorf("vrtmax: %s is not an episode page", id)
+		return nil, "", fmt.Errorf("vrtmax: %s is not an episode page", id)
 	}
-	return v.play(ctx, resp.Data.Page)
+	file, _, episode, err := v.play(ctx, resp.Data.Page)
+	return file, episode, err
 }
 
 // play turns an episode page into a playable segment list. The returned File
@@ -443,9 +390,9 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 	}
 
 	headers := httpx.Referer(vrtRoot + "/")
-	stream, err := resolveMediaPlaylist(ctx, v.client, manifest, headers)
+	stream, err := broadcastMedia(ctx, v.client, "vrtmax", streamID, manifest, headers)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("vrtmax: %s: %w", streamID, err)
+		return nil, "", "", err
 	}
 	// A variant keeping its audio apart comes with it (stream.Audio), which
 	// the downloader joins to the video. Only one naming no audio anywhere
@@ -455,18 +402,8 @@ func (v *VRTMax) play(ctx context.Context, page *vrtPage) (file *File, programme
 			"so joining its segments would give a silent video", streamID)
 	}
 
-	return &File{
-		Name: stream.extensionOr(playlistExtension(stream.Variant)),
-		// The media document publishes a duration, not a length: nothing here
-		// knows how many bytes the parts add up to until they arrive, and a
-		// Size that is not exact is worse than none at all.
-		Size:       -1,
-		Headers:    headers,
-		Segments:   stream.Segments,
-		SegmentKey: stream.Key,
-		Audio:      stream.Audio,
-		Subtitles:  stream.Subtitles,
-	}, media.Title, util.FirstNonEmpty(page.Title, page.Player.Title), nil
+	return new(stream.file(stream.extensionOr(playlistExtension(stream.Variant)), headers)),
+		media.Title, cmp.Or(page.Title, page.Player.Title), nil
 }
 
 // vrtSilent reports a variant whose own segments carry no audio, which
@@ -491,7 +428,7 @@ func (v *VRTMax) media(ctx context.Context, streamID string) (*vrtMedia, error) 
 	var doc vrtMedia
 	if err := v.client.GetJSON(ctx, endpoint, nil, &doc); err != nil {
 		if code := vrtRefusalCode(err); code != "" {
-			return nil, &vrtRefused{code: code}
+			return nil, &itemRefusal{site: "vrtmax", reason: vrtReason(code)}
 		}
 		return nil, fmt.Errorf("vrtmax: media for %s: %w", streamID, err)
 	}
@@ -508,29 +445,27 @@ func (v *VRTMax) media(ctx context.Context, streamID string) (*vrtMedia, error) 
 // episodes takes longer than a token lives, and a job that began with a valid
 // one would start failing partway down the list.
 func (v *VRTMax) playerToken(ctx context.Context) (string, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.token != "" && time.Now().Before(v.expiry) {
-		return v.token, nil
-	}
+	return v.token.get(ctx, v.mintPlayerToken)
+}
 
+// mintPlayerToken asks the token service for a player token, which expires
+// when the service says, less a margin, or after config.VRTTokenLife.
+func (v *VRTMax) mintPlayerToken(ctx context.Context) (string, time.Time, error) {
 	var out struct {
 		Token   string `json:"vrtPlayerToken"`
 		Expires string `json:"expirationDate"`
 	}
 	if err := v.client.PostJSON(ctx, vrtMediaAPI+"tokens", nil, nil, &out); err != nil {
-		return "", fmt.Errorf("vrtmax: player token: %w", err)
+		return "", time.Time{}, fmt.Errorf("vrtmax: player token: %w", err)
 	}
 	if out.Token == "" {
-		return "", errors.New("vrtmax: the token service answered without a token")
+		return "", time.Time{}, errors.New("vrtmax: the token service answered without a token")
 	}
-
-	v.token = out.Token
-	v.expiry = time.Now().Add(vrtTokenLife)
+	expiry := time.Now().Add(config.VRTTokenLife)
 	if when, err := time.Parse(time.RFC3339, out.Expires); err == nil {
-		v.expiry = when.Add(-vrtTokenMargin)
+		expiry = when.Add(-config.VRTTokenMargin)
 	}
-	return v.token, nil
+	return out.Token, expiry, nil
 }
 
 // gql posts one query and returns the decoded response.
@@ -539,9 +474,8 @@ func (v *VRTMax) playerToken(ctx context.Context) (string, error) {
 // object full of nulls, so it has to be looked for: left alone it would
 // surface much later as "this page holds no episodes".
 func (v *VRTMax) gql(ctx context.Context, query, id string) (*vrtResponse, error) {
-	body := map[string]any{"query": query, "variables": map[string]string{"id": id}}
 	var out vrtResponse
-	if err := v.client.PostJSON(ctx, vrtGraphQL, vrtAPIHeader, body, &out); err != nil {
+	if err := postGraphQL(ctx, v.client, vrtGraphQL, vrtAPIHeader, query, map[string]string{"id": id}, &out); err != nil {
 		return nil, fmt.Errorf("vrtmax: query %s: %w", id, err)
 	}
 	if len(out.Errors) > 0 {
@@ -601,27 +535,16 @@ func vrtSlug(id string) string {
 // itself: the media document names the programme and the episode's place in
 // it — "A Programme S2026 E167" is the shape — but not what it is about, and
 // the page names the episode but not what it belongs to.
+// Where the two differ only in case, the programme's spelling is kept.
 func vrtTitle(programme, episode string) string {
-	switch {
-	case programme == "":
-		return episode
-	case episode == "" || strings.EqualFold(programme, episode):
+	if strings.EqualFold(programme, episode) {
 		return programme
 	}
-	return programme + " - " + episode
+	return joinTitle(programme, episode, titleEqual)
 }
 
-// vrtRefused is the media service declining to serve something, carrying the
-// code it declined with. It is a type rather than a message so that expanding
-// a whole programme can report the reason once instead of the same line
-// several hundred times.
-type vrtRefused struct {
-	code string
-}
-
-func (e *vrtRefused) Error() string { return "vrtmax: " + vrtReason(e.code) }
-
-// vrtReason puts a refusal code into words, keeping the code beside them.
+// vrtReason puts the media service's refusal code into words, keeping the
+// code beside them. The refusal names no programme, only the code.
 func vrtReason(code string) string {
 	if text, ok := vrtRefusals[code]; ok {
 		return text + " (" + code + ")"
@@ -633,17 +556,12 @@ func vrtReason(code string) string {
 // answers one with HTTP 400 and a body of a single field, so the code arrives
 // inside the status error rather than in a document of its own.
 func vrtRefusalCode(err error) string {
-	status, ok := errors.AsType[*httpx.StatusError](err)
-	if !ok || status.Code != http.StatusBadRequest {
-		return ""
-	}
-	var body struct {
+	if body, ok := refusalBody[struct {
 		Code string `json:"code"`
+	}](err, http.StatusBadRequest); ok {
+		return body.Code
 	}
-	if json.Unmarshal([]byte(status.Body), &body) != nil {
-		return ""
-	}
-	return body.Code
+	return ""
 }
 
 // vrtResponse is the envelope both queries come back in.

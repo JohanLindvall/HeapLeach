@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,7 +138,6 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 	t.Setenv("HEAPLEACH_CONCURRENCY", "7")
 	t.Setenv("HEAPLEACH_MAX_SPEED", "1000000")
 	t.Setenv("HEAPLEACH_STALL_TIMEOUT", "45s")
-	t.Setenv("HEAPLEACH_KVS_HOSTS", "one.example, two.example  three.example")
 	t.Setenv("HEAPLEACH_DEBUG", "1")
 	t.Setenv("HEAPLEACH_RESUME", "true")
 	t.Setenv("HEAPLEACH_MAX_SOURCES", "5000")
@@ -156,36 +156,26 @@ func TestFromEnvReadsTheEnvironment(t *testing.T) {
 		cfg.MaxConcurrency != 256 || cfg.CaptchaConcurrency != 8 {
 		t.Errorf("cfg = %+v", cfg)
 	}
-	kvs := cfg.ExtraHostsFor(FamilyKVS)
-	if len(kvs) != 3 || kvs[2] != "three.example" {
-		t.Errorf("kvs hosts = %v, want commas and spaces both to separate", kvs)
-	}
 }
 
-// One setting carries every family's additions; the original KVS-only
-// variable still works, because someone is relying on it.
+// The host-list settings are retired: still accepted, so a configuration
+// carrying one starts as before, and named in a warning, so its owner learns
+// it no longer does anything.
 func TestExtraHostsGroupsByFamily(t *testing.T) {
-	t.Setenv("HEAPLEACH_KVS_HOSTS", "tube.example")
-	t.Setenv("HEAPLEACH_EXTRA_HOSTS",
-		"peertube:one.example,two.example; chevereto:pics.example ;kvs:another.example")
-
-	cfg, err := FromEnv()
+	t.Setenv("HEAPLEACH_KVS_HOSTS", "tube.example.test")
+	t.Setenv("HEAPLEACH_EXTRA_HOSTS", "peertube:one.example.test, Two.example.test; kvs:clips.example.test;bad")
+	c, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.ExtraHostsFor(FamilyPeerTube); len(got) != 2 || got[0] != "one.example" {
+	if got := c.ExtraHostsFor(FamilyKVS); !slices.Equal(got, []string{"tube.example.test", "clips.example.test"}) {
+		t.Errorf("kvs = %v", got)
+	}
+	if got := c.ExtraHostsFor(FamilyPeerTube); !slices.Equal(got, []string{"one.example.test", "two.example.test"}) {
 		t.Errorf("peertube = %v", got)
 	}
-	if got := cfg.ExtraHostsFor(FamilyChevereto); len(got) != 1 || got[0] != "pics.example" {
-		t.Errorf("chevereto = %v", got)
-	}
-	// The legacy variable and the new one name the same family and both
-	// count, rather than one silently replacing the other.
-	if got := cfg.ExtraHostsFor(FamilyKVS); len(got) != 2 {
-		t.Errorf("kvs = %v, want the legacy variable and the grouped one merged", got)
-	}
-	if got := cfg.ExtraHostsFor("nothing-configured"); got != nil {
-		t.Errorf("unconfigured family = %v, want nil", got)
+	if got := c.ExtraHostsFor(FamilyChevereto); len(got) != 0 {
+		t.Errorf("chevereto = %v, want none", got)
 	}
 }
 
@@ -229,7 +219,7 @@ func TestPrepareValidates(t *testing.T) {
 		{"blank directory", func(c *Config) { c.DownloadDir = "   " }, "directory"},
 		{"unknown proxy protocol", func(c *Config) { c.ProxyType = "tor" }, "proxy type"},
 		{"protocol for no proxy group", func(c *Config) { c.ProxyTypes = map[string]string{"elsewhere": ProxyTypeSOCKS} }, "proxy types"},
-		{"unknown protocol for a group", func(c *Config) { c.ProxyTypes = map[string]string{"fileboom": "tor"} }, "proxy types"},
+		{"unknown protocol for a group", func(c *Config) { c.ProxyTypes = map[string]string{"emload": "tor"} }, "proxy types"},
 	}
 	for _, tc := range cases {
 		cfg := base()
@@ -589,11 +579,37 @@ func TestProxyTypesFromTheEnvironment(t *testing.T) {
 		t.Errorf("written back as %q", got)
 	}
 
-	for _, bad := range []string{"keep2share=tor", "elsewhere=socks", "keep2share", "fileboom="} {
+	for _, bad := range []string{"keep2share=tor", "elsewhere=socks", "keep2share", "emload="} {
 		t.Setenv("HEAPLEACH_PROXY_TYPES", bad)
 		if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "HEAPLEACH_PROXY_TYPES") {
 			t.Errorf("%q: err = %v, want it refused and named", bad, err)
 		}
+	}
+}
+
+// The two services of one file store are proxy groups of their own: each
+// keeps the protocol it is given, and neither stands for the other.
+func TestProxyTypesKeepTheTwoFileStoreServicesApart(t *testing.T) {
+	for raw, want := range map[string]map[string]string{
+		"fileboom=socks":                 {"fileboom": ProxyTypeSOCKS},
+		"FileBoom=http,mega=any":         {"fileboom": ProxyTypeHTTP, "mega": ProxyTypeAny},
+		"fileboom=socks,keep2share=http": {"fileboom": ProxyTypeSOCKS, "keep2share": ProxyTypeHTTP},
+	} {
+		got, err := ParseProxyTypes(raw)
+		if err != nil || !maps.Equal(got, want) {
+			t.Errorf("%q read as %v, err %v; want %v", raw, got, err, want)
+		}
+	}
+	cfg := &Config{DownloadDir: t.TempDir(), Concurrency: 4, Streams: 8, StallTimeout: time.Minute,
+		ProxyTypes: map[string]string{"fileboom": ProxyTypeSOCKS}}
+	if err := cfg.Prepare(); err != nil || !maps.Equal(cfg.ProxyTypes, map[string]string{"fileboom": ProxyTypeSOCKS}) {
+		t.Errorf("prepared as %v, err %v; want the group kept", cfg.ProxyTypes, err)
+	}
+	if !IsProxyGroup(GroupFileBoom) || !slices.Contains(ProxyGroups, GroupKeep2Share) {
+		t.Errorf("groups %v, want both services", ProxyGroups)
+	}
+	if got := FormatProxyTypes(map[string]string{"fileboom": "http", "keep2share": "socks"}); got != "keep2share=socks,fileboom=http" {
+		t.Errorf("written as %q", got)
 	}
 }
 

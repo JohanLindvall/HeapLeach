@@ -8,8 +8,30 @@ that need yt-dlp (`external.go`, `internal/tools`).
 
 ## Reading a playlist
 
-Every playlist goes through `resolveMediaPlaylist` (`hls.go`), and every
-caller carries the key, the separate audio and the subtitles it returns onto
+A bare manifest is recognised (`HLSDirect`) by a playlist type, an opening
+`#EXTM3U` in the probed body, or a `.m3u8` path. The probe reads no body of
+a type it does not take for text, so an answer at a path whose last element
+names no extension, served under a generic binary type
+(`application/octet-stream` and its spellings) or `video/mp2t`
+(`hlsMislabelled`), is asked once more for its first
+`config.ManifestSniffBytes` (a ranged GET with the origin as referer,
+`hlsSniffable`/`servesManifest`): object storage labels a playlist that
+way, and the fallback would otherwise save the playlist's few kilobytes of
+text as the video. A link that names a file is taken at its word, and an
+image or other stated type is not asked again, since a page's
+extensionless pictures and counters would each cost a request.
+
+A pasted manifest already read whole is accepted with the probe's navigation
+Referer, so a single-use link is not fetched twice. `hlsPlaylistResult` passes
+that document into `readMediaPlaylist`; variants, audio, subtitles and queued
+media still use the origin Referer. Other playlist readers use `fetchPlaylist`,
+which reuses a probe only when it answers their explicit Referer policy.
+`TestPastedManifestIsFetchedOnce`, `TestPastedMasterKeepsVariantReferer` and
+`TestPlaylistReaderHonorsReferer` cover these different requests.
+
+Every main playlist goes through `readMediaPlaylist` (`hls.go`), usually fetched
+by `resolveMediaPlaylist`, and every caller carries the key, the separate audio
+and the subtitles it returns onto
 its `File`. So no path joins an encrypted or demuxed playlist as it stands:
 either would make a file that looks finished and is ciphertext or silent.
 
@@ -89,7 +111,11 @@ Two things here are easy to get wrong:
 `fetchSegmentOnce` asks a byte-range part for exactly its bytes, checks
 `Content-Range` and the length, and refuses a host that answers with the whole
 file (`errRangeIgnored`, not retried): read whole, a playlist of a thousand
-parts would fetch the file a thousand times.
+parts would fetch the file a thousand times. The part's `Content-Range` is
+read for its span alone (`contentRangeSpan`): a segment server that writes
+the total wrongly — empty, or no larger than the last offset — still served
+the bytes asked for, and the length is checked against the body anyway. The
+whole-file transfer, which resumes from the total, reads the header strictly.
 
 **AES-128 playlists are decrypted natively** (`hlscrypt.go`). HLS's
 `METHOD=AES-128` encrypts each segment on its own (AES-CBC, PKCS#7), so each
@@ -238,7 +264,7 @@ concurrently with `Wait`, so that its inherited-pipe deadline actually starts.
 `util.BoundedBuffer` keeps diagnostic readers draining without unbounded
 allocation.
 
-**Probing.** That bound is why the yt-dlp probes (`youtube.go`) print only the
+**Probing.** That bound is why the yt-dlp probes (`handoffs.go`) print only the
 fields they read with `--print`, one JSON object per line, rather than dumping
 with `-J`: a full dump of one ordinary YouTube video can be ten megabytes,
 almost all of it machine-translated automatic captions, which would fail the

@@ -18,8 +18,10 @@ type recursiveFixture struct {
 	cycle    bool
 }
 
-func (*recursiveFixture) Name() string        { return "fixture" }
-func (*recursiveFixture) Match(*url.URL) bool { return true }
+func (*recursiveFixture) Name() string                          { return "fixture" }
+func (*recursiveFixture) Shape(*url.URL) bool                   { return false }
+func (*recursiveFixture) Recognise(context.Context, *Page) bool { return true }
+func (*recursiveFixture) Recognises() string                    { return "every page" }
 func (f *recursiveFixture) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	f.calls++
 	if f.calls > config.MaxExtractionDepth+1 {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
@@ -61,9 +61,9 @@ func TestSourceRecoveryRedrawsBrokenProxiesBeyondTheRetryBudget(t *testing.T) {
 	if err != nil || res == nil || len(res.Files) != 1 {
 		t.Fatalf("source failed before reaching a working proxy: result=%+v err=%v", res, err)
 	}
-	if requests.Load() != 5 || pool.Page("cloudflare", proxy.Query{}).Summary.Cooling != 3 ||
-		pool.Page("cloudflare", proxy.Query{}).Summary.Active != 0 {
-		t.Fatalf("requests=%d inventory=%+v", requests.Load(), pool.Page("cloudflare", proxy.Query{}).Summary)
+	if requests.Load() != 5 || pool.Page(config.GroupWAF, proxy.Query{}).Summary.Cooling != 3 ||
+		pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active != 0 {
+		t.Fatalf("requests=%d inventory=%+v", requests.Load(), pool.Page(config.GroupWAF, proxy.Query{}).Summary)
 	}
 	if notes[len(notes)-1] != "Doodstream: requesting media token (1/3) — connection attempt 5" {
 		t.Fatalf("proxy redraws were not visible: %v", notes)
@@ -168,7 +168,7 @@ func TestDoodProxyTimeoutRecovery(t *testing.T) {
 						}
 					}
 				}
-				page := pool.Page("cloudflare", proxy.Query{})
+				page := pool.Page(config.GroupWAF, proxy.Query{})
 				wantPlayers, wantCooling, wantConnects := tc.failures+1, int(tc.failures), int32(0)
 				if !tc.headers {
 					wantConnects = tc.failures
@@ -184,7 +184,7 @@ func TestDoodProxyTimeoutRecovery(t *testing.T) {
 						t.Fatalf("silent proxy did not receive exactly one transport penalty: %+v", row)
 					}
 				}
-				if pool.Page("keep2share", proxy.Query{}).Summary.Cooling != wantCooling {
+				if pool.Page(config.GroupKeep2Share, proxy.Query{}).Summary.Cooling != wantCooling {
 					t.Fatal("silent proxies remained available for other services")
 				}
 			})
@@ -253,8 +253,7 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 					http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader(payload))
 				}
 			}
-			direct := httptest.NewServer(handler("direct"))
-			defer direct.Close()
+			direct := testServer(t, handler("direct"))
 			origin = direct.URL
 			route := proxyServer(t, "127.0.0.2", handler("proxy"))
 			pool := attachPool(t, m, []string{proxy.Direct, route.URL})
@@ -268,14 +267,13 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if pool.Page("cloudflare", proxy.Query{}).Summary.Active != 0 {
+			if pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active != 0 {
 				t.Fatal("healthy direct extraction used a proxy")
 			}
 			failed.Store(true)
 			m.mu.Lock()
 			job := &Job{ID: newID(), Source: u.String()}
-			m.jobs[job.ID] = job
-			m.order = append(m.order, job.ID)
+			m.queueJobLocked(job)
 			m.applyResultLocked(job, "doodstream", res, nil)
 			m.mu.Unlock()
 			m.Start()
@@ -299,13 +297,97 @@ func TestDoodDirectFailureRetriesWithProxyProgressAndFreshSession(t *testing.T) 
 	}
 }
 
+// Discover a file through a folder, then refresh its strict nested source on
+// another address. A proxy serving a bare refusal must be cooled and replaced,
+// without turning the recognised file into unsupported navigation.
+func TestDoodFolderRefreshSkipsRefusedProxy(t *testing.T) {
+	m := busyManager(t)
+	var origin string
+	var refusedRoute, refusedPages atomic.Int32
+	const payload = "synthetic video bytes"
+	handler := func(route int32) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(httpx.HeaderContentType, "text/html")
+			if route != 0 && (r.URL.Path == "/d/synthetic" || r.URL.Path == "/e/synthetic") {
+				refusedRoute.CompareAndSwap(0, route)
+				if refusedRoute.Load() == route {
+					refusedPages.Add(1)
+					fmt.Fprint(w, "The resource you are looking for has been removed or is temporarily unavailable.")
+					return
+				}
+			}
+			switch {
+			case r.URL.Path == "/folder":
+				fmt.Fprint(w, `<title>Invented Folder</title><a href="/d/synthetic">Invented Clip</a>`)
+			case r.URL.Path == "/d/synthetic":
+				fmt.Fprint(w, `<meta name="og:sitename" content="DoodStream.com"><iframe src="/e/synthetic"></iframe>`)
+			case r.URL.Path == "/e/synthetic":
+				http.SetCookie(w, &http.Cookie{Name: "route", Value: fmt.Sprint(route), Path: "/"})
+				fmt.Fprintf(w, `<title>Invented Clip</title><script>fetch('/pass_md5/session/route%d')</script>`, route)
+			case strings.HasPrefix(r.URL.Path, "/pass_md5/") || strings.HasPrefix(r.URL.Path, "/media/"):
+				cookie, err := r.Cookie("route")
+				if err != nil || cookie.Value != fmt.Sprint(route) || r.Referer() != origin+"/e/synthetic" {
+					t.Errorf("request crossed sessions: route=%d cookie=%v error=%v referer=%s", route, cookie, err, r.Referer())
+				}
+				if strings.HasPrefix(r.URL.Path, "/pass_md5/") {
+					fmt.Fprintf(w, "%s/media/route%d/", origin, route)
+					return
+				}
+				if route == 0 {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+				if !strings.HasPrefix(r.URL.Path, fmt.Sprintf("/media/route%d/", route)) {
+					t.Error("media reused a different route's signed URL")
+				}
+				w.Header().Set(httpx.HeaderContentType, "video/mp4")
+				http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader(payload))
+			default:
+				http.NotFound(w, r)
+			}
+		}
+	}
+	origin = testServer(t, handler(0)).URL
+	var endpoints []string
+	for i, address := range []string{"127.0.0.2", "127.0.0.3"} {
+		endpoints = append(endpoints, proxyServer(t, address, handler(int32(i+1))).URL)
+	}
+	pool := attachPool(t, m, endpoints)
+	// The local server plays DoodStream, whose folder links its own items.
+	m.reg.AliasHosts("doodstream", "127.0.0.1")
+	m.cfg.ProxyRetries = 0 // An address refusal must not spend this budget.
+	m.Start()
+	id, err := m.Add(origin+"/folder", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLocked(t, m, 5*time.Second, func() bool {
+		job := m.jobs[id]
+		return job.Err != "" || (len(job.Items) == 1 && job.Items[0].Status.Terminal())
+	})
+	m.mu.Lock()
+	job := m.jobs[id]
+	if job.Err != "" || len(job.Items) != 1 || job.Items[0].Status != StatusDone {
+		m.mu.Unlock()
+		t.Fatalf("folder file did not recover: %+v", m.Snapshot().Jobs[0])
+	}
+	path, retries := job.Items[0].Path, job.Items[0].proxyRetries
+	m.mu.Unlock()
+	body, err := os.ReadFile(filepath.Join(m.DownloadDir(), path))
+	if err != nil || string(body) != payload || retries != 0 {
+		t.Fatalf("download=%q error=%v proxy retries=%d", body, err, retries)
+	}
+	if refusedPages.Load() != 2 || pool.Page(config.GroupWAF, proxy.Query{}).Summary.Cooling != 1 {
+		t.Fatalf("refused pages=%d inventory=%+v", refusedPages.Load(), pool.Page(config.GroupWAF, proxy.Query{}).Summary)
+	}
+}
+
 func TestSourceProgressIncludesRetryAttemptAndClearsAfterCancellation(t *testing.T) {
 	m := busyManager(t)
-	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	origin := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(httpx.HeaderCFMitigated, "challenge")
 		w.WriteHeader(http.StatusForbidden)
 	}))
-	defer origin.Close()
 	started := make(chan struct{})
 	route := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, r *http.Request) {
 		close(started)
@@ -328,7 +410,7 @@ func TestSourceProgressIncludesRetryAttemptAndClearsAfterCancellation(t *testing
 	if err := m.CancelJob(id); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, time.Second, func() bool { return pool.Page("cloudflare", proxy.Query{}).Summary.Active == 0 })
+	waitFor(t, time.Second, func() bool { return pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active == 0 })
 	if job := m.Snapshot().Jobs[0]; job.Note != "" || job.Status != StatusCanceled {
 		t.Fatalf("canceled source retained retry progress: %+v", job)
 	}
@@ -354,7 +436,7 @@ func TestSourceRecoveryKeepsTemporaryFailuresBoundedAndPermanentErrorsFinal(t *t
 				attempts++
 				return nil, tc.err
 			}, tc.err)
-			if !errors.Is(err, tc.err) || attempts != tc.attempts || pool.Page("cloudflare", proxy.Query{}).Summary.Active != 0 {
+			if !errors.Is(err, tc.err) || attempts != tc.attempts || pool.Page(config.GroupWAF, proxy.Query{}).Summary.Active != 0 {
 				t.Fatalf("attempts=%d want=%d err=%v", attempts, tc.attempts, err)
 			}
 		})
@@ -365,7 +447,7 @@ func TestDoodFallbackDisabledKeepsOrdinaryTransferRetries(t *testing.T) {
 	m := busyManager(t)
 	m.timings.progressRetry = time.Millisecond
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(httpx.HeaderContentType, "video/mp4")
 		w.Header().Set("Content-Length", "4")
 		if calls.Add(1) == 1 {
@@ -374,7 +456,6 @@ func TestDoodFallbackDisabledKeepsOrdinaryTransferRetries(t *testing.T) {
 		}
 		fmt.Fprint(w, "file")
 	}))
-	defer srv.Close()
 	it := &Item{ID: newID(), Name: "clip.mp4", URL: srv.URL, Size: 4, proxyFallback: true}
 	if err := m.transferRouted(context.Background(), it); err != nil || calls.Load() < 2 {
 		t.Fatalf("disabled fallback changed direct retries: calls=%d err=%v", calls.Load(), err)

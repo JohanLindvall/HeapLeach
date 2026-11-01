@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/extractor"
 	"github.com/JohanLindvall/HeapLeach/internal/proxy"
 )
@@ -35,8 +35,7 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 			fmt.Fprint(w, "file")
 		}
 	}
-	origin := httptest.NewServer(handler("direct", finishDirect))
-	defer origin.Close()
+	origin := testServer(t, handler("direct", finishDirect))
 	defer directOnce.Do(func() { close(finishDirect) })
 	defer aOnce.Do(func() { close(finishA) })
 	defer bOnce.Do(func() { close(finishB) })
@@ -92,30 +91,27 @@ func TestLiveProxyTogglesDrainExistingRoutesAndRespectNewConcurrency(t *testing.
 	}
 	bOnce.Do(func() { close(finishB) })
 	take("direct")
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		for _, it := range job.Items {
 			if it.Status != StatusDone {
 				return false
 			}
 		}
-		return m.proxyRunning["keep2share"] == 0
+		return m.proxyRunning[config.GroupKeep2Share] == 0
 	})
 }
 
 func TestEnablingAfterStartWakesForDiscoveredRoutes(t *testing.T) {
 	m := busyManager(t)
 	m.cfg.ProxyDB = filepath.Join(t.TempDir(), "proxies.db")
-	m.SetPaused(true)
+	_ = m.ApplySettings(Settings{Paused: new(true)})
 	m.Start()
 	destination := proxyServer(t, "127.0.0.2", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		fmt.Fprint(w, "file")
 	})
 	finish := make(chan struct{})
-	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-finish; fmt.Fprint(w, destination.URL) }))
-	defer feed.Close()
+	feed := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { <-finish; fmt.Fprint(w, destination.URL) }))
 	var once sync.Once
 	defer once.Do(func() { close(finish) })
 	job := addProxyFiles(m, 1, func(context.Context) (*extractor.Target, error) {
@@ -128,11 +124,9 @@ func TestEnablingAfterStartWakesForDiscoveredRoutes(t *testing.T) {
 	if err := m.ApplySettings(Settings{Proxies: &enabled, ProxyFeeds: &feeds}); err != nil {
 		t.Fatal(err)
 	}
-	m.SetPaused(false)
+	_ = m.ApplySettings(Settings{Paused: new(false)})
 	once.Do(func() { close(finish) })
-	waitFor(t, 5*time.Second, func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
+	waitLocked(t, m, 5*time.Second, func() bool {
 		return job.Items[0].Status == StatusDone
 	})
 }
@@ -169,8 +163,8 @@ func TestProxyScopeAndSettingsErrorsAreAtomic(t *testing.T) {
 func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 	m := busyManager(t)
 	p := attachPool(t, m, []string{proxy.Direct})
-	job := addProxyFiles(m, len(proxy.Services()), nil)
-	for i, service := range proxy.Services() {
+	job := addProxyFiles(m, len(config.ProxyGroups), nil)
+	for i, service := range config.ProxyGroups {
 		lease := p.Acquire(service, "", 1)
 		if lease == nil {
 			t.Fatalf("another service's transfer blocked %s", service)
@@ -185,15 +179,15 @@ func TestProxyInventorySeparatesServicesOnTheSameAddress(t *testing.T) {
 			t.Fatalf("same address admitted a second %s transfer", service)
 		}
 	}
-	for i, service := range proxy.Services() {
+	for i, service := range config.ProxyGroups {
 		page := m.ProxyPage(proxy.Query{Site: service})
 		if len(page.Rows) != 1 || page.Rows[0].Active != 1 || page.Rows[0].CurrentSpeed != float64((i+1)*1024) {
 			t.Fatalf("service %s included another service's measurements: %+v", service, page)
 		}
 	}
 	job.Items[0].route.Cooldown(time.Now().Add(time.Hour))
-	if page := m.ProxyPage(proxy.Query{Site: "fileboom"}); !page.Rows[0].CooldownUntil.IsZero() {
-		t.Fatal("K2S cooldown appeared in FileBoom inventory")
+	if page := m.ProxyPage(proxy.Query{Site: config.GroupEmload}); !page.Rows[0].CooldownUntil.IsZero() {
+		t.Fatal("K2S cooldown appeared in EMLOAD inventory")
 	}
 }
 

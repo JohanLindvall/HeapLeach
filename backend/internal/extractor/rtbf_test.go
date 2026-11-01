@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
@@ -46,6 +45,8 @@ type rtbfFake struct {
 	sessions atomic.Int32
 	// stale makes the session handed out first stop working after one play.
 	stale atomic.Bool
+	// embeds counts the media asked of the embed API.
+	embeds atomic.Int32
 }
 
 func newRTBFFake(t *testing.T) *rtbfFake {
@@ -102,6 +103,7 @@ func newRTBFFake(t *testing.T) *rtbfFake {
 		path, q := r.URL.Path, r.URL.Query()
 		switch {
 		case strings.HasPrefix(path, "/bff/embed/media/"):
+			f.embeds.Add(1)
 			switch id := strings.TrimPrefix(path, "/bff/embed/media/"); id {
 			case "1001", "1002", "1003", "1004", "1005", "1006", "1007", "1010":
 				_, _ = io.WriteString(w, media(id, "MEDIA", "Un programme inventé", "Épisode "+id))
@@ -159,6 +161,9 @@ func newRTBFFake(t *testing.T) *rtbfFake {
 			_, _ = fmt.Fprintf(w, `<html><head><title>Un article inventé</title></head><body>
 				<iframe data-src="https://auvio.rtbf.be/embed/rtbf/highlight/media/1001?autoplay=1&amp;mute=1" data-asset-id="1001"></iframe>
 				<script>{"embedUrl":"https:\/\/auvio.rtbf.be\/embed\/rtbf\/highlight\/media\/1002"}</script></body></html>`)
+		case path == "/article/un-article-reserve-4001":
+			_, _ = io.WriteString(w, `<html><head><title>Un article réservé</title></head><body>
+				<iframe data-asset-id="1004"></iframe><iframe data-asset-id="1005"></iframe></body></html>`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -168,7 +173,7 @@ func newRTBFFake(t *testing.T) *rtbfFake {
 }
 
 func (f *rtbfFake) extractor() *RTBF {
-	r := NewRTBF(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	r := NewRTBF(testClient())
 	r.bff = f.srv.URL + "/bff"
 	r.exposure = f.srv.URL + "/exposure"
 	return r
@@ -176,11 +181,7 @@ func (f *rtbfFake) extractor() *RTBF {
 
 func (f *rtbfFake) extract(t *testing.T, raw string, opts Options) *Result {
 	t.Helper()
-	u, _ := url.Parse(raw)
-	res, err := f.extractor().Extract(context.Background(), u, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, f.extractor(), raw, opts)
 	return res
 }
 
@@ -211,15 +212,10 @@ func TestRTBFReadsAVideoWithTheAudioItReallyHas(t *testing.T) {
 func TestRTBFReadsAPodcastAndRenewsItsSession(t *testing.T) {
 	f := newRTBFFake(t)
 	r := f.extractor()
-	u, _ := url.Parse("https://auvio.rtbf.be/media/un-podcast-invente-episode-1002")
-	if _, err := r.Extract(context.Background(), u, Options{}); err != nil {
-		t.Fatal(err)
-	}
+	const link = "https://auvio.rtbf.be/media/un-podcast-invente-episode-1002"
+	extractOK(t, r, link, Options{})
 	f.stale.Store(true)
-	res, err := r.Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := extractOK(t, r, link, Options{})
 	if file := res.Files[0]; file.Name != "Un programme inventé - Épisode 1002.mp3" || file.URL != f.srv.URL+"/aod/an-invented-episode.mp3" {
 		t.Errorf("name %q, url %q", file.Name, file.URL)
 	}
@@ -263,6 +259,24 @@ func TestRTBFReadsThePlayersAPageEmbeds(t *testing.T) {
 	if res.Title != "Un article inventé" || len(res.Files) != 2 || !strings.HasSuffix(res.Files[1].Name, ".mp3") {
 		t.Errorf("%q: %+v", res.Title, res.Files)
 	}
+	// None of them playable, the first reason one gave is the answer.
+	_, err := extract(t, f.extractor(), f.srv.URL+"/article/un-article-reserve-4001", Options{})
+	if want := "rtbf: none of the 2 players of Un article réservé are playable: RTBF shows it in Belgium only"; err == nil || !strings.HasPrefix(err.Error(), want) {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
+// A page embedding more players than the file limit allows resolves only as
+// many as it may keep, not every one to drop the rest afterwards.
+func TestRTBFResolvesEmbeddedPlayersUpToTheFileLimit(t *testing.T) {
+	f := newRTBFFake(t)
+	res := f.extract(t, f.srv.URL+"/article/un-article-invente-4000", Options{limits: Limits{Files: 1}})
+	if len(res.Files) != 1 || res.Note != "1 of 2 players" {
+		t.Errorf("files %d, note %q; want one file and the count", len(res.Files), res.Note)
+	}
+	if n := f.embeds.Load(); n != 1 {
+		t.Errorf("%d players resolved; want only the one the limit keeps", n)
+	}
 }
 
 // What cannot be had says why, in the play answer's own terms.
@@ -277,8 +291,7 @@ func TestRTBFSaysWhyAMediaCannotBeHad(t *testing.T) {
 		"1008": "live stream",
 		"1009": "it is not on Auvio",
 	} {
-		u, _ := url.Parse("https://auvio.rtbf.be/media/un-programme-invente-" + id)
-		_, err := f.extractor().Extract(context.Background(), u, Options{})
+		_, err := extract(t, f.extractor(), "https://auvio.rtbf.be/media/un-programme-invente-"+id, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v; want it to say %q", id, err, want)
 		}

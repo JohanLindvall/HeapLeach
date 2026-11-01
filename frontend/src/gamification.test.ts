@@ -10,7 +10,7 @@ function item(over: Partial<ItemView>): ItemView {
 function snapshot(items: ItemView[], over: Partial<Snapshot> = {}): Snapshot {
   const job: JobView = {
     id: 'j1', source: 'https://example.test/a', title: 'a', host: 'example.test',
-    status: 'running', createdAt: '', items,
+    status: 'running', items,
     total: items.length, done: 0, failed: 0, canceled: 0, active: 0,
     size: 0, downloaded: 0, speed: 0, sizeKnown: true,
   };

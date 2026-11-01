@@ -12,9 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 )
 
 // A gallery page shaped like the site's, carrying every trap that decides how
@@ -42,10 +41,7 @@ const pornpicsGalleryPage = `<!DOCTYPE html><html><head>
 </body></html>`
 
 func TestPornPicsGalleryReadsTheFullSizeImagesOnly(t *testing.T) {
-	u, err := url.Parse("https://www.pornpics.test/galleries/a-gallery-name-10000001/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.pornpics.test/galleries/a-gallery-name-10000001/")
 
 	res, err := pornpicsGallery(pornpicsGalleryPage, u)
 	if err != nil {
@@ -84,7 +80,7 @@ func TestPornPicsGalleryReadsTheFullSizeImagesOnly(t *testing.T) {
 }
 
 func TestPornPicsGalleryWithoutImagesIsAnError(t *testing.T) {
-	u, _ := url.Parse("https://www.pornpics.test/galleries/gone-10000009/")
+	u := mustParse(t, "https://www.pornpics.test/galleries/gone-10000009/")
 	// Only the furniture: links of the same class leading everywhere but the
 	// CDN. A build that trusted the class would report two files.
 	page := `<html><head><title>Gone - PornPics.com</title></head><body>
@@ -134,14 +130,8 @@ const pornpicsCategoryListing = `<!DOCTYPE html><html><head>
 // its first twenty galleries and reports no trouble at all. This is the test
 // that says it is not routed that way.
 func TestPornPicsSearchPageIsPagedThroughTheSearchEndpoint(t *testing.T) {
-	u, err := url.Parse("https://www.pornpics.com/pornstars/a-name/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := parseHTML(fmt.Sprintf(pornpicsSearchListing, "https://www.pornpics.com"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.pornpics.com/pornstars/a-name/")
+	root := mustParseDoc(t, fmt.Sprintf(pornpicsSearchListing, "https://www.pornpics.com"))
 
 	got := pornpicsPagerFor(root, u)(pornpicsFirstOffset)
 	want := "https://www.pornpics.com/search/srch.php?lang=en&limit=500&offset=20&q=a+name"
@@ -155,14 +145,8 @@ func TestPornPicsSearchPageIsPagedThroughTheSearchEndpoint(t *testing.T) {
 }
 
 func TestPornPicsPlainListingIsPagedThroughItsOwnPath(t *testing.T) {
-	u, err := url.Parse("https://www.pornpics.com/some-category/?orientation=straight")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := parseHTML(fmt.Sprintf(pornpicsCategoryListing, "https://www.pornpics.com"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://www.pornpics.com/some-category/?orientation=straight")
+	root := mustParseDoc(t, fmt.Sprintf(pornpicsCategoryListing, "https://www.pornpics.com"))
 	pager := pornpicsPagerFor(root, u)
 
 	// The filter the URL already carried chooses what is being paged, so it
@@ -173,7 +157,7 @@ func TestPornPicsPlainListingIsPagedThroughItsOwnPath(t *testing.T) {
 	}
 	// The second block starts a whole page size on, not one item on.
 	want = "https://www.pornpics.com/some-category/?limit=500&offset=520&orientation=straight"
-	if got := pager(pornpicsFirstOffset + pornpicsPageSize); got != want {
+	if got := pager(pornpicsFirstOffset + config.PornPicsPageSize); got != want {
 		t.Errorf("page 2 = %q, want %q", got, want)
 	}
 	if strings.Contains(pager(pornpicsFirstOffset), "srch.php") {
@@ -182,10 +166,7 @@ func TestPornPicsPlainListingIsPagedThroughItsOwnPath(t *testing.T) {
 }
 
 func TestPornPicsGlobalsSurviveEitherQuoting(t *testing.T) {
-	root, err := parseHTML(fmt.Sprintf(pornpicsSearchListing, "https://www.pornpics.com"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, fmt.Sprintf(pornpicsSearchListing, "https://www.pornpics.com"))
 	globals := pornpicsGlobals(root)
 	if globals[pornpicsQueryGlobal] != "a+name" {
 		t.Errorf("QUERY = %q, want the single-quoted value", globals[pornpicsQueryGlobal])
@@ -196,16 +177,10 @@ func TestPornPicsGlobalsSurviveEitherQuoting(t *testing.T) {
 }
 
 func TestPornPicsGalleryLinksIgnoreTheSharedClass(t *testing.T) {
-	u, err := url.Parse("https://pornpics.com/some-category/")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://pornpics.com/some-category/")
 	// Note the base is the bare host and the page's links are on "www.": the
 	// site emits its canonical host whichever form was pasted.
-	root, err := parseHTML(fmt.Sprintf(pornpicsCategoryListing, "https://www.pornpics.com"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := mustParseDoc(t, fmt.Sprintf(pornpicsCategoryListing, "https://www.pornpics.com"))
 
 	got := pornpicsGalleryLinks(root, u)
 	want := []string{
@@ -235,42 +210,36 @@ func TestPornPicsIsGallery(t *testing.T) {
 		"https://www.pornpics.com/":                                 false,
 	}
 	for raw, want := range cases {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := pornpicsIsGallery(u); got != want {
 			t.Errorf("pornpicsIsGallery(%q) = %v, want %v", raw, got, want)
 		}
 	}
 }
 
-func TestPornPicsMatch(t *testing.T) {
+func TestPornPicsRecognise(t *testing.T) {
 	p := NewPornPics(nil)
-	for _, raw := range []string{
-		"https://www.pornpics.com/galleries/a-gallery-10000001/",
-		"https://pornpics.com/some-category/",
-		"https://www.pornpics.de/some-category/",
+	gallery := strings.Replace(pornpicsGalleryPage, "</head>", `<script>var PP_LANG = "en";</script></head>`, 1)
+	category := fmt.Sprintf(pornpicsCategoryListing, "https://pics.example.test")
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/galleries/a-gallery-name-10000001/", gallery), true)
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/de/galleries/a-gallery-name-10000001/", gallery), true)
+	// A category is a bare /<name>/, recognised by its page alone.
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/some-category/", category), true)
+	// The right form and the site's name, but not the page the pager reads.
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/galleries/a-gallery-name-10000001/", pornpicsGalleryPage), false)
+	// The site's markup on its front page, which is no listing to expand.
+	expectRecognised(t, p, htmlPage(t, "https://pics.example.test/", category), false)
+
+	for raw, want := range map[string]bool{
+		"https://pics.example.test/galleries/a-gallery-10000001/":    true,
+		"https://pics.example.test/de/galleries/a-gallery-10000001/": true,
+		"https://pics.example.test/tags/a-tag/":                      true,
+		"https://pics.example.test/pornstars/a-name/":                true,
+		"https://pics.example.test/some-category/":                   false,
+		"https://pics.example.test/galleries/":                       false,
+		"https://pics.example.test/":                                 false,
 	} {
-		u, err := url.Parse(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !p.Match(u) {
-			t.Errorf("Match(%q) = false", raw)
-		}
-	}
-	// A CDN link is already a file. Claiming it would hand an image to the
-	// listing reader, which would find no galleries in it and refuse what the
-	// direct extractor downloads without a thought.
-	for _, raw := range []string{
-		"https://cdni.pornpics.com/1280/1/200/10000001/10000001_001_aaaa.jpg",
-		"https://example.test/some-category/",
-	} {
-		u, _ := url.Parse(raw)
-		if p.Match(u) {
-			t.Errorf("Match(%q) = true", raw)
-		}
+		expectShape(t, p, raw, want)
 	}
 }
 
@@ -381,6 +350,17 @@ func pornpicsServer(t *testing.T) (*httptest.Server, *pornpicsSite) {
 		_, _ = io.WriteString(w, "[]")
 	})
 
+	// A search the site has a category for redirects there, with every
+	// parameter it was asked with.
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		site.record(r)
+		if r.URL.Query().Get("q") == "" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/some-category/", http.StatusMovedPermanently)
+	})
+
 	mux.HandleFunc("/galleries/", func(w http.ResponseWriter, r *http.Request) {
 		site.record(r)
 		segs := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -392,20 +372,13 @@ func pornpicsServer(t *testing.T) (*httptest.Server, *pornpicsSite) {
 }
 
 func testPornPics() *PornPics {
-	return NewPornPics(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	return NewPornPics(testClient())
 }
 
 func TestPornPicsExpandsASearchListingThroughTheSearchEndpoint(t *testing.T) {
 	srv, site := pornpicsServer(t)
 
-	u, err := url.Parse(srv.URL + "/pornstars/a-name/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := testPornPics().Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPornPics(), srv.URL+"/pornstars/a-name/", Options{})
 
 	// Two galleries off the page and one more off the endpoint, two pictures
 	// each. A listing paged the wrong way would stop at four.
@@ -432,14 +405,7 @@ func TestPornPicsExpandsASearchListingThroughTheSearchEndpoint(t *testing.T) {
 func TestPornPicsExpandsAPlainListingThroughItsOwnPath(t *testing.T) {
 	srv, site := pornpicsServer(t)
 
-	u, err := url.Parse(srv.URL + "/some-category/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := testPornPics().Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPornPics(), srv.URL+"/some-category/", Options{})
 
 	if len(res.Files) != 6 {
 		t.Fatalf("resolved %d files, want 6 (three galleries of two)", len(res.Files))
@@ -464,14 +430,7 @@ func TestPornPicsExpandsAPlainListingThroughItsOwnPath(t *testing.T) {
 func TestPornPicsExtractsASingleGallery(t *testing.T) {
 	srv, _ := pornpicsServer(t)
 
-	u, err := url.Parse(srv.URL + "/galleries/gallery-10000001/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := testPornPics().Extract(context.Background(), u, Options{})
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	res := extractOK(t, testPornPics(), srv.URL+"/galleries/gallery-10000001/", Options{})
 	if len(res.Files) != 2 {
 		t.Fatalf("resolved %d files, want 2", len(res.Files))
 	}
@@ -485,34 +444,18 @@ func TestPornPicsExtractsASingleGallery(t *testing.T) {
 	}
 }
 
-// The ceiling exists because the search endpoint, unlike the own-path route,
-// clamps nothing: a broad enough query describes more galleries than anyone
-// meant to ask for. Where it falls matters — a folder holding some of its
-// pictures reads as a finished download.
-func TestPornPicsTrimCutsOnAGalleryBoundary(t *testing.T) {
-	var files []File
-	for _, dir := range []string{"one", "one", "two", "two", "two", "three"} {
-		files = append(files, File{Dir: dir})
-	}
+// The file cap takes a listing a gallery at a time: a folder holding some of
+// its pictures reads as a finished download, so a gallery that would cross
+// the cap is left out whole and the cut is noted.
+func TestPornPicsFileCapTakesWholeGalleries(t *testing.T) {
+	srv, _ := pornpicsServer(t)
 
-	// The ceiling falls inside "two", so "two" goes whole rather than in part.
-	got := pornpicsTrim(files, 4)
-	if len(got) != 2 || got[len(got)-1].Dir != "one" {
-		t.Errorf("trimmed to %d files ending in %q, want the two of \"one\"",
-			len(got), got[len(got)-1].Dir)
+	res := extractOK(t, testPornPics(), srv.URL+"/some-category/", Options{limits: Limits{Files: 3}})
+	if len(res.Files) != 2 || res.Files[1].Dir != "Gallery 10000001" {
+		t.Errorf("files = %v, want the first gallery's two alone", filePaths(res.Files))
 	}
-	// A ceiling that lands on a boundary already needs no moving.
-	if got := pornpicsTrim(files, 5); len(got) != 5 {
-		t.Errorf("trimmed to %d files, want 5: the ceiling was already a boundary", len(got))
-	}
-	if got := pornpicsTrim(files, 99); len(got) != len(files) {
-		t.Errorf("trimmed to %d files, want all %d", len(got), len(files))
-	}
-	// One gallery bigger than the whole ceiling has nowhere to cut back to,
-	// and must still yield something.
-	single := []File{{Dir: "one"}, {Dir: "one"}, {Dir: "one"}}
-	if got := pornpicsTrim(single, 2); len(got) != 2 {
-		t.Errorf("trimmed to %d files, want the ceiling's 2", len(got))
+	if !strings.Contains(res.Note, "partial — file limit") {
+		t.Errorf("note = %q, want the file cap admitted", res.Note)
 	}
 }
 
@@ -531,7 +474,7 @@ func TestPornPicsListingWithNoGalleriesIsAnError(t *testing.T) {
 		</body></html>`)
 	})
 
-	u, _ := url.Parse(srv.URL + "/")
+	u := mustParse(t, srv.URL+"/")
 	if _, err := testPornPics().Extract(context.Background(), u, Options{}); err == nil {
 		t.Fatal("a page listing only categories resolved to something")
 	}

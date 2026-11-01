@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -86,12 +85,12 @@ func TestMinutesLeftRoundsUp(t *testing.T) {
 // hold that worker. The file behind it finishes first, while the waiting one
 // shows as queued rather than downloading, and it runs once its time comes.
 func TestAWaitingItemGivesItsWorkerToTheRestOfTheQueue(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "payload for "+r.URL.Path)
 	}))
-	t.Cleanup(srv.Close)
 
-	m, _ := newTestManager(t)
+	m := testManager(t, nil)
+	m.Start()
 	var resolves atomic.Int32
 	until := time.Now().Add(2 * time.Second)
 	waits := extractor.File{Name: "waits.bin", Size: -1, Resolve: func(context.Context) (*extractor.Target, error) {
@@ -104,8 +103,7 @@ func TestAWaitingItemGivesItsWorkerToTheRestOfTheQueue(t *testing.T) {
 
 	m.mu.Lock()
 	job := &Job{ID: newID(), Source: srv.URL + "/list", CreatedAt: time.Now()}
-	m.jobs[job.ID] = job
-	m.order = append(m.order, job.ID)
+	m.queueJobLocked(job)
 	first, second := m.newItem(job, waits, "", 0), m.newItem(job, quick, "", 1)
 	job.Items = []*Item{first, second}
 	m.enqueueLocked(first)
@@ -113,16 +111,7 @@ func TestAWaitingItemGivesItsWorkerToTheRestOfTheQueue(t *testing.T) {
 	m.mu.Unlock()
 	m.signal()
 
-	view := func(id string) ItemView {
-		for _, job := range m.Snapshot().Jobs {
-			for _, it := range job.Items {
-				if it.ID == id {
-					return it
-				}
-			}
-		}
-		return ItemView{}
-	}
+	view := func(id string) ItemView { return findItem(m, "", id) }
 
 	waitFor(t, 10*time.Second, func() bool { return view(second.ID).Status == StatusDone })
 	if v := view(first.ID); time.Now().Before(until) &&

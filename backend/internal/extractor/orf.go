@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -39,10 +40,11 @@ import (
 // clip of something else. That is recognised and refused in words, and a
 // series of such episodes left out after one has shown it.
 //
-// Anything else on orf.at — its radio, its news pages — is still handed to
-// yt-dlp, as all of it was.
+// The broadcaster's radio broadcasts, podcasts and stories, recognised by
+// their path family and the broadcaster's name, are handed to yt-dlp, as
+// is an ORF ON page naming no episode or series.
 type ORF struct {
-	hostSet
+	about
 	client *httpx.Client
 	// site is where the runtime configuration is read from, a field so that
 	// tests can stand in for it.
@@ -58,9 +60,8 @@ type orfAPI struct{ base, authorization string }
 
 // orfRest is the part of orf.at still handed to yt-dlp.
 var orfRest = handoffSite{
-	name:    "orf",
-	domains: []string{"orf.at", "tvthek.orf.at", "on.orf.at"},
-	why:     "only ORF ON's videos and series are read natively, not a page like this one",
+	name: "orf",
+	why:  "only ORF ON's videos and series are read natively, not a page like this one",
 }
 
 const orfSite = "https://on.orf.at/"
@@ -68,12 +69,51 @@ const orfSite = "https://on.orf.at/"
 // NewORF builds the ORF extractor.
 func NewORF(client *httpx.Client) *ORF {
 	return &ORF{
-		hostSet: orfRest.domains, client: client, site: orfSite,
-		handoff: &Handoff{hostSet: orfRest.domains, client: client, site: orfRest},
+		client: client, site: orfSite,
+		handoff: newHandoff(client, orfRest),
+		about: about{name: "orf", shape: orfShape,
+			recognises: "episodes and series (`/video/<id>`, `/sendereihe/<id>`, `/profile/…`) of ORF ON, whose page carries the runtime configuration (`__NUXT__`) the API credentials are read from; " +
+				"radio broadcasts, podcasts and stories (`/radio/…`, `/player/<date>/<id>`, `/podcast/…`, `/stories/<id>`) named for the broadcaster are handed to yt-dlp"},
 	}
 }
 
-func (o *ORF) Name() string { return "orf" }
+// orfShape is an episode or series link as ORF ON writes them, with the
+// slug after the id: a bare /video/<number> is every other video site's
+// form too, and only a probed page can say it is this one.
+func orfShape(u *url.URL) bool {
+	kind, _ := orfLink(u)
+	segs := util.PathSegments(u)
+	return kind != 0 && (segs[0] == "profile" || len(segs) >= 3)
+}
+
+// Recognise takes a page of ORF ON: it carries the runtime configuration
+// (window.__NUXT__) that names the API and the credentials this reads with.
+// A page of it that is no episode or series is handed to yt-dlp, as before.
+func (o *ORF) Recognise(_ context.Context, p *Page) bool {
+	if len(p.Segments()) > 0 && p.Has("__NUXT__") && p.Named("ORF ON") {
+		return true
+	}
+	return orfRestPage(p)
+}
+
+// orfRestShape are the pages of the broadcaster's other services that
+// yt-dlp reads: a radio broadcast (by its id, its programme's /sendung/
+// page, or a station player's /player/<date>/<id>), a podcast episode, a
+// story with video.
+var orfRestShape = pathShape(
+	`^/radio/[a-z0-9]+/[0-9]+(?:/[^/]+)*/?$`,
+	`^/radio/[a-z0-9]+/sendung/[0-9]+(?:/[^/]+)?/?$`,
+	`^/player/[0-9]{8}/[^/]+/?$`,
+	`^/podcast/[a-z0-9-]+/[^/]+(?:/[^/]+)?/?$`,
+	`^/stories/[0-9]+/?$`,
+)
+
+// orfRestPage is such a page by its path family and its name, which every
+// one of those services begins with the broadcaster's (or is its youth
+// station's).
+func orfRestPage(p *Page) bool {
+	return orfRestShape(p.Final) && (p.namedPrefix("ORF") || p.Named("FM4"))
+}
 
 // The kinds of page read natively.
 const (
@@ -81,23 +121,19 @@ const (
 	orfSeries
 )
 
-var orfNumber = regexp.MustCompile(`^[0-9]+$`)
-
 // orfLink tells what a link names: on.orf.at's /video/<id>[/<segment>][/slug]
 // and /sendereihe/<id>[/slug], and the older tvthek.orf.at's
 // /profile/<name>/<series>[/<title>/<episode>].
 func orfLink(u *url.URL) (kind int, id string) {
 	segs := util.PathSegments(u)
 	switch {
-	case !util.HostMatches(u.Host, "on.orf.at") && !util.HostMatches(u.Host, "tvthek.orf.at"):
-		return 0, ""
-	case len(segs) >= 2 && segs[0] == "video" && orfNumber.MatchString(segs[1]):
+	case len(segs) >= 2 && segs[0] == "video" && allDigits(segs[1]):
 		return orfEpisode, segs[1]
-	case len(segs) >= 2 && segs[0] == "sendereihe" && orfNumber.MatchString(segs[1]):
+	case len(segs) >= 2 && segs[0] == "sendereihe" && allDigits(segs[1]):
 		return orfSeries, segs[1]
-	case len(segs) >= 5 && segs[0] == "profile" && orfNumber.MatchString(segs[4]):
+	case len(segs) >= 5 && segs[0] == "profile" && allDigits(segs[4]):
 		return orfEpisode, segs[4]
-	case len(segs) >= 3 && segs[0] == "profile" && orfNumber.MatchString(segs[2]):
+	case len(segs) >= 3 && segs[0] == "profile" && allDigits(segs[2]):
 		return orfSeries, segs[2]
 	}
 	return 0, ""
@@ -116,10 +152,7 @@ func (o *ORF) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 		if err != nil {
 			return nil, err
 		}
-		return &Result{Title: ep.name(), Files: []File{{
-			Name: target.Name, Size: -1, Headers: target.Headers, Segments: target.Segments,
-			SegmentKey: target.SegmentKey, Audio: target.Audio, Subtitles: target.Subtitles,
-		}}}, nil
+		return &Result{Title: ep.name(), Files: []File{target.file("")}}, nil
 	case orfSeries:
 		return o.series(ctx, id, opts)
 	}
@@ -136,7 +169,6 @@ type orfEpisodeDoc struct {
 	Sources        struct {
 		HLS []struct {
 			Src              string `json:"src"`
-			QualityKey       string `json:"quality_key"`
 			IsAdaptiveStream bool   `json:"is_adaptive_stream"`
 			IsDRMProtected   bool   `json:"is_drm_protected"`
 		} `json:"hls"`
@@ -151,7 +183,7 @@ type orfEpisodeDoc struct {
 // name is what an episode is filed as: its series and its title, the
 // series left out where the title already says it.
 func (e *orfEpisodeDoc) name() string {
-	return cmp.Or(ardJoin(strings.TrimSpace(e.ProfileTitle), strings.TrimSpace(e.Title)), strconv.FormatInt(e.ID, 10))
+	return cmp.Or(joinTitle(strings.TrimSpace(e.ProfileTitle), strings.TrimSpace(e.Title), titleContains), strconv.FormatInt(e.ID, 10))
 }
 
 // errORFAustriaOnly is an episode the stream refuses outside Austria.
@@ -186,22 +218,19 @@ func (o *ORF) stream(ctx context.Context, ep *orfEpisodeDoc) (*Target, error) {
 	if master == "" {
 		return nil, fmt.Errorf("orf: %s offers no stream to download", name)
 	}
-	headers := httpx.RefererOrigin(orfSite, strings.TrimSuffix(orfSite, "/"))
-	media, err := resolveMediaPlaylist(ctx, o.client, master, headers)
+	headers := httpx.SiteOrigin(strings.TrimSuffix(orfSite, "/"))
+	media, err := broadcastMedia(ctx, o.client, "orf", name, master, headers)
 	if err != nil {
-		return nil, fmt.Errorf("orf: %s: %w", name, err)
+		return nil, err
 	}
 	if orfGeoProtected(media) {
 		return nil, fmt.Errorf("orf: %s: %w", name, errORFAustriaOnly)
 	}
-	subtitles := media.Subtitles
-	if sub := ep.Embedded.Subtitle; len(subtitles) == 0 && sub != nil && sub.VTTURL != "" {
-		subtitles = []Track{{Segments: []string{sub.VTTURL}, Language: "de", Name: "Deutsch"}}
+	target := media.target(master, name+media.extension(), headers)
+	if sub := ep.Embedded.Subtitle; len(target.Subtitles) == 0 && sub != nil && sub.VTTURL != "" {
+		target.Subtitles = []Track{{Segments: []string{sub.VTTURL}, Language: "de", Name: "Deutsch"}}
 	}
-	return &Target{
-		URL: master, Name: name + media.extension(), Size: -1, Headers: headers,
-		Segments: media.Segments, SegmentKey: media.Key, Audio: media.Audio, Subtitles: subtitles,
-	}, nil
+	return target, nil
 }
 
 // orfGeoProtected reports a stream that is the notice ORF shows outside
@@ -224,22 +253,25 @@ type orfEpisodesPage struct {
 // left out; and once one shown in Austria alone turns out refused here,
 // the rest of those are left out with it, the note saying so once.
 func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, error) {
-	var episodes []orfEpisodeDoc
-	for page := 1; ; page++ {
-		var doc orfEpisodesPage
-		if err := o.get(ctx, fmt.Sprintf("profile/%s/episodes?limit=%d&page=%d", url.PathEscape(id), orfPageSize, page), &doc); err != nil {
-			if page == 1 {
-				if httpx.HasStatus(err, http.StatusNotFound) {
-					return nil, fmt.Errorf("orf: series %s does not exist", id)
-				}
-				return nil, fmt.Errorf("orf: series %s: %w", id, err)
+	// The whole listing is read, up to the page cap, before any is cut to
+	// the file cap: it is filed oldest first, and lists newest first.
+	episodes, walkNote, err := walkPages(ctx, pageWalk[orfEpisodeDoc]{
+		fetch: func(ctx context.Context, n int) (pageOf[orfEpisodeDoc], error) {
+			var doc orfEpisodesPage
+			if err := o.get(ctx, fmt.Sprintf("profile/%s/episodes?limit=%d&page=%d", url.PathEscape(id), config.ORFPageSize, n+1), &doc); err != nil {
+				return pageOf[orfEpisodeDoc]{}, err
 			}
-			break
+			items := doc.Embedded.Items
+			return pageOf[orfEpisodeDoc]{items: items, next: true, end: len(items) == 0, pages: max(doc.Pages, 1)}, nil
+		},
+		key:   func(ep orfEpisodeDoc) string { return strconv.FormatInt(ep.ID, 10) },
+		limit: -1,
+	})
+	if err != nil {
+		if httpx.HasStatus(err, http.StatusNotFound) {
+			return nil, fmt.Errorf("orf: series %s does not exist", id)
 		}
-		episodes = append(episodes, doc.Embedded.Items...)
-		if page >= doc.Pages || len(doc.Embedded.Items) == 0 {
-			break
-		}
+		return nil, fmt.Errorf("orf: series %s: %w", id, err)
 	}
 	slices.Reverse(episodes)
 
@@ -282,38 +314,22 @@ func (o *ORF) series(ctx context.Context, id string, opts Options) (*Result, err
 		}
 		return nil, fmt.Errorf("orf: series %s lists no episodes", id)
 	}
-	res := &Result{Title: cmp.Or(title, "series "+id), Files: files}
-	var notes []string
-	if shown := len(episodes) - drm - austria; shown > len(files) {
-		notes = append(notes, fmt.Sprintf("%d of %d episodes", len(files), shown))
-	}
-	if austria > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that ORF shows in Austria only", austria))
-	}
-	if drm > 0 {
-		notes = append(notes, fmt.Sprintf("%d left out that are DRM-protected", drm))
-	}
-	res.Note = strings.Join(notes, "; ")
-	return res, nil
+	note := joinNotes(cappedNote(len(files), len(episodes)-drm-austria, "episodes"), walkNote,
+		leftOutNote(austria, " that ORF shows in Austria only"), leftOutNote(drm, " that are DRM-protected"))
+	return &Result{Title: cmp.Or(title, "series "+id), Files: files, Note: note}, nil
 }
-
-// orfPageSize is how many episodes a page of a series asks for.
-const orfPageSize = 100
 
 // lazy is a series' episode, read again and resolved when its transfer
 // starts.
 func (o *ORF) lazy(ep *orfEpisodeDoc) File {
 	id := strconv.FormatInt(ep.ID, 10)
-	return File{
-		Name: ep.name() + ".mp4", Size: -1,
-		Resolve: func(ctx context.Context) (*Target, error) {
-			full, err := o.episode(ctx, id)
-			if err != nil {
-				return nil, err
-			}
-			return o.stream(ctx, full)
-		},
-	}
+	return lazyEpisode(ep.name()+".mp4", "", nil, func(ctx context.Context) (*Target, error) {
+		full, err := o.episode(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return o.stream(ctx, full)
+	})
 }
 
 // get fetches one API document, with the site's credentials. Credentials
@@ -324,7 +340,7 @@ func (o *ORF) get(ctx context.Context, path string, out any) error {
 		if err != nil {
 			return err
 		}
-		headers := httpx.Header{"Authorization": api.authorization, httpx.HeaderReferer: orfSite}
+		headers := httpx.Header{httpx.HeaderAuthorization: api.authorization, httpx.HeaderReferer: orfSite}
 		err = o.client.GetJSON(ctx, api.base+path, headers, out)
 		if attempt == 0 && httpx.HasStatus(err, http.StatusUnauthorized, http.StatusForbidden) {
 			continue

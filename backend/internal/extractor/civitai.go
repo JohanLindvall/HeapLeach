@@ -3,7 +3,9 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
@@ -53,7 +54,10 @@ import (
 // the right suffix on a filename nobody can match against the page they
 // copied it from.
 type Civitai struct {
+	about
 	client *httpx.Client
+	// api is the API's base, a field so a test can serve it.
+	api string
 }
 
 const (
@@ -84,11 +88,60 @@ const (
 var civitaiUserTabs = map[string]bool{"images": true, "posts": true, "videos": true}
 
 // NewCivitai builds the civitai extractor.
-func NewCivitai(client *httpx.Client) *Civitai { return &Civitai{client: client} }
+func NewCivitai(client *httpx.Client) *Civitai {
+	return &Civitai{client: client, api: civitaiAPI, about: about{name: "civitai", shape: civitaiShape,
+		recognises: "images, posts, models and user galleries (`/images/<id>`, `/posts/<id>`, `/models/<id>`, `/user/<name>`) " +
+			"whose site's public API answers for that item on the page's own origin"}}
+}
 
-func (c *Civitai) Name() string { return "civitai" }
+// civitaiShape is the forms civitaiTargetOf reads, but for a post:
+// /posts/<n> is every forum's and blog's navigation too, so a post is
+// recognised when submitted rather than singled out among a page's links.
+func civitaiShape(u *url.URL) bool {
+	target := civitaiTargetOf(u)
+	return target != nil && target.selector != civitaiByPost
+}
 
-func (c *Civitai) Match(u *url.URL) bool { return civitaiTargetOf(u) != nil }
+// Recognise asks the public API this extractor reads, on the page's own
+// origin, for the item the URL names. The site's pages sit behind a
+// challenge an anonymous probe rarely passes, so there is usually no page to
+// read; the API is what the extraction depends on anyway. It is asked only
+// for a page of the right form that names itself, is the site's Next.js
+// app (its item pages are titled after the item and the uploader alone, with
+// no site name), or could not be read at all (probeWithheld: a challenge,
+// a refusal, a rate limit, a server error, a timeout) — never for every /images/<n>
+// on the web.
+func (c *Civitai) Recognise(ctx context.Context, p *Page) bool {
+	target := civitaiTargetOf(p.Final)
+	if target == nil || c.client == nil || !(probeWithheld(p) || p.Named("Civitai") || civitaiApp(p)) {
+		return false
+	}
+	if target.selector == "" {
+		endpoint := civitaiModelOn(p.Final, target.value)
+		var model struct {
+			ID       int64              `json:"id"`
+			Versions *[]json.RawMessage `json:"modelVersions"`
+		}
+		return pageJSON(ctx, p, c.client, endpoint, nil, &model) && model.ID > 0 && model.Versions != nil
+	}
+	endpoint := civitaiQuery(util.Origin(p.Final)+"/api/v1/images", target, 1)
+	var listing struct {
+		Items    *[]json.RawMessage `json:"items"`
+		Metadata *json.RawMessage   `json:"metadata"`
+	}
+	return pageJSON(ctx, p, c.client, endpoint, nil, &listing) && listing.Items != nil && listing.Metadata != nil
+}
+
+// civitaiModelOn is a model's API endpoint on u's origin.
+func civitaiModelOn(u *url.URL, id string) string {
+	return util.Origin(u) + "/api/v1/models/" + url.PathEscape(id)
+}
+
+// civitaiApp reports the Next.js app the site's pages are: its data island
+// and its bundles. Only a gate before the API is asked, which decides.
+func civitaiApp(p *Page) bool {
+	return p.Has(`id="__NEXT_DATA__"`) && p.Script("/_next/static/")
+}
 
 // civitaiTarget is what one input URL asks for.
 type civitaiTarget struct {
@@ -103,9 +156,6 @@ type civitaiTarget struct {
 // and /api/download/... too, so a model file link still reaches the direct
 // extractor that can fetch it.
 func civitaiTargetOf(u *url.URL) *civitaiTarget {
-	if !util.HostMatches(u.Host, "civitai.com") {
-		return nil
-	}
 	segs := util.PathSegments(u)
 	if len(segs) < 2 {
 		return nil
@@ -139,17 +189,17 @@ func civitaiIsID(seg string) bool {
 }
 
 // Extract resolves an image, a post, a user's gallery or a model.
-func (c *Civitai) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, error) {
+func (c *Civitai) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	target := civitaiTargetOf(u)
 	if target == nil {
 		return nil, fmt.Errorf("civitai: %s is not an image (/images/<id>), a post "+
 			"(/posts/<id>), a model (/models/<id>) or a user gallery (/user/<name>)", u.Redacted())
 	}
 	if target.selector == "" {
-		return c.model(ctx, target.value)
+		return c.model(ctx, u, target.value)
 	}
 
-	items, err := c.listing(ctx, target)
+	items, note, err := c.walk(ctx, civitaiQuery(c.api+"/images", target, civitaiPageSize), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -162,53 +212,52 @@ func (c *Civitai) Extract(ctx context.Context, u *url.URL, _ Options) (*Result, 
 	for _, item := range items {
 		files = append(files, civitaiFile(item))
 	}
-	return &Result{Title: civitaiTitle(target, items), Files: files}, nil
+	return &Result{Title: civitaiTitle(target, items), Files: files, Note: note}, nil
 }
 
-// listing collects everything one selector names.
-func (c *Civitai) listing(ctx context.Context, target *civitaiTarget) ([]civitaiImage, error) {
-	return c.walk(ctx, civitaiQuery(civitaiAPI+"/images", target))
-}
-
-// civitaiQuery builds the first page's request: the site's own maximum page,
-// the browsing level that makes the answer complete, and exactly one
-// selector.
-func civitaiQuery(endpoint string, target *civitaiTarget) string {
+// civitaiQuery builds the first page's request: limit items, the site's own
+// maximum page for a listing, the browsing level that makes the answer
+// complete, and exactly one selector.
+func civitaiQuery(endpoint string, target *civitaiTarget, limit int) string {
 	query := url.Values{}
-	query.Set("limit", strconv.Itoa(civitaiPageSize))
+	query.Set("limit", strconv.Itoa(limit))
 	query.Set("nsfw", civitaiNSFW)
 	query.Set(target.selector, target.value)
 	return endpoint + "?" + query.Encode()
 }
 
-// walk follows the listing's cursor from one page to the next. The page count
-// is bounded the way every album listing here is, as a backstop against a site
-// that keeps answering rather than ending.
-func (c *Civitai) walk(ctx context.Context, next string) ([]civitaiImage, error) {
-	var (
-		items []civitaiImage
-		seen  = make(map[int64]bool)
-	)
-	for page := 0; next != "" && page < config.MaxAlbumPages; page++ {
-		payload, err := c.page(ctx, next)
-		if err != nil {
-			return nil, err
-		}
-		if len(payload.Items) == 0 {
-			break
-		}
-		for _, item := range payload.Items {
-			// A cursor boundary hands the same item out twice, once at the
-			// end of a page and again at the head of the next.
-			if item.URL == "" || seen[item.ID] {
-				continue
+// walk follows the listing's cursor from one page to the next, until a page
+// names no next one. A cursor boundary hands the same item out twice, once
+// at the end of a page and again at the head of the next, which the walk
+// counts once.
+func (c *Civitai) walk(ctx context.Context, next string, opts Options) ([]civitaiImage, string, error) {
+	return walkPages(ctx, pageWalk[civitaiImage]{
+		key:   func(item civitaiImage) string { return strconv.FormatInt(item.ID, 10) },
+		limit: opts.maxFiles(), limitNote: fileLimitNote,
+		failed: func(err error) (string, bool) {
+			if httpx.HasStatus(err, http.StatusServiceUnavailable) {
+				return "partial — the image search stayed overloaded", true
 			}
-			seen[item.ID] = true
-			items = append(items, item)
-		}
-		next = civitaiNextPage(next, payload.Metadata.NextPage)
-	}
-	return items, nil
+			return "", false
+		},
+		fetch: func(ctx context.Context, _ int) (pageOf[civitaiImage], error) {
+			payload, err := c.page(ctx, next)
+			if err != nil {
+				return pageOf[civitaiImage]{}, err
+			}
+			items := make([]civitaiImage, 0, len(payload.Items))
+			for _, item := range payload.Items {
+				if item.URL != "" {
+					items = append(items, item)
+				}
+			}
+			next = civitaiNextPage(next, payload.Metadata.NextPage)
+			// A page whose images all lack a URL adds nothing, yet the
+			// cursor goes on: it is passed over, not taken as a repeat.
+			return pageOf[civitaiImage]{items: items, next: next != "", end: len(payload.Items) == 0,
+				skip: len(items) == 0 && len(payload.Items) > 0}, nil
+		},
+	})
 }
 
 // civitaiNextPage takes the cursor link the listing supplies as it stands.
@@ -238,13 +287,14 @@ func civitaiNextPage(current, raw string) string {
 // it arrives with neither Retry-After nor any rate-limit header to pace by,
 // so the wait is our own. What it must never be read as is the end of the
 // listing: a gallery cut short at page seven looks exactly like a finished
-// one, so an overload that outlasts the attempts fails the extraction rather
-// than quietly returning most of it.
+// one, so an overload that outlasts the attempts fails the first page, and
+// marks a gallery a later one cut short as partial rather than quietly
+// returning most of it.
 func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, error) {
 	overloaded := func(_ *civitaiListing, err error) bool {
 		return httpx.HasStatus(err, http.StatusServiceUnavailable)
 	}
-	payload, err := withExtractRetries(ctx, func() (*civitaiListing, error) {
+	payload, err := withExtractRetries(ctx, func(ctx context.Context) (*civitaiListing, error) {
 		var payload civitaiListing
 		err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload)
 		return &payload, err
@@ -261,18 +311,21 @@ func (c *Civitai) page(ctx context.Context, endpoint string) (*civitaiListing, e
 
 // model reads a model's showcase images, which the image listing cannot
 // reach: its modelId parameter is accepted and answers with nothing.
-func (c *Civitai) model(ctx context.Context, id string) (*Result, error) {
-	endpoint := civitaiAPI + "/models/" + url.PathEscape(id)
-
+// The recogniser's answer for the probed page is read when it asked.
+func (c *Civitai) model(ctx context.Context, u *url.URL, id string) (*Result, error) {
 	var payload civitaiModel
-	if err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload); err != nil {
-		return nil, fmt.Errorf("civitai: model %s: %w", id, err)
+	if p := probed(ctx, u); p == nil || !askedJSON(ctx, p, c.client, civitaiModelOn(p.Final, id), nil, &payload) {
+		payload = civitaiModel{}
+		endpoint := c.api + "/models/" + url.PathEscape(id)
+		if err := c.client.GetJSON(ctx, endpoint, httpx.Referer(civitaiRoot+"/"), &payload); err != nil {
+			return nil, fmt.Errorf("civitai: model %s: %w", id, err)
+		}
 	}
 	files := civitaiModelFiles(&payload)
 	if len(files) == 0 {
 		return nil, fmt.Errorf("civitai: model %s shows no images", id)
 	}
-	return &Result{Title: util.FirstNonEmpty(payload.Name, "civitai-model-"+id), Files: files}, nil
+	return &Result{Title: cmp.Or(payload.Name, "civitai-model-"+id), Files: files}, nil
 }
 
 // civitaiModelFiles flattens a model's versions, filing each version's
@@ -337,7 +390,7 @@ func civitaiTitle(target *civitaiTarget, items []civitaiImage) string {
 	}
 	switch target.selector {
 	case civitaiByUser:
-		return util.FirstNonEmpty(who, target.value)
+		return cmp.Or(who, target.value)
 	case civitaiByPost:
 		if who != "" {
 			return who + " post " + target.value

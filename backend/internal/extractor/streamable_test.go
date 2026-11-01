@@ -9,13 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 // streamableReadyDoc is a finished video in the shape the API serves, cut to
@@ -83,138 +79,124 @@ const streamablePartialDoc = `{
   }
 }`
 
-// streamableDoc decodes a fixture the way the fetch does, so the JSON tags
-// are under test too.
-func streamableDoc(t *testing.T, doc string) *streamableVideo {
+// streamablePick decodes a fixture the way the read does, so the JSON tags
+// are under test too, and takes the rendition the engine would.
+func streamablePick(t *testing.T, doc string) (*playerVideo, mediaCandidate, error) {
 	t.Helper()
 	var video streamableVideo
 	if err := json.Unmarshal([]byte(doc), &video); err != nil {
 		t.Fatalf("decode fixture: %v", err)
 	}
-	return &video
+	read, err := streamableVideoOf(&video, "abcd12")
+	if err != nil {
+		return nil, mediaCandidate{}, err
+	}
+	best, _ := bestCandidate(read.candidates)
+	return read, best, nil
 }
 
-func TestStreamableTargetPrefersTheTallerRendition(t *testing.T) {
-	target, err := streamableTarget(streamableDoc(t, streamableReadyDoc), "abcd12")
+func TestStreamablePrefersTheTallerRendition(t *testing.T) {
+	read, best, err := streamablePick(t, streamableReadyDoc)
 	if err != nil {
-		t.Fatalf("streamableTarget: %v", err)
+		t.Fatalf("read: %v", err)
 	}
-
 	// Protocol-relative in the document; unusable until it is given a scheme.
 	want := "https://cdn.example.test/video/mp4/abcd12.mp4?Expires=1&Signature=ccc&Key-Pair-Id=bbb"
-	if target.URL != want {
-		t.Errorf("url = %q, want the full-height rendition with a scheme", target.URL)
+	if best.URL != want {
+		t.Errorf("url = %q, want the full-height rendition with a scheme", best.URL)
 	}
-	if target.Size != 44039389 {
-		t.Errorf("size = %d, want the rendition's own byte count", target.Size)
+	if best.Size != 44039389 {
+		t.Errorf("size = %d, want the rendition's own byte count", best.Size)
 	}
-	if target.Name != "A Synthetic Clip.mp4" {
-		t.Errorf("name = %q, want the title with the served extension", target.Name)
+	if read.title != "A Synthetic Clip" {
+		t.Errorf("title = %q, want the uploader's", read.title)
 	}
 }
 
 // The upload's size is the decoy in this document: publishing it would be an
 // exact size describing a different file, so a finished download would look
 // unfinished and a file already on disk would never be skipped.
-func TestStreamableTargetNeverTakesTheUploadsSize(t *testing.T) {
+func TestStreamableNeverTakesTheUploadsSize(t *testing.T) {
 	for _, doc := range []string{streamableReadyDoc, streamableEarlyDoc} {
-		target, err := streamableTarget(streamableDoc(t, doc), "abcd12")
+		_, best, err := streamablePick(t, doc)
 		if err != nil {
-			t.Fatalf("streamableTarget: %v", err)
+			t.Fatalf("read: %v", err)
 		}
-		if target.Size == 442093890 || target.Size == 34220382 {
-			t.Errorf("size = %d, which is original_size and describes the upload", target.Size)
+		if best.Size == 442093890 || best.Size == 34220382 {
+			t.Errorf("size = %d, which is original_size and describes the upload", best.Size)
 		}
 	}
 }
 
 // A rendition with no length must say so, rather than borrowing one.
-func TestStreamableTargetReportsAnUnknownSize(t *testing.T) {
-	target, err := streamableTarget(streamableDoc(t, streamableEarlyDoc), "abcd12")
+func TestStreamableReportsAnUnknownSize(t *testing.T) {
+	read, best, err := streamablePick(t, streamableEarlyDoc)
 	if err != nil {
-		t.Fatalf("streamableTarget: %v", err)
+		t.Fatalf("read: %v", err)
 	}
-	if target.Size != -1 {
-		t.Errorf("size = %d, want -1 for a rendition that states none", target.Size)
+	if best.Size != 0 || knownSize(best.Size) != -1 {
+		t.Errorf("size = %d, want none for a rendition that states none", best.Size)
 	}
 	// No title, so the upload names the file — but not its container, which
 	// is the one the site transcoded away from.
-	if target.Name != "cow.mp4" {
-		t.Errorf("name = %q, want the upload's stem with the served extension", target.Name)
+	if read.title != "cow" {
+		t.Errorf("title = %q, want the upload's stem", read.title)
 	}
 }
 
 // A rendition that is still being made is listed in full except for its link,
 // so height alone would pick something that cannot be fetched.
-func TestStreamableTargetSkipsARenditionWithNoLink(t *testing.T) {
-	target, err := streamableTarget(streamableDoc(t, streamablePartialDoc), "abcd12")
+func TestStreamableSkipsARenditionWithNoLink(t *testing.T) {
+	_, best, err := streamablePick(t, streamablePartialDoc)
 	if err != nil {
-		t.Fatalf("streamableTarget: %v", err)
+		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(target.URL, "mp4-mobile") {
-		t.Errorf("url = %q, want the one rendition that has a link", target.URL)
+	if !strings.Contains(best.URL, "mp4-mobile") {
+		t.Errorf("url = %q, want the one rendition that has a link", best.URL)
 	}
 }
 
-// One document must always name the same rendition: Resolve re-reads it
-// before every attempt, and a transfer that resumed into the other encode
-// would splice two files together. Map iteration is randomised, so a tie
-// decided by iteration order would be a rare, unreproducible corruption.
-func TestStreamableBestIsDeterministicOnATie(t *testing.T) {
-	files := map[string]streamableFile{
-		"mp4":        {URL: "https://cdn.example.test/a.mp4", Height: 720, Size: 1000},
-		"mp4-mobile": {URL: "https://cdn.example.test/b.mp4", Height: 720, Size: 1000},
-		"mp4-alt":    {URL: "https://cdn.example.test/c.mp4", Height: 720, Size: 1000},
-	}
-	first, ok := streamableBest(files)
-	if !ok {
-		t.Fatal("nothing was chosen")
-	}
+// One document must always name the same rendition: it is read again before
+// every attempt, and a transfer that resumed into the other encode would
+// splice two files together. Map iteration is randomised, so a tie decided by
+// iteration order would be a rare, unreproducible corruption.
+func TestStreamableIsDeterministicOnATie(t *testing.T) {
+	doc := `{"status": 2, "files": {
+	  "mp4": {"url": "https://cdn.example.test/a.mp4", "height": 720, "size": 1000},
+	  "mp4-mobile": {"url": "https://cdn.example.test/b.mp4", "height": 720, "size": 1000},
+	  "mp4-alt": {"url": "https://cdn.example.test/c.mp4", "height": 720, "size": 1000}}}`
 	for range 50 {
-		got, ok := streamableBest(files)
-		if !ok || got.URL != first.URL {
-			t.Fatalf("chose %q then %q for the same document", first.URL, got.URL)
+		if _, best, err := streamablePick(t, doc); err != nil || best.URL != "https://cdn.example.test/a.mp4" {
+			t.Fatalf("chose %q (%v), want the first by name", best.URL, err)
 		}
 	}
 }
 
-func TestStreamableBestHandlesAwkwardLists(t *testing.T) {
+func TestStreamableHandlesAwkwardLists(t *testing.T) {
 	tests := []struct {
-		name   string
-		files  map[string]streamableFile
-		want   string
-		wantOK bool
+		name, files, want string
 	}{
-		{name: "nothing at all"},
-		{
-			name:  "listed but not yet made",
-			files: map[string]streamableFile{"mp4": {Height: 1080}},
-		},
+		{name: "nothing at all", files: `{}`},
+		{name: "listed but not yet made", files: `{"mp4": {"height": 1080}}`},
 		{
 			name: "the larger size breaks a tie in height",
-			files: map[string]streamableFile{
-				"mp4":        {URL: "https://cdn.example.test/a.mp4", Height: 480, Size: 900},
-				"mp4-mobile": {URL: "https://cdn.example.test/b.mp4", Height: 480, Size: 2000},
-			},
-			want:   "https://cdn.example.test/b.mp4",
-			wantOK: true,
+			files: `{"mp4": {"url": "https://cdn.example.test/a.mp4", "height": 480, "size": 900},
+			  "mp4-mobile": {"url": "https://cdn.example.test/b.mp4", "height": 480, "size": 2000}}`,
+			want: "https://cdn.example.test/b.mp4",
 		},
 		{
 			// A name this does not know about is still worth downloading.
 			name: "an unfamiliar rendition name",
-			files: map[string]streamableFile{
-				"webm-1440": {URL: "https://cdn.example.test/c.mp4", Height: 1440, Size: 10},
-				"mp4":       {URL: "https://cdn.example.test/a.mp4", Height: 1080, Size: 20},
-			},
-			want:   "https://cdn.example.test/c.mp4",
-			wantOK: true,
+			files: `{"webm-1440": {"url": "https://cdn.example.test/c.mp4", "height": 1440, "size": 10},
+			  "mp4": {"url": "https://cdn.example.test/a.mp4", "height": 1080, "size": 20}}`,
+			want: "https://cdn.example.test/c.mp4",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := streamableBest(tc.files)
-			if ok != tc.wantOK || got.URL != tc.want {
-				t.Errorf("streamableBest = %q, %v; want %q, %v", got.URL, ok, tc.want, tc.wantOK)
+			_, best, err := streamablePick(t, `{"status": 2, "files": `+tc.files+`}`)
+			if (err == nil) != (tc.want != "") || best.URL != tc.want {
+				t.Errorf("picked %q (%v); want %q", best.URL, err, tc.want)
 			}
 		})
 	}
@@ -223,7 +205,7 @@ func TestStreamableBestHandlesAwkwardLists(t *testing.T) {
 // A video that is not transcoded yet is an answer, not a failure, and the
 // message has to say which of the two it is: one is worth waiting for and the
 // other never will be.
-func TestStreamableTargetReportsWhyAVideoIsNotReady(t *testing.T) {
+func TestStreamableReportsWhyAVideoIsNotReady(t *testing.T) {
 	tests := []struct {
 		doc  string
 		want string
@@ -234,7 +216,7 @@ func TestStreamableTargetReportsWhyAVideoIsNotReady(t *testing.T) {
 		{`{"status": 7}`, "status 7"},
 	}
 	for _, tc := range tests {
-		_, err := streamableTarget(streamableDoc(t, tc.doc), "abcd12")
+		_, _, err := streamablePick(t, tc.doc)
 		if err == nil {
 			t.Fatalf("%s resolved to something", tc.doc)
 		}
@@ -246,15 +228,16 @@ func TestStreamableTargetReportsWhyAVideoIsNotReady(t *testing.T) {
 
 // A finished video with nothing behind it is its own case: the status says
 // everything is fine, so the error must not blame the transcode.
-func TestStreamableTargetRejectsAReadyVideoWithNoRenditions(t *testing.T) {
-	if _, err := streamableTarget(streamableDoc(t, `{"status": 2, "files": {}}`), "abcd12"); err == nil {
-		t.Fatal("a video offering no rendition resolved to something")
+func TestStreamableRejectsAReadyVideoWithNoRenditions(t *testing.T) {
+	if _, _, err := streamablePick(t, `{"status": 2, "files": {}}`); err == nil ||
+		!strings.Contains(err.Error(), "transcoded but offers no rendition") {
+		t.Fatalf("a video offering no rendition read as %v", err)
 	}
 }
 
 // streamableServer stands in for the API, minting a link with a fresh
 // signature on every call the way CloudFront does, and counting the calls.
-func streamableServer(t *testing.T, status int, body string) (*Streamable, *atomic.Int32) {
+func streamableServer(t *testing.T, status int, body string) (*Player, *atomic.Int32) {
 	t.Helper()
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -267,23 +250,19 @@ func streamableServer(t *testing.T, status int, body string) (*Streamable, *atom
 		_, _ = io.WriteString(w, strings.ReplaceAll(body, "Signature=ccc", fmt.Sprintf("Signature=sig%d", n)))
 	}))
 	t.Cleanup(srv.Close)
-	return &Streamable{
-		client: httpx.New("test-agent", "en-US", 0, 5*time.Second),
-		api:    srv.URL + "/videos/",
-	}, &hits
+	site := streamablePlayer
+	site.page = streamableDocument(srv.URL + "/videos/")
+	return NewPlayer(testClient(), &site), &hits
 }
 
-// The point of the whole extractor: no URL is published, because the one the
+// The point of the whole row: no URL is published, because the one the
 // document carries is signed and would lapse while the item waited its turn —
 // but the size is, and as an exact figure, because it does not expire with
 // the link and is what gives the queue a real total and lets an identical
 // file already on disk be skipped before a connection is opened.
 func TestStreamableExtractDefersTheLinkButNotTheSize(t *testing.T) {
 	s, hits := streamableServer(t, http.StatusOK, streamableReadyDoc)
-	u, err := ParseURL("https://streamable.com/abcd12")
-	if err != nil {
-		t.Fatal(err)
-	}
+	u := mustParse(t, "https://streamable.com/abcd12")
 
 	res, err := s.Extract(context.Background(), u, Options{})
 	if err != nil {
@@ -332,11 +311,8 @@ func TestStreamableExtractDefersTheLinkButNotTheSize(t *testing.T) {
 // error would name a JSON decode failure at an endpoint the user never typed.
 func TestStreamableExtractReportsAMissingVideoPlainly(t *testing.T) {
 	s, _ := streamableServer(t, http.StatusNotFound, "")
-	u, err := ParseURL("https://streamable.com/abcd12")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.Extract(context.Background(), u, Options{})
+	u := mustParse(t, "https://streamable.com/abcd12")
+	_, err := s.Extract(context.Background(), u, Options{})
 	if err == nil {
 		t.Fatal("a missing video extracted successfully")
 	}
@@ -356,29 +332,9 @@ func TestStreamableID(t *testing.T) {
 		"https://streamable.com/":              "",
 	}
 	for raw, want := range tests {
-		u, err := ParseURL(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
+		u := mustParse(t, raw)
 		if got := streamableID(u); got != want {
 			t.Errorf("streamableID(%s) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-// The match is deliberately an allowlist. A direct CDN link is already
-// downloadable and belongs to the fallback extractor; routed here it would
-// become an API lookup for a video id that does not exist.
-func TestStreamableMatch(t *testing.T) {
-	s := NewStreamable(nil)
-	for _, host := range []string{"streamable.com", "www.streamable.com", "Streamable.com", "streamable.com:443"} {
-		if !s.Match(&url.URL{Scheme: "https", Host: host, Path: "/abcd12"}) {
-			t.Errorf("%s was not matched", host)
-		}
-	}
-	for _, host := range []string{"cdn-cf-west.streamable.com", "ajax.streamable.com", "notstreamable.com"} {
-		if s.Match(&url.URL{Scheme: "https", Host: host, Path: "/video/mp4/abcd12.mp4"}) {
-			t.Errorf("%s was matched, and it serves no video pages", host)
 		}
 	}
 }

@@ -3,6 +3,7 @@
 package download
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -14,13 +15,6 @@ import (
 // actual filesystem operation, avoiding a check-then-open traversal race.
 // The zero value handles trusted local paths for helper tools and tests.
 type transferFiles struct{ root *os.Root }
-
-func fileScope(scopes []transferFiles) transferFiles {
-	if len(scopes) > 0 {
-		return scopes[0]
-	}
-	return transferFiles{}
-}
 
 func (f transferFiles) relative(path string) (string, error) {
 	return filepath.Rel(f.root.Name(), path)
@@ -135,4 +129,52 @@ func (f transferFiles) reserve(dir, name string) (string, error) {
 		return candidate, nil
 	}
 	return "", fmt.Errorf("could not reserve a filename for %q in %s", name, dir)
+}
+
+// writeFile writes a whole file under a temporary name and renames it into
+// place, so that a file found there is always a whole one. A write that
+// fails removes its temporary file.
+func writeFile(files transferFiles, path string, data []byte) error {
+	tmp := path + ".tmp"
+	err := files.write(tmp, data)
+	if err == nil {
+		err = files.rename(tmp, path)
+	}
+	if err != nil {
+		_ = files.remove(tmp)
+	}
+	return err
+}
+
+// A sidecar is the JSON checkpoint written beside a part file so that an
+// interrupted transfer resumes rather than starts over. It is written whole
+// (writeFile), so an interrupted write cannot leave a half-parsed one, and a
+// missing or broken one simply means starting over.
+
+// writeSidecar records a checkpoint.
+func writeSidecar(files transferFiles, path string, v any) error {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return writeFile(files, path, raw)
+}
+
+// readSidecar reads a checkpoint, nil when it is absent or unreadable.
+func readSidecar[T any](files transferFiles, path string) *T {
+	raw, err := files.read(path)
+	if err != nil {
+		return nil
+	}
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil
+	}
+	return &v
+}
+
+// clearSidecar removes a checkpoint, and any write of one left unfinished.
+func clearSidecar(files transferFiles, path string) {
+	_ = files.remove(path)
+	_ = files.remove(path + ".tmp")
 }

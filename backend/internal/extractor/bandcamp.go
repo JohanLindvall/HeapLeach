@@ -3,6 +3,7 @@
 package extractor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -37,6 +39,7 @@ import (
 // the same listing and is served, so a discography is read from there and
 // every release on it resolved in turn.
 type Bandcamp struct {
+	about
 	client *httpx.Client
 }
 
@@ -47,26 +50,87 @@ const bandcampAgent = "HeapLeach"
 // bandcampStream is the one format served without a purchase.
 const bandcampStream = "mp3-128"
 
+// bandcampDomain is where the bands without a domain of their own live.
+const bandcampDomain = "bandcamp.com"
+
 // NewBandcamp builds the bandcamp extractor.
-func NewBandcamp(client *httpx.Client) *Bandcamp { return &Bandcamp{client: client} }
+func NewBandcamp(client *httpx.Client) *Bandcamp {
+	return &Bandcamp{client: client, about: about{name: "bandcamp", shape: bandcampShape,
+		recognises: "releases (`/album/<slug>`, `/track/<slug>`), a band's `/music` and its front page, " +
+			"where the page is built from Bandcamp's client bundle and carries `data-tralbum` release data or the music grid"}}
+}
 
-func (b *Bandcamp) Name() string { return "bandcamp" }
+// bandcampShape is a release, /album/<slug> or /track/<slug>, or a band's
+// /music listing. A band's own front page is its site root, which is no
+// shape at all, so it is recognised by its page alone.
+var bandcampShape = pathShape(`^/(?:album|track)/[^/.]+/?$`, `^/music/?$`)
 
-// Match accepts a band's subdomain: a release, or the band itself.
-func (b *Bandcamp) Match(u *url.URL) bool {
-	host := strings.ToLower(u.Hostname())
-	if !strings.HasSuffix(host, ".bandcamp.com") || host == "www.bandcamp.com" {
+// Recognise takes a page of the right form, or a band's front page, built
+// from the platform's client bundle and carrying what Extract reads: the
+// data-tralbum release data, or the /music grid of releases. The platform's
+// own front page has the bundle but neither, so it is left alone.
+//
+// A probe says it is a browser, and so may be handed the platform's client
+// challenge instead of the page (see Bandcamp). Then, and only for a page of
+// the right form, the page is asked for once more as this extractor asks
+// for it, and that answer is judged the same way. A band's front page
+// answers 403 whatever the client says, so a site root behind the challenge,
+// or withheld from the probe some other way (probeWithheld), is judged by
+// its /music listing instead, asked for as this extractor asks: that is the
+// page the discography is read from.
+func (b *Bandcamp) Recognise(ctx context.Context, p *Page) bool {
+	root := len(p.Segments()) == 0
+	if !bandcampShape(p.Final) && !root {
 		return false
 	}
-	segs := util.PathSegments(u)
-	switch {
-	case len(segs) == 0:
+	if bandcampMarked(p) {
 		return true
-	case len(segs) == 1:
-		return segs[0] == "music"
-	default:
-		return segs[0] == "album" || segs[0] == "track"
 	}
+	challenged := p.Title() == bandcampChallengeTitle && p.Has(bandcampChallengeAssets)
+	if b.client == nil || !(challenged || root && probeWithheld(p)) {
+		return false
+	}
+	target, key := p.Final.String(), bandcampAgentKey
+	if root {
+		target, key = util.Origin(p.Final)+"/music", bandcampMusicKey
+	}
+	doc := memoAsked(ctx, p, key, func() string {
+		ctx, done, admitted := probeContext(ctx)
+		if !admitted {
+			return ""
+		}
+		defer done()
+		doc, err := b.client.GetString(ctx, target, bandcampHeaders())
+		if err != nil {
+			return ""
+		}
+		return doc
+	})
+	return doc != "" && bandcampMarked(&Page{URL: p.Final, Final: p.Final, Body: doc})
+}
+
+// bandcampAgentKey memoises, on a challenged probe, the page as fetched
+// under the extractor's own agent, so that Extract reads that document
+// rather than the challenge or a third fetch.
+const bandcampAgentKey = "bandcamp-agent"
+
+// bandcampMusicKey memoises, on a band's front page withheld from the probe,
+// its /music listing as fetched under the extractor's own agent, which
+// Extract's discography then reads.
+const bandcampMusicKey = "bandcamp-music"
+
+// The client challenge a browser is shown in place of a page: its title,
+// and the path its assets are served under.
+const (
+	bandcampChallengeTitle  = "Client Challenge"
+	bandcampChallengeAssets = "/_fs-ch-"
+)
+
+// bandcampMarked reports a page built from the platform's client bundle
+// that carries release data or a band's release grid.
+func bandcampMarked(p *Page) bool {
+	return p.Script("/client-bundle/") &&
+		p.HasAny(`data-tralbum="`, `id="music-grid"`, `data-client-items="`)
 }
 
 // Extract resolves a release, or every release a band lists.
@@ -85,9 +149,17 @@ func (b *Bandcamp) Extract(ctx context.Context, u *url.URL, _ Options) (*Result,
 // discography resolves every release on a band's /music page.
 func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error) {
 	music := util.Origin(u) + "/music"
-	root, err := b.page(ctx, music)
-	if err != nil {
-		return nil, err
+	var root *html.Node
+	if p := probed(ctx, u); p != nil {
+		if doc := memoAsked(ctx, p, bandcampMusicKey, func() string { return "" }); doc != "" {
+			root, _ = parseHTML(doc)
+		}
+	}
+	if root == nil {
+		var err error
+		if root, err = b.page(ctx, music); err != nil {
+			return nil, err
+		}
 	}
 	// A band with one release has /music send it straight to that release.
 	// The listing carries release data too, but empty and of no kind, so
@@ -100,18 +172,23 @@ func (b *Bandcamp) discography(ctx context.Context, u *url.URL) (*Result, error)
 	if len(links) == 0 {
 		return nil, fmt.Errorf("bandcamp: %s lists no releases", u.Redacted())
 	}
-	files := FanOut(ctx, links, func(ctx context.Context, link string) ([]File, error) {
+	// Each release is a page to read, so a catalogue is read as far as
+	// config.MaxResolvedReleases of them; the registry holds the files to
+	// the user's cap.
+	listed := len(links)
+	links = links[:min(len(links), config.MaxResolvedReleases)]
+	files, outcomes := resolveListing(ctx, links, func(ctx context.Context, link string) ([]File, error) {
 		release, err := b.release(ctx, link)
 		if err != nil {
 			return nil, err
 		}
 		return release.files(b), nil
 	})
-	if len(files) == 0 {
-		return nil, fmt.Errorf("bandcamp: none of the %d releases on %s could be read", len(links), u.Redacted())
+	if err := outcomes.noneResolved(ctx, files, "bandcamp", "releases", u.Redacted()); err != nil {
+		return nil, err
 	}
-	band := util.FirstNonEmpty(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
-	return &Result{Title: band, Files: files}, nil
+	band := cmp.Or(metaContent(root, "og:site_name"), metaContent(root, "og:title"), u.Hostname())
+	return &Result{Title: band, Files: files, Note: joinNotes(cappedNote(len(links), listed, "releases"), outcomes.note())}, nil
 }
 
 // release reads one album or track page.
@@ -125,13 +202,31 @@ func (b *Bandcamp) release(ctx context.Context, link string) (*bandcampPage, err
 
 // page fetches and parses a page as something other than a browser.
 func (b *Bandcamp) page(ctx context.Context, link string) (*html.Node, error) {
-	doc, err := b.client.GetString(ctx, link, bandcampHeaders())
+	u, err := url.Parse(link)
+	if err != nil {
+		return nil, fmt.Errorf("bandcamp: %w", err)
+	}
+	if p := probed(ctx, u); p != nil && p.Title() == bandcampChallengeTitle {
+		if doc := memoAsked(ctx, p, bandcampAgentKey, func() string { return "" }); doc != "" {
+			return parseHTML(doc)
+		}
+	}
+	// A page the probe was served, rather than the challenge, is the page
+	// whichever agent asks: this host's representation does not depend on
+	// the User-Agent once it serves one, so it is read as it is. That is a
+	// decision about this host, made here; fetchRoot would not take the
+	// probe for a request carrying an agent of its own (Page.answers).
+	if p := probed(ctx, u); p.answers(b.client, u, nil) && p.Title() != bandcampChallengeTitle {
+		if doc, ok := p.Document(); ok {
+			if root := p.HTML(); root != nil {
+				return root, nil
+			}
+			return parseHTML(doc)
+		}
+	}
+	root, _, err := fetchRoot(ctx, b.client, u, bandcampHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("bandcamp: fetch %s: %w", link, err)
-	}
-	root, err := parseHTML(doc)
-	if err != nil {
-		return nil, fmt.Errorf("bandcamp: parse %s: %w", link, err)
 	}
 	return root, nil
 }
@@ -156,18 +251,20 @@ type bandcampTrack struct {
 	File   map[string]string `json:"file"`
 }
 
-// bandcampData returns the page's data-tralbum document, or "".
-func bandcampData(root *html.Node) string {
-	n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, "data-tralbum") })
+// bandcampData returns the JSON document the page carries in its first
+// element with the attribute name — data-tralbum, data-embed,
+// data-client-items — or "".
+func bandcampData(root *html.Node, name string) string {
+	n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, name) })
 	if n == nil {
 		return ""
 	}
-	return attr(n, "data-tralbum")
+	return attr(n, name)
 }
 
 // bandcampRelease reads a release out of its page.
 func bandcampRelease(root *html.Node, link string) (*bandcampPage, error) {
-	data := bandcampData(root)
+	data := bandcampData(root, "data-tralbum")
 	if data == "" {
 		return nil, fmt.Errorf("bandcamp: %s carries no release data (the page may be a purchase-only or removed item)", link)
 	}
@@ -186,13 +283,11 @@ func bandcampRelease(root *html.Node, link string) (*bandcampPage, error) {
 
 	// A track page names its album only in the embed data beside it.
 	if p.kind == "track" {
-		if n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, "data-embed") }); n != nil {
-			var e struct {
-				AlbumTitle string `json:"album_title"`
-			}
-			if json.Unmarshal([]byte(attr(n, "data-embed")), &e) == nil {
-				p.album = e.AlbumTitle
-			}
+		var e struct {
+			AlbumTitle string `json:"album_title"`
+		}
+		if json.Unmarshal([]byte(bandcampData(root, "data-embed")), &e) == nil {
+			p.album = e.AlbumTitle
 		}
 	}
 	return p, nil
@@ -213,7 +308,8 @@ func (p *bandcampPage) folder() string {
 	if p.kind == "track" {
 		album = p.album
 	}
-	return path.Join(bandcampSegment(p.artist), bandcampSegment(album))
+	// A slash in a title is part of the title, not a folder.
+	return path.Join(sourceFolder(p.artist), sourceFolder(album))
 }
 
 // files lists every track the page will stream.
@@ -265,12 +361,6 @@ func (b *Bandcamp) stream(ctx context.Context, link string, id int64) (*Target, 
 	return nil, fmt.Errorf("bandcamp: track %d is no longer streamable from %s", id, link)
 }
 
-// bandcampSegment keeps a name from being read as a path: a slash in a title
-// is part of the title, not a folder.
-func bandcampSegment(s string) string {
-	return strings.NewReplacer("/", "_", `\`, "_").Replace(strings.TrimSpace(s))
-}
-
 // bandcampReleaseLinks collects the releases a /music page lists, in its
 // order: the grid's own links, and the items the page renders from script
 // once the grid grows past what it draws up front.
@@ -280,7 +370,8 @@ func bandcampReleaseLinks(root *html.Node, u *url.URL) []string {
 	add := func(ref string) {
 		link := resolveRef(u, ref)
 		lu, err := url.Parse(link)
-		if err != nil || !strings.HasSuffix(strings.ToLower(lu.Hostname()), ".bandcamp.com") {
+		// A band on a domain of its own lists releases on that domain.
+		if err != nil || !(strings.EqualFold(lu.Host, u.Host) || util.HostMatches(lu.Host, bandcampDomain)) {
 			return
 		}
 		segs := util.PathSegments(lu)
@@ -301,14 +392,12 @@ func bandcampReleaseLinks(root *html.Node, u *url.URL) []string {
 	for _, a := range findAll(grid, func(n *html.Node) bool { return n.Type == html.ElementNode && n.Data == "a" }) {
 		add(attr(a, "href"))
 	}
-	if n := findFirst(root, func(n *html.Node) bool { return n.Type == html.ElementNode && hasAttr(n, "data-client-items") }); n != nil {
-		var items []struct {
-			PageURL string `json:"page_url"`
-		}
-		if json.Unmarshal([]byte(attr(n, "data-client-items")), &items) == nil {
-			for _, it := range items {
-				add(it.PageURL)
-			}
+	var items []struct {
+		PageURL string `json:"page_url"`
+	}
+	if json.Unmarshal([]byte(bandcampData(root, "data-client-items")), &items) == nil {
+		for _, it := range items {
+			add(it.PageURL)
 		}
 	}
 	return links

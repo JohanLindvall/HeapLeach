@@ -12,9 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
 func TestYleLink(t *testing.T) {
@@ -120,6 +117,32 @@ func yleFakeSite(t *testing.T) *httptest.Server {
 			ids = map[string][]string{"1-2100": {"1-2101", "1-2102", "1-2103"}, "1-2200": {"1-2201"}}[q.Get("path.season")]
 		case "an.invented.podcast":
 			ids = []string{"1-3001", "1-3002", "1-3003", "1-3004", "1-3005"}
+		case "an.invented.mixed":
+			// Four cards, two a page, the second of them a series card,
+			// which is no episode.
+			all := []string{
+				`{"type": "card", "title": "1", "pointer": {"type": "program", "uri": "yleareena://items/1-3001"}}`,
+				`{"type": "card", "title": "S", "pointer": {"type": "series", "uri": "yleareena://items/1-3100"}}`,
+				`{"type": "card", "title": "2", "pointer": {"type": "program", "uri": "yleareena://items/1-3002"}}`,
+				`{"type": "card", "title": "3", "pointer": {"type": "program", "uri": "yleareena://items/1-3003"}}`,
+			}
+			offset, _ := strconv.Atoi(q.Get("offset"))
+			_, _ = fmt.Fprintf(w, `{"meta": {"offset": %d, "count": 4}, "data": [%s]}`, offset,
+				strings.Join(all[min(offset, 4):min(offset+2, 4)], ","))
+			return
+		case "an.invented.repeating":
+			// A list that states no count and, asked past its end, serves
+			// its first page again.
+			offset, _ := strconv.Atoi(q.Get("offset"))
+			if offset >= 2 {
+				offset = 0
+			}
+			var cards []string
+			for _, id := range []string{"1-3001", "1-3002"}[offset:min(2, offset+2)] {
+				cards = append(cards, fmt.Sprintf(`{"type": "card", "title": "%s", "pointer": {"type": "program", "uri": "yleareena://items/%s"}}`, id, id))
+			}
+			_, _ = fmt.Fprintf(w, `{"meta": {"offset": %d, "count": 0}, "data": [%s]}`, offset, strings.Join(cards, ","))
+			return
 		default:
 			http.Error(w, "not a list of episodes", http.StatusBadRequest)
 			return
@@ -155,6 +178,12 @@ func yleFakeSite(t *testing.T) *httptest.Server {
 			page(w, "TVSeries", name, seasons(name, season, "1-2200"))
 		case "/1-2100":
 			page(w, "TVSeason", name+" | "+season+" 1", seasons(name, season, "1-2100"))
+		case "/1-4000":
+			page(w, "RadioSeries", "Keksitty podcast", fmt.Sprintf(`{"title": "Keksitty podcast", "tabs": [{"content": [
+				{"type": "list", "source": {"uri": "%s/v1/ui/content/list?token=an.invented.repeating"}}]}]}`, srv.URL))
+		case "/1-5000":
+			page(w, "RadioSeries", "Keksitty podcast", fmt.Sprintf(`{"title": "Keksitty podcast", "tabs": [{"content": [
+				{"type": "list", "source": {"uri": "%s/v1/ui/content/list?token=an.invented.mixed"}}]}]}`, srv.URL))
 		case "/1-3000":
 			page(w, "RadioSeries", "Keksitty podcast", fmt.Sprintf(`{"title": "Keksitty podcast", "tabs": [{"content": [
 				{"type": "list", "source": {"uri": "%s/v1/ui/content/list?token=an.invented.podcast"}}]}]}`, srv.URL))
@@ -181,28 +210,10 @@ func yleFakeSite(t *testing.T) *httptest.Server {
 }
 
 func yleWith(srv *httptest.Server) *Yle {
-	y := NewYle(httpx.New("test-agent", "en-US", 0, 5*time.Second))
+	y := NewYle(testClient())
 	y.player = srv.URL + "/v1/preview/"
 	y.site = map[string]string{"fin": srv.URL, "swe": srv.URL + "/sv"}
 	return y
-}
-
-func yleExtract(t *testing.T, srv *httptest.Server, raw string, opts Options) *Result {
-	t.Helper()
-	u, _ := url.Parse(raw)
-	res, err := yleWith(srv).Extract(context.Background(), u, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return res
-}
-
-func yleNames(res *Result) string {
-	var names []string
-	for _, f := range res.Files {
-		names = append(names, strings.TrimPrefix(f.Dir+"/", "/")+f.Name)
-	}
-	return strings.Join(names, "\n")
 }
 
 // A programme is read off the player's preview, named for its series and
@@ -211,7 +222,7 @@ func yleNames(res *Result) string {
 // nothing out: the stream says whether it is encrypted.
 func TestYleReadsAProgrammeFromThePlayersPreview(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-1001", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-1001", Options{})
 	f := res.Files[0]
 	if res.Title != "Keksitty sarja - Ensimmäinen jakso" || f.Name != "Keksitty sarja - Ensimmäinen jakso.ts" {
 		t.Errorf("title %q, name %q", res.Title, f.Name)
@@ -227,7 +238,7 @@ func TestYleReadsAProgrammeFromThePlayersPreview(t *testing.T) {
 // An episode of a podcast is one MP3.
 func TestYleReadsAnAudioProgrammeAsItsFile(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/podcastit/1-1002", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/podcastit/1-1002", Options{})
 	f := res.Files[0]
 	if f.Name != "Keksitty sarja - Podcastin jakso.mp3" || f.URL != srv.URL+"/aod/world/an-invented-episode.mp3?hdnts=exp=1~hmac=x" || len(f.Segments) != 0 {
 		t.Errorf("name %q, url %q, segments %v", f.Name, f.URL, f.Segments)
@@ -240,14 +251,14 @@ func TestYleReadsAnAudioProgrammeAsItsFile(t *testing.T) {
 // under, its number with it, when its transfer starts.
 func TestYleListsASeriesBySeason(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-2000", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-2000", Options{})
 	want := strings.Join([]string{
 		"Kausi 2/Keksitty sarja - 1. Jakso 1-2201.ts",
 		"Kausi 1/Keksitty sarja - 1. Jakso 1-2101.ts",
 		"Kausi 1/Keksitty sarja - 2. Jakso 1-2102.ts",
 		"Kausi 1/Keksitty sarja - 3. Jakso 1-2103.ts",
 	}, "\n")
-	if got := yleNames(res); res.Title != "Keksitty sarja" || got != want || res.Note != "" {
+	if got := strings.Join(filePaths(res.Files), "\n"); res.Title != "Keksitty sarja" || got != want || res.Note != "" {
 		t.Fatalf("%q (note %q):\n%s\nwant:\n%s", res.Title, res.Note, got, want)
 	}
 	target, err := res.Files[3].Resolve(context.Background())
@@ -259,13 +270,13 @@ func TestYleListsASeriesBySeason(t *testing.T) {
 // A season's own page offers every season of its series, and lists itself.
 func TestYleListsASeasonAlone(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-2100", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-2100", Options{})
 	want := strings.Join([]string{
 		"Keksitty sarja - 1. Jakso 1-2101.ts",
 		"Keksitty sarja - 2. Jakso 1-2102.ts",
 		"Keksitty sarja - 3. Jakso 1-2103.ts",
 	}, "\n")
-	if got := yleNames(res); res.Title != "Keksitty sarja - Kausi 1" || got != want {
+	if got := strings.Join(filePaths(res.Files), "\n"); res.Title != "Keksitty sarja - Kausi 1" || got != want {
 		t.Errorf("%q:\n%s\nwant:\n%s", res.Title, got, want)
 	}
 }
@@ -274,11 +285,11 @@ func TestYleListsASeasonAlone(t *testing.T) {
 // preview's titles.
 func TestYleReadsTheSwedishSiteInSwedish(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://arenan.yle.fi/1-2100", Options{})
+	res := extractOK(t, yleWith(srv), "https://arenan.yle.fi/1-2100", Options{})
 	if res.Title != "En påhittad serie - Säsong 1" || res.Files[0].Name != "En påhittad serie - 1. Avsnitt 1-2101.ts" {
-		t.Errorf("%q: %s", res.Title, yleNames(res))
+		t.Errorf("%q: %s", res.Title, strings.Join(filePaths(res.Files), "\n"))
 	}
-	res = yleExtract(t, srv, "https://arenan.yle.fi/1-1001", Options{})
+	res = extractOK(t, yleWith(srv), "https://arenan.yle.fi/1-1001", Options{})
 	if res.Title != "En påhittad serie - Första avsnittet" {
 		t.Errorf("title %q", res.Title)
 	}
@@ -289,13 +300,13 @@ func TestYleReadsTheSwedishSiteInSwedish(t *testing.T) {
 // what Yle shows in Finland alone, the note saying so.
 func TestYleLeavesOutWhatASeriesCannotHave(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-3000", Options{})
+	res := extractOK(t, yleWith(srv), "https://areena.yle.fi/1-3000", Options{})
 	want := strings.Join([]string{
 		"Keksitty podcast - 1. Jakso 1-3001.mp3",
 		"Keksitty podcast - 2. Jakso 1-3002.mp3",
 		"Keksitty podcast - 3. Jakso 1-3003.mp3",
 	}, "\n")
-	if got := yleNames(res); got != want {
+	if got := strings.Join(filePaths(res.Files), "\n"); got != want {
 		t.Errorf("%s\nwant:\n%s", got, want)
 	}
 	if note := "1 left out that Yle shows in Finland only; 1 left out: it is no longer on Areena"; res.Note != note {
@@ -303,12 +314,49 @@ func TestYleLeavesOutWhatASeriesCannotHave(t *testing.T) {
 	}
 }
 
-// A cap keeps the first episodes, and the note counts the rest by what the
-// list states rather than by reading it.
+// A cap keeps the first episodes, and the walk counts the rest by what the
+// list states rather than by reading it. The user's file cap is the
+// registry's: the series lists every episode it can have.
 func TestYleCountsWhatACapLeavesOut(t *testing.T) {
 	srv := yleFakeSite(t)
-	res := yleExtract(t, srv, "https://areena.yle.fi/1-3000", Options{limits: Limits{Files: 2}})
+	y := yleWith(srv)
+	page, err := y.page(context.Background(), "fin", "1-3000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	episodes, listed, _, err := y.walk(context.Background(), "fin", page, page.lists("1-3000"), !page.season(), 2)
+	if err != nil || len(episodes) != 2 || listed != 5 {
+		t.Errorf("%d episodes of %d listed, err %v", len(episodes), listed, err)
+	}
+	res := extractOK(t, y, "https://areena.yle.fi/1-3000", Options{limits: Limits{Files: 2}})
+	// The file cap is the series': the note counts what it left out, and
+	// no episode past it is resolved.
 	if len(res.Files) != 2 || res.Note != "2 of 5 episodes" {
+		t.Errorf("%d files, note %q", len(res.Files), res.Note)
+	}
+}
+
+// A list the cap cuts is counted by its episodes, not its cards: a card
+// that is no episode, read before the cut, is not counted as one.
+func TestYleCapCountsEpisodesNotCards(t *testing.T) {
+	srv := yleFakeSite(t)
+	y := yleWith(srv)
+	page, err := y.page(context.Background(), "fin", "1-5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	episodes, listed, _, err := y.walk(context.Background(), "fin", page, page.lists("1-5000"), !page.season(), 1)
+	if err != nil || len(episodes) != 1 || listed != 3 {
+		t.Errorf("%d episodes of %d listed, err %v; want 1 of 3", len(episodes), listed, err)
+	}
+}
+
+// A list served again past its end has ended: the job is complete and says
+// nothing about being partial.
+func TestYleRepeatedPageEndsTheListQuietly(t *testing.T) {
+	srv := yleFakeSite(t)
+	res := extractOK(t, yleWith(srv), srv.URL+"/1-4000", Options{})
+	if len(res.Files) != 2 || strings.Contains(res.Note, "partial") {
 		t.Errorf("%d files, note %q", len(res.Files), res.Note)
 	}
 }
@@ -324,8 +372,7 @@ func TestYleSaysWhyAProgrammeCannotBeHad(t *testing.T) {
 		"1-1007": errYleFinlandOnly.Error(),
 		"1-9999": "does not exist",
 	} {
-		u, _ := url.Parse("https://areena.yle.fi/" + id)
-		_, err := yleWith(srv).Extract(context.Background(), u, Options{})
+		_, err := extract(t, yleWith(srv), "https://areena.yle.fi/"+id, Options{})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v; want it to say %q", id, err, want)
 		}
