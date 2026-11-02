@@ -87,8 +87,8 @@ var booruDialects = [...]booruDialect{
 
 // booruSite is the board one URL is on, as recognition established it.
 type booruSite struct {
-	// name is the board's label: its host's first label, or a booru.org
-	// board's own subdomain.
+	// name is a known board's established label or an unknown board's
+	// full hostname, preserving its destination folder and namespace.
 	name string
 	root string
 	api  booruAPI
@@ -500,19 +500,16 @@ func gelbooru01Original(src string) bool {
 	return len(segs) >= 4 && segs[1] == "images"
 }
 
-// booruLabel names a board by its host's first label, as hostLabel does,
-// unless that label is a word boards share — "booru" itself, an image or
-// mobile subdomain — when the next label is the board's own: two boards at
-// booru.<a> and booru.<b> never share a name or a folder.
+// booruLabel keeps the collection prefix that names a board's destination
+// folder. Known installs have established labels; a known install without
+// an explicit label, such as a booru.org board, keeps hostLabel's derivation.
+// Unknown boards keep their full hostname so their previous downloads are
+// found and unrelated boards cannot share a folder through a common label.
 func booruLabel(host string) string {
-	labels := strings.Split(strings.TrimPrefix(strings.ToLower(host), "www."), ".")
-	if len(labels) > 2 {
-		switch labels[0] {
-		case "booru", "img", "m", "api", "boards":
-			return labels[1]
-		}
+	if label, known := knownInstallLabel(config.FamilyBooru, host); known {
+		return cmp.Or(label, hostLabel(host))
 	}
-	return hostLabel(host)
+	return host
 }
 
 // parseTarget pulls a tag query or a single post id out of a URL, and

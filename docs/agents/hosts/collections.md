@@ -137,7 +137,29 @@ whose albums holds anything says why (`noneRead`).
 A deleted album answers 410 with the site's own page and no album markup;
 the recogniser takes an album link answered that way by a page named for
 the site, so a pasted dead album says it was deleted rather than getting
-the fallback's refusal.
+the fallback's refusal. The album reader accepts a probed 410 only when
+`probedFor` confirms it answers the reader's fixed Referer, client, route
+and session. Otherwise it makes its own document request before deciding
+whether the album was deleted, even when navigation omitted `Vary`.
+`TestEromeAlbumUsesReaderStatus` covers available albums and genuine reader
+refusals after a navigation 410.
+
+## imgur
+
+Account, tag and mirrored-subreddit listings mix direct media rows with
+posts whose pages must be opened to find their files. `listingEntries`
+bounds inspected rows by `config.MaxListingPosts`; distinct post rows also
+use `imgurPostCap`, which honors a source limit set below the default.
+Repeated post IDs spend that budget once.
+
+Each listing page is expanded through `listingFiles` before the next is
+requested. The file limit counts only the files produced: empty albums and
+failed posts leave room for later media on the same page or a later page.
+Small ordered batches stop opening children once the file budget is full,
+and `pageWalk.consume` stops pagination too. Albums that cross the file
+limit are trimmed, and unreadable posts and any budget or page cut remain
+in the result's note. A listing with no readable files retains the first
+post failure in its error.
 
 ## rajce
 
@@ -160,21 +182,30 @@ An empty, missing or restricted album is an error, not a downloaded HTML page.
 
 A storage link pasted on its own (`/storage/video/<id>` on an `img<N>.`
 server) is no form of the row's: a host-free Shape would take every
-`/video/<n>` link on the web. On the site's own hosts the host claim hands
-it to `rajceExtract` once nothing recognised it (`rajceStorage`), and it is
-the file itself. Derive its name with `util.NameFromURL`, then replace the
+`/video/<n>` link on the web. The host claim hands `/storage/` links on
+numbered `img<N>.rajce.idnes.cz` and `img<N>.rajce.net` hosts to
+`rajceExtract` before any probe, including links with a filename extension.
+They are already files; extraction only supplies their metadata. Derive
+the name with `util.NameFromURL`, then replace the
 extension with `.mp4` when its path contains `/video/`, preserving the
 storage video's stable filename. The download URL stays intact, including
 its query, and the site remains its referer. Other storage paths retain
-their URL-derived names. A storage link that names its file type is a file
-the fallback downloads without a probe.
+their URL-derived names. Other hosts' or paths' named files retain the
+direct fallback's ordinary metadata. Registry-level tests cover both the
+numbered storage hosts and lookalikes, so a parser-only test cannot hide a
+dispatch change that drops the site's Referer or video extension.
 
 ## bandcamp
 
-Every bandcamp endpoint answers a request claiming to be a browser (Chrome and
-Firefox alike) with a three-kilobyte client challenge page, while a request
-naming itself (`bandcampAgent`) gets the real page. So every request there
-overrides the client's browser User-Agent. The page's `data-tralbum` carries
+Bandcamp can answer a request claiming to be a browser (Chrome and Firefox
+alike) with a three-kilobyte client challenge page, while a request naming
+itself (`bandcampAgent`) gets the real page. The extractor's own requests
+override the client's browser User-Agent. A successful browser probe can be
+reused when its response chain does not declare `Vary: User-Agent` or
+`Vary: *`; either declaration requires the extractor's own request before
+reading release data. That dependency is retained across redirects and
+probe retries. Freshness restrictions alone do not require repeating the
+current acquisition's successful probe. The page's `data-tralbum` carries
 the band, the release and per track its number, title and a `mp3-128` link
 signed for a day, minted through `Resolve`. Tracks are filed
 `<band>/<album>/NN - title.mp3`, the band and album each one folder through

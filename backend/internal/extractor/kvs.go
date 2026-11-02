@@ -239,9 +239,35 @@ const kvsLabel = "kvs"
 func NewKVS(client *httpx.Client) *KVS {
 	return &KVS{client: client, about: about{name: kvsLabel, shape: kvsShape,
 		recognises: "Kernel Video Sharing pages — videos, member profiles, searches and listings — carrying " +
-			"the licensed player's configuration or script, or its `list_videos` blocks (asynchronous " +
+			"the licensed player's configuration or script, the platform's generator with playable plain-media " +
+			"flashvars, or its `list_videos` blocks (asynchronous " +
 			"controls, or a container and its `_items` list), and video pages whose player is gone by the " +
 			"platform's generator, a block's `_items` list or its screenshot store"}}
+}
+
+// probeReferer gives a known install's canonical page its reader's policy
+// on the first visit. Member and search readers take precedence in Extract
+// and use their canonical listing's self-Referer. A URL that canonicalizes
+// to a different listing retains navigation; browse pages use the origin.
+// The front page is refused by kvsBrowse without a reader request.
+func (k *KVS) probeReferer(u *url.URL) *string {
+	if len(util.PathSegments(u)) == 0 {
+		return nil
+	}
+	if listing, member := kvsMemberPath(u); member {
+		if listing == u.String() {
+			return &listing
+		}
+		return nil
+	}
+	if _, listing, search := kvsSearchPath(u); search {
+		if listing == u.String() {
+			return &listing
+		}
+		return nil
+	}
+	referer := util.Origin(u) + "/"
+	return &referer
 }
 
 // kvsShape is the URL forms worth a probe: a video page under a /videos/
@@ -280,7 +306,7 @@ func (k *KVS) Recognise(_ context.Context, p *Page) bool {
 
 // kvsMarkers are the literals every part of the fingerprint contains, one
 // of which the body must carry before the document is walked for it.
-var kvsMarkers = []string{"license_code", "kt_player", "list_videos"}
+var kvsMarkers = []string{"license_code", "kt_player", "list_videos", "flashvars"}
 
 // kvsItemsList is the id the platform gives a block's items list,
 // list_videos_<block>_items.
@@ -291,7 +317,7 @@ var kvsItemsList = regexp.MustCompile(`^list_videos_[a-z0-9_]+_items$`)
 // or a link into its screenshot store. None of these alone is the
 // fingerprint, which must also hold off a video path.
 func kvsVideoPageSigns(p *Page) bool {
-	if g := p.Generator(); g == "kvs" || strings.HasPrefix(g, "kernel video sharing") {
+	if kvsGenerator(p.Generator()) {
 		return true
 	}
 	if strings.Contains(p.Body, "/contents/videos_screenshots/") {
@@ -301,14 +327,33 @@ func kvsVideoPageSigns(p *Page) bool {
 		p.hasElement(func(n *html.Node) bool { return kvsItemsList.MatchString(attr(n, "id")) })
 }
 
+func kvsGenerator(generator string) bool {
+	return generator == "kvs" || strings.HasPrefix(generator, "kernel video sharing")
+}
+
 // kvsFingerprint reports the platform's own structure. A generic flashvars
 // object or a videos container is insufficient: KVS identifies itself
 // through the licensed player, its asynchronous block controls (which carry
 // both the block id and the platform's parameters), or a block rendered as
 // the platform renders one: its container and the items list named after it.
+// An install serving plain media without the licensed player is also known
+// by its generator together with the playable rendition extraction chooses.
 func kvsFingerprint(root *html.Node, doc string) bool {
-	if vars, err := parseFlashvars(doc); err == nil && vars["license_code"] != "" {
-		return true
+	if vars, err := parseFlashvars(doc); err == nil {
+		if vars["license_code"] != "" {
+			return true
+		}
+		if kvsGenerator(strings.ToLower(metaContent(root, "generator"))) {
+			renditions, err := kvsRenditions(vars)
+			best, ok := kvsPlainRendition(renditions)
+			// KVS emits absolute media URLs. A relative path or another
+			// scheme is not playable evidence: extraction keeps it as is.
+			// Neither is a manifest: the plain-file reader cannot assemble
+			// DASH or an HLS link whose spelling escaped IsHLS above.
+			if media := webLink(&url.URL{}, best.URL); err == nil && ok && media != nil && !hlsManifestShape(media) {
+				return true
+			}
+		}
 	}
 	// An inline call is looked for only where the document has one at all,
 	// rather than by reading out every script's text.
@@ -343,7 +388,7 @@ func (k *KVS) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, e
 	}
 	l.limit = opts.maxFiles()
 	if l.url == u.String() {
-		if p := probed(ctx, u); p != nil {
+		if p := probedFor(ctx, k.client, u, httpx.Referer(l.url)); p != nil {
 			if doc, ok := p.Document(); ok {
 				l.first = &document{body: doc, final: cloneURL(p.Final), probe: p}
 			}
@@ -398,13 +443,7 @@ func kvsResult(doc string, u *url.URL) (*Result, error) {
 	// stream is reported rather than handled: saving the playlist under the
 	// video's name would produce a few kilobytes that look like a finished
 	// download and play as nothing.
-	direct := make([]mediaCandidate, 0, len(renditions))
-	for _, c := range renditions {
-		if !c.IsHLS {
-			direct = append(direct, c)
-		}
-	}
-	best, ok := bestCandidate(direct)
+	best, ok := kvsPlainRendition(renditions)
 	if !ok {
 		if len(renditions) > 0 {
 			return nil, fmt.Errorf("%s: this page offers only an adaptive stream, "+
@@ -428,6 +467,19 @@ func kvsResult(doc string, u *url.URL) (*Result, error) {
 			Headers: httpx.Referer(u.String()),
 		}},
 	}, nil
+}
+
+// kvsPlainRendition is the file extraction chooses. Recognition uses the
+// same choice, so an invalid preferred rendition cannot be justified by a
+// lower-quality link that extraction would never take.
+func kvsPlainRendition(renditions []mediaCandidate) (mediaCandidate, bool) {
+	direct := make([]mediaCandidate, 0, len(renditions))
+	for _, c := range renditions {
+		if !c.IsHLS {
+			direct = append(direct, c)
+		}
+	}
+	return bestCandidate(direct)
 }
 
 // kvsRenditions collects and unscrambles every rendition a player

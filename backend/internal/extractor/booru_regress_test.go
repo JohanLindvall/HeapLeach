@@ -199,18 +199,77 @@ func TestBooruSearchIsHeldToTheBoardBound(t *testing.T) {
 	}
 }
 
-// Two boards under one shared first label are told apart by the next one.
+// Unknown boards retain their full hostnames, while known installs keep
+// their established labels, including boards on a shared hosting domain.
 func TestBooruLabel(t *testing.T) {
 	for host, want := range map[string]string{
-		"booru.first.example":  "first",
-		"booru.second.example": "second",
-		"aboard.example.test":  "aboard",
-		"example.booru.org":    "example",
-		"www.aboard.example":   "aboard",
-		"booru.example":        "booru",
+		"yande.re":               "yandere",
+		"WWW.YANDE.RE.":          "yandere",
+		"booru.borvar.art":       "booruvar",
+		"booru.foalcon.com":      "foalcon",
+		"konachan.net":           "konachan",
+		"mobile.konachan.com":    "konachan",
+		"yande.re.example.test":  "yande.re.example.test",
+		"booru.first.example":    "booru.first.example",
+		"booru.second.example":   "booru.second.example",
+		"aboard.example.test":    "aboard.example.test",
+		"aboard.example.invalid": "aboard.example.invalid",
+		"example.booru.org":      "example",
+		"www.aboard.example":     "www.aboard.example",
+		"booru.example":          "booru.example",
 	} {
 		if got := booruLabel(host); got != want {
 			t.Errorf("booruLabel(%q) = %q, want %q", host, got, want)
 		}
+	}
+}
+
+// Collection titles are destination folders, so the established install
+// names survive the move to software-family extractors.
+func TestBooruKnownInstallKeepsCollectionTitle(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/post.json" && r.URL.Path != "/posts.json" {
+			t.Errorf("unexpected request: %s", r.URL)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		if r.URL.Query().Get("page") != "1" {
+			_, _ = io.WriteString(w, `[]`)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"id":1,"file_url":"https://media.example.test/first.jpg"},
+			{"id":2,"file_url":"https://media.example.test/second.jpg"}]`)
+	}))
+	t.Cleanup(proxy.Close)
+	client, err := testClient().ThroughProxy(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ host, route, name string }{
+		{"yande.re", "/post", "yandere"},
+		{"www.yande.re", "/post", "yandere"},
+		{"booru.borvar.art", "/posts", "booruvar"},
+		{"konachan.com", "/post", "konachan"},
+		{"konachan.net", "/post", "konachan"},
+		{"mobile.konachan.com", "/post", "konachan"},
+		{"www.sakugabooru.com", "/post", "sakugabooru"},
+	} {
+		t.Run(tc.host, func(t *testing.T) {
+			for _, tags := range []string{"", "synthetic"} {
+				res, ex, err := NewRegistry(&config.Config{}, client).Extract(t.Context(),
+					"http://"+tc.host+tc.route+"?tags="+tags, Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := tc.name + " " + tags
+				if tags == "" {
+					want = tc.name + " latest"
+				}
+				if ex.Name() != "booru" || res.Title != want || len(res.Files) != 2 {
+					t.Fatalf("%s: title=%q files=%d; want booru, %q and two files", ex.Name(), res.Title, len(res.Files), want)
+				}
+			}
+		})
 	}
 }

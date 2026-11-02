@@ -61,8 +61,8 @@ type rajceMedium struct {
 const rajceRoot = "https://www.rajce.idnes.cz"
 
 // rajceStorage is a media link on the site's storage hosts
-// (img<N>.rajce.idnes.cz/storage/…), which the host claim hands here when
-// it names no file type of its own: a pasted video, which is the file.
+// (img<N>.rajce.idnes.cz/storage/…), which the host claim hands here
+// without a probe, whether or not it names a file type of its own.
 var rajceStorage = pathShape(`^/storage/`)
 
 // rajceExtract reads an album. The referer its files carry is the album's

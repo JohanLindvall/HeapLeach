@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,10 +35,11 @@ import (
 // why — so that an extractor whose URL form alone is conclusive can claim it,
 // and the error it then meets is its own rather than the probe's.
 //
-// A Page is shared: the page cache hands one to every concurrent caller of
-// its URL and route — a successful one to any route sending the same
-// request (Page.servesAnyRoute) — and every recogniser and the chosen
-// extractor read it.
+// A Page's response is shared: the page cache keeps one for callers of its
+// URL and route — a successful one for any route sending the same request
+// (Page.servesAnyRoute). Each acquisition gets its own view and memo, shared
+// only by that acquisition's recognisers and chosen extractor. Additional
+// network answers cannot inherit the source document's cache lifetime.
 // Everything it holds — its URLs, header, body, parsed document and memoised
 // values — is borrowed and must not be changed. A reader that needs to edit
 // a URL, a header or a subtree copies it first; probedDocument and fetchRoot
@@ -82,6 +84,7 @@ type Page struct {
 	// the cache neither keeps it nor shares it with waiting callers.
 	via     *httpx.Client
 	route   string
+	agent   string
 	request string
 	session string
 	// redirects records each request in a redirect chain and the cookies
@@ -90,6 +93,20 @@ type Page struct {
 	// a hop may establish a cookie for a destination not yet visited.
 	redirects       []pageRequest
 	redirectCookies bool
+	// noCache forbids reuse by another acquisition; the originating reader
+	// can still consume its probe once. variesReferer and variesAgent record
+	// representation dependencies readers must honor within that acquisition.
+	// All include the responses along the redirect chain.
+	noCache, variesReferer, variesAgent bool
+	// reuseUntil bounds later acquisitions by the shortest freshness
+	// lifetime in the response chain. Zero leaves only the local cache TTL.
+	// It never prevents the originating reader from consuming its Page.
+	reuseUntil time.Time
+
+	// source owns the immutable response's parsed index. An acquisition view
+	// borrows that index, but never source's memo: answers from other URLs
+	// may have different freshness, cookies or representation policies.
+	source *Page
 
 	// parsed is filled once, on first use: the document and what every
 	// recogniser asks of its head, read in one pass, since each unrecognised
@@ -106,6 +123,24 @@ type Page struct {
 	// cache's bound. The cache sets it before handing the page out
 	// (pageCache.get); nil for a page no cache keeps.
 	charged func(int)
+}
+
+// acquisition retains the cached response and its lazy parsed document,
+// with fresh memo state for one identification/extraction. Copy only immutable
+// fields: the parse and memo locks must never be copied or reset while another
+// acquisition uses them. Acquisition memos are not retained by the page cache.
+func (p *Page) acquisition() *Page {
+	return &Page{
+		URL: p.URL, Final: p.Final, Status: p.Status, Header: p.Header, Body: p.Body,
+		partial: p.partial, originReferer: p.originReferer,
+		referer: p.referer, finalReferer: p.finalReferer,
+		Challenged: p.Challenged, Err: p.Err,
+		via: p.via, route: p.route, agent: p.agent,
+		request: p.request, session: p.session,
+		redirects: p.redirects, redirectCookies: p.redirectCookies,
+		noCache: p.noCache, variesReferer: p.variesReferer, variesAgent: p.variesAgent, reuseUntil: p.reuseUntil,
+		source: p,
+	}
 }
 
 type pageRequest struct {
@@ -149,12 +184,12 @@ func (p *Page) memoSlot(key string) (e *memoEntry, owner bool) {
 	return e, owner
 }
 
-// memo runs compute once per page and key, however many recognisers ask:
+// memo runs compute once per acquisition view and key, however many recognisers ask:
 // a bounded probe of the page's origin that several extractors would make
 // is made once, and its answer shared. Concurrent callers wait for the
 // first. Keys are namespaced by what is asked ("json <endpoint>"), and a key
-// is only ever asked for one type. What is kept counts against the page
-// cache's bound (memoSize).
+// is only ever asked for one type. Values on a cached source Page are charged
+// through memoSize; acquisition views never retain their answers in that cache.
 func memo[T any](p *Page, key string, compute func() T) T {
 	e, owner := p.memoSlot(key)
 	if owner {
@@ -172,13 +207,13 @@ func memo[T any](p *Page, key string, compute func() T) T {
 // memoAsked is memo for a question compute puts to the network with ctx.
 // An answer that comes back after ctx has ended is that caller's
 // cancellation, not the page's answer: it is handed back to that caller
-// alone and not kept, so the page — shared through the cache with every
-// job reading the same URL — goes on as if nobody had asked, and a caller
+// alone and not kept, so callers sharing this acquisition's view go on as
+// if nobody had asked, and a caller
 // that was waiting on it asks again with its own context. Any other
-// answer, failures and the probe's own timeouts included, is kept as memo
-// keeps it, for as long as the page is kept: config.PageCacheTTL at most,
-// and never for a retry the user asked for, which reads afresh (FreshRead)
-// and so gets a new page with no answers on it.
+// answer, failures and the probe's own timeouts included, is kept only in
+// this acquisition's Page view. The next acquisition gets a new memo even
+// when its source document can still be read from the page cache. A retry
+// the user asked for (FreshRead) also reads that document afresh.
 //
 // A caller waiting for another's answer waits only as long as its own ctx
 // lasts: the question runs under the first asker's context and admission,
@@ -262,9 +297,10 @@ func memoKey(ctx context.Context, key string) string {
 }
 
 // pageCache keeps recently probed pages so that one URL is fetched once:
-// identification, the extractor that then reads the document, a refresh
-// at transfer time and a link several sources share all ask the same
-// question. Only a success read whole (Page.servesAnyRoute) is kept. It is
+// identification and the extractor share one acquisition, while several
+// sources can reuse the response in distinct views with their own memos.
+// Transfer-time refreshes ask again. Only a success read whole
+// (Page.servesAnyRoute) is kept. It is
 // keyed by route and request, and also indexed by the request alone
 // (httpx.RequestKey: the URL, the language and the cookies it sends,
 // whatever agent the route presents), and serves any route that would make
@@ -283,17 +319,20 @@ func memoKey(ctx context.Context, key string) string {
 //
 // It is bounded by age and by bytes, oldest dropped first: each entry
 // counts a fixed allowance (config.PageCacheEntryBytes, which bounds how
-// many header-only answers it holds), its body, and the bodies, documents
-// and raw answers its page's memoised questions hold (Page.charge).
+// many header-only answers it holds), its body and request identity. Memo
+// values attached directly to the source Page are charged through Page.charge;
+// the registry's acquisition views keep their network answers outside the cache.
 type pageCache struct {
 	mu      sync.Mutex
 	entries map[string]*list.Element
-	// shared indexes the entries any route may read, by request.
+	// shared indexes the entries any route may read, by request and
+	// acquisition Referer policy.
 	shared map[string]*list.Element
 	order  list.List // of *pageCacheEntry, oldest first
 	bytes  int
 	// sweep drops expired entries when nothing else asks (sweepLocked).
-	sweep *time.Timer
+	sweep   *time.Timer
+	sweepAt time.Time
 }
 
 type pageCacheEntry struct {
@@ -318,11 +357,22 @@ type pageCacheEntry struct {
 // in flight on another route is not waited for, since only its outcome says
 // whether this route may share it.
 func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
-	var key, request string
+	return c.getWithReferer(ctx, client, u, nil)
+}
+
+// getWithReferer acquires a known reader's representation. A nil policy is
+// ordinary navigation, including its refusal retry; an explicit policy is
+// a separate cache identity even when its Referer is empty.
+func (c *pageCache) getWithReferer(ctx context.Context, client *httpx.Client, u *url.URL, referer *string) *Page {
+	var key, request, representation string
 	fresh := isFresh(ctx)
 	for {
 		request = httpx.RequestKey(ctx, client, u)
-		key = httpx.RouteID(ctx) + " " + request
+		representation = request
+		if referer != nil {
+			representation += "\n" + *referer
+		}
+		key = httpx.RouteID(ctx) + " " + representation
 		c.mu.Lock()
 		if c.entries == nil {
 			c.entries = map[string]*list.Element{}
@@ -331,9 +381,10 @@ func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *
 		c.expireLocked()
 		el := c.entries[key]
 		if el == nil && !fresh && request != "" {
-			if shared := c.shared[request]; shared != nil {
-				p := shared.Value.(*pageCacheEntry).page
-				if p.matchesSession(ctx, client) {
+			if shared := c.shared[representation]; shared != nil {
+				e := shared.Value.(*pageCacheEntry)
+				p := e.page
+				if p.matchesSession(ctx, client) && p.reusable() && time.Now().Before(e.expires()) {
 					c.mu.Unlock()
 					return p
 				}
@@ -353,7 +404,8 @@ func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *
 		case <-ctx.Done():
 			return &Page{URL: u, Final: u, Err: ctx.Err()}
 		}
-		if e.page != nil && request == httpx.RequestKey(ctx, client, u) && e.page.matchesSession(ctx, client) {
+		if e.page != nil && request == httpx.RequestKey(ctx, client, u) && e.page.matchesSession(ctx, client) &&
+			e.page.reusable() && time.Now().Before(e.expires()) {
 			return e.page
 		}
 		// A failed probe, or cookies changed while it ran, requires a new
@@ -365,7 +417,7 @@ func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *
 
 	// The page keeps a URL of its own: the caller's may be changed once
 	// the page is shared with others.
-	p := probePage(ctx, client, cloneURL(u))
+	p := probePageWithReferer(ctx, client, cloneURL(u), referer)
 	c.mu.Lock()
 	// The entry may have been dropped while its probe ran — evicted, or
 	// replaced by a fresh read — and is then only its waiters' answer: a
@@ -373,18 +425,18 @@ func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *
 	el := c.entries[key]
 	listed := el != nil && el.Value == e
 	unchanged := p.request == request && p.unchangedSession()
-	if unchanged && p.Err == nil && !p.Challenged {
+	if unchanged && p.reusable() && p.Err == nil && !p.Challenged {
 		// Its waiters share any answer the site gave, refusals included.
 		e.page, e.fetched = p, time.Now()
 	}
 	switch {
-	case listed && unchanged && p.servesAnyRoute():
+	case listed && unchanged && p.servesAnyRoute() && p.reusable():
 		if request != "" {
-			if old := c.shared[request]; old != nil && old != el {
+			if old := c.shared[representation]; old != nil && old != el {
 				old.Value.(*pageCacheEntry).request = ""
 			}
-			e.request = request
-			c.shared[request] = el
+			e.request = representation
+			c.shared[representation] = el
 		}
 		e.size = config.PageCacheEntryBytes + len(p.Body) + len(p.referer) + len(p.finalReferer)
 		for _, hop := range p.redirects {
@@ -402,12 +454,23 @@ func (c *pageCache) get(ctx context.Context, client *httpx.Client, u *url.URL) *
 	return p
 }
 
-// expireLocked drops entries older than the cache's time to live. A probe
-// still in flight has no fetch time and is left alone.
+// expires bounds reuse by both the local TTL and the response's remaining
+// freshness. The response deadline starts before the body is read.
+func (e *pageCacheEntry) expires() time.Time {
+	until := e.fetched.Add(config.PageCacheTTL)
+	if e.page != nil && !e.page.reuseUntil.IsZero() && e.page.reuseUntil.Before(until) {
+		until = e.page.reuseUntil
+	}
+	return until
+}
+
+// expireLocked drops expired entries. A probe still in flight has no
+// page or fetch time and is left alone.
 func (c *pageCache) expireLocked() {
+	now := time.Now()
 	for el := c.order.Front(); el != nil; {
 		next := el.Next()
-		if e := el.Value.(*pageCacheEntry); e.page != nil && time.Since(e.fetched) >= config.PageCacheTTL {
+		if e := el.Value.(*pageCacheEntry); e.page != nil && !now.Before(e.expires()) {
 			c.removeLocked(el)
 		}
 		el = next
@@ -420,18 +483,34 @@ func (c *pageCache) expireLocked() {
 // until the next probe of anything. One timer at a time, rearmed while
 // entries remain.
 func (c *pageCache) sweepLocked() {
-	if c.sweep != nil {
+	var next time.Time
+	for el := c.order.Front(); el != nil; el = el.Next() {
+		if e := el.Value.(*pageCacheEntry); e.page != nil {
+			if until := e.expires(); next.IsZero() || until.Before(next) {
+				next = until
+			}
+		}
+	}
+	if next.IsZero() || c.sweep != nil && !next.Before(c.sweepAt) {
 		return
 	}
-	c.sweep = time.AfterFunc(config.PageCacheTTL, func() {
+	if c.sweep != nil {
+		c.sweep.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(time.Until(next), func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if c.sweep != timer {
+			return
+		}
 		c.sweep = nil
 		c.expireLocked()
 		if c.order.Len() > 0 {
 			c.sweepLocked()
 		}
 	})
+	c.sweep, c.sweepAt = timer, next
 }
 
 func (c *pageCache) removeLocked(el *list.Element) {
@@ -470,13 +549,34 @@ func (c *pageCache) charger(e *pageCacheEntry) func(int) {
 	}
 }
 
+// newProbePage snapshots who is about to ask for a page. Every real probe,
+// including a recogniser's canonical request, must retain this identity so
+// a later reader cannot consume another client's or session's response.
+func newProbePage(ctx context.Context, client *httpx.Client, u *url.URL) *Page {
+	return &Page{URL: u, Final: u, via: client, route: httpx.RouteID(ctx),
+		agent: httpx.RequestAgent(ctx, client), request: httpx.RequestKey(ctx, client, u)}
+}
+
+// finishProbe snapshots the cookies left by the complete request chain.
+// Its own reader can consume a response that set cookies without spending
+// a single-use page again; a later session change still requires a new read.
+func (p *Page) finishProbe(ctx context.Context) {
+	p.session = httpx.RequestKey(ctx, p.via, p.URL)
+	for i := range p.redirects {
+		hop := &p.redirects[i]
+		hop.session = httpx.RequestKey(ctx, p.via, hop.url)
+	}
+}
+
 // probePage fetches a URL as a browser navigating to it would, reading the
 // body only when it is text. A page that would not load is reported in the
 // Page rather than as an error, since a recogniser may still know the URL's
 // form.
 //
-// The probe is asked as a navigation, with no Referer. An answer of 401 or
-// 403 is asked once more with the origin's root as the Referer, as the
+// A named manifest is asked with the origin Referer its reader uses, so
+// recognition and extraction can consume the same single-use response.
+// Other probes navigate without a Referer. An answer of 401 or 403 is
+// asked once more with the origin's root as the Referer, as the
 // fallback's download and the manifest reader ask: a hotlink-protected
 // file, or a manifest whose origin refuses strangers, is then read by what
 // it serves its own pages rather than judged by the refusal. That second
@@ -486,14 +586,14 @@ func (c *pageCache) charger(e *pageCacheEntry) func(int) {
 // that knows the URL's form claims a failed probe anyway, and the chosen
 // extractor's own requests wait out what the probe did not.
 func probePage(ctx context.Context, client *httpx.Client, u *url.URL) (p *Page) {
-	p = &Page{URL: u, Final: u, via: client, route: httpx.RouteID(ctx), request: httpx.RequestKey(ctx, client, u)}
-	defer func() {
-		p.session = httpx.RequestKey(ctx, client, u)
-		for i := range p.redirects {
-			hop := &p.redirects[i]
-			hop.session = httpx.RequestKey(ctx, client, hop.url)
-		}
-	}()
+	return probePageWithReferer(ctx, client, u, nil)
+}
+
+// probePageWithReferer uses a reader's declared policy on the first GET.
+// An explicit policy is not replaced with the generic origin refusal retry.
+func probePageWithReferer(ctx context.Context, client *httpx.Client, u *url.URL, referer *string) (p *Page) {
+	p = newProbePage(ctx, client, u)
+	defer func() { p.finishProbe(ctx) }()
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return p
 	}
@@ -510,12 +610,19 @@ func probePage(ctx context.Context, client *httpx.Client, u *url.URL) (p *Page) 
 			return head
 		}
 	}
-	if !probeGet(ctx, client, p, nil) {
+	var headers httpx.Header
+	if referer != nil {
+		headers = httpx.Referer(*referer)
+	} else if hlsManifestShape(u) {
+		headers = httpx.Referer(util.Origin(u) + "/")
+	}
+	if !probeGet(ctx, client, p, headers) {
 		return p
 	}
-	if p.Status == http.StatusUnauthorized || p.Status == http.StatusForbidden {
-		retry := &Page{URL: u, Final: u, via: p.via, route: p.route, request: p.request,
-			redirects: p.redirects, redirectCookies: p.redirectCookies}
+	if referer == nil && !p.originReferer && (p.Status == http.StatusUnauthorized || p.Status == http.StatusForbidden) {
+		retry := &Page{URL: u, Final: u, via: p.via, route: p.route, agent: p.agent, request: p.request,
+			redirects: p.redirects, redirectCookies: p.redirectCookies,
+			noCache: p.noCache, variesReferer: p.variesReferer, variesAgent: p.variesAgent, reuseUntil: p.reuseUntil}
 		if probeGet(ctx, client, retry, httpx.Referer(util.Origin(u)+"/")) || ctx.Err() != nil {
 			return retry
 		}
@@ -536,6 +643,7 @@ func probeGet(ctx context.Context, client *httpx.Client, p *Page, headers httpx.
 	headers.Apply(req)
 	p.referer = req.Header.Get(httpx.HeaderReferer)
 	p.originReferer = p.referer == util.Origin(p.URL)+"/"
+	started := time.Now()
 	resp, err := probeDo(client, req)
 	if err != nil {
 		p.Err = err
@@ -552,7 +660,7 @@ func probeGet(ctx context.Context, client *httpx.Client, p *Page, headers httpx.
 	defer resp.Body.Close()
 	p.Status, p.Header, p.Final = resp.StatusCode, resp.Header, resp.Request.URL
 	p.finalReferer = resp.Request.Header.Get(httpx.HeaderReferer)
-	p.recordRedirects(resp)
+	p.recordRedirects(resp, started)
 	kind := p.MediaType()
 	switch {
 	case probeReadsType(kind):
@@ -635,6 +743,7 @@ func headProbe(ctx context.Context, client *httpx.Client, p *Page) *Page {
 		return nil
 	}
 	httpx.Navigate.Apply(req)
+	started := time.Now()
 	resp, err := probeDo(client, req)
 	if err != nil {
 		if _, challenged := errors.AsType[*httpx.ChallengeError](err); challenged || ctx.Err() != nil {
@@ -644,7 +753,7 @@ func headProbe(ctx context.Context, client *httpx.Client, p *Page) *Page {
 		return nil
 	}
 	resp.Body.Close()
-	p.recordRedirects(resp)
+	p.recordRedirects(resp, started)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil
 	}
@@ -657,18 +766,145 @@ func headProbe(ctx context.Context, client *httpx.Client, p *Page) *Page {
 	return p
 }
 
-// recordRedirects keeps only request identities, not the HTTP responses or
-// their bodies. Request.Response links each hop to the one that caused it.
-func (p *Page) recordRedirects(resp *http.Response) {
-	if resp.Request.Response == nil {
-		return
-	}
+// recordRedirects keeps request identities and response reuse restrictions,
+// not HTTP responses or their bodies. Request.Response links each hop to the
+// one that caused it. Even a final cacheable response cannot override an
+// earlier hop's no-store redirect or Referer-dependent destination.
+func (p *Page) recordRedirects(resp *http.Response, started time.Time) {
+	received := time.Now()
+	redirected := resp.Request.Response != nil
 	for resp != nil && resp.Request != nil {
 		req := resp.Request
-		p.redirects = append(p.redirects, pageRequest{url: cloneURL(req.URL), request: httpx.SentRequestKey(req)})
-		p.redirectCookies = p.redirectCookies || len(resp.Cookies()) != 0
+		until, reusable := pageFreshUntil(resp.Header, started, received)
+		p.noCache = p.noCache || !reusable
+		if !until.IsZero() && (p.reuseUntil.IsZero() || until.Before(p.reuseUntil)) {
+			p.reuseUntil = until
+		}
+		for _, vary := range resp.Header.Values(httpx.HeaderVary) {
+			for name := range strings.SplitSeq(vary, ",") {
+				name = strings.TrimSpace(name)
+				if name == "*" || strings.EqualFold(name, httpx.HeaderReferer) {
+					p.variesReferer = true
+				}
+				if name == "*" || strings.EqualFold(name, httpx.HeaderUserAgent) {
+					p.variesAgent = true
+				}
+				// Only these fields are modeled by RequestKey. Other
+				// variants belong to this acquisition alone, even when
+				// another caller uses the same route or browser.
+				if name != "" && !strings.EqualFold(name, httpx.HeaderCookie) && !strings.EqualFold(name, httpx.HeaderAcceptLanguage) {
+					p.noCache = true
+				}
+			}
+		}
+		if redirected {
+			p.redirects = append(p.redirects, pageRequest{url: cloneURL(req.URL), request: httpx.SentRequestKey(req)})
+			p.redirectCookies = p.redirectCookies || len(resp.Cookies()) != 0
+		}
 		resp = req.Response
 	}
+}
+
+// pageFreshUntil is the response's freshness deadline, without the local
+// cache TTL. max-age takes precedence over Expires; Age and Date account
+// for time already spent in upstream caches. The whole probe's duration
+// conservatively bounds each redirect hop's response delay, so fetching a
+// slow destination or body never gives an earlier response extra life.
+// Invalid or conflicting freshness metadata permits only the original
+// acquisition to consume the answer. No stated lifetime leaves the local
+// TTL in charge.
+func pageFreshUntil(h http.Header, started, received time.Time) (time.Time, bool) {
+	var lifetime time.Duration
+	hasMaxAge := false
+	for _, control := range h.Values(httpx.HeaderCacheControl) {
+		for directive := range strings.SplitSeq(control, ",") {
+			name, value, _ := strings.Cut(directive, "=")
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case httpx.CacheControlNoStore, httpx.CacheControlNoCache:
+				return time.Time{}, false
+			case httpx.CacheControlMaxAge:
+				if hasMaxAge {
+					return time.Time{}, false
+				}
+				hasMaxAge = true
+				value = strings.TrimSpace(value)
+				if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+					value = value[1 : len(value)-1]
+				}
+				var ok bool
+				if lifetime, ok = cacheSeconds(value); !ok {
+					return time.Time{}, false
+				}
+			}
+		}
+	}
+	expires := h.Values(httpx.HeaderExpires)
+	if !hasMaxAge && len(expires) == 0 {
+		return time.Time{}, true
+	}
+	date := received
+	if values := h.Values(httpx.HeaderDate); len(values) != 0 {
+		var err error
+		if len(values) != 1 {
+			return time.Time{}, false
+		}
+		if date, err = http.ParseTime(values[0]); err != nil {
+			return time.Time{}, false
+		}
+	}
+	if !hasMaxAge {
+		if len(expires) != 1 {
+			return time.Time{}, false
+		}
+		end, err := http.ParseTime(expires[0])
+		if err != nil {
+			return time.Time{}, false
+		}
+		lifetime = end.Sub(date)
+	}
+	var age time.Duration
+	if values := h.Values(httpx.HeaderAge); len(values) != 0 {
+		var ok bool
+		if len(values) != 1 {
+			return time.Time{}, false
+		}
+		if age, ok = cacheSeconds(strings.TrimSpace(values[0])); !ok {
+			return time.Time{}, false
+		}
+	}
+	if lifetime <= age {
+		return received, false
+	}
+	until := started.Add(lifetime - age)
+	// A future Date cannot increase freshness beyond the response's
+	// lifetime; an old Date can shorten it below what Age alone states.
+	if date.After(received) {
+		date = received
+	}
+	if dated := date.Add(lifetime); dated.Before(until) {
+		until = dated
+	}
+	return until, received.Before(until)
+}
+
+// cacheSeconds reads HTTP delta-seconds without allowing signed, fractional
+// or overflowing values to wrap into a new freshness lifetime. A valid
+// duration larger than Go represents saturates; the local TTL still caps it.
+func cacheSeconds(value string) (time.Duration, bool) {
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	const maxDuration = time.Duration(1<<63 - 1)
+	if n > uint64(maxDuration/time.Second) {
+		return maxDuration, true
+	}
+	return time.Duration(n) * time.Second, true
 }
 
 // matchesSession checks every URL whose cookies contributed to this page,
@@ -756,8 +992,8 @@ func freshRead(ctx context.Context) context.Context {
 
 // FreshRead is freshRead for a read the user asked for again: a retry of a
 // job whose source failed or must be listed anew. Registry.Extract then
-// probes the source rather than take the page the cache kept — and with it
-// the answers memoised on that page — and a "no" kept about a whole install
+// probes the source rather than take the document the cache kept. Every
+// acquisition already starts with its own memo; a "no" kept about a whole install
 // (verdictMemo) is asked again. Nested sources it lists are read afresh too.
 func FreshRead(ctx context.Context) context.Context { return freshRead(ctx) }
 
@@ -791,6 +1027,12 @@ func probed(ctx context.Context, u *url.URL) *Page {
 		if !p.matchesSession(ctx, p.via) {
 			return nil
 		}
+		// A response restricted to its acquisition must keep that
+		// acquisition's effective browser too. Reusing a route ID does
+		// not make a changed WithRouteAgent override the same request.
+		if p.noCache && p.agent != httpx.RequestAgent(ctx, p.via) {
+			return nil
+		}
 		// Another route may read only a complete success that did not
 		// change its session: its cookies were not updated by this probe.
 		if p.route != httpx.RouteID(ctx) && !(p.servesAnyRoute() && p.unchangedSession()) {
@@ -806,15 +1048,27 @@ func probed(ctx context.Context, u *url.URL) *Page {
 // servesAnyRoute reports whether the page is an answer any route sending
 // the same request may read: a success, read whole. A refusal, an error
 // page or a redirect left unfollowed may be the address's own, and a read
-// moved to another route by recovery must ask again.
+// moved to another route by recovery must ask again. A response forbidding
+// caching belongs only to its originating acquisition.
 func (p *Page) servesAnyRoute() bool {
-	return p != nil && p.Err == nil && !p.Challenged && !p.partial && p.Status >= 200 && p.Status < 300
+	return p != nil && p.Err == nil && !p.Challenged && !p.partial && !p.noCache && p.Status >= 200 && p.Status < 300
+}
+
+// reusable checks freshness at acquisition, not while an extractor consumes
+// an already-attached Page. A page acquired on another route just before
+// expiry is still that extraction's answer and need not be fetched again.
+func (p *Page) reusable() bool {
+	return p != nil && !p.noCache && (p.reuseUntil.IsZero() || time.Now().Before(p.reuseUntil))
 }
 
 // Document is the page's body when it is a successful document of its own,
-// the only kind an extractor may read instead of fetching.
+// the only kind an extractor may read instead of fetching. Both 200 and
+// 203 carry the requested representation; 203 permits an intermediary's
+// transformation. Other successes can describe an operation, omit content,
+// or carry only a range or delta, so they do not establish a whole document.
 func (p *Page) Document() (string, bool) {
-	if p == nil || p.Err != nil || p.partial || p.Status != http.StatusOK || p.Body == "" {
+	if p == nil || p.Err != nil || p.partial || p.Body == "" ||
+		p.Status != http.StatusOK && p.Status != http.StatusNonAuthoritativeInfo {
 		return "", false
 	}
 	return p.Body, true
@@ -854,9 +1108,9 @@ func probedFor(ctx context.Context, client *httpx.Client, u *url.URL, headers ht
 
 // answers reports whether p stands for a GET of its URL with headers
 // through client: the one place a reader's request is held to the probe's.
-// The probe navigated as a browser does, with no Referer (or the origin's,
-// after a 401 or 403 without one), through the registry's client on a route
-// probed checks. A client of another identity —
+// The probe navigated with no Referer, the origin's (for a named manifest
+// or after a 401/403), or a known canonical player's declared policy,
+// through the registry's client on a route probed checks. A client of another identity —
 // another User-Agent, language or session (httpx.Client.SameIdentity) — is
 // served its own representation, and so is a request carrying any header
 // but a matching Referer: an Accept, a cookie, a credential or an agent of
@@ -1030,6 +1284,9 @@ func (p *Page) IsHTML() bool {
 
 // index parses the document once and reads its head in the same pass.
 func (p *Page) index() *pageIndex {
+	if p.source != nil {
+		return p.source.index()
+	}
 	p.parseOnce.Do(func() {
 		if !p.IsHTML() {
 			return
@@ -1082,6 +1339,9 @@ func (p *Page) index() *pageIndex {
 // that costs less than the index, and a page whose recognisers only scan
 // its body is never indexed for nothing.
 func (p *Page) parsedRoot() (*html.Node, bool) {
+	if p.source != nil {
+		return p.source.parsedRoot()
+	}
 	if !p.indexed.Load() {
 		return nil, false
 	}

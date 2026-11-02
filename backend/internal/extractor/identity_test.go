@@ -76,7 +76,7 @@ func TestProbeAnswersOnlyItsOwnRequest(t *testing.T) {
 // Only a probe that holds a complete, successful document of its own stands
 // in for a reader's request, and it does for either end of its redirect
 // chain. Each acquisition adapter decides the same way: a failed, partial,
-// empty or non-200 probe, or one of another URL, is fetched again.
+// empty or ineligible response, or one of another URL, is fetched again.
 func TestAcquisitionReusesOnlyACompleteProbe(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -105,9 +105,28 @@ func TestAcquisitionReusesOnlyACompleteProbe(t *testing.T) {
 	}{
 		{"the submitted URL", page(nil), submitted, true},
 		{"the redirect's end", page(nil), final, true},
+		{"a transformed representation", page(func(p *Page) { p.Status = http.StatusNonAuthoritativeInfo }), submitted, true},
 		{"another URL", page(nil), other, false},
 		{"another status", page(func(p *Page) { p.Status = http.StatusNotFound }), submitted, false},
+		{"a creation response", page(func(p *Page) { p.Status = http.StatusCreated }), submitted, false},
+		{"an accepted operation", page(func(p *Page) { p.Status = http.StatusAccepted }), submitted, false},
+		{"no-content status", page(func(p *Page) { p.Status = http.StatusNoContent }), submitted, false},
+		{"reset-content status", page(func(p *Page) { p.Status = http.StatusResetContent }), submitted, false},
+		{"a partial response", page(func(p *Page) { p.Status = http.StatusPartialContent }), submitted, false},
+		{"a delta response", page(func(p *Page) { p.Status = http.StatusIMUsed }), submitted, false},
 		{"a body cut short", page(func(p *Page) { p.Err = io.ErrUnexpectedEOF }), submitted, false},
+		{"a transformed body cut short", page(func(p *Page) {
+			p.Status, p.Err = http.StatusNonAuthoritativeInfo, io.ErrUnexpectedEOF
+		}), submitted, false},
+		{"a transformed body past the bound", page(func(p *Page) {
+			p.Status, p.Err = http.StatusNonAuthoritativeInfo, httpx.ErrTooLarge
+		}), submitted, false},
+		{"a transformed sniff prefix", page(func(p *Page) {
+			p.Status, p.partial = http.StatusNonAuthoritativeInfo, true
+		}), submitted, false},
+		{"an empty transformed response", page(func(p *Page) {
+			p.Status, p.Body = http.StatusNonAuthoritativeInfo, ""
+		}), submitted, false},
 		{"no body", page(func(p *Page) { p.Body = "" }), submitted, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

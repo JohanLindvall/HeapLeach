@@ -199,7 +199,8 @@ func (f *FoolFuuka) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 	if p := probed(ctx, u); p != nil && p.Final != nil {
 		at = p.Final
 	}
-	a := &foolFuukaArchive{client: f.client, root: util.Origin(at), name: hostLabel(at.Hostname())}
+	label, _ := knownInstallLabel(config.FamilyFoolFuuka, at.Hostname())
+	a := &foolFuukaArchive{client: f.client, root: util.Origin(at), name: cmp.Or(label, hostLabel(at.Hostname()))}
 	return a.Extract(ctx, u, opts)
 }
 
@@ -207,8 +208,8 @@ func (f *FoolFuuka) Extract(ctx context.Context, u *url.URL, opts Options) (*Res
 type foolFuukaArchive struct {
 	client *httpx.Client
 	// name is the prefix on every error this raises and the start of an
-	// index page's title: the archive's first host label, the part that
-	// distinguishes one archive from another.
+	// index page's title: the established install label, or the first host
+	// label for a newly detected archive.
 	name string
 	// root is the origin every API call is addressed to.
 	root string

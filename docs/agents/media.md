@@ -21,13 +21,19 @@ text as the video. A link that names a file is taken at its word, and an
 image or other stated type is not asked again, since a page's
 extensionless pictures and counters would each cost a request.
 
-A pasted manifest already read whole is accepted with the probe's navigation
-Referer, so a single-use link is not fetched twice. `hlsPlaylistResult` passes
-that document into `readMediaPlaylist`; variants, audio, subtitles and queued
-media still use the origin Referer. Other playlist readers use `fetchPlaylist`,
+A named manifest is probed with the reader's origin Referer, so the right
+representation of a single-use link is fetched once. `hlsPlaylistResult`
+passes that document into `readMediaPlaylist`. An extensionless manifest
+discovered through navigation can reuse its response unless it or a redirect
+declares `Vary: Referer` (or `Vary: *`); a differing Referer then requires
+another acquisition. Variants, audio, subtitles and queued media use the
+origin Referer. Other playlist readers use `fetchPlaylist`,
 which reuses a probe only when it answers their explicit Referer policy.
 `TestPastedManifestIsFetchedOnce`, `TestPastedMasterKeepsVariantReferer` and
 `TestPlaylistReaderHonorsReferer` cover these different requests.
+`TestPastedManifestHonorsOriginReferer` checks representation selection,
+including extensionless and redirected manifests; the extensionless
+single-use test preserves navigation reuse where no Referer variant is stated.
 
 Every main playlist goes through `readMediaPlaylist` (`hls.go`), usually fetched
 by `resolveMediaPlaylist`, and every caller carries the key, the separate audio

@@ -45,11 +45,12 @@ import (
 // other sites (Registry.Follows). On its own pages a site's links are
 // followed only where its extractor's Shape claims them as items: a bare
 // path there is as often an account, genre or sort-order page as an item,
-// and a form named only by its host (linkForm.follow) is followed only from
-// another site's page. A platform's same-site forms are also suppressed
+// and automatic scans follow a form named only by its host (linkForm.follow)
+// only from another site's page. A platform's same-site forms are also suppressed
 // during automatic scanning (linkForm.local). Explicit links: accepts its
 // established item routes (linkForm.harvest) on known installs, excluding
-// profiles and listings. So a harvest of a supported site's index finds its
+// profiles and listings, plus bounded canonical follow forms that opt in
+// through linkForm.harvestFollow. So a harvest of a supported site's index finds its
 // item pages, and not every short path it links to; a site whose items
 // have no form of their own is read through its own extractor instead. A
 // followed link whose page no extractor recognises is left out and

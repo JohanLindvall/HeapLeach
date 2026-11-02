@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // pageSniff recognises WordPress categories, then gives an ordinary HTML
@@ -21,8 +22,10 @@ import (
 // navigation cannot recurse through this fallback. A page whose supported
 // links held nothing, or none of which could be read, keeps the media
 // fallback: a side link that failed says nothing about the page's own
-// clip. An empty successful probe gets one fetch with the origin Referer,
-// unless the probe already asked that way. A successful file response to
+// clip. A complete probe declaring Referer variants must answer the origin-
+// Referer request before any of its links or media are accepted. Other useful
+// probes remain reusable. An empty successful probe also gets one fetch with the
+// origin Referer, unless the probe already asked that way. A file response to
 // that retry keeps its request headers and becomes a direct file. read
 // reports whether HTML was read, so an unsuccessful retry cannot erase the
 // earlier page classification and queue its URL as a file.
@@ -37,16 +40,22 @@ func (d *Direct) pageSniff(ctx context.Context, u *url.URL, opts Options) (res *
 	if !ok {
 		return nil, false, nil
 	}
-	res, read, err = d.pageContents(ctx, u, page, doc, opts)
-	if res != nil || err != nil || !read {
-		return res, read, err
+	_, whole := probe.Document()
+	needsReferer := whole && probe.variesReferer &&
+		!probe.answers(d.client, u, httpx.Referer(util.Origin(u)+"/"))
+	if !needsReferer {
+		res, read, err = d.pageContents(ctx, u, page, doc, opts)
+		if res != nil || err != nil || !read {
+			return res, read, err
+		}
 	}
-	if _, whole := probe.Document(); whole && !probe.originReferer {
+	if whole && (!probe.originReferer || needsReferer) {
 		if err := ctx.Err(); err != nil {
 			return nil, true, err
 		}
-		// A 200 page can be a soft Referer gate. Read it once under the
-		// fallback's own request policy, without reusing the same probe.
+		// A successful page can be a soft Referer gate or a valid preview of a
+		// different representation. Read it once under the fallback's
+		// request policy, without reusing the same probe.
 		fresh := freshRead(ctx)
 		if reply, ok := mediaPageFetch(fresh, d.client, u); ok {
 			if reply.file {

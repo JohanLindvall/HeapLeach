@@ -50,6 +50,190 @@ func jwSource(setup string, base *url.URL) (string, error) {
 		"(the file may have been removed, or the player may have changed)")
 }
 
+// jwSetupHLS reads a single HLS file on the JW Player setup object itself.
+// Source lists keep jwSource's ordering and DASH refusal; this is only the
+// alternative single-file form. Nested preview/track objects are not media.
+func jwSetupHLS(script string, base *url.URL) string {
+	players := make(map[string]bool)
+	if strings.HasPrefix(strings.TrimSpace(script), "<") || strings.Contains(strings.ToLower(script), "<script") {
+		root, err := parseHTML(script)
+		if err != nil {
+			return ""
+		}
+		// Page prose is not JavaScript: an apostrophe in a heading must
+		// not hide the real script, nor may a quoted example become one.
+		// Named players survive into later scripts, while each script's
+		// comments and string boundaries stay local to that element.
+		for _, text := range scriptTexts(root) {
+			if link := jwScriptHLS(text, base, players); link != "" {
+				return link
+			}
+			if setup, ok := unpackJS(text); ok {
+				if link := jwScriptHLS(setup, base, players); link != "" {
+					return link
+				}
+			}
+		}
+		return ""
+	}
+	return jwScriptHLS(script, base, players)
+}
+
+func jwScriptHLS(script string, base *url.URL, players map[string]bool) string {
+	r := jsTokens{rest: script}
+	var recent []string
+	for token := r.next(); token != ""; token = r.next() {
+		recent = append(recent, token)
+		if len(recent) > 8 {
+			recent = recent[1:]
+		}
+		// Both jwplayer("id").setup({...}) and a named player created
+		// with player = jwplayer("id"); player.setup({...}) are common.
+		if n := len(recent); n >= 6 && token == ")" {
+			v := recent[n-6:]
+			if v[1] == "=" && v[2] == "jwplayer" && v[3] == "(" {
+				players[v[0]] = true
+			}
+		}
+		if token != "{" || len(recent) < 5 {
+			continue
+		}
+		v := recent[len(recent)-5:]
+		if v[1] != "." || v[2] != "setup" || v[3] != "(" {
+			continue
+		}
+		direct := len(recent) == 8 && recent[0] == "jwplayer" && recent[1] == "(" && recent[3] == ")"
+		if !direct && !players[v[0]] {
+			continue
+		}
+		if link := resolveRef(base, jsObjectFile(&r)); isPlaylistLink(link) {
+			return link
+		}
+		recent = nil
+	}
+	return ""
+}
+
+// jsObjectFile reads only a literal, direct file property of the object
+// whose opening brace was consumed. Balanced containers, quoted strings
+// and comments keep nested keys and apparent keys inside text out of it.
+func jsObjectFile(r *jsTokens) string {
+	stack := []byte{'{'}
+	var key, file, pending string
+	var sources bool
+	state := 0 // property key, colon, value, then the next comma or closing brace
+	for token := r.next(); token != ""; token = r.next() {
+		if len(stack) == 1 {
+			if state == 3 && key == "file" {
+				if token == "," || token == "}" {
+					file = pending
+				}
+				pending = ""
+			}
+			switch state {
+			case 0:
+				if token == "." || token == "[" {
+					return "" // spreads and computed keys can override file or sources
+				}
+				key, state = token, 1
+				if value, ok := jsLiteral(token); ok {
+					key = value
+				}
+			case 1:
+				state = 3
+				if token == ":" {
+					state = 2
+				} else if key == "file" || key == "sources" || token != "," && token != "}" {
+					// A shorthand media property, method or accessor is not
+					// a literal source. Only unrelated scalar shorthand can
+					// leave an earlier file value intact.
+					return ""
+				}
+			case 2:
+				state = 3
+				if key == "sources" {
+					sources = true
+				}
+				if key == "file" {
+					pending, _ = jsLiteral(token)
+					file = ""
+				}
+			}
+		}
+		switch token {
+		case "{", "[", "(":
+			stack = append(stack, token[0])
+		case "}", "]", ")":
+			if strings.IndexByte("{[(", stack[len(stack)-1]) != strings.IndexByte("}])", token[0]) {
+				return ""
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				if sources {
+					return "" // source lists are jwSource's, including DASH-only lists
+				}
+				return file
+			}
+		case ",":
+			if len(stack) == 1 {
+				state = 0
+			}
+		}
+	}
+	return "" // an incomplete configuration supplies no trusted file
+}
+
+// jsTokens scans just the literals, names and punctuation needed to locate
+// a setup object, without evaluating JavaScript. Template strings are opaque.
+type jsTokens struct{ rest string }
+
+func (r *jsTokens) next() string {
+	for {
+		r.rest = strings.TrimLeft(r.rest, " \t\r\n")
+		switch {
+		case strings.HasPrefix(r.rest, "//"):
+			_, r.rest, _ = strings.Cut(r.rest, "\n")
+		case strings.HasPrefix(r.rest, "/*"):
+			_, r.rest, _ = strings.Cut(r.rest[2:], "*/")
+		default:
+			if r.rest == "" {
+				return ""
+			}
+			n := 1
+			switch quote := r.rest[0]; quote {
+			case '\'', '"', '`':
+				for n < len(r.rest) && r.rest[n] != quote {
+					if r.rest[n] == '\\' {
+						n++
+					}
+					n++
+				}
+				if n >= len(r.rest) {
+					r.rest = ""
+					return ""
+				}
+				n++
+			default:
+				if isWordByte(quote) || quote == '$' {
+					for n < len(r.rest) && (isWordByte(r.rest[n]) || r.rest[n] == '$') {
+						n++
+					}
+				}
+			}
+			token := r.rest[:n]
+			r.rest = r.rest[n:]
+			return token
+		}
+	}
+}
+
+func jsLiteral(token string) (string, bool) {
+	if len(token) < 2 || token[0] != '\'' && token[0] != '"' {
+		return "", false
+	}
+	return unescapeJSString(token[1 : len(token)-1]), true
+}
+
 // scanObject finds the end of the brace-delimited object that opens at
 // doc[start], and reports the index just past its closing brace.
 //

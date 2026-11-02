@@ -350,8 +350,7 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			}
 			// The queue sets up only so many at once: each is a hunt and a
 			// CAPTCHA, which the files' own routes need first.
-			if t.manager.extraAcquiring.Add(1) > int32(t.manager.timings.extraAcquisitions) {
-				t.manager.extraAcquiring.Add(-1)
+			if !t.manager.tryExtraAcquisition() {
 				continue
 			}
 			lastAdd = time.Now()
@@ -365,6 +364,18 @@ func (t *segmentedTransfer) superviseRoutes(ctx context.Context,
 			}(pending)
 		}
 	}
+}
+
+// tryExtraAcquisition reserves a setup slot without counting a rejected
+// attempt. Incrementing before checking the limit briefly overstates the
+// number of active setups to concurrent readers.
+func (m *Manager) tryExtraAcquisition() bool {
+	for used := m.extraAcquiring.Load(); used < int32(m.timings.extraAcquisitions); used = m.extraAcquiring.Load() {
+		if m.extraAcquiring.CompareAndSwap(used, used+1) {
+			return true
+		}
+	}
+	return false
 }
 
 // pumpSource reads ranges through an extra stream's route until nothing is

@@ -49,9 +49,9 @@ func TestFeedsPastTheResponseBound(t *testing.T) {
 	}
 }
 
-// TestFeedsAskedForByName: a feed-shaped URL whose probe got a generic
-// binary type, which the probe does not read, or an HTML subscribe page
-// served to its browser-shaped Accept, is asked again for a feed by name.
+// TestFeedsAskedForByName: a feed-shaped URL is asked for a feed by name,
+// including a generic binary type or a publisher whose browser-shaped
+// Accept would instead receive an HTML subscribe page.
 func TestFeedsAskedForByName(t *testing.T) {
 	for _, tc := range []struct{ name, served string }{
 		{"octet-stream", "application/octet-stream"},
@@ -82,22 +82,26 @@ func TestFeedsAskedForByName(t *testing.T) {
 // TestFeedsNeverAskAgainForMedia: a media file under a feed-shaped path is
 // not asked for again as a feed.
 func TestFeedsNeverAskAgainForMedia(t *testing.T) {
-	var hits atomic.Int32
+	var hits, feedHits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) > 1 {
+			http.Error(w, "Already consumed", http.StatusGone)
+			return
+		}
 		if r.Header.Get(httpx.HeaderAccept) == feedAccept {
-			hits.Add(1)
+			feedHits.Add(1)
 		}
 		w.Header().Set(httpx.HeaderContentType, "audio/mpeg")
 		_, _ = io.WriteString(w, "ID3")
 	}))
 	t.Cleanup(srv.Close)
-	_, ex, err := NewRegistry(&config.Config{}, testClient()).
+	res, ex, err := NewRegistry(&config.Config{}, testClient()).
 		Extract(context.Background(), srv.URL+"/feed/episode", Options{})
-	if err != nil || ex.Name() == "feed" {
+	if err != nil || ex.Name() == "feed" || fileCount(res) != 1 || res.Files[0].URL != srv.URL+"/feed/episode" {
 		t.Fatalf("got %v: %v, want the fallback's file", ex, err)
 	}
-	if n := hits.Load(); n != 0 {
-		t.Errorf("asked for it as a feed %d times, want never", n)
+	if hits.Load() != 1 || feedHits.Load() != 1 {
+		t.Errorf("requests = %d, feed Accept = %d; want one first request and no refetch", hits.Load(), feedHits.Load())
 	}
 }
 
@@ -145,7 +149,7 @@ func feedsHostClient(t *testing.T) *httpx.Client {
 }
 
 // TestFeedsOnAFeedsHost: a URL on a feeds., feed. or rss. host, whatever
-// its path, is asked for as a feed by name when the probe was served a
+// its path, is asked for as a feed by name before navigation can select a
 // subscribe page, and a link to one on another site's page is followed.
 func TestFeedsOnAFeedsHost(t *testing.T) {
 	client := feedsHostClient(t)

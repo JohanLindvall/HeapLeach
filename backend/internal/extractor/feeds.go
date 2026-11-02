@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
@@ -108,71 +110,235 @@ func feedShape(u *url.URL) bool {
 	return wordpress
 }
 
+// feedFirst selects the feed reader's request policy before navigation can
+// consume a feed-shaped source. A named media file or manifest keeps its
+// normal HEAD or manifest acquisition, even below a /feed/ path.
+func feedFirst(u *url.URL) bool {
+	if u.Scheme != "http" && u.Scheme != "https" ||
+		!feedShape(u) && !feedHost(u) || hlsManifestShape(u) || fileRoute(u) {
+		return false
+	}
+	return probeWorthy(u) || slices.Contains(feedFileExtensions, strings.ToLower(path.Ext(u.Path)))
+}
+
+// initialPage acquires a possible feed with its reader's Accept first. The
+// answer belongs only to this acquisition. A definite file needs no
+// second request. Other non-feed answers still get ordinary navigation and
+// recognition; their negative feed answer is kept too, so the later
+// recognizer does not repeat that same question in an unchanged session.
+func (f *Feeds) initialPage(ctx context.Context, u *url.URL, navigate func() *Page) *Page {
+	answer := f.askFeed(ctx, u)
+	p := answer.page
+	file := answer.err == nil && followedFile(p) &&
+		(!feedBinaryTypes[p.MediaType()] || !probeWorthy(u))
+	if !answer.feed && !file && !probeTransient(ctx, answer.err) && ctx.Err() == nil {
+		p = navigate()
+	} else {
+		p.Body = string(answer.body[:min(len(answer.body), config.FeedSniffBytes)])
+		p.partial = answer.cut || len(answer.body) > len(p.Body)
+		p.Err = answer.err
+	}
+	// Navigation can establish cookies needed by a feed. Its new session
+	// must not inherit a negative answer obtained before those cookies.
+	if answer.page.matchesSession(ctx, f.client) {
+		memoAsked(ctx, p, feedAskKey+" "+u.String(), func() feedAnswer { return answer })
+	}
+	return p
+}
+
 // Recognise takes a response that is a syndication feed, by its declared
 // type or its root element, whatever URL served it: a feed has no host or
 // path of its own. A body past the probe's bound is still sniffed, since
 // only its head decides and a long feed is still a feed.
 //
-// Two answers the probe could not read are asked again, by a feed-shaped
-// URL or one on a feeds host (feedHost), with the feed's own Accept: a document served as a generic
-// binary type, which the probe does not read, and a subscribe page served
-// as HTML to the probe's browser-shaped request by a host that negotiates
-// on Accept. Only the head of that second answer is read here.
+// A feed-shaped URL or one on a feeds host (feedHost) can answer navigation
+// with a refusal, a subscribe notice or an unread generic binary type.
+// Those answers are asked again with the feed's own Accept: the browser's
+// status and representation need not be the reader's. A successful feed
+// response is kept for extraction, so negotiation cannot spend a single-use
+// feed and then ask for it again. A transient failure keeps its error rather
+// than turning a temporarily unavailable feed into an unsupported page.
 func (f *Feeds) Recognise(ctx context.Context, p *Page) bool {
-	if p.Status < 200 || p.Status >= 300 {
+	if answer, asked := f.pageAnswer(ctx, p, p.URL); asked &&
+		(answer.feed || probeTransient(ctx, answer.err)) {
+		return true
+	}
+	if p.Status < 200 {
 		return false
 	}
-	if p.Body != "" && (p.Err == nil || httpx.IsTooLarge(p.Err)) &&
+	if p.Status < 300 && p.Body != "" && (p.Err == nil || httpx.IsTooLarge(p.Err)) &&
 		feedish(p.Header.Get(httpx.HeaderContentType), []byte(p.Body[:min(len(p.Body), config.FeedSniffBytes)])) {
 		return true
 	}
 	return p.Err == nil && f.negotiated(ctx, p)
 }
 
-// feedAskKey memoises, on a probed page, whether the URL asked for as a
-// feed answered as one.
+// feedAskKey names a feed-specific request within one acquisition.
 const feedAskKey = "feed-accept"
 
+// feedAnswer is the response to a feed request, including its request
+// identity after redirects and cookie updates. It lives only in the
+// acquisition's memo, never the navigation page's shared cache.
+type feedAnswer struct {
+	page      *Page
+	body      []byte
+	kind      string
+	feed, cut bool
+	err       error
+}
+
 // negotiated reports whether a feed-shaped URL, or one on a feeds host,
-// that the probe got no feed from — a binary type it did not read, or an
-// HTML page — answers as a feed when asked for one by name, reading only
-// the head of that answer.
+// that the probe got no feed from — a navigation refusal, a binary type it
+// did not read, an HTML page or a plain/untyped text notice — answers as a
+// feed when asked for one by name. The submitted form survives redirects;
+// negotiation starts from that URL because Accept can change the redirect
+// destination too. A response that identifies a feed is read to the feed
+// bound and kept for its reader. Exhausted transient errors also select this
+// reader, which reports the actual error instead of claiming no support.
 func (f *Feeds) negotiated(ctx context.Context, p *Page) bool {
-	if f.client == nil || !feedShape(p.Final) && !feedHost(p.Final) {
+	if f.client == nil || p.URL == nil || p.Final == nil ||
+		(p.via != nil && !p.via.SameIdentity(f.client)) ||
+		!feedShape(p.URL) && !feedHost(p.URL) && !feedShape(p.Final) && !feedHost(p.Final) {
 		return false
 	}
 	kind := p.MediaType()
 	unread := p.Body == "" && feedBinaryTypes[kind]
-	if !unread && !mediaPageIsHTMLType(kind) {
+	// A successful media response is the file itself. A refusal's type
+	// describes its error representation, not what the feed request gets.
+	if p.Status < 300 && !unread && !mediaPageIsHTMLType(kind) && !probeSniffsType(kind) {
 		return false
 	}
-	return memoAsked(ctx, p, feedAskKey, func() bool {
-		ctx, done, ok := probeContext(ctx)
-		if !ok {
-			return false
-		}
-		defer done()
-		req, err := f.client.NewRequest(ctx, http.MethodGet, p.Final.String(), nil)
-		if err != nil {
-			return false
-		}
-		req.Header.Set(httpx.HeaderAccept, feedAccept)
-		resp, err := f.client.DoOnce(req)
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return false
-		}
-		head, _ := io.ReadAll(io.LimitReader(resp.Body, config.FeedSniffBytes))
-		return feedish(resp.Header.Get(httpx.HeaderContentType), head)
+	answer := memoAsked(ctx, p, feedAskKey+" "+p.URL.String(), func() feedAnswer {
+		return f.askFeed(ctx, p.URL)
 	})
+	return answer.feed || probeTransient(ctx, answer.err)
+}
+
+// askFeed gives identification the same finite transient-failure patience
+// as other optional platform questions. A negative content verdict is not
+// retried, and each attempt releases its admission before waiting. A stated
+// Retry-After uses the HTTP client's capped policy, never an earlier retry
+// imposed by the shorter optional-probe backoff.
+func (f *Feeds) askFeed(ctx context.Context, u *url.URL) feedAnswer {
+	for attempt := 0; ; attempt++ {
+		answer := f.askFeedOnce(ctx, u)
+		if answer.err == nil || !probeTransient(ctx, answer.err) || attempt+1 >= config.PlatformProbeAttempts {
+			return answer
+		}
+		wait := min(httpx.RetryDelay(attempt), config.PlatformProbeRetryWait)
+		if status, ok := errors.AsType[*httpx.StatusError](answer.err); ok {
+			if delay, stated := httpx.RetryAfter(status.Header); stated {
+				if status.Code == http.StatusTooManyRequests {
+					wait = delay
+				} else {
+					wait = max(wait, delay)
+				}
+			}
+		}
+		if err := util.SleepCtx(ctx, wait); err != nil {
+			answer.err = err
+			return answer
+		}
+	}
+}
+
+// askFeedOnce bounds the identification prefix by the probe timeout, then
+// lets an identified feed finish under the caller's and HTTP client's
+// ordinary reader timeouts. Keeping that response avoids a second use of a
+// signed feed without imposing the short identification timeout on its body.
+func (f *Feeds) askFeedOnce(ctx context.Context, u *url.URL) (answer feedAnswer) {
+	answer.page = newProbePage(ctx, f.client, cloneURL(u))
+	defer func() { answer.page.finishProbe(ctx) }()
+	release, err := httpx.Admit(ctx)
+	if err != nil {
+		answer.err = err
+		return answer
+	}
+	defer release()
+	ask, cancel := context.WithCancelCause(httpx.WithoutAdmission(ctx))
+	defer cancel(nil)
+	timer := time.AfterFunc(platformProbeTimeout, func() { cancel(context.DeadlineExceeded) })
+	defer timer.Stop()
+	defer func() {
+		if err := ctx.Err(); err != nil {
+			answer.err = err
+		} else if context.Cause(ask) == context.DeadlineExceeded {
+			answer.err = fmt.Errorf("%s: identify feed: %w", u.Redacted(), context.DeadlineExceeded)
+		}
+	}()
+	req, err := f.client.NewRequest(ask, http.MethodGet, u.String(), nil)
+	if err != nil {
+		answer.err = err
+		return answer
+	}
+	req.Header.Set(httpx.HeaderAccept, feedAccept)
+	started := time.Now()
+	resp, err := f.client.DoOnce(req)
+	if err != nil {
+		answer.err = err
+		return answer
+	}
+	defer resp.Body.Close()
+	answer.page.Status, answer.page.Header, answer.page.Final = resp.StatusCode, resp.Header, resp.Request.URL
+	answer.page.recordRedirects(resp, started)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		answer.err = httpx.NewStatusError(resp)
+		return answer
+	}
+	answer.kind = resp.Header.Get(httpx.HeaderContentType)
+	answer.feed = feedish(answer.kind, nil)
+	var head []byte
+	if !answer.feed {
+		kind := answer.page.MediaType()
+		if !probeReadsType(kind) && !probeSniffsType(kind) && !feedBinaryTypes[kind] {
+			// Specific media types are files, not feed candidates. Do not
+			// read any of their bytes merely because the path looked like a feed.
+			return answer
+		}
+		head, err = io.ReadAll(io.LimitReader(resp.Body, config.FeedSniffBytes))
+		answer.feed = feedish(answer.kind, head)
+		if err != nil {
+			answer.err = fmt.Errorf("%s: read feed prefix: %w", resp.Request.URL.Redacted(), err)
+			return answer
+		}
+	}
+	if !answer.feed {
+		return answer
+	}
+	timer.Stop()
+	answer.body, answer.cut, answer.err = readFeedBody(resp, head)
+	return answer
+}
+
+// askedFeed consumes only this acquisition's matching feed request. The
+// navigation probe may no longer match after negotiation sets cookies, so
+// the feed response's own identity decides reuse. New acquisitions have new
+// memos; route, agent, client or later session changes require a fresh read.
+func (f *Feeds) askedFeed(ctx context.Context, u *url.URL) (feedAnswer, bool) {
+	return f.pageAnswer(ctx, attachedPage(ctx), u)
+}
+
+func (f *Feeds) pageAnswer(ctx context.Context, p *Page, u *url.URL) (feedAnswer, bool) {
+	if p == nil || u == nil {
+		return feedAnswer{}, false
+	}
+	key := feedAskKey + " " + u.String()
+	p.memoMu.Lock()
+	_, asked := p.memo[memoKey(ctx, key)]
+	p.memoMu.Unlock()
+	if !asked {
+		return feedAnswer{}, false
+	}
+	answer := memoAsked(ctx, p, key, func() feedAnswer { return f.askFeed(ctx, u) })
+	identity := answer.page
+	return answer, identity != nil && identity.via.SameIdentity(f.client) &&
+		identity.route == httpx.RouteID(ctx) && identity.agent == httpx.RequestAgent(ctx, f.client) &&
+		identity.matchesSession(ctx, f.client)
 }
 
 // feedBinaryTypes are the generic types a feed is sometimes served as,
-// which the probe does not read. A specific media type is never taken for
-// one: that is the file itself.
+// which the probe does not read. A successful response with a specific
+// media type is never taken for one: that is the file itself.
 var feedBinaryTypes = map[string]bool{
 	"application/octet-stream":   true,
 	"binary/octet-stream":        true,
@@ -182,14 +348,18 @@ var feedBinaryTypes = map[string]bool{
 
 // Extract reads the feed and lists its enclosures.
 func (f *Feeds) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
-	// Recognition can use a sniffed prefix, but decoding its enclosures
-	// requires a complete document or later episodes silently disappear.
-	p := probed(ctx, u)
-	if doc, ok := p.Document(); ok &&
-		feedish(p.Header.Get(httpx.HeaderContentType), []byte(doc[:min(len(doc), config.FeedSniffBytes)])) {
-		return feedResult([]byte(doc), u, opts.maxFiles())
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	body, contentType, cut, err := f.fetch(ctx, u)
+	// The browser probe can recognise a feed, but its Accept may select
+	// different enclosures even when it returned complete, valid XML. Read
+	// the feed's own representation, including past any sniffed prefix.
+	// Initial acquisition or later negotiation may already have acquired it.
+	answer, asked := f.askedFeed(ctx, u)
+	body, contentType, cut, err := answer.body, answer.kind, answer.cut, answer.err
+	if !asked {
+		body, contentType, cut, err = f.fetch(ctx, u)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("feed: fetch %s: %w", u.Redacted(), err)
 	}
@@ -229,14 +399,23 @@ func (f *Feeds) fetch(ctx context.Context, u *url.URL) (body []byte, contentType
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", false, httpx.NewStatusError(resp)
 	}
-	body, err = io.ReadAll(io.LimitReader(resp.Body, config.MaxFeedBytes+1))
+	body, cut, err = readFeedBody(resp, nil)
+	return body, resp.Header.Get(httpx.HeaderContentType), cut, err
+}
+
+// readFeedBody reads the complete feed within its bound, retaining any
+// prefix identification already consumed. A bounded prefix is never passed
+// off as the complete feed; the same cut reporting serves both acquisition
+// paths.
+func readFeedBody(resp *http.Response, prefix []byte) (body []byte, cut bool, err error) {
+	body, err = io.ReadAll(io.LimitReader(io.MultiReader(bytes.NewReader(prefix), resp.Body), config.MaxFeedBytes+1))
 	if err != nil {
-		return nil, "", false, fmt.Errorf("%s: read body: %w", resp.Request.URL.Redacted(), err)
+		return nil, false, fmt.Errorf("%s: read body: %w", resp.Request.URL.Redacted(), err)
 	}
 	if len(body) > config.MaxFeedBytes {
 		body, cut = body[:config.MaxFeedBytes], true
 	}
-	return body, resp.Header.Get(httpx.HeaderContentType), cut, nil
+	return body, cut, nil
 }
 
 // feedContentTypes are the types that settle the question on their own.

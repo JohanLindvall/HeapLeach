@@ -22,6 +22,16 @@ own. A `parse` row names the Referer the page is fetched with (`asks`) and
 receives a `playerPage`: the body, the final URL, the page as asked for, and
 the tree on demand (`tree`, `title`, `heading`), the probe's own when its
 request matches the row's Referer. Otherwise the row fetches its own page.
+A canonical video URL submitted on the row's known hosts is probed with its
+declared `asks` Referer on the first request (`Player.probeReferer`), so
+recognition does not spend a single-use player on a preview representation.
+Listings, noncanonical links and unfamiliar hosts keep normal navigation;
+the response still decides which extractor recognises the page. The page
+cache separates explicit reader policies from navigation and from each other,
+and preserves the response's client, cookies, redirects and sent Referer for
+the usual reader identity checks. `TestCanonicalPlayerUsesReaderReferer`
+covers direct watch URLs and embed-to-watch conversion with and without
+`Vary: Referer`; `playerprobe_test.go` covers dispatch and cache boundaries.
 A scan of the body never parses it. `TestRegisteredRowsAreComplete`
 (`rows_test.go`) holds every row to exactly one of the two, `withheld` only on a `signed`
 row and no `peek` row signed; `TestPlayerPageRowsHonorTheirPageReferer`
@@ -75,7 +85,13 @@ What else a row can ask for:
 - **`probeCanonical`.** When a link's own page has lost its player markup,
   validate the canonical page (`page`) with one bounded request.
   Recognition still requires the player's normal markers on that page, and
-  extraction reuses it. The request is made only for a probed page the
+  the request sends the row's `asks` Referer up front when declared.
+  Its `Page` records the client, route, sent and final Referer, redirects
+  and cookie state with `newProbePage`, `recordRedirects` and `finishProbe`.
+  Extraction reuses a matching response, including a single-use page;
+  another reader Referer or session requires its own request.
+  `playercanonical_test.go` covers these identities and redirects.
+  The request is made only for a probed page the
   row's `canonicalGate` admits, the row's Shape when it sets none, and never
   when the canonical page is the page already probed. VidMoly needs this
   because old aliases redirect to advertising rather than the player, so
@@ -96,6 +112,14 @@ What else a row can ask for:
 - **`withheld`.** A signed row's queued file carries no link at all, only
   its name and exact size, so the item waits against the site it came from
   rather than the media host (streamable).
+
+On known Sendvid hosts, `/<id>.mp4` accepts 1–32 alphanumeric characters,
+matching `sendvidID`. This is the parser's accepted range, not a claim that
+the service issues every length. `linkForms` scopes that range to the known
+hosts; `sendvidShape` keeps its 6–12-character probe form for unfamiliar
+hosts, so ordinary media links outside that form cost no extra requests.
+Empty, nonalphanumeric and longer IDs do not enter the player through this
+file form.
 
 ## streamable
 
@@ -118,14 +142,23 @@ follows the canonical `/<id>` only on the site's own host, as a discovery
 form (`linkForms`, [extractors.md](../extractors.md#dispatch-is-by-page-never-by-host)). The renditions are listed in sorted name
 order so that equal ones are chosen alike on every read.
 
+Only the main and `www` hosts claim a page before probing. A CDN subdomain
+can serve an extensionless file whose last component resembles a video ID;
+that response belongs to generic file handling, not the metadata API.
+
 The script-reading rows (streamtape, mixdrop, lulustream) are the most fragile
 extractors here, because each depends on the shape of a script the host can
 change. Each therefore reads the numbers it needs off the page — the
 substring offset, the packer's base and word list — rather than hard-coding
 them. `unpackJS` reverses the p,a,c,k,e,d packer and is host-neutral.
 `jwSource` reads a JW Player setup's `sources:` list (vidmoly, lulustream):
-only that list is media, since a `file:` key above it can name the seek-bar
-sprite, and a DASH entry is passed over for the HLS beside it.
+its entries are media, and a DASH entry is passed over for the HLS beside
+it. Lulu also accepts the actual setup object's own HLS `file` property,
+in both plain and packed scripts. A nested preview, track or seek-bar
+sprite's `file` is not that property; strings and comments are not player
+configurations. Source-list selection and DASH refusal retain precedence.
+Unresolved spreads, computed keys and nonliteral media properties refuse
+the single-file fallback, since they may override the apparent literal URL.
 
 A vidmoly HLS file is named after its segments' container
 (`hlsMedia.extension`), as every other player row's is, not after the
@@ -491,7 +524,12 @@ permutation); `kvslisting.go` the walk every listing shares, and
 whatever else a fetched page turns out to list. The install is recognised
 by the platform's fingerprint: flashvars carrying a `license_code`, the
 `kt_player` script, the asynchronous `list_videos` controls, or a block's
-container with its `_items` list. There is no install list to keep.
+container with its `_items` list. Its generator together with playable
+plain-media flashvars also identifies a custom video route: the selected
+rendition must be an absolute HTTP(S) URL that extraction can use, without
+a missing license or an adaptive-only stream. Recognition and extraction
+share the rendition choice (`kvsPlainRendition`). Generic flashvars alone
+are insufficient. There is no install list to keep.
 
 A video page whose player is gone (private, removed, or a 410) has lost the
 parts the fingerprint reads, but it is still the install's, and the right
@@ -500,7 +538,7 @@ missing player is what would be downloaded. So on a video path
 (`kvsVideoPath`) the platform's weaker signs also count
 (`kvsVideoPageSigns`): its own generator meta, an items list named
 `list_videos_<block>_items` without its container, or a link into
-`/contents/videos_screenshots/`. None of these is enough off a video path. The
+`/contents/videos_screenshots/`. None of these alone is enough off a video path. The
 front page is recognised too, by the fingerprint, so that `kvsBrowse` refuses
 it rather than `direct` walking whatever the site promotes.
 `TestRegistryKVSVideoWithoutPlayerReportsItsError` and
@@ -568,9 +606,20 @@ second time (`TestKVSListingWalksTheFirstPageInHand`). A canonical first
 page found by dropping a pasted page number is a request of its own. A
 browse read requests the origin Referer and fetches again if the probe used
 another one: a 200 response can carry the platform marker but withhold its
-player until that Referer is sent (`TestRegistryNamedReaderHonorsReferer`). A
-member or search listing takes the probe by URL and route alone
-(`probed`), as it always has. Its reader stops at the stated
+player until that Referer is sent (`TestRegistryNamedReaderHonorsReferer`).
+For a known or configured install's browse path, including a custom video
+route or category listing, the first probe already sends that origin
+Referer, so a consumable page is not spent on a preview
+(`TestKVSVideoProbeUsesReaderReferer`). Member and search routes take
+precedence even if they contain a `videos` segment. A known install's
+canonical member or search listing sends its self-Referer on the first
+probe too, preserving the complete response when only one GET is usable
+(`TestKVSListingProbeUsesReaderReferer`). A member or search URL that
+canonicalizes to a different listing, and unfamiliar installs, retain
+navigation before recognition. A member or search listing reuses a probe
+only when `probedFor` matches its self-Referer request, client, session and
+route; otherwise it fetches its own
+first page. A compatible probe still supplies its parsed tree. Its reader stops at the stated
 total, and a later page that repeats, adds nothing or carries no listing is
 the end of the listing rather than a partial one; a later page that fails is
 a cut, and noted. Every video

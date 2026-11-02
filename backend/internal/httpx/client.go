@@ -672,16 +672,21 @@ func retryableStatus(code int) bool {
 	return false
 }
 
-// retryAfter reads the Retry-After header in either of its two legal forms,
-// and reports whether the host stated one at all.
+func retryAfter(resp *http.Response) (time.Duration, bool) {
+	return RetryAfter(resp.Header)
+}
+
+// RetryAfter reads the Retry-After header in either of its two legal forms,
+// caps the wait at config.MaxRetryAfter, and reports whether the host stated
+// a valid delay. It also accepts the headers preserved in a StatusError.
 //
 // That second answer is what a rate limit turns on. A host naming an
 // interval is the authority on its own limiter and is believed in either
 // direction, a shorter one included; a host naming nothing has said only
 // "too many", and is left to the escalating schedule. Without the flag the
 // two are indistinguishable, since both come out as a zero wait.
-func retryAfter(resp *http.Response) (time.Duration, bool) {
-	v := strings.TrimSpace(resp.Header.Get(HeaderRetryAfter))
+func RetryAfter(header http.Header) (time.Duration, bool) {
+	v := strings.TrimSpace(header.Get(HeaderRetryAfter))
 	if v == "" {
 		return 0, false
 	}

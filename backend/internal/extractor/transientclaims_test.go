@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -241,6 +242,51 @@ func TestTransientPathCollisionPreservesCancellation(t *testing.T) {
 	res, _, err := NewRegistry(&config.Config{}, client).Extract(ctx, srv.URL+"/v/synthetic", Options{})
 	if res != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %+v, %v; want cancellation", res, err)
+	}
+}
+
+func TestRegistryCancellationWinsOverCompletedRead(t *testing.T) {
+	for _, stage := range []string{"recognition", "extraction"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			srv, _ := collisionProbeServer(t, "/v/synthetic", http.StatusServiceUnavailable, "text/html")
+			client := testClient()
+			defer client.CloseIdleConnections()
+			player := NewPlayer(client, &playerSite{
+				about: about{name: "synthetic", shape: func(*url.URL) bool { return true }},
+				recognise: func(page *Page) bool {
+					if !httpx.HasStatus(probeFailure(page.URL, page), http.StatusServiceUnavailable) {
+						t.Fatalf("probe did not finish with the server's refusal: %+v", page)
+					}
+					if stage == "recognition" {
+						// Make the ordering deterministic: the response has
+						// arrived, but cancellation precedes its classification.
+						cancel()
+						return false
+					}
+					return true
+				},
+				read: func(context.Context, *httpx.Client, string) (*playerVideo, error) {
+					cancel()
+					return nil, &httpx.StatusError{Code: http.StatusServiceUnavailable, Status: "503 Service Unavailable"}
+				},
+				proxyFallback: true,
+			})
+			reg := &Registry{client: client, extractors: []Extractor{player}, fallback: NewDirect(client)}
+			var recoveries int
+			ctx = WithChallengeRecovery(ctx, func(_ context.Context, _ func(context.Context) (*Result, error), cause error) (*Result, error) {
+				recoveries++
+				return nil, cause
+			})
+			res, _, err := reg.Extract(ctx, srv.URL+"/v/synthetic", Options{})
+			if res != nil || !errors.Is(err, context.Canceled) {
+				t.Errorf("got %+v, %v; want cancellation", res, err)
+			}
+			if recoveries != 0 {
+				t.Errorf("started %d recovery attempts after cancellation", recoveries)
+			}
+		})
 	}
 }
 

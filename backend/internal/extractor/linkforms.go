@@ -20,9 +20,10 @@ import (
 // all the same while extractors were chosen by host, and a thread of them
 // is a common thing to harvest.
 //
-// linkForms names them, by the host that hands them out, for discovery
-// alone, and only for a link found on another site's page: Registry.Follows
-// follows them, and their pages are still recognised
+// linkForms names them, by the host that hands them out, for discovery.
+// Registry.Follows takes them only from another site's page; explicit
+// links: can also take bounded item forms on their own site (harvestFollow).
+// Their pages are still recognised
 // by what they serve, never because of the host. No Shape or Recognise reads
 // anything here (TestDiscoveryFormsNeverDecideRecognition), so a host named
 // below is an operational constant like an API base, not a reason any
@@ -39,6 +40,10 @@ import (
 type linkForm struct {
 	// follow is the links followed besides the extractor's Shape.
 	follow func(*url.URL) bool
+	// harvestFollow admits this bounded, host-specific item form on its
+	// own site for explicit links:. Broad feed and catalogue forms leave
+	// this unset; reserved account and navigation paths are excluded too.
+	harvestFollow bool
 	// local is the part of the Shape a site's own pages use for
 	// navigation.
 	local func(*url.URL) bool
@@ -113,6 +118,7 @@ var siteHosts = map[string][]string{
 	"pornone":        {"pornone.com"},
 	"eporner":        {"eporner.com"},
 	"pixhost":        {"pixhost.to"},
+	"goonbox":        {"goonbox.cr"},
 	"imagepond":      {"imagepond.net"},
 	"suvobox":        {"suvobox.com"},
 	"filester":       {"filester.*"},
@@ -182,6 +188,14 @@ func onSiteHosts(u *url.URL, hosts []string) bool {
 			if !scoped || u.Path == "/"+prefix || strings.HasPrefix(u.Path, "/"+prefix+"/") {
 				return true
 			}
+			if domain == "bbc.co.uk" && prefix == "sounds" {
+				// This service accepts /Sounds/ too. Keep its inventory
+				// scope consistent with bbcShape without folding other sites.
+				section, _, _ := strings.Cut(strings.TrimPrefix(u.Path, "/"), "/")
+				if strings.EqualFold(section, prefix) {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -215,32 +229,38 @@ func anyTLD(host, name string) bool {
 // linkForms is keyed by extractor name.
 var linkForms = map[string]linkForm{
 	// Short links that only redirect to the item's page.
-	"youtube":     {follow: hostLinks([]string{"youtu.be"}, `^/[A-Za-z0-9_-]{11}/?$`)},
-	"dailymotion": {follow: hostLinks([]string{"dai.ly"}, `^/x?[0-9a-zA-Z]{5,}/?$`)},
-	"bilibili":    {follow: hostLinks([]string{"b23.tv"}, `^/[0-9A-Za-z]{4,}/?$`)},
+	"youtube":     {follow: hostLinks([]string{"youtu.be"}, `^/[A-Za-z0-9_-]{11}/?$`), harvestFollow: true},
+	"dailymotion": {follow: hostLinks([]string{"dai.ly"}, `^/x?[0-9a-zA-Z]{5,}/?$`), harvestFollow: true},
+	"bilibili":    {follow: hostLinks([]string{"b23.tv"}, `^/[0-9A-Za-z]{4,}/?$`), harvestFollow: true},
 	"soundcloud": {follow: eitherShape(
 		hostLinks([]string{"on.soundcloud.com"}, `^/[0-9A-Za-z]{4,}/?$`),
 		// A track, private ones with their token included.
 		exactHostLinks([]string{"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"},
 			`^/[^/]+/[^/.]+(?:/s-[0-9A-Za-z]+)?/?$`),
-	)},
+	), harvestFollow: true},
 	// A show, /<user>/<show>/.
 	"mixcloud": {follow: exactHostLinks([]string{"mixcloud.com", "www.mixcloud.com", "m.mixcloud.com"},
-		`^/[^/]+/[^/.]+/?$`)},
+		`^/[^/]+/[^/.]+/?$`), harvestFollow: true},
 	// Canonical single-item links, /<id>.
-	"streamable": {follow: exactHostLinks([]string{"streamable.com", "www.streamable.com"}, `^/[0-9a-z]{4,10}/?$`)},
-	"sendvid":    {follow: exactHostLinks([]string{"sendvid.com", "www.sendvid.com"}, `^/[A-Za-z0-9]{6,12}/?$`)},
-	"lulustream": {follow: hostLinks([]string{"lulustream.com", "luluvdo.com", "luluvido.com"}, `^/[0-9A-Za-z]{12}/?$`)},
-	"vidmoly":    {follow: hostLinks([]string{"vidmoly.me", "vidmoly.to", "vidmoly.biz", "vidmoly.net"}, `^/[A-Za-z0-9]{5,}/?$`)},
-	"imgur":      {follow: exactHostLinks([]string{"imgur.com", "www.imgur.com", "m.imgur.com"}, `^/[A-Za-z0-9]{5,8}/?$`)},
+	"streamable": {follow: exactHostLinks([]string{"streamable.com", "www.streamable.com"}, `^/[0-9a-z]{4,10}/?$`), harvestFollow: true},
+	"sendvid": {follow: eitherShape(
+		exactHostLinks([]string{"sendvid.com", "www.sendvid.com"}, `^/[A-Za-z0-9]{6,12}/?$`),
+		// On its own hosts, the redirect accepts sendvidID's full range.
+		// Keep the wider form out of Shape so unrelated files stay direct.
+		hostLinks(siteHosts["sendvid"], `^/[A-Za-z0-9]{1,32}\.mp4/?$`),
+	), harvestFollow: true},
+	"lulustream": {follow: hostLinks([]string{"lulustream.com", "luluvdo.com", "luluvido.com"}, `^/[0-9A-Za-z]{12}/?$`), harvestFollow: true},
+	"vidmoly":    {follow: hostLinks([]string{"vidmoly.me", "vidmoly.to", "vidmoly.biz", "vidmoly.net"}, `^/[A-Za-z0-9]{5,}/?$`), harvestFollow: true},
+	"imgur":      {follow: exactHostLinks([]string{"imgur.com", "www.imgur.com", "m.imgur.com"}, `^/[A-Za-z0-9]{5,8}/?$`), harvestFollow: true},
 	"chevereto": {follow: exactHostLinks([]string{"ibb.co"}, `^/[A-Za-z0-9]{5,10}/?$`),
-		local: everyLink, harvest: cheveretoHarvestItem},
+		harvestFollow: true, local: everyLink, harvest: cheveretoHarvestItem},
 	// A Kernel Video Sharing install that serves its videos at
 	// /<slug>.html, which on any other site is an article.
 	"kvs": {
-		follow:  hostLinks([]string{"sexvid.xxx"}, `^/[^/]+\.html$`),
-		local:   everyLink,
-		harvest: kvsHarvestItem,
+		follow:        hostLinks([]string{"sexvid.xxx"}, `^/[^/]+\.html$`),
+		harvestFollow: true,
+		local:         everyLink,
+		harvest:       kvsHarvestItem,
 	},
 	// A show's feed on a publisher's feeds host, /<show-id>.
 	"feed": {follow: feedHost},
@@ -259,6 +279,53 @@ var linkForms = map[string]linkForm{
 	"bandzoogle": {local: everyLink},
 	"fediverse":  {local: everyLink, harvest: fediHarvestItem},
 	"mediawiki":  {local: everyLink, harvest: mediaWikiHarvestItem},
+}
+
+// canonicalHarvest excludes account routes and the music sites' listing
+// tabs where those fit a follow form. A track/show slug is otherwise free
+// text: words such as "you", "latest" or "about" can be its title, not
+// navigation. This is only used for explicit same-site harvesting.
+func canonicalHarvest(name string, u *url.URL) bool {
+	parts := util.PathSegments(u)
+	if len(parts) == 0 {
+		return false
+	}
+	first := strings.TrimSuffix(strings.ToLower(parts[0]), ".html")
+	switch first {
+	case "account", "login", "logout", "signin", "signup", "register", "settings", "upload", "uploads":
+		return false
+	}
+	switch name {
+	case "soundcloud":
+		if first == "discover" || first == "search" {
+			return false
+		}
+		if len(parts) > 1 {
+			switch strings.ToLower(parts[1]) {
+			case "tracks", "popular-tracks", "albums", "sets", "likes", "reposts", "followers", "following":
+				return false
+			}
+		}
+	case "mixcloud":
+		if first == "genres" || first == "charts" || first == "discover" {
+			return false
+		}
+		if len(parts) > 1 {
+			switch strings.ToLower(parts[1]) {
+			case "favorites", "favourites", "uploads", "playlists", "followers", "following":
+				return false
+			}
+		}
+	default:
+		// These forms have one code/slug, so the site's own static pages
+		// cannot be mistaken for a title nested beneath a creator.
+		switch first {
+		case "help", "support", "about", "contact", "privacy", "terms", "pricing", "premium",
+			"dashboard", "explore", "discover", "gallery":
+			return false
+		}
+	}
+	return true
 }
 
 // Explicit harvesting uses each platform's item parser rather than its

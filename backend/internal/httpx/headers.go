@@ -44,12 +44,15 @@ const (
 
 	// Response headers, most of them set by the server on what it serves.
 	HeaderAccelBuffering        = "X-Accel-Buffering"
+	HeaderAge                   = "Age"
 	HeaderAllow                 = "Allow"
 	HeaderCacheControl          = "Cache-Control"
 	HeaderContentEncoding       = "Content-Encoding"
 	HeaderContentLength         = "Content-Length"
 	HeaderContentSecurityPolicy = "Content-Security-Policy"
 	HeaderContentTypeOptions    = "X-Content-Type-Options"
+	HeaderDate                  = "Date"
+	HeaderExpires               = "Expires"
 	HeaderFrameOptions          = "X-Frame-Options"
 	HeaderReferrerPolicy        = "Referrer-Policy"
 	HeaderVary                  = "Vary"
@@ -63,6 +66,10 @@ const (
 
 	ContentTypeJSON = "application/json"
 	ContentTypeForm = "application/x-www-form-urlencoded"
+
+	CacheControlNoStore = "no-store"
+	CacheControlNoCache = "no-cache"
+	CacheControlMaxAge  = "max-age"
 
 	// RequestedWithXHR marks a request the page would make from script.
 	// Some players answer their own endpoints only to it.

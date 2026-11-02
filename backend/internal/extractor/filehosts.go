@@ -425,6 +425,9 @@ var (
 	driveFileShape   = pathShape(`^/file/(?:u/[0-9]+/)?d/[A-Za-z0-9_-]{10,}(/[a-z]*)?/?$`)
 	driveQueryShape  = pathShape(`^/(?:u/[0-9]+/)?(open|uc|download)/?$`)
 	driveFolderShape = pathShape(`^/drive/(?:u/[0-9]+/)?folders/[A-Za-z0-9_-]{10,}/?$`)
+	// Only this shared endpoint is claimed on docs.google.com; document
+	// export routes there belong to their requested format, not Drive.
+	driveUCShape = pathShape(`^/(?:u/[0-9]+/)?uc/?$`)
 )
 
 // driveViewerBundle is the file viewer's script bundle.

@@ -10,20 +10,20 @@ import (
 	"time"
 )
 
-// A retry the user asks for reads the source again. The page a job failed
-// on a moment ago is still in the extractors' cache, and handing it back
-// would repeat the failure without asking the site; adding the same link
-// as a new job may share it, but a retry may not.
+// A retry the user asks for obtains a fresh probe even when the cached page
+// already recognises the feed. The feed reader also makes its own request,
+// so verify both fresh reads as well as the newly available enclosure.
 func TestRetryJobReadsTheSourceAgain(t *testing.T) {
 	var hits atomic.Int32
+	var ready atomic.Bool
 	srv := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/rss+xml")
 		switch r.URL.Path {
 		case "/page":
-			// The recognised feed has no enclosures at first. Unlike an
-			// unrecognised HTML page, it does not get a Referer retry, so
-			// only the user's Retry can discover the added enclosure.
-			if hits.Add(1) == 1 {
+			hits.Add(1)
+			// The browser probe and feed reader see the same empty source
+			// until it changes immediately before the user's retry.
+			if !ready.Load() {
 				fmt.Fprint(w, `<rss version="2.0"><channel><title>Page</title></channel></rss>`)
 				return
 			}
@@ -41,10 +41,11 @@ func TestRetryJobReadsTheSourceAgain(t *testing.T) {
 	m.mu.Lock()
 	failed, items := m.jobs[id].Err, len(m.jobs[id].Items)
 	m.mu.Unlock()
-	if failed == "" || items != 0 {
-		t.Fatalf("the empty page: err %q with %d items, want a failure", failed, items)
+	if hits.Load() != 2 || failed == "" || items != 0 {
+		t.Fatalf("the empty page: %d reads, err %q with %d items; want probe and feed reads, and a failure", hits.Load(), failed, items)
 	}
 
+	ready.Store(true)
 	if err := m.RetryJob(id); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestRetryJobReadsTheSourceAgain(t *testing.T) {
 	m.mu.Lock()
 	failed, items = m.jobs[id].Err, len(m.jobs[id].Items)
 	m.mu.Unlock()
-	if hits.Load() != 2 || failed != "" || items != 1 {
-		t.Fatalf("retry: %d reads of the page, err %q, %d items; want a second read and its file", hits.Load(), failed, items)
+	if hits.Load() != 4 || failed != "" || items != 1 {
+		t.Fatalf("retry: %d reads of the page, err %q, %d items; want fresh probe and feed reads, and its file", hits.Load(), failed, items)
 	}
 }

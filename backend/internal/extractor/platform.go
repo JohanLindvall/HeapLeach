@@ -32,13 +32,25 @@ func platformJSON(ctx context.Context, client *httpx.Client, endpoint string, he
 // answered (jsonAnswer.answered): a "no" that is the site's own rather than
 // the absence of an answer.
 func platformJSONAnswer(ctx context.Context, client *httpx.Client, endpoint string, headers httpx.Header, out any) (ok, answered bool) {
+	got := platformJSONRead(ctx, client, endpoint, headers)
+	return len(got.raw) > 0 && json.Unmarshal(got.raw, out) == nil, got.answered
+}
+
+// platformJSONRead also retains a transient failure after the bounded
+// attempts. It is not a negative identification: a reader may need its
+// normal retry budget after the generic fallback found nothing to read.
+func platformJSONRead(ctx context.Context, client *httpx.Client, endpoint string, headers httpx.Header) jsonAnswer {
 	for attempt := 0; ; attempt++ {
-		ok, again, answered := platformJSONOnce(ctx, client, endpoint, headers, out)
+		var raw json.RawMessage
+		ok, again, answered, retry := platformJSONOnce(ctx, client, endpoint, headers, &raw)
 		if ok || !again || attempt+1 >= config.PlatformProbeAttempts {
-			return ok, ok || answered
+			if ok {
+				return jsonAnswer{raw: raw, answered: true}
+			}
+			return jsonAnswer{answered: answered, retry: retry}
 		}
 		if util.SleepCtx(ctx, min(httpx.RetryDelay(attempt), config.PlatformProbeRetryWait)) != nil {
-			return false, false
+			return jsonAnswer{}
 		}
 	}
 }
@@ -67,15 +79,15 @@ func probeContext(ctx context.Context) (_ context.Context, done func(), ok bool)
 // worth asking once more about, and answered one that is the endpoint's
 // own answer: a success read whole, or a client error other than a rate
 // limit, through no challenge and no route's refusal.
-func platformJSONOnce(ctx context.Context, client *httpx.Client, endpoint string, headers httpx.Header, out any) (ok, again, answered bool) {
+func platformJSONOnce(ctx context.Context, client *httpx.Client, endpoint string, headers httpx.Header, out any) (ok, again, answered bool, retry error) {
 	ctx, done, admitted := probeContext(ctx)
 	if !admitted {
-		return false, false, false
+		return false, false, false, nil
 	}
 	defer done()
 	req, err := client.NewRequest(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return false, false, false
+		return false, false, false, nil
 	}
 	req.Header.Set(httpx.HeaderAccept, httpx.ContentTypeJSON)
 	headers.Apply(req)
@@ -86,22 +98,25 @@ func platformJSONOnce(ctx context.Context, client *httpx.Client, endpoint string
 		status, isStatus := errors.AsType[*httpx.StatusError](err)
 		transient := !isStatus || status.Code == http.StatusTooManyRequests || status.Code >= 500
 		refused := isStatus && clientRefusal(status.Code)
-		return false, transient && !challenged && !routed && ctx.Err() == nil, refused && !challenged && !routed
+		if transient && !challenged && !routed {
+			retry = err
+		}
+		return false, retry != nil && ctx.Err() == nil, refused && !challenged && !routed, retry
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false, false, clientRefusal(resp.StatusCode)
+		return false, false, clientRefusal(resp.StatusCode), nil
 	}
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get(httpx.HeaderContentType))
 	if mediaType != "" && mediaType != httpx.ContentTypeJSON && !strings.HasSuffix(mediaType, "+json") &&
 		mediaType != "text/plain" && mediaType != "text/css" {
-		return false, false, true
+		return false, false, true, nil
 	}
 	body, err := httpx.ReadBody(resp.Body)
 	if err != nil {
-		return false, false, false
+		return false, false, false, nil
 	}
-	return json.Unmarshal(body, out) == nil, false, true
+	return json.Unmarshal(body, out) == nil, false, true, nil
 }
 
 // clientRefusal is a status by which an endpoint says no rather than "not
@@ -137,6 +152,9 @@ func pageJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint strin
 type jsonAnswer struct {
 	raw      json.RawMessage
 	answered bool
+	// retry is the actual transient failure; nil for a definite refusal,
+	// invalid document, challenge, route failure or a skipped question.
+	retry error
 }
 
 // pageJSONAnswer is pageJSON reporting also whether its "no" is the
@@ -144,21 +162,20 @@ type jsonAnswer struct {
 // endpoint did not answer, which a caller remembering verdicts must not
 // keep (verdictMemo).
 func pageJSONAnswer(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header, out any) (ok, answered bool) {
+	got := pageJSONRead(ctx, p, client, endpoint, headers)
+	return len(got.raw) > 0 && json.Unmarshal(got.raw, out) == nil, got.answered
+}
+
+// pageJSONRead is the memoized answer, including a transient failure when
+// the bounded question ran out of attempts. Identity and route checks are
+// the same for successful and failed answers.
+func pageJSONRead(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header) jsonAnswer {
 	if client == nil || p == nil || (p.via != nil && !p.via.SameIdentity(client)) {
-		return false, false
+		return jsonAnswer{}
 	}
-	got := memoAsked(ctx, p, jsonKey(endpoint, headers), func() jsonAnswer {
-		var raw json.RawMessage
-		ok, answered := platformJSONAnswer(ctx, client, endpoint, headers, &raw)
-		if !ok {
-			return jsonAnswer{answered: answered}
-		}
-		return jsonAnswer{raw: raw, answered: true}
+	return memoAsked(ctx, p, jsonKey(endpoint, headers), func() jsonAnswer {
+		return platformJSONRead(ctx, client, endpoint, headers)
 	})
-	if len(got.raw) > 0 && json.Unmarshal(got.raw, out) == nil {
-		return true, true
-	}
-	return false, got.answered
 }
 
 // askedJSON is pageJSON for an extractor: the answer a recogniser already
@@ -166,13 +183,23 @@ func pageJSONAnswer(ctx context.Context, p *Page, client *httpx.Client, endpoint
 // it asks nothing and reports false, so the extractor makes its own request,
 // with its own retries, rather than a bounded probe ahead of it.
 func askedJSON(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header, out any) bool {
-	if p == nil {
-		return false
+	got, asked := askedJSONRead(ctx, p, client, endpoint, headers)
+	return asked && len(got.raw) > 0 && json.Unmarshal(got.raw, out) == nil
+}
+
+// askedJSONRead never starts a new question. Deferred recognition uses it
+// to inspect a failed acquisition without guessing on a new route or client.
+func askedJSONRead(ctx context.Context, p *Page, client *httpx.Client, endpoint string, headers httpx.Header) (jsonAnswer, bool) {
+	if p == nil || client == nil || (p.via != nil && !p.via.SameIdentity(client)) {
+		return jsonAnswer{}, false
 	}
 	p.memoMu.Lock()
 	_, asked := p.memo[memoKey(ctx, jsonKey(endpoint, headers))]
 	p.memoMu.Unlock()
-	return asked && pageJSON(ctx, p, client, endpoint, headers, out)
+	if !asked {
+		return jsonAnswer{}, false
+	}
+	return pageJSONRead(ctx, p, client, endpoint, headers), true
 }
 
 // jsonKey names a JSON question for a page's memo: the endpoint and every

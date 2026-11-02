@@ -9,7 +9,7 @@ Most of these hosts are one row of a table rather than an extractor of
 their own: `Share` (`shares.go`) is the extractor, and a host is a
 `shareSite` — its name, its inventory line, its link forms and the function
 that reads a recognised link — registered through its `New…` constructor.
-bunkr, cyberdrop, dropbox, emload, filejump, filester, imagepond, mediafire,
+bunkr, cyberdrop, dropbox, emload, filejump, filester, goonbox, imagepond, mediafire,
 pixhost, suvobox, turbo and wetransfer are rows. A form is a `shape`, which
 is what the link scanner follows, and a `recognise`, which takes a probed
 page whose *final* URL has that shape; the first form the final URL has
@@ -58,6 +58,17 @@ mediafire reads its page and is claimed as a fallback: a page without the
 download button is still mediafire's, which reports "removed, or need a
 password". `TestFileHostClaimsReportTheHostsOwnRefusal` holds each to its
 words through `Registry.Extract`.
+
+The claims retain each service's host and path boundaries
+(`hostClaimAllows`). On `docs.google.com`, only `/uc` (including its
+`/u/<n>/uc` account form) is Drive's endpoint; document and spreadsheet
+exports retain their submitted URL and requested format. Drive's own file
+and content hosts keep their confirmation flow. WeTransfer takes
+`/downloads/` on its main domain and follows every `we.tl` short link,
+including legacy paths outside its discovery Shape. Extensionless signed
+storage links on its subdomains stay direct files. These boundaries apply
+before a probe, so a binary response or an unrelated page never has to
+survive an inappropriate service API call.
 
 Recognition and its withheld-page questions are for the same forms on
 other hosts only. Those questions never go to a fixed service's API: gofile,
@@ -396,6 +407,26 @@ is one request instead of one per image, and if the mapping ever changes the
 failure is a visible 404 rather than a directory full of thumbnails. Names
 keep the site's id prefix because two images in one gallery can share an
 original filename.
+
+## goonbox
+
+GoonBox image viewers use `/img/<id>`; older filename links append the
+encoded id after the last dot. Its React app reads `/api/images/<id>` on
+the viewer's own origin. `claimFirstForm` sends only these viewer links to
+the API before a page probe: the viewer can require a Cloudflare challenge
+while its public metadata remains available. Storage files and other routes
+retain their ordinary handling. On another host, the page must name GoonBox
+and carry the app's root and module bundle before the row recognises it.
+
+Read `image.original_url`, `original_filename` and `size_bytes` together;
+the medium and thumbnail URLs describe smaller renditions, and
+`album_images` are neighbouring items rather than the submitted image.
+The returned encoded id must match the requested one. Deleted, missing or
+incomplete metadata is an error, including an answer that offers thumbnails
+but no original. Missing byte counts stay unknown. Keep the canonical viewer
+as the API Referer and the site origin as the file Referer; no authentication
+or eager media request is needed. The registry test refuses every viewer
+request to ensure that successful API extraction never depends on the page.
 
 ## imagepond
 

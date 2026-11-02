@@ -4,6 +4,7 @@ package extractor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -199,6 +200,33 @@ func (f *Fediverse) identified(ctx context.Context, p *Page, form *url.URL) (str
 	})
 }
 
+// recoverRecognition is only asked after ordinary recognition and the
+// generic reader found nothing. A transient discovery failure is not proof
+// that the source is unsupported; finish that question with the reader's
+// retry policy before reporting the page empty. Definitive negatives and
+// pages whose form never asked this question do not gain another request.
+func (f *Fediverse) recoverRecognition(ctx context.Context, p *Page) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	form := fediForm(p)
+	if form == nil {
+		return false, nil
+	}
+	_, err := f.nodeInfo(form, func(endpoint string, out any) error {
+		got, asked := askedJSONRead(ctx, p, f.client, endpoint, fediHeaders(util.Origin(form)))
+		if !asked {
+			return errNoAnswer
+		}
+		return fediProbeAnswer(got, out)
+	})
+	if !errors.Is(err, errDiscoveryRetry) {
+		return false, nil
+	}
+	_, err = f.softwareName(withPage(ctx, p), form)
+	return err == nil, err
+}
+
 // Extract discovers what the instance runs, then asks it in its own dialect.
 func (f *Fediverse) Extract(ctx context.Context, u *url.URL, opts Options) (*Result, error) {
 	target := fediTargetOf(u)
@@ -324,15 +352,24 @@ func fediFiles(posts []fediEntry) []File {
 // errNoAnswer is a bounded probe's silence, which Recognise reads as no.
 var errNoAnswer = errors.New("no answer")
 
+var errDiscoveryRetry = errors.New("platform discovery failed temporarily")
+
 // probedJSON asks through the probed page's memo, so each endpoint is asked
 // once whether a recogniser or the extraction asks first.
 func (f *Fediverse) probedJSON(ctx context.Context, p *Page, root string) func(string, any) error {
 	return func(endpoint string, out any) error {
-		if !pageJSON(ctx, p, f.client, endpoint, fediHeaders(root), out) {
-			return errNoAnswer
-		}
+		return fediProbeAnswer(pageJSONRead(ctx, p, f.client, endpoint, fediHeaders(root)), out)
+	}
+}
+
+func fediProbeAnswer(got jsonAnswer, out any) error {
+	if len(got.raw) > 0 && json.Unmarshal(got.raw, out) == nil {
 		return nil
 	}
+	if got.retry != nil {
+		return fmt.Errorf("%w: %w", errDiscoveryRetry, got.retry)
+	}
+	return errNoAnswer
 }
 
 // softwareName reads software.name out of the instance's nodeinfo: through
@@ -341,12 +378,13 @@ func (f *Fediverse) probedJSON(ctx context.Context, p *Page, root string) func(s
 func (f *Fediverse) softwareName(ctx context.Context, u *url.URL) (string, error) {
 	return f.software.lookup(u.Host, func() (string, error) {
 		root := util.Origin(u)
-		if p := probed(ctx, u); p != nil {
-			if name, err := f.nodeInfo(u, f.probedJSON(ctx, p, root)); err == nil {
-				return name, nil
-			}
-		}
+		p := probed(ctx, u)
 		return f.nodeInfo(u, func(endpoint string, out any) error {
+			// Keep each successful discovery answer independently: a
+			// transient document failure must not spend the index again.
+			if askedJSON(ctx, p, f.client, endpoint, fediHeaders(root), out) {
+				return nil
+			}
 			return f.client.GetJSON(ctx, endpoint, fediHeaders(root), out)
 		})
 	})
@@ -360,8 +398,7 @@ func (f *Fediverse) nodeInfo(u *url.URL, get func(endpoint string, out any) erro
 		Links []fediNodeLink `json:"links"`
 	}
 	if err := get(util.Origin(u)+fediWellKnown, &index); err != nil {
-		return "", fmt.Errorf("fediverse: %s publishes no nodeinfo, so it is not a fediverse "+
-			"instance this can read: %w", u.Hostname(), err)
+		return "", fmt.Errorf("fediverse: %s: read nodeinfo index: %w", u.Hostname(), err)
 	}
 
 	href := fediNodeInfoHref(index.Links, u)

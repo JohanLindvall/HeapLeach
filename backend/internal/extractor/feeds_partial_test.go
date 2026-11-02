@@ -94,8 +94,8 @@ func TestFeedsReadPastAPlainTextProbe(t *testing.T) {
 				if !slices.Equal(urls, want) {
 					t.Errorf("episode URLs = %v, want %v", urls, want)
 				}
-				if got := pageReads.Load(); got != 2 {
-					t.Errorf("feed GETs = %d, want the prefix probe and complete feed read", got)
+				if got := pageReads.Load(); got != 1 {
+					t.Errorf("feed GETs = %d, want identification and the complete feed on one response", got)
 				}
 				if got := feedReads.Load(); got != 1 {
 					t.Errorf("requests with feed Accept = %d, want 1", got)

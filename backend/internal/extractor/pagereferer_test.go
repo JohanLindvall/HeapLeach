@@ -18,7 +18,7 @@ import (
 // A named reader still needs its requested Referer when recognition saw a
 // 200 soft gate. Reusing that gate must not suppress the actual page read.
 func TestRegistryNamedReaderHonorsReferer(t *testing.T) {
-	var invited atomic.Int32
+	var invited, navigation atomic.Int32
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/videos/synthetic/" {
@@ -31,19 +31,21 @@ func TestRegistryNamedReaderHonorsReferer(t *testing.T) {
 			fmt.Fprint(w, `<html><title>Example Clip</title><script>var flashvars = {video_title: 'Example Clip', video_url: 'https://cdn.example.test/synthetic.mp4'};</script></html>`)
 			return
 		}
+		navigation.Add(1)
 		fmt.Fprint(w, `<html><meta name="generator" content="KVS"><title>Open from this site</title></html>`)
 	}))
 	t.Cleanup(srv.Close)
 	client := testClient()
 	t.Cleanup(client.CloseIdleConnections)
-	u := mustParse(t, srv.URL)
-	reg := NewRegistry(&config.Config{ExtraHosts: map[string][]string{config.FamilyKVS: {u.Hostname()}}}, client)
+	// An unfamiliar install still needs recognition before its reader's
+	// request policy is known. Known video hosts send that policy first.
+	reg := NewRegistry(&config.Config{}, client)
 	res, _, err := reg.Extract(t.Context(), srv.URL+"/videos/synthetic/", Options{})
 	if err != nil {
 		t.Fatalf("requests carrying origin Referer=%d: %v", invited.Load(), err)
 	}
-	if len(res.Files) != 1 || res.Files[0].URL != "https://cdn.example.test/synthetic.mp4" || invited.Load() != 1 {
-		t.Fatalf("files=%+v, origin Referer requests=%d; want the player after one invited read", res.Files, invited.Load())
+	if len(res.Files) != 1 || res.Files[0].URL != "https://cdn.example.test/synthetic.mp4" || invited.Load() != 1 || navigation.Load() != 1 {
+		t.Fatalf("files=%+v, origin Referer requests=%d, navigation requests=%d; want one navigation and one invited read", res.Files, invited.Load(), navigation.Load())
 	}
 }
 
@@ -146,7 +148,9 @@ func TestPlaylistReaderHonorsReferer(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client := testClient()
 	t.Cleanup(client.CloseIdleConnections)
-	u := mustParse(t, srv.URL+"/index.m3u8")
+	// An extensionless URL is initially navigated to without a Referer;
+	// named manifests already send the origin on their first request.
+	u := mustParse(t, srv.URL+"/playlist")
 	p := probePage(t.Context(), client, u)
 	ctx := withPage(t.Context(), p)
 	doc, _, err := fetchPlaylist(ctx, client, u.String(), nil)
@@ -196,5 +200,88 @@ func TestPastedMasterKeepsVariantReferer(t *testing.T) {
 	}
 	if f := res.Files[0]; len(f.Segments) != 2 || f.Headers[httpx.HeaderReferer] != srv.URL+"/" || masters.Load() != 1 || variants.Load() != 1 {
 		t.Fatalf("file=%+v, masters=%d, variants=%d", f, masters.Load(), variants.Load())
+	}
+}
+
+// A named manifest uses the reader's origin Referer on its first and only
+// fetch. An extensionless manifest first discovered by navigation must ask
+// for the right representation when Vary says the Referer matters, including
+// when a redirect selects the representation rather than the final response.
+func TestPastedManifestHonorsOriginReferer(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, vary string
+		reads            int32
+	}{
+		{"named", "/first.m3u8", "Referer", 1},
+		{"extensionless", "/playlist", "Accept-Encoding, rEfErEr", 2},
+		{"wildcard", "/playlist", "*", 2},
+		{"redirect", "/start", "Referer", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reads, invited atomic.Int32
+			var srv *httptest.Server
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reads.Add(1)
+				if r.URL.Path == tc.path && r.Referer() == srv.URL+"/" {
+					invited.Add(1)
+				}
+				if tc.name != "redirect" || r.URL.Path == "/start" {
+					w.Header().Set(httpx.HeaderVary, tc.vary)
+				}
+				segment := "preview.ts"
+				if r.Referer() == srv.URL+"/" || r.URL.Path == "/full" {
+					segment = "full.ts"
+				}
+				if r.URL.Path == "/start" {
+					destination := "/preview"
+					if segment == "full.ts" {
+						destination = "/full"
+					}
+					http.Redirect(w, r, destination, http.StatusFound)
+					return
+				}
+				w.Header().Set(httpx.HeaderContentType, "application/vnd.apple.mpegurl")
+				fmt.Fprintf(w, "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\n%s\n#EXT-X-ENDLIST\n", segment)
+			}))
+			t.Cleanup(srv.Close)
+			client := testClient()
+			t.Cleanup(client.CloseIdleConnections)
+			res, _, err := NewRegistry(&config.Config{}, client).Extract(t.Context(), srv.URL+tc.path, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Files) != 1 || len(res.Files[0].Segments) != 1 || res.Files[0].Segments[0] != srv.URL+"/full.ts" {
+				t.Fatalf("wrong manifest representation: %+v", res.Files)
+			}
+			// Other recognizers can inspect an extensionless redirect before
+			// HLS claims it. Its reader must make one origin-Referer request.
+			if invited.Load() != 1 {
+				t.Errorf("origin-Referer acquisitions=%d, want one", invited.Load())
+			}
+			if tc.reads != 0 && reads.Load() != tc.reads {
+				t.Errorf("manifest requests=%d, want %d", reads.Load(), tc.reads)
+			}
+		})
+	}
+}
+
+// A manifest discovered at an extensionless URL still consumes a single-use
+// navigation response when the origin declares no Referer-dependent variant.
+func TestExtensionlessManifestIsFetchedOnce(t *testing.T) {
+	var reads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if reads.Add(1) != 1 {
+			http.Error(w, "single-use link spent", http.StatusGone)
+			return
+		}
+		w.Header().Set(httpx.HeaderContentType, "application/vnd.apple.mpegurl")
+		fmt.Fprint(w, invitedMediaPlaylist)
+	}))
+	t.Cleanup(srv.Close)
+	client := testClient()
+	t.Cleanup(client.CloseIdleConnections)
+	res, _, err := NewRegistry(&config.Config{}, client).Extract(t.Context(), srv.URL+"/playlist", Options{})
+	if err != nil || len(res.Files) != 1 || len(res.Files[0].Segments) != 2 || reads.Load() != 1 {
+		t.Fatalf("result=%+v, err=%v, reads=%d; want one successful acquisition", res, err, reads.Load())
 	}
 }

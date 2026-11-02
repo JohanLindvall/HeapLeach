@@ -22,6 +22,45 @@ const foolFuukaIndexJSON = `{"100":{"omitted":0,"images_omitted":0,"op":{"num":"
 	"media":{"media":"100.jpg","media_filename":"a.jpg","media_link":"https://media.example.test/b/image/1/1/100.jpg",
 	"media_size":"10","media_status":"normal"}}}}`
 
+func TestFoolFuukaKnownInstallKeepsCollectionTitle(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+		switch r.URL.Path {
+		case "/b/", "/b":
+			w.Header().Set(httpx.HeaderContentType, "text/html")
+			_, _ = io.WriteString(w, `<html><head><meta name="generator" content="FoolFuuka 2.2.0"></head></html>`)
+		case foolFuukaIndexAPI:
+			_, _ = io.WriteString(w, foolFuukaIndexJSON)
+		case foolFuukaThreadAPI:
+			_, _ = io.WriteString(w, foolFuukaThreadJSON)
+		default:
+			t.Errorf("unexpected request: %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(proxy.Close)
+	client, err := testClient().ThroughProxy(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, name := range map[string]string{
+		"archive.palanq.win": "palanq",
+		"desuarchive.org":    "desuarchive",
+		"rbt.asia":           "desuarchive",
+	} {
+		t.Run(host, func(t *testing.T) {
+			res, ex, err := NewRegistry(&config.Config{}, client).Extract(t.Context(),
+				"http://"+host+"/b/", Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := name + "-b-page-1"; ex.Name() != "foolfuuka" || res.Title != want || len(res.Files) < 2 {
+				t.Fatalf("%s: title=%q files=%d; want foolfuuka, %q and multiple files", ex.Name(), res.Title, len(res.Files), want)
+			}
+		})
+	}
+}
+
 // Both an unfamiliar HTML frontend and a withheld board page are settled
 // by the index API. A missing board or a bare slug asks no API question.
 func TestFoolFuukaRecognisesAWithheldBoardPage(t *testing.T) {

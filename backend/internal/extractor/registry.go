@@ -114,6 +114,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPlayer(client, &pornonePlayer),
 		NewPlayer(client, &epornerPlayer),
 		NewPixhost(client),
+		NewGoonBox(client),
 		NewImagePond(client),
 		NewSuvobox(client),
 		NewFilester(client),
@@ -378,6 +379,8 @@ func (r *Registry) Follows(u, from *url.URL) (Extractor, bool) {
 // A platform's Shape alone is not enough: it often includes profiles and
 // listings, and the same paths on an unrelated site can be navigation.
 // Only a known install and the platform's item predicate lift that filter.
+// Canonical follow forms can opt in too, keeping their own host and route
+// bounds and excluding the account/navigation names those bounds allow.
 func (r *Registry) harvests(u, from *url.URL) (Extractor, bool) {
 	if ex, ok := r.Follows(u, from); ok {
 		return ex, true
@@ -386,7 +389,11 @@ func (r *Registry) harvests(u, from *url.URL) (Extractor, bool) {
 		return r.fallback, false
 	}
 	for _, e := range r.extractors {
-		item := linkForms[e.Name()].harvest
+		form := linkForms[e.Name()]
+		if form.harvestFollow && form.follow != nil && form.follow(u) && canonicalHarvest(e.Name(), u) {
+			return e, true
+		}
+		item := form.harvest
 		if item == nil {
 			continue
 		}
@@ -414,19 +421,69 @@ func (r *Registry) identify(ctx context.Context, u *url.URL) (Extractor, *Page) 
 	}
 	var p *Page
 	if r.client != nil {
-		p = r.pages.get(ctx, r.client, u)
+		var referer *string
+		if reader, ok := r.hostClaim(u, claimFallback).(probeReader); ok {
+			referer = reader.probeReferer(u)
+		}
+		navigate := func() *Page {
+			return r.pages.getWithReferer(ctx, r.client, u, referer).acquisition()
+		}
+		if referer == nil && feedFirst(u) {
+			for _, e := range r.extractors {
+				if feed, ok := e.(*Feeds); ok {
+					p = feed.initialPage(ctx, u, navigate)
+					break
+				}
+			}
+		}
+		if p == nil {
+			p = navigate()
+		}
 	} else {
 		p = &Page{URL: u, Final: u, Err: errNoProbe}
 	}
+	return r.identifyPage(ctx, u, p), p
+}
+
+// probeReader supplies a known host's initial request policy when the URL
+// already names the reader's page. It chooses headers, not the extractor:
+// the response still goes through recognition in the ordinary order.
+type probeReader interface {
+	probeReferer(*url.URL) *string
+}
+
+// deferredRecogniser can finish an inconclusive identification only when
+// ordinary recognition and generic extraction found no usable source.
+// Its normal recognition remains bounded, and a positive answer must still
+// validate the platform rather than trusting the URL's shape.
+type deferredRecogniser interface {
+	recoverRecognition(context.Context, *Page) (bool, error)
+}
+
+func (r *Registry) recoverIdentification(ctx context.Context, page *Page) (Extractor, error) {
+	for _, ex := range r.extractors {
+		if reader, ok := ex.(deferredRecogniser); ok {
+			identified, err := reader.recoverRecognition(ctx, page)
+			if identified || err != nil {
+				return ex, err
+			}
+		}
+	}
+	return nil, nil
+}
+
+// identifyPage dispatches an acquired representation, including one read
+// under a different Referer after navigation was refused.
+func (r *Registry) identifyPage(ctx context.Context, u *url.URL, p *Page) Extractor {
 	for _, e := range r.extractors {
 		if e.Recognise(ctx, p) {
-			return e, p
+			return e
 		}
 	}
 	if e := r.hostClaim(u, claimFallback); e != nil {
-		return e, p
+		return e
 	}
-	return r.fallback, p
+	return r.fallback
 }
 
 // proxyFallbackForm reports whether the URL has the form of a player row
@@ -537,9 +594,43 @@ func transientProbe(ctx context.Context, page *Page) bool {
 		page.Status >= http.StatusInternalServerError
 }
 
+// needsOriginReferer admits only a generic HTML refusal that explicitly
+// varies by Referer and has not tried the fallback's request policy. Known
+// services keep their own refusals, at either end of a redirect.
+func (r *Registry) needsOriginReferer(u *url.URL, page *Page) bool {
+	if r.client == nil || page == nil || page.Err != nil || page.Challenged ||
+		page.originReferer || !page.variesReferer || !mediaPageIsHTMLType(page.MediaType()) ||
+		(page.Status != http.StatusNotFound && page.Status != http.StatusGone) {
+		return false
+	}
+	for _, link := range []*url.URL{u, page.Final} {
+		if link != nil && (r.claimsHere(link) ||
+			r.hostClaim(link, claimFirst, claimFirstForm, claimFallback, claimLast) != nil) {
+			return false
+		}
+	}
+	return true
+}
+
 // errUnrecognised reports a source that had a supported form but whose page
 // no extractor recognised: navigation that merely looked like a download.
 var errUnrecognised = errors.New("no extractor recognises this page")
+
+// followedFile allows an already-admitted child to use the direct fallback
+// when its successful response establishes a file. HTML and ambiguous text
+// remain navigation; a structured document needs a filename as well, so an
+// extensionless API response cannot become a download by accident.
+func followedFile(p *Page) bool {
+	if p == nil || !p.OK() || p.Challenged || p.Status == http.StatusNoContent || p.Status == http.StatusResetContent {
+		return false
+	}
+	kind := p.MediaType()
+	if !strings.Contains(kind, "/") || mediaPageIsHTMLType(kind) || probeSniffsType(kind) ||
+		hlsManifestType(kind) || p.URL == nil || hlsManifestShape(p.URL) {
+		return false
+	}
+	return !probeReadsType(kind) || !probeWorthy(p.URL)
+}
 
 // Extract parses rawURL and resolves it.
 func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*Result, Extractor, error) {
@@ -587,6 +678,26 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 		// a page being read, its challenge is its own answer, and must not
 		// become the enclosing page's (httpx.WithoutChallengeCapture).
 		ex, page := r.identify(httpx.WithoutChallengeCapture(ctx), u)
+		// A completed probe can race cancellation. The caller's error
+		// takes precedence over its response and the recogniser's choice.
+		if err := ctx.Err(); err != nil {
+			return ex, page, nil, err
+		}
+		retriedReferer := ex == r.fallback && submitted && r.needsOriginReferer(u, page)
+		if retriedReferer {
+			// The declared variant may be a readable page even when the
+			// navigation representation is missing. Acquire it once with
+			// the generic reader's policy, then recognise what it serves.
+			probeCtx := httpx.WithoutChallengeCapture(ctx)
+			page = newProbePage(probeCtx, r.client, cloneURL(u))
+			probeGet(probeCtx, r.client, page, httpx.Referer(util.Origin(u)+"/"))
+			page.finishProbe(probeCtx)
+			page = page.acquisition()
+			ex = r.identifyPage(probeCtx, u, page)
+			if err := ctx.Err(); err != nil {
+				return ex, page, nil, err
+			}
+		}
 		if ex == r.fallback {
 			if page.Challenged {
 				return ex, page, nil, page.Err
@@ -613,15 +724,23 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 							r.hostClaim(page.Final, claimFirst, claimFirstForm, claimFallback, claimLast) != nil
 					}
 				}
-				if strict || ((claimed || refusedPage(ctx, page)) &&
+				if strict || ((retriedReferer || claimed || refusedPage(ctx, page)) &&
 					!httpx.IsTooLarge(failed) && !errors.Is(failed, errNoProbe)) {
 					return ex, page, nil, failed
 				}
 			}
-			if strict {
-				// Only a successfully read, unrecognised page is
-				// navigation.
-				return ex, page, nil, fmt.Errorf("%s: %w", u.Redacted(), errUnrecognised)
+			if strict && !followedFile(page) {
+				// A successful file response is enough for the direct
+				// fallback. Finish inconclusive discovery before treating
+				// a followed supported form as unrelated navigation.
+				if recovered, err := r.recoverIdentification(ctx, page); recovered != nil {
+					ex = recovered
+					if err != nil {
+						return ex, page, nil, err
+					}
+				} else {
+					return ex, page, nil, fmt.Errorf("%s: %w", u.Redacted(), errUnrecognised)
+				}
 			}
 		}
 		ctx, challenge := httpx.CaptureChallenges(ctx)
@@ -632,9 +751,17 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 			if last := r.hostClaim(u, claimLast); last != nil {
 				ex = last
 				res, err = last.Extract(withPage(ctx, page), u, opts)
+			} else if recovered, recoveryErr := r.recoverIdentification(ctx, page); recovered != nil {
+				ex, err = recovered, recoveryErr
+				if err == nil {
+					res, err = ex.Extract(withPage(ctx, page), u, opts)
+				}
 			}
 		}
-		if ctx.Err() == nil && challenge() != nil {
+		if err := ctx.Err(); err != nil {
+			return ex, page, nil, err
+		}
+		if challenge() != nil {
 			return ex, page, nil, challenge()
 		}
 		return ex, page, res, err
@@ -684,7 +811,7 @@ func (r *Registry) Extract(ctx context.Context, rawURL string, opts Options) (*R
 		// its recovery, which is for exactly an address the host refuses.
 		optedIn = optedIn || r.proxyFallbackForm(u)
 	}
-	if err != nil && httpx.RouteID(ctx) == "" && (challenged || optedIn) {
+	if err != nil && ctx.Err() == nil && httpx.RouteID(ctx) == "" && (challenged || optedIn) {
 		if recover, ok := ctx.Value(challengeRecoveryKey{}).(ChallengeRecovery); ok {
 			res, err = recover(ctx, func(ctx context.Context) (*Result, error) {
 				got, page, res, err := read(ctx)

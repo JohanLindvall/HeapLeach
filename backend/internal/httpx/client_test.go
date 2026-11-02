@@ -395,37 +395,36 @@ func TestHasStatus(t *testing.T) {
 }
 
 func TestRetryAfterForms(t *testing.T) {
-	resp := &http.Response{Header: http.Header{}}
-
-	// A header that is not there at all is a different answer from one that
-	// says zero, which is what a rate limit's schedule turns on.
-	if wait, stated := retryAfter(resp); stated || wait != 0 {
-		t.Errorf("absent header = (%s, %v), want (0, false)", wait, stated)
-	}
-	resp.Header.Set(HeaderRetryAfter, "0")
-	if wait, stated := retryAfter(resp); !stated || wait != 0 {
-		t.Errorf("zero seconds = (%s, %v), want (0, true) — the host said come back now", wait, stated)
-	}
-
-	resp.Header.Set(HeaderRetryAfter, "3")
-	if got, _ := retryAfter(resp); got != 3*time.Second {
-		t.Errorf("seconds form = %s", got)
-	}
-
-	resp.Header.Set(HeaderRetryAfter, time.Now().Add(2*time.Second).UTC().Format(http.TimeFormat))
-	if got, _ := retryAfter(resp); got <= 0 || got > 2*time.Second {
-		t.Errorf("date form = %s, want a positive wait up to 2s", got)
-	}
-
-	// A hostile or broken value cannot park a worker for an hour.
-	resp.Header.Set(HeaderRetryAfter, "9999999")
-	if got, _ := retryAfter(resp); got > 2*time.Minute {
-		t.Errorf("cap ignored: %s", got)
-	}
-
-	resp.Header.Set(HeaderRetryAfter, "soon")
-	if got, _ := retryAfter(resp); got != 0 {
-		t.Errorf("unparseable value should mean no wait, got %s", got)
+	for name, parse := range map[string]func(http.Header) (time.Duration, bool){
+		"headers": RetryAfter,
+		"response": func(header http.Header) (time.Duration, bool) {
+			return retryAfter(&http.Response{Header: header})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, value string
+				min, max    time.Duration
+				stated      bool
+			}{
+				{"absent", "", 0, 0, false},
+				{"zero", "0", 0, 0, true},
+				{"seconds", "3", 3 * time.Second, 3 * time.Second, true},
+				{"date", time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat), time.Nanosecond, 2 * time.Second, true},
+				{"past date", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat), 0, 0, true},
+				{"capped seconds", "9999999", config.MaxRetryAfter, config.MaxRetryAfter, true},
+				{"capped date", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat), config.MaxRetryAfter, config.MaxRetryAfter, true},
+				{"invalid", "soon", 0, 0, false},
+				{"negative", "-1", 0, 0, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					wait, stated := parse(http.Header{HeaderRetryAfter: {tc.value}})
+					if stated != tc.stated || wait < tc.min || wait > tc.max {
+						t.Errorf("Retry-After %q = (%s, %v), want delay in [%s, %s], stated %v", tc.value, wait, stated, tc.min, tc.max, tc.stated)
+					}
+				})
+			}
+		})
 	}
 }
 

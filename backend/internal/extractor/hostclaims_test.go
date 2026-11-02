@@ -132,7 +132,7 @@ func TestFamilyInstallsAreClaimedAndLabelled(t *testing.T) {
 		"https://desuarchive.org/a/thread/1/":           "desuarchive",
 		"https://archive.palanq.win/a/thread/1/":        "palanq",
 		"https://archive.example.test/a/thread/1/":      "archive",
-		"https://yande.re/post?tags=a_tag":              "yande",
+		"https://yande.re/post?tags=a_tag":              "yandere",
 	} {
 		if got := reg.Label(mustParse(t, raw)); got != want {
 			t.Errorf("Label(%s) = %q, want %q", raw, got, want)

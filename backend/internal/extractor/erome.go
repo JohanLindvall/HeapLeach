@@ -253,11 +253,13 @@ func isEromeAlbum(raw string) bool {
 
 // album lists every video and image in one album.
 func (e *Erome) album(ctx context.Context, u *url.URL) (*Result, error) {
-	// The probe already heard the album was deleted; it is not asked again.
-	if p := probed(ctx, u); p != nil && p.Status == http.StatusGone {
+	headers := httpx.Referer(eromeReferer + "/")
+	// A deletion belongs to the reader's request, not a navigation with
+	// another Referer. Reuse it only when the probe answers this request.
+	if p := probedFor(ctx, e.client, u, headers); p != nil && p.Status == http.StatusGone {
 		return nil, fmt.Errorf("erome: the album %s has been deleted", u.Redacted())
 	}
-	doc, _, err := fetchDocument(ctx, e.client, u, httpx.Referer(eromeReferer+"/"))
+	doc, _, err := fetchDocument(ctx, e.client, u, headers)
 	if err != nil {
 		// A deleted album is answered with 410 and a full page of the
 		// site's own furniture, which the status error would quote 200

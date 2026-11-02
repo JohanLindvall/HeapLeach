@@ -855,11 +855,12 @@ func hlsPlaylistResult(ctx context.Context, client *httpx.Client, u *url.URL) (*
 
 	var media *hlsMedia
 	var err error
-	if p := probedFor(ctx, client, u, nil); p != nil && hlsManifestBody(p.Body) {
+	if p := probedFor(ctx, client, u, nil); p != nil && hlsManifestBody(p.Body) &&
+		(!p.variesReferer || p.answers(client, u, headers)) {
 		if doc, ok := p.Document(); ok {
-			// A pasted manifest is already the requested resource. Accept
-			// the probe's navigation Referer rather than spend a single-use
-			// link again; variants and media still use the origin Referer.
+			// Named manifests are probed with the origin Referer. An
+			// extensionless one can reuse navigation to preserve a single-use
+			// link only when no response says it varies with that header.
 			media, err = readMediaPlaylist(ctx, client, u.String(), headers, doc, cloneURL(p.Final))
 		}
 	}

@@ -27,6 +27,16 @@ and a programme. Link forms read case-insensitively where the site's links
 vary in case (bbcsounds' `/Sounds/`, rtpplay's `/Play/P…`), and ruv's
 player path at any depth, as `ruvTarget` reads it.
 
+The scoped BBC host inventory uses the same case-insensitive `/sounds/`
+section boundary as its link form, so `/Sounds/` reaches the episode API
+without depending on an available or recognisable HTML shell. Other scoped
+inventories retain their own path-case rules.
+NPR's host claim accepts only the main site and `www`, leaving media
+subdomains to generic extraction. PBS claims only player/show targets,
+and SRF only Play paths or a valid media URN. Their other articles and
+extensionless storage links remain eligible for direct files and embedded
+media; native programme refusals still belong to the broadcaster's reader.
+
 A link that names its media outright needs no page at all: radio-canada's
 media console (`/widgets/mediaconsole/<app>/<id>`), and srf's `?urn=` when
 the urn is the broadcasting group's own (`urn:srf|rts|rsi|rtr|swi:video|audio:…`,

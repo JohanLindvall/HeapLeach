@@ -3,6 +3,8 @@
 package download
 
 import (
+	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +13,108 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/extractor"
+	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
+
+// Re-reading a pre-family-extractor queue must retain the established
+// collection folder: the saved-file record and the partial transfer both
+// refer to it. All public-host requests are answered by the local proxy.
+func TestKnownCollectionRestoresSavedFilesAndPartialTransfers(t *testing.T) {
+	for _, tc := range []struct{ host, route, prefix string }{
+		{"yande.re", "/post", "yandere"},
+		{"booru.borvar.art", "/posts", "booruvar"},
+	} {
+		t.Run(tc.prefix, func(t *testing.T) {
+			photo := []byte("a saved photo")
+			partial := []byte("partial photo contents")
+			const offset = 7
+			var savedFetches, resumedFetches atomic.Int32
+			proxy := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/post.json", "/posts.json":
+					w.Header().Set(httpx.HeaderContentType, httpx.ContentTypeJSON)
+					if r.URL.Query().Get("page") != "1" {
+						_, _ = fmt.Fprint(w, `[]`)
+						return
+					}
+					_, _ = fmt.Fprintf(w, `[{"id":1,"file_url":"http://media.example.test/first.jpg"},
+						{"id":2,"file_url":"http://media.example.test/second.jpg","file_size":%d}]`, len(partial))
+				case "/first.jpg":
+					if r.Method == http.MethodGet {
+						savedFetches.Add(1)
+					}
+					http.ServeContent(w, r, "first.jpg", time.Time{}, bytes.NewReader(photo))
+				case "/second.jpg":
+					if r.Method == http.MethodGet {
+						if got, want := r.Header.Get("Range"), fmt.Sprintf("bytes=%d-", offset); got != want {
+							t.Errorf("partial download Range=%q, want %q", got, want)
+						} else {
+							resumedFetches.Add(1)
+						}
+					}
+					http.ServeContent(w, r, "second.jpg", time.Time{}, bytes.NewReader(partial))
+				default:
+					t.Errorf("unexpected request: %s", r.URL)
+					http.NotFound(w, r)
+				}
+			}))
+			source := "http://" + tc.host + tc.route + "?tags=synthetic"
+			folder := tc.prefix + " synthetic"
+			seed, stateFile := newSavedManager(t)
+			seed.jobs["restored"] = &Job{
+				ID: "restored", Source: source, Title: folder, CreatedAt: time.Now(),
+				Items: []*Item{
+					{ID: "saved", Name: "1.jpg", Dir: folder, Path: filepath.Join(folder, "1.jpg"), Status: StatusDone, Size: int64(len(photo))},
+					{ID: "partial", Name: "2.jpg", Dir: folder, Status: StatusRunning, Size: int64(len(partial))},
+				},
+			}
+			seed.order = []string{"restored"}
+			seed.persist()
+			m := testManager(t, func(cfg *config.Config) { cfg.StateFile = stateFile })
+			client, err := httpx.New(config.DefaultUserAgent, config.DefaultLanguage, 0, 5*time.Second).ThroughProxy(proxy.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.reg, m.client = extractor.NewRegistry(m.cfg, client), client.Streaming()
+			dir := filepath.Join(m.DownloadDir(), folder)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for name, body := range map[string][]byte{
+				"1.jpg": photo, partNames("2.jpg", source, "partial")[0]: partial[:offset],
+			} {
+				if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if unfinished, err := m.Restore(); err != nil || unfinished != 1 {
+				t.Fatalf("Restore: unfinished=%d err=%v", unfinished, err)
+			}
+			m.Start()
+			if err := m.RetryJob("restored"); err != nil {
+				t.Fatal(err)
+			}
+			if !waitForCond(10*time.Second, func() bool { return countStatus(m, "restored", StatusDone) == 2 }) {
+				t.Fatalf("restored job did not finish: %+v", m.Snapshot().Jobs)
+			}
+			if savedFetches.Load() != 0 || resumedFetches.Load() != 1 {
+				t.Errorf("saved fetches=%d resumed fetches=%d, want 0 and 1", savedFetches.Load(), resumedFetches.Load())
+			}
+			if got := namesIn(t, m.DownloadDir()); len(got) != 1 || got[0] != folder {
+				t.Errorf("collection folders=%q, want only %q", got, folder)
+			}
+			if got := namesIn(t, dir); len(got) != 2 || got[0] != "1.jpg" || got[1] != "2.jpg" {
+				t.Errorf("files=%q, want both images and no abandoned partial", got)
+			}
+			if got, err := os.ReadFile(filepath.Join(dir, "2.jpg")); err != nil || !bytes.Equal(got, partial) {
+				t.Errorf("resumed bytes=%q err=%v", got, err)
+			}
+		})
+	}
+}
 
 // unsizedServer serves body with no Content-Length, as DarkGram's photo
 // endpoint does: nothing before the bytes themselves says how long it is.

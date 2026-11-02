@@ -5,9 +5,11 @@ package extractor
 import (
 	"cmp"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/JohanLindvall/HeapLeach/internal/config"
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
 // Host claims: which extractor takes a link because of the host it is on.
@@ -63,6 +65,9 @@ var claimModes = map[string]claimMode{
 	"emload": claimFirst, "turbo": claimFirst, "dropbox": claimFirst, "drive": claimFirst,
 	"wetransfer": claimFirst, "cyberdrop": claimFirst, "filester": claimFirst, "imagepond": claimFirst,
 	"filejump": claimFirst,
+	// Only the image-viewer route belongs to this API; named storage files
+	// and other pages keep their ordinary handling.
+	"goonbox": claimFirstForm,
 	// Media sites read through their APIs.
 	"redgifs": claimFirst, "streamable": claimFirst, "vimeo": claimFirst, "bitchute": claimFirst,
 	"imgur": claimFirst, "civitai": claimFirst, "archive.org": claimFirst, "4chan": claimFirst,
@@ -87,8 +92,15 @@ var claimModes = map[string]claimMode{
 // it stands.
 var claimsFiles = map[string]bool{"dropbox": true, "drive": true, "imagepond": true}
 
+// rajceStorageHost is the site's numbered media hosts, whose storage files
+// need its Referer and, for videos, its MP4 filename even when the URL names
+// another extension. Other subdomains' files remain direct downloads.
+var rajceStorageHost = regexp.MustCompile(`^img[0-9]+\.(?:rajce\.idnes\.cz|rajce\.net)$`)
+
 // familyInstalls are the installs each platform family ships knowing, and
 // the label a job on each is shown with ("" for the host's first label).
+// Explicit labels also preserve established collection-title prefixes;
+// those titles name destination folders, including after queue restoration.
 // HEAPLEACH_EXTRA_HOSTS adds to them (config.ExtraHostsFor). A family's
 // installs are claimed as their family's mode says, and labelled by
 // install (Registry.JobLabel).
@@ -108,11 +120,11 @@ var familyInstalls = map[string]map[string]string{
 		"desuarchive.org": "desuarchive", "rbt.asia": "desuarchive", "archive.palanq.win": "palanq",
 	},
 	config.FamilyBooru: {
-		"aibooru.online": "", "booru.borvar.art": "", "booru.foalcon.com": "", "booru.org": "",
-		"derpibooru.org": "", "e621.net": "", "e6ai.net": "", "e926.net": "", "furbooru.org": "",
-		"hypnohub.net": "", "konachan.com": "", "konachan.net": "", "ponybooru.org": "",
-		"safebooru.org": "", "sakugabooru.com": "", "snootbooru.com": "", "tbib.org": "",
-		"twibooru.org": "", "xbooru.com": "", "yande.re": "",
+		"aibooru.online": "aibooru", "booru.borvar.art": "booruvar", "booru.foalcon.com": "foalcon", "booru.org": "",
+		"derpibooru.org": "derpibooru", "e621.net": "e621", "e6ai.net": "e6ai", "e926.net": "e926", "furbooru.org": "furbooru",
+		"hypnohub.net": "hypnohub", "konachan.com": "konachan", "konachan.net": "konachan", "ponybooru.org": "ponybooru",
+		"safebooru.org": "safebooru", "sakugabooru.com": "sakugabooru", "snootbooru.com": "snootbooru", "tbib.org": "tbib",
+		"twibooru.org": "twibooru", "xbooru.com": "xbooru", "yande.re": "yandere",
 	},
 	config.FamilyMediaWiki: {
 		"wikipedia.org": "", "wikimedia.org": "", "wiktionary.org": "", "wikiquote.org": "",
@@ -168,10 +180,15 @@ func (r *Registry) hostClaim(u *url.URL, modes ...claimMode) Extractor {
 	}
 	for _, e := range r.extractors {
 		hosts, mode := r.claimHosts(e)
-		if mode == claimNone || !onSiteHosts(u, hosts) {
+		if mode == claimNone || !onSiteHosts(u, hosts) || !r.hostClaimAllows(e.Name(), u) {
 			continue
 		}
 		switch {
+		case e.Name() == "rajce" && rajceStorage(u) && !rajceShape(u) &&
+			rajceStorageHost.MatchString(strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))):
+			// This is already a file. Its extractor only supplies the
+			// storage metadata, so no probe should spend its bytes first.
+			mode = claimFirst
 		case mode == claimFirstFormThenLast && formClaims(e, u):
 			mode = claimFirstForm
 		case mode == claimFirstFormThenLast:
@@ -194,13 +211,55 @@ func (r *Registry) hostClaim(u *url.URL, modes ...claimMode) Extractor {
 	return nil
 }
 
+// hostClaimAllows keeps the boundaries of services that share their domain
+// with other kinds of content. The discovery inventory names hosts, not the
+// narrower routes each extractor can read. These checks apply before any
+// claim, including to links that have no filename extension.
+func (r *Registry) hostClaimAllows(name string, u *url.URL) bool {
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	switch name {
+	case "streamable", "npr":
+		// The main and www hosts belong to this reader. Media subdomains
+		// can serve extensionless files whose paths look like item IDs.
+		root := siteHosts[name][0]
+		return host == root || host == "www."+root || onSiteHosts(u, r.claimAliases[name])
+	case "pbs":
+		// Player and show routes belong here, not CDN files or ordinary
+		// articles whose embedded media the generic fallback can read.
+		return pbsTargetOf(u) != nil
+	case "srf":
+		// The rest of the domain is a news site, outside Play's reader.
+		return srfURN(u.Query().Get("urn")) != "" || strings.HasPrefix(strings.ToLower(u.Path), "/play/")
+	case "civitai":
+		// Shape leaves /posts/ out of automatic discovery, but submitted
+		// posts are supported. The download API and other pages are not.
+		return civitaiTargetOf(u) != nil
+	case "archive.org":
+		// Wayback snapshots and storage nodes are not archive item pages.
+		// Explicit aliases let another host stand in for the main site.
+		return archiveShape(u) && (host == "archive.org" || host == "www.archive.org" ||
+			onSiteHosts(u, r.claimAliases[name]))
+	case "drive":
+		// Docs shares Drive's /uc endpoint, but its document exports must
+		// retain their own endpoint and requested format.
+		return !util.HostMatches(host, "docs.google.com") || driveUCShape(u)
+	case "wetransfer":
+		// Every short link is followed, including legacy forms. On the
+		// main domain only /downloads/ names a transfer; storage does not.
+		if util.HostMatches(host, "we.tl") {
+			return true
+		}
+		segs := util.PathSegments(u)
+		return len(segs) > 0 && segs[0] == wetransferDownloads
+	}
+	return true
+}
+
 // installLabel is the label of the family install u is on, or "".
 func (r *Registry) installLabel(family string, host string) string {
 	host = strings.TrimPrefix(strings.ToLower(strings.TrimSuffix(host, ".")), "www.")
-	for install, label := range familyInstalls[family] {
-		if host == install || strings.HasSuffix(host, "."+install) {
-			return cmp.Or(label, hostLabel(host))
-		}
+	if label, known := knownInstallLabel(family, host); known {
+		return cmp.Or(label, hostLabel(host))
 	}
 	for _, install := range r.families[family] {
 		if host == install || strings.HasSuffix(host, "."+install) {
@@ -208,4 +267,16 @@ func (r *Registry) installLabel(family string, host string) string {
 		}
 	}
 	return ""
+}
+
+// knownInstallLabel returns an install's explicit label, if any. An empty
+// label lets each family derive a name for that host as usual.
+func knownInstallLabel(family, host string) (string, bool) {
+	host = strings.TrimPrefix(strings.ToLower(strings.TrimSuffix(host, ".")), "www.")
+	for install, label := range familyInstalls[family] {
+		if host == install || strings.HasSuffix(host, "."+install) {
+			return label, true
+		}
+	}
+	return "", false
 }

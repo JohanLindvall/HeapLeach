@@ -15,6 +15,39 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 )
 
+// Scoped inventories preserve each service's path-case contract. An
+// accepted section spelling must work for discovery as well as dispatch,
+// without admitting a neighbouring section or changing another service.
+func TestScopedSiteHostsPreservePathCasePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		service, host, path string
+		want                bool
+	}{
+		{"bbcsounds", "www.bbc.co.uk", "/sounds/play/p000epis", true},
+		{"bbcsounds", "WWW.BBC.CO.UK.", "/Sounds/play/p000epis", true},
+		{"bbcsounds", "bbc.co.uk", "/sOuNdS/brand/p000brnd", true},
+		{"bbcsounds", "bbc.co.uk", "/SOUNDS", true},
+		{"bbcsounds", "bbc.co.uk", "/Soundscape/play/p000epis", false},
+		{"bbcsounds", "bbc.co.uk", "/news/synthetic-report", false},
+		{"bbcsounds", "bbc.co.uk.example.test", "/Sounds/play/p000epis", false},
+		{"abclisten", "abc.net.au", "/listen/programs/synthetic/1234567", true},
+		{"abclisten", "abc.net.au", "/Listen/programs/synthetic/1234567", false},
+	} {
+		u := &url.URL{Scheme: "https", Host: tc.host, Path: tc.path}
+		if got := onSiteHosts(u, siteHosts[tc.service]); got != tc.want {
+			t.Errorf("%s inventory on %s: got %v, want %v", tc.service, u, got, tc.want)
+		}
+	}
+	reg := NewRegistry(&config.Config{}, nil)
+	from := mustParse(t, "https://article.example.test/report")
+	for _, section := range []string{"sounds", "Sounds", "SOUNDS"} {
+		u := &url.URL{Scheme: "https", Host: "www.bbc.co.uk", Path: "/" + section + "/play/p000epis"}
+		if ex, follows := reg.Follows(u, from); !follows || ex.Name() != "bbcsounds" {
+			t.Errorf("%s: follows=%v extractor=%v; want the programme reader", u, follows, ex)
+		}
+	}
+}
+
 // Fixed mirrors must survive discovery as well as direct submission. The
 // real host labels exercise the inventory; every request goes to this local
 // proxy, whose pages, filenames and media links are synthetic.

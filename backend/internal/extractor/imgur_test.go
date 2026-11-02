@@ -275,10 +275,14 @@ func TestImgurListingEntriesStop(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":[` + body + `]}`))
 		}))
 		i := NewImgur(testClient())
-		entries, note, err := i.listingEntries(t.Context(), nil, srv.URL, "/t/cats", Options{limits: Limits{Sources: tc.limit, Files: tc.files}})
+		i.root = srv.URL
+		res, err := i.listing(t.Context(), nil, imgurTarget{Listing: "/t/cats"}, Options{limits: Limits{Sources: tc.limit, Files: tc.files}})
 		srv.Close()
-		if err != nil || len(entries) != tc.rows || note != tc.note {
-			t.Errorf("%s: rows=%d note=%q err=%v", tc.name, len(entries), note, err)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(res.Files) != tc.rows || res.Note != tc.note {
+			t.Errorf("%s: files=%d note=%q", tc.name, len(res.Files), res.Note)
 		}
 	}
 }
@@ -297,7 +301,7 @@ func TestImgurListingCapsPostRowsBySources(t *testing.T) {
 	defer srv.Close()
 	i := NewImgur(testClient())
 	entries, note, err := i.listingEntries(t.Context(), nil, srv.URL, "/user/someone/submitted",
-		Options{limits: Limits{Sources: 3}})
+		Options{limits: Limits{Sources: 3}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

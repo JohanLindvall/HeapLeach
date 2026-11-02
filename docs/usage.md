@@ -278,10 +278,20 @@ listed as supported and quietly broken.
 - Be a good citizen: the defaults are deliberately modest, and the client
   honours `Retry-After` and backs off on 429s.
 - Cached page checks are repeated when the site's session cookies change,
-  including cookies used only after a redirect. A previous session's page
+  including their order when names repeat and cookies used only after a
+  redirect. Pages marked `no-store` or `no-cache`, or whose declared cache
+  lifetime has expired, are read again for each new submission. This includes
+  `max-age=0`, so removing and re-adding a source asks for its current media
+  URL. Pages whose `Vary` policy depends on an untracked header, such as
+  User-Agent, are also read again instead of sharing another route's answer.
+  A previous session's page
   is not reused for a later submission with different cookies. If an extractor
   needs a different Referer header, it also fetches its own page; this can add
   a request after recognition.
+- Pasted `.m3u8` manifests send the origin Referer on their first request,
+  selecting the same representation as the playlist reader without spending
+  a single-use link twice. A manifest discovered at an extensionless URL may
+  need another request if the response varies with that header.
 - One link's discovery holds at most twelve requests open at once, however
   its listings nest, and a listing of albums is expanded in batches, the cap
   checked between them. A listing of listings is read more slowly than its

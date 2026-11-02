@@ -4,7 +4,7 @@
 
 For the generated inventory of extractors and the pages each one recognises, see [every supported site](../README.md#every-supported-site). This guide explains accepted link formats and host-specific behavior.
 
-No link is chosen by its domain. HeapLeach fetches the page once and picks the extractor whose markers the page carries (its player configuration, embedded data, scripts or structure, together with the link's form), so a site that moves to a new domain, or an install nobody listed, still works. A link to a plain file that no extractor's form claims is downloaded as it is, without that extra fetch.
+Known service URLs use their site's resolver within its supported host and path boundaries. Other links are identified by the page's player configuration, embedded data, scripts or structure, together with the link's form, so a site that moves to a new domain, or an install nobody listed, can still work. A link to a plain file that no extractor's form claims is downloaded as it is, without that extra fetch.
 
 | Host | Accepts | How it resolves |
 |---|---|---|
@@ -32,11 +32,12 @@ No link is chosen by its domain. HeapLeach fetches the page once and picks the e
 | **booru** | tag searches and posts on any image board running one of the supported engines, the booru.org network included | One adapter per API family — Danbooru, e621, Moebooru, Gelbooru 0.1 and 0.2, Philomena, Twibooru, szurubooru — recognised by the board's API answer or markup, which is how a handful of engines covers a lot of sites. The boards listed in the [usage guide](usage.md) are read as the engine each runs, with nothing guessed. |
 | **4chan** | `/<board>/thread/<id>` | The site's read-only JSON API; every attachment in a thread. |
 | **vids.st** | video and embed pages | The page names the uploaded file itself, which is downloaded as it is, or an HLS playlist, followed natively. Encoded playlist extensions are recognised; `.m3u8` inside an MP4 filename or its query does not turn it into a playlist. The site sends an incomplete certificate chain, which is completed from the certificate's own issuer address the way a browser does. |
-| **lulustream** | video, embed and download pages | The player's setup is packed, and names an HLS playlist whose segments are AES-128-encrypted; they are decrypted natively as they arrive, and the playlist is read again when the file's turn comes, since its links are signed for eight hours. |
+| **lulustream** | video, embed and download pages | Reads HLS from plain or packed player setups, including single-file and source-list configurations. AES-128-encrypted segments are decrypted natively as they arrive, and the playlist is read again when the file's turn comes, since its links are signed for eight hours. |
 | **streamtape, doodstream, mixdrop** | watch and embed pages | Each assembles its link inside the player: two halves joined at an offset the page states, a token endpoint plus a random tail, or a packed script naming the delivery host. Every one of them reads the numbers it needs off the page rather than hard-coding what they were. |
-| **rajce** | `rajce.idnes.cz/<user>/album/<slug>`, legacy album links on `rajce.net` | Reads the album's embedded media list in one request, preserving its title, filenames and order. Downloads full-size photos and MP4 videos, excluding thumbnails, video posters and recommendations. File limits and unavailable items are reported; private or password-protected albums require public access. A video link pasted from the storage servers (`img<N>.rajce.idnes.cz/storage/video/<id>`) is downloaded as it stands, with the site as referer. |
+| **rajce** | `rajce.idnes.cz/<user>/album/<slug>`, legacy album links on `rajce.net` | Reads the album's embedded media list in one request, preserving its title, filenames and order. Downloads full-size photos and MP4 videos, excluding thumbnails, video posters and recommendations. File limits and unavailable items are reported; private or password-protected albums require public access. Pasted links on the `img<N>` storage servers retain the site's Referer, including links with filenames. Storage video names use `.mp4`, while the submitted download URL stays intact. |
 | **pixhost** | `/gallery/<code>`, `/show/<group>/<file>` | A gallery's thumbnails say where the full images are: the two links differ only by host prefix and one path segment. Deriving them resolves a gallery of fifty in one request instead of fifty, and a mapping that ever changed would fail visibly with a 404 rather than quietly fetching thumbnails. |
 | **suvobox** | `/a/<id>`, `/f/<id>` | The album listing states every file's id, its full name with extension and its size, so a whole album resolves in one request with real names in the queue from the start. The bytes come from the media host's `?raw=1`, which needs no token — the site's own signed `?dl=1` link would only expire while an item waited its turn. |
+| **goonbox** | `/img/<id>`, including `/img/<slug>.<id>` | Downloads the original image with its original filename and exact size from the public metadata API. Viewer pages that require a browser challenge do not prevent extraction when the API remains available. |
 | **imagepond** | `/i/<code>`, the title-slug form of the same page, `/a/<code>` albums, and links straight to `media.imagepond.net` | The metadata names the item, but for a video it names the *poster frame*, and it has been seen misreporting a QuickTime file as MP4 — so the player element's own `data-src` is read first and the metadata is the fallback. An album arrives whole in one document, but its cards link only to each item's viewer, so the files behind them are resolved one at a time as they download rather than in a burst of fetches up front. An item the host has aged out answers 200 with an expiry notice rather than a 404, and is reported as expired instead of as a parse failure. A link to the media host is the stored file already, and is downloaded as it stands, with the site's Referer. Profile pages list their items client-side and are still not supported. |
 | **yandex** | `/video/preview/<id>` and searches or previews naming a `filmId`, touch forms included, on any of its country domains | Yandex hosts none of this: a preview is a viewer wrapped around somebody else's video, and the page links the source beside the player. That link is what is followed: through this program's own extractor when it supports the host, and otherwise by yt-dlp, which knows far more hosts than this program does. Needs `make dependencies` for the latter. |
 | **noodlemagazine** | `/video/<query>` searches, `/watch/<id>` videos | Walks search results from the first page, preserving duration, sort and HD filters and excluding unrelated recommendations. Queues video titles and refreshes signed playback links when each download starts. Selects the highest offered resolution, preferring MP4 over HLS at the same resolution; HLS keys and separate tracks are handled natively. Source and file limits apply, with incomplete listings reported. |
@@ -59,13 +60,19 @@ No link is chosen by its domain. HeapLeach fetches the page once and picks the e
 | *a bare `.m3u8`* | any adaptive manifest | Joined into a playable file, with every audio track when the playlist keeps its audio apart, and its WebVTT subtitles as text tracks (both need ffmpeg). A `.mpd` is refused with a reason rather than saved: DASH is usually demuxed, so concatenating it would yield a silent video. |
 | *a directory listing* | Apache, nginx, lighttpd autoindex | Walked recursively, with sizes and structure taken from the listing. Also covers IPFS gateway directories. |
 | *`links:<url>`* | any public page | Reads the page and downloads every link a supported host claims, each into its own folder. Aimed at the forum thread with two hundred links in it. |
-| *an ordinary webpage* | any public HTML page without a dedicated extractor | Automatically reads links whose form a supported extractor knows, including albums and files, without a `links:` prefix. Ordinary HTML links are ignored so navigation cannot recursively crawl the web. Links keep their host's resolver and download settings; source and file caps apply. |
+| *an ordinary webpage* | any public HTML page without a dedicated extractor | Automatically reads links whose form a supported extractor knows, including albums and files, without a `links:` prefix. An admitted link that successfully advertises a direct file is retained, including non-feed XML at a file URL on a feed host. Ordinary HTML links are ignored so navigation cannot recursively crawl the web. Links keep their host's resolver and download settings; source and file caps apply. |
 | **DarkGram albums** | any HTML page with a DarkGram player | Reads the first embedded album's videos and full-size photos from its `data-album` metadata. HLS playlists are resolved at download time and refreshed on retries; photos use their original links, never thumbnails. Files keep the page title and album order. File caps and unavailable items are reported. |
 | **WordPress categories** | any domain; category permalinks, custom category bases and `?cat=<id>` | Recognises classic and block theme markup without a domain list or version check. Follows the selected category's pagination and reads each post's supported file-host links, embedded albums/players and JPEG images, preferring linked originals and full-size image metadata. File links go through the existing host extractors, including deferred K2S/FileBoom resolution and proxy pacing. Each post gets a folder; player thumbnails, navigation and related-post widgets are excluded. Source/file caps and incomplete results are reported. |
 | **voyeurking** | `voyeurking.com/categories/<name>`, `/collection/<slug>` and `/video/<slug>` | Walks category and collection pages and reads each video's K2S or FileBoom file from its page data. Files use the corresponding downloader, including its per-address waits and proxy pool, enabled by default. Listing results keep each video in its own folder; source and file caps apply. |
 | **balbums** | `balbums.st/?search=<query>` | An index of somebody else's albums rather than a host: a search is walked page by page and every album it lists is handed to the extractor that does host it, each into its own folder. Asking for a hundred results a page is what makes a search of three hundred albums four requests rather than eighteen — ask for more and the site quietly serves twenty, so nothing trusts the parameter. Only searches are taken. The charts are built in the browser and the front page is the same grid over the whole catalogue. |
 | **KVS listings** | `/members/<id>/`, `/search/<query>/`, and any category, model, tag, channel or site-wide list on any KVS install | A member's public videos, everything a search turns up, or every video a category, model, tag or channel lists. Sections are recognised by the page rather than by name, since an install may rename them. The platform pages through its own asynchronous block loader, and which parameter pages a block is the block's own business — a wrong one is not refused, it serves page one again — so the walk sends exactly what the pager's own control carries. The last page says it is the last, and the walk stops there without asking. |
 | *anything else* | any `http(s)` URL | Treated as a direct file link after checking for a known platform, a manifest, a directory index, supported download links or a player. |
+
+Direct Civitai model-download endpoints and WeTransfer storage links keep
+their submitted download URLs. Google Docs export links retain their chosen
+export format instead of being rewritten as Drive file downloads. Wayback
+pages use ordinary page extraction; they are not treated as Archive item
+metadata links.
 
 A submitted direct link on an unrelated host can enter the queue after a
 temporary connection failure, timeout, rate limit or server error, even if
@@ -93,11 +100,33 @@ sites running the same software. On any host, Pixeldrain-compatible
 services, booru boards, FoolFuuka archives, Kemono-compatible services and
 MediaWiki articles are detected through distinctive API responses or platform
 markup. KVS detection also covers member, search and other listing pages
-through its player or asynchronous block controls. A KVS video that is
+through its player or asynchronous block controls. Custom video paths also
+work when the page identifies KVS and supplies a playable plain-media
+player configuration. A KVS video that is
 private or removed reports that, rather than downloading the related videos
 shown beside it, and an install's front page is refused with a hint to paste
 a video, listing or search instead. Existing PeerTube,
 Chevereto and Bandzoogle detection continues to work the same way.
+
+Known booru boards and FoolFuuka archives keep their established collection
+folder names when a saved queue is re-read, so finished files and partial
+downloads can be reused. Automatically detected booru boards retain the full
+hostname in their collection folders, so different hosts with matching post
+IDs remain separate. Files saved under different names by an intervening
+version are not moved automatically.
+
+Repeated extractions may reuse a fresh source page, but each extraction reads
+its API metadata anew. Feed listings use the feed-reader representation,
+including when the submitted feed URL redirects to a subscription page.
+Feed negotiation honors retry delays for temporary failures and consumes a
+successful feed response once. Feed-shaped inputs request that representation
+first, preserving feeds whose first successful response can be consumed only
+once. Canonical player links on known hosts send the reader's
+required Referer from the first request, and album readers honor declared
+User-Agent variants. Canonical member/search video listings on known installs
+also send their required Referer on the first request. A generic page that
+declares different representations by Referer is read with the site's origin
+before selecting its media, so a navigation preview cannot hide the full file.
 
 A familiar URL path selects a possible API; it does not establish support.
 API requests made to identify a page with unfamiliar markup (a custom
@@ -108,7 +137,12 @@ even without the usual frontend markers. A populated page can still be identifie
 the response must match the platform and requested target.
 Recognised platforms use their normal extractors, including pagination,
 deferred resolvers and transfer pacing. Unidentified pages continue through
-the generic fallback.
+the generic fallback. If an otherwise unreadable federated source could not
+be identified because of temporary nodeinfo errors, discovery can finish with
+the normal HTTP retry policy. A definitive unsupported response is not retried
+this way, and usable generic media keeps its normal handling. Exhausted
+discovery retries report the underlying error rather than suggesting that
+the source was removed or made private.
 
 Other entries are not hosts at all but **shapes** — an adaptive
 manifest, an open directory, a page carrying supported download links,
@@ -132,7 +166,8 @@ Recognised platforms keep their own extraction behavior. Use `links:<url>`
 to explicitly scan a page that would otherwise go to a dedicated extractor.
 On a known platform install, explicit scanning also accepts supported
 same-site item routes, such as individual videos, posts, threads and image
-pages. Front pages, accounts, profiles and listing navigation are excluded.
+pages, including supported canonical short-code links and track/show
+permalinks. Front pages, accounts, profiles and listing navigation are excluded.
 Known installs include the built-in inventory and `HEAPLEACH_EXTRA_HOSTS`.
 The usual source and file limits still apply.
 

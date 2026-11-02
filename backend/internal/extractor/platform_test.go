@@ -258,13 +258,22 @@ func TestPlatformMediaWikiArticle(t *testing.T) {
 func TestPlatformKVSListings(t *testing.T) {
 	for _, route := range []string{"/categories/sample/", "/members/42/videos/", "/search/sample/"} {
 		t.Run(route, func(t *testing.T) {
-			var listingCalls atomic.Int32
+			var listingCalls, readerCalls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set(httpx.HeaderContentType, "text/html")
 				switch r.URL.Path {
 				case route:
 					listingCalls.Add(1)
-					// The same first page is used for the walk. An unrelated
+					wantReferer := "http://" + r.Host + route
+					if route == "/categories/sample/" {
+						wantReferer = "http://" + r.Host + "/"
+					}
+					if r.Referer() == wantReferer {
+						readerCalls.Add(1)
+					} else if r.Referer() != "" {
+						t.Errorf("listing Referer=%q, want navigation or %q", r.Referer(), wantReferer)
+					}
+					// The reader's first page is used for the walk. An unrelated
 					// download link must not replace the platform's listing.
 					fmt.Fprint(w, `<h1>Sample Videos</h1><h2>Sample's Videos</h2>
 <a href="/wiki/File:Ignored.bin">Advertisement</a>
@@ -282,14 +291,10 @@ func TestPlatformKVSListings(t *testing.T) {
 			if err != nil || res == nil || len(res.Files) != 1 || res.Files[0].URL != kvsHighDirect || ex.Name() != "kvs" {
 				t.Fatalf("listing = %v via %v, %v", res, ex, err)
 			}
-			wantReads := int32(1)
-			if route == "/categories/sample/" {
-				// Browse requests the origin Referer; member and search
-				// listings accept the probe's navigation as their first page.
-				wantReads++
-			}
-			if listingCalls.Load() != wantReads {
-				t.Errorf("listing fetched %d times, want %d", listingCalls.Load(), wantReads)
+			// Browse asks with the origin Referer; member/search ask with
+			// their own listing URL. Neither can reuse the navigation probe.
+			if listingCalls.Load() != 2 || readerCalls.Load() != 1 {
+				t.Errorf("listing fetches=%d reader Referers=%d, want 2 and 1", listingCalls.Load(), readerCalls.Load())
 			}
 		})
 	}

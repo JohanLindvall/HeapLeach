@@ -92,10 +92,9 @@ func TestQueuedTransfersFollowTheNewDirectory(t *testing.T) {
 	}
 
 	target := filepath.Join(moved, "file.bin")
-	waitFor(t, 20*time.Second, func() bool {
-		_, err := os.Stat(target)
-		return err == nil
-	})
+	// The final path can exist briefly as an empty reservation before the
+	// completed part file is renamed into place.
+	waitForStatus(t, m, StatusDone, 1, 20*time.Second)
 	got, err := os.ReadFile(target)
 	if err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("file at the new destination is wrong: %v", err)

@@ -646,10 +646,19 @@ func luluProbedSource(p *Page) (string, error) {
 // luluSource reads the player's source, from its setup as the page carries
 // it or once unpacked.
 func luluSource(doc string, base *url.URL) (string, error) {
-	link, err := jwSource(doc, base)
+	read := func(setup string) (string, error) {
+		link, err := jwSource(setup, base)
+		if err != nil {
+			if single := jwSetupHLS(setup, base); single != "" {
+				return single, nil
+			}
+		}
+		return link, err
+	}
+	link, err := read(doc)
 	if err != nil {
 		if setup, ok := unpackJS(doc); ok {
-			return jwSource(setup, base)
+			return read(setup)
 		}
 	}
 	return link, err
@@ -722,7 +731,9 @@ var (
 	// sendvidShape is the player, /embed/<id>, or the /<id>.mp4 a page's
 	// og:video names, which redirects to the watch page and is recognised
 	// there. A file link of that form on another site costs the probe of its
-	// headers, and is then the fallback's as before.
+	// headers, and is then the fallback's as before. On the site's own
+	// hosts, linkForms admits the full sendvidID range without widening
+	// this probe shape for unrelated media files.
 	sendvidShape = pathShape(`^/embed/[A-Za-z0-9]{1,32}/?$`, `^/[A-Za-z0-9]{6,12}\.mp4$`)
 	// sendvidPage is the player or the bare watch page, /<id>, too common a
 	// form for the link scanner.

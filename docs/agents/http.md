@@ -51,7 +51,10 @@ endpoint's answer.
 
 Two traps:
 
-- `retryAfter` returns `(time.Duration, bool)`. It has to separate
+- `RetryAfter` reads a header map and returns `(time.Duration, bool)`;
+  `retryAfter` adapts the client's response to the same parser. Both apply
+  `config.MaxRetryAfter`, and callers with a preserved `StatusError` use its
+  headers directly. It has to separate
   "the header says 0" from "there is no header", because a stated delay is
   authoritative while an absent one means back off. With a bare duration,
   every fixture would sit out the full backoff.
@@ -205,10 +208,29 @@ one job's unlock replace another job's access.
 `RequestKey` describes the effective cookies for one URL. A response reached
 through redirects also depends on each hop's cookies: `SentRequestKey`
 reads those from the actual request after net/http added its jar's cookies.
+Both keys preserve cookie order: cookies with the same name at different
+paths can select different sessions depending on which value the server reads
+first. Sorting their names and values would conflate those sessions.
 The page cache validates the full chain before reuse, using the effective
 source, route or client jar. Both keys contain cookie values and must never
 be logged. Cookie-setting redirect chains stay with their original caller
 because an earlier hop may change the session before a later one is observed.
+
+The extractor page cache also honors response freshness and representation
+policy at every redirect hop. `max-age` (before `Expires`) bounds reuse,
+with `Date`, `Age` and request time accounting for freshness already spent;
+the local TTL is an additional ceiling. Invalid or conflicting freshness
+metadata prevents retention. A response with `Vary: *`, `User-Agent` or
+any field other than `Cookie` and `Accept-Language` stays with its original
+acquisition: those two are the fields modeled by `RequestKey`. A response
+without a relevant `Vary` can still be shared across browser agents.
+Host-specific reuse within the originating acquisition must also honor
+declared agent variation: a successful navigation response cannot replace
+an explicit reader agent when a response hop declares `User-Agent` or `*`.
+`RequestAgent` supplies the effective route override when checking the
+original acquisition's reader, since equal route IDs need not mean equal
+agents. Freshness never forces that reader to fetch an already-acquired
+page again; expiry applies when handing a page to a later acquisition.
 
 A routed attempt carries its route in the request context (`route.go`):
 

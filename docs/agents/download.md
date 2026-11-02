@@ -225,6 +225,15 @@ Three rules here are easy to break:
   Which jobs that applies to is `unfetchable`, not `restored`: `restored`
   means *held*, and a job whose files were all done or cancelled comes back
   unheld while its items are just as URL-less.
+  Extractor collection titles must stay stable across versions: the
+  finished-file record is keyed by directory and listed name, and the
+  source-keyed partial file lives in that same directory.
+  `TestKnownCollectionRestoresSavedFilesAndPartialTransfers` restores an
+  older queue through the real registry and verifies both reuse paths.
+  Unknown image boards keep the full hostname in their collection prefix.
+  `TestUnknownBoardCollectionsKeepDestinations` verifies existing folders are
+  reused and independent boards with matching post IDs and sizes retain their
+  own bytes instead of incorrectly skipping a second board's files.
 - **A job whose listing a failure cut short is re-read on retry.** Its
   result's note names a page, folder or season that could not be read
   (`extractor.Result.Incomplete`), so `applyResultLocked` marks it
@@ -241,10 +250,15 @@ Three rules here are easy to break:
   cap is not marked; reading it again would stop at the same cap.
 - **A re-read the user asked for asks the site again.** `RetryJob` and
   `RetryItem` call `rereadLocked(job, true)`, which resolves under
-  `extractor.FreshRead`: the extractors' page cache keeps a probed page for
-  a minute, with every answer memoised on it, and a retry handed that page
+  `extractor.FreshRead`: the extractors' page cache can keep a reusable probed
+  page for up to a minute, bounded by its response freshness, with every
+  answer memoised on it, and a retry handed that page
   back would repeat the failure without a request. A new job, and resuming
-  restored jobs, read normally and may share a page another job just read.
+  restored jobs, read normally and may share a page another job just read
+  only while its freshness and representation policy permit reuse.
+  `TestResubmittedSourceHonorsResponsePolicy` verifies that remove/re-add
+  obtains current media and finishes downloading when the page forbids reuse
+  or declares `max-age=0`.
   `TestRetryJobReadsTheSourceAgain` holds it.
 - **Resolution appends to `job.Items`**, so a restored job's items must be
   dropped before it is re-read or every file in it doubles. Both resuming

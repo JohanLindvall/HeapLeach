@@ -37,10 +37,19 @@ would read the page's related videos as the item. The hosts are the
 baseline lists (`siteHosts`) and each family's known installs plus
 `HEAPLEACH_EXTRA_HOSTS` (`familyInstalls`); a family's job is labelled by
 install, and a KVS install names itself in its errors the same way
-(`kvsName`). A file on a claimed host (an image subdomain) stays a file unless
+(`kvsName`). Host inventories do not replace path and subdomain boundaries:
+direct API downloads, document exports and storage links outside a service's
+item forms keep their original handling. Streamable and NPR claim only their
+main and `www` hosts; PBS claims its player/show routes, and SRF its Play
+section or a valid media URN. These restrictions apply to extensionless
+files and ordinary HTML pages too. Wayback pages belong to generic
+page extraction, not Archive item metadata. A file on a claimed host (an image
+subdomain) stays a file unless
 its form is the extractor's (`claimsFiles`: Dropbox's and Drive's
 direct-link resolvers, and ImagePond's media host, asked with the site's
-Referer).
+Referer). Rajce's `img<N>` storage links retain their specialized Referer and
+video filename correction without probing the file, including named paths;
+that exception does not claim every file on the site's other hosts.
 Tests stand a local server in for a site with `aliasClaims`.
 
 So an extractor claimed first never leans on the probe: `probed(ctx, u)`
@@ -54,9 +63,35 @@ can be stood in for, and the claim itself for those whose API host is
 fixed.
 
 Everywhere else no extractor claims a domain. `Registry.Extract` probes the submitted URL
-(`page.go`: one bounded GET, redirects followed, sent as a navigation with
-no Referer and asked once more with `Referer: <origin>/` when answered 401
-or 403, that second answer being the page — a hotlink-protected file or
+(`page.go`: one bounded GET, redirects followed). Feed-shaped inputs and
+feed hosts first use the bounded feed reader's `Accept`, so a usable feed
+is not spent on navigation before its reader can consume it. Named media
+files, manifests, and an explicit known-reader request policy keep their
+existing acquisition. A positive feed response or exhausted transient error
+belongs to this acquisition's memo and still goes through normal recognition.
+A successful specific media response supplies the page's file metadata without
+reading its body or issuing another probe. A named non-feed XML document
+also retains its file response after bounded feed identification. Other
+negative feed answers fall back to ordinary navigation: a feed Accept can
+select a different HTML document even without `Vary`, so that document is
+not substituted for navigation. An extensionless generic binary answer is
+also inconclusive and keeps that navigation fallback.
+The negative answer is retained only while its request identity still matches.
+A named manifest sends `Referer: <origin>/` at once, matching its reader
+without spending the URL twice. A canonical player URL on a known host likewise sends its page
+reader's declared `asks` Referer on the first probe (`Player.probeReferer`).
+A known KVS install's browse paths, including custom video and category
+routes, send their reader's origin Referer (`KVS.probeReferer`). Canonical
+member and search listings send their reader's self-Referer immediately,
+so navigation cannot consume a listing before its complete representation
+is requested. Member/search precedence still applies when a section or term
+contains `videos`. Other player listings, member/search URLs that canonicalize
+to a different URL, and unfamiliar hosts retain ordinary navigation.
+This selects request headers only; normal page recognition still chooses the
+extractor. Explicit reader policies have separate page-cache identities, and
+their refusals are not retried with a different origin Referer.
+Other URLs navigate with no Referer and are asked once more with the
+origin Referer when answered 401 or 403, that second answer being the page — a hotlink-protected file or
 manifest is judged by what it serves its own pages, as the fallback's
 download and the manifest reader ask. The probe spends one attempt and one
 more after a transient failure (`probeDo`: no answer, 408, 429, 5xx), the
@@ -76,27 +111,46 @@ prefix reads past `httpx.IsTooLarge(p.Err)`: the generic fallback, sniffing
 an oversized page for its media, and the feed recogniser, since a feed is
 decided by its head — one past the bound is read again to
 `config.MaxFeedBytes`, its enclosures listed up to the cut. Feed extraction
-reuses only a complete successful probe (`Page.Document`). A plain-text or
-untyped feed's sniff prefix can identify the feed, but must be fetched
+uses its own `Accept` through the bounded feed reader, reusing the initial
+feed acquisition when available. An ordinary browser probe returning complete
+valid XML still cannot replace that representation: negotiation can change
+enclosure URLs and episode counts (`TestFeedsRequestTheirAcceptRepresentation`).
+A plain-text or untyped feed's sniff prefix can identify the feed, but must be fetched
 through the feed's bounded reader before decoding enclosures, including
 when the prefix has no read error. Otherwise the tolerant decoder can
 silently omit later episodes. `TestFeedsReadPastAPlainTextProbe` covers RSS
 and Atom with enclosures before and after the prefix. The feed recogniser
-also asks a feed-shaped URL, or any URL on a `feeds.`, `feed.`
-or `rss.` host (`feedHost`, also a followed `linkForms` entry), once more with the feed's own
-`Accept` when the probe got a generic binary type it did not read or an
-HTML page, which is how a host that negotiates on `Accept` serves a
-subscribe page to a browser) and offers the `Page` to each `Recognise` in
-turn; nothing claims it and `Direct` takes it. A link whose path names a file (`probeWorthy` false)
+also negotiates when either the submitted or final URL has feed form or a
+`feeds.`, `feed.` or `rss.` host (`feedHost`, also a followed `linkForms` entry).
+It asks the submitted URL with the feed's own `Accept`, since that header can
+change the redirect destination as well as the document. Negotiation follows
+a non-success navigation response, successful HTML/plain-text notices, or a
+generic binary type the probe did not read. Transient failures receive the
+finite `PlatformProbeAttempts` budget and honor a stated `Retry-After` up to
+`MaxRetryAfter`, without holding metadata admission while waiting. Cancellation
+interrupts that wait. An exhausted failure selects the feed
+reader to report the typed error instead of claiming the source is unsupported.
+A successful response must identify a feed by its type or root element.
+Identification headers and prefixes use the probe deadline; an identified
+feed finishes on that same response under the normal reader timeout and
+`MaxFeedBytes` bound. Its body belongs only to the acquisition's memo, with
+the negotiated request's client, route, agent and redirect cookie sessions
+checked at handoff. Its own cookie update or `no-store` response can be
+consumed once; a new acquisition never reuses that negotiated body.
+Successful actual media, unrelated forms, failed navigation reads and
+cancellation do not start this later negotiation. `feeds_negotiation_test.go` and
+`feeds_request_test.go` cover these boundaries, retries, single-use responses
+and reader identity. The registry offers the `Page` to each `Recognise` in
+turn; if nothing claims it, `Direct` takes it. A link whose path names a file (`probeWorthy` false)
 is probed only because some `Shape` claims it, and is asked with a HEAD
 first (`headProbe`), as is a file API's extensionless download route
 (`fileRoute`, `/api/file/<id>`): media answers there, never fetched, since a download
 link may be single-use or quota-counted and a host that punishes parallel
 connections counts the probe's; a text answer, or any HEAD that did not
 succeed, is fetched with the GET as before. A link naming a manifest
-(`.m3u8`, `.mpd`) skips the HEAD: the probe's GET is the manifest, and
-`hlsPlaylistResult` accepts the probe's navigation when it read a complete,
-valid manifest, so a pasted manifest — often signed for one use — is
+(`.m3u8`, `.mpd`) skips the HEAD: the probe's GET uses the manifest reader's
+origin Referer, and `hlsPlaylistResult` consumes that complete, valid
+response, so a pasted manifest — often signed for one use — is
 asked for once (`TestPastedManifestIsFetchedOnce`). Such a link's recogniser decides
 on the headers and redirect, not on its origin's API: archive.org takes a
 file route only when it ended on a storage path naming the item
@@ -132,6 +186,17 @@ extractor, as a cache key, never as the reason a page is taken. A populated cust
 frontend is as eligible as a challenge or empty shell: compatible APIs do
 not require the original frontend's branding or markup.
 
+A transient nodeinfo failure is kept with its typed error, separately from
+a definitive negative answer. If ordinary recognition and generic extraction
+find nothing, the federated reader can finish that discovery with its normal
+HTTP retry policy; a strictly followed source gets the same recovery before
+it is rejected as unrecognised navigation. A generic page with usable media
+keeps that result. Definitive refusals, invalid metadata, unrelated forms,
+cancellation and changed client/route identity do not trigger recovery.
+Successful discovery is validated and cached before the source API is read;
+an exhausted retry reports the underlying failure. Failed discovery is not
+stored as a negative hostname verdict, so a later submission can try again.
+
 `Shape` is the half that needs no fetch: the link's path, query and
 fragment. `Registry.Known` uses it for link discovery (the harvester, the
 page scanner, the index extractors), together with the discovery forms in
@@ -160,7 +225,10 @@ two-segment form never takes a last segment with a dot, which names a
 file, not an item.
 
 An explicit `links:` harvest also asks `Registry.harvests`, which admits
-the table's `harvest` item predicates on known installs. The host must be
+the table's `harvest` item predicates on known installs. Bounded canonical
+and short-link `follow` forms can also opt in through `harvestFollow`;
+their own host and route checks still apply, with reserved navigation
+excluded. Feed and catalogue forms do not opt in. For `harvest`, the host must be
 in `claimHosts` (built-in sites, family installs, configured extra hosts or
 claim aliases), or a discovery alias. A broad platform Shape alone cannot
 establish either the install or an item: profiles, search results and
@@ -169,6 +237,7 @@ The exception changes admission only; the existing strict expansion still
 reads each admitted item, preserves its failures and applies source/file
 caps. Platforms without stable item routes, such as Bandzoogle, have no
 exception. `harvestforms_test.go` covers item and navigation boundaries;
+`links_canonical_test.go` covers the canonical forms and their boundaries;
 `links_platform_test.go` exercises the real registry and player extraction,
 redirects, self-links, duplicates, caps and unavailable items.
 
@@ -210,10 +279,19 @@ often as a right one; a job that fails takes the name of the extractor that
 recognised its page (`Registry.Identified`). A job a platform family read
 is labelled by its install (`Registry.JobLabel`: KVS by its host's first
 label, PeerTube by the label naming the instance), as each was while
-installs were listed; the label names no folder. A link followed for its form is extracted strictly
-(`Options.strict`): if its page turns out to be no extractor's, it is left
-out (`errUnrecognised`) rather than handed to the fallback, and the
-collection's note counts it as unrecognised beside how many links resolved
+installs were listed. This job label does not itself name a folder;
+booru and FoolFuuka also use established install labels in `Result.Title`
+to preserve their collection destinations. A link followed for its form is extracted strictly
+(`Options.strict`): an unrecognised page is left out (`errUnrecognised`)
+rather than handed to the fallback. An already-admitted link whose successful
+response declares a non-HTML file can use the direct fallback (`followedFile`):
+media and binary types establish the file, while a structured document such as
+XML or JSON also needs a file-shaped URL. HTML, ambiguous plain/untyped text,
+empty 204/205 responses and unrecognised manifests do not qualify. This keeps
+feed-host file links without turning navigation or API replies into downloads;
+it does not broaden which links discovery admits. `links_files_test.go` covers
+explicit harvesting, automatic expansion, direct input and these boundaries.
+The collection's note counts omitted links as unrecognised beside how many resolved
 ("6 of 10 links resolved; 4 unrecognised"), so a recogniser a site change
 broke for some links shows rather than leaving a job that looks complete. Keep
 forms specific enough that a site's own navigation does not turn into a
@@ -234,6 +312,17 @@ probe's Referer retry. An unclaimed refusal served as media or a binary type
 is still the fallback's. A page too large to read whole is the submitted
 URL's exception: the fallback sniffs its prefix.
 
+A submitted generic HTML page answered 404 or 410 gets one acquisition with
+the fallback's origin Referer when any navigation hop declares
+`Vary: Referer` or `Vary: *` and that request policy has not already been
+tried. The original and final URLs must both be unclaimed by a known
+service. The registry recognises the new representation before dispatching
+it, and keeps a failed reader request as a typed failure. The acquisition
+uses the normal probe's timeout, admission, body and retry bounds. Strict
+and nested sources retain their existing failure handling.
+`directreferer_test.go` covers declared variants, redirect policies, genuine
+reader refusals, route/session identity and cancellation.
+
 For a transient probe failure (`transientProbe`: no answer, a timeout,
 408, 429, 5xx), a single-site form claims a submitted URL only where it is
 valid (`claimsHere`): on that site's known or aliased hosts, or where the
@@ -249,6 +338,15 @@ exception: strict and nested sources keep their existing failures, as do
 known services, permanent refusals, challenges, refused routes and
 cancellation. `transientclaims_test.go` covers these boundaries and
 `TestSubmittedUnclaimedLinkOutlastsAFailedProbe` covers unclaimed forms.
+
+After recognition and extraction, `Registry.Extract` checks the caller's
+context before accepting the answer. Cancellation takes precedence over a
+completed probe's refusal or an extractor's error, and a cancelled read
+never starts proxy recovery. A response arriving with cancellation must
+not turn a stopped job into an HTTP failure or queue a direct download.
+`TestRegistryCancellationWinsOverCompletedRead` fixes that ordering at both
+boundaries; `TestTransientPathCollisionPreservesCancellation` also exercises
+the network race.
 
 The probe is made outside any enclosing extraction's challenge capture
 (`httpx.WithoutChallengeCapture`):
@@ -266,13 +364,31 @@ accepted as recovery and swap the item for the page under a new name.
 ### Fetching a page once
 
 Probes go through `pageCache`: per route and request identity, shared by
-concurrent callers sending the same cookies, and kept for
+concurrent callers sending the same cookies, and kept for at most
 `config.PageCacheTTL` only when the answer is a success
-(`Page.servesAnyRoute`: a 2xx read whole). A kept success also serves any
+(`Page.servesAnyRoute`: a 2xx read whole that permits reuse). The response's
+freshness lifetime can shorten that limit: `max-age` takes precedence over
+`Expires`, with `Age` and `Date` accounting for time already spent. Every
+redirect hop bounds the deadline. `no-store`, `no-cache`, an expired lifetime
+or an invalid freshness policy prevents retaining the page or handing it to
+another acquisition's waiting caller. This also applies to HEAD-only probes.
+An extraction that already acquired the page can still consume it and its
+memoised answers after expiry, avoiding a second use of a signed link.
+`TestPageCacheHonorsResponsePolicy` covers response/redirect/HEAD policies;
+`pagefreshness_test.go` covers deadlines and waiting acquisitions.
+`TestResubmittedSourceHonorsResponsePolicy` verifies remove/re-add through a
+real download. A kept success also serves any
 route that would make the same request (`httpx.RequestKey`: the URL, the
-language and the cookies its jar holds for the URL; not the User-Agent,
-which a route may present of its own), and `probed` accepts it there: only
-the address and agent differ. This identity keys both cached and in-flight
+language and the cookies its jar holds for the URL in their sent order;
+not the User-Agent, which a route may present of its own), and `probed`
+accepts it there. `Vary` permits this sharing only for fields represented in
+the key: `Cookie` and `Accept-Language`. `Vary: *`, `User-Agent`, `Referer` and
+other unsupported fields restrict the answer to its originating acquisition,
+including when a redirect or HEAD response declares them. The manifest
+reader still honors its separate Referer-equivalence check within that
+acquisition. Without such a policy, routes with different agents can share
+the same successful page. `TestRegistryPageCacheHonorsVary` verifies both
+cases through the registry. This identity keys both cached and in-flight
 pages, including reads on the same route: changing or removing a cookie
 must not reuse another session's media or a password gate from before an
 unlock. The effective jar is the source's when supplied with
@@ -319,14 +435,18 @@ since what one address is refused says nothing of another, route recovery
 moves a read precisely to ask again, and a refusal is often of the moment
 (`TestPageCacheKeepsNoRefusal`). A probe in flight on another route is not
 waited for. Questions recognisers put to the network about a page
-(`memoAsked`, `pageJSON`) are kept per route even when the page is shared,
+(`memoAsked`, `pageJSON`) are kept per route within one acquisition,
 for the same reason. The cache's byte bound (`config.PageCacheBytes`, oldest
 dropped first) counts each entry's allowance
 (`config.PageCacheEntryBytes`, which is what bounds header-only answers),
-its body, and what its memoised answers hold (`memoSize`: a string, bytes,
-raw JSON, a whole second page), charged as each is kept (`Page.charge`)
-and not at all once the entry was dropped (`TestPageCacheCountsWhatItKeeps`);
-parsed trees ride along uncounted. Expired entries are swept on a timer as
+its body and request identity. Parsed trees ride along uncounted. The registry
+hands each acquisition a fresh `Page.acquisition` view, borrowing the cached
+response and parsed tree but keeping its own memo. Additional API responses
+and derived recognition results leave with that view; they cannot inherit
+the HTML response's cache lifetime or cross into another session whose cookies
+apply only to the API endpoint. Recognition and extraction within that view
+still share their answer. The repeated-extraction and concurrent-session
+tests cover this boundary. Expired entries are swept on a timer as
 well as on the next probe. A fresh read (`freshRead`: a retry, every
 transfer-time read, and a file's `Refresh`, which re-identifies through the
 registry) takes no kept page: it is probed again and its answer replaces
@@ -334,32 +454,36 @@ the kept one, since the kept page is where the stale link came from. A
 user's Retry is one: the manager re-reads a job it retries through
 `FreshRead` (`TestRetryJobReadsTheSourceAgain`), so neither a kept page nor
 the answers memoised on it are replayed, while a new job for the same link
-still shares the minute-old success. A reader's explicit `Referer` must
+can share a recent success only while its response freshness and `Vary`
+policy permit caching.
+A reader's explicit `Referer` must
 match the probe's request (`Page.answers`); a different one fetches the
 reader's own representation. An
 extractor that reads the submitted page whole uses `fetchDocument`,
 `readDocument` or `fetchRoot`, which hand it the probed document instead of
 fetching again. All three are adapters over `acquire` (`page.go`), the one
 implementation of that decision: the probe when `probedFor` says it answers
-this request and `Page.Document` says it is a complete 200 document,
+this request and `Page.Document` says it is a complete 200 or 203 document,
 otherwise `GetPage`; a final URL the caller owns either way; and the probe's
 tree only when recognition already parsed it (`parseDocument`), so a body
 read without a tree never builds the page's index, and a parse error is
 returned rather than lost behind a nil tree. `TestAcquisitionReusesOnlyACompleteProbe`
-runs every adapter over each probe state. Any extra request a
+runs every adapter over each probe state. A 203 carries a complete
+representation transformed by an intermediary; no-content, partial,
+operation-status and delta responses do not qualify. Any extra request a
 recogniser makes goes through `memoAsked(ctx, p, key, …)` (`pageJSON` for an
 API question, the player engine's canonical probe, Bandcamp's own-agent
 read), keyed by what it asks, so several recognisers asking one origin's API
-share one answer. An answer computed after its asker's context ended is that
+share one answer within that acquisition. An answer computed after its asker's context ended is that
 caller's cancellation, not the page's: it is not kept, and a caller waiting
-on it asks again with its own context, since the page is shared through the
-cache with every job reading the URL (`TestPageAnswerAskedByACancelledCallerIsNotKept`).
+on it asks again with its own context
+(`TestPageAnswerAskedByACancelledCallerIsNotKept`).
 A caller waiting for another's answer waits only while its own context
 lasts — the question runs under the first asker's admission, and a
 cancelled job is not to stay behind another job's queue — and leaves with
 the zero value (`TestPageMemoAskedWaiterLeavesWithItsContext`).
-A failure or the probe's own timeout is still an answer and is kept for as
-long as its page is. Plain
+A failure or the probe's own timeout is still an answer and is kept only
+within that acquisition. Plain
 `memo` is for decoding the page's own body, which no cancellation reaches. An extractor that reads an endpoint a recogniser may already have asked tries
 `askedJSON` first: it hands back that answer, and asks nothing when no
 recogniser did, so the extractor's own request, with its retries, is never
@@ -368,8 +492,9 @@ path names a non-page file and matches no `Shape` skips the probe
 (`probeWorthy`): probing would download the start of the file the fallback
 is about to fetch.
 
-A `Page` is borrowed, never owned: the cache hands one to every concurrent
-caller and every recogniser reads it. Its URLs, header, body, parsed tree and
+A `Page` is borrowed, never owned: each acquisition's recognisers and extractor
+share its view, while concurrent acquisitions borrow the same cached response
+and parsed tree. Its URLs, header, body, parsed tree and
 memoised values must not be changed. `probedDocument`, `fetchDocument` and
 `fetchRoot` hand back a final URL the caller owns, and the cache probes with
 a URL of its own, so editing either is safe; a reader that edits a tree (the
@@ -392,23 +517,32 @@ At the submitted URL this compares the initial request; at a redirect's final
 URL it compares the request that reached that URL, including a Referer generated
 by the redirect. An explicitly empty Referer also must match. A reader with no
 Referer header accepts the probe's navigation, including its 401/403 retry.
-Referer is a reuse check, not another probe-cache lookup key: a reader's fresh
-response to a different Referer is not stored as a separate cached variant.
+For an ordinary reader, Referer is a reuse check: a fresh response to a
+different Referer is not stored as a separate cached variant. A known
+canonical player's explicit initial probe policy is part of the probe-cache
+key, so navigation and that reader's acquisition cannot substitute for each
+other even when the server declares no `Vary`.
 Another route can reuse only a complete success whose probe did not change
 its cookies, as above.
 Any other header — an agent, an Accept, a cookie, a credential — asks for
 its own response, as does another method or body, which these readers never
 send. A host that knows its page does not depend on a header it sends says
 so where it reads: Bandcamp takes a probe the site served (not its
-challenge) although it asks with an agent of its own. `pageJSON` and
+challenge) although it asks with an agent of its own, only when no response
+hop declares `Vary: User-Agent` or `Vary: *`. Declared agent variation also
+constrains reuse within the original acquisition; freshness alone does not
+require rereading its response. `pageJSON` and
 `askedJSON` name a question by its endpoint and every header but the
 referer (`jsonKey`), and a client of another identity neither reads nor
 fills a page's answers. Fixture pages built without a recorded client
 answer any reader. `TestProbeAnswersOnlyItsOwnRequest`,
 `TestPageAcquisitionHonorsReferer` and `TestPageJSONKeysTheRequest` pin the
-variants. The bare-manifest reader deliberately accepts a complete valid
-playlist from the probe, avoiding a second use of a signed link; its variants,
-tracks and queued media retain the origin Referer. A player explicitly asking
+variants. A named manifest is probed with the origin Referer and its reader
+reuses that complete playlist. An extensionless manifest discovered by
+navigation can reuse that response unless any hop declares `Vary: Referer`
+or `Vary: *`; then a different Referer requires the reader's own request.
+This is a Referer-equivalence check, not general HTTP variant caching.
+Variants, tracks and queued media retain the origin Referer. A player explicitly asking
 for another playlist Referer through `fetchPlaylist` still fetches that request.
 
 Whether a read may take the probe is decided in one place, `freshRead`
@@ -576,25 +710,30 @@ ends.
 
 ## The generic fallback
 
-`Direct` takes what no extractor recognised. It reads the probed document
-(`Direct.document`) rather than fetching it again, recognises WordPress
+`Direct` takes what no extractor recognised. It reads a compatible probed
+document (`Direct.document`), recognises WordPress
 categories and DarkGram albums in it, and otherwise scans it for links of a
 supported form before using a generic embedded player. This is how a page
 embedding a supported player works without an extractor of its own.
 `filelinks.go` shares the `links:` harvester's bounded expansion; its links
-are extracted strictly, so a link that only had a supported form is dropped
-once its page proves to be nobody's, and a page whose links were all of that
-kind, or none of whose links could be read, falls through to its own media:
+are extracted strictly, so an unrecognised HTML page is dropped while a
+confirmed direct file is retained. A page whose links were all unrecognised,
+or none of whose links could be read, falls through to its own media:
 a side link's failure says nothing of the article's own clip. When it has
 none, the error says what the links came to: that N links of a supported
 form led to pages no extractor recognised (removed items, a login, a
 redesign), not that the page links nothing supported; a `links:` harvest
-says the same.
-A complete HTTP-200 HTML probe that yields no usable content and no
+says the same. Before parsing a useful HTML probe, `Vary: Referer` or `Vary: *`
+on any redirect hop requires the fallback's origin Referer to match the probe.
+A different representation is fetched through the bounded `mediaPageFetch`;
+if that fetch fails, the old preview is not substituted. Useful pages without
+declared Referer variance retain their single acquisition, the same equivalence
+policy used for discovered HLS manifests.
+A complete HTTP-200 or HTTP-203 HTML probe that yields no usable content and no
 extraction error gets one additional acquisition with the origin Referer
 (`Direct.pageSniff`). The probe records whether it already used that
 Referer, so the 401/403 recovery does not cause another fetch. Useful pages
-keep their single acquisition; genuinely empty pages also get this one
+without declared Referer variance keep their single acquisition; empty pages also get this one
 extra attempt because a soft gate need not identify itself. Eligibility
 uses the probe actually consumed by `Direct.document`, since cookie
 changes can make a reader fetch for itself instead. The retry uses
@@ -883,11 +1022,15 @@ intact. `sources.go` holds what they share:
   gallery listings, which are held to the extracted file count alone:
   one block request names hundreds of galleries, and the expansion stops
   opening them once the files fill the cap. Imgur's account and tag
-  listings hold all their rows to `config.MaxListingPosts` (or the file cap
-  when lower), and their post rows to it too unless the user set a source
+  listings hold inspected rows to `config.MaxListingPosts`, and their post
+  rows to it too unless the user set a source
   limit below the default, which then bounds them (`imgurPostCap`: a raised
   source limit never lowers the bound), counting each post once however
-  many pages repeat it. A Cum creator's posts are each a source as well as
+  many pages repeat it. Each page is expanded before fetching the next;
+  `listingFiles` counts produced files through `pageWalk.consume`, so an
+  empty or unreadable post spends no file slot and later rows can fill the
+  budget. Expansion and pagination stop once that budget is full.
+  A Cum creator's posts are each a source as well as
   files: the walk takes no more posts than the source limit and asks no
   page for more than it leaves room for. Where
   every entry is queued as a file of its own — a profile's deferred videos — it is
@@ -1027,6 +1170,19 @@ the number would not be a different setting but a broken walk.
   folder never does. A note in the title would change the folder whenever a
   cap was raised or a rate limit waited out, and the next run would file
   everything somewhere new and download it all again.
+- **Known installs retain their established collection prefixes.** Booru
+  and FoolFuuka titles use the explicit labels in `familyInstalls`, including
+  aliases and subdomains, through `knownInstallLabel`. Unlisted Booru installs
+  retain their full hostname, separating independent boards whose local post
+  IDs and sizes can coincide. FoolFuuka retains `hostLabel` derivation; the
+  separate boards under `booru.org` retain their own names. The prefix is a disk-compatibility
+  contract: changing it breaks both saved-file matching after a queue
+  restore and finding the previous partial file. The full-registry naming
+  tests and `TestKnownCollectionRestoresSavedFilesAndPartialTransfers` pin
+  those behaviors. `TestUnknownBoardCollectionsKeepDestinations` also checks
+  existing full-host folders and independent boards with equal post IDs and sizes.
+  Files written under the temporary host-derived names
+  are not moved automatically.
 - **A note is built from the helpers in `notes.go`, so every extractor's
   reads alike.** `joinNotes` is the one joiner: "; " between parts, empty
   parts dropped, a part the note already holds not repeated (a joined note's
@@ -1053,14 +1209,10 @@ the number would not be a different setting but a broken walk.
   names alike. `sourceFolder` turns them, and plain slashes, into "_" instead;
   keep that, since changing it would file every re-read job somewhere new and
   download it all again.
-- **Names the consolidation changed are kept as they now are.** Moving to
+- **Other names the consolidation changed are kept as they now are.** Moving to
   recognition by page renamed some files and folders, and a file saved under
   the older name downloads once more under the new one beside it. Each is
   kept on purpose, since changing it back would rename what was saved since:
-  - a FoolFuuka board page and a booru tag search are titled by the host's
-    label (`hostLabel`, `booruLabel`) rather than a name from an install
-    list, which reads differently for some installs (an `archive.`
-    subdomain gives "archive");
   - `folderName` goes through `sourceFolder`, so a slash in a fediverse post
     or note title, or in a creator post's folder, is "_", not "⧸", and a
     broadcaster's season or programme label holding a slash is one folder,
@@ -1373,7 +1525,7 @@ Two conventions worth keeping to when writing one:
 
 | Notes | Hosts |
 | --- | --- |
-| [hosts/file-hosts.md](hosts/file-hosts.md) | bunkr, gofile, pixeldrain, mega, emload, filejump, filester, suvobox, pixhost, imagepond |
+| [hosts/file-hosts.md](hosts/file-hosts.md) | bunkr, gofile, pixeldrain, mega, emload, filejump, filester, suvobox, pixhost, goonbox, imagepond |
 | [hosts/keep2share.md](hosts/keep2share.md) | keep2share (both hosts), voyeurking, and the CAPTCHA reader (`internal/captcha`) |
 | [hosts/video-hosts.md](hosts/video-hosts.md) | the player rows (pornhub, xhamster, tnaflix, drtuber, pornone, vidmoly, streamtape, mixdrop, lulustream, vids.st, sendvid, doodstream, knuthing, noodlemagazine, ok.ru, eporner), Kernel Video Sharing; pointer pages (yandex, alohatube); the yt-dlp handoffs (youtube, odysee, dailymotion, bilibili, soundcloud, mixcloud, rumble) |
 | [hosts/broadcasters.md](hosts/broadcasters.md) | vimeo, arte, orf, svtplay, yle, drtv, rtbf, francetv, radio-canada, niconico |

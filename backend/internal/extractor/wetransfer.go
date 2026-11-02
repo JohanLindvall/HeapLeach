@@ -81,10 +81,11 @@ var (
 // for that redirect. The bytes are served from signed links of another
 // form, which stay the direct fallback's.
 //
-// A link on the site's own hosts never gets here: the registry gives it to
-// extract unprobed (hostClaims), which asks the API whatever the page looks
-// like. A page of the form on any other host that the probe was kept from
-// is not taken, so the API is never asked to mint another host's id.
+// A transfer link on the site's own hosts never gets here: the registry
+// gives /downloads/ and short links to extract unprobed (hostClaims), which
+// asks the API whatever the page looks like. A page of the form on any other
+// host that the probe was kept from is not taken, so the API is never asked
+// to mint another host's id.
 var wetransferSite = shareSite{
 	name: "wetransfer",
 	recognises: "download pages (`/downloads/<id>/<hash>`) and the short links (`/t-<code>`) that redirect to them, " +

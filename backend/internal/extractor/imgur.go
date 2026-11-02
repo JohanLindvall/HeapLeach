@@ -358,7 +358,18 @@ func imgurUsableLink(link string) bool {
 
 // listing resolves an account, a tag or a mirrored subreddit.
 func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, opts Options) (*Result, error) {
-	entries, note, err := i.listingEntries(ctx, probe, i.root, target.Listing, opts)
+	// Resolve each page before asking for another. Only produced files spend
+	// the file budget; an empty or unreadable post leaves room for later rows.
+	expanded := listingFiles[imgurEntry]{limit: opts.maxFiles()}
+	entries, note, err := i.listingEntries(ctx, probe, i.root, target.Listing, opts, func(entries []imgurEntry) (bool, bool) {
+		return expanded.add(ctx, entries, func(ctx context.Context, entry imgurEntry) ([]File, error) {
+			if file, ok := entry.media(); ok {
+				return []File{file}, nil
+			}
+			files, _, err := i.postFiles(ctx, entry.Hash)
+			return files, err
+		})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -369,14 +380,7 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, op
 	// naming a post needs that post's page, so those are read several at a
 	// time, in the listing's order; one post that will not load is skipped,
 	// since on a listing of hundreds the rest are still worth having.
-	files, refused, err := readListing(ctx, "imgur", "posts", i.root+target.Listing, entries,
-		func(ctx context.Context, entry imgurEntry) ([]File, error) {
-			if file, ok := entry.media(); ok {
-				return []File{file}, nil
-			}
-			files, _, err := i.postFiles(ctx, entry.Hash)
-			return files, err
-		})
+	files, refused, err := expanded.result(ctx, "imgur", "posts", i.root+target.Listing)
 	if err != nil {
 		return nil, err
 	}
@@ -402,23 +406,23 @@ func (i *Imgur) listing(ctx context.Context, probe *Page, target imgurTarget, op
 // which is what the cap is for. A later page failing, or the page cap, leaves
 // the posts already collected intact, and says the listing was cut.
 //
-// The two kinds of row are capped apart. A row that is itself the media is
-// one file and costs nothing to expand, so the file cap bounds the listing,
-// or config.MaxListingPosts rows when that is lower, as the listing always
-// went; a row naming a post costs a request, so those are bounded apart
+// All rows are held to config.MaxListingPosts, as the listing always went.
+// A row naming a post costs a request, so those are bounded apart
 // (imgurPostCap), and the walk stops asking for pages once it has as many
-// as that allows. A post is
-// counted once, however many pages repeat it: a feed whose pages overlap,
+// as that allows. The consumer counts the files the rows produce and can
+// stop sooner, without spending file slots on empty or unreadable posts.
+// A post is counted once, however many pages repeat it: a feed whose pages overlap,
 // or a subreddit serving its first page again past its end, would
 // otherwise spend the bound on repeats and claim a cut that never happened.
-func (i *Imgur) listingEntries(ctx context.Context, probe *Page, origin, base string, opts Options) ([]imgurEntry, string, error) {
+func (i *Imgur) listingEntries(ctx context.Context, probe *Page, origin, base string, opts Options,
+	consume func([]imgurEntry) (bool, bool)) ([]imgurEntry, string, error) {
 	posts := 0
 	postCap, postNote := imgurPostCap(opts)
 	counted := make(map[string]bool)
-	limit, limitNote := entryLimit(opts, config.MaxListingPosts)
 	return walkPages(ctx, pageWalk[imgurEntry]{
 		key:   func(entry imgurEntry) string { return entry.Hash },
-		limit: limit, limitNote: limitNote, ends: walkAccepts{repeated: true},
+		limit: config.MaxListingPosts, limitNote: listingLimitNote, ends: walkAccepts{repeated: true},
+		consume: consume, consumeNote: fileLimitNote,
 		fetch: func(ctx context.Context, n int) (pageOf[imgurEntry], error) {
 			if posts >= postCap {
 				return pageOf[imgurEntry]{end: true, note: postNote}, nil

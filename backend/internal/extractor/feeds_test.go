@@ -487,22 +487,44 @@ func TestFeedsRecognise(t *testing.T) {
 	expectRecognised(t, f, fixturePage(t, "https://pod.example.test/feed/", http.StatusNotFound, "text/xml", feedRSSFixture), false)
 }
 
-// Through the registry the feed the probe read is the feed extracted: it is
-// fetched once.
-func TestFeedsReadOnceThroughTheRegistry(t *testing.T) {
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
+// A complete, valid browser feed can have fewer episodes and different
+// enclosures than the representation selected by the feed reader's Accept.
+func TestFeedsRequestTheirAcceptRepresentation(t *testing.T) {
+	var browserReads, feedReads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/feed" {
+			t.Errorf("unexpected request: %s", r.URL)
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set(httpx.HeaderContentType, "application/rss+xml")
-		_, _ = io.WriteString(w, feedRSSFixture)
+		w.Header().Set(httpx.HeaderVary, httpx.HeaderAccept)
+		file, second := "browser-edition.mp3", ""
+		if r.Header.Get(httpx.HeaderAccept) == feedAccept {
+			feedReads.Add(1)
+			file = "full-edition.mp3"
+			second = `<item><title>Episode Two</title><enclosure url="http://audio.example.test/second-episode.mp3" type="audio/mpeg" length="13"/></item>`
+		} else {
+			browserReads.Add(1)
+		}
+		_, _ = fmt.Fprintf(w, `<rss version="2.0"><channel><title>Example Podcast</title>
+			<item><title>Episode One</title><enclosure url="http://audio.example.test/%s" type="audio/mpeg" length="12"/></item>
+			%s</channel></rss>`, file, second)
 	}))
 	t.Cleanup(srv.Close)
 	res, ex, err := NewRegistry(&config.Config{}, testClient()).
-		Extract(context.Background(), srv.URL+"/shows/one", Options{})
-	if err != nil || ex.Name() != "feed" || len(res.Files) != 5 {
+		Extract(t.Context(), srv.URL+"/feed", Options{})
+	if err != nil || res == nil || ex == nil || ex.Name() != "feed" {
 		t.Fatalf("got %v from %v: %v", res, ex, err)
 	}
-	if n := hits.Load(); n != 1 {
-		t.Errorf("the feed was fetched %d times, want once", n)
+	urls := make(map[string]bool)
+	for _, file := range res.Files {
+		urls[file.URL] = true
+	}
+	if len(res.Files) != 2 || !urls["http://audio.example.test/full-edition.mp3"] || !urls["http://audio.example.test/second-episode.mp3"] {
+		t.Errorf("feed representation lost episodes or changed enclosures: %+v", res.Files)
+	}
+	if browserReads.Load() != 0 || feedReads.Load() != 1 {
+		t.Errorf("browser reads=%d feed reads=%d, want 0/1", browserReads.Load(), feedReads.Load())
 	}
 }

@@ -211,12 +211,11 @@ func (b *Bandcamp) page(ctx context.Context, link string) (*html.Node, error) {
 			return parseHTML(doc)
 		}
 	}
-	// A page the probe was served, rather than the challenge, is the page
-	// whichever agent asks: this host's representation does not depend on
-	// the User-Agent once it serves one, so it is read as it is. That is a
-	// decision about this host, made here; fetchRoot would not take the
-	// probe for a request carrying an agent of its own (Page.answers).
-	if p := probed(ctx, u); p.answers(b.client, u, nil) && p.Title() != bandcampChallengeTitle {
+	// A served page without declared agent variation can be read as it is.
+	// This host-specific reuse must yield to Vary: User-Agent or Vary: *
+	// anywhere in the response chain: then the extractor asks as itself.
+	// fetchRoot keeps the stricter identity check for the explicit agent.
+	if p := probed(ctx, u); p.answers(b.client, u, nil) && !p.variesAgent && p.Title() != bandcampChallengeTitle {
 		if doc, ok := p.Document(); ok {
 			if root := p.HTML(); root != nil {
 				return root, nil

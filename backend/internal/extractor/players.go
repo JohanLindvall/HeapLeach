@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
@@ -142,6 +143,28 @@ func NewPlayer(client *httpx.Client, site *playerSite) *Player {
 	return &Player{about: site.about, client: client, site: site}
 }
 
+// probeReferer is the reader's policy when the submitted link already names
+// its page. The registry uses this only on a known host, before spending a
+// possibly single-use page. Other forms and listings retain navigation's
+// policy; choosing these headers does not choose an extractor.
+func (p *Player) probeReferer(u *url.URL) *string {
+	if p.site.parse == nil || p.site.asks == nil || p.site.listing != nil && p.site.listing.shape(u) {
+		return nil
+	}
+	if !formClaims(p, u) && (p.site.canonicalGate == nil || !p.site.canonicalGate(&Page{URL: u, Final: u})) {
+		return nil
+	}
+	page := u.String()
+	if p.site.page != nil {
+		canonical, err := p.site.page(u)
+		if err != nil || canonical != page {
+			return nil
+		}
+	}
+	referer := p.site.asks(page)
+	return &referer
+}
+
 // Recognise reports whether the probed page is the site's player.
 func (p *Player) Recognise(ctx context.Context, page *Page) bool {
 	if p.site.recognise(page) || p.canonicalPage(ctx, page) != nil {
@@ -175,6 +198,14 @@ func (p *Player) canonicalPage(ctx context.Context, page *Page) *Page {
 			return nil
 		}
 		httpx.Navigate.Apply(req)
+		if p.site.asks != nil {
+			httpx.Referer(p.site.asks(endpoint)).Apply(req)
+		}
+		candidate := newProbePage(ctx, p.client, req.URL)
+		candidate.referer = req.Header.Get(httpx.HeaderReferer)
+		candidate.originReferer = candidate.referer == util.Origin(req.URL)+"/"
+		defer candidate.finishProbe(ctx)
+		started := time.Now()
 		resp, err := p.client.DoOnce(req)
 		if err != nil {
 			return nil
@@ -191,7 +222,9 @@ func (p *Player) canonicalPage(ctx context.Context, page *Page) *Page {
 		if err != nil {
 			return nil
 		}
-		candidate := &Page{URL: req.URL, Final: resp.Request.URL, Status: resp.StatusCode, Header: resp.Header, Body: string(body)}
+		candidate.Final, candidate.Status, candidate.Header, candidate.Body = resp.Request.URL, resp.StatusCode, resp.Header, string(body)
+		candidate.finalReferer = resp.Request.Header.Get(httpx.HeaderReferer)
+		candidate.recordRedirects(resp, started)
 		if !p.site.recognise(candidate) {
 			return nil
 		}

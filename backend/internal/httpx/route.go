@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -120,13 +119,26 @@ func RouteID(ctx context.Context) string {
 	return ""
 }
 
+// RequestAgent is the User-Agent a request built by c sends after the
+// route's override. A reader with an explicit header still asks for its own
+// response; this describes the defaults shared by page probes and readers.
+func RequestAgent(ctx context.Context, c *Client) string {
+	if route, ok := ctx.Value(routeContextKey{}).(*requestRoute); ok && route != nil && route.agent != "" {
+		return route.agent
+	}
+	if c == nil {
+		return ""
+	}
+	return c.ua
+}
+
 // RequestKey names a GET of u through c on ctx's route for sharing its
 // answer between routes: the URL, the client's Accept-Language and the
 // cookies the jar the request would use (the source's, else the route's,
 // else the client's) holds for u. Two routes with one key ask for the same
 // thing from different addresses. The User-Agent is left out: a route may
 // present a browser of its own (WithRouteAgent), and a successful page is
-// taken to be the same page whichever browser asked. This names only u;
+// shared unless its Vary policy prevents it. This names only u;
 // a cached redirect must also validate each hop against SentRequestKey.
 // Headers a caller adds are checked by the reader holding the answer.
 // Empty when there is no client.
@@ -164,7 +176,8 @@ func requestKey(u *url.URL, language string, cookies []*http.Cookie) string {
 	for _, cookie := range cookies {
 		values = append(values, cookie.Name+"="+cookie.Value)
 	}
-	slices.Sort(values)
+	// Keep wire order: duplicate names at different paths can select different
+	// sessions depending on which cookie the server reads first.
 	return strings.Join([]string{u.String(), language, strings.Join(values, "; ")}, "\n")
 }
 

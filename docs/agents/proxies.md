@@ -291,7 +291,9 @@ Extra streams take idle routes only:
   and a waiting file given it would only be told to come back in an hour. So
   extra streams engage as a queue drains, for its last files.
 - The queue sets up only `RouteExtraAcquisitions` (64) extra streams at a time
-  (`extraAcquiring`). That is no bound on how many run, which is files at once
+  (`extraAcquiring`). A slot is reserved with compare-and-swap only while
+  below the limit, so rejected attempts never inflate the active setup count.
+  That is no bound on how many run, which is files at once
   times streams per file. Each set-up is a hunt and a CAPTCHA, and the files'
   own routes need the reader first.
 
