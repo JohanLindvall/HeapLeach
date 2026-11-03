@@ -128,7 +128,9 @@ a non-success navigation response, successful HTML/plain-text notices, or a
 generic binary type the probe did not read. Transient failures receive the
 finite `PlatformProbeAttempts` budget and honor a stated `Retry-After` up to
 `MaxRetryAfter`, without holding metadata admission while waiting. Cancellation
-interrupts that wait. An exhausted failure selects the feed
+interrupts that wait and takes precedence over a completed response, including
+when it arrives after an attempt releases admission but before the retry decision.
+An exhausted failure selects the feed
 reader to report the typed error instead of claiming the source is unsupported.
 A successful response must identify a feed by its type or root element.
 Identification headers and prefixes use the probe deadline; an identified

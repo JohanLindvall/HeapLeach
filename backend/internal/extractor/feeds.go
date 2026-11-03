@@ -219,9 +219,16 @@ func (f *Feeds) negotiated(ctx context.Context, p *Page) bool {
 // retried, and each attempt releases its admission before waiting. A stated
 // Retry-After uses the HTTP client's capped policy, never an earlier retry
 // imposed by the shorter optional-probe backoff.
-func (f *Feeds) askFeed(ctx context.Context, u *url.URL) feedAnswer {
+func (f *Feeds) askFeed(ctx context.Context, u *url.URL) (answer feedAnswer) {
+	// Cancellation can arrive after the attempt releases its admission but
+	// before the retry decision; it must still take precedence over the response.
+	defer func() {
+		if err := ctx.Err(); err != nil {
+			answer.err = err
+		}
+	}()
 	for attempt := 0; ; attempt++ {
-		answer := f.askFeedOnce(ctx, u)
+		answer = f.askFeedOnce(ctx, u)
 		if answer.err == nil || !probeTransient(ctx, answer.err) || attempt+1 >= config.PlatformProbeAttempts {
 			return answer
 		}
