@@ -91,7 +91,7 @@ behaviour in generic terms instead.
 
 A push to `main` that passes CI publishes only Docker images, stamped with
 the latest stable tag plus the Git SHA. Manual Update version runs choose a
-version and build its release; Release can rebuild an existing tag. Release
+version and build its release; Release rebuilds an existing tag, or tags main with a new version first. Release
 changes and manual publication have a checklist in [releases.md](docs/agents/releases.md).
 
 ## No live URLs or real filenames in the repository

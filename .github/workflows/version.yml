@@ -47,6 +47,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      actions: read
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}

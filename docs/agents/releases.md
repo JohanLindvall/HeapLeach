@@ -52,8 +52,16 @@ so another update cannot allocate a version while it is building.
 After tagging, Update version **always calls Release** (`release.yml`) with
 the selected tag. It calls the reusable workflow directly because tags
 pushed with `GITHUB_TOKEN` do not start another workflow. Release can also
-be dispatched manually with `tag=vX.Y.Z` to rebuild an existing version.
-Both entry points use the same publication queue.
+be dispatched manually with `tag=vX.Y.Z`: an existing tag is rebuilt as it
+stands, and a version that does not exist yet is created first on the
+dispatched main commit by `release-tag.sh`, after the same check that CI
+passed for that exact commit. The script's rules hold either way: the
+version must be newer than the latest stable tag, the commit must descend
+from it, and the run ID in the annotation lets a rerun find its tag. So
+`tag=v1.3.0` on main both tags and publishes the minor release. Both entry
+points use the same publication queue. Release's `prepare` job asks for
+`contents: write` and `actions: read` to do this, so a caller of the
+reusable workflow must grant both.
 
 Release resolves the tag on main's history and pins every checkout to its
 commit. It runs `checks.yml` plus native archive builds and packaged OCR

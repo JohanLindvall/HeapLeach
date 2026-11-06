@@ -27,6 +27,12 @@ jobs:
   prepare:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # A requested version that does not exist yet is tagged here, as Update
+    # version would tag it: on main's tested tip, newer than the latest
+    # stable tag, recorded with this run's ID so a rerun reuses it.
+    permissions:
+      contents: write
+      actions: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       sha: ${{ steps.tag.outputs.sha }}
@@ -35,13 +41,22 @@ jobs:
         with:
           fetch-depth: 0
       - id: tag
-        name: Resolve the requested release tag
+        name: Resolve or create the requested release tag
         shell: bash
         env:
           TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if ! git rev-parse --quiet --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+            test "$(gh run list --workflow ci.yml --branch main --commit "$GITHUB_SHA" \
+              --json conclusion --jq 'any(.[]; .conclusion == "success")')" = true || {
+              echo "::error::$TAG does not exist, and CI has not passed for $GITHUB_SHA to tag it"
+              exit 1
+            }
+            bash .github/scripts/release-tag.sh "$TAG" "$GITHUB_SHA" "$GITHUB_RUN_ID" >/dev/null
+          fi
           sha=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
           git merge-base --is-ancestor "$sha" origin/main
           printf 'tag=%s\nsha=%s\n' "$TAG" "$sha" >> "$GITHUB_OUTPUT"
