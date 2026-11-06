@@ -214,6 +214,18 @@ editing either side:
   (`internal/cli/cli_test.go` and `frontend/src/format.test.ts`) mirror each
   other digit for digit, so the same transfer cannot read "1.5 GB" in the
   terminal and "1.6 GB" in the browser. Change them together or not at all.
+- **Filenames are resolved generically.** A file is named by what its host
+  declares for it, read through the shared helpers rather than per-host
+  code: a structured name in an API answer, the name a link declares in its
+  query (`util.DeclaredName`: `filename=`, or a signed link's
+  `response-content-disposition`/`rscd`, which `util.NameFromURL` reads
+  before the path), the path's last segment, and at transfer time the
+  response's Content-Disposition (`util.DispositionName`). A page title is
+  the last resort, since many pages' titles and `og:title` name only the
+  site. When a host's files come out misnamed, teach these helpers or the
+  generic fallback the shape the host uses, so every host using it gains,
+  and add host-specific naming only where the host declares nothing a
+  generic reader could find.
 - **Everything the event stream carries is rendered somewhere.** A field the
   UI stops reading comes out of the payload rather than being left to
   accumulate. A job's `createdAt` is the one exception: API clients read it.

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"html"
 	"math/rand/v2"
+	"mime"
 	"net/url"
 	"os"
 	"path"
@@ -61,13 +62,16 @@ func Truncate(s string, n int) string {
 	return s[:cut] + "..."
 }
 
-// NameFromURL derives a filename from a URL's path, ignoring the query
-// string and undoing percent-encoding. It returns "" when there is no
-// usable path segment.
+// NameFromURL derives a filename from a URL: the name the link itself
+// declares (DeclaredName) when it carries one, otherwise its path's last
+// segment with percent-encoding undone. It returns "" when there is neither.
 func NameFromURL(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return ""
+	}
+	if name := declaredName(u); name != "" {
+		return name
 	}
 	base := path.Base(u.Path)
 	if base == "." || base == "/" || base == "" {
@@ -77,6 +81,70 @@ func NameFromURL(raw string) string {
 		base = decoded
 	}
 	return strings.TrimSpace(base)
+}
+
+// declaredNameParams are query parameters in which a link names the file it
+// serves: a storage key's path is often an opaque id while the query says
+// what the bytes are called, as the host's own download button would.
+// `filename` is the plain form; the others carry a whole Content-Disposition
+// value, as S3-compatible signed links (`response-content-disposition`) and
+// Azure SAS links (`rscd`) do.
+var declaredNameParams = []struct {
+	key         string
+	disposition bool
+}{
+	{"filename", false},
+	{"response-content-disposition", true},
+	{"rscd", true},
+}
+
+// DeclaredName is the filename a URL's query declares for the file it
+// serves, or "" when it declares none. Such a name is the host's own name
+// for the bytes, the same one its Content-Disposition would give, and so
+// outranks anything a page title or an opaque path segment suggests.
+func DeclaredName(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return declaredName(u)
+}
+
+func declaredName(u *url.URL) string {
+	if u.RawQuery == "" {
+		return ""
+	}
+	q := u.Query()
+	for _, p := range declaredNameParams {
+		v := strings.TrimSpace(q.Get(p.key))
+		if v == "" {
+			continue
+		}
+		if p.disposition {
+			v = DispositionName(v)
+		}
+		// A name, not a path: anything with a separator in it says where,
+		// not what, and is no name to save under.
+		if v = strings.TrimSpace(v); v != "" && v != "." && v != ".." && !strings.ContainsAny(v, `/\`) {
+			return v
+		}
+	}
+	return ""
+}
+
+// DispositionName is the filename a Content-Disposition value names, its
+// RFC 5987 form decoded, or "" when it names none. Some servers
+// percent-encode the plain form without saying so; that is undone too.
+func DispositionName(v string) string {
+	_, params, err := mime.ParseMediaType(v)
+	if err != nil {
+		return ""
+	}
+	name := params["filename"]
+	if decoded, err := url.PathUnescape(name); err == nil {
+		name = decoded
+	}
+	return strings.TrimSpace(name)
 }
 
 // Stem is a name or path with its extension (path.Ext) removed; any

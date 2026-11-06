@@ -340,6 +340,21 @@ func TestMediaPageName(t *testing.T) {
 			want:  "A clip.mp4",
 		},
 		{
+			name:  "a link declaring its filename is named by it, not by the page",
+			found: mediaFinding{mediaCandidate: mediaCandidate{URL: "https://cdn.example.test/0f1e2d3c.mp4?filename=first_song_720p.mp4"}},
+			want:  "first_song_720p.mp4",
+		},
+		{
+			name:  "a signed link's disposition names the file",
+			found: mediaFinding{mediaCandidate: mediaCandidate{URL: "https://store.example.test/0f1e2d3c?X-Amz-Expires=3600&response-content-disposition=attachment%3B%20filename%3D%22second%20song.webm%22"}},
+			want:  "second song.webm",
+		},
+		{
+			name:  "a declared name without an extension still gets one",
+			found: mediaFinding{mediaCandidate: mediaCandidate{URL: "https://cdn.example.test/get/abc123?filename=third_song"}, Type: "video/webm"},
+			want:  "third_song.webm",
+		},
+		{
 			name:  "a playlist is saved as the stream it concatenates into",
 			found: mediaFinding{mediaCandidate: mediaCandidate{URL: "https://cdn.example.test/hls/master.m3u8", IsHLS: true}},
 			want:  "A clip.ts",

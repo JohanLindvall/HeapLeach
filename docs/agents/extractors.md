@@ -752,6 +752,14 @@ as a page. `referer_retry_test.go` and `referer_media_test.go` cover the gate,
 request counts, unread bodies, redirects, request headers, sessions, routes,
 admission and cancellation.
 
+A page's own media is named by the name its link declares
+(`util.DeclaredName`, `mediaPageName`) before the page's title: a file page
+whose player points at an opaque storage key with `?filename=` beside it, or
+at a signed link carrying `response-content-disposition`, says there what the
+file is called, while its `og:title` may be only the site's slogan. A
+declared name without an extension takes one the way a title does. The rule
+is AGENTS.md's: names come from what hosts declare, read generically.
+
 A URL read as a web page that still holds nothing is refused (`Direct.emptyPage`),
 naming the claimant when exactly one form claims it and the host when
 several do (an album link on one site has another's share form), rather

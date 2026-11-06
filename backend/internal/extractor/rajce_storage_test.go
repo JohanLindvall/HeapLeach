@@ -16,7 +16,7 @@ func TestRajceStorageFilenames(t *testing.T) {
 		{"existing extension", "/storage/video/scene.mp4", "scene.mp4"},
 		{"uppercase extension", "/storage/video/scene.MP4", "scene.mp4"},
 		{"poster extension", "/storage/video/scene.clip.jpg", "scene.clip.mp4"},
-		{"query filename ignored", "/storage/video/synthetic?filename=unrelated.jpg&download=1", "synthetic.mp4"},
+		{"declared query filename", "/storage/video/synthetic?filename=declared.jpg&download=1", "declared.mp4"},
 		{"percent encoded name", "/storage/video/Quiet%20scene%2Ejpg?download=1#selected", "Quiet scene.mp4"},
 		{"image with video query", "/storage/images/photo.jpg?next=/video/synthetic", "photo.jpg"},
 		{"extensionless image", "/storage/images/synthetic", "synthetic"},

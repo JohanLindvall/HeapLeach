@@ -1109,21 +1109,7 @@ func totalSize(resp *http.Response, offset int64) int64 {
 
 // filenameFromDisposition extracts the filename, preferring the RFC 5987
 // encoded form that Go's mime parser folds into "filename" for us.
-func filenameFromDisposition(v string) string {
-	_, params, err := mime.ParseMediaType(v)
-	if err != nil {
-		return ""
-	}
-	name := params["filename"]
-	if name == "" {
-		return ""
-	}
-	// Some servers percent-encode without saying so.
-	if decoded, err := url.PathUnescape(name); err == nil {
-		name = decoded
-	}
-	return strings.TrimSpace(name)
-}
+func filenameFromDisposition(v string) string { return util.DispositionName(v) }
 
 // chooseName keeps the extractor's name unless the server's is strictly
 // more informative — that is, it carries an extension and ours does not.

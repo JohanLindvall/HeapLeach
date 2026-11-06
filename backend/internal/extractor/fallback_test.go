@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -331,5 +332,34 @@ func TestLabelIsTheHostWhenFormsOverlap(t *testing.T) {
 		if got := reg.Label(u); got != want {
 			t.Errorf("Label(%s) = %q (forms %v), want %q", raw, got, claims, want)
 		}
+	}
+}
+
+// TestDirectNamesAnEmbeddedFileByTheNameItsLinkDeclares pins the generic
+// naming rule on a page whose metadata names only the site: the player's
+// link carries an opaque storage key and declares the real filename in its
+// query, and that declared name is what the file is saved under.
+func TestDirectNamesAnEmbeddedFileByTheNameItsLinkDeclares(t *testing.T) {
+	const page = `<!DOCTYPE html><html><head>
+<title>Download first_song_720p.mp4 (12.3 MB) - Example Files | Example Files</title>
+<meta property="og:title" content="Example Files - Fast File Sharing">
+<meta property="og:site_name" content="Example Files">
+</head><body>
+<video src="https://cdn.example.test/0f1e2d3c-4b5a.mp4?filename=first_song_720p.mp4" controls></video>
+<a href="/api/files/download/0f1e2d3c">Download</a>
+</body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, page)
+	}))
+	defer srv.Close()
+	client := testClient()
+	reg := &Registry{client: client, fallback: NewDirect(client)}
+	res, _, err := reg.Extract(context.Background(), srv.URL+"/f/abc123", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Files[0].Name != "first_song_720p.mp4" {
+		t.Fatalf("files = %+v, want one named first_song_720p.mp4", res.Files)
 	}
 }

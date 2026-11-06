@@ -628,7 +628,17 @@ func mediaPageTitle(root *html.Node) string {
 
 // mediaPageName is the filename to save under: the page's title, plus an
 // extension that says what the bytes are.
+//
+// A link that declares its own filename (util.DeclaredName) is named by it
+// instead: that is the host's name for the bytes, where a page title may be
+// nothing more than the site's.
 func mediaPageName(title string, found mediaFinding) string {
+	if declared := util.DeclaredName(found.URL); declared != "" && !found.IsHLS {
+		if path.Ext(declared) != "" {
+			return declared
+		}
+		title = declared
+	}
 	if found.IsHLS {
 		// Segments are concatenated as they arrive, which yields a transport
 		// stream; remuxing to MP4 happens afterwards, if it can.
