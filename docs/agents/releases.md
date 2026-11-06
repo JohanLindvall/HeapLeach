@@ -14,6 +14,7 @@ without publishing. Ordinary CI does not build native release archives.
 Successful main pushes call `image.yml`, which builds the runtime image from
 source for Linux amd64 and arm64 and publishes `latest` and `sha-<full SHA>`
 to `ghcr.io/johanlindvall/heapleach`. It never creates tags or releases.
+It and Release's image job are the only writers of `latest`.
 `.github/scripts/image-version.sh` stamps the binary and OCI version label
 as `<latest stable tag>-g<12-character SHA>`, including when the commit is
 itself tagged. It selects the highest stable `vX.Y.Z` tag reachable from the
@@ -81,8 +82,14 @@ partial uploads.
 The release image job downloads the published Linux archives, checks their
 checksums and amd64 version, and selects Docker's `released-binary` stage
 with `BINARY_STAGE`. It publishes `vX.Y.Z`, `X.Y.Z`, `vX.Y` and `X.Y` image
-tags. Docker metadata's automatic `latest` tag is explicitly disabled:
-only main's image publisher may move `latest`.
+tags, and `latest` too when the released commit is still main's tip, so a
+release of the tip restamps `latest` with its version rather than the
+`<previous tag>-g<sha>` main's publisher gave it before the tag existed.
+Rebuilding an older tag, or one main has moved past, leaves `latest` alone,
+so it never rolls back. The job shares `image.yml`'s `heapleach-latest-image`
+concurrency group, so its tip check and push cannot interleave with main's
+publication. Docker metadata's automatic `latest` rule stays disabled; the
+tip check alone decides.
 
 `make test-release` exercises read-only image version selection, default
 patch bumps, explicit overrides, retries and invalid requests against

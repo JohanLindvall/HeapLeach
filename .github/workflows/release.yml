@@ -124,12 +124,19 @@ jobs:
           gh release edit "$TAG" --draft=false
 
   # The container image, for every platform the helpers are built for, at
-  # ghcr.io/<owner>/heapleach — tagged with the release. It
+  # ghcr.io/<owner>/heapleach — tagged with the release, and latest when
+  # the release is main's tip. It
   # waits for the release job so a tag that fails its tests publishes no
   # image either.
   image:
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    # latest is shared with main's image publisher; queue behind it so the
+    # tip check below and the push cannot interleave with its publication.
+    concurrency:
+      group: heapleach-latest-image
+      cancel-in-progress: false
+      queue: max
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
     permissions:
@@ -161,6 +168,23 @@ jobs:
           reported_version=$(dist/runtime/amd64/heapleach -version 2>&1)
           test "$reported_version" = "heapleach $TAG"
 
+      # A release of main's tip is also latest, now stamped with its version.
+      # Rebuilding an older tag, or a tag main has moved past, leaves latest
+      # alone so it never rolls back.
+      - name: Decide whether this release is latest
+        id: latest
+        env:
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$tip" = "$SHA" ]; then
+            echo 'latest=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at $tip, not $SHA; leaving latest alone."
+            echo 'latest=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
@@ -179,9 +203,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/heapleach
-          # Only main's image publisher owns latest.
+          # latest is set explicitly below, never by metadata's own rule.
           flavor: latest=false
           tags: |
+            type=raw,value=latest,enable=${{ steps.latest.outputs.latest == 'true' }}
             type=semver,pattern=v{{version}},value=${{ env.TAG }}
             type=semver,pattern={{version}},value=${{ env.TAG }}
             type=semver,pattern=v{{major}}.{{minor}},value=${{ env.TAG }}
