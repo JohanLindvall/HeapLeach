@@ -282,7 +282,9 @@ func booruCandidates(u *url.URL) []booruAPI {
 			return []booruAPI{apiMoebooru, apiSzurubooru}
 		case len(segs) >= 3 && segs[1] == "show":
 			return []booruAPI{apiMoebooru}
-		case len(segs) == 2:
+		case len(segs) == 2 && allDigits(segs[1]):
+			// szurubooru's post ids are numbers; a word there is another
+			// route of the board (/post/atom, its feed), not a post.
 			return []booruAPI{apiSzurubooru}
 		}
 	case len(segs) == 2 && segs[0] == "images":

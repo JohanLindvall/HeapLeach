@@ -361,6 +361,7 @@ func TestBooruShape(t *testing.T) {
 		"https://board.example.test/post":                                 true,
 		"https://board.example.test/post/show/42":                         true,
 		"https://board.example.test/post/42":                              true,
+		"https://board.example.test/post/atom":                            false,
 		"https://board.example.test/index.php?page=post&s=list&tags=cat":  true,
 		"https://board.example.test/index.php?page=post&s=view&id=42":     true,
 		"https://board.example.test/images/42":                            true,

@@ -595,7 +595,10 @@ narrower recogniser takes costs none of those guesses. The boards the host
 claim names (`familyInstalls`) are known instead (`booruBoards`): a link
 on one is read as the API family it runs, with no page fetched and nothing
 guessed, and a known Philomena board's "Everything" filter is its own
-number rather than a lookup (`TestKnownBoardsReadAsWhatTheyRun`). A
+number rather than a lookup (`TestKnownBoardsReadAsWhatTheyRun`). Since
+a known board's links are claimed by form before any probe, a form must
+name a post and not the board's other routes: szurubooru's `/post/<id>`
+takes a numeric id only, so `/post/atom` stays the feed reader's. A
 Philomena answer that is empty under the default filter is asked again
 under the board's "Everything" filter, looked up among its system filters,
 before the page is refused, since that filter is what hides explicit
