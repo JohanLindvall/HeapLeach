@@ -14,7 +14,7 @@ import (
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 )
 
-// pageSniff recognises WordPress categories, then gives an ordinary HTML
+// pageSniff recognises WordPress categories and posts, then gives an ordinary HTML
 // page's file links precedence over an embedded preview. Every platform has
 // already been offered the probed page by its own recogniser, so what
 // reaches this is a page none of them claimed. Outside a recognised
@@ -88,6 +88,12 @@ func (d *Direct) pageContents(ctx context.Context, u, page *url.URL, doc string,
 		if wordPressCategory(root, page) {
 			res, err := wordPressExtract(ctx, d.client, d.registry, page, root, opts)
 			return res, true, err
+		}
+		if wordPressSingle(root) {
+			res, err := wordPressPostResult(ctx, d.client, d.registry, page, root, opts)
+			if !errors.Is(err, errWordPressPostEmpty) {
+				return res, true, err
+			}
 		}
 	}
 	album, albumErr := darkGramResult(d.client, page, root, opts)

@@ -5,6 +5,7 @@ package extractor
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	stdhtml "html"
 	"net/url"
@@ -24,11 +25,28 @@ import (
 // a version number. Classic themes and block themes expose different post
 // containers, but both give us post permalinks, content and actual next links.
 func wordPressCategory(root *html.Node, page *url.URL) bool {
-	category, wordpress := false, false
+	wordpress, body := wordPressDocument(root)
+	category := body != nil && hasClass(body, "category")
+	wordpress = wordpress || category && hasClass(body, "archive")
+	return wordpress && (category || strings.Contains(page.Path, "/category/") ||
+		page.Query().Get("cat") != "" || page.Query().Get("category_name") != "")
+}
+
+// wordPressSingle recognises one post's own page: WordPress marks its body
+// "single" (classic and block themes alike), and the post reader then takes
+// the post's content rather than the whole page with its sidebars, related
+// posts and language switchers.
+func wordPressSingle(root *html.Node) bool {
+	wordpress, body := wordPressDocument(root)
+	return wordpress && body != nil && hasClass(body, "single") && !hasClass(body, "attachment")
+}
+
+// wordPressDocument reports whether the page names WordPress as its
+// generator or loads its assets, and returns the body element.
+func wordPressDocument(root *html.Node) (wordpress bool, body *html.Node) {
 	walk(root, func(n *html.Node) {
-		if isElem(n, atom.Body) && hasClass(n, "category") {
-			category = true
-			wordpress = wordpress || hasClass(n, "archive")
+		if isElem(n, atom.Body) && body == nil {
+			body = n
 		}
 		if isElem(n, atom.Meta) && strings.EqualFold(attr(n, "name"), "generator") &&
 			strings.HasPrefix(strings.ToLower(attr(n, "content")), "wordpress") {
@@ -41,8 +59,7 @@ func wordPressCategory(root *html.Node, page *url.URL) bool {
 			}
 		}
 	})
-	return wordpress && (category || strings.Contains(page.Path, "/category/") ||
-		page.Query().Get("cat") != "" || page.Query().Get("category_name") != "")
+	return wordpress, body
 }
 
 func wordPressExtract(ctx context.Context, client *httpx.Client, registry *Registry, page *url.URL, root *html.Node, opts Options) (result *Result, err error) {
@@ -348,6 +365,21 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 	if err != nil {
 		return nil, err
 	}
+	res, err := wordPressPostResult(ctx, client, registry, page, root, opts)
+	if errors.Is(err, errWordPressPostEmpty) {
+		return nil, fmt.Errorf("wordpress: post has no accessible downloads")
+	}
+	return res, err
+}
+
+// errWordPressPostEmpty is a post whose content holds nothing to download
+// and named no source that failed: a pasted post then keeps the ordinary
+// fallback, which also reads the page's head and players outside the post.
+var errWordPressPostEmpty = errors.New("wordpress: post content holds no downloads")
+
+// wordPressPostResult reads one post's tree, which it may edit: the caller
+// passes a private parse, never a shared page's (fetchRoot).
+func wordPressPostResult(ctx context.Context, client *httpx.Client, registry *Registry, page *url.URL, root *html.Node, opts Options) (*Result, error) {
 	area := wordPressArea(root)
 	content := findFirst(area, func(n *html.Node) bool {
 		return hasAnyClass(n, "entry-content", "wp-block-post-content") || attr(n, "itemprop") == "articleBody"
@@ -356,7 +388,7 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 		content = findFirst(area, func(n *html.Node) bool { return hasClass(n, "post-content") })
 	}
 	if content == nil {
-		return nil, fmt.Errorf("wordpress: post content is missing")
+		return nil, fmt.Errorf("%w: post content is missing", errWordPressPostEmpty)
 	}
 	title := cmp.Or(wordPressTitle(area, false), trimSiteSuffix(firstText(root, atomTitle)), util.NameFromURL(page.String()))
 	// Related-post plugins can append their own thumbnails inside entry-content.
@@ -431,6 +463,9 @@ func wordPressPost(ctx context.Context, client *httpx.Client, registry *Registry
 		e.files = append(e.files, File{Name: util.NameFromURL(link), URL: link, Size: -1, Headers: httpx.Referer(page.String())})
 	}
 	if len(e.files) == 0 {
+		if len(sources) == 0 {
+			return nil, errWordPressPostEmpty
+		}
 		return nil, fmt.Errorf("wordpress: post has no accessible downloads")
 	}
 	return &Result{Title: title, Note: joinNotes(notes...), Files: e.files}, nil

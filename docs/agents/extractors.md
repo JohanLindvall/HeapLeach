@@ -717,7 +717,7 @@ ends.
 
 `Direct` takes what no extractor recognised. It reads a compatible probed
 document (`Direct.document`), recognises WordPress
-categories and DarkGram albums in it, and otherwise scans it for links of a
+categories and posts and DarkGram albums in it, and otherwise scans it for links of a
 supported form before using a generic embedded player. This is how a page
 embedding a supported player works without an extractor of its own.
 `filelinks.go` shares the `links:` harvester's bounded expansion; its links
@@ -892,7 +892,17 @@ excluded, and independent JPEGs are kept without duplicates. The post reader
 is passed to the shared source expansion
 ([below](#sources-that-lead-to-other-sources)), so folder names, concurrency
 and caps are the shared ones, and no host-specific WordPress category scraper
-is kept beside it. Tests use invented classic and block-theme pages; saved
+is kept beside it.
+
+A pasted single post is recognised the same way (`wordPressSingle`: a
+WordPress document whose body carries `single`, attachment pages excepted)
+and read by the same post reader (`wordPressPostResult`) on the probed
+page's private parse, before the ordinary link scan, so the page's language
+switchers, sidebar and related posts never become files. Only a post whose
+content holds nothing and named no source falls through
+(`errWordPressPostEmpty`) to the ordinary fallback, which also reads head
+metadata and players outside the post; a post whose linked sources all
+failed reports that failure instead of scanning the page a second time. Tests use invented classic and block-theme pages; saved
 browser archives stay untracked and can be parsed offline without contacting
 their source sites.
 

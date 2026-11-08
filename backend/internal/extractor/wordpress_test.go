@@ -474,3 +474,71 @@ func TestWordPressUnavailableAndCancelledCategoriesFail(t *testing.T) {
 		t.Fatalf("lost cancellation: %v", err)
 	}
 }
+
+// A single post's own page is read like a category's posts: originals from
+// the post content, not the language flags, sidebar or related posts around
+// it. Lazy-loading themes print each image twice, once in <noscript>, and an
+// image's link outranks the thumbnail it wraps.
+func wordPressSingleHTML(content string) string {
+	return `<html><head><meta name="generator" content="WordPress 5.4"><title>Sample Post (2 Photos) - Example Site</title></head>
+<body class="post-template-default single single-post postid-1 single-format-standard">
+<header><a href="/"><img src="/assets/flags/en_flag.jpg"></a></header>
+<div id="primary"><div id="content" role="main"><article class="post hentry">
+<h1 class="entry-title">Sample Post (2 Photos)</h1><div class="entry-content">` + content + `
+<div class="crp_related"><a href="/other-post/"><img src="/uploads/related.jpg"></a></div>
+</div></article></div></div><aside><img src="/uploads/sidebar.jpg"></aside></body></html>`
+}
+
+func TestWordPressSinglePostCollectsOriginalJPEGs(t *testing.T) {
+	reg, _, base, _ := wordPressTestSite(t, map[string]string{
+		"/sample-post/": wordPressSingleHTML(`
+<p><a href="/uploads/first.jpg"><noscript><img src="/uploads/first.jpg" srcset="/uploads/first-112x300.jpg 112w"></noscript><img class="lazyload" src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" data-src="/uploads/first.jpg" data-srcset="/uploads/first.jpg 716w, /uploads/first-112x300.jpg 112w"></a></p>
+<p><a href="/uploads/second.jpg"><noscript><img src="/uploads/thumbnail.jpg"></noscript><img class="lazyload" data-src="/uploads/thumbnail.jpg"></a></p>`),
+	})
+	res, _, err := reg.Extract(context.Background(), base+"/sample-post/", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range res.Files {
+		got = append(got, f.Name+" "+strings.TrimPrefix(f.URL, base))
+		if f.Headers[httpx.HeaderReferer] != base+"/sample-post/" {
+			t.Fatalf("image lost the post as its referer: %+v", f)
+		}
+	}
+	want := []string{"first.jpg /uploads/first.jpg", "second.jpg /uploads/second.jpg"}
+	if res.Title != "Sample Post (2 Photos)" || res.Note != "" || !slices.Equal(got, want) {
+		t.Fatalf("title=%q note=%q files=%v, want %v", res.Title, res.Note, got, want)
+	}
+}
+
+// A post whose content holds nothing keeps the ordinary fallback, which
+// reads the whole page rather than only the post.
+func TestWordPressEmptySinglePostKeepsOrdinaryFallback(t *testing.T) {
+	doc := strings.Replace(wordPressSingleHTML(`<p>No pictures today.</p>`), "<aside>",
+		`<aside><a href="https://keep2share.example.test/file/sidebar">Download</a>`, 1)
+	reg, _, base, _ := wordPressTestSite(t, map[string]string{"/sample-post/": doc})
+	res, _, err := reg.Extract(context.Background(), base+"/sample-post/", Options{})
+	if err != nil || len(res.Files) != 1 || res.Files[0].Name != "sidebar.bin" {
+		t.Fatalf("result=%+v err=%v", res, err)
+	}
+}
+
+func TestWordPressSingleRecognition(t *testing.T) {
+	for _, tc := range []struct {
+		name, doc string
+		want      bool
+	}{
+		{"classic post", `<meta name="generator" content="WordPress 6.8"><body class="single single-post">`, true},
+		{"assets only", `<link href="/wp-content/themes/x/style.css"><body class="single">`, true},
+		{"attachment page", `<meta name="generator" content="WordPress 6.8"><body class="attachment single">`, false},
+		{"page", `<meta name="generator" content="WordPress 6.8"><body class="page page-id-2">`, false},
+		{"other software", `<body class="single">`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := wordPressSingle(mustParseDoc(t, tc.doc)); got != tc.want {
+				t.Fatalf("wordPressSingle = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
