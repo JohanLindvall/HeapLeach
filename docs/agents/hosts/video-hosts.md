@@ -10,7 +10,7 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 pornhub, xhamster, tnaflix, drtuber, pornone, eporner, streamable, vidmoly,
 ok.ru, streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid,
-knuthing and noodlemagazine are rows of one table (`playersites.go`, and a
+knuthing, noodlemagazine and absolugirl are rows of one table (`playersites.go`, and a
 file of its own for the larger rows), run by the engine in `players.go`, each registered as its
 own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
@@ -120,6 +120,18 @@ hosts; `sendvidShape` keeps its 6–12-character probe form for unfamiliar
 hosts, so ordinary media links outside that form cost no extra requests.
 Empty, nonalphanumeric and longer IDs do not enter the player through this
 file form.
+
+## Legacy encoded Flowplayer pages
+
+`absolugirl.go` is a player row for `/video-<id>.html` pages whose inline
+Flowplayer clip joins `servervideo`, `path`, `repp` and `filee`. Recognition
+checks that construction without checking the domain. The first, second and
+fourth components are literal assignments; `repp = codage(<ASCII literal>)`
+is the lowercase MD5 directory used by this template. This encoding is a
+site-template convention, not a general Flowplayer feature. Unknown
+expressions, duplicate assignments and non-MP4 links are refused. Preview
+frames and plugin URLs are not media. The shared player engine names and
+queues the file with the page origin as Referer.
 
 ## streamable
 

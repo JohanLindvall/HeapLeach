@@ -229,3 +229,8 @@ over is the best video plus the best audio and subtitle track **of each
 language**, so a recording that shipped in several languages stays usable in
 all of them without also carrying the duplicate encodes within each. Without
 ffmpeg the `.ts` is kept and plays fine.
+
+Legacy Flowplayer pages using the Absolugirl encoded-directory template are
+supported at `/video-<id>.html`. Detection uses the player configuration and
+also works on other domains serving that template. Other Flowplayer scripts
+with custom URL construction are not implied to be supported.

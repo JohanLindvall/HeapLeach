@@ -117,6 +117,7 @@ var siteHosts = map[string][]string{
 	"drtuber":        {"drtuber.com"},
 	"pornone":        {"pornone.com"},
 	"eporner":        {"eporner.com"},
+	"absolugirl":     {"absolugirl.com"},
 	"pixhost":        {"pixhost.to"},
 	"goonbox":        {"goonbox.cr"},
 	"imagepond":      {"imagepond.net"},
