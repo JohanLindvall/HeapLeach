@@ -130,7 +130,9 @@ fourth components are literal assignments; `repp = codage(<ASCII literal>)`
 is the lowercase MD5 directory used by this template. This encoding is a
 site-template convention, not a general Flowplayer feature. Unknown
 expressions, duplicate assignments and non-MP4 links are refused. Preview
-frames and plugin URLs are not media. The shared player engine names and
+frames and plugin URLs are not media. The filename comes from the resolved
+media URL through `util.NameFromURL`, preserving the declared filename ahead
+of the page title. The title remains the job title. The shared player engine
 queues the file with the page origin as Referer.
 
 ## streamable

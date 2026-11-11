@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
 )
 
@@ -29,7 +30,7 @@ var absolugirlPlayer = playerSite{
 		if link == "" {
 			return nil, fmt.Errorf("no supported player configuration (the video may be removed)")
 		}
-		return &playerVideo{title: d.title(), candidates: []mediaCandidate{{URL: link}}}, nil
+		return &playerVideo{title: d.title(), filename: util.NameFromURL(link), candidates: []mediaCandidate{{URL: link}}}, nil
 	},
 }
 

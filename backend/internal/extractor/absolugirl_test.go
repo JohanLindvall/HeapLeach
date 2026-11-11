@@ -50,10 +50,13 @@ func TestEncodedPlayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Title != "A sample clip" {
+		t.Fatalf("title = %q", result.Title)
+	}
 	if ex.Name() != "absolugirl" {
 		t.Fatalf("wrong extractor: %s", ex.Name())
 	}
-	if len(result.Files) != 1 || result.Files[0].URL != want {
+	if len(result.Files) != 1 || result.Files[0].URL != want || result.Files[0].Name != "clip.mp4" {
 		t.Fatalf("got %+v", result)
 	}
 }

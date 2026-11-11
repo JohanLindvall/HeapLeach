@@ -232,5 +232,6 @@ ffmpeg the `.ts` is kept and plays fine.
 
 Legacy Flowplayer pages using the Absolugirl encoded-directory template are
 supported at `/video-<id>.html`. Detection uses the player configuration and
-also works on other domains serving that template. Other Flowplayer scripts
+also works on other domains serving that template. Downloads keep the filename
+declared by the media URL; the page title labels the job. Other Flowplayer scripts
 with custom URL construction are not implied to be supported.
