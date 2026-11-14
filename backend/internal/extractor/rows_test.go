@@ -30,7 +30,7 @@ var registryOrder = []string{
 	"drtv:DRTV", "rtbf:RTBF", "francetv:FranceTV", "radio-canada:RadioCanada", "vrtmax:VRTMax",
 	"npo:NPOStart", "raiplay:RaiPlay", "rtve:RTVE", "rtpplay:RTPPlay", "pbs:PBS", "npr:NPR",
 	"abclisten:ABCListen", "bbcsounds:BBCSounds",
-	"vimeo:Vimeo", "niconico:Niconico", "yandex:Pointer", "4chan:FourChan",
+	"vimeo:Vimeo", "niconico:Niconico", "yandex:Pointer", "pornzog:Pointer", "txxx:Player", "4chan:FourChan",
 	"redgifs:RedGifs", "kemono:Kemono",
 	"pornhub:Player", "xhamster:Player", "tnaflix:Player", "drtuber:Player", "pornone:Player",
 	"eporner:Player", "absolugirl:Player", "pixhost:Share", "goonbox:Share", "imagepond:Share", "suvobox:Share", "filester:Share",

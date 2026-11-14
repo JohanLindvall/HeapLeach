@@ -109,6 +109,8 @@ var siteHosts = map[string][]string{
 	"vimeo":          {"vimeo.com"},
 	"niconico":       {"nicovideo.jp", "nico.ms"},
 	"yandex":         {"yandex.*"},
+	"pornzog":        {"pornzog.com"},
+	"txxx":           {"txxx.com", "txxx.me", "videotxxx.com"},
 	"4chan":          {"4chan.org", "4channel.org"},
 	"redgifs":        {"redgifs.com"},
 	"pornhub":        {"pornhub.com"},

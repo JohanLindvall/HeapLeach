@@ -106,7 +106,7 @@ var rajceStorageHost = regexp.MustCompile(`^img[0-9]+\.(?:rajce\.idnes\.cz|rajce
 // install (Registry.JobLabel).
 var familyInstalls = map[string]map[string]string{
 	config.FamilyKVS: {
-		"thisvid.com": "", "pornzog.com": "", "camwhores.tv": "", "sexvid.xxx": "", "porntrex.com": "",
+		"thisvid.com": "", "camwhores.tv": "", "sexvid.xxx": "", "porntrex.com": "",
 		"pornhits.com": "", "fapster.xyz": "", "xxthots.com": "", "moannest.com": "",
 	},
 	config.FamilyPeerTube: {

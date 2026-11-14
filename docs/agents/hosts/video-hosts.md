@@ -10,7 +10,7 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 pornhub, xhamster, tnaflix, drtuber, pornone, eporner, streamable, vidmoly,
 ok.ru, streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid,
-knuthing, noodlemagazine and absolugirl are rows of one table (`playersites.go`, and a
+knuthing, noodlemagazine, absolugirl and txxx are rows of one table (`playersites.go`, and a
 file of its own for the larger rows), run by the engine in `players.go`, each registered as its
 own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
@@ -134,6 +134,22 @@ frames and plugin URLs are not media. The filename comes from the resolved
 media URL through `util.NameFromURL`, preserving the declared filename ahead
 of the page title. The title remains the job title. The shared player engine
 queues the file with the page origin as Referer.
+
+## Embedded TXXX players
+
+`txxx.go` reads `/embed/<id>/` pages by their literal `window.constants`
+video ID and embed bundle. The ID must match the final URL after redirects;
+the final origin serves both metadata and media-source APIs. Metadata uses
+million/thousand ID directories, while `videofile.php` supplies the encoded
+source list. The player alphabet replaces five Latin letters with Cyrillic
+lookalikes and uses `.,~` for `+/=`; decode it before URL unescaping, preserving
+literal plus signs. Lists, numeric-key objects and encoded JSON strings are
+accepted. Only MP4 sources count; thumbnails and related videos do not.
+The shared player engine retains API order for equally ranked sources,
+refreshes signed links when transfers start, and sends the final embed page
+as Referer. Generic declared-name helpers name the file; metadata titles
+label the job. Private, missing and mismatched metadata are refused before
+requesting media sources.
 
 ## streamable
 
@@ -419,7 +435,7 @@ type is checked rather than taking the first name found.
 
 <a id="yandex"></a>
 
-## Pointer pages: yandex, alohatube
+## Pointer pages: yandex, alohatube, pornzog
 
 `pointers.go` is one table for pages whose only job is to point at a video
 hosted elsewhere: yandex's video previews (search output wrapped around
@@ -459,6 +475,13 @@ film in its query (`/video/search?…filmId=`, `/video/preview/?filmId=`), each
 also under `/video/touch/`; the viewer's source anchor and the front end's
 `/fiji-static/` scripts decide. alohatube keeps to its view page: its other
 pages (categories) frame promotions as well, and are no pointer.
+
+pornzog video pages (`/video/<id>/<slug>/`) are pointer pages, not KVS
+installs. Recognition requires its name and a fullscreen iframe inside the
+`player` container. Only those frames are followed; adverts outside that
+container, same-site frames and printed embed-code examples are excluded.
+A page without that player reports it missing rather than collecting related
+videos. TXXX embeds resolve natively through the player row above.
 
 ## Handoffs to yt-dlp
 

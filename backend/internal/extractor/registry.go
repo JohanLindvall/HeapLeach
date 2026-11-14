@@ -104,6 +104,8 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewVimeo(client),
 		NewNiconico(client),
 		NewPointer(client, reg, "yandex"),
+		NewPointer(client, reg, "pornzog"),
+		NewPlayer(client, &txxxPlayer),
 		NewFourChan(client),
 		NewRedGifs(client),
 		NewKemono(client),

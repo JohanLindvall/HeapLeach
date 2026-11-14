@@ -4,6 +4,12 @@ package config
 
 import "time"
 
+// Cache lifetimes requested by the embedded video's own API client, in seconds.
+const (
+	TxxxMetadataLifetime = 86400
+	TxxxFileLifetime     = 8640000
+)
+
 // Application proxy configuration and scheduling. Pool health and discovery
 // defaults live in github.com/JohanLindvall/proxytron/lease.
 const (

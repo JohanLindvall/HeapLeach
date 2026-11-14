@@ -60,6 +60,16 @@ type pointerSite struct {
 // pointerSites are the sites recognised here.
 var pointerSites = []pointerSite{
 	{
+		name:  "pornzog",
+		shape: pornzogShape,
+		recognise: func(p *Page) bool {
+			return pornzogShape(p.Final) && p.Named("PornZog") && len(pornzogFrames(p.HTML(), p.Final)) > 0
+		},
+		recognises: "video pages (`/video/<id>/<slug>/`) framing another site's player inside the player container",
+		links:      pornzogFrames,
+		missing:    "embeds no player (the video may have been removed, or the page layout changed)",
+	},
+	{
 		// A preview is search output: a viewer wrapped around somebody
 		// else's video, with the source linked beside the player. It is
 		// rebuilt whenever the search page is, and the source anchor is the
@@ -103,6 +113,7 @@ var pointerSites = []pointerSite{
 
 // The forms and markers the pointer sites are recognised by.
 var (
+	pornzogShape = pathShape(`^/video/[0-9]+/[^/]+/?$`)
 	// yandexShape is a preview, /video/preview/<id>, or a search or preview
 	// naming its film in the query, each also under /video/touch/.
 	yandexShape = func(u *url.URL) bool {
@@ -271,4 +282,34 @@ func alohaFrames(root *html.Node, page *url.URL) []string {
 // alohaOffsite keeps a frame only if it leads away from the index.
 func alohaOffsite(link string) string {
 	return offsiteLink(link, func(host string) bool { return util.HostMatches(host, "alohatube.com") })
+}
+
+// Only the fullscreen frame inside the video player is a source. The
+// surrounding page also embeds adverts and prints an embed-code example.
+func pornzogFrames(root *html.Node, page *url.URL) []string {
+	if !pornzogShape(page) {
+		return nil
+	}
+	var out []string
+	for _, n := range findAll(root, func(n *html.Node) bool {
+		return isElem(n, atom.Iframe) && hasAttr(n, "allowfullscreen")
+	}) {
+		inside := false
+		for parent := n.Parent; parent != nil; parent = parent.Parent {
+			if hasClass(parent, "player") {
+				inside = true
+				break
+			}
+		}
+		if !inside {
+			continue
+		}
+		link := offsiteLink(resolveRef(page, attr(n, "src")), func(host string) bool {
+			return strings.EqualFold(host, page.Hostname()) || util.HostMatches(host, "pornzog.com")
+		})
+		if link != "" && !slices.Contains(out, link) {
+			out = append(out, link)
+		}
+	}
+	return out
 }
