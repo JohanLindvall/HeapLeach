@@ -13,16 +13,36 @@ import (
 	"sync/atomic"
 )
 
-// ChallengeError distinguishes a Cloudflare challenge from a missing or
+// ChallengeError distinguishes a browser challenge from a missing or
 // forbidden file. Retrying on the same connection cannot solve the challenge.
-type ChallengeError struct{ Err *StatusError }
+type ChallengeError struct {
+	Err      *StatusError
+	Provider string
+}
 
-func (e *ChallengeError) Error() string { return e.Err.URL + ": Cloudflare challenge required" }
+func (e *ChallengeError) Error() string {
+	provider := e.Provider
+	if provider == "" {
+		provider = "Cloudflare"
+	}
+	return e.Err.URL + ": " + provider + " challenge required"
+}
 func (e *ChallengeError) Unwrap() error { return e.Err }
 
 type challengeCaptureKey struct{}
 type capturedChallenge struct{ err error }
 type pageChallengeKey struct{}
+
+type pageChallenge struct {
+	provider string
+	check    func(string) bool
+}
+
+// WithPageChallenge checks a host's HTML gate before retries, capture and
+// route scoring. Scope it to the host's reads, not the sources it links to.
+func WithPageChallenge(ctx context.Context, provider string, check func(string) bool) context.Context {
+	return context.WithValue(ctx, pageChallengeKey{}, pageChallenge{provider, check})
+}
 
 // CaptureChallenges keeps a challenge visible even when an extractor treats
 // a failed optional probe as "not this platform". Each extraction has its
@@ -56,11 +76,12 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 		return resp, err
 	}
 	challenged := strings.EqualFold(strings.TrimSpace(resp.Header.Get(HeaderCFMitigated)), "challenge")
+	provider := "Cloudflare"
 	// Some hosts put Turnstile in their own player page, which has neither
 	// the interstitial header nor an error status. Only an explicit page
 	// fetch can inspect that host's gate. Do it before route accounting so
 	// the HTML is not first recorded as a successful download.
-	if check, _ := resp.Request.Context().Value(pageChallengeKey{}).(func(string) bool); !challenged && check != nil {
+	if gate, _ := resp.Request.Context().Value(pageChallengeKey{}).(pageChallenge); !challenged && gate.check != nil {
 		kind, _, _ := mime.ParseMediaType(resp.Header.Get(HeaderContentType))
 		if kind == "text/html" || kind == "application/xhtml+xml" {
 			body, err := ReadBody(resp.Body)
@@ -71,7 +92,8 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s: read page: %w", resp.Request.URL.Redacted(), err)
 			}
-			challenged = check(string(body))
+			challenged = gate.check(string(body))
+			provider = gate.provider
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
 	}
@@ -79,7 +101,7 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 		// Not NewStatusError: nothing reads a challenge's body, and one
 		// served as a 200 has no deadline on reading it.
 		resp.Body.Close()
-		return nil, &ChallengeError{Err: statusError(resp, resp.Request, nil)}
+		return nil, &ChallengeError{Err: statusError(resp, resp.Request, nil), Provider: provider}
 	}
 	return resp, nil
 }

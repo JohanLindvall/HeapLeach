@@ -128,6 +128,7 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 // states twenty thousand pages and walking them to throw all but five away
 // would be a lot of requests to reach the same answer.
 func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit int) (albums []string, found int, note string, err error) {
+	ctx = httpx.WithPageChallenge(ctx, "Sentinel", balbumsChallengePage)
 	headers := httpx.Referer(balbumsRoot + "/")
 	doc, err := b.client.GetString(ctx, balbumsPage(first, 1), headers)
 	if err != nil {
@@ -184,6 +185,14 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 		return albums[:limit], found, note, nil
 	}
 	return albums, len(albums), note, nil
+}
+
+// Sentinel's checkpoint has no challenge header. Require both its page title
+// and the verification endpoint in its script, not a mention in an album.
+func balbumsChallengePage(doc string) bool {
+	return strings.Contains(doc, "<title>Checkpoint | Sentinel</title>") &&
+		strings.Contains(doc, "var C=") &&
+		strings.Contains(strings.ReplaceAll(doc, `\/`, `/`), `"/.well-known/checkpoint"`)
 }
 
 // balbumsSearch reads the query out of a URL and returns the first page of

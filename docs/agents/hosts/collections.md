@@ -31,6 +31,16 @@ nothing. The front page is recognised by the form together with its page
 count over the whole index, and refused, so that `direct` does not follow
 every album it promotes.
 
+Sentinel's checkpoint is a browser challenge, not an empty search or a
+permanent HTTP refusal. `balbumsChallengePage` requires its title and scripted
+verification endpoint. The search walk scopes `httpx.WithPageChallenge` to
+its own reads, including later pages, so capture and route scoring see a
+typed Sentinel challenge before ordinary status handling. The registry's
+challenge recovery retries the whole search on one proxy route; a checkpoint
+midway through the walk cannot silently truncate the results. Album expansion
+keeps each linked host's own challenge detection. Recovery tries other
+addresses; it does not solve Sentinel's CAPTCHA or proof of work.
+
 ## coomerfans
 
 A creator's page on coomerfans lists posts but keeps the media on each post's

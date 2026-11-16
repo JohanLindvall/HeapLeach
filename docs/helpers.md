@@ -167,6 +167,11 @@ to obtain fresh signed links and keeps the resolver, cookies and media on
 the chosen route. Attempts use the configured proxy retry budget, and
 waiting for an extraction route is bounded by the request timeout.
 
+The album index's Sentinel checkpoint also triggers proxy recovery, including
+when it appears on a later search page. HeapLeach retries the complete search
+on another route and labels the challenge as Sentinel. The existing
+Cloudflare proxy-group setting controls this recovery too.
+
 Doodstream also switches to this proxy pool after temporary network/HTTP
 failures or repeated `RELOAD` replies from its token endpoint. It tries the
 normal connection first. Each retry refreshes the player and token together

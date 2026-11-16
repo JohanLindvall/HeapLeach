@@ -196,6 +196,15 @@ the header is; Doodstream supplies one for its Turnstile gate and Cloudflare's
 interstitial ([hosts/video-hosts.md](hosts/video-hosts.md)). What recovery
 does with a challenge is in [proxies.md](proxies.md).
 
+`WithPageChallenge` scopes a named HTML challenge check to a host's requests;
+balbums uses it for Sentinel's checkpoint across its search pages. It uses
+the same bounded body read and runs before capture and route observations,
+so neither HTTP 200 nor 403 gates count as successful traffic or transport
+failures. Scope it to the host's reads, leaving linked sources to their own
+checks. `ChallengeError.Provider` identifies the gate in diagnostics; an
+unset provider retains Cloudflare for existing callers, and `cf-mitigated`
+always takes precedence over a body check.
+
 ## Routes on a request
 
 `WithCookieJar` scopes cookies to one source without changing its transport,

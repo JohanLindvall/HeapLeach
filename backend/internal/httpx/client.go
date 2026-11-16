@@ -588,7 +588,7 @@ func (c *Client) GetString(ctx context.Context, url string, headers Header) (str
 // cf-mitigated header.
 func (c *Client) GetPage(ctx context.Context, rawURL string, headers Header, isChallenge func(string) bool) (string, *url.URL, error) {
 	if isChallenge != nil {
-		ctx = context.WithValue(ctx, pageChallengeKey{}, isChallenge)
+		ctx = WithPageChallenge(ctx, "Cloudflare", isChallenge)
 	}
 	body, resp, err := c.Fetch(ctx, rawURL, Navigate.Merge(headers))
 	if resp == nil {

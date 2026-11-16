@@ -374,7 +374,8 @@ host asking it to wait.
 
 ### WAF challenges
 
-A Cloudflare challenge ([http.md](http.md)) starts recovery. The manager
+A recognized browser challenge ([http.md](http.md)), including Cloudflare
+and the album index's Sentinel checkpoint, starts recovery. The manager
 installs `extractor.WithChallengeRecovery` for source extraction, and the
 registry reaches nested sources with the same hook. A recovery reruns the
 whole extraction on one lease. `File.Refresh` re-reads the smallest known
@@ -383,6 +384,8 @@ than by its position in a listing, before minting fresh media URLs. External
 downloaders own their network requests and cannot use this recovery.
 
 Any native host can enter the `cloudflare` proxy group after a challenge.
+That existing settings and database identifier also serves Sentinel recovery;
+the error keeps the actual challenge provider's name.
 Per-route services keep their group and address limits, adding `Pace.WAF` to
 route selection. `entry.WAF` stores challenge outcomes separately: a WAF
 failure changes no ordinary service counters, speed, transport health or

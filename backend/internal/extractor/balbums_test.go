@@ -4,10 +4,12 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -368,5 +370,99 @@ func TestBalbumsNotesAnAlbumThatWouldNotOpen(t *testing.T) {
 	}
 	if len(res.Files) != 2 || res.Note != "1 left out: could not be read" {
 		t.Errorf("got %d files, note %q; want 2 and the dead album counted", len(res.Files), res.Note)
+	}
+}
+
+const balbumsCheckpointFixture = `<html><title>Checkpoint | Sentinel</title>
+<script>var C={"n":"synthetic","v":"\/.well-known\/checkpoint"},rounds=0;</script></html>`
+
+func TestBalbumsCheckpointRequiresGateMarkup(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{balbumsCheckpointFixture, true},
+		{strings.ReplaceAll(balbumsCheckpointFixture, `\/`, `/`), true},
+		{`<title>Checkpoint | Sentinel</title><p>Ordinary forbidden page</p>`, false},
+		{`<title>An album</title><script>var C={"v":"/.well-known/checkpoint"}</script>`, false},
+		{`<title>Checkpoint | Sentinel</title><script>var C={"v":"/another-endpoint"}</script>`, false},
+	} {
+		if got := balbumsChallengePage(tc.body); got != tc.want {
+			t.Errorf("challenge=%t want %t for %s", got, tc.want, tc.body)
+		}
+	}
+}
+
+func TestBalbumsCheckpointRecoversWholeSearchOnOneRoute(t *testing.T) {
+	for _, blockedPage := range []int{1, 2} {
+		for _, code := range []int{http.StatusOK, http.StatusForbidden} {
+			t.Run(fmt.Sprintf("page%d/status%d", blockedPage, code), func(t *testing.T) {
+				const albumHost = "albums.example.test"
+				stub := &linksStub{hostClaim: albumHost, files: 1, title: "Album"}
+				var directPages, proxyPages []int
+				serve := func(routed bool) http.HandlerFunc {
+					return func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set(httpx.HeaderContentType, "text/html")
+						// The stub owns its album metadata; probing it remains on the route.
+						if r.URL.Hostname() == albumHost {
+							fmt.Fprint(w, `<title>Album</title>`)
+							return
+						}
+						page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+						if routed {
+							proxyPages = append(proxyPages, page)
+						} else {
+							directPages = append(directPages, page)
+						}
+						if !routed && (page == blockedPage || (page == 0 && blockedPage == 1)) {
+							w.WriteHeader(code)
+							fmt.Fprint(w, balbumsCheckpointFixture)
+							return
+						}
+						if page == 0 {
+							page = 1
+						}
+						fmt.Fprint(w, balbumsForm+balbumsPageHTML(albumHost, page, 2, fmt.Sprintf("album%d", page)))
+					}
+				}
+				origin := httptest.NewServer(serve(false))
+				defer origin.Close()
+				proxy := httptest.NewServer(serve(true))
+				defer proxy.Close()
+				client := testClient()
+				defer client.CloseIdleConnections()
+				route, err := client.ThroughProxy(proxy.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer route.CloseIdleConnections()
+				reg := &Registry{client: client, fallback: NewDirect(client)}
+				index := NewBalbums(client, reg)
+				reg.extractors = []Extractor{index, stub}
+				aliasClaims(reg, "balbums", "127.0.0.1")
+				calls := 0
+				ctx := WithChallengeRecovery(context.Background(), func(ctx context.Context, read func(context.Context) (*Result, error), cause error) (*Result, error) {
+					calls++
+					challenge, ok := errors.AsType[*httpx.ChallengeError](cause)
+					if !ok || challenge.Provider != "Sentinel" || !httpx.HasStatus(cause, code) {
+						t.Fatalf("wrong recovery cause: %v", cause)
+					}
+					return read(httpx.WithRoute(ctx, "synthetic-route", route, nil))
+				})
+				res, ex, err := reg.Extract(ctx, origin.URL+"/?search=Driftwood", Options{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if calls != 1 || ex != index || len(res.Files) != 2 || res.Note != "" {
+					t.Fatalf("calls=%d extractor=%v result=%+v", calls, ex, res)
+				}
+				if !slices.Contains(proxyPages, 1) || !slices.Contains(proxyPages, 2) {
+					t.Fatalf("recovery skipped pages: %v", proxyPages)
+				}
+				if slices.Contains(directPages, blockedPage+1) {
+					t.Fatalf("continued after checkpoint: %v", directPages)
+				}
+			})
+		}
 	}
 }
