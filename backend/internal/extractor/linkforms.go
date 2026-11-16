@@ -120,6 +120,7 @@ var siteHosts = map[string][]string{
 	"pornone":        {"pornone.com"},
 	"eporner":        {"eporner.com"},
 	"absolugirl":     {"absolugirl.com"},
+	"luxuretv":       {"luxuretv.com"},
 	"pixhost":        {"pixhost.to"},
 	"goonbox":        {"goonbox.cr"},
 	"imagepond":      {"imagepond.net"},

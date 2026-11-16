@@ -33,7 +33,7 @@ var registryOrder = []string{
 	"vimeo:Vimeo", "niconico:Niconico", "yandex:Pointer", "pornzog:Pointer", "txxx:Player", "4chan:FourChan",
 	"redgifs:RedGifs", "kemono:Kemono",
 	"pornhub:Player", "xhamster:Player", "tnaflix:Player", "drtuber:Player", "pornone:Player",
-	"eporner:Player", "absolugirl:Player", "pixhost:Share", "goonbox:Share", "imagepond:Share", "suvobox:Share", "filester:Share",
+	"eporner:Player", "absolugirl:Player", "luxuretv:Player", "pixhost:Share", "goonbox:Share", "imagepond:Share", "suvobox:Share", "filester:Share",
 	"bandcamp:Bandcamp", "cyberdrop:Share", "imgur:Imgur", "civitai:Civitai", "bitchute:BitChute",
 	"streamable:Player", "wetransfer:Share", "vidmoly:Player", "nrk:NRK", "pornpics:PornPics",
 	"archive.org:ArchiveOrg", "feed:Feeds", "autoindex:Autoindex", "fapello:Fapello",

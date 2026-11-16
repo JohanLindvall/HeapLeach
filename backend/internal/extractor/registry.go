@@ -116,6 +116,7 @@ func NewRegistry(cfg *config.Config, client *httpx.Client) *Registry {
 		NewPlayer(client, &pornonePlayer),
 		NewPlayer(client, &epornerPlayer),
 		NewPlayer(client, &absolugirlPlayer),
+		NewPlayer(client, &luxuretvPlayer),
 		NewPixhost(client),
 		NewGoonBox(client),
 		NewImagePond(client),

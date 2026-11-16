@@ -10,7 +10,7 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 pornhub, xhamster, tnaflix, drtuber, pornone, eporner, streamable, vidmoly,
 ok.ru, streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid,
-knuthing, noodlemagazine, absolugirl and txxx are rows of one table (`playersites.go`, and a
+knuthing, noodlemagazine, absolugirl, luxuretv and txxx are rows of one table (`playersites.go`, and a
 file of its own for the larger rows), run by the engine in `players.go`, each registered as its
 own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
@@ -134,6 +134,18 @@ frames and plugin URLs are not media. The filename comes from the resolved
 media URL through `util.NameFromURL`, preserving the declared filename ahead
 of the page title. The title remains the job title. The shared player engine
 queues the file with the page origin as Referer.
+
+## Signed HTML5 video pages
+
+`luxuretv.go` reads `/videos/<slug>-<id>.html` pages with a `thisPlayer`
+video inside the `player` container. Recognition and parsing require an MP4
+source whose `/cf-stream/<id>/` path matches the final page's ID, without
+checking the domain. Read only that player's source: JSON-LD carries an
+unsigned copy, while a separate promotional video and related links are not
+part of the item. Preserve the source's signature query unchanged. The
+shared player engine refreshes it when a transfer starts, uses the final
+page as media Referer, and names the file through `util.NameFromURL`.
+A known host's page without the player reports it missing.
 
 ## Embedded TXXX players
 
