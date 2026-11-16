@@ -238,3 +238,12 @@ func TestTheReadersAreAsManyAsSet(t *testing.T) {
 		}
 	}
 }
+
+func TestReaderRejectsInvalidLengthsBeforeLoading(t *testing.T) {
+	p := testPool(t, func() (engine, error) { t.Fatal("loaded model for invalid length"); return nil, nil })
+	for _, length := range []int{-1, 0, config.CaptchaMaxLength + 1} {
+		if _, err := p.readLength(t.Context(), testImage(t), length, nil); err == nil {
+			t.Fatal("accepted invalid length")
+		}
+	}
+}

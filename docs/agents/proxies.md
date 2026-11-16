@@ -374,8 +374,11 @@ host asking it to wait.
 
 ### WAF challenges
 
-A recognized browser challenge ([http.md](http.md)), including Cloudflare
-and the album index's Sentinel checkpoint, starts recovery. The manager
+An unhandled browser challenge ([http.md](http.md)), including Cloudflare,
+starts recovery. The album index first solves recognized Sentinel CAPTCHA and
+proof-of-work checks locally; only unrecognized gate configurations use this
+fallback. Exhausted local solves report an error instead of cycling routes.
+The manager
 installs `extractor.WithChallengeRecovery` for source extraction, and the
 registry reaches nested sources with the same hook. A recovery reruns the
 whole extraction on one lease. `File.Refresh` re-reads the smallest known

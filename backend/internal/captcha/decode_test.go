@@ -108,3 +108,16 @@ func TestInvalidModelOutput(t *testing.T) {
 		t.Fatalf("large logits: %v, %v", table, err)
 	}
 }
+
+func TestDecodeLengthIsPerCall(t *testing.T) {
+	five := scores(t, spelled("ab3de"))
+	six := scores(t, spelled("ab3de7"))
+	for range 3 {
+		if got := rankLength([][]probabilities{five}, 5); len(got) == 0 || got[0] != "ab3de" {
+			t.Fatalf("five-symbol challenge: %v", got)
+		}
+		if got := rank([][]probabilities{six}); len(got) == 0 || got[0] != "ab3de7" {
+			t.Fatalf("default challenge changed: %v", got)
+		}
+	}
+}

@@ -541,6 +541,15 @@ const (
 
 // Extraction tuning.
 const (
+	// Sentinel's browser checkpoint has five characters and may add a harder
+	// proof after the image passes. Bound all rounds and CPU work per search.
+	SentinelCaptchaLength      = 5
+	SentinelRounds             = 8
+	SentinelMaxProofBits       = 24
+	SentinelProofCheckInterval = 4096
+	SentinelSolveTimeout       = 90 * time.Second
+	SentinelMaxProofSeedBytes  = 128
+
 	// Keep2Share's free tier requires a locally read image CAPTCHA and a
 	// wait. Bound both independently of transport retries; an unreadable
 	// challenge must not turn into a stream of new challenges. A wrong
@@ -561,6 +570,7 @@ const (
 	CaptchaModelHeight   = 64
 	CaptchaModelMaxWidth = 1024
 	CaptchaLength        = 6
+	CaptchaMaxLength     = 8
 	CaptchaReadings      = 5
 	CaptchaBeamWidth     = 32
 	CaptchaProposals     = 8

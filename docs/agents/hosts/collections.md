@@ -33,13 +33,24 @@ every album it promotes.
 
 Sentinel's checkpoint is a browser challenge, not an empty search or a
 permanent HTTP refusal. `balbumsChallengePage` requires its title and scripted
-verification endpoint. The search walk scopes `httpx.WithPageChallenge` to
-its own reads, including later pages, so capture and route scoring see a
-typed Sentinel challenge before ordinary status handling. The registry's
-challenge recovery retries the whole search on one proxy route; a checkpoint
-midway through the walk cannot silently truncate the results. Album expansion
-keeps each linked host's own challenge detection. Recovery tries other
-addresses; it does not solve Sentinel's CAPTCHA or proof of work.
+verification endpoint. `sentinelPage` reads its five-character CAPTCHA through
+the shared local model, computes its SHA-256 proof, and follows the server's
+bounded retry rounds. A rejected image is replaced, while an accepted image
+may be followed by a harder proof without another image; old answers are never
+reused for either. Browser questions use a fixed whitelist, never evaluation
+of server JavaScript. Verification is restricted to the checkpoint path on
+the origin that served the gate, with a stable User-Agent and a cookie jar
+private to the search walk, on the same route throughout.
+
+Host gates are classified before route scoring, but the locally handled
+challenge stays outside the registry's capture so it cannot poison the
+successful extraction. The solve has finite round, difficulty and time limits;
+OCR failures and exhausted solves return an explicit error rather than
+cycling proxies indefinitely. Unrecognized gate configurations retain shared
+proxy recovery. Both an unhandled gate and a failed local solve on a later
+page abort the search instead of becoming a partial result. The final page is
+read once after verification; another checkpoint means the pass did not stick.
+Album expansion keeps each linked host's own session and challenge handling.
 
 ## coomerfans
 

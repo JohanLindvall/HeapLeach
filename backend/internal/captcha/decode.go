@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// Package captcha reads six-character image challenges locally. The trained
+// Package captcha reads fixed-length image challenges locally. The trained
 // model supplies character scores; the decoder combines two views of the image
 // and enforces the challenge's alphabet and length.
 package captcha
@@ -79,9 +79,11 @@ type beam struct {
 
 func (b beam) score() float64 { return logAdd(b.blank, b.symbol) }
 
-// proposals is CTC prefix beam search constrained to exactly six symbols.
+// proposals is the default six-symbol CTC prefix beam search.
 // A repeated symbol only adds a character when a blank separates its runs.
-func proposals(table []probabilities) []string {
+func proposals(table []probabilities) []string { return proposalsLength(table, config.CaptchaLength) }
+
+func proposalsLength(table []probabilities, length int) []string {
 	none := math.Inf(-1)
 	beams := []beam{{blank: 0, symbol: none}}
 	for _, row := range table {
@@ -104,10 +106,10 @@ func proposals(table []probabilities) []string {
 				}
 				if len(b.prefix) > 0 && b.prefix[len(b.prefix)-1] == c {
 					extend(b.prefix, none, b.symbol+p)
-					if len(b.prefix) < config.CaptchaLength {
+					if len(b.prefix) < length {
 						extend(b.prefix+string(c), none, b.blank+p)
 					}
-				} else if len(b.prefix) < config.CaptchaLength {
+				} else if len(b.prefix) < length {
 					extend(b.prefix+string(c), none, total+p)
 				}
 			}
@@ -126,7 +128,7 @@ func proposals(table []probabilities) []string {
 	}
 	var readings []string
 	for _, b := range beams {
-		if len(b.prefix) == config.CaptchaLength {
+		if len(b.prefix) == length {
 			readings = append(readings, b.prefix)
 		}
 	}
@@ -166,10 +168,12 @@ func likelihood(table []probabilities, reading string) float64 {
 	return logAdd(alpha[len(alpha)-1], alpha[len(alpha)-2])
 }
 
-func rank(tables [][]probabilities) []string {
+func rank(tables [][]probabilities) []string { return rankLength(tables, config.CaptchaLength) }
+
+func rankLength(tables [][]probabilities, length int) []string {
 	found := make(map[string]float64)
 	for _, table := range tables {
-		for _, reading := range proposals(table) {
+		for _, reading := range proposalsLength(table, length) {
 			found[reading] = 0
 		}
 	}

@@ -18,6 +18,9 @@ import (
 type ChallengeError struct {
 	Err      *StatusError
 	Provider string
+	// Body holds an already-buffered host gate for a local solver. Header-only
+	// challenges remain unread. Never log this body or its session tokens.
+	Body []byte `json:"-"`
 }
 
 func (e *ChallengeError) Error() string {
@@ -77,6 +80,7 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 	}
 	challenged := strings.EqualFold(strings.TrimSpace(resp.Header.Get(HeaderCFMitigated)), "challenge")
 	provider := "Cloudflare"
+	var gateBody []byte
 	// Some hosts put Turnstile in their own player page, which has neither
 	// the interstitial header nor an error status. Only an explicit page
 	// fetch can inspect that host's gate. Do it before route accounting so
@@ -94,6 +98,9 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 			}
 			challenged = gate.check(string(body))
 			provider = gate.provider
+			if challenged {
+				gateBody = body
+			}
 			resp.Body = io.NopCloser(bytes.NewReader(body))
 		}
 	}
@@ -101,7 +108,7 @@ func challengeResponse(resp *http.Response, err error) (*http.Response, error) {
 		// Not NewStatusError: nothing reads a challenge's body, and one
 		// served as a 200 has no deadline on reading it.
 		resp.Body.Close()
-		return nil, &ChallengeError{Err: statusError(resp, resp.Request, nil), Provider: provider}
+		return nil, &ChallengeError{Err: statusError(resp, resp.Request, nil), Provider: provider, Body: gateBody}
 	}
 	return resp, nil
 }

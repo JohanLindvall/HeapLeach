@@ -167,10 +167,12 @@ to obtain fresh signed links and keeps the resolver, cookies and media on
 the chosen route. Attempts use the configured proxy retry budget, and
 waiting for an extraction route is bounded by the request timeout.
 
-The album index's Sentinel checkpoint also triggers proxy recovery, including
-when it appears on a later search page. HeapLeach retries the complete search
-on another route and labels the challenge as Sentinel. The existing
-Cloudflare proxy-group setting controls this recovery too.
+The album index's Sentinel checkpoint is solved automatically using the local
+OCR model and its browser proof of work, including on later search pages.
+The check and search use one connection route and retain the resulting session
+cookie. This works with proxies disabled too. Missing OCR assets or an exhausted
+check produce an explicit error. An unrecognized checkpoint can still trigger
+proxy recovery through the existing Cloudflare proxy-group setting.
 
 Doodstream also switches to this proxy pool after temporary network/HTTP
 failures or repeated `RELOAD` replies from its token endpoint. It tries the
@@ -197,8 +199,8 @@ speed, excluding user-throttled samples and free-host caps when estimating
 unrestricted capacity. Keep2Share, FileBoom, EMLOAD and MEGA retain their per-service
 address limits even when WAF recovery is needed.
 
-This tries other addresses; it does not solve interactive challenges.
-With proxies disabled, a challenge remains an error. External downloaders
+Proxy recovery tries other addresses; it does not solve Cloudflare's interactive
+challenges. With proxies disabled, an unsolved challenge remains an error. External downloaders
 such as yt-dlp manage their own HTTP requests and are outside this recovery
 path.
 

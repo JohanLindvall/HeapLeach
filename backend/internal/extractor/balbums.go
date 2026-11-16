@@ -4,12 +4,15 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/JohanLindvall/HeapLeach/internal/captcha"
 	"github.com/JohanLindvall/HeapLeach/internal/httpx"
 	"github.com/JohanLindvall/HeapLeach/internal/util"
 	"golang.org/x/net/html"
@@ -128,9 +131,20 @@ func (b *Balbums) Extract(ctx context.Context, u *url.URL, opts Options) (*Resul
 // states twenty thousand pages and walking them to throw all but five away
 // would be a lot of requests to reach the same answer.
 func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit int) (albums []string, found int, note string, err error) {
-	ctx = httpx.WithPageChallenge(ctx, "Sentinel", balbumsChallengePage)
+	jar, _ := cookiejar.New(nil)
+	ctx = httpx.WithCookieJar(ctx, jar)
 	headers := httpx.Referer(balbumsRoot + "/")
-	doc, err := b.client.GetString(ctx, balbumsPage(first, 1), headers)
+	var checkpointErr error
+	fetchPage := func(ctx context.Context, raw string) (string, *url.URL, error) {
+		doc, final, err := sentinelPage(ctx, b.client, raw, headers, captcha.ReadLength)
+		_, challenged := errors.AsType[*httpx.ChallengeError](err)
+		_, failedSolve := errors.AsType[*sentinelSolveError](err)
+		if challenged || failedSolve {
+			checkpointErr = err
+		}
+		return doc, final, err
+	}
+	doc, _, err := fetchPage(ctx, balbumsPage(first, 1))
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("balbums: search for %q: %w", query, err)
 	}
@@ -155,8 +169,15 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 	// is where they end; a page that fails is a cut, and noted.
 	links, _, note, err := walkListing(ctx, b.client, start, listingWalk{
 		name: "balbums", limit: -1, root: root,
-		ends:  walkAccepts{repeated: true, missing: true},
-		fetch: fetchAsAsked(b.client, headers),
+		ends: walkAccepts{repeated: true, missing: true},
+		fetch: func(ctx context.Context, page, _ *url.URL) (*html.Node, *url.URL, error) {
+			doc, final, err := fetchPage(ctx, page.String())
+			if err != nil {
+				return nil, nil, err
+			}
+			root, err := parseHTML(doc)
+			return root, final, err
+		},
 		read: func(root *html.Node, _, _ *url.URL) listingPage {
 			page++
 			var p listingPage
@@ -177,6 +198,9 @@ func (b *Balbums) walk(ctx context.Context, first *url.URL, query string, limit 
 			return p
 		},
 	})
+	if checkpointErr != nil {
+		return nil, 0, "", checkpointErr
+	}
 	if err != nil {
 		return nil, 0, "", err
 	}

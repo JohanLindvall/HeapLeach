@@ -205,6 +205,12 @@ checks. `ChallengeError.Provider` identifies the gate in diagnostics; an
 unset provider retains Cloudflare for existing callers, and `cf-mitigated`
 always takes precedence over a body check.
 
+An HTML gate already read by the named check is retained in
+`ChallengeError.Body` for a local solver, excluded from JSON and diagnostics.
+Header-only challenges still close without reading their body. A local solver
+uses `WithoutChallengeCapture` for its own exchange, then returns an unhandled
+challenge normally; a solved gate must not remain captured as a source failure.
+
 ## Routes on a request
 
 `WithCookieJar` scopes cookies to one source without changing its transport,

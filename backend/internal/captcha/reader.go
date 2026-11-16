@@ -63,7 +63,20 @@ func Read(ctx context.Context, raw []byte, note func(string)) ([]string, error) 
 	return readers.read(ctx, raw, note)
 }
 
+// ReadLength reads a host's fixed-length, case-insensitive alphanumeric CAPTCHA.
+// It shares the existing model pool; length belongs to this call, not global state.
+func ReadLength(ctx context.Context, raw []byte, length int, note func(string)) ([]string, error) {
+	return readers.readLength(ctx, raw, length, note)
+}
+
 func (p *pool) read(ctx context.Context, raw []byte, note func(string)) ([]string, error) {
+	return p.readLength(ctx, raw, config.CaptchaLength, note)
+}
+
+func (p *pool) readLength(ctx context.Context, raw []byte, length int, note func(string)) ([]string, error) {
+	if length < 1 || length > config.CaptchaMaxLength {
+		return nil, errors.New("captcha: invalid challenge length")
+	}
 	if len(raw) > config.Keep2ShareCaptchaBytes {
 		return nil, errors.New("captcha: image is too large")
 	}
@@ -101,7 +114,7 @@ func (p *pool) read(ctx context.Context, raw []byte, note func(string)) ([]strin
 			case <-run.Done():
 			}
 		}
-		found, err := p.work(run, raw, emit)
+		found, err := p.work(run, raw, length, emit)
 		done <- result{found, err}
 	}()
 	for {
@@ -125,7 +138,7 @@ func (p *pool) read(ctx context.Context, raw []byte, note func(string)) ([]strin
 	}
 }
 
-func (p *pool) work(ctx context.Context, raw []byte, note func(string)) ([]string, error) {
+func (p *pool) work(ctx context.Context, raw []byte, length int, note func(string)) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -183,7 +196,7 @@ func (p *pool) work(ctx context.Context, raw []byte, note func(string)) ([]strin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	found := rank(tables)
+	found := rankLength(tables, length)
 	usable = true
 	if len(found) == 0 {
 		return nil, ErrUnreadable

@@ -198,11 +198,16 @@ still run every other host and explain that OCR is disabled.
 
 The model is ddddocr's beta model, used as published. Go matches Pillow's
 image conversion, contrast stretching and Lanczos resize, then runs the model
-through cgo. CTC decoding pools letter cases, enforces six characters and
+through cgo. CTC decoding pools letter cases, defaults to six characters and
 ranks readings jointly across the cropped and whole-image views. Synthetic
 fixtures pin both the preprocessing tensors and all five ranked readings to
 the Python reference implementation's output. `make test-captcha` tests real
 native inference and cancellation.
+
+`captcha.ReadLength` selects another fixed length per call, sharing the same
+bounded model pool; Sentinel uses five. Length is never shared mutable state,
+so simultaneous challenges of different lengths cannot affect these six-character
+readings. `captcha.Read` preserves the existing six-character contract.
 
 The reader returns ranked readings, not one answer. The challenge is six
 letters and digits compared without regard to case, and a wrong answer leaves
