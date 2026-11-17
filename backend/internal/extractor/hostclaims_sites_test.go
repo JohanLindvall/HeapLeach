@@ -330,6 +330,7 @@ func TestHostClaimedFallbackRowsSayWhy(t *testing.T) {
 		{"lulustream", "/e/abcdef123456", "/e/Related%02dxxx", true},
 		{"vids.st", "/v/12345", "/v/99%02d?Related", true},
 		{"sendvid", "/embed/abc123", "/embed/Related%02d", true},
+		{"bebasbokep", "/video/AbC123", "/video/Related%02d", true},
 		{"kvs", "/videos/12345/a-clip/", "/videos/999%02d/Related/", false},
 		{"kvs", "/a-clip.html", "/related-%02d.html?Related", false},
 		{"chevereto", "/image/AbCd1", "/image/Related%02d", false},

@@ -10,7 +10,7 @@ Kernel Video Sharing platform. The shared machinery they use is in
 
 pornhub, xhamster, tnaflix, drtuber, pornone, eporner, streamable, vidmoly,
 ok.ru, streamtape, doodstream, mixdrop, lulustream, vids.st, sendvid,
-knuthing, noodlemagazine, absolugirl, luxuretv and txxx are rows of one table (`playersites.go`, and a
+knuthing, noodlemagazine, absolugirl, luxuretv, bebasbokep and txxx are rows of one table (`playersites.go`, and a
 file of its own for the larger rows), run by the engine in `players.go`, each registered as its
 own `Player` under its own name, in the registry position its hand-written
 extractor had (form order decides `Known`, so the rows are registered one by
@@ -146,6 +146,19 @@ part of the item. Preserve the source's signature query unchanged. The
 shared player engine refreshes it when a transfer starts, uses the final
 page as media Referer, and names the file through `util.NameFromURL`.
 A known host's page without the player reports it missing.
+
+## Packed rendition-array players
+
+`bebasbokep.go` reads `/video/<id>` pages with a `jw_player` container and
+the matching JW Player setup's literal `rawSources` array. The shared packer
+decoder exposes the script without executing it. Read only that array's
+literal string properties, rejecting expressions, duplicate properties and
+incomplete arrays; logo, thumbnail and advertising files are not renditions.
+Only MP4 entries count, with the shared player engine choosing the highest
+quality. The generic name helpers preserve the declared filename, and the
+final embed page supplies the media Referer. The generic page scanner follows
+these embeds from WordPress posts, including themes that place their player
+outside an empty `entry-content`; the wrapper needs no separate extractor.
 
 ## Embedded TXXX players
 
