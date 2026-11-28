@@ -12,8 +12,8 @@ include `ocr/`, and the Docker image includes the entire model, native runtime
 and required system libraries. Container startup does not download OCR data.
 
 `install.sh` downloads ddddocr 1.5.6's wheel as an ordinary ZIP, extracts only
-its beta model (`common.onnx`) and license, and downloads ONNX Runtime 1.23.2's
-CPU archive for the target platform. Every download and the extracted model
+its beta model (`common.onnx`) and license, and extracts the target platform’s CPU runtime
+from Microsoft’s `Microsoft.ML.OnnxRuntime` 1.23.2 NuGet package. Every download and the extracted model
 are checked against pinned SHA-256 digests. No Python installation is required.
 Downloads are cached under `~/.cache/heapleach/ocr` (or `HEAPLEACH_OCR_CACHE`).
 The model is about 52 MiB. No model or native binaries are tracked in Git.
@@ -22,7 +22,7 @@ The runtime version is pinned deliberately: it publishes binaries for all five
 release targets, including Intel macOS. The Go binding uses that runtime's C
 API. Updating it requires updating the checksums and re-running the model tests
 on each platform. Native builds need Go and a C compiler; asset installation
-needs Bash, curl, unzip, tar and sha256sum (or shasum on macOS). Windows source
+needs Bash, curl, unzip and sha256sum (or shasum on macOS). Windows source
 builds use a MinGW C compiler and Git Bash. The Windows native library also
 requires Microsoft's Visual C++ runtime to be installed on the system.
 
