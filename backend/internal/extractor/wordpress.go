@@ -509,6 +509,42 @@ func wordPressMedia(ctx context.Context, client *httpx.Client, page *url.URL, co
 	if album, err := darkGramResult(client, page, root, opts); album != nil || err != nil {
 		return album, err
 	}
+	// The post body has already been isolated from recommendations. Each
+	// player here can be a separate clip with its own set of renditions.
+	if players := mediaPlayers(root); len(players) > 1 {
+		res := &Result{Title: title}
+		seen := make(map[string]bool)
+		headers := httpx.Referer(page.String())
+		unavailable := 0
+		for _, player := range players {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			best, ok := bestCandidate(mediaPlayerSources(player, page))
+			if !ok || seen[best.URL] {
+				continue
+			}
+			if len(res.Files) == opts.maxFiles() {
+				res.Note = fileLimitNote
+				break
+			}
+			seen[best.URL] = true
+			stem := title
+			if len(seen) > 1 {
+				stem = fmt.Sprintf("%s - %03d", title, len(seen))
+			}
+			file, ok := mediaPageFile(ctx, client, headers, stem, mediaFinding{mediaCandidate: best})
+			if !ok {
+				unavailable++
+				continue
+			}
+			res.Files = append(res.Files, file)
+		}
+		if len(seen) > 0 {
+			res.Note = joinNotes(res.Note, countNote(unavailable, "embedded players unavailable"))
+			return res, ctx.Err()
+		}
+	}
 	media, _ := mediaPageResult(ctx, client, page, root, doc.String())
 	return media, ctx.Err()
 }

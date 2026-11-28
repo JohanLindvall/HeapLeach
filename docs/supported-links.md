@@ -179,7 +179,8 @@ classic post markup, block query loops, older/newer-post navigation, and
 path or query pagination. A pasted later page starts from the category's
 first page. Posts without supported file-host links use the shared album and
 media-player parsers on their content, with DarkGram playlists still resolved
-at download time. Separate JPEG photos are kept and duplicates removed.
+at download time. Each distinct HTML video or audio player in the post contributes
+one file in post order, using its best rendition. Separate JPEG photos are kept and duplicates removed.
 A pasted single post (WordPress marks its page `single`) is read the same
 way, from the post's content only, so language flags, sidebars and
 related-post thumbnails are left out and lazy-loaded images are not

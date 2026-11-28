@@ -78,21 +78,23 @@ func mediaPageResult(ctx context.Context, client *httpx.Client, u *url.URL, root
 		strings.Trim(u.Path, "/"),
 		u.Hostname(),
 	)
-	// The page is the referer for whatever it pointed at, which is what a
-	// browser would have sent and what hotlink checks look for.
-	headers := httpx.Referer(u.String())
-	name := mediaPageName(title, found)
+	file, ok := mediaPageFile(ctx, client, httpx.Referer(u.String()), title, found)
+	if !ok {
+		return nil, false
+	}
+	return &Result{Title: title, Files: []File{file}}, true
+}
 
+func mediaPageFile(ctx context.Context, client *httpx.Client, headers httpx.Header, title string, found mediaFinding) (File, bool) {
+	name := mediaPageName(title, found)
 	if found.IsHLS {
 		media, err := resolveMediaPlaylist(ctx, client, found.URL, headers)
 		if err != nil || len(media.Segments) == 0 {
-			return nil, false
+			return File{}, false
 		}
-		return &Result{Title: title, Files: []File{media.file(title+media.extensionOr(path.Ext(name)), headers)}}, true
+		return media.file(title+media.extensionOr(path.Ext(name)), headers), true
 	}
-	return &Result{Title: title, Files: []File{{
-		Name: name, URL: found.URL, Size: knownSize(found.Size), Headers: headers,
-	}}}, true
+	return File{Name: name, URL: found.URL, Size: knownSize(found.Size), Headers: headers}, true
 }
 
 // mediaFinding is what one step found: the link, how it ranks, and whatever
@@ -234,37 +236,45 @@ func mediaPageFetch(ctx context.Context, client *httpx.Client, u *url.URL) (medi
 // and label attributes, because on real pages the two disagree and the
 // filename is the one that is right.
 func mediaPageElements(root *html.Node, base *url.URL) []mediaCandidate {
-	for _, player := range findAll(root, func(n *html.Node) bool {
-		return isElem(n, atom.Video) || isElem(n, atom.Audio)
-	}) {
-		var out []mediaCandidate
-		add := func(n *html.Node, ref string) {
-			link := mediaPageLink(base, ref)
-			if link == "" {
-				return
-			}
-			// A declared type that is not media is believed — a player whose
-			// <source> is an image or a DASH manifest is saying so.
-			declared := mediaPageMediaType(attr(n, "type"))
-			if declared != "" && !mediaPageIsMediaType(declared) {
-				return
-			}
-			out = append(out, mediaCandidate{
-				URL:     link,
-				Quality: mediaPageQuality(n, link),
-				IsHLS:   mediaPageIsHLS(link, declared),
-			})
-		}
-
-		add(player, attr(player, "src"))
-		for _, source := range findAll(player, func(n *html.Node) bool { return isElem(n, atom.Source) }) {
-			add(source, attr(source, "src"))
-		}
-		if len(out) > 0 {
-			return out
+	for _, player := range mediaPlayers(root) {
+		if sources := mediaPlayerSources(player, base); len(sources) > 0 {
+			return sources
 		}
 	}
 	return nil
+}
+
+func mediaPlayers(root *html.Node) []*html.Node {
+	return findAll(root, func(n *html.Node) bool {
+		return isElem(n, atom.Video) || isElem(n, atom.Audio)
+	})
+}
+
+func mediaPlayerSources(player *html.Node, base *url.URL) []mediaCandidate {
+	var out []mediaCandidate
+	add := func(n *html.Node, ref string) {
+		link := mediaPageLink(base, ref)
+		if link == "" {
+			return
+		}
+		// A declared type that is not media is believed — a player whose
+		// <source> is an image or a DASH manifest is saying so.
+		declared := mediaPageMediaType(attr(n, "type"))
+		if declared != "" && !mediaPageIsMediaType(declared) {
+			return
+		}
+		out = append(out, mediaCandidate{
+			URL:     link,
+			Quality: mediaPageQuality(n, link),
+			IsHLS:   mediaPageIsHLS(link, declared),
+		})
+	}
+
+	add(player, attr(player, "src"))
+	for _, source := range findAll(player, func(n *html.Node) bool { return isElem(n, atom.Source) }) {
+		add(source, attr(source, "src"))
+	}
+	return out
 }
 
 // mediaPageQuality ranks one rendition, filename first for the reason

@@ -512,6 +512,35 @@ func TestWordPressSinglePostCollectsOriginalJPEGs(t *testing.T) {
 	}
 }
 
+func TestWordPressSinglePostCollectsEachPlayer(t *testing.T) {
+	doc := wordPressSingleHTML(`
+<video src="blob:placeholder"></video>
+<video><source src="/first-360p.mp4" res="360"><source src="/first-720p.mp4" res="720"></video>
+<video src="/first-720p.mp4"></video>
+<video src="/second.mp4"></video>
+<div class="related-posts"><video src="/related.mp4"></video></div>`)
+	doc = strings.Replace(doc, "<aside>", `<aside><video src="/sidebar.mp4"></video>`, 1)
+	reg, _, base, _ := wordPressTestSite(t, map[string]string{"/sample-post/": doc})
+	page := base + "/sample-post/"
+	for _, limit := range []int{1, 2, 3} {
+		reg.limits.Files = limit
+		res, _, err := reg.Extract(t.Context(), page, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"/first-720p.mp4", "/second.mp4"}
+		names := []string{res.Title + ".mp4", res.Title + " - 002.mp4"}
+		if len(res.Files) != min(limit, len(want)) || strings.Contains(res.Note, fileLimitNote) != (limit == 1) {
+			t.Fatalf("limit %d: files=%+v note=%q", limit, res.Files, res.Note)
+		}
+		for i, f := range res.Files {
+			if f.URL != base+want[i] || f.Name != names[i] || f.Headers[httpx.HeaderReferer] != page {
+				t.Errorf("limit %d, player %d: %+v", limit, i+1, f)
+			}
+		}
+	}
+}
+
 // A post whose content holds nothing keeps the ordinary fallback, which
 // reads the whole page rather than only the post.
 func TestWordPressEmptySinglePostKeepsOrdinaryFallback(t *testing.T) {

@@ -887,6 +887,9 @@ original-image links and metadata outrank thumbnails. Registered extractors
 resolve the host links, keeping their deferred resolvers and pacing. Without
 such links, the album and player parsers of the generic fallback read the
 post's content and title, keeping sidebar players and head metadata out.
+Once scoped to the post body, HTML video and audio players each contribute
+their best rendition. Repeated source URLs count once, and the file cap applies
+before loading the next playlist. The first player keeps its usual filename.
 DarkGram videos keep their deferred playlist resolvers; player artwork is
 excluded, and independent JPEGs are kept without duplicates. The post reader
 is passed to the shared source expansion
